@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      3.0.0
-// @description  Throttles PokéIdle's scene animation loop while preserving hunt state and Auto Catch.
+// @version      4.0.0
+// @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -12,7 +12,8 @@
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'moth-pokeidle-performance-v4';
+    const STORAGE_KEY = 'moth-pokeidle-performance-v5';
+    const LEGACY_KEY = 'moth-pokeidle-performance-v4';
     const TRIGGER_ID = 'moth-performance-trigger';
     const PANEL_ID = 'moth-performance-panel';
     const STYLE_ID = 'moth-performance-style';
@@ -20,93 +21,146 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
 
+    /*
+     * "Performance" is intentionally different from AFK/Capture Saver:
+     * it does NOT cap the scene. It removes superfluous UI/effects so the
+     * browser can spend as much of its frame budget as possible on campo.
+     */
     const PROFILES = {
         full: {
             label: 'Full',
-            active: 'full',
-            idle: 'full',
-            background: 'full',
+            adaptive: false,
+            scene: 'full',
+            idleScene: 'full',
+            backgroundScene: 'full',
             idleSeconds: 0,
+            ui: 'off',
+            idleUi: 'off',
             effects: 'full',
-            collapseChat: false
+            chat: 'normal'
         },
-        balanced: {
-            label: 'Balanced',
-            active: '30',
-            idle: '15',
-            background: '2',
-            idleSeconds: 60,
+        adaptive: {
+            label: 'Adaptive',
+            adaptive: true,
+            scene: '30',
+            idleScene: '2',
+            backgroundScene: '2',
+            idleSeconds: 45,
+            ui: 'lite',
+            idleUi: 'aggressive',
             effects: 'reduced',
-            collapseChat: false
+            chat: 'idle'
         },
         afk: {
             label: 'AFK',
-            active: '15',
-            idle: '2',
-            background: '2',
+            adaptive: false,
+            scene: '15',
+            idleScene: '2',
+            backgroundScene: '2',
             idleSeconds: 20,
+            ui: 'lite',
+            idleUi: 'aggressive',
             effects: 'reduced',
-            collapseChat: true
+            chat: 'idle'
         },
         capture: {
             label: 'Capture Saver',
-            active: '15',
-            idle: '2',
-            background: '2',
+            adaptive: false,
+            scene: '15',
+            idleScene: '2',
+            backgroundScene: '2',
             idleSeconds: 10,
+            ui: 'aggressive',
+            idleUi: 'aggressive',
             effects: 'minimal',
-            collapseChat: true
+            chat: 'always'
+        },
+        performance: {
+            label: 'Performance',
+            adaptive: false,
+            scene: 'full',
+            idleScene: 'full',
+            backgroundScene: 'full',
+            idleSeconds: 0,
+            ui: 'performance',
+            idleUi: 'performance',
+            effects: 'minimal',
+            chat: 'always'
         }
     };
 
     const DEFAULTS = {
         enabled: true,
-        profile: 'balanced'
+        profile: 'adaptive'
     };
+
+    function loadSettings() {
+        let saved = {};
+
+        try {
+            saved = JSON.parse(
+                localStorage.getItem(STORAGE_KEY) ||
+                localStorage.getItem(LEGACY_KEY) ||
+                '{}'
+            );
+        } catch {}
+
+        // v3 called the adaptive-ish profile "balanced".
+        if (saved.profile === 'balanced') {
+            saved.profile = 'adaptive';
+        }
+
+        if (!PROFILES[saved.profile]) {
+            saved.profile = DEFAULTS.profile;
+        }
+
+        return {
+            ...DEFAULTS,
+            ...saved
+        };
+    }
 
     let settings = loadSettings();
     let lastActivity = Date.now();
+    let interactionBoostUntil = 0;
     let currentMode = 'full';
+    let currentUi = 'off';
     let chatCollapsedByAddon = false;
 
-    // Renderer diagnostics.
-    let hookInstalled = false;
-    let detectorInstalled = false;
-    let sceneCallbacksFound = 0;
-    let sceneRunsWindow = 0;
-    let throttledWindow = 0;
-    let sceneRunsPerSecond = 0;
-    let throttledPerSecond = 0;
+    // Exact campo.mjs loop hook state.
+    const nativeRAF = page.requestAnimationFrame?.bind(page);
+    const nativeCancelRAF = page.cancelAnimationFrame?.bind(page);
+    const throttledRequests = new Map();
+    const campoState = new WeakMap();
+    let nextSyntheticRafId = -1;
+    let campoLoopCallback = null;
+    let campoHookInstalled = false;
+    let campoLoopFound = false;
+    let campoRunsWindow = 0;
+    let campoSkippedWindow = 0;
+    let campoRunsPerSecond = 0;
+    let campoSkippedPerSecond = 0;
 
-    // rAF hook state.
-    const sceneCallbacks = new WeakSet();
-    const sceneCallbackSources = new Set();
-    const callbackState = new WeakMap();
-    const pendingRaf = new Map();
-    let nextRafId = -1;
-    let activeRafCallback = null;
-    let sceneTouchedInActiveRaf = false;
-
-    const originalRAF = page.requestAnimationFrame?.bind(page);
-    const originalCancelRAF = page.cancelAnimationFrame?.bind(page);
-
-    function loadSettings() {
-        try {
-            return {
-                ...DEFAULTS,
-                ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
-            };
-        } catch {
-            return { ...DEFAULTS };
-        }
-    }
+    // Load monitor.
+    const longTasks = [];
+    const jankFrames = [];
+    let browserFps = 0;
+    let frameCount = 0;
+    let frameWindowStart = performance.now();
+    let previousMonitorFrame = 0;
+    let longTaskMsPerSecond = 0;
+    let jankPerSecond = 0;
+    let pressure = 'light';
+    let heavyStreak = 0;
+    let lightStreak = 0;
+    let adaptiveDecision = '30';
 
     function saveSettings() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
     }
 
     function profile() {
-        return PROFILES[settings.profile] || PROFILES.balanced;
+        return PROFILES[settings.profile] || PROFILES.adaptive;
     }
 
     function isNativeEconomy() {
@@ -115,11 +169,16 @@
 
     function autoCatchEnabled() {
         const button = q('#moth-ac-toggle');
-        if (button) return button.textContent.trim().toUpperCase() === 'ON';
+
+        if (button) {
+            return button.textContent.trim().toUpperCase() === 'ON';
+        }
 
         try {
             return Boolean(
-                JSON.parse(localStorage.getItem('moth-pokeidle-autocatch-v4') || '{}').enabled
+                JSON.parse(
+                    localStorage.getItem('moth-pokeidle-autocatch-v4') || '{}'
+                ).enabled
             );
         } catch {
             return false;
@@ -127,62 +186,47 @@
     }
 
     // ------------------------------------------------------------------
-    // Scene-loop detection
+    // Exact campo.mjs loop throttle
     // ------------------------------------------------------------------
 
-    function callbackSource(callback) {
+    function scheduleComesFromCampo() {
         try {
-            return Function.prototype.toString.call(callback).slice(0, 1200);
+            return /(?:https:\/\/pokeidle\.io)?\/campo\.mjs(?:\?|:)/i
+                .test(String(new Error().stack || ''));
         } catch {
-            return '';
+            return false;
         }
     }
 
-    function markSceneTouch(ctx) {
-        if (!activeRafCallback || ctx?.canvas?.id !== 'cena') return;
-
-        sceneTouchedInActiveRaf = true;
-
-        if (!sceneCallbacks.has(activeRafCallback)) {
-            sceneCallbacks.add(activeRafCallback);
-
-            const source = callbackSource(activeRafCallback);
-            if (source) sceneCallbackSources.add(source);
-
-            sceneCallbacksFound++;
-            console.info('[PokéIdle Performance+] identified scene rAF callback', activeRafCallback);
-        }
-    }
-
-    function installSceneDetector() {
-        if (detectorInstalled) return true;
-
-        const proto = page.CanvasRenderingContext2D?.prototype;
-        if (!proto) return false;
-
-        for (const name of ['clearRect', 'drawImage']) {
-            const original = proto[name];
-            if (typeof original !== 'function') continue;
-
-            // Avoid wrapping twice if Tampermonkey reinjects.
-            if (original.__mothPerformanceWrapped) continue;
-
-            const wrapped = function (...args) {
-                markSceneTouch(this);
-                return original.apply(this, args);
-            };
-
-            try {
-                Object.defineProperty(wrapped, '__mothPerformanceWrapped', {
-                    value: true
-                });
-            } catch {}
-
-            proto[name] = wrapped;
+    function isCampoLoopRequest(callback) {
+        if (campoLoopCallback && callback === campoLoopCallback) {
+            return true;
         }
 
-        detectorInstalled = true;
-        return true;
+        /*
+         * The supplied Chrome trace identifies the renderer callback as:
+         *   campo.mjs -> loop (around line 1072)
+         *
+         * We only capture a function literally named "loop" when the
+         * requestAnimationFrame call itself originates from campo.mjs.
+         * Every unrelated rAF request remains native/pass-through.
+         */
+        if (
+            typeof callback === 'function' &&
+            callback.name === 'loop' &&
+            scheduleComesFromCampo()
+        ) {
+            campoLoopCallback = callback;
+            campoLoopFound = true;
+
+            console.info(
+                '[PokéIdle Performance+] hooked campo.mjs loop directly'
+            );
+
+            return true;
+        }
+
+        return false;
     }
 
     function intervalForMode(mode) {
@@ -192,226 +236,617 @@
         return 0;
     }
 
-    function knownSceneCallback(callback) {
-        if (sceneCallbacks.has(callback)) return true;
-
-        const source = callbackSource(callback);
-        return Boolean(source && sceneCallbackSources.has(source));
-    }
-
-    // ------------------------------------------------------------------
-    // requestAnimationFrame hook
-    //
-    // Unlike v2, this suppresses the campo.mjs animation callback itself.
-    // That avoids doing the scene's JS work on frames we were going to
-    // discard anyway.
-    // ------------------------------------------------------------------
-
-    function installRafHook() {
-        if (hookInstalled || !originalRAF || !originalCancelRAF) return hookInstalled;
-
-        installSceneDetector();
+    function installCampoHook() {
+        if (
+            campoHookInstalled ||
+            !nativeRAF ||
+            !nativeCancelRAF
+        ) {
+            return campoHookInstalled;
+        }
 
         function mothRequestAnimationFrame(callback) {
-            if (typeof callback !== 'function') {
-                return originalRAF(callback);
+            if (!isCampoLoopRequest(callback)) {
+                return nativeRAF(callback);
             }
 
-            const publicId = nextRafId--;
+            const publicId = nextSyntheticRafId--;
             const pending = {
                 actualId: null,
-                cancelled: false,
-                callback
+                cancelled: false
             };
 
-            const runner = timestamp => {
+            const gate = timestamp => {
                 if (pending.cancelled) {
-                    pendingRaf.delete(publicId);
+                    throttledRequests.delete(publicId);
                     return;
                 }
 
-                const scene = knownSceneCallback(callback);
                 const interval =
-                    settings.enabled && scene
+                    settings.enabled
                         ? intervalForMode(currentMode)
                         : 0;
 
-                if (interval > 0) {
-                    let state = callbackState.get(callback);
+                let state = campoState.get(callback);
 
-                    if (!state) {
-                        state = { lastRun: -Infinity };
-                        callbackState.set(callback, state);
-                    }
+                if (!state) {
+                    state = {
+                        lastRun: -Infinity
+                    };
 
-                    if ((timestamp - state.lastRun) < interval) {
-                        throttledWindow++;
-                        pending.actualId = originalRAF(runner);
-                        return;
-                    }
-
-                    state.lastRun = timestamp;
+                    campoState.set(
+                        callback,
+                        state
+                    );
                 }
 
-                activeRafCallback = callback;
-                sceneTouchedInActiveRaf = false;
+                if (
+                    interval > 0 &&
+                    timestamp - state.lastRun <
+                        interval
+                ) {
+                    campoSkippedWindow++;
 
-                try {
-                    callback.call(page, timestamp);
-                } finally {
-                    if (sceneTouchedInActiveRaf) {
-                        sceneCallbacks.add(callback);
+                    pending.actualId =
+                        nativeRAF(gate);
 
-                        const source = callbackSource(callback);
-                        if (source) sceneCallbackSources.add(source);
-
-                        sceneRunsWindow++;
-                    }
-
-                    activeRafCallback = null;
-                    sceneTouchedInActiveRaf = false;
-                    pendingRaf.delete(publicId);
+                    return;
                 }
+
+                state.lastRun = timestamp;
+                campoRunsWindow++;
+
+                throttledRequests.delete(
+                    publicId
+                );
+
+                callback.call(page, timestamp);
             };
 
-            pending.actualId = originalRAF(runner);
-            pendingRaf.set(publicId, pending);
+            pending.actualId =
+                nativeRAF(gate);
+
+            throttledRequests.set(
+                publicId,
+                pending
+            );
 
             return publicId;
         }
 
         function mothCancelAnimationFrame(id) {
-            const pending = pendingRaf.get(id);
+            const pending =
+                throttledRequests.get(id);
 
-            if (pending) {
-                pending.cancelled = true;
-
-                if (pending.actualId != null) {
-                    originalCancelRAF(pending.actualId);
-                }
-
-                pendingRaf.delete(id);
-                return;
+            if (!pending) {
+                return nativeCancelRAF(id);
             }
 
-            return originalCancelRAF(id);
+            pending.cancelled = true;
+
+            if (pending.actualId != null) {
+                nativeCancelRAF(
+                    pending.actualId
+                );
+            }
+
+            throttledRequests.delete(id);
         }
 
         try {
-            page.requestAnimationFrame = mothRequestAnimationFrame;
-            page.cancelAnimationFrame = mothCancelAnimationFrame;
+            page.requestAnimationFrame =
+                mothRequestAnimationFrame;
 
-            hookInstalled =
-                page.requestAnimationFrame === mothRequestAnimationFrame;
+            page.cancelAnimationFrame =
+                mothCancelAnimationFrame;
 
-            if (hookInstalled) {
-                console.info('[PokéIdle Performance+] page-world rAF hook installed');
-            }
+            campoHookInstalled =
+                page.requestAnimationFrame ===
+                mothRequestAnimationFrame;
         } catch (error) {
-            console.warn('[PokéIdle Performance+] could not patch rAF', error);
-            hookInstalled = false;
+            console.warn(
+                '[PokéIdle Performance+] campo hook failed',
+                error
+            );
+
+            campoHookInstalled = false;
         }
 
-        return hookInstalled;
+        return campoHookInstalled;
     }
 
+    // Install immediately, before campo.mjs starts its loop.
+    installCampoHook();
+
     // ------------------------------------------------------------------
-    // Adaptive mode
+    // Runtime pressure measurement
     // ------------------------------------------------------------------
 
-    function calculateMode() {
-        if (!settings.enabled) return 'full';
+    try {
+        const observer =
+            new PerformanceObserver(list => {
+                const now =
+                    performance.now();
 
+                for (
+                    const entry of
+                    list.getEntries()
+                ) {
+                    longTasks.push({
+                        time: now,
+                        duration:
+                            entry.duration
+                    });
+                }
+            });
+
+        observer.observe({
+            type: 'longtask',
+            buffered: false
+        });
+    } catch {}
+
+    function monitorFrame(now) {
+        frameCount++;
+
+        if (previousMonitorFrame) {
+            const gap =
+                now -
+                previousMonitorFrame;
+
+            if (gap > 34) {
+                jankFrames.push({
+                    time: now,
+                    gap
+                });
+            }
+        }
+
+        previousMonitorFrame = now;
+
+        const elapsed =
+            now -
+            frameWindowStart;
+
+        if (elapsed >= 1000) {
+            browserFps =
+                frameCount *
+                1000 /
+                elapsed;
+
+            frameCount = 0;
+            frameWindowStart = now;
+        }
+
+        nativeRAF?.(monitorFrame);
+    }
+
+    nativeRAF?.(monitorFrame);
+
+    function prunePerformanceSamples() {
+        const now =
+            performance.now();
+
+        const cutoff =
+            now - 5000;
+
+        while (
+            longTasks.length &&
+            longTasks[0].time < cutoff
+        ) {
+            longTasks.shift();
+        }
+
+        while (
+            jankFrames.length &&
+            jankFrames[0].time < cutoff
+        ) {
+            jankFrames.shift();
+        }
+
+        const longMs =
+            longTasks.reduce(
+                (sum, item) =>
+                    sum +
+                    item.duration,
+                0
+            );
+
+        longTaskMsPerSecond =
+            longMs / 5;
+
+        jankPerSecond =
+            jankFrames.length / 5;
+
+        if (
+            document.hidden
+        ) {
+            pressure = 'background';
+        } else if (
+            longTaskMsPerSecond >= 90 ||
+            jankPerSecond >= 5 ||
+            (
+                browserFps > 0 &&
+                browserFps < 42
+            )
+        ) {
+            pressure = 'heavy';
+        } else if (
+            longTaskMsPerSecond >= 35 ||
+            jankPerSecond >= 2.5 ||
+            (
+                browserFps > 0 &&
+                browserFps < 53
+            )
+        ) {
+            pressure = 'medium';
+        } else {
+            pressure = 'light';
+        }
+    }
+
+    function updateAdaptiveDecision() {
         const p = profile();
 
-        if (document.hidden) return p.background;
-
-        const idleSeconds = (Date.now() - lastActivity) / 1000;
-
-        if (p.idleSeconds > 0 && idleSeconds >= p.idleSeconds) {
-            return p.idle;
+        if (!p.adaptive) {
+            return;
         }
 
-        return p.active;
+        const idleSeconds =
+            (
+                Date.now() -
+                lastActivity
+            ) / 1000;
+
+        if (
+            document.hidden ||
+            (
+                p.idleSeconds > 0 &&
+                idleSeconds >=
+                    p.idleSeconds
+            )
+        ) {
+            adaptiveDecision = '2';
+            heavyStreak = 0;
+            lightStreak = 0;
+            return;
+        }
+
+        if (
+            Date.now() <
+            interactionBoostUntil
+        ) {
+            adaptiveDecision = '30';
+            return;
+        }
+
+        if (pressure === 'heavy') {
+            heavyStreak++;
+            lightStreak = 0;
+        } else if (
+            pressure === 'light'
+        ) {
+            lightStreak++;
+            heavyStreak = 0;
+        } else {
+            heavyStreak = 0;
+            lightStreak = 0;
+        }
+
+        /*
+         * Hysteresis prevents 30/15 bouncing when load sits near a
+         * threshold.
+         */
+        if (
+            adaptiveDecision === '30' &&
+            heavyStreak >= 2
+        ) {
+            adaptiveDecision = '15';
+            heavyStreak = 0;
+        } else if (
+            adaptiveDecision === '15' &&
+            lightStreak >= 4
+        ) {
+            adaptiveDecision = '30';
+            lightStreak = 0;
+        }
     }
 
-    function collapseChat() {
-        const button = q('#btn-chat-toggle');
-        if (!button) return;
+    // ------------------------------------------------------------------
+    // UI performance levels
+    // ------------------------------------------------------------------
 
-        if (button.getAttribute('aria-expanded') !== 'false') {
+    function collapseChat() {
+        const button =
+            q('#btn-chat-toggle');
+
+        if (!button) {
+            return;
+        }
+
+        if (
+            button.getAttribute(
+                'aria-expanded'
+            ) !== 'false'
+        ) {
             button.click();
             chatCollapsedByAddon = true;
         }
     }
 
     function restoreChat() {
-        if (!chatCollapsedByAddon) return;
+        if (!chatCollapsedByAddon) {
+            return;
+        }
 
-        const button = q('#btn-chat-toggle');
-        if (button?.getAttribute('aria-expanded') === 'false') button.click();
+        const button =
+            q('#btn-chat-toggle');
+
+        if (
+            button?.getAttribute(
+                'aria-expanded'
+            ) === 'false'
+        ) {
+            button.click();
+        }
 
         chatCollapsedByAddon = false;
     }
 
-    function applyMode() {
-        currentMode = calculateMode();
+    function isIdleForProfile(p) {
+        if (document.hidden) {
+            return true;
+        }
+
+        if (p.idleSeconds <= 0) {
+            return false;
+        }
+
+        return (
+            Date.now() -
+            lastActivity
+        ) >=
+            p.idleSeconds * 1000;
+    }
+
+    function calculateMode() {
+        if (!settings.enabled) {
+            return 'full';
+        }
 
         const p = profile();
-        const html = document.documentElement;
+
+        if (p.adaptive) {
+            return adaptiveDecision;
+        }
+
+        if (document.hidden) {
+            return p.backgroundScene;
+        }
+
+        if (isIdleForProfile(p)) {
+            return p.idleScene;
+        }
+
+        return p.scene;
+    }
+
+    function calculateUiLevel() {
+        if (!settings.enabled) {
+            return 'off';
+        }
+
+        const p = profile();
+
+        if (
+            p.adaptive &&
+            !document.hidden &&
+            !isIdleForProfile(p)
+        ) {
+            /*
+             * Under heavy pressure we remove the log/chat render work too;
+             * when load recovers we return to the lighter move-HUD-only
+             * reduction.
+             */
+            return pressure === 'heavy'
+                ? 'aggressive'
+                : p.ui;
+        }
+
+        return isIdleForProfile(p)
+            ? p.idleUi
+            : p.ui;
+    }
+
+    function syncChatPolicy() {
+        if (!settings.enabled) {
+            restoreChat();
+            return;
+        }
+
+        const p = profile();
+        const idle =
+            isIdleForProfile(p);
+
+        const shouldCollapse =
+            p.chat === 'always' ||
+            (
+                p.chat === 'idle' &&
+                (
+                    idle ||
+                    currentUi ===
+                        'aggressive'
+                )
+            );
+
+        if (shouldCollapse) {
+            collapseChat();
+        } else {
+            restoreChat();
+        }
+    }
+
+    function applyMode() {
+        currentMode =
+            calculateMode();
+
+        currentUi =
+            calculateUiLevel();
+
+        const p = profile();
+        const html =
+            document.documentElement;
 
         html.classList.toggle(
             'moth-perf-reduced',
-            settings.enabled && p.effects === 'reduced'
+            settings.enabled &&
+                p.effects === 'reduced'
         );
 
         html.classList.toggle(
             'moth-perf-minimal',
-            settings.enabled && p.effects === 'minimal'
+            settings.enabled &&
+                p.effects === 'minimal'
         );
+
+        for (
+            const level of [
+                'lite',
+                'aggressive',
+                'performance'
+            ]
+        ) {
+            html.classList.toggle(
+                'moth-ui-' + level,
+                settings.enabled &&
+                    currentUi === level
+            );
+        }
 
         html.classList.toggle(
             'moth-scene-sleep',
-            settings.enabled && currentMode === '2'
+            settings.enabled &&
+                currentMode === '2'
         );
 
-        const idle = document.hidden || currentMode === p.idle;
-
-        if (settings.enabled && p.collapseChat && idle) collapseChat();
-        else restoreChat();
-
+        syncChatPolicy();
         updateUI();
     }
 
     function recordActivity() {
         lastActivity = Date.now();
+
+        /*
+         * Adaptive mode immediately returns to its responsive ceiling
+         * after interaction, then reevaluates load a few seconds later.
+         */
+        interactionBoostUntil =
+            Date.now() + 2500;
+
+        if (
+            profile().adaptive
+        ) {
+            adaptiveDecision = '30';
+        }
+
         applyMode();
     }
 
-    for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
-        window.addEventListener(eventName, recordActivity, {
-            passive: true,
-            capture: true
-        });
+    for (
+        const eventName of [
+            'pointerdown',
+            'keydown',
+            'wheel',
+            'touchstart'
+        ]
+    ) {
+        window.addEventListener(
+            eventName,
+            recordActivity,
+            {
+                passive: true,
+                capture: true
+            }
+        );
     }
 
-    document.addEventListener('visibilitychange', applyMode);
+    document.addEventListener(
+        'visibilitychange',
+        applyMode
+    );
 
     // ------------------------------------------------------------------
-    // UI performance CSS
+    // CSS reductions
     // ------------------------------------------------------------------
 
     function installStyles() {
-        if (q('#' + STYLE_ID)) return;
+        if (q('#' + STYLE_ID)) {
+            return;
+        }
 
-        const style = document.createElement('style');
+        const style =
+            document.createElement(
+                'style'
+            );
+
         style.id = STYLE_ID;
 
         style.textContent = `
             /*
-             * Balanced removes expensive decorative motion without hiding
-             * functional controls.
+             * Trace-backed target:
+             * reposicionarGolpesPainel produced repeated style/layout work.
+             * In an idle game the move HUD is informational, not an input.
              */
+            html.moth-ui-lite #golpes-painel,
+            html.moth-ui-aggressive #golpes-painel,
+            html.moth-ui-performance #golpes-painel {
+                display: none !important;
+            }
+
+            /*
+             * Aggressive UI Lite stops painting frequently-changing
+             * informational feeds. Capture controls/history are NOT here.
+             */
+            html.moth-ui-aggressive #hud-log,
+            html.moth-ui-performance #hud-log,
+            html.moth-ui-aggressive .evento-faixa,
+            html.moth-ui-performance .evento-faixa,
+            html.moth-ui-aggressive #musica-player,
+            html.moth-ui-performance #musica-player {
+                display: none !important;
+            }
+
+            /*
+             * Performance profile keeps the chat header/unread badge but
+             * removes the message list and composer from layout entirely.
+             * Incoming messages may still be processed by the game, but
+             * they no longer trigger visible chat layout/paint.
+             */
+            html.moth-ui-performance #p-chat .chat-vao,
+            html.moth-ui-performance #p-chat .chat-entrada,
+            html.moth-ui-performance #chat-emojis {
+                display: none !important;
+            }
+
+            /*
+             * Let Chrome skip off-screen panel rendering where possible.
+             * These are presentation optimizations only; no game state is
+             * disconnected.
+             */
+            html:is(
+                .moth-ui-lite,
+                .moth-ui-aggressive,
+                .moth-ui-performance
+            ) :is(
+                #p-ativo,
+                #p-equipe,
+                #p-treinador,
+                #p-chat
+            ) {
+                content-visibility: auto;
+                contain-intrinsic-size: auto 260px;
+            }
+
             html.moth-perf-reduced :is(
                 .ab-confete *,
                 .recompensa *,
@@ -425,10 +860,6 @@
                 transition-duration: .001ms !important;
             }
 
-            /*
-             * Capture Saver also strips costly visual CSS from ordinary UI.
-             * Layout, visibility and interaction remain intact.
-             */
             html.moth-perf-minimal #app *,
             html.moth-perf-minimal #app *::before,
             html.moth-perf-minimal #app *::after {
@@ -452,12 +883,8 @@
                 display: none !important;
             }
 
-            /*
-             * A nearly static scene should not keep an expensive composited
-             * canvas looking like it is merely frozen by accident.
-             */
             html.moth-scene-sleep #cena {
-                opacity: .45 !important;
+                opacity: .55 !important;
             }
 
             #${TRIGGER_ID} {
@@ -527,7 +954,7 @@
 
             #${PANEL_ID} .mpp-metrics {
                 display: grid;
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(3,1fr);
                 gap: 4px;
                 margin-bottom: 7px;
             }
@@ -554,7 +981,7 @@
             }
 
             #${PANEL_ID} select {
-                width: 115px;
+                width: 120px;
                 padding: 3px 4px;
                 border: 1px solid rgba(255,255,255,.12);
                 border-radius: 4px;
@@ -572,7 +999,10 @@
             }
         `;
 
-        (document.head || document.documentElement).appendChild(style);
+        (
+            document.head ||
+            document.documentElement
+        ).appendChild(style);
     }
 
     function labelForMode(mode) {
@@ -584,205 +1014,417 @@
         }[mode] || mode;
     }
 
+    function labelForUi(level) {
+        return {
+            off: 'UI Full',
+            lite: 'UI Lite',
+            aggressive: 'UI Low',
+            performance: 'UI Max'
+        }[level] || level;
+    }
+
+    // ------------------------------------------------------------------
+    // Light control UI
+    // ------------------------------------------------------------------
+
     function ensurePanel() {
-        let panel = q('#' + PANEL_ID);
-        if (panel) return panel;
+        let panel =
+            q('#' + PANEL_ID);
 
-        const host = q('#auto-corpo');
-        if (!host) return null;
+        if (panel) {
+            return panel;
+        }
 
-        panel = document.createElement('section');
+        const host =
+            q('#auto-corpo');
+
+        if (!host) {
+            return null;
+        }
+
+        panel =
+            document.createElement(
+                'section'
+            );
+
         panel.id = PANEL_ID;
         panel.hidden = true;
 
         panel.innerHTML = `
             <div class="mpp-head">
                 <strong>Performance+</strong>
-                <label><input id="mpp-enabled" type="checkbox"> On</label>
+                <label>
+                    <input id="mpp-enabled" type="checkbox">
+                    On
+                </label>
             </div>
 
             <div class="mpp-metrics">
-                <div class="mpp-metric"><b id="mpp-runs">0</b><span>scene runs/s</span></div>
-                <div class="mpp-metric"><b id="mpp-throttled">0</b><span>skipped/s</span></div>
-                <div class="mpp-metric"><b id="mpp-capture">—</b><span>auto catch</span></div>
+                <div class="mpp-metric">
+                    <b id="mpp-browser-fps">—</b>
+                    <span>browser FPS</span>
+                </div>
+
+                <div class="mpp-metric">
+                    <b id="mpp-scene-runs">0</b>
+                    <span>campo runs/s</span>
+                </div>
+
+                <div class="mpp-metric">
+                    <b id="mpp-long">0</b>
+                    <span>long ms/s</span>
+                </div>
             </div>
 
             <div class="mpp-row">
                 <label>Profile</label>
+
                 <select id="mpp-profile">
                     <option value="full">Full</option>
-                    <option value="balanced">Balanced</option>
+                    <option value="adaptive">Adaptive</option>
                     <option value="afk">AFK</option>
                     <option value="capture">Capture Saver</option>
+                    <option value="performance">Performance</option>
                 </select>
             </div>
 
-            <div class="mpp-status" id="mpp-status">Loading renderer hook…</div>
+            <div class="mpp-status" id="mpp-status">
+                Loading campo.mjs hook…
+            </div>
         `;
 
         host.prepend(panel);
 
-        q('#mpp-enabled', panel).addEventListener('change', event => {
-            settings.enabled = event.target.checked;
-            saveSettings();
-            applyMode();
-        });
+        q(
+            '#mpp-enabled',
+            panel
+        ).addEventListener(
+            'change',
+            event => {
+                settings.enabled =
+                    event.target.checked;
 
-        q('#mpp-profile', panel).addEventListener('change', event => {
-            settings.profile = event.target.value;
-            lastActivity = Date.now();
-            saveSettings();
-            applyMode();
-        });
+                saveSettings();
+                applyMode();
+            }
+        );
+
+        q(
+            '#mpp-profile',
+            panel
+        ).addEventListener(
+            'change',
+            event => {
+                settings.profile =
+                    event.target.value;
+
+                lastActivity =
+                    Date.now();
+
+                interactionBoostUntil =
+                    Date.now() + 2500;
+
+                adaptiveDecision = '30';
+
+                saveSettings();
+                applyMode();
+            }
+        );
 
         return panel;
     }
 
     function ensureTrigger() {
-        if (!document.body) return false;
+        if (!document.body) {
+            return false;
+        }
 
         installStyles();
-        installRafHook();
+        installCampoHook();
         ensurePanel();
 
-        let trigger = q('#' + TRIGGER_ID);
-        if (trigger) return true;
+        let trigger =
+            q('#' + TRIGGER_ID);
 
-        const header = q('#p-auto .painel-cab-auto') || q('#p-auto .painel-cab');
-        if (!header) return false;
+        if (trigger) {
+            return true;
+        }
 
-        trigger = document.createElement('button');
+        const header =
+            q('#p-auto .painel-cab-auto') ||
+            q('#p-auto .painel-cab');
+
+        if (!header) {
+            return false;
+        }
+
+        trigger =
+            document.createElement(
+                'button'
+            );
+
         trigger.type = 'button';
         trigger.id = TRIGGER_ID;
-        trigger.textContent = 'Perf · load';
-        trigger.title = 'Performance+ loaded';
+        trigger.textContent =
+            'Perf · load';
 
-        trigger.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
+        trigger.title =
+            'Performance+ loaded';
 
-            const autoToggle = q('#btn-auto-toggle');
-            if (autoToggle?.getAttribute('aria-expanded') === 'false') autoToggle.click();
+        trigger.addEventListener(
+            'click',
+            event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-            const panel = ensurePanel();
-            if (panel) panel.hidden = !panel.hidden;
-        });
+                const autoToggle =
+                    q('#btn-auto-toggle');
 
-        const collapse = q('#btn-auto-toggle', header);
-        if (collapse) header.insertBefore(trigger, collapse);
-        else header.appendChild(trigger);
+                if (
+                    autoToggle?.getAttribute(
+                        'aria-expanded'
+                    ) === 'false'
+                ) {
+                    autoToggle.click();
+                }
+
+                const panel =
+                    ensurePanel();
+
+                if (panel) {
+                    panel.hidden =
+                        !panel.hidden;
+                }
+            }
+        );
+
+        const collapse =
+            q(
+                '#btn-auto-toggle',
+                header
+            );
+
+        if (collapse) {
+            header.insertBefore(
+                trigger,
+                collapse
+            );
+        } else {
+            header.appendChild(
+                trigger
+            );
+        }
 
         return true;
     }
 
     function updateUI() {
-        const trigger = q('#' + TRIGGER_ID);
-        const panel = q('#' + PANEL_ID);
+        const trigger =
+            q('#' + TRIGGER_ID);
+
+        const panel =
+            q('#' + PANEL_ID);
 
         if (panel) {
-            const enabled = q('#mpp-enabled', panel);
-            const select = q('#mpp-profile', panel);
+            q(
+                '#mpp-enabled',
+                panel
+            ).checked =
+                settings.enabled;
 
-            if (enabled) enabled.checked = settings.enabled;
-            if (select) select.value = settings.profile;
+            q(
+                '#mpp-profile',
+                panel
+            ).value =
+                settings.profile;
 
-            q('#mpp-runs', panel).textContent =
-                isNativeEconomy() ? 'Eco' : String(sceneRunsPerSecond);
+            q(
+                '#mpp-browser-fps',
+                panel
+            ).textContent =
+                document.hidden
+                    ? 'BG'
+                    : Math.round(
+                        browserFps
+                    );
 
-            q('#mpp-throttled', panel).textContent =
-                String(throttledPerSecond);
+            q(
+                '#mpp-scene-runs',
+                panel
+            ).textContent =
+                isNativeEconomy()
+                    ? 'Eco'
+                    : String(
+                        campoRunsPerSecond
+                    );
 
-            q('#mpp-capture', panel).textContent =
-                autoCatchEnabled() ? 'ON' : 'OFF';
+            q(
+                '#mpp-long',
+                panel
+            ).textContent =
+                Math.round(
+                    longTaskMsPerSecond
+                );
 
-            const status = q('#mpp-status', panel);
+            const status =
+                q(
+                    '#mpp-status',
+                    panel
+                );
 
             if (isNativeEconomy()) {
                 status.textContent =
-                    'Native Economy is active; battlefield capture state is unavailable.';
-            } else if (!hookInstalled) {
+                    'Native Economy is active; Auto Catch cannot receive fallen targets.';
+            } else if (!campoHookInstalled) {
                 status.textContent =
-                    'Page-world requestAnimationFrame hook is not installed.';
+                    'Could not install the page-world campo hook.';
+            } else if (!campoLoopFound) {
+                status.textContent =
+                    'Hook ready; waiting for campo.mjs → loop.';
             } else if (!settings.enabled) {
                 status.textContent =
-                    'Loaded, currently disabled.';
-            } else if (sceneCallbacksFound === 0) {
+                    'campo.mjs loop found; Performance+ disabled.';
+            } else if (
+                settings.profile ===
+                'performance'
+            ) {
                 status.textContent =
-                    'Hook active; identifying the campo.mjs scene loop…';
-            } else if (currentMode === 'full') {
+                    'Performance: native scene rate, UI stripped for maximum visible FPS.';
+            } else if (
+                profile().adaptive
+            ) {
                 status.textContent =
-                    'Scene loop found. Full profile is not throttling it.';
-            } else if (throttledPerSecond > 0) {
-                status.textContent =
-                    `Working: campo scene loop identified; skipping ${throttledPerSecond} animation callbacks/s.`;
+                    'Adaptive · ' +
+                    pressure +
+                    ' load · ' +
+                    Math.round(
+                        jankPerSecond * 10
+                    ) / 10 +
+                    ' jank/s · skipped ' +
+                    campoSkippedPerSecond +
+                    '/s.';
             } else {
                 status.textContent =
-                    `Scene loop found; target is ${labelForMode(currentMode)}.`;
+                    'campo.mjs loop targeted directly · skipped ' +
+                    campoSkippedPerSecond +
+                    '/s.';
             }
         }
 
-        if (trigger) {
-            trigger.classList.remove('working', 'warning');
-
-            if (isNativeEconomy()) {
-                trigger.textContent = 'Perf · Native Eco';
-                trigger.classList.add('warning');
-            } else if (!settings.enabled) {
-                trigger.textContent = 'Perf · Off';
-            } else if (!hookInstalled) {
-                trigger.textContent = 'Perf · hook!';
-                trigger.classList.add('warning');
-            } else if (sceneCallbacksFound === 0) {
-                trigger.textContent = 'Perf · finding…';
-                trigger.classList.add('warning');
-            } else {
-                trigger.textContent =
-                    `Perf · ${labelForMode(currentMode)} · ↓${throttledPerSecond}`;
-
-                if (currentMode !== 'full' && throttledPerSecond > 0) {
-                    trigger.classList.add('working');
-                }
-            }
+        if (!trigger) {
+            return;
         }
+
+        trigger.classList.remove(
+            'working',
+            'warning'
+        );
+
+        if (isNativeEconomy()) {
+            trigger.textContent =
+                'Perf · Native Eco';
+
+            trigger.classList.add(
+                'warning'
+            );
+
+            return;
+        }
+
+        if (!settings.enabled) {
+            trigger.textContent =
+                'Perf · Off';
+
+            return;
+        }
+
+        if (!campoHookInstalled) {
+            trigger.textContent =
+                'Perf · hook!';
+
+            trigger.classList.add(
+                'warning'
+            );
+
+            return;
+        }
+
+        if (!campoLoopFound) {
+            trigger.textContent =
+                'Perf · campo…';
+
+            trigger.classList.add(
+                'warning'
+            );
+
+            return;
+        }
+
+        trigger.textContent =
+            'Perf · ' +
+            labelForMode(
+                currentMode
+            ) +
+            ' · ' +
+            labelForUi(
+                currentUi
+            );
+
+        trigger.classList.add(
+            'working'
+        );
     }
 
     // ------------------------------------------------------------------
-    // Metrics / bootstrap
+    // Tick / bootstrap
     // ------------------------------------------------------------------
 
     setInterval(() => {
-        sceneRunsPerSecond = sceneRunsWindow;
-        throttledPerSecond = throttledWindow;
+        campoRunsPerSecond =
+            campoRunsWindow;
 
-        sceneRunsWindow = 0;
-        throttledWindow = 0;
+        campoSkippedPerSecond =
+            campoSkippedWindow;
 
-        updateUI();
+        campoRunsWindow = 0;
+        campoSkippedWindow = 0;
+
+        prunePerformanceSamples();
+        updateAdaptiveDecision();
+        applyMode();
     }, 1000);
 
     function bootstrap() {
         installStyles();
-        installSceneDetector();
-        installRafHook();
+        installCampoHook();
         ensureTrigger();
+
+        lastActivity =
+            Date.now();
+
         applyMode();
 
         setInterval(() => {
-            installSceneDetector();
-            installRafHook();
+            installCampoHook();
             ensureTrigger();
-            applyMode();
-        }, 1000);
+        }, 1500);
 
-        console.info('[PokéIdle Performance+] v3 loaded');
+        console.info(
+            '[PokéIdle Performance+] v4 loaded'
+        );
     }
 
-    // Install the page-world hooks immediately, before waiting for DOMContentLoaded.
-    installSceneDetector();
-    installRafHook();
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            bootstrap,
+            {
+                once: true
+            }
+        );
     } else {
         bootstrap();
     }
