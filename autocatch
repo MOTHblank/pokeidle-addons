@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      4.1.0
+// @version      4.2.0
 // @description  Configurable auto-catch with capture statistics HUD.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -79,6 +79,17 @@
     let resolvedTokens = new Set();
 
     let lastHistoryFingerprint = '';
+    let historyObserver = null;
+    let sessionObserver = null;
+    let observedSessionCaptures = null;
+    let sessionCaptureBase = null;
+
+    /*
+     * Most recent accepted throw against the current body. Used only as
+     * a fallback when the game's capture/session UI does not expose a
+     * direct success update.
+     */
+    let pendingOutcome = null;
 
     const inventoryBaseline = new Map();
 
@@ -552,7 +563,8 @@
 
     function recordCapture(
         token,
-        inferred
+        inferred,
+        source = inferred ? 'target removed' : 'game UI'
     ) {
         if (resolvedTokens.has(token)) {
             return;
@@ -566,14 +578,339 @@
             stats.inferredCaptures++;
         }
 
+        if (
+            pendingOutcome?.token === token
+        ) {
+            pendingOutcome = null;
+        }
+
         currentTargetSignature = null;
         targetThrows = 0;
 
         stats.status = inferred
-            ? 'Captured (estimated)'
-            : 'Captured';
+            ? `Captured ~ (${source})`
+            : `Captured (${source})`;
 
         updateUI();
+    }
+
+    function sessionCaptureCount() {
+        const panel =
+            document.querySelector(
+                '#sessao-painel'
+            );
+
+        if (!panel) {
+            return null;
+        }
+
+        const text = normalize(
+            panel.textContent
+        )
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text) {
+            return null;
+        }
+
+        /*
+         * The session card is localized, so accept the common Portuguese
+         * and English labels rather than depending on one exact sentence.
+         */
+        const patterns = [
+            /(?:capturas?|capturados?)\s*[:\-]?\s*([\d.,]+)/i,
+            /(?:captures?|caught)\s*[:\-]?\s*([\d.,]+)/i
+        ];
+
+        for (const pattern of patterns) {
+            const match =
+                text.match(pattern);
+
+            if (!match) {
+                continue;
+            }
+
+            const digits =
+                match[1].replace(/\D/g, '');
+
+            if (digits) {
+                return Number(digits);
+            }
+        }
+
+        return null;
+    }
+
+    function syncSessionCaptureCount() {
+        const total =
+            sessionCaptureCount();
+
+        if (total === null) {
+            return false;
+        }
+
+        if (
+            observedSessionCaptures === null
+        ) {
+            observedSessionCaptures =
+                total;
+
+            sessionCaptureBase =
+                total;
+
+            return false;
+        }
+
+        /*
+         * Session reset / new hunt.
+         */
+        if (
+            total <
+            observedSessionCaptures
+        ) {
+            observedSessionCaptures =
+                total;
+
+            sessionCaptureBase =
+                total;
+
+            return false;
+        }
+
+        if (
+            total ===
+            observedSessionCaptures
+        ) {
+            return false;
+        }
+
+        const delta =
+            total -
+            observedSessionCaptures;
+
+        observedSessionCaptures =
+            total;
+
+        /*
+         * A server/session counter is authoritative. Apply every newly
+         * observed capture, but resolve the current target token first so
+         * a later DOM-removal fallback cannot double count it.
+         */
+        for (
+            let i = 0;
+            i < delta;
+            i++
+        ) {
+            if (
+                i === 0 &&
+                currentTargetToken &&
+                !resolvedTokens.has(
+                    currentTargetToken
+                )
+            ) {
+                recordCapture(
+                    currentTargetToken,
+                    false,
+                    'session'
+                );
+            } else {
+                stats.captures++;
+                stats.status =
+                    'Captured (session)';
+            }
+        }
+
+        updateUI();
+        return true;
+    }
+
+    function checkPendingOutcome() {
+        const pending =
+            pendingOutcome;
+
+        if (
+            !pending ||
+            resolvedTokens.has(
+                pending.token
+            )
+        ) {
+            return;
+        }
+
+        const age =
+            Date.now() -
+            pending.sentAt;
+
+        /*
+         * Keep the correlation alive much longer than the old 1.45 s
+         * polling window. Captures can resolve after the ball animation
+         * and network response.
+         */
+        if (age > 6500) {
+            pendingOutcome = null;
+            return;
+        }
+
+        const history =
+            historyFingerprint();
+
+        if (
+            history &&
+            history !==
+                pending.beforeHistory &&
+            history !==
+                lastHistoryFingerprint
+        ) {
+            lastHistoryFingerprint =
+                history;
+
+            recordCapture(
+                pending.token,
+                false,
+                'history'
+            );
+
+            return;
+        }
+
+        if (syncSessionCaptureCount()) {
+            return;
+        }
+
+        if (age < 500) {
+            return;
+        }
+
+        const list =
+            document.querySelector(
+                '#caidos-lista'
+            );
+
+        const nowCount =
+            list?.children.length ?? 0;
+
+        const gone =
+            !signatureStillPresent(
+                pending.signature
+            );
+
+        if (!gone) {
+            return;
+        }
+
+        /*
+         * Only infer a capture if the throw was actually accepted by the
+         * game (the chosen ball count went down) and the target vanished
+         * shortly afterwards. This is much safer than body disappearance
+         * by itself.
+         */
+        const currentButton =
+            getBallButtons().find(
+                button =>
+                    ballIdentity(button) ===
+                    pending.ballIdentity
+            );
+
+        const countNow =
+            ballCount(currentButton);
+
+        const ballConsumed =
+            (
+                pending.ballCountBefore !==
+                    null &&
+                countNow !== null &&
+                countNow <
+                    pending.ballCountBefore
+            ) ||
+            (
+                pending.ballCountBefore ===
+                    null &&
+                totalUsed() >
+                    pending.usedBefore
+            );
+
+        if (
+            ballConsumed &&
+            nowCount <=
+                pending.beforeCount
+        ) {
+            recordCapture(
+                pending.token,
+                true,
+                'accepted throw + target removed'
+            );
+        }
+    }
+
+    function installCaptureObservers() {
+        const historyPanel =
+            document.querySelector(
+                '#capturas-painel'
+            );
+
+        if (
+            historyPanel &&
+            historyObserver?.target !==
+                historyPanel
+        ) {
+            historyObserver?.observer
+                ?.disconnect();
+
+            const observer =
+                new MutationObserver(() => {
+                    checkPendingOutcome();
+                });
+
+            observer.observe(
+                historyPanel,
+                {
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                }
+            );
+
+            historyObserver = {
+                observer,
+                target: historyPanel
+            };
+        }
+
+        const sessionPanel =
+            document.querySelector(
+                '#sessao-painel'
+            );
+
+        if (
+            sessionPanel &&
+            sessionObserver?.target !==
+                sessionPanel
+        ) {
+            sessionObserver?.observer
+                ?.disconnect();
+
+            const observer =
+                new MutationObserver(() => {
+                    syncSessionCaptureCount();
+                });
+
+            observer.observe(
+                sessionPanel,
+                {
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                }
+            );
+
+            sessionObserver = {
+                observer,
+                target: sessionPanel
+            };
+
+            syncSessionCaptureCount();
+        }
     }
 
     function monitorOutcome({
@@ -581,91 +918,44 @@
         signature,
         token,
         beforeHistory,
-        beforeCount
+        beforeCount,
+        ballIdentity: thrownBallIdentity,
+        ballCountBefore,
+        usedBefore
     }) {
-        const started = Date.now();
+        pendingOutcome = {
+            target,
+            signature,
+            token,
+            beforeHistory,
+            beforeCount,
+            ballIdentity:
+                thrownBallIdentity,
+            ballCountBefore,
+            usedBefore,
+            sentAt: Date.now()
+        };
 
-        const checks = [
-            180,
-            360,
-            650,
-            1000,
-            1450
-        ];
-
-        for (const delay of checks) {
-            setTimeout(() => {
-                if (
-                    resolvedTokens.has(token)
-                ) {
-                    return;
-                }
-
-                /*
-                 * Preferred method:
-                 * game's capture history changed.
-                 */
-                const history =
-                    historyFingerprint();
-
-                if (
-                    history &&
-                    history !== beforeHistory &&
-                    history !==
-                        lastHistoryFingerprint
-                ) {
-                    lastHistoryFingerprint =
-                        history;
-
-                    recordCapture(
-                        token,
-                        false
-                    );
-
-                    return;
-                }
-
-                /*
-                 * Give the client some time before
-                 * using the fallback.
-                 */
-                if (
-                    Date.now() - started < 600
-                ) {
-                    return;
-                }
-
-                /*
-                 * Fallback:
-                 * target disappeared immediately
-                 * after one of our throws.
-                 *
-                 * This is marked as estimated.
-                 */
-                const list =
-                    document.querySelector(
-                        '#caidos-lista'
-                    );
-
-                const nowCount =
-                    list?.children.length ?? 0;
-
-                const gone =
-                    !target?.isConnected &&
-                    !signatureStillPresent(
-                        signature
-                    );
-
-                if (
-                    gone &&
-                    nowCount <= beforeCount
-                ) {
-                    recordCapture(
-                        token,
-                        true
-                    );
-                }
-            }, delay);
+        /*
+         * Mutation observers normally resolve this immediately. These
+         * delayed checks cover clients that batch UI updates.
+         */
+        for (
+            const delay of [
+                250,
+                500,
+                900,
+                1400,
+                2200,
+                3200,
+                4500,
+                6200
+            ]
+        ) {
+            setTimeout(
+                checkPendingOutcome,
+                delay
+            );
         }
     }
 
@@ -688,6 +978,18 @@
 
         lastHistoryFingerprint =
             historyFingerprint();
+
+        observedSessionCaptures =
+            null;
+
+        sessionCaptureBase =
+            null;
+
+        pendingOutcome =
+            null;
+
+        installCaptureObservers();
+        syncSessionCaptureCount();
 
         syncInventoryUsage();
         updateUI();
@@ -879,7 +1181,13 @@
                 signature,
                 token,
                 beforeHistory,
-                beforeCount
+                beforeCount,
+                ballIdentity:
+                    chosenIdentity,
+                ballCountBefore:
+                    countBeforeThrow,
+                usedBefore:
+                    totalUsed()
             });
 
             /*
@@ -1953,10 +2261,12 @@
     function bootstrap() {
         installPanel();
         installHud();
+        installCaptureObservers();
 
         lastHistoryFingerprint =
             historyFingerprint();
 
+        syncSessionCaptureCount();
         syncInventoryUsage();
         updateUI();
 
@@ -1967,7 +2277,10 @@
         setInterval(() => {
             installPanel();
             installHud();
+            installCaptureObservers();
 
+            syncSessionCaptureCount();
+            checkPendingOutcome();
             syncInventoryUsage();
             updateUI();
         }, 1000);
