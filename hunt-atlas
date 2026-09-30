@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.2.0
+// @version      1.3.0
 // @description  Fast Pokémon-centric hunt finder with lock, capture, type and weakness filters.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -29,7 +29,7 @@
         'moth-pokeidle-hunt-atlas-filters-v2';
 
     const PERF_KEY =
-        'moth-pokeidle-hunt-atlas-performance-v1';
+        'moth-pokeidle-hunt-atlas-performance-v2';
 
     const BUTTON_ID =
         'moth-hunt-atlas-button';
@@ -243,14 +243,15 @@
         strongestPokemon: null,
         activePokemonId: null,
 
-        trainerXp: null,
-        trainerLevel: null,
-        trainerXpNext: null,
-        trainerNoCentro: true,
-        trainerSampleAt: 0,
-
         huntPerf: loadPerformance(),
-        observedMoveTypes: new Set(),
+
+        combatTargets: new Map(),
+        speciesCombat: new Map(),
+        combatCatalogStatus: 'idle',
+        combatCatalogPromise: null,
+
+        serverTypeChart: null,
+        huntAmplification: 1.5,
 
         typesBySpecies: new Map(),
         typeStatus: 'idle',
@@ -471,214 +472,992 @@
             .toLocaleString();
     }
 
-    function updateXpObservation(
-        gameState
+    function leadPokemon() {
+        const active =
+            state.pokemons.get(
+                Number(
+                    state.activePokemonId
+                )
+            );
+
+        return (
+            active ||
+            state.strongestPokemon ||
+            null
+        );
+    }
+
+    function leadSignature(
+        pokemon =
+            leadPokemon()
     ) {
-        const now =
-            Date.now();
+        if (!pokemon) {
+            return null;
+        }
 
-        const nextXp =
-            Number(
-                gameState?.xp
+        const stats =
+            pokemon.stats ||
+            {};
+
+        const ivs =
+            pokemon.ivs ||
+            {};
+
+        return [
+            pokemon.id,
+            pokemon.speciesId,
+            pokemon.level,
+            Math.round(
+                pokemonPower(
+                    pokemon
+                )
+            ),
+            stats.atk,
+            stats.spAtk,
+            ivs.speed,
+            pokemon.tmElemental,
+            pokemon.tmAoe,
+            pokemon.heldItemId,
+            pokemon.megaId ||
+                pokemon.mega ||
+                ''
+        ]
+            .map(
+                value =>
+                    value ??
+                    ''
+            )
+            .join(':');
+    }
+
+    function currentHunt() {
+        return (
+            state.hunts.find(
+                hunt =>
+                    hunt.slug ===
+                    state.currentHuntSlug
+            ) ||
+            null
+        );
+    }
+
+    function performanceKey(
+        huntSlug,
+        pokemon =
+            leadPokemon()
+    ) {
+        const signature =
+            leadSignature(
+                pokemon
             );
-
-        const nextLevel =
-            Number(
-                gameState?.level
-            );
-
-        const nextThreshold =
-            Number(
-                gameState?.xpProximo
-            );
-
-        const nextNoCentro =
-            gameState?.noCentro ===
-                undefined
-                ? state.trainerNoCentro
-                : Boolean(
-                    gameState.noCentro
-                );
 
         if (
-            state.trainerSampleAt &&
-            state.currentHuntSlug &&
-            !state.trainerNoCentro &&
-            !nextNoCentro &&
-            currentStrongestActive()
+            !huntSlug ||
+            !signature
         ) {
-            const elapsed =
-                Math.min(
-                    15000,
-                    Math.max(
-                        0,
-                        now -
-                            state.trainerSampleAt
-                    )
-                );
+            return null;
+        }
 
-            let gained = 0;
+        return (
+            huntSlug +
+            '|' +
+            signature
+        );
+    }
 
-            if (
-                Number.isFinite(
-                    state.trainerXp
-                ) &&
-                Number.isFinite(
-                    nextXp
-                )
-            ) {
-                if (
-                    nextXp >=
-                    state.trainerXp
-                ) {
-                    gained =
-                        nextXp -
-                        state.trainerXp;
-                } else if (
-                    Number.isFinite(
-                        state.trainerXpNext
-                    ) &&
-                    Number.isFinite(
-                        nextLevel
-                    ) &&
-                    Number.isFinite(
-                        state.trainerLevel
-                    ) &&
-                    nextLevel >
-                        state.trainerLevel
-                ) {
-                    gained =
-                        Math.max(
-                            0,
-                            state.trainerXpNext -
-                                state.trainerXp
-                        ) +
-                        Math.max(
-                            0,
-                            nextXp
-                        );
-                }
-            }
-
-            const key =
-                state.currentHuntSlug;
-
-            const strongest =
-                state.strongestPokemon;
-
-            const record = {
-                activeMs: 0,
-                xpGain: 0,
-                samples: 0,
-                pokemonId:
-                    strongest?.id || null,
-                pokemonSpeciesId:
-                    strongest?.speciesId || null,
-                pokemonLevel:
-                    Number(
-                        strongest?.level ||
-                        0
-                    ),
-                pokemonPower:
-                    pokemonPower(
-                        strongest
-                    ),
-                updatedAt:
-                    now,
-                ...(state.huntPerf.get(
-                    key
-                ) || {})
-            };
-
-            record.activeMs =
+    function createPerformanceRecord(
+        huntSlug,
+        pokemon
+    ) {
+        return {
+            version: 2,
+            huntSlug,
+            signature:
+                leadSignature(
+                    pokemon
+                ),
+            pokemonId:
+                pokemon?.id ??
+                null,
+            pokemonSpeciesId:
+                pokemon?.speciesId ??
+                null,
+            pokemonName:
+                pokemon?.nome ||
+                null,
+            pokemonLevel:
                 Number(
-                    record.activeMs ||
+                    pokemon?.level ||
                     0
-                ) +
-                elapsed;
-
-            record.xpGain =
-                Number(
-                    record.xpGain ||
-                    0
-                ) +
-                Math.max(
-                    0,
-                    gained
-                );
-
-            record.samples =
-                Number(
-                    record.samples ||
-                    0
-                ) +
-                1;
-
-            record.pokemonId =
-                strongest?.id || null;
-
-            record.pokemonSpeciesId =
-                strongest?.speciesId ||
-                null;
-
-            record.pokemonLevel =
-                Number(
-                    strongest?.level ||
-                    0
-                );
-
-            record.pokemonPower =
+                ),
+            pokemonPower:
                 pokemonPower(
-                    strongest
-                );
+                    pokemon
+                ),
 
-            record.updatedAt =
-                now;
+            kills: 0,
+            trainerXp: 0,
+            pokemonXp: 0,
+            gold: 0,
+
+            killIntervals: [],
+            sameTargetIntervals: [],
+            transitionIntervals: [],
+            allAttackIntervals: [],
+
+            attacks: 0,
+            damage: 0,
+            moveDamage: {},
+            hpSamples: [],
+            trainerXpMultSamples: [],
+            pokemonXpMultSamples: [],
+
+            firstEventAt: 0,
+            lastEventAt: 0,
+            lastKillAt: 0,
+            lastAttackAt: 0,
+            lastAttackSlot: null,
+
+            updatedAt:
+                Date.now()
+        };
+    }
+
+    function performanceRecord(
+        huntSlug =
+            state.currentHuntSlug,
+        create = false
+    ) {
+        const pokemon =
+            leadPokemon();
+
+        const key =
+            performanceKey(
+                huntSlug,
+                pokemon
+            );
+
+        if (!key) {
+            return null;
+        }
+
+        let record =
+            state.huntPerf.get(
+                key
+            );
+
+        if (
+            !record &&
+            create
+        ) {
+            record =
+                createPerformanceRecord(
+                    huntSlug,
+                    pokemon
+                );
 
             state.huntPerf.set(
                 key,
                 record
             );
+        }
 
+        return record;
+    }
+
+    function pushSample(
+        record,
+        key,
+        value,
+        max = 80
+    ) {
+        const number =
+            Number(value);
+
+        if (
+            !Number.isFinite(
+                number
+            ) ||
+            number < 0
+        ) {
+            return;
+        }
+
+        if (
+            !Array.isArray(
+                record[key]
+            )
+        ) {
+            record[key] = [];
+        }
+
+        record[key].push(
+            number
+        );
+
+        if (
+            record[key].length >
+            max
+        ) {
+            record[key].splice(
+                0,
+                record[key].length -
+                    max
+            );
+        }
+    }
+
+    function robustMean(
+        values
+    ) {
+        const clean =
+            (
+                Array.isArray(values)
+                    ? values
+                    : []
+            )
+                .map(Number)
+                .filter(
+                    value =>
+                        Number.isFinite(
+                            value
+                        ) &&
+                        value >= 0
+                )
+                .sort(
+                    (a, b) =>
+                        a - b
+                );
+
+        if (!clean.length) {
+            return null;
+        }
+
+        let from = 0;
+        let to =
+            clean.length;
+
+        if (
+            clean.length >=
+            10
+        ) {
+            const trim =
+                Math.floor(
+                    clean.length *
+                    0.1
+                );
+
+            from =
+                trim;
+
+            to =
+                clean.length -
+                trim;
+        }
+
+        const slice =
+            clean.slice(
+                from,
+                to
+            );
+
+        return (
+            slice.reduce(
+                (sum, value) =>
+                    sum + value,
+                0
+            ) /
+            slice.length
+        );
+    }
+
+    function median(
+        values
+    ) {
+        const clean =
+            (
+                Array.isArray(values)
+                    ? values
+                    : []
+            )
+                .map(Number)
+                .filter(
+                    Number.isFinite
+                )
+                .sort(
+                    (a, b) =>
+                        a - b
+                );
+
+        if (!clean.length) {
+            return null;
+        }
+
+        const middle =
+            Math.floor(
+                clean.length /
+                2
+            );
+
+        return clean.length % 2
+            ? clean[middle]
+            : (
+                clean[
+                    middle - 1
+                ] +
+                clean[
+                    middle
+                ]
+            ) /
+                2;
+    }
+
+    /*
+     * Exact upstream XP curve from shared/sell-value.mjs.
+     */
+    function xpDoNivel(
+        level
+    ) {
+        const n =
+            Math.max(
+                1,
+                Number(level) ||
+                1
+            );
+
+        if (n <= 150) {
+            return (
+                Math.floor(
+                    6 *
+                        n *
+                        n /
+                        10
+                ) +
+                8
+            );
+        }
+
+        return Math.round(
+            13500 *
+                Math.pow(
+                    n /
+                        150,
+                    1.25
+                )
+        );
+    }
+
+    function touchRecord(
+        record,
+        now =
+            Date.now()
+    ) {
+        if (!record) {
+            return;
+        }
+
+        if (
+            !record.firstEventAt
+        ) {
+            record.firstEventAt =
+                now;
+        }
+
+        record.lastEventAt =
+            now;
+
+        record.updatedAt =
+            now;
+    }
+
+    function combatSlot(
+        event
+    ) {
+        const value =
+            event?.slot ??
+            event?.s;
+
+        if (
+            value ===
+                undefined ||
+            value === null
+        ) {
+            return null;
+        }
+
+        return String(
+            value
+        );
+    }
+
+    function recordTargetHp(
+        record,
+        target
+    ) {
+        if (
+            !record ||
+            !target ||
+            target.hpRecorded
+        ) {
+            return;
+        }
+
+        const maxHp =
+            Number(
+                target.maxHp
+            );
+
+        const level =
+            Number(
+                target.level
+            );
+
+        if (
+            !Number.isFinite(
+                maxHp
+            ) ||
+            maxHp <= 0 ||
+            !Number.isFinite(
+                level
+            ) ||
+            level <= 0
+        ) {
+            return;
+        }
+
+        if (
+            !Array.isArray(
+                record.hpSamples
+            )
+        ) {
+            record.hpSamples =
+                [];
+        }
+
+        record.hpSamples.push({
+            speciesId:
+                Number(
+                    target.speciesId
+                ) ||
+                null,
+            level,
+            maxHp
+        });
+
+        if (
+            record.hpSamples.length >
+            120
+        ) {
+            record.hpSamples.splice(
+                0,
+                record.hpSamples.length -
+                    120
+            );
+        }
+
+        target.hpRecorded =
+            true;
+    }
+
+    function recordSpawnEvent(
+        event
+    ) {
+        const slot =
+            combatSlot(
+                event
+            );
+
+        if (!slot) {
+            return;
+        }
+
+        const hp =
+            Number(
+                event?.maxHp ??
+                event?.hp
+            );
+
+        state.combatTargets.set(
+            slot,
+            {
+                slot,
+                speciesId:
+                    Number(
+                        event?.speciesId ??
+                        event?.pokeId
+                    ) ||
+                    null,
+                name:
+                    event?.nome ||
+                    null,
+                level:
+                    Number(
+                        event?.level
+                    ) ||
+                    Number(
+                        currentHunt()
+                            ?.nivel
+                    ) ||
+                    1,
+                maxHp:
+                    Number.isFinite(
+                        hp
+                    )
+                        ? hp
+                        : null,
+                playerAttacks: 0,
+                hpRecorded:
+                    false,
+                seenAt:
+                    Date.now()
+            }
+        );
+    }
+
+    function recordAttackEvent(
+        event
+    ) {
+        if (
+            event?.por !==
+                'jogador'
+        ) {
+            return;
+        }
+
+        const record =
+            performanceRecord(
+                state.currentHuntSlug,
+                true
+            );
+
+        if (!record) {
+            return;
+        }
+
+        const now =
+            Date.now();
+
+        touchRecord(
+            record,
+            now
+        );
+
+        const slot =
+            combatSlot(
+                event
+            );
+
+        if (
+            record.lastAttackAt
+        ) {
+            const gap =
+                now -
+                record.lastAttackAt;
+
+            /*
+             * Multiple AoE damage rows can share one timestamp. Do not
+             * mistake those for 0 ms attack cadence.
+             */
             if (
-                record.samples % 8 === 0
+                gap >= 100 &&
+                gap <= 300000
             ) {
-                savePerformance();
+                pushSample(
+                    record,
+                    'allAttackIntervals',
+                    gap
+                );
+
+                if (
+                    slot &&
+                    slot ===
+                        record.lastAttackSlot
+                ) {
+                    pushSample(
+                        record,
+                        'sameTargetIntervals',
+                        gap
+                    );
+                } else {
+                    pushSample(
+                        record,
+                        'transitionIntervals',
+                        gap
+                    );
+                }
             }
         }
 
-        if (
-            Number.isFinite(
-                nextXp
-            )
-        ) {
-            state.trainerXp =
-                nextXp;
-        }
-
-        if (
-            Number.isFinite(
-                nextLevel
-            )
-        ) {
-            state.trainerLevel =
-                nextLevel;
-        }
-
-        if (
-            Number.isFinite(
-                nextThreshold
-            )
-        ) {
-            state.trainerXpNext =
-                nextThreshold;
-        }
-
-        state.trainerNoCentro =
-            nextNoCentro;
-
-        state.trainerSampleAt =
+        record.lastAttackAt =
             now;
+
+        record.lastAttackSlot =
+            slot;
+
+        record.attacks =
+            Number(
+                record.attacks ||
+                0
+            ) +
+            1;
+
+        const damage =
+            Math.max(
+                0,
+                Number(
+                    event?.dano
+                ) ||
+                0
+            );
+
+        const effectiveness =
+            Number(
+                event?.ef
+            );
+
+        const type =
+            typeof event?.tipo ===
+                'string'
+                ? String(
+                    event.tipo
+                ).toUpperCase()
+                : 'UNKNOWN';
+
+        record.damage =
+            Number(
+                record.damage ||
+                0
+            ) +
+            damage;
+
+        if (
+            damage > 0 &&
+            Number.isFinite(
+                effectiveness
+            ) &&
+            effectiveness > 0
+        ) {
+            if (
+                !record.moveDamage ||
+                typeof record.moveDamage !==
+                    'object'
+            ) {
+                record.moveDamage =
+                    {};
+            }
+
+            const sample =
+                record.moveDamage[
+                    type
+                ] || {
+                    count: 0,
+                    neutralDamage: 0,
+                    actualDamage: 0
+                };
+
+            sample.count++;
+            sample.neutralDamage +=
+                damage /
+                effectiveness;
+            sample.actualDamage +=
+                damage;
+
+            record.moveDamage[
+                type
+            ] =
+                sample;
+        }
+
+        if (slot) {
+            let target =
+                state.combatTargets.get(
+                    slot
+                );
+
+            if (!target) {
+                target = {
+                    slot,
+                    speciesId: null,
+                    name: null,
+                    level:
+                        Number(
+                            currentHunt()
+                                ?.nivel
+                        ) ||
+                        1,
+                    maxHp: null,
+                    playerAttacks: 0,
+                    hpRecorded:
+                        false,
+                    seenAt: now
+                };
+
+                state.combatTargets.set(
+                    slot,
+                    target
+                );
+            }
+
+            if (
+                !Number.isFinite(
+                    Number(
+                        target.maxHp
+                    )
+                ) &&
+                target.playerAttacks ===
+                    0
+            ) {
+                const hpAfter =
+                    Number(
+                        event?.hpAlvo
+                    );
+
+                if (
+                    Number.isFinite(
+                        hpAfter
+                    ) &&
+                    damage > 0
+                ) {
+                    target.maxHp =
+                        Math.max(
+                            1,
+                            hpAfter +
+                                damage
+                        );
+                }
+            }
+
+            target.playerAttacks++;
+
+            recordTargetHp(
+                record,
+                target
+            );
+        }
+    }
+
+    function recordDeathEvent(
+        event
+    ) {
+        if (
+            event?.quem !==
+                'selvagem'
+        ) {
+            return;
+        }
+
+        const record =
+            performanceRecord(
+                state.currentHuntSlug,
+                true
+            );
+
+        if (!record) {
+            return;
+        }
+
+        const now =
+            Date.now();
+
+        touchRecord(
+            record,
+            now
+        );
+
+        if (
+            record.lastKillAt
+        ) {
+            const gap =
+                now -
+                record.lastKillAt;
+
+            if (
+                gap >= 100 &&
+                gap <= 600000
+            ) {
+                pushSample(
+                    record,
+                    'killIntervals',
+                    gap,
+                    100
+                );
+            }
+        }
+
+        record.lastKillAt =
+            now;
+
+        record.kills =
+            Number(
+                record.kills ||
+                0
+            ) +
+            1;
+
+        const trainerXp =
+            Math.max(
+                0,
+                Number(
+                    event?.xpTreinador ??
+                    event?.xp
+                ) ||
+                0
+            );
+
+        const pokemonXp =
+            Math.max(
+                0,
+                Number(
+                    event?.xpPokemon ??
+                    event?.xp
+                ) ||
+                0
+            );
+
+        record.trainerXp =
+            Number(
+                record.trainerXp ||
+                0
+            ) +
+            trainerXp;
+
+        record.pokemonXp =
+            Number(
+                record.pokemonXp ||
+                0
+            ) +
+            pokemonXp;
+
+        record.gold =
+            Number(
+                record.gold ||
+                0
+            ) +
+            Math.max(
+                0,
+                Number(
+                    event?.ouro
+                ) ||
+                0
+            ) +
+            Math.max(
+                0,
+                Number(
+                    event?.ouroVendaAuto
+                ) ||
+                0
+            );
+
+        const hunt =
+            currentHunt();
+
+        const baseXp =
+            xpDoNivel(
+                hunt?.nivel ||
+                event?.level ||
+                1
+            );
+
+        if (
+            trainerXp > 0 &&
+            baseXp > 0
+        ) {
+            pushSample(
+                record,
+                'trainerXpMultSamples',
+                trainerXp /
+                    baseXp,
+                80
+            );
+        }
+
+        if (
+            pokemonXp > 0 &&
+            baseXp > 0
+        ) {
+            pushSample(
+                record,
+                'pokemonXpMultSamples',
+                pokemonXp /
+                    baseXp,
+                80
+            );
+        }
+
+        const slot =
+            combatSlot(
+                event
+            );
+
+        if (slot) {
+            const target =
+                state.combatTargets.get(
+                    slot
+                );
+
+            recordTargetHp(
+                record,
+                target
+            );
+
+            state.combatTargets.delete(
+                slot
+            );
+        }
+
+        if (
+            record.kills % 3 ===
+            0
+        ) {
+            savePerformance();
+        }
+
+        if (
+            state.drawerOpen
+        ) {
+            queueRender();
+        }
+    }
+
+    function processCombatEvents(
+        events
+    ) {
+        if (
+            !Array.isArray(
+                events
+            ) ||
+            !state.currentHuntSlug
+        ) {
+            return;
+        }
+
+        for (
+            const event of
+            events
+        ) {
+            if (
+                event?.k ===
+                    'spawn'
+            ) {
+                recordSpawnEvent(
+                    event
+                );
+            } else if (
+                event?.k ===
+                    'ataque'
+            ) {
+                recordAttackEvent(
+                    event
+                );
+            } else if (
+                event?.k ===
+                    'morte'
+            ) {
+                recordDeathEvent(
+                    event
+                );
+            }
+        }
     }
 
     function loadCache() {
@@ -887,10 +1666,25 @@
             gameState.activeId !==
                 null
         ) {
-            state.activePokemonId =
+            const nextActiveId =
                 Number(
                     gameState.activeId
                 );
+
+            if (
+                Number.isFinite(
+                    nextActiveId
+                ) &&
+                nextActiveId !==
+                    Number(
+                        state.activePokemonId
+                    )
+            ) {
+                state.combatTargets.clear();
+            }
+
+            state.activePokemonId =
+                nextActiveId;
         }
 
         mergePokedex(
@@ -904,10 +1698,6 @@
 
         mergeOwnedPokemon(
             gameState.pkMud
-        );
-
-        updateXpObservation(
-            gameState
         );
 
         if (
@@ -964,8 +1754,7 @@
         state.currentHuntSlug =
             huntEvent.slug;
 
-        state.trainerSampleAt =
-            Date.now();
+        state.combatTargets.clear();
 
         state.status =
             `Entered ${huntEvent.nome || huntEvent.slug}.`;
@@ -998,40 +1787,18 @@
             message?.t === 'batalha' &&
             Array.isArray(message.ev)
         ) {
-            const strongest =
-                state.strongestPokemon;
-
-            if (
-                strongest &&
-                currentStrongestActive()
-            ) {
-                for (
-                    const event of
-                    message.ev
-                ) {
-                    if (
-                        event?.k ===
-                            'ataque' &&
-                        event?.por ===
-                            'jogador' &&
-                        typeof event.tipo ===
-                            'string'
-                    ) {
-                        state.observedMoveTypes.add(
-                            String(
-                                event.tipo
-                            ).toUpperCase()
-                        );
-                    }
-                }
-            }
-        }
-
-        if (
+            /*
+             * Hunt transition first so spawns/attacks in the same packet
+             * are attributed to the new hunt.
+             */
             handleHuntBattleEvent(
                 message
-            )
-        ) {
+            );
+
+            processCombatEvents(
+                message.ev
+            );
+
             return;
         }
 
@@ -1039,6 +1806,28 @@
             message?.t ===
                 'welcome'
         ) {
+            if (
+                message.tabelaTipos &&
+                typeof message.tabelaTipos ===
+                    'object'
+            ) {
+                state.serverTypeChart =
+                    message.tabelaTipos;
+            }
+
+            if (
+                Number.isFinite(
+                    Number(
+                        message.ampliacaoHunt
+                    )
+                )
+            ) {
+                state.huntAmplification =
+                    Number(
+                        message.ampliacaoHunt
+                    );
+            }
+
             if (
                 Array.isArray(
                     message.hunts
