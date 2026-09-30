@@ -1365,7 +1365,7 @@
                     record,
                     'killIntervals',
                     gap,
-                    100
+                    40
                 );
             }
         }
@@ -2915,7 +2915,39 @@
         const exact =
             recordsForLead();
 
-        if (exact.length) {
+        const exactAttacks =
+            exact.reduce(
+                (sum, record) =>
+                    sum +
+                    Number(
+                        record.attacks ||
+                        0
+                    ),
+                0
+            );
+
+        const exactHp =
+            exact.reduce(
+                (sum, record) =>
+                    sum +
+                    (
+                        record.hpSamples
+                            ?.length ||
+                        0
+                    ),
+                0
+            );
+
+        /*
+         * Once the current level has enough direct combat data, it stands
+         * alone. Before that, blend the nearest previous level so a level-up
+         * does not blank the Atlas for the first few attacks.
+         */
+        if (
+            exact.length &&
+            exactAttacks >= 6 &&
+            exactHp >= 1
+        ) {
             return {
                 records: exact,
                 warmStart: false
@@ -2932,10 +2964,16 @@
 
         if (!loadout) {
             return {
-                records: [],
-                warmStart: false
+                records: exact,
+                warmStart:
+                    false
             };
         }
+
+        const currentSignature =
+            leadSignature(
+                pokemon
+            );
 
         const compatible =
             [...state.huntPerf.values()]
@@ -2945,6 +2983,8 @@
                             2 &&
                         record.loadoutSignature ===
                             loadout &&
+                        record.signature !==
+                            currentSignature &&
                         Number(
                             record.attacks ||
                             0
@@ -2953,7 +2993,7 @@
 
         if (!compatible.length) {
             return {
-                records: [],
+                records: exact,
                 warmStart: false
             };
         }
@@ -2978,19 +3018,24 @@
                 )
             );
 
+        const nearest =
+            compatible.filter(
+                record =>
+                    Math.abs(
+                        Number(
+                            record.pokemonLevel ||
+                            0
+                        ) -
+                        currentLevel
+                    ) ===
+                    nearestDistance
+            );
+
         return {
-            records:
-                compatible.filter(
-                    record =>
-                        Math.abs(
-                            Number(
-                                record.pokemonLevel ||
-                                0
-                            ) -
-                            currentLevel
-                        ) ===
-                        nearestDistance
-                ),
+            records: [
+                ...exact,
+                ...nearest
+            ],
             warmStart: true
         };
     }
@@ -3237,8 +3282,14 @@
                 sameTarget
             );
 
+        const cadenceThroughput =
+            robustMean(
+                allAttacks
+            );
+
         const cadenceMs =
             cadenceMeasured ||
+            cadenceThroughput ||
             UPSTREAM_GLOBAL_ATTACK_MS;
 
         let movementMs =
@@ -3395,6 +3446,11 @@
             cadenceMeasured:
                 Boolean(
                     cadenceMeasured
+                ),
+            cadenceFromThroughput:
+                !cadenceMeasured &&
+                Boolean(
+                    cadenceThroughput
                 ),
             movementMs,
             movementMeasured:
@@ -5447,7 +5503,7 @@
                         ? `${profile.attacks} attacks`
                         : null,
                     profile.cadenceMs
-                        ? `${(profile.cadenceMs / 1000).toFixed(2)}s attack cadence${profile.cadenceMeasured ? '' : ' (900ms floor)'}`
+                        ? `${(profile.cadenceMs / 1000).toFixed(2)}s attack cadence${profile.cadenceMeasured ? '' : profile.cadenceFromThroughput ? ' (attack throughput)' : ' (900ms floor)'}`
                         : null,
                     profile.movementMs
                         ? `${(profile.movementMs / 1000).toFixed(2)}s travel`
