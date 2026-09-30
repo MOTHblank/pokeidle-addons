@@ -2,7 +2,7 @@
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
 // @version      1.3.0
-// @description  Fast Pokémon-centric hunt finder with lock, capture, type and weakness filters.
+// @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -419,20 +419,6 @@
                 pokemonPower(pokemon)
             )
         ].join(':');
-    }
-
-    function currentStrongestActive() {
-        const strongest =
-            state.strongestPokemon;
-
-        if (!strongest) {
-            return false;
-        }
-
-        return (
-            Number(state.activePokemonId) ===
-            Number(strongest.id)
-        );
     }
 
     function formatRate(
@@ -5014,13 +5000,13 @@
                             xpInfo?.value
                                 ? (
                                     xpInfo.observed
-                                        ? 'observed '
-                                        : 'est. '
+                                        ? 'measured '
+                                        : 'combat model '
                                 ) +
                                   formatRate(
                                       xpInfo.value
                                   ) +
-                                  ' XP/h'
+                                  ' trainer XP/h'
                                 : null;
 
                         const sub =
@@ -5107,12 +5093,12 @@
             return;
         }
 
-        const strongest =
-            state.strongestPokemon;
+        const lead =
+            leadPokemon();
 
-        if (!strongest) {
+        if (!lead) {
             host.innerHTML =
-                '<div class="mha-xp-note">Waiting for your Pokémon roster before calculating XP/hour.</div>';
+                '<div class="mha-xp-note">Waiting for the active Pokémon before calculating trainer XP/hour.</div>';
 
             return;
         }
@@ -5133,13 +5119,7 @@
             usable[0] || null;
 
         const current =
-            state.currentHuntSlug
-                ? state.hunts.find(
-                    hunt =>
-                        hunt.slug ===
-                        state.currentHuntSlug
-                )
-                : null;
+            currentHunt();
 
         const currentXp =
             current
@@ -5148,26 +5128,49 @@
                 )
                 : null;
 
-        const samples =
-            [...state.huntPerf.values()]
+        const profile =
+            combatProfile();
+
+        const measuredHunts =
+            recordsForLead()
                 .filter(
                     record =>
-                        recordObservedXph(
+                        observedRates(
                             record
                         )
                 )
                 .length;
 
-        const strongestText =
-            `${strongest.nome || 'Pokémon'} Lv ${Number(strongest.level || 0)} · power ${Math.round(pokemonPower(strongest))}`;
+        const leadText =
+            `${lead.nome || 'Pokémon'} Lv ${Number(lead.level || 0)} · lead · power ${Math.round(pokemonPower(lead))}`;
+
+        const profileDetails =
+            profile
+                ? [
+                    profile.kills
+                        ? `${profile.kills} kills`
+                        : null,
+                    profile.attacks
+                        ? `${profile.attacks} attacks`
+                        : null,
+                    profile.cadenceMs
+                        ? `${(profile.cadenceMs / 1000).toFixed(2)}s attack cadence${profile.cadenceMeasured ? '' : ' (900ms floor)'}`
+                        : null,
+                    profile.movementMs
+                        ? `${(profile.movementMs / 1000).toFixed(2)}s travel`
+                        : null,
+                    profile.hpSamples
+                        ? `${profile.hpSamples} HP samples`
+                        : null
+                ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : '';
 
         const calibrationText =
-            samples
-                ? `${samples} hunt${samples === 1 ? '' : 's'} calibrated from real XP gain`
-                : currentStrongestActive()
-                    ? 'learning your real XP rate now'
-                    : 'activate your strongest Pokémon to calibrate XP/hour';
-
+            profile?.attacks
+                ? `${measuredHunts ? measuredHunts + ' measured hunt' + (measuredHunts === 1 ? '' : 's') : 'combat model calibrating'}${profileDetails ? ' · ' + profileDetails : ''}`
+                : 'learning this lead Pokémon: waiting for real attack and kill events';
         const bestRows =
             usable
                 .slice(0, 5)
@@ -5181,7 +5184,7 @@
                             <div class="mha-best-row">
                                 <span class="mha-best-rank">${index + 1}</span>
                                 <span class="mha-best-name">${escapeHtml(row.hunt.nome || row.hunt.slug)} · Lv ${Number(row.hunt.nivel || 0)}</span>
-                                <span class="mha-xp-value">${row.xp.observed ? 'observed ' : 'est. '}${formatRate(row.xp.value)} XP/h</span>
+                                <span class="mha-xp-value" title="${escapeHtml([row.xp.killsH ? Math.round(row.xp.killsH) + ' kills/h' : null, row.xp.pokemonValue ? formatRate(row.xp.pokemonValue) + ' Pokémon XP/h' : null].filter(Boolean).join(' · '))}">${row.xp.observed ? 'measured ' : 'model '}${formatRate(row.xp.value)} XP/h</span>
                                 <button
                                     type="button"
                                     class="mha-go ${here ? 'current' : ''}"
@@ -5196,14 +5199,14 @@
 
         host.innerHTML = `
             <div class="mha-xp-top">
-                <strong>${escapeHtml(strongestText)}</strong>
-                <span>${best ? 'Best: ' + escapeHtml(formatRate(best.xp.value)) + ' XP/h' : 'XP/h learning…'}</span>
+                <strong>${escapeHtml(leadText)}</strong>
+                <span>${best ? 'Best trainer XP: ' + escapeHtml(formatRate(best.xp.value)) + '/h' : 'Trainer XP/h learning…'}</span>
             </div>
 
             <div class="mha-xp-note">
                 ${escapeHtml(calibrationText)}
-                ${currentXp?.value ? ' · current ' + escapeHtml(formatRate(currentXp.value)) + ' XP/h' : ''}
-                · estimates use your measured XP rate, hunt level and type matchup.
+                ${currentXp?.value ? ' · current ' + (currentXp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(currentXp.value)) + ' trainer XP/h' : ''}
+                · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon's real combat.
             </div>
 
             <div class="mha-best-list">
@@ -5427,7 +5430,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.2 loaded'
+            '[PokéIdle Hunt Atlas] v1.3 loaded'
         );
     }
 
