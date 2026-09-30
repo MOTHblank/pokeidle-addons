@@ -1127,7 +1127,40 @@
 
         const decoded = decodeProtocolData(data);
 
-        if (!decoded || decoded.t !== 'batalha' || !Array.isArray(decoded.ev)) return;
+        if (!decoded) return;
+
+        if (decoded.t === 'welcome') {
+            mergeBallCatalog(
+                decoded.catalogoBolas
+            );
+
+            mergeProtocolState(
+                decoded.estado
+            );
+
+            maybeRestock();
+            updateUI();
+
+            return;
+        }
+
+        if (decoded.t === 'estado') {
+            mergeProtocolState(
+                decoded.estado
+            );
+
+            maybeRestock();
+            updateUI();
+
+            return;
+        }
+
+        if (
+            decoded.t !== 'batalha' ||
+            !Array.isArray(decoded.ev)
+        ) {
+            return;
+        }
 
         for (const event of decoded.ev) {
             if (event?.k === 'bola') handleBallResult(event);
@@ -1144,6 +1177,17 @@
 
     function attachProtocolSocket(socket) {
         protocolSockets++;
+        activeProtocolSocket = socket;
+
+        socket.addEventListener('close', () => {
+            if (
+                activeProtocolSocket ===
+                socket
+            ) {
+                activeProtocolSocket =
+                    null;
+            }
+        });
 
         socket.addEventListener('message', event => {
             if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
@@ -1170,7 +1214,9 @@
         const NativeWebSocket = page.WebSocket;
         if (typeof NativeWebSocket !== 'function') return false;
 
-        if (page.__mothAutoCatchWebSocketHookV6) {
+        if (
+            page.__mothAutoCatchWebSocketHookV61
+        ) {
             protocolHookInstalled = true;
             return true;
         }
@@ -1185,7 +1231,7 @@
 
         try {
             page.WebSocket = WrappedWebSocket;
-            page.__mothAutoCatchWebSocketHookV6 = true;
+            page.__mothAutoCatchWebSocketHookV61 = true;
             protocolHookInstalled = page.WebSocket === WrappedWebSocket;
 
             if (protocolHookInstalled) {
@@ -1245,6 +1291,7 @@
         installPanel();
         installHud();
         syncInventoryUsage();
+        maybeRestock();
 
         const fallenPanel = q('#caidos');
         const states = scanTargets();
@@ -1358,6 +1405,9 @@
         inventoryBaseline.clear();
         targetStates.clear();
         pendingBySlot.clear();
+        restockPending.clear();
+        restockFailures = 0;
+        restockBlockedUntil = 0;
 
         syncInventoryUsage();
         updateUI();
