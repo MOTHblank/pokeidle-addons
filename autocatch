@@ -23,7 +23,7 @@
 
     const DEFAULTS = {
         enabled: false,
-        intervalMs: 650,
+        intervalMs: 100,
         showHud: true,
         use: {
             poke: true,
@@ -48,6 +48,15 @@
             const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
 
             // escalation existed in v4; intentionally ignore it from now on.
+            /*
+             * 650 ms was the old default. With upstream's stable data-slot
+             * identity we no longer need that conservative delay, so migrate
+             * only that legacy default value to the new 100 ms baseline.
+             */
+            if (Number(saved.intervalMs) === 650) {
+                saved.intervalMs = 100;
+            }
+
             return {
                 ...DEFAULTS,
                 ...saved,
@@ -1050,7 +1059,7 @@
         interval.addEventListener('change', () => {
             settings.intervalMs = Math.max(
                 MIN_INTERVAL_MS,
-                Math.min(5000, Number(interval.value) || 650)
+                Math.min(5000, Number(interval.value) || MIN_INTERVAL_MS)
             );
 
             interval.value = settings.intervalMs;
