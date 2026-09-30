@@ -1,0 +1,1891 @@
+// ==UserScript==
+// @name         PokéIdle Auto Catch+
+// @namespace    moth.pokeidle
+// @version      4.0.0
+// @description  Configurable auto-catch with capture statistics HUD.
+// @match        https://pokeidle.io/*
+// @match        https://www.pokeidle.io/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
+
+    const DEFAULTS = {
+        enabled: false,
+
+        // How often to attempt a throw.
+        intervalMs: 650,
+
+        // 0 = keep using the weakest ball forever.
+        // Example: 5 = after 5 attempts use the next available tier.
+        escalateAfter: 0,
+
+        showHud: true,
+
+        use: {
+            poke: true,
+            super: true,
+            ultra: true,
+
+            // Deliberately disabled by default.
+            master: false,
+            other: false
+        },
+
+        // Never spend below these quantities.
+        reserve: {
+            poke: 0,
+            super: 0,
+            ultra: 0,
+            master: 1,
+            other: 0
+        }
+    };
+
+    function loadSettings() {
+        try {
+            const saved =
+                JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+
+            return {
+                ...DEFAULTS,
+                ...saved,
+                use: {
+                    ...DEFAULTS.use,
+                    ...(saved.use || {})
+                },
+                reserve: {
+                    ...DEFAULTS.reserve,
+                    ...(saved.reserve || {})
+                }
+            };
+        } catch {
+            return structuredClone(DEFAULTS);
+        }
+    }
+
+    let settings = loadSettings();
+
+    let timer = null;
+
+    let currentTargetSignature = null;
+    let currentTargetToken = 0;
+    let targetThrows = 0;
+
+    let resolvedTokens = new Set();
+
+    let lastHistoryFingerprint = '';
+
+    const inventoryBaseline = new Map();
+
+    let stats = freshStats();
+
+    function freshStats() {
+        return {
+            startedAt: Date.now(),
+
+            attempts: 0,
+            captures: 0,
+            inferredCaptures: 0,
+
+            used: {
+                poke: 0,
+                super: 0,
+                ultra: 0,
+                master: 0,
+                other: 0
+            },
+
+            status: 'Idle'
+        };
+    }
+
+    // ---------------------------------------------------------------------
+    // Settings
+    // ---------------------------------------------------------------------
+
+    function saveSettings() {
+        localStorage.setItem(
+            SETTINGS_KEY,
+            JSON.stringify(settings)
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // General helpers
+    // ---------------------------------------------------------------------
+
+    function normalize(value) {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+    }
+
+    function visible(el) {
+        if (!el || !el.isConnected) {
+            return false;
+        }
+
+        const style = getComputedStyle(el);
+
+        return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+        );
+    }
+
+    function fireClick(el) {
+        if (!el) return;
+
+        const opts = {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        };
+
+        try {
+            el.dispatchEvent(
+                new PointerEvent('pointerdown', opts)
+            );
+
+            el.dispatchEvent(
+                new PointerEvent('pointerup', opts)
+            );
+        } catch (_) {}
+
+        el.dispatchEvent(
+            new MouseEvent('mousedown', opts)
+        );
+
+        el.dispatchEvent(
+            new MouseEvent('mouseup', opts)
+        );
+
+        el.dispatchEvent(
+            new MouseEvent('click', opts)
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Poké Balls
+    // ---------------------------------------------------------------------
+
+    function classifyBall(button) {
+        const text = normalize([
+            button?.title,
+            button?.getAttribute('aria-label'),
+            button?.querySelector('img')?.src
+        ]
+            .filter(Boolean)
+            .join(' '));
+
+        if (text.includes('master')) {
+            return 'master';
+        }
+
+        if (text.includes('ultra')) {
+            return 'ultra';
+        }
+
+        if (
+            text.includes('super') ||
+            text.includes('great')
+        ) {
+            return 'super';
+        }
+
+        if (text.includes('poke')) {
+            return 'poke';
+        }
+
+        return 'other';
+    }
+
+    function ballCount(button) {
+        const title = button?.title || '';
+
+        const match = title.match(
+            /(?:voce tem|você tem)\s+([\d.,]+)/i
+        );
+
+        if (!match) {
+            return null;
+        }
+
+        // Ball counts are integers:
+        // 4.972 -> 4972
+        const digits = match[1]
+            .replace(/\D/g, '');
+
+        return digits
+            ? Number(digits)
+            : null;
+    }
+
+    function ballLabel(button) {
+        const title = button?.title || '';
+
+        return (
+            title.split('—')[0].trim() ||
+            classifyBall(button)
+        );
+    }
+
+    function ballIdentity(button) {
+        const key = classifyBall(button);
+
+        const img = normalize(
+            button?.querySelector('img')?.src || ''
+        );
+
+        return [
+            key,
+            normalize(ballLabel(button)),
+            img
+        ].join('|');
+    }
+
+    function getBallButtons() {
+        return [
+            ...document.querySelectorAll(
+                '#caidos-bolas button.caidos-bola'
+            )
+        ];
+    }
+
+    /*
+     * Track actual inventory decreases instead of assuming
+     * every generated click was accepted by the game.
+     */
+    function syncInventoryUsage() {
+        for (const button of getBallButtons()) {
+            const count = ballCount(button);
+
+            if (count === null) {
+                continue;
+            }
+
+            const id = ballIdentity(button);
+            const key = classifyBall(button);
+
+            const previous =
+                inventoryBaseline.get(id);
+
+            if (
+                previous !== undefined &&
+                count < previous
+            ) {
+                stats.used[key] +=
+                    previous - count;
+            }
+
+            inventoryBaseline.set(id, count);
+        }
+    }
+
+    function rankFor(key) {
+        return {
+            poke: 0,
+            super: 1,
+            ultra: 2,
+            other: 3,
+            master: 4
+        }[key] ?? 99;
+    }
+
+    function getEligibleBalls() {
+        return getBallButtons()
+            .map((button, index) => {
+                const key = classifyBall(button);
+
+                return {
+                    button,
+                    key,
+                    index,
+                    count: ballCount(button),
+                    rank: rankFor(key)
+                };
+            })
+
+            .filter(({
+                button,
+                key,
+                count
+            }) => {
+                if (
+                    button.disabled ||
+                    !visible(button)
+                ) {
+                    return false;
+                }
+
+                if (!settings.use[key]) {
+                    return false;
+                }
+
+                const reserve =
+                    Number(
+                        settings.reserve[key] || 0
+                    );
+
+                return (
+                    count === null ||
+                    count > reserve
+                );
+            })
+
+            .sort(
+                (a, b) =>
+                    a.rank - b.rank ||
+                    a.index - b.index
+            );
+    }
+
+    function chooseBall() {
+        const eligible =
+            getEligibleBalls();
+
+        if (!eligible.length) {
+            return null;
+        }
+
+        // Weakest ball by default.
+        let index = 0;
+
+        /*
+         * Optional escalation:
+         *
+         * escalateAfter = 5
+         *
+         * throws 0-4  -> Poké
+         * throws 5-9  -> Super
+         * throws 10+  -> Ultra
+         */
+        if (settings.escalateAfter > 0) {
+            index = Math.floor(
+                targetThrows /
+                settings.escalateAfter
+            );
+
+            index = Math.min(
+                index,
+                eligible.length - 1
+            );
+        }
+
+        return eligible[index];
+    }
+
+    function selectBall(choice) {
+        if (!choice?.button) {
+            return false;
+        }
+
+        if (
+            !choice.button.classList.contains('on')
+        ) {
+            fireClick(choice.button);
+        }
+
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Targets
+    // ---------------------------------------------------------------------
+
+    function getTarget() {
+        const list =
+            document.querySelector('#caidos-lista');
+
+        if (!list) {
+            return null;
+        }
+
+        for (const child of list.children) {
+            if (visible(child)) {
+                return child;
+            }
+        }
+
+        return null;
+    }
+
+    function targetSignature(target) {
+        if (!target) {
+            return '';
+        }
+
+        for (
+            const attr of [
+                'data-id',
+                'data-pokemon-id',
+                'data-poke-id',
+                'data-uid'
+            ]
+        ) {
+            const value =
+                target.getAttribute?.(attr);
+
+            if (value) {
+                return `${attr}:${value}`;
+            }
+        }
+
+        const image = normalize(
+            target.querySelector?.('img')?.src || ''
+        );
+
+        const text = normalize(
+            target.textContent
+        )
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        return `${image}|${text.slice(0, 120)}`;
+    }
+
+    // ---------------------------------------------------------------------
+    // Capture detection
+    // ---------------------------------------------------------------------
+
+    function historyFingerprint() {
+        const panel =
+            document.querySelector(
+                '#capturas-painel'
+            );
+
+        if (!panel) {
+            return '';
+        }
+
+        const text = normalize(
+            panel.textContent
+        )
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const images = [
+            ...panel.querySelectorAll('img')
+        ]
+            .map(img => normalize(img.src))
+            .join('|');
+
+        return [
+            panel.children.length,
+            text,
+            images
+        ].join('|');
+    }
+
+    function signatureStillPresent(signature) {
+        const list =
+            document.querySelector(
+                '#caidos-lista'
+            );
+
+        if (
+            !list ||
+            !signature
+        ) {
+            return false;
+        }
+
+        return [...list.children].some(
+            child =>
+                targetSignature(child) ===
+                signature
+        );
+    }
+
+    function recordCapture(
+        token,
+        inferred
+    ) {
+        if (resolvedTokens.has(token)) {
+            return;
+        }
+
+        resolvedTokens.add(token);
+
+        stats.captures++;
+
+        if (inferred) {
+            stats.inferredCaptures++;
+        }
+
+        currentTargetSignature = null;
+        targetThrows = 0;
+
+        stats.status = inferred
+            ? 'Captured (estimated)'
+            : 'Captured';
+
+        updateUI();
+    }
+
+    function monitorOutcome({
+        target,
+        signature,
+        token,
+        beforeHistory,
+        beforeCount
+    }) {
+        const started = Date.now();
+
+        const checks = [
+            180,
+            360,
+            650,
+            1000,
+            1450
+        ];
+
+        for (const delay of checks) {
+            setTimeout(() => {
+                if (
+                    resolvedTokens.has(token)
+                ) {
+                    return;
+                }
+
+                /*
+                 * Preferred method:
+                 * game's capture history changed.
+                 */
+                const history =
+                    historyFingerprint();
+
+                if (
+                    history &&
+                    history !== beforeHistory &&
+                    history !==
+                        lastHistoryFingerprint
+                ) {
+                    lastHistoryFingerprint =
+                        history;
+
+                    recordCapture(
+                        token,
+                        false
+                    );
+
+                    return;
+                }
+
+                /*
+                 * Give the client some time before
+                 * using the fallback.
+                 */
+                if (
+                    Date.now() - started < 600
+                ) {
+                    return;
+                }
+
+                /*
+                 * Fallback:
+                 * target disappeared immediately
+                 * after one of our throws.
+                 *
+                 * This is marked as estimated.
+                 */
+                const list =
+                    document.querySelector(
+                        '#caidos-lista'
+                    );
+
+                const nowCount =
+                    list?.children.length ?? 0;
+
+                const gone =
+                    !target?.isConnected &&
+                    !signatureStillPresent(
+                        signature
+                    );
+
+                if (
+                    gone &&
+                    nowCount <= beforeCount
+                ) {
+                    recordCapture(
+                        token,
+                        true
+                    );
+                }
+            }, delay);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Statistics
+    // ---------------------------------------------------------------------
+
+    function resetStats() {
+        stats = freshStats();
+
+        inventoryBaseline.clear();
+
+        resolvedTokens =
+            new Set();
+
+        currentTargetSignature =
+            null;
+
+        targetThrows = 0;
+
+        lastHistoryFingerprint =
+            historyFingerprint();
+
+        syncInventoryUsage();
+        updateUI();
+    }
+
+    function totalUsed() {
+        return Object
+            .values(stats.used)
+            .reduce(
+                (sum, value) =>
+                    sum + value,
+                0
+            );
+    }
+
+    // ---------------------------------------------------------------------
+    // Automation loop
+    // ---------------------------------------------------------------------
+
+    function setEnabled(value) {
+        settings.enabled =
+            Boolean(value);
+
+        saveSettings();
+
+        clearTimeout(timer);
+        timer = null;
+
+        stats.status =
+            settings.enabled
+                ? 'Starting'
+                : 'Paused';
+
+        updateUI();
+
+        if (settings.enabled) {
+            tick();
+        }
+    }
+
+    function schedule() {
+        clearTimeout(timer);
+        timer = null;
+
+        if (!settings.enabled) {
+            return;
+        }
+
+        timer = setTimeout(
+            tick,
+            Math.max(
+                250,
+                Number(
+                    settings.intervalMs
+                ) || 650
+            )
+        );
+    }
+
+    function tick() {
+        timer = null;
+
+        if (!settings.enabled) {
+            return;
+        }
+
+        installPanel();
+        installHud();
+
+        syncInventoryUsage();
+
+        const fallenPanel =
+            document.querySelector('#caidos');
+
+        const target = getTarget();
+
+        if (
+            !fallenPanel ||
+            fallenPanel.classList.contains(
+                'hidden'
+            ) ||
+            !target
+        ) {
+            stats.status =
+                'Waiting for target';
+
+            updateUI();
+            schedule();
+
+            return;
+        }
+
+        const signature =
+            targetSignature(target);
+
+        /*
+         * New defeated Pokémon.
+         */
+        if (
+            signature !==
+            currentTargetSignature
+        ) {
+            currentTargetSignature =
+                signature;
+
+            currentTargetToken++;
+            targetThrows = 0;
+        }
+
+        const choice = chooseBall();
+
+        if (!choice) {
+            stats.status =
+                'No allowed balls';
+
+            updateUI();
+            schedule();
+
+            return;
+        }
+
+        selectBall(choice);
+
+        const list =
+            document.querySelector(
+                '#caidos-lista'
+            );
+
+        const beforeHistory =
+            historyFingerprint();
+
+        const beforeCount =
+            list?.children.length ?? 0;
+
+        const token =
+            currentTargetToken;
+
+        /*
+         * Let ball selection settle first.
+         */
+        setTimeout(() => {
+            if (
+                !settings.enabled ||
+                !target.isConnected
+            ) {
+                return;
+            }
+
+            fireClick(target);
+
+            stats.attempts++;
+            targetThrows++;
+
+            stats.status =
+                `Throwing ${ballLabel(
+                    choice.button
+                )}`;
+
+            monitorOutcome({
+                target,
+                signature,
+                token,
+                beforeHistory,
+                beforeCount
+            });
+
+            /*
+             * Allow the game's inventory UI
+             * to update before reading it.
+             */
+            setTimeout(() => {
+                syncInventoryUsage();
+                updateUI();
+            }, 300);
+
+            updateUI();
+        }, 90);
+
+        schedule();
+    }
+
+    // ---------------------------------------------------------------------
+    // Styling
+    // ---------------------------------------------------------------------
+
+    function injectStyle() {
+        if (
+            document.getElementById(
+                'moth-ac-style'
+            )
+        ) {
+            return;
+        }
+
+        const style =
+            document.createElement('style');
+
+        style.id =
+            'moth-ac-style';
+
+        style.textContent = `
+            #moth-ac-panel {
+                margin: 8px 0 10px;
+                padding: 9px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.14);
+
+                border-radius: 8px;
+
+                background:
+                    rgba(18,15,18,.72);
+
+                color: #f4edf0;
+
+                font:
+                    12px/1.3
+                    system-ui,
+                    sans-serif;
+            }
+
+            #moth-ac-panel * {
+                box-sizing: border-box;
+            }
+
+            #moth-ac-panel button,
+            #moth-ac-panel input {
+                font: inherit;
+            }
+
+            .moth-ac-head {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+
+                margin-bottom: 8px;
+            }
+
+            .moth-ac-title {
+                font-weight: 750;
+                font-size: 13px;
+            }
+
+            .moth-ac-status {
+                min-width: 0;
+                flex: 1;
+
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+
+                color: #b9adb2;
+                font-size: 11px;
+            }
+
+            .moth-ac-toggle {
+                border:
+                    1px solid
+                    rgba(255,255,255,.18);
+
+                border-radius: 999px;
+
+                padding: 4px 9px;
+
+                color: white;
+                background: #5b3038;
+
+                cursor: pointer;
+                font-weight: 700;
+            }
+
+            .moth-ac-toggle.on {
+                background: #23683d;
+            }
+
+            .moth-ac-stats {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(
+                        3,
+                        minmax(0, 1fr)
+                    );
+
+                gap: 5px;
+
+                margin-bottom: 8px;
+            }
+
+            .moth-ac-stat {
+                padding: 5px 6px;
+
+                border-radius: 6px;
+
+                background:
+                    rgba(255,255,255,.06);
+
+                text-align: center;
+            }
+
+            .moth-ac-stat b {
+                display: block;
+                font-size: 14px;
+            }
+
+            .moth-ac-stat span {
+                color: #aaa0a4;
+                font-size: 10px;
+            }
+
+            .moth-ac-grid {
+                display: grid;
+
+                grid-template-columns:
+                    1fr 72px;
+
+                gap: 5px 8px;
+
+                align-items: center;
+            }
+
+            .moth-ac-grid label {
+                color: #d6cdd0;
+            }
+
+            .moth-ac-grid input[type="number"] {
+                width: 72px;
+
+                padding: 3px 5px;
+
+                border-radius: 5px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.14);
+
+                color: white;
+
+                background:
+                    rgba(0,0,0,.22);
+            }
+
+            .moth-ac-balls {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(
+                        2,
+                        minmax(0, 1fr)
+                    );
+
+                gap: 4px 8px;
+
+                margin-top: 8px;
+            }
+
+            .moth-ac-ball {
+                display: grid;
+
+                grid-template-columns:
+                    auto 1fr 54px;
+
+                align-items: center;
+
+                gap: 4px;
+
+                min-width: 0;
+            }
+
+            .moth-ac-ball span {
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            .moth-ac-ball
+            input[type="number"] {
+                width: 54px;
+
+                padding: 2px 4px;
+
+                border-radius: 4px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.12);
+
+                color: white;
+
+                background:
+                    rgba(0,0,0,.22);
+            }
+
+            .moth-ac-foot {
+                display: flex;
+                align-items: center;
+
+                gap: 8px;
+
+                margin-top: 8px;
+                padding-top: 7px;
+
+                border-top:
+                    1px solid
+                    rgba(255,255,255,.08);
+            }
+
+            .moth-ac-foot label {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
+
+            .moth-ac-reset {
+                margin-left: auto;
+
+                padding: 3px 7px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.15);
+
+                border-radius: 5px;
+
+                color: #ddd;
+
+                background:
+                    rgba(255,255,255,.05);
+
+                cursor: pointer;
+            }
+
+            /*
+             * Arena HUD
+             */
+            #moth-capture-hud {
+                position: absolute;
+
+                top: 42px;
+                right: 8px;
+
+                z-index: 45;
+
+                min-width: 158px;
+
+                padding: 7px 8px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.18);
+
+                border-radius: 7px;
+
+                background:
+                    rgba(18,16,20,.82);
+
+                color: white;
+
+                font:
+                    11px/1.25
+                    system-ui,
+                    sans-serif;
+
+                pointer-events: none;
+
+                backdrop-filter:
+                    blur(3px);
+            }
+
+            .moth-hud-head {
+                display: flex;
+
+                justify-content:
+                    space-between;
+
+                gap: 8px;
+
+                margin-bottom: 5px;
+
+                font-weight: 700;
+            }
+
+            .moth-hud-state {
+                color: #aab0b4;
+                font-weight: 500;
+            }
+
+            .moth-hud-row {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(3, 1fr);
+
+                gap: 4px;
+            }
+
+            .moth-hud-cell {
+                padding: 4px;
+
+                border-radius: 4px;
+
+                background:
+                    rgba(255,255,255,.07);
+
+                text-align: center;
+            }
+
+            .moth-hud-cell b {
+                display: block;
+                font-size: 13px;
+            }
+
+            .moth-hud-cell span {
+                color: #aaa0a4;
+                font-size: 9px;
+            }
+
+            .moth-hud-balls {
+                margin-top: 5px;
+
+                color: #c6bcc0;
+
+                text-align: center;
+
+                font-size: 10px;
+            }
+        `;
+
+        document.head?.appendChild(style);
+    }
+
+    // ---------------------------------------------------------------------
+    // Configuration panel
+    // ---------------------------------------------------------------------
+
+    function ballControl(
+        key,
+        label
+    ) {
+        return `
+            <label
+                class="moth-ac-ball"
+                title="Enable this ball type and keep the configured reserve."
+            >
+                <input
+                    type="checkbox"
+                    data-moth-use="${key}"
+                >
+
+                <span>${label}</span>
+
+                <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    data-moth-reserve="${key}"
+                    title="Reserve"
+                >
+            </label>
+        `;
+    }
+
+    function panelMarkup() {
+        return `
+            <div class="moth-ac-head">
+                <span class="moth-ac-title">
+                    Auto Catch+
+                </span>
+
+                <span
+                    class="moth-ac-status"
+                    id="moth-ac-status"
+                >
+                    Idle
+                </span>
+
+                <button
+                    type="button"
+                    class="moth-ac-toggle"
+                    id="moth-ac-toggle"
+                >
+                    OFF
+                </button>
+            </div>
+
+            <div class="moth-ac-stats">
+
+                <div class="moth-ac-stat">
+                    <b id="moth-ac-captures">
+                        0
+                    </b>
+                    <span>captures</span>
+                </div>
+
+                <div class="moth-ac-stat">
+                    <b id="moth-ac-balls-used">
+                        0
+                    </b>
+                    <span>balls used</span>
+                </div>
+
+                <div class="moth-ac-stat">
+                    <b id="moth-ac-rate">
+                        0%
+                    </b>
+                    <span>success</span>
+                </div>
+
+            </div>
+
+            <div class="moth-ac-grid">
+
+                <label for="moth-ac-interval">
+                    Throw interval
+                </label>
+
+                <input
+                    id="moth-ac-interval"
+                    type="number"
+                    min="250"
+                    max="5000"
+                    step="50"
+                >
+
+                <label for="moth-ac-escalate">
+                    Escalate every N throws
+                    <small>(0 = never)</small>
+                </label>
+
+                <input
+                    id="moth-ac-escalate"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                >
+
+            </div>
+
+            <div class="moth-ac-balls">
+
+                ${ballControl(
+                    'poke',
+                    'Poké'
+                )}
+
+                ${ballControl(
+                    'super',
+                    'Super'
+                )}
+
+                ${ballControl(
+                    'ultra',
+                    'Ultra'
+                )}
+
+                ${ballControl(
+                    'master',
+                    'Master'
+                )}
+
+            </div>
+
+            <div class="moth-ac-foot">
+
+                <label>
+                    <input
+                        id="moth-ac-hud-check"
+                        type="checkbox"
+                    >
+                    HUD
+                </label>
+
+                <span
+                    title="Reserve means the addon will not spend below this amount."
+                >
+                    Reserve = keep
+                </span>
+
+                <button
+                    type="button"
+                    class="moth-ac-reset"
+                    id="moth-ac-reset"
+                >
+                    Reset stats
+                </button>
+
+            </div>
+        `;
+    }
+
+    function installPanel() {
+        injectStyle();
+
+        if (
+            document.getElementById(
+                'moth-ac-panel'
+            )
+        ) {
+            return true;
+        }
+
+        const host =
+            document.querySelector(
+                '#auto-corpo'
+            );
+
+        if (!host) {
+            return false;
+        }
+
+        const panel =
+            document.createElement(
+                'section'
+            );
+
+        panel.id =
+            'moth-ac-panel';
+
+        panel.innerHTML =
+            panelMarkup();
+
+        host.prepend(panel);
+
+        // Main toggle
+
+        panel
+            .querySelector(
+                '#moth-ac-toggle'
+            )
+            .addEventListener(
+                'click',
+                () => {
+                    setEnabled(
+                        !settings.enabled
+                    );
+                }
+            );
+
+        // Interval
+
+        const interval =
+            panel.querySelector(
+                '#moth-ac-interval'
+            );
+
+        interval.value =
+            settings.intervalMs;
+
+        interval.addEventListener(
+            'change',
+            () => {
+                settings.intervalMs =
+                    Math.max(
+                        250,
+                        Math.min(
+                            5000,
+                            Number(
+                                interval.value
+                            ) || 650
+                        )
+                    );
+
+                interval.value =
+                    settings.intervalMs;
+
+                saveSettings();
+
+                if (settings.enabled) {
+                    schedule();
+                }
+            }
+        );
+
+        // Escalation
+
+        const escalate =
+            panel.querySelector(
+                '#moth-ac-escalate'
+            );
+
+        escalate.value =
+            settings.escalateAfter;
+
+        escalate.addEventListener(
+            'change',
+            () => {
+                settings.escalateAfter =
+                    Math.max(
+                        0,
+                        Math.min(
+                            100,
+                            Number(
+                                escalate.value
+                            ) || 0
+                        )
+                    );
+
+                escalate.value =
+                    settings.escalateAfter;
+
+                saveSettings();
+            }
+        );
+
+        // Enabled ball types
+
+        for (
+            const checkbox of
+            panel.querySelectorAll(
+                '[data-moth-use]'
+            )
+        ) {
+            const key =
+                checkbox.dataset.mothUse;
+
+            checkbox.checked =
+                Boolean(
+                    settings.use[key]
+                );
+
+            checkbox.addEventListener(
+                'change',
+                () => {
+                    settings.use[key] =
+                        checkbox.checked;
+
+                    saveSettings();
+                    updateUI();
+                }
+            );
+        }
+
+        // Ball reserves
+
+        for (
+            const input of
+            panel.querySelectorAll(
+                '[data-moth-reserve]'
+            )
+        ) {
+            const key =
+                input.dataset.mothReserve;
+
+            input.value =
+                Number(
+                    settings.reserve[key] ||
+                    0
+                );
+
+            input.addEventListener(
+                'change',
+                () => {
+                    settings.reserve[key] =
+                        Math.max(
+                            0,
+                            Number(
+                                input.value
+                            ) || 0
+                        );
+
+                    input.value =
+                        settings.reserve[key];
+
+                    saveSettings();
+                }
+            );
+        }
+
+        // HUD
+
+        const hudCheck =
+            panel.querySelector(
+                '#moth-ac-hud-check'
+            );
+
+        hudCheck.checked =
+            settings.showHud;
+
+        hudCheck.addEventListener(
+            'change',
+            () => {
+                settings.showHud =
+                    hudCheck.checked;
+
+                saveSettings();
+                updateUI();
+            }
+        );
+
+        // Reset
+
+        panel
+            .querySelector(
+                '#moth-ac-reset'
+            )
+            .addEventListener(
+                'click',
+                resetStats
+            );
+
+        updateUI();
+
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Capture HUD
+    // ---------------------------------------------------------------------
+
+    function installHud() {
+        injectStyle();
+
+        if (
+            document.getElementById(
+                'moth-capture-hud'
+            )
+        ) {
+            return true;
+        }
+
+        const palco =
+            document.querySelector(
+                '#palco'
+            );
+
+        if (!palco) {
+            return false;
+        }
+
+        if (
+            getComputedStyle(palco)
+                .position === 'static'
+        ) {
+            palco.style.position =
+                'relative';
+        }
+
+        const hud =
+            document.createElement('div');
+
+        hud.id =
+            'moth-capture-hud';
+
+        hud.innerHTML = `
+            <div class="moth-hud-head">
+                <span>Capture HUD</span>
+                <span
+                    class="moth-hud-state"
+                    id="moth-hud-status"
+                >
+                    Idle
+                </span>
+            </div>
+
+            <div class="moth-hud-row">
+
+                <div class="moth-hud-cell">
+                    <b id="moth-hud-captures">
+                        0
+                    </b>
+                    <span>captures</span>
+                </div>
+
+                <div class="moth-hud-cell">
+                    <b id="moth-hud-used">
+                        0
+                    </b>
+                    <span>balls</span>
+                </div>
+
+                <div class="moth-hud-cell">
+                    <b id="moth-hud-rate">
+                        0%
+                    </b>
+                    <span>rate</span>
+                </div>
+
+            </div>
+
+            <div
+                class="moth-hud-balls"
+                id="moth-hud-balls"
+            ></div>
+        `;
+
+        palco.appendChild(hud);
+
+        updateUI();
+
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // UI update
+    // ---------------------------------------------------------------------
+
+    function formatDuration(ms) {
+        const total =
+            Math.max(
+                0,
+                Math.floor(ms / 1000)
+            );
+
+        const hours =
+            Math.floor(total / 3600);
+
+        const minutes =
+            Math.floor(
+                (total % 3600) / 60
+            );
+
+        const seconds =
+            total % 60;
+
+        if (hours) {
+            return [
+                hours,
+                String(minutes).padStart(
+                    2,
+                    '0'
+                ),
+                String(seconds).padStart(
+                    2,
+                    '0'
+                )
+            ].join(':');
+        }
+
+        return (
+            `${minutes}:` +
+            String(seconds).padStart(
+                2,
+                '0'
+            )
+        );
+    }
+
+    function setText(
+        selector,
+        value
+    ) {
+        const el =
+            document.querySelector(
+                selector
+            );
+
+        if (el) {
+            el.textContent =
+                String(value);
+        }
+    }
+
+    function updateUI() {
+        const used =
+            totalUsed();
+
+        /*
+         * Prefer actual inventory consumption.
+         * If unavailable, fall back to click attempts.
+         */
+        const denominator =
+            used ||
+            stats.attempts;
+
+        const rate =
+            denominator
+                ? (
+                    stats.captures /
+                    denominator
+                ) * 100
+                : 0;
+
+        /*
+         * "~" means at least one capture had
+         * to be inferred from target removal.
+         */
+        const capturesText =
+            stats.inferredCaptures
+                ? `${stats.captures}~`
+                : String(
+                    stats.captures
+                );
+
+        const toggle =
+            document.querySelector(
+                '#moth-ac-toggle'
+            );
+
+        if (toggle) {
+            toggle.textContent =
+                settings.enabled
+                    ? 'ON'
+                    : 'OFF';
+
+            toggle.classList.toggle(
+                'on',
+                settings.enabled
+            );
+        }
+
+        setText(
+            '#moth-ac-status',
+            stats.status
+        );
+
+        setText(
+            '#moth-ac-captures',
+            capturesText
+        );
+
+        setText(
+            '#moth-ac-balls-used',
+            used
+        );
+
+        setText(
+            '#moth-ac-rate',
+            `${rate.toFixed(
+                rate >= 10
+                    ? 0
+                    : 1
+            )}%`
+        );
+
+        const hud =
+            document.querySelector(
+                '#moth-capture-hud'
+            );
+
+        if (hud) {
+            hud.style.display =
+                settings.showHud
+                    ? 'block'
+                    : 'none';
+        }
+
+        setText(
+            '#moth-hud-status',
+            settings.enabled
+                ? stats.status
+                : 'Paused'
+        );
+
+        setText(
+            '#moth-hud-captures',
+            capturesText
+        );
+
+        setText(
+            '#moth-hud-used',
+            used
+        );
+
+        setText(
+            '#moth-hud-rate',
+            `${rate.toFixed(
+                rate >= 10
+                    ? 0
+                    : 1
+            )}%`
+        );
+
+        const balls = [
+            `P ${stats.used.poke}`,
+            `S ${stats.used.super}`,
+            `U ${stats.used.ultra}`,
+
+            stats.used.master
+                ? `M ${stats.used.master}`
+                : null,
+
+            `· ${
+                formatDuration(
+                    Date.now() -
+                    stats.startedAt
+                )
+            }`
+        ]
+            .filter(Boolean)
+            .join('  ');
+
+        setText(
+            '#moth-hud-balls',
+            balls
+        );
+
+        const panel =
+            document.querySelector(
+                '#moth-ac-panel'
+            );
+
+        if (panel) {
+            panel.title =
+                stats.inferredCaptures
+                    ? (
+                        '~ means ' +
+                        `${stats.inferredCaptures} ` +
+                        'capture(s) were inferred.'
+                    )
+                    : '';
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Bootstrap
+    // ---------------------------------------------------------------------
+
+    function bootstrap() {
+        installPanel();
+        installHud();
+
+        lastHistoryFingerprint =
+            historyFingerprint();
+
+        syncInventoryUsage();
+        updateUI();
+
+        /*
+         * Keeps the addon alive if the site's UI
+         * is rebuilt/moved dynamically.
+         */
+        setInterval(() => {
+            installPanel();
+            installHud();
+
+            syncInventoryUsage();
+            updateUI();
+        }, 1000);
+
+        if (settings.enabled) {
+            tick();
+        }
+    }
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            bootstrap,
+            { once: true }
+        );
+    } else {
+        bootstrap();
+    }
+})();
