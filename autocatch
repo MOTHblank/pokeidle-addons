@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.0.0
+// @version      6.1.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -16,6 +16,9 @@
     const MIN_INTERVAL_MS = 100;
     const RETRY_AFTER_MS = 1000;
     const MAX_ATTEMPTS_PER_BODY = 2;
+    const RESTOCK_RETRY_MS = 5000;
+    const RESTOCK_BACKOFF_MS = 30000;
+    const RESTOCK_MAX_QTY = 5000;
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
@@ -40,6 +43,26 @@
             ultra: 0,
             master: 1,
             other: 0
+        },
+        restock: {
+            enabled: false,
+            goldReserve: 0,
+            at: {
+                poke: 50,
+                great: 25,
+                super: 15,
+                ultra: 10,
+                master: 0,
+                other: 0
+            },
+            to: {
+                poke: 500,
+                great: 250,
+                super: 150,
+                ultra: 100,
+                master: 0,
+                other: 0
+            }
         }
     };
 
@@ -67,6 +90,18 @@
                 reserve: {
                     ...DEFAULTS.reserve,
                     ...(saved.reserve || {})
+                },
+                restock: {
+                    ...DEFAULTS.restock,
+                    ...(saved.restock || {}),
+                    at: {
+                        ...DEFAULTS.restock.at,
+                        ...(saved.restock?.at || {})
+                    },
+                    to: {
+                        ...DEFAULTS.restock.to,
+                        ...(saved.restock?.to || {})
+                    }
                 }
             };
         } catch {
@@ -79,6 +114,16 @@
 
     const inventoryBaseline = new Map();
     const targetStates = new Map();
+
+    const ballCatalog = new Map();
+    const protocolBalls = new Map();
+    const restockPending = new Map();
+
+    let protocolGold = null;
+    let activeProtocolSocket = null;
+    let restockBlockedUntil = 0;
+    let restockFailures = 0;
+    let restockLastAction = 'off';
 
     /*
      * Local click -> outgoing ball.throw -> incoming batalha.ev[k="bola"].
@@ -98,6 +143,8 @@
             startedAt: Date.now(),
             attempts: 0,
             captures: 0,
+            restockOrders: 0,
+            restockBought: 0,
             used: {
                 poke: 0,
                 great: 0,
