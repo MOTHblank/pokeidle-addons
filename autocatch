@@ -873,6 +873,14 @@
             const key of
             order
         ) {
+            if (
+                !settings.use[
+                    key
+                ]
+            ) {
+                continue;
+            }
+
             const meta =
                 restockMetaForKey(
                     key
@@ -954,11 +962,49 @@
                     )
                 );
 
+            const pendingSpend =
+                [...restockPending.entries()]
+                    .reduce(
+                        (
+                            sum,
+                            [
+                                pendingId,
+                                pending
+                            ]
+                        ) => {
+                            const pendingMeta =
+                                ballCatalog.get(
+                                    pendingId
+                                );
+
+                            const pendingPrice =
+                                Number(
+                                    pending.price ||
+                                    pendingMeta?.priceGold ||
+                                    0
+                                );
+
+                            return (
+                                sum +
+                                Math.max(
+                                    0,
+                                    Number(
+                                        pending.qty ||
+                                        0
+                                    ) *
+                                    pendingPrice
+                                )
+                            );
+                        },
+                        0
+                    );
+
             const spendable =
                 Math.max(
                     0,
                     protocolGold -
-                        goldReserve
+                        goldReserve -
+                        pendingSpend
                 );
 
             const affordable =
@@ -1019,21 +1065,13 @@
                     before:
                         count,
                     qty,
+                    price,
                     sentAt:
                         now
                 }
             );
 
             stats.restockOrders++;
-
-            /*
-             * Locally reserve the expected cost so two different ball types
-             * cannot both spend the same visible gold before the next state
-             * update arrives.
-             */
-            protocolGold -=
-                qty *
-                price;
 
             restockLastAction =
                 'buying ' +
@@ -1547,6 +1585,65 @@
 
             .moth-ac-ball input[type="number"] { width: 54px; }
 
+            .moth-ac-restock {
+                margin-top: 8px;
+                padding: 7px;
+                border: 1px solid rgba(255,255,255,.09);
+                border-radius: 6px;
+                background: rgba(255,255,255,.035);
+            }
+
+            .moth-ac-restock-head {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 6px;
+            }
+
+            .moth-ac-restock-head label {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                font-weight: 700;
+            }
+
+            .moth-ac-restock-status {
+                min-width: 0;
+                margin-left: auto;
+                color: #a99fa3;
+                font-size: 9px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .moth-ac-restock-grid {
+                display: grid;
+                grid-template-columns: minmax(60px,1fr) 62px 62px;
+                gap: 4px 6px;
+                align-items: center;
+            }
+
+            .moth-ac-restock-grid small {
+                color: #8f858a;
+                text-align: center;
+                font-size: 8px;
+                text-transform: uppercase;
+            }
+
+            .moth-ac-restock-grid input[type="number"] {
+                width: 62px;
+                padding: 3px 4px;
+                border-radius: 5px;
+                border: 1px solid rgba(255,255,255,.14);
+                color: white;
+                background: rgba(0,0,0,.22);
+            }
+
+            .moth-ac-restock-gold {
+                margin-top: 6px;
+            }
+
             .moth-ac-foot {
                 display: flex;
                 align-items: center;
@@ -1658,6 +1755,17 @@
         `;
     }
 
+    function restockControl(
+        key,
+        label
+    ) {
+        return `
+            <span>${label}</span>
+            <input type="number" min="0" step="1" data-moth-restock-at="${key}" title="Restock when inventory is at or below this amount">
+            <input type="number" min="0" step="1" data-moth-restock-to="${key}" title="Buy enough to reach this amount">
+        `;
+    }
+
     function panelMarkup() {
         return `
             <div class="moth-ac-head">
@@ -1685,6 +1793,29 @@
                 ${ballControl('super', 'Super')}
                 ${ballControl('ultra', 'Ultra')}
                 ${ballControl('master', 'Master')}
+            </div>
+
+            <div class="moth-ac-restock">
+                <div class="moth-ac-restock-head">
+                    <label title="Automatically buy enabled, server-purchasable balls while Auto Catch is ON.">
+                        <input id="moth-ac-restock-enabled" type="checkbox">
+                        Auto-restock
+                    </label>
+                    <span class="moth-ac-restock-status" id="moth-ac-restock-status">off</span>
+                </div>
+
+                <div class="moth-ac-restock-grid">
+                    <small></small><small>at</small><small>to</small>
+                    ${restockControl('poke', 'Poké')}
+                    ${restockControl('great', 'Great')}
+                    ${restockControl('super', 'Super')}
+                    ${restockControl('ultra', 'Ultra')}
+                </div>
+
+                <div class="moth-ac-grid moth-ac-restock-gold">
+                    <label for="moth-ac-restock-gold">Keep gold</label>
+                    <input id="moth-ac-restock-gold" type="number" min="0" step="100">
+                </div>
             </div>
 
             <div class="moth-ac-foot">
@@ -1748,6 +1879,165 @@
                 saveSettings();
             });
         }
+
+        const restockEnabled =
+            q(
+                '#moth-ac-restock-enabled',
+                panel
+            );
+
+        restockEnabled.checked =
+            Boolean(
+                settings.restock
+                    .enabled
+            );
+
+        restockEnabled.addEventListener(
+            'change',
+            () => {
+                settings.restock.enabled =
+                    restockEnabled.checked;
+
+                restockFailures =
+                    0;
+
+                restockBlockedUntil =
+                    0;
+
+                saveSettings();
+                maybeRestock();
+                updateUI();
+            }
+        );
+
+        for (
+            const input of
+            qa(
+                '[data-moth-restock-at]',
+                panel
+            )
+        ) {
+            const key =
+                input.dataset
+                    .mothRestockAt;
+
+            input.value =
+                Number(
+                    settings.restock
+                        .at[
+                        key
+                    ] ||
+                    0
+                );
+
+            input.addEventListener(
+                'change',
+                () => {
+                    settings.restock
+                        .at[
+                        key
+                    ] =
+                        Math.max(
+                            0,
+                            Number(
+                                input.value
+                            ) ||
+                            0
+                        );
+
+                    input.value =
+                        settings.restock
+                            .at[
+                            key
+                        ];
+
+                    saveSettings();
+                    maybeRestock();
+                }
+            );
+        }
+
+        for (
+            const input of
+            qa(
+                '[data-moth-restock-to]',
+                panel
+            )
+        ) {
+            const key =
+                input.dataset
+                    .mothRestockTo;
+
+            input.value =
+                Number(
+                    settings.restock
+                        .to[
+                        key
+                    ] ||
+                    0
+                );
+
+            input.addEventListener(
+                'change',
+                () => {
+                    settings.restock
+                        .to[
+                        key
+                    ] =
+                        Math.max(
+                            0,
+                            Number(
+                                input.value
+                            ) ||
+                            0
+                        );
+
+                    input.value =
+                        settings.restock
+                            .to[
+                            key
+                        ];
+
+                    saveSettings();
+                    maybeRestock();
+                }
+            );
+        }
+
+        const restockGold =
+            q(
+                '#moth-ac-restock-gold',
+                panel
+            );
+
+        restockGold.value =
+            Number(
+                settings.restock
+                    .goldReserve ||
+                0
+            );
+
+        restockGold.addEventListener(
+            'change',
+            () => {
+                settings.restock
+                    .goldReserve =
+                        Math.max(
+                            0,
+                            Number(
+                                restockGold.value
+                            ) ||
+                            0
+                        );
+
+                restockGold.value =
+                    settings.restock
+                        .goldReserve;
+
+                saveSettings();
+                maybeRestock();
+            }
+        );
 
         const hudCheck = q('#moth-ac-hud-check', panel);
         hudCheck.checked = settings.showHud;
@@ -1889,6 +2179,20 @@
         setText('#moth-ac-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
         setText('#moth-ac-protocol', protocolText);
 
+        setText(
+            '#moth-ac-restock-status',
+            settings.restock?.enabled
+                ? restockLastAction +
+                  (
+                      stats.restockBought
+                          ? ' · +' +
+                            stats.restockBought +
+                            ' bought'
+                          : ''
+                  )
+                : 'off'
+        );
+
         const hud = q('#moth-capture-hud');
 
         if (hud) {
@@ -1948,7 +2252,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.0 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1 loaded');
     }
 
     if (document.readyState === 'loading') {
