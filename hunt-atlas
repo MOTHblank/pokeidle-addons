@@ -249,6 +249,10 @@
         speciesCombat: new Map(),
         combatCatalogStatus: 'idle',
         combatCatalogPromise: null,
+        combatRevision: 0,
+        combatProfileCache: null,
+        estimateCache: new Map(),
+        estimateCacheKey: '',
 
         serverTypeChart: null,
         huntAmplification: 1.5,
@@ -746,6 +750,38 @@
         );
     }
 
+    function average(
+        values
+    ) {
+        const clean =
+            (
+                Array.isArray(values)
+                    ? values
+                    : []
+            )
+                .map(Number)
+                .filter(
+                    value =>
+                        Number.isFinite(
+                            value
+                        ) &&
+                        value >= 0
+                );
+
+        if (!clean.length) {
+            return null;
+        }
+
+        return (
+            clean.reduce(
+                (sum, value) =>
+                    sum + value,
+                0
+            ) /
+            clean.length
+        );
+    }
+
     function median(
         values
     ) {
@@ -867,6 +903,10 @@
 
         record.updatedAt =
             now;
+
+        state.combatRevision++;
+        state.combatProfileCache =
+            null;
     }
 
     function combatSlot(
@@ -1297,7 +1337,7 @@
                 record.lastKillAt;
 
             if (
-                gap >= 100 &&
+                gap >= 0 &&
                 gap <= 600000
             ) {
                 pushSample(
@@ -1430,12 +1470,7 @@
             );
         }
 
-        if (
-            record.kills % 3 ===
-            0
-        ) {
-            savePerformance();
-        }
+        savePerformance();
 
         if (
             state.drawerOpen
@@ -1780,6 +1815,23 @@
             huntEvent.slug;
 
         state.combatTargets.clear();
+
+        const enteredRecord =
+            performanceRecord(
+                huntEvent.slug,
+                false
+            );
+
+        if (enteredRecord) {
+            enteredRecord.lastKillAt =
+                0;
+
+            enteredRecord.lastAttackAt =
+                0;
+
+            enteredRecord.lastAttackSlot =
+                null;
+        }
 
         state.status =
             `Entered ${huntEvent.nome || huntEvent.slug}.`;
@@ -2547,6 +2599,10 @@
                         state.combatCatalogStatus =
                             'ready';
 
+                        state.combatRevision++;
+                        state.combatProfileCache =
+                            null;
+
                         queueRender();
                     }
                 )
@@ -2843,7 +2899,7 @@
         }
 
         const killMs =
-            robustMean(
+            average(
                 record.killIntervals
             );
 
@@ -2895,6 +2951,23 @@
     }
 
     function combatProfile() {
+        const cacheKey =
+            [
+                leadSignature() ||
+                    '',
+                state.combatRevision,
+                state.combatCatalogStatus
+            ].join('|');
+
+        if (
+            state.combatProfileCache
+                ?.key ===
+            cacheKey
+        ) {
+            return state.combatProfileCache
+                .value;
+        }
+
         const records =
             recordsForLead();
 
@@ -3169,7 +3242,7 @@
                 bucket.samples.length;
         }
 
-        return {
+        const value = {
             records,
             attacks,
             kills,
@@ -3209,8 +3282,14 @@
                 ) ||
                 1
         };
-    }
 
+        state.combatProfileCache = {
+            key: cacheKey,
+            value
+        };
+
+        return value;
+    }
     function targetHpEstimate(
         speciesId,
         huntLevel,
@@ -3479,6 +3558,15 @@
     function predictionCalibration(
         profile
     ) {
+        if (
+            profile &&
+            Number.isFinite(
+                profile._calibration
+            )
+        ) {
+            return profile._calibration;
+        }
+
         const ratios = [];
 
         for (
@@ -3528,26 +3616,73 @@
                 ratios
             );
 
-        if (!ratio) {
-            return 1;
+        const calibrated =
+            !ratio
+                ? 1
+                : Math.max(
+                    0.4,
+                    Math.min(
+                        3,
+                        ratio
+                    )
+                );
+
+        if (profile) {
+            profile._calibration =
+                calibrated;
         }
 
-        /*
-         * Keep one pathological sample from exploding every unvisited hunt.
-         * The measured hunt itself always uses its observed rate directly.
-         */
-        return Math.max(
-            0.4,
-            Math.min(
-                3,
-                ratio
-            )
-        );
+        return calibrated;
     }
 
     function huntXpEstimate(
         hunt
     ) {
+        const cacheKey =
+            [
+                leadSignature() ||
+                    '',
+                state.combatRevision,
+                state.combatCatalogStatus
+            ].join('|');
+
+        if (
+            state.estimateCacheKey !==
+            cacheKey
+        ) {
+            state.estimateCacheKey =
+                cacheKey;
+
+            state.estimateCache.clear();
+        }
+
+        const huntKey =
+            hunt?.slug ||
+            '';
+
+        if (
+            huntKey &&
+            state.estimateCache.has(
+                huntKey
+            )
+        ) {
+            return state.estimateCache.get(
+                huntKey
+            );
+        }
+
+        const remember =
+            value => {
+                if (huntKey) {
+                    state.estimateCache.set(
+                        huntKey,
+                        value
+                    );
+                }
+
+                return value;
+            };
+
         const record =
             performanceRecord(
                 hunt?.slug,
@@ -3560,7 +3695,7 @@
             );
 
         if (observed) {
-            return {
+            return remember({
                 value:
                     observed.trainerXpH,
                 pokemonValue:
@@ -3583,7 +3718,7 @@
                             0
                         )
                     )
-            };
+            });
         }
 
         const profile =
@@ -3600,7 +3735,7 @@
             !rawKillMs ||
             rawKillMs <= 0
         ) {
-            return {
+            return remember({
                 value: null,
                 pokemonValue: null,
                 goldValue: null,
@@ -3610,7 +3745,7 @@
                 source:
                     'learning',
                 samples: 0
-            };
+            });
         }
 
         const killMs =
@@ -3629,7 +3764,7 @@
                 1
             );
 
-        return {
+        return remember({
             value:
                 baseXp *
                 profile.trainerXpMult *
@@ -3647,7 +3782,7 @@
                 'combat model',
             samples:
                 profile.moveSamples
-        };
+        });
     }
 
     function rankedUnlockedHunts() {
