@@ -173,6 +173,8 @@
                 bossArena: false,
                 mistico: false,
                 activeId: null,
+                gold: null,
+                diamonds: null,
                 outlandTier: null,
                 team: 0,
                 teamSlots: '',
@@ -241,6 +243,14 @@
             activeId:
                 state.activeId != null
                     ? state.activeId
+                    : null,
+            gold:
+                state.gold != null
+                    ? Number(state.gold)
+                    : null,
+            diamonds:
+                state.diamonds != null
+                    ? Number(state.diamonds)
                     : null,
             outlandTier:
                 state.outlandTier != null
@@ -984,7 +994,8 @@
         return (
             teamPokemon().find(
                 pokemon =>
-                    pokemon.id !== activeId &&
+                    Number(pokemon.id) !==
+                        Number(activeId) &&
                     !houseIds.has(
                         Number(pokemon.id)
                     )
