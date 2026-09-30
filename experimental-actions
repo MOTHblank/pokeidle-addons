@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Experimental Actions
 // @namespace    moth.pokeidle
-// @version      1.2.0
-// @description  One-shot protocol probes for untested PokéIdle actions, read surfaces, idempotency, and server validation paths.
+// @version      1.3.0
+// @description  Reversible, gameplay-useful protocol probes for PokéIdle actions that may work outside their normal UI context.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -166,27 +166,18 @@
         if (!state) {
             return {
                 scene: 'unknown',
+                level: null,
                 noCentro: false,
                 huntSlug: null,
                 casaDentro: null,
                 bossArena: false,
                 mistico: false,
                 activeId: null,
-                bike: null,
-                gold: null,
-                diamonds: null,
-                gems: null,
-                ballsTotal: null,
-                itemsTotal: null,
-                alive: 0,
-                hp: 0,
-                maxHp: 0,
+                outlandTier: null,
                 team: 0,
                 teamSlots: '',
-                automation: null,
-                tutorialSeen: null,
-                skinsWorn: 0,
-                escapeRope: null
+                lootLocks: '',
+                collection: ''
             };
         }
 
@@ -207,9 +198,28 @@
                         Number(b.slot)
                 );
 
+        const automation =
+            isPlainObject(state.automation)
+                ? state.automation
+                : {};
+
+        const normalizedIds =
+            values =>
+                Array.isArray(values)
+                    ? values
+                        .map(Number)
+                        .filter(Number.isFinite)
+                        .sort((a, b) => a - b)
+                        .join(',')
+                    : '';
+
         return {
             scene:
                 sceneLabel(state),
+            level:
+                state.level != null
+                    ? Number(state.level)
+                    : null,
             noCentro:
                 Boolean(state.noCentro),
             huntSlug:
@@ -232,78 +242,10 @@
                 state.activeId != null
                     ? state.activeId
                     : null,
-            bike:
-                state.bicicleta &&
-                state.bicicleta.equipada != null
-                    ? state.bicicleta.equipada
+            outlandTier:
+                state.outlandTier != null
+                    ? Number(state.outlandTier)
                     : null,
-            gold:
-                state.gold != null
-                    ? Number(state.gold)
-                    : null,
-            diamonds:
-                state.diamonds != null
-                    ? Number(state.diamonds)
-                    : null,
-            gems:
-                state.gems != null
-                    ? Number(state.gems)
-                    : state.gemas != null
-                        ? Number(state.gemas)
-                        : null,
-            ballsTotal:
-                state.balls &&
-                typeof state.balls === 'object'
-                    ? Object.values(state.balls)
-                        .reduce(
-                            (sum, value) =>
-                                sum +
-                                Math.max(
-                                    0,
-                                    Number(value) || 0
-                                ),
-                            0
-                        )
-                    : null,
-            itemsTotal:
-                state.items &&
-                typeof state.items === 'object'
-                    ? Object.values(state.items)
-                        .reduce(
-                            (sum, value) =>
-                                sum +
-                                Math.max(
-                                    0,
-                                    Number(value) || 0
-                                ),
-                            0
-                        )
-                    : null,
-            alive:
-                pokemons.filter(
-                    pokemon =>
-                        Number(pokemon.hp || 0) > 0
-                ).length,
-            hp:
-                pokemons.reduce(
-                    (sum, pokemon) =>
-                        sum +
-                        Math.max(
-                            0,
-                            Number(pokemon.hp || 0)
-                        ),
-                    0
-                ),
-            maxHp:
-                pokemons.reduce(
-                    (sum, pokemon) =>
-                        sum +
-                        Math.max(
-                            0,
-                            Number(pokemon.maxHp || 0)
-                        ),
-                    0
-                ),
             team:
                 team.length,
             teamSlots:
@@ -315,24 +257,14 @@
                             String(pokemon.slot)
                     )
                     .join(','),
-            automation:
-                isPlainObject(state.automation)
-                    ? JSON.stringify(state.automation)
-                    : null,
-            tutorialSeen:
-                state.tutorialVisto != null
-                    ? Boolean(state.tutorialVisto)
-                    : null,
-            skinsWorn:
-                pokemons.filter(
-                    pokemon =>
-                        pokemon.skin != null
-                ).length,
-            escapeRope:
-                state.items &&
-                typeof state.items === 'object'
-                    ? Number(state.items[70010] || 0)
-                    : null
+            lootLocks:
+                normalizedIds(
+                    automation.lootTravado
+                ),
+            collection:
+                normalizedIds(
+                    automation.pokemonTravado
+                )
         };
     }
 
@@ -370,35 +302,31 @@
         probe
     ) {
         const map = {
-            'team-slot-reassert': [
+            'switch-hunt-roundtrip': [
+                'scene',
+                'huntSlug',
+                'noCentro'
+            ],
+            'team-add-roundtrip': [
+                'team',
                 'teamSlots',
                 'activeId'
             ],
-            'automation-reassert': [
-                'automation'
+            'team-park-roundtrip': [
+                'team',
+                'teamSlots',
+                'activeId'
             ],
-            'tutorial-reassert': [
-                'tutorialSeen'
+            'loot-lock-roundtrip': [
+                'lootLocks'
             ],
-            'skin-remove-unskinned': [
-                'skinsWorn'
+            'collection-roundtrip': [
+                'collection'
             ],
-            'invalid-ball-slot': [
-                'ballsTotal'
-            ],
-            'escape-rope-empty': [
-                'itemsTotal',
-                'escapeRope',
-                'scene',
-                'noCentro',
-                'huntSlug'
-            ],
-            'invalid-boss-key': [
-                'scene',
-                'bossArena',
-                'mistico',
+            'outland-tier-roundtrip': [
+                'outlandTier',
                 'huntSlug',
-                'noCentro'
+                'scene'
             ]
         };
 
@@ -844,30 +772,253 @@
             : [];
     }
 
-    function currentAutomation() {
-        const automation =
-            runtime.gameState &&
-            runtime.gameState.automation;
+    function normalHuntActive() {
+        const state =
+            runtime.gameState;
 
-        return isPlainObject(automation)
-            ? automation
-            : null;
+        return Boolean(
+            state &&
+            state.huntSlug &&
+            !state.noCentro &&
+            !(
+                state.casa &&
+                state.casa.dentro != null
+            ) &&
+            !(
+                state.boss &&
+                state.boss.arena
+            ) &&
+            !state.mistico
+        );
     }
 
-    function firstOwnedBallId() {
-        const balls =
+    function huntCatalog() {
+        return Array.isArray(
+            runtime.welcome &&
+            runtime.welcome.hunts
+        )
+            ? runtime.welcome.hunts
+            : [];
+    }
+
+    function currentHuntDefinition() {
+        const slug =
             runtime.gameState &&
-            runtime.gameState.balls;
+            runtime.gameState.huntSlug;
+
+        return (
+            huntCatalog().find(
+                hunt =>
+                    hunt &&
+                    hunt.slug === slug
+            ) ||
+            null
+        );
+    }
+
+    function alternativeUnlockedHunt() {
+        if (!normalHuntActive()) {
+            return null;
+        }
+
+        const state =
+            runtime.gameState;
+
+        const current =
+            currentHuntDefinition();
+
+        const level =
+            Number(state.level || 0);
+
+        const candidates =
+            huntCatalog()
+                .filter(
+                    hunt =>
+                        hunt &&
+                        hunt.slug &&
+                        hunt.slug !== state.huntSlug &&
+                        Number(hunt.nivel || 0) <= level
+                )
+                .sort(
+                    (a, b) => {
+                        const sameRegionA =
+                            current &&
+                            a.regiao === current.regiao
+                                ? 0
+                                : 1;
+
+                        const sameRegionB =
+                            current &&
+                            b.regiao === current.regiao
+                                ? 0
+                                : 1;
+
+                        if (
+                            sameRegionA !==
+                            sameRegionB
+                        ) {
+                            return (
+                                sameRegionA -
+                                sameRegionB
+                            );
+                        }
+
+                        return (
+                            Math.abs(
+                                Number(a.nivel || 0) -
+                                Number(current && current.nivel || 0)
+                            ) -
+                            Math.abs(
+                                Number(b.nivel || 0) -
+                                Number(current && current.nivel || 0)
+                            )
+                        );
+                    }
+                );
+
+        return candidates[0] || null;
+    }
+
+    function collectionIds() {
+        const values =
+            runtime.gameState &&
+            runtime.gameState.automation &&
+            runtime.gameState.automation.pokemonTravado;
+
+        return new Set(
+            Array.isArray(values)
+                ? values.map(Number)
+                : []
+        );
+    }
+
+    function houseXpSharePokemonIds() {
+        const ids =
+            new Set();
+
+        const houses =
+            runtime.gameState &&
+            runtime.gameState.casa &&
+            Array.isArray(
+                runtime.gameState.casa.lista
+            )
+                ? runtime.gameState.casa.lista
+                : [];
+
+        for (const house of houses) {
+            for (
+                const pokemonId of
+                Array.isArray(house && house.postos)
+                    ? house.postos
+                    : []
+            ) {
+                if (pokemonId != null) {
+                    ids.add(
+                        Number(pokemonId)
+                    );
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    function freeTeamSlot() {
+        const used =
+            new Set(
+                teamPokemon().map(
+                    pokemon =>
+                        Number(pokemon.slot)
+                )
+            );
+
+        const max =
+            Math.max(
+                1,
+                Number(
+                    runtime.welcome &&
+                    runtime.welcome.maxEquipe ||
+                    5
+                )
+            );
+
+        for (
+            let slot = 0;
+            slot < max;
+            slot++
+        ) {
+            if (!used.has(slot)) {
+                return slot;
+            }
+        }
+
+        return null;
+    }
+
+    function depotCandidate() {
+        const collection =
+            collectionIds();
+
+        return (
+            allPokemon().find(
+                pokemon =>
+                    pokemon &&
+                    pokemon.id != null &&
+                    pokemon.slot == null &&
+                    !collection.has(
+                        Number(pokemon.id)
+                    )
+            ) ||
+            null
+        );
+    }
+
+    function parkableTeamPokemon() {
+        const houseIds =
+            houseXpSharePokemonIds();
+
+        const activeId =
+            runtime.gameState &&
+            runtime.gameState.activeId;
+
+        return (
+            teamPokemon().find(
+                pokemon =>
+                    pokemon.id !== activeId &&
+                    !houseIds.has(
+                        Number(pokemon.id)
+                    )
+            ) ||
+            null
+        );
+    }
+
+    function unlockedLootItem() {
+        const items =
+            runtime.gameState &&
+            runtime.gameState.items;
 
         if (
-            !balls ||
-            typeof balls !== 'object'
+            !items ||
+            typeof items !== 'object'
         ) {
             return null;
         }
 
-        const entry =
-            Object.entries(balls)
+        const locked =
+            new Set(
+                (
+                    runtime.gameState.automation &&
+                    Array.isArray(
+                        runtime.gameState.automation.lootTravado
+                    )
+                        ? runtime.gameState.automation.lootTravado
+                        : []
+                ).map(Number)
+            );
+
+        const row =
+            Object.entries(items)
                 .map(
                     ([id, count]) => ({
                         id: Number(id),
@@ -875,42 +1026,69 @@
                     })
                 )
                 .filter(
-                    row =>
-                        Number.isFinite(row.id) &&
-                        row.count > 0
+                    item =>
+                        Number.isFinite(item.id) &&
+                        item.count > 0 &&
+                        !locked.has(item.id)
                 )
                 .sort(
                     (a, b) =>
                         a.id - b.id
                 )[0];
 
-        return entry
-            ? entry.id
-            : null;
+        return row || null;
     }
 
-    function unskinnedPokemon() {
+    function collectionCandidate() {
+        return depotCandidate();
+    }
+
+    function alternativeOutlandTier() {
+        if (!normalHuntActive()) {
+            return null;
+        }
+
+        const hunt =
+            currentHuntDefinition();
+
+        if (
+            !hunt ||
+            !(
+                hunt.regiao === 'outland' ||
+                hunt.area === 'outland'
+            )
+        ) {
+            return null;
+        }
+
+        const tiers =
+            Array.isArray(
+                runtime.welcome &&
+                runtime.welcome.outlandTiers
+            )
+                ? runtime.welcome.outlandTiers
+                : [];
+
+        const level =
+            Number(
+                runtime.gameState.level ||
+                0
+            );
+
+        const current =
+            Number(
+                runtime.gameState.outlandTier ||
+                1
+            );
+
         return (
-            allPokemon().find(
-                pokemon =>
-                    pokemon &&
-                    pokemon.id != null &&
-                    pokemon.skin == null
+            tiers.find(
+                tier =>
+                    tier &&
+                    Number(tier.tier) !== current &&
+                    Number(tier.nivel || 0) <= level
             ) ||
             null
-        );
-    }
-
-    function escapeRopeCount() {
-        const items =
-            runtime.gameState &&
-            runtime.gameState.items;
-
-        return (
-            items &&
-            typeof items === 'object'
-                ? Number(items[70010] || 0)
-                : 0
         );
     }
 
@@ -974,257 +1152,89 @@
 
     const actions = [
         {
-            id: 'profile-stats-anywhere',
-            group: 'Read-only remote queries',
-            label: 'Account stats from current scene',
-            risk: 'low',
+            id: 'switch-hunt-roundtrip',
+            group: 'Highest value · easy',
+            label: 'Switch hunt directly, then return',
+            risk: 'medium',
             description:
-                'Request perfil.estatisticas without opening Profile. Confirms whether this read surface is scene-independent.',
-            expect: [
-                'estatisticas'
-            ],
+                'While hunting, jump directly to another unlocked area with hunt.select, then automatically restore the original hunt. If accepted, this can become a fast hunt-switch addon feature.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 4200,
+            available:
+                () => {
+                    const target =
+                        alternativeUnlockedHunt();
+
+                    return {
+                        ok:
+                            Boolean(target),
+                        reason:
+                            normalHuntActive()
+                                ? 'needs another unlocked hunt'
+                                : 'requires a normal active hunt'
+                    };
+                },
             steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'perfil.estatisticas'
+                () => {
+                    const original =
+                        runtime.gameState.huntSlug;
+
+                    const target =
+                        alternativeUnlockedHunt();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'hunt.select',
+                                slug:
+                                    target.slug
+                            }
+                        },
+                        {
+                            delay: 1500,
+                            payload: {
+                                t: 'hunt.select',
+                                slug:
+                                    original
+                            }
                         }
-                    }
-                ]
+                    ];
+                }
         },
         {
-            id: 'pvp-info-anywhere',
-            group: 'Read-only remote queries',
-            label: 'PvP info from current scene',
-            risk: 'low',
+            id: 'team-add-roundtrip',
+            group: 'Highest value · easy',
+            label: 'Bring Depot Pokémon into hunt team',
+            risk: 'medium',
             description:
-                'Request pvp.info directly without opening the ranked PvP interface.',
-            expect: [
-                'pvp'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'pvp.info'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'friends-info-anywhere',
-            group: 'Read-only remote queries',
-            label: 'Friends info from current scene',
-            risk: 'low',
-            description:
-                'Request amigos.info directly without opening the Friends interface.',
-            expect: [
-                'amigos'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'amigos.info'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'guild-info-anywhere',
-            group: 'Read-only remote queries',
-            label: 'Guild info from current scene',
-            risk: 'low',
-            description:
-                'Request guild.info directly. This is read-only even when the account is not in a guild.',
-            expect: [
-                'guild'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'guild.info'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'trade-info-anywhere',
-            group: 'Read-only remote queries',
-            label: 'Trade info from current scene',
-            risk: 'low',
-            description:
-                'Request comercio.info directly without entering the trade view. No offer or message is sent.',
-            expect: [
-                'comercio'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'comercio.info'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'orbs-panel-anywhere',
-            group: 'Read-only remote queries',
-            label: 'Orb panel from current scene',
-            risk: 'low',
-            description:
-                'Request orbs.painel directly. It reads the panel state but does not deposit, withdraw, or cancel anything.',
-            expect: [
-                'orbs'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'orbs.painel'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'shiny-registry',
-            group: 'Read-only registries',
-            label: 'Query Shiny registry directly',
-            risk: 'low',
-            description:
-                'Request the first default page of shiny.listar without opening the registry.',
-            expect: [
-                'shiny.lista'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'shiny.listar',
-                            busca: '',
-                            tipo: '',
-                            soAVenda: false,
-                            ordem: 'recentes',
-                            pagina: 0
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'p5-registry',
-            group: 'Read-only registries',
-            label: 'Query Power V registry directly',
-            risk: 'low',
-            description:
-                'Request the first default page of p5.listar without opening the registry.',
-            expect: [
-                'p5.lista'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'p5.listar',
-                            busca: '',
-                            tipo: '',
-                            soAVenda: false,
-                            ordem: 'recentes',
-                            pagina: 0
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'house-registry',
-            group: 'Read-only registries',
-            label: 'Query house registry directly',
-            risk: 'low',
-            description:
-                'Request casas.listar page 0 with no rarity filter.',
-            expect: [
-                'casas.lista'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'casas.listar',
-                            raridade: null,
-                            pagina: 0
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'bike-registry',
-            group: 'Read-only registries',
-            label: 'Query bike registry directly',
-            risk: 'low',
-            description:
-                'Request bicicletas.listar page 0 with no rarity filter.',
-            expect: [
-                'bicicletas.lista'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'bicicletas.listar',
-                            raridade: null,
-                            pagina: 0
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'gym-directory',
-            group: 'Read-only registries',
-            label: 'Query Gym directory directly',
-            risk: 'low',
-            description:
-                'Request ginasio.info without opening the Gym interface.',
-            expect: [
-                'ginasio'
-            ],
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'ginasio.info'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'team-slot-reassert',
-            group: 'Idempotency probes',
-            label: 'Re-assert current team slot',
-            risk: 'low',
-            description:
-                'Send team.move for a Pokémon already occupying that exact slot. No team layout should change.',
+                'During a normal hunt, put one Depot Pokémon into a free team slot, then send it back to Depot. Tests live team editing without visiting the Center.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 3800,
             available:
                 () => ({
                     ok:
-                        teamPokemon().length > 0,
+                        Boolean(
+                            normalHuntActive() &&
+                            depotCandidate() &&
+                            freeTeamSlot() != null
+                        ),
                     reason:
-                        'needs at least one Pokémon in the team'
+                        !normalHuntActive()
+                            ? 'requires a normal active hunt'
+                            : freeTeamSlot() == null
+                                ? 'team is full'
+                                : 'needs a Depot Pokémon outside the Collection'
                 }),
             steps:
                 () => {
                     const pokemon =
-                        teamPokemon()[0];
+                        depotCandidate();
+
+                    const slot =
+                        freeTeamSlot();
 
                     return [
                         {
@@ -1233,200 +1243,208 @@
                                 t: 'team.move',
                                 pokemonId:
                                     pokemon.id,
-                                slot:
-                                    pokemon.slot
+                                slot
+                            }
+                        },
+                        {
+                            delay: 1100,
+                            payload: {
+                                t: 'team.move',
+                                pokemonId:
+                                    pokemon.id,
+                                slot: null
                             }
                         }
                     ];
                 }
         },
         {
-            id: 'automation-reassert',
-            group: 'Idempotency probes',
-            label: 'Re-assert automation state',
-            risk: 'low',
-            description:
-                'Send auto.set with the exact automation object already present in the authoritative state.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            currentAutomation()
-                        ),
-                    reason:
-                        'automation state not present'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'auto.set',
-                            ...clone(
-                                currentAutomation()
-                            )
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'tutorial-reassert',
-            group: 'Idempotency probes',
-            label: 'Re-submit tutorial completion',
-            risk: 'low',
-            description:
-                'Send tutorial.concluir again after onboarding. Tests whether completion is safely idempotent.',
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'tutorial.concluir'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'invalid-boss-key',
-            group: 'Validation probes',
-            label: 'Challenge nonexistent boss key',
-            risk: 'low',
-            description:
-                'Send boss.entrar with an impossible key. Expected result is a clean server rejection with no scene/resource change.',
-            expectsRejection: true,
-            available:
-                () => ({
-                    ok:
-                        !(
-                            runtime.gameState.boss &&
-                            runtime.gameState.boss.arena
-                        ) &&
-                        !runtime.gameState.mistico,
-                    reason:
-                        'leave active arenas before testing'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'boss.entrar',
-                            key: '__moth_invalid_boss__'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'invalid-gym-type',
-            group: 'Validation probes',
-            label: 'Challenge nonexistent Gym type',
-            risk: 'low',
-            description:
-                'Send ginasio.desafiar with an impossible type. Expected result is a clean server rejection.',
-            expectsRejection: true,
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'ginasio.desafiar',
-                            tipo: '__moth_invalid_gym__'
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'escape-rope-empty',
-            group: 'Validation probes',
-            label: 'Use missing Escape Rope',
-            risk: 'low',
-            description:
-                'Only enabled when you own zero Escape Ropes. Sends item.use for item 70010 to test inventory validation.',
-            expectsRejection: true,
-            available:
-                () => ({
-                    ok:
-                        escapeRopeCount() <= 0,
-                    reason:
-                        'you currently own an Escape Rope; this probe only runs at zero inventory'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'item.use',
-                            itemId: 70010
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'invalid-ball-slot',
-            group: 'Validation probes',
-            label: 'Throw ball at invalid ground slot',
+            id: 'team-park-roundtrip',
+            group: 'Highest value · easy',
+            label: 'Park hunt teammate in Depot, then restore',
             risk: 'medium',
             description:
-                'During a normal hunt, throw one owned ball at slot -1. A correct rejection should not consume the ball.',
-            expectsRejection: true,
+                'Temporarily move a non-active teammate to Depot during a normal hunt, then restore the same slot. Avoids Pokémon currently assigned to House XP Share.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 3800,
             available:
                 () => ({
                     ok:
                         Boolean(
-                            runtime.gameState.huntSlug &&
-                            !runtime.gameState.noCentro &&
-                            !(
-                                runtime.gameState.boss &&
-                                runtime.gameState.boss.arena
-                            ) &&
-                            !runtime.gameState.mistico &&
-                            firstOwnedBallId() != null
+                            normalHuntActive() &&
+                            parkableTeamPokemon()
                         ),
                     reason:
-                        'requires a normal hunt and at least one ball'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'ball.throw',
-                            ballId:
-                                firstOwnedBallId(),
-                            slot: -1
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'skin-remove-unskinned',
-            group: 'Validation probes',
-            label: 'Remove skin from unskinned Pokémon',
-            risk: 'low',
-            description:
-                'Send skin.tirar for a Pokémon that currently has no skin. Expected result is rejection or a harmless no-op.',
-            expectsRejection: true,
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            unskinnedPokemon()
-                        ),
-                    reason:
-                        'no unskinned Pokémon found'
+                        normalHuntActive()
+                            ? 'needs a non-active teammate not assigned to House XP Share'
+                            : 'requires a normal active hunt'
                 }),
             steps:
                 () => {
                     const pokemon =
-                        unskinnedPokemon();
+                        parkableTeamPokemon();
+
+                    const slot =
+                        pokemon.slot;
 
                     return [
                         {
                             delay: 0,
                             payload: {
-                                t: 'skin.tirar',
+                                t: 'team.move',
                                 pokemonId:
-                                    pokemon.id
+                                    pokemon.id,
+                                slot: null
+                            }
+                        },
+                        {
+                            delay: 1100,
+                            payload: {
+                                t: 'team.move',
+                                pokemonId:
+                                    pokemon.id,
+                                slot
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'loot-lock-roundtrip',
+            group: 'Useful shortcuts · easy',
+            label: 'Lock an owned item remotely, then unlock',
+            risk: 'low',
+            description:
+                'Toggle shop.lockLoot for one currently-unlocked owned item, then restore it. Useful if addon controls should protect drops without opening Market inventory.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 3400,
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            unlockedLootItem()
+                        ),
+                    reason:
+                        'needs at least one owned item that is not already locked'
+                }),
+            steps:
+                () => {
+                    const item =
+                        unlockedLootItem();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'shop.lockLoot',
+                                id:
+                                    item.id
+                            }
+                        },
+                        {
+                            delay: 1000,
+                            payload: {
+                                t: 'shop.lockLoot',
+                                id:
+                                    item.id
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'collection-roundtrip',
+            group: 'Useful shortcuts · slower',
+            label: 'Protect Depot Pokémon, then restore',
+            risk: 'medium',
+            description:
+                'Move one Depot Pokémon into the Collection/protected list and back. Waits through the Collection cooldown, so it is slower but tests a useful remote safety control.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 8500,
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            collectionCandidate()
+                        ),
+                    reason:
+                        'needs a Depot Pokémon outside the Collection'
+                }),
+            steps:
+                () => {
+                    const pokemon =
+                        collectionCandidate();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'colecao.mover',
+                                pokemonId:
+                                    pokemon.id,
+                                para: 'colecao'
+                            }
+                        },
+                        {
+                            delay: 4200,
+                            payload: {
+                                t: 'colecao.mover',
+                                pokemonId:
+                                    pokemon.id,
+                                para: 'depot'
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'outland-tier-roundtrip',
+            group: 'Useful shortcuts · situational',
+            label: 'Change Outland tier mid-hunt, then restore',
+            risk: 'medium',
+            description:
+                'While actively hunting in Outland, switch to another tier unlocked by your trainer level, then restore the original tier.',
+            expectsRoundTrip: true,
+            successOnStateChange: true,
+            responseWindowMs: 4200,
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            alternativeOutlandTier()
+                        ),
+                    reason:
+                        'requires an Outland hunt and at least two unlocked tiers'
+                }),
+            steps:
+                () => {
+                    const original =
+                        Number(
+                            runtime.gameState.outlandTier ||
+                            1
+                        );
+
+                    const target =
+                        alternativeOutlandTier();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'outland.tier',
+                                tier:
+                                    Number(target.tier)
+                            }
+                        },
+                        {
+                            delay: 1400,
+                            payload: {
+                                t: 'outland.tier',
+                                tier:
+                                    original
                             }
                         }
                     ];
@@ -1483,7 +1501,22 @@
                     'notice'
             );
 
+        const stateChanged =
+            probe.events.some(
+                event =>
+                    event.kind ===
+                    'state'
+            );
+
         if (
+            probe.expectsRoundTrip &&
+            stateChanged
+        ) {
+            probe.result =
+                probe.changes.length
+                    ? 'state changed; restore may have failed'
+                    : 'state changed and restored';
+        } else if (
             probe.expectsRejection
         ) {
             if (
@@ -1509,9 +1542,17 @@
         } else if (notice) {
             probe.result =
                 'server notice / likely rejection';
-        } else if (accepted) {
+        } else if (
+            accepted ||
+            (
+                probe.successOnStateChange &&
+                stateChanged
+            )
+        ) {
             probe.result =
-                'expected response received';
+                accepted
+                    ? 'expected response received'
+                    : 'relevant state changed';
         } else if (
             probe.changes.length
         ) {
@@ -1627,6 +1668,14 @@
             expectsRejection:
                 Boolean(
                     action.expectsRejection
+                ),
+            expectsRoundTrip:
+                Boolean(
+                    action.expectsRoundTrip
+                ),
+            successOnStateChange:
+                Boolean(
+                    action.successOnStateChange
                 )
         };
 
@@ -1703,7 +1752,13 @@
                     finishProbe(
                         'no explicit response in window'
                     ),
-                RESPONSE_WINDOW_MS
+                Math.max(
+                    RESPONSE_WINDOW_MS,
+                    Number(
+                        action.responseWindowMs ||
+                        0
+                    )
+                )
             );
 
         updateUI();
@@ -1900,7 +1955,7 @@
 
         html +=
             '<div class="mea-state" data-mea-state></div>' +
-            '<div class="mea-state">Fresh batch: read-only queries plus bounded validation/no-op probes. No VIP/premium spoofing, currency fabrication, market/trade writes, guild/social mutations, destructive Pokémon operations, or held Exp. Share race testing.</div>';
+            '<div class="mea-state">Prioritized for practical use: reversible hunt/team/protection shortcuts first. Tests auto-restore their starting state and avoid scarce-resource, evolution/refinement, premium, trade, destructive Pokémon, and held Exp. Share race paths.</div>';
 
         for (
             const [
