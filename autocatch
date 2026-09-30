@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.2.0
+// @version      5.3.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -13,6 +13,10 @@
     'use strict';
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
+    const MIN_INTERVAL_MS = 100;
+    const TARGET_RETRY_MS = 220;
+    const BALL_SELECT_SETTLE_MS = 35;
+
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
     const qa = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -73,6 +77,9 @@
      */
     const pendingLocalAttempts = [];
     const pendingBySlot = new Map();
+    const ballIdByIdentity = new Map();
+
+    let activeProtocolSocket = null;
 
     let stats = freshStats();
     let protocolHookInstalled = false;
@@ -376,7 +383,8 @@
                     lastChance: null,
                     shiny: false,
                     captured: false,
-                    capturedAt: 0
+                    capturedAt: 0,
+                    lastDispatchAt: 0
                 };
 
                 targetStates.set(key, state);
@@ -450,6 +458,46 @@
             .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0]
             || states.find(state => !state.captured)
             || null;
+    }
+
+    function chooseTargetState(states) {
+        const now = Date.now();
+
+        return states
+            .filter(state => {
+                if (state.captured) {
+                    return false;
+                }
+
+                /*
+                 * Do not hammer one corpse while its previous throw is
+                 * still awaiting a server result. With several fallen
+                 * Pokémon this naturally rotates between them.
+                 */
+                if (
+                    state.lastResult === 'pending' &&
+                    now - state.lastAttemptAt < TARGET_RETRY_MS
+                ) {
+                    return false;
+                }
+
+                return true;
+            })
+            .sort((a, b) => {
+                /*
+                 * Never-attempted targets first. Afterwards service the
+                 * least-recently attempted target. This prevents one
+                 * stubborn corpse from starving newer fallen Pokémon.
+                 */
+                const aAttempt = a.lastAttemptAt || 0;
+                const bAttempt = b.lastAttemptAt || 0;
+
+                if (aAttempt !== bAttempt) {
+                    return aAttempt - bAttempt;
+                }
+
+                return a.firstSeenAt - b.firstSeenAt;
+            })[0] || null;
     }
 
     function formatTargetState(state) {
@@ -531,6 +579,17 @@
         pending.state.slot = slot;
         pending.state.lastServerBallId =
             message.ballId ?? null;
+
+        if (
+            pending.ballIdentity &&
+            message.ballId !== undefined &&
+            message.ballId !== null
+        ) {
+            ballIdByIdentity.set(
+                pending.ballIdentity,
+                message.ballId
+            );
+        }
 
         pendingBySlot.set(
             slot,
@@ -698,6 +757,13 @@
 
     function attachProtocolSocket(socket) {
         protocolSockets++;
+        activeProtocolSocket = socket;
+
+        socket.addEventListener('close', () => {
+            if (activeProtocolSocket === socket) {
+                activeProtocolSocket = null;
+            }
+        });
 
         socket.addEventListener('message', event => {
             if (
@@ -798,8 +864,118 @@
 
         timer = setTimeout(
             tick,
-            Math.max(250, Number(settings.intervalMs) || 650)
+            Math.max(
+                MIN_INTERVAL_MS,
+                Number(settings.intervalMs) || 650
+            )
         );
+    }
+
+    function protocolSocketReady() {
+        return Boolean(
+            activeProtocolSocket &&
+            activeProtocolSocket.readyState === WebSocket.OPEN
+        );
+    }
+
+    function registerAttempt(
+        state,
+        choice,
+        ballIdentityValue,
+        ballBefore,
+        ballName
+    ) {
+        const now = Date.now();
+
+        state.throws++;
+        state.lastAttemptAt = now;
+        state.lastDispatchAt = now;
+        state.lastBallKey = choice.key;
+        state.lastBallLabel = ballName;
+        state.lastBallIdentity = ballIdentityValue;
+        state.lastBallCountBefore = ballBefore;
+        state.lastResult = 'pending';
+
+        stats.attempts++;
+
+        const pending = {
+            state,
+            createdAt: now,
+            bound: false,
+            slot: null,
+            ballIdentity: ballIdentityValue
+        };
+
+        pendingLocalAttempts.push(pending);
+
+        return pending;
+    }
+
+    function rollbackAttempt(
+        state,
+        pending
+    ) {
+        const index =
+            pendingLocalAttempts.indexOf(
+                pending
+            );
+
+        if (index >= 0) {
+            pendingLocalAttempts.splice(
+                index,
+                1
+            );
+        }
+
+        state.throws =
+            Math.max(
+                0,
+                state.throws - 1
+            );
+
+        state.lastResult = null;
+
+        stats.attempts =
+            Math.max(
+                0,
+                stats.attempts - 1
+            );
+    }
+
+    function sendDirectThrow(
+        state,
+        choice,
+        ballIdentityValue
+    ) {
+        if (
+            state.slot === null ||
+            state.slot === undefined ||
+            !protocolSocketReady()
+        ) {
+            return false;
+        }
+
+        const serverBallId =
+            ballIdByIdentity.get(
+                ballIdentityValue
+            );
+
+        if (
+            serverBallId === undefined ||
+            serverBallId === null
+        ) {
+            return false;
+        }
+
+        activeProtocolSocket.send(
+            JSON.stringify({
+                t: 'ball.throw',
+                ballId: serverBallId,
+                slot: Number(state.slot)
+            })
+        );
+
+        return true;
     }
 
     function tick() {
@@ -813,14 +989,31 @@
 
         const fallenPanel = q('#caidos');
         const states = scanTargets();
-        const state = states.find(item => !item.captured);
+        const state = chooseTargetState(states);
 
         if (
             !fallenPanel ||
             fallenPanel.classList.contains('hidden') ||
-            !state
+            !states.some(item => !item.captured)
         ) {
             stats.status = 'Waiting for target';
+            updateUI();
+            schedule();
+            return;
+        }
+
+        /*
+         * Every visible target currently has a throw in flight. Do not
+         * send duplicates yet; come back quickly and service whichever
+         * result resolves first.
+         */
+        if (!state) {
+            stats.status =
+                `Waiting on ${states.filter(item =>
+                    !item.captured &&
+                    item.lastResult === 'pending'
+                ).length} throw result(s)`;
+
             updateUI();
             schedule();
             return;
@@ -835,99 +1028,107 @@
             return;
         }
 
-        selectBall(choice);
-
         const targetElement = state.element;
-        const ballId = ballIdentity(choice.button);
+        const ballIdentityValue =
+            ballIdentity(choice.button);
         const ballBefore = choice.count;
         const ballName = ballLabel(choice.button);
+
+        const pending =
+            registerAttempt(
+                state,
+                choice,
+                ballIdentityValue,
+                ballBefore,
+                ballName
+            );
+
+        /*
+         * Once a target slot and this ball's server ID are known, skip
+         * the DOM completely. This removes the old 160 ms wait and makes
+         * retries both faster and more reliable.
+         */
+        if (
+            sendDirectThrow(
+                state,
+                choice,
+                ballIdentityValue
+            )
+        ) {
+            stats.status =
+                formatTargetState(state);
+
+            updateUI();
+            schedule();
+            return;
+        }
+
+        const clickTarget =
+            getTargetClickElement(
+                targetElement
+            );
+
+        if (
+            !clickTarget ||
+            !targetElement?.isConnected
+        ) {
+            rollbackAttempt(
+                state,
+                pending
+            );
+
+            stats.status =
+                'Target disappeared before throw';
+
+            updateUI();
+            schedule();
+            return;
+        }
+
+        const alreadySelected =
+            choice.button.classList
+                .contains('on');
+
+        if (!alreadySelected) {
+            selectBall(choice);
+        }
 
         setTimeout(() => {
             if (
                 !settings.enabled ||
                 state.captured ||
                 !targetElement?.isConnected
-            ) return;
-
-            const clickTarget = getTargetClickElement(targetElement);
-
-            if (!clickTarget) {
-                stats.status = 'Target has no clickable control';
-                updateUI();
-                return;
-            }
-
-            /*
-             * Register the local attempt BEFORE click(). PokéIdle sends
-             * ball.throw synchronously from its click handler, so the
-             * outgoing WebSocket hook can bind its exact server slot.
-             */
-            const now = Date.now();
-
-            state.throws++;
-            state.lastAttemptAt = now;
-            state.lastBallKey = choice.key;
-            state.lastBallLabel = ballName;
-            state.lastBallIdentity = ballId;
-            state.lastBallCountBefore = ballBefore;
-            state.lastResult = 'pending';
-
-            stats.attempts++;
-
-            const pending = {
-                state,
-                createdAt: now,
-                bound: false,
-                slot: null
-            };
-
-            pendingLocalAttempts.push(pending);
-
-            if (!fireClick(clickTarget)) {
-                pendingLocalAttempts.splice(
-                    pendingLocalAttempts.indexOf(pending),
-                    1
+            ) {
+                rollbackAttempt(
+                    state,
+                    pending
                 );
 
-                state.throws--;
-                stats.attempts--;
+                return;
+            }
 
-                stats.status = 'Target click failed';
+            if (!fireClick(clickTarget)) {
+                rollbackAttempt(
+                    state,
+                    pending
+                );
+
+                stats.status =
+                    'Target click failed';
+
                 updateUI();
                 return;
             }
 
-            stats.status = formatTargetState(state);
-
-            /*
-             * Ball inventory is still useful for "balls used" statistics,
-             * but it no longer decides whether a capture succeeded.
-             */
-            setTimeout(() => {
-                syncInventoryUsage();
-
-                if (
-                    ballBefore !== null &&
-                    !state.captured
-                ) {
-                    const currentButton = getBallButtons().find(
-                        button => ballIdentity(button) === ballId
-                    );
-
-                    const after = ballCount(currentButton);
-
-                    if (after !== null && after >= ballBefore) {
-                        state.lastResult = 'not-consumed';
-                        stats.status =
-                            `${state.name} · click sent · ball not consumed`;
-                    }
-                }
-
-                updateUI();
-            }, 450);
+            stats.status =
+                formatTargetState(state);
 
             updateUI();
-        }, 160);
+        },
+        alreadySelected
+            ? 0
+            : BALL_SELECT_SETTLE_MS
+        );
 
         schedule();
     }
@@ -938,6 +1139,7 @@
         targetStates.clear();
         pendingLocalAttempts.length = 0;
         pendingBySlot.clear();
+        ballIdByIdentity.clear();
 
         syncInventoryUsage();
         updateUI();
@@ -1206,7 +1408,7 @@
 
             <div class="moth-ac-grid">
                 <label for="moth-ac-interval">Throw interval</label>
-                <input id="moth-ac-interval" type="number" min="250" max="5000" step="50">
+                <input id="moth-ac-interval" type="number" min="100" max="5000" step="25">
             </div>
 
             <div class="moth-ac-balls">
@@ -1247,7 +1449,7 @@
 
         interval.addEventListener('change', () => {
             settings.intervalMs = Math.max(
-                250,
+                MIN_INTERVAL_MS,
                 Math.min(5000, Number(interval.value) || 650)
             );
 
@@ -1478,7 +1680,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5.2 loaded');
+        console.info('[PokéIdle Auto Catch+] v5.3 loaded');
     }
 
     if (document.readyState === 'loading') {
