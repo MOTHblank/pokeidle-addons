@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      4.2.1
+// @version      5.0.0
 // @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -12,14 +12,19 @@
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'moth-pokeidle-performance-v5';
-    const LEGACY_KEY = 'moth-pokeidle-performance-v4';
+    const STORAGE_KEY = 'moth-pokeidle-performance-v6';
+    const LEGACY_KEY = 'moth-pokeidle-performance-v5';
+    const NATIVE_OPT_OWNER_KEY = 'moth-pokeidle-performance-native-opt-owner';
+    const NATIVE_OPT_BASE_KEY = 'moth-pokeidle-performance-native-opt-base';
     const TRIGGER_ID = 'moth-performance-trigger';
     const PANEL_ID = 'moth-performance-panel';
     const STYLE_ID = 'moth-performance-style';
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
+
+    const nativeSetInterval = page.setInterval.bind(page);
+    const nativeClearInterval = page.clearInterval.bind(page);
 
     /*
      * "Performance" is intentionally different from AFK/Capture Saver:
@@ -37,55 +42,55 @@
             ui: 'off',
             idleUi: 'off',
             effects: 'full',
-            chat: 'normal'
+            nativeOptimized: false
         },
         adaptive: {
             label: 'Adaptive',
             adaptive: true,
             scene: '30',
-            idleScene: '2',
+            idleScene: '5',
             backgroundScene: '2',
             idleSeconds: 45,
             ui: 'lite',
             idleUi: 'aggressive',
             effects: 'reduced',
-            chat: 'idle'
+            nativeOptimized: true
         },
         afk: {
             label: 'AFK',
             adaptive: false,
             scene: '15',
-            idleScene: '2',
+            idleScene: '5',
             backgroundScene: '2',
             idleSeconds: 20,
             ui: 'lite',
             idleUi: 'aggressive',
             effects: 'reduced',
-            chat: 'idle'
+            nativeOptimized: true
         },
         capture: {
             label: 'Capture Saver',
             adaptive: false,
-            scene: '15',
-            idleScene: '2',
+            scene: '10',
+            idleScene: '5',
             backgroundScene: '2',
             idleSeconds: 10,
             ui: 'aggressive',
             idleUi: 'aggressive',
             effects: 'minimal',
-            chat: 'always'
+            nativeOptimized: true
         },
         performance: {
             label: 'Performance',
             adaptive: false,
-            scene: 'full',
-            idleScene: 'full',
-            backgroundScene: 'full',
-            idleSeconds: 0,
+            scene: '30',
+            idleScene: '15',
+            backgroundScene: '2',
+            idleSeconds: 30,
             ui: 'performance',
             idleUi: 'performance',
             effects: 'minimal',
-            chat: 'normal'
+            nativeOptimized: true
         }
     };
 
@@ -131,11 +136,12 @@
     const nativeRAF = page.requestAnimationFrame?.bind(page);
     const nativeCancelRAF = page.cancelAnimationFrame?.bind(page);
     const throttledRequests = new Map();
-    const campoState = new WeakMap();
+    const rafState = new WeakMap();
+    const rafClassification = new WeakMap();
     let nextSyntheticRafId = -1;
-    const campoCallbacks = new WeakSet();
     let campoHookInstalled = false;
     let campoLoopFound = false;
+    let npcLoopFound = false;
     let campoRunsWindow = 0;
     let campoSkippedWindow = 0;
     let campoRunsPerSecond = 0;
@@ -151,9 +157,19 @@
     let longTaskMsPerSecond = 0;
     let jankPerSecond = 0;
     let pressure = 'light';
-    let heavyStreak = 0;
-    let lightStreak = 0;
     let adaptiveDecision = '30';
+    let adaptiveCandidate = '30';
+    let adaptiveCandidateStreak = 0;
+
+    let uiTimerRunsWindow = 0;
+    let uiTimerSkippedWindow = 0;
+    let uiTimerRunsPerSecond = 0;
+    let uiTimerSkippedPerSecond = 0;
+
+    let npcRunsWindow = 0;
+    let npcSkippedWindow = 0;
+    let npcRunsPerSecond = 0;
+    let npcSkippedPerSecond = 0;
 
     function saveSettings() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
