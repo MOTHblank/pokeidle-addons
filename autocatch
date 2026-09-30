@@ -275,6 +275,27 @@
         return ids;
     }
 
+    function targetInstanceId(target) {
+        /*
+         * Only identifiers that are likely to identify this fallen body,
+         * not the Pokémon species. data-pokemon-id/data-poke-id remain
+         * useful for protocol matching but are not safe map keys when two
+         * identical species are on the floor at the same time.
+         */
+        for (const attr of [
+            'data-caido-id',
+            'data-corpo-id',
+            'data-target-id',
+            'data-uid',
+            'data-id'
+        ]) {
+            const value = target?.getAttribute?.(attr);
+            if (value) return String(value);
+        }
+
+        return null;
+    }
+
     function targetName(target) {
         const explicit = [
             target?.getAttribute?.('data-name'),
@@ -316,7 +337,7 @@
             if (!visible(element)) continue;
 
             const ids = targetProtocolIds(element);
-            const strongId = [...ids][0] || null;
+            const strongId = targetInstanceId(element);
             const base = strongId ? 'id:' + strongId : fallbackTargetSignature(element);
 
             const occurrence = occurrences.get(base) || 0;
