@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.1.0
 // @description  Fast Pokémon-centric hunt finder with lock, capture, type and weakness filters.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -26,7 +26,7 @@
         'moth-pokeidle-hunt-atlas-types-v1';
 
     const FILTER_KEY =
-        'moth-pokeidle-hunt-atlas-filters-v1';
+        'moth-pokeidle-hunt-atlas-filters-v2';
 
     const BUTTON_ID =
         'moth-hunt-atlas-button';
@@ -245,6 +245,8 @@
         drawerOpen: false,
         websocketHookInstalled: false,
         sockets: 0,
+        activeSocket: null,
+        pendingTravel: null,
 
         status: 'Waiting for game data…',
 
@@ -277,7 +279,7 @@
             region: 'all',
             type: 'all',
             weakness: 'all',
-            availability: 'all',
+            availability: 'unlocked',
             captured: 'all'
         };
 
@@ -530,6 +532,39 @@
         }
     }
 
+    function handleHuntBattleEvent(message) {
+        if (
+            message?.t !== 'batalha' ||
+            !Array.isArray(message.ev)
+        ) {
+            return false;
+        }
+
+        const huntEvent =
+            message.ev.find(
+                event =>
+                    event?.k === 'hunt' &&
+                    typeof event.slug === 'string'
+            );
+
+        if (!huntEvent) {
+            return false;
+        }
+
+        state.currentHuntSlug =
+            huntEvent.slug;
+
+        state.status =
+            `Entered ${huntEvent.nome || huntEvent.slug}.`;
+
+        state.pendingTravel = null;
+
+        saveCache();
+        queueRender();
+
+        return true;
+    }
+
     function handleProtocolMessage(
         data
     ) {
@@ -543,6 +578,14 @@
             message =
                 JSON.parse(data);
         } catch {
+            return;
+        }
+
+        if (
+            handleHuntBattleEvent(
+                message
+            )
+        ) {
             return;
         }
 
@@ -591,6 +634,21 @@
         socket
     ) {
         state.sockets++;
+        state.activeSocket =
+            socket;
+
+        socket.addEventListener(
+            'close',
+            () => {
+                if (
+                    state.activeSocket ===
+                    socket
+                ) {
+                    state.activeSocket =
+                        null;
+                }
+            }
+        );
 
         socket.addEventListener(
             'message',
@@ -1383,237 +1441,103 @@
     }
 
     // ------------------------------------------------------------------
-    // Navigation through PokéIdle's own map UI
+    // Hunt navigation
     // ------------------------------------------------------------------
 
-    function wait(
-        ms
-    ) {
-        return new Promise(
-            resolve =>
-                setTimeout(
-                    resolve,
-                    ms
-                )
-        );
-    }
-
-    async function waitFor(
-        predicate,
-        timeout = 2500,
-        step = 50
-    ) {
-        const started =
-            Date.now();
-
-        while (
-            Date.now() -
-            started <
-            timeout
-        ) {
-            const value =
-                predicate();
-
-            if (value) {
-                return value;
-            }
-
-            await wait(step);
-        }
-
-        return null;
-    }
-
-    function elementLooksLocked(
-        el
-    ) {
-        const classes =
-            normalize(
-                el.className
-            );
-
+    function socketReady() {
         return Boolean(
-            el.disabled ||
-            el.getAttribute(
-                'aria-disabled'
-            ) === 'true' ||
-            /locked|bloquead|travado|indisponivel|disabled/.test(
-                classes
-            )
+            state.activeSocket &&
+            state.activeSocket.readyState ===
+                WebSocket.OPEN
         );
     }
 
-    function huntCandidateScore(
-        element,
+    function sendHuntSelect(
         hunt
     ) {
-        const slug =
-            normalize(
-                hunt.slug
-            );
-
-        const name =
-            normalize(
-                hunt.nome
-            );
-
-        const area =
-            normalize(
-                hunt.area
-            );
-
-        const text =
-            normalize(
-                element.textContent
-            );
-
-        const title =
-            normalize(
-                element.getAttribute(
-                    'title'
-                )
-            );
-
-        const href =
-            normalize(
-                element.getAttribute(
-                    'href'
-                )
-            );
-
-        const attrs =
-            [
-                ...element.attributes
-            ]
-                .map(
-                    attr =>
-                        normalize(
-                            attr.value
-                        )
-                )
-                .join(' ');
-
-        let score = 0;
-
         if (
-            slug &&
-            attrs.split(/\s+/)
-                .includes(slug)
+            !hunt ||
+            !hunt.slug
         ) {
-            score += 120;
-        } else if (
-            slug &&
-            attrs.includes(slug)
-        ) {
-            score += 80;
+            return false;
         }
 
-        if (
-            slug &&
-            href.includes(slug)
-        ) {
-            score += 80;
+        if (!socketReady()) {
+            state.status =
+                'Game connection is not ready yet.';
+
+            queueRender();
+            return false;
         }
 
-        if (
-            name &&
-            text === name
-        ) {
-            score += 70;
-        } else if (
-            name &&
-            text.includes(name)
-        ) {
-            score += 45;
-        }
+        try {
+            state.pendingTravel = {
+                slug:
+                    hunt.slug,
+                startedAt:
+                    Date.now()
+            };
 
-        if (
-            name &&
-            title.includes(name)
-        ) {
-            score += 40;
-        }
+            state.status =
+                `Traveling to ${hunt.nome || hunt.slug}…`;
 
-        if (
-            area &&
-            text.includes(area)
-        ) {
-            score += 10;
-        }
-
-        return score;
-    }
-
-    function findHuntElement(
-        root,
-        hunt
-    ) {
-        const candidates =
-            qa(
-                [
-                    'button',
-                    'a',
-                    '[role="button"]',
-                    '[data-slug]',
-                    '[data-hunt]',
-                    '[data-hunt-slug]'
-                ].join(','),
-                root
-            );
-
-        return candidates
-            .map(
-                element => ({
-                    element,
-                    score:
-                        huntCandidateScore(
-                            element,
-                            hunt
-                        )
+            /*
+             * Explorer captured PokéIdle's exact map action:
+             *   { t: "hunt.select", slug: "<hunt-slug>" }
+             *
+             * The server remains authoritative for cooldowns and any
+             * progression restrictions Atlas does not know about.
+             */
+            state.activeSocket.send(
+                JSON.stringify({
+                    t:
+                        'hunt.select',
+                    slug:
+                        hunt.slug
                 })
-            )
-            .filter(
-                candidate =>
-                    candidate.score >=
-                    40
-            )
-            .sort(
-                (a, b) =>
-                    b.score -
-                    a.score
-            )[0]
-            ?.element ||
-            null;
-    }
+            );
 
-    function findAreaElement(
-        root,
-        area
-    ) {
-        const wanted =
-            normalize(area);
+            queueRender();
 
-        if (!wanted) {
-            return null;
+            setTimeout(
+                () => {
+                    if (
+                        state.pendingTravel?.slug ===
+                            hunt.slug &&
+                        state.currentHuntSlug !==
+                            hunt.slug
+                    ) {
+                        state.status =
+                            `PokéIdle did not accept ${hunt.nome || hunt.slug}. It may still be locked or hunt switching may be on cooldown.`;
+
+                        state.pendingTravel =
+                            null;
+
+                        queueRender();
+                    }
+                },
+                2500
+            );
+
+            return true;
+        } catch (error) {
+            console.warn(
+                '[PokéIdle Hunt Atlas] hunt.select failed',
+                error
+            );
+
+            state.pendingTravel =
+                null;
+
+            state.status =
+                'Could not send hunt selection.';
+
+            queueRender();
+            return false;
         }
-
-        return qa(
-            'button,a,[role="button"]',
-            root
-        ).find(
-            el =>
-                normalize(
-                    el.textContent
-                ) === wanted ||
-                normalize(
-                    el.getAttribute(
-                        'data-area'
-                    )
-                ) === wanted
-        ) || null;
     }
 
-    async function navigateToHunt(
+    function navigateToHunt(
         hunt
     ) {
         if (
@@ -1637,125 +1561,30 @@
             return;
         }
 
-        state.status =
-            `Opening map for ${hunt.nome}…`;
-
-        queueRender();
-
-        const mapButton =
-            q(
-                '[data-modal="mapa"]'
-            );
-
-        if (!mapButton) {
-            state.status =
-                'Could not find PokéIdle’s Map button.';
-
-            queueRender();
-            return;
-        }
-
-        mapButton.click();
-
-        const modalBody =
-            await waitFor(
-                () => {
-                    const modal =
-                        q('#modal');
-
-                    const body =
-                        q(
-                            '#modal-corpo'
-                        );
-
-                    if (
-                        modal &&
-                        body &&
-                        getComputedStyle(
-                            modal
-                        ).display !==
-                            'none'
-                    ) {
-                        return body;
-                    }
-
-                    return null;
-                },
-                2500
-            );
-
-        if (!modalBody) {
-            state.status =
-                'Map did not open.';
-
-            queueRender();
-            return;
-        }
-
-        let candidate =
-            findHuntElement(
-                modalBody,
-                hunt
-            );
-
-        if (!candidate) {
-            const areaElement =
-                findAreaElement(
-                    modalBody,
-                    hunt.area
-                );
-
-            if (areaElement) {
-                areaElement.click();
-                await wait(180);
-
-                candidate =
-                    findHuntElement(
-                        modalBody,
-                        hunt
-                    );
-            }
-        }
-
-        if (!candidate) {
-            state.status =
-                `Map opened, but Atlas could not identify “${hunt.nome}” yet. Use Explorer → Inspect next click on that hunt once and export the report; the catalog/filtering side is already working.`;
-
-            queueRender();
-            return;
-        }
-
         if (
-            elementLooksLocked(
-                candidate
+            sendHuntSelect(
+                hunt
             )
         ) {
-            state.lockOverrides.set(
-                hunt.slug,
-                false
+            /*
+             * Keep the Atlas open briefly so the user sees "Traveling…".
+             * The confirmed hunt event will update the current state.
+             */
+            setTimeout(
+                () => {
+                    if (
+                        state.currentHuntSlug ===
+                        hunt.slug
+                    ) {
+                        state.drawerOpen =
+                            false;
+
+                        queueRender();
+                    }
+                },
+                300
             );
-
-            state.status =
-                `${hunt.nome} is locked by the game.`;
-
-            queueRender();
-            return;
         }
-
-        state.lockOverrides.set(
-            hunt.slug,
-            true
-        );
-
-        candidate.click();
-
-        state.status =
-            `Traveling to ${hunt.nome}…`;
-
-        state.drawerOpen =
-            false;
-
-        queueRender();
     }
 
     // ------------------------------------------------------------------
@@ -2644,7 +2473,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1 loaded'
+            '[PokéIdle Hunt Atlas] v1.1 loaded'
         );
     }
 
