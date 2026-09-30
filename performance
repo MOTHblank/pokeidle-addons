@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      4.1.0
+// @version      4.2.0
 // @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -85,7 +85,7 @@
             ui: 'performance',
             idleUi: 'performance',
             effects: 'minimal',
-            chat: 'always'
+            chat: 'normal'
         }
     };
 
@@ -683,16 +683,14 @@
         const idle =
             isIdleForProfile(p);
 
+        /*
+         * Never collapse chat just because UI load is high. That changes
+         * user-visible state and made the panel appear broken. Only AFK-like
+         * profiles explicitly configured for idle collapse may do it.
+         */
         const shouldCollapse =
-            p.chat === 'always' ||
-            (
-                p.chat === 'idle' &&
-                (
-                    idle ||
-                    currentUi ===
-                        'aggressive'
-                )
-            );
+            p.chat === 'idle' &&
+            idle;
 
         if (shouldCollapse) {
             collapseChat();
@@ -832,23 +830,11 @@
             }
 
             /*
-             * Performance profile keeps only gameplay-critical surfaces.
-             * Explorer measured the team, active-card and native automation
-             * option grids as recurring mutation sources. They may continue
-             * receiving state updates, but Firefox no longer has to lay out
-             * or paint them while UI Max is active.
+             * UI Max must never remove interactive/core game UI.
+             * Chat, team, active Pokémon and automation controls stay fully
+             * usable. Only redundant live indicators are removed.
              */
-            html.moth-ui-performance #p-chat .chat-vao,
-            html.moth-ui-performance #p-chat .chat-entrada,
-            html.moth-ui-performance #chat-emojis,
-            html.moth-ui-performance #time-corpo,
-            html.moth-ui-performance #ativo-card,
-            html.moth-ui-performance #btn-evoluir,
-            html.moth-ui-performance #btn-mega,
-            html.moth-ui-performance #ir-centro-conta,
-            html.moth-ui-performance #auto-ball-opts,
-            html.moth-ui-performance #auto-revive-opts,
-            html.moth-ui-performance #auto-potion-opts {
+            html.moth-ui-performance #ir-centro-conta {
                 display: none !important;
             }
 
@@ -1376,7 +1362,7 @@
                 'performance'
             ) {
                 statusText =
-                    'Performance: native scene rate, UI stripped for maximum visible FPS.';
+                    'Performance: native scene rate, nonessential effects reduced; core UI preserved.';
             } else if (
                 profile().adaptive
             ) {
@@ -1496,7 +1482,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v4.1 loaded'
+            '[PokéIdle Performance+] v4.2 loaded'
         );
     }
 
