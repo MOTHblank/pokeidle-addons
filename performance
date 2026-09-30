@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      4.0.0
+// @version      4.1.0
 // @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -133,7 +133,7 @@
     const throttledRequests = new Map();
     const campoState = new WeakMap();
     let nextSyntheticRafId = -1;
-    let campoLoopCallback = null;
+    const campoCallbacks = new WeakSet();
     let campoHookInstalled = false;
     let campoLoopFound = false;
     let campoRunsWindow = 0;
@@ -199,34 +199,49 @@
     }
 
     function isCampoLoopRequest(callback) {
-        if (campoLoopCallback && callback === campoLoopCallback) {
+        if (
+            typeof callback !==
+            'function'
+        ) {
+            return false;
+        }
+
+        if (
+            campoCallbacks.has(
+                callback
+            )
+        ) {
             return true;
         }
 
         /*
-         * The supplied Chrome trace identifies the renderer callback as:
-         *   campo.mjs -> loop (around line 1072)
+         * Firefox's profiler labels the renderer as campo.mjs -> loop,
+         * but Function.name is not guaranteed for module-local callbacks.
+         * v4 incorrectly required callback.name === "loop", which is why
+         * it could remain stuck at "campo…".
          *
-         * We only capture a function literally named "loop" when the
-         * requestAnimationFrame call itself originates from campo.mjs.
-         * Every unrelated rAF request remains native/pass-through.
+         * Discover once from the requestAnimationFrame call site itself.
+         * After the first campo callback is found, unrelated rAF calls no
+         * longer pay the cost of creating Error stacks.
          */
         if (
-            typeof callback === 'function' &&
-            callback.name === 'loop' &&
-            scheduleComesFromCampo()
+            campoLoopFound ||
+            !scheduleComesFromCampo()
         ) {
-            campoLoopCallback = callback;
-            campoLoopFound = true;
-
-            console.info(
-                '[PokéIdle Performance+] hooked campo.mjs loop directly'
-            );
-
-            return true;
+            return false;
         }
 
-        return false;
+        campoCallbacks.add(
+            callback
+        );
+
+        campoLoopFound = true;
+
+        console.info(
+            '[PokéIdle Performance+] hooked campo.mjs renderer from its rAF call site'
+        );
+
+        return true;
     }
 
     function intervalForMode(mode) {
@@ -817,14 +832,23 @@
             }
 
             /*
-             * Performance profile keeps the chat header/unread badge but
-             * removes the message list and composer from layout entirely.
-             * Incoming messages may still be processed by the game, but
-             * they no longer trigger visible chat layout/paint.
+             * Performance profile keeps only gameplay-critical surfaces.
+             * Explorer measured the team, active-card and native automation
+             * option grids as recurring mutation sources. They may continue
+             * receiving state updates, but Firefox no longer has to lay out
+             * or paint them while UI Max is active.
              */
             html.moth-ui-performance #p-chat .chat-vao,
             html.moth-ui-performance #p-chat .chat-entrada,
-            html.moth-ui-performance #chat-emojis {
+            html.moth-ui-performance #chat-emojis,
+            html.moth-ui-performance #time-corpo,
+            html.moth-ui-performance #ativo-card,
+            html.moth-ui-performance #btn-evoluir,
+            html.moth-ui-performance #btn-mega,
+            html.moth-ui-performance #ir-centro-conta,
+            html.moth-ui-performance #auto-ball-opts,
+            html.moth-ui-performance #auto-revive-opts,
+            html.moth-ui-performance #auto-potion-opts {
                 display: none !important;
             }
 
@@ -1021,6 +1045,59 @@
             aggressive: 'UI Low',
             performance: 'UI Max'
         }[level] || level;
+    }
+
+    function setText(el, value) {
+        if (!el) {
+            return;
+        }
+
+        const next =
+            String(value);
+
+        if (
+            el.textContent !==
+            next
+        ) {
+            el.textContent =
+                next;
+        }
+    }
+
+    function setChecked(el, value) {
+        if (
+            el &&
+            el.checked !==
+                Boolean(value)
+        ) {
+            el.checked =
+                Boolean(value);
+        }
+    }
+
+    function setValue(el, value) {
+        if (
+            el &&
+            el.value !==
+                String(value)
+        ) {
+            el.value =
+                String(value);
+        }
+    }
+
+    function setClass(el, className, enabled) {
+        if (
+            el &&
+            el.classList.contains(
+                className
+            ) !== Boolean(enabled)
+        ) {
+            el.classList.toggle(
+                className,
+                Boolean(enabled)
+            );
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1226,45 +1303,53 @@
             q('#' + PANEL_ID);
 
         if (panel) {
-            q(
-                '#mpp-enabled',
-                panel
-            ).checked =
-                settings.enabled;
+            setChecked(
+                q(
+                    '#mpp-enabled',
+                    panel
+                ),
+                settings.enabled
+            );
 
-            q(
-                '#mpp-profile',
-                panel
-            ).value =
-                settings.profile;
+            setValue(
+                q(
+                    '#mpp-profile',
+                    panel
+                ),
+                settings.profile
+            );
 
-            q(
-                '#mpp-browser-fps',
-                panel
-            ).textContent =
+            setText(
+                q(
+                    '#mpp-browser-fps',
+                    panel
+                ),
                 document.hidden
                     ? 'BG'
                     : Math.round(
                         browserFps
-                    );
+                    )
+            );
 
-            q(
-                '#mpp-scene-runs',
-                panel
-            ).textContent =
+            setText(
+                q(
+                    '#mpp-scene-runs',
+                    panel
+                ),
                 isNativeEconomy()
                     ? 'Eco'
-                    : String(
-                        campoRunsPerSecond
-                    );
+                    : campoRunsPerSecond
+            );
 
-            q(
-                '#mpp-long',
-                panel
-            ).textContent =
+            setText(
+                q(
+                    '#mpp-long',
+                    panel
+                ),
                 Math.round(
                     longTaskMsPerSecond
-                );
+                )
+            );
 
             const status =
                 q(
@@ -1272,28 +1357,30 @@
                     panel
                 );
 
+            let statusText;
+
             if (isNativeEconomy()) {
-                status.textContent =
+                statusText =
                     'Native Economy is active; Auto Catch cannot receive fallen targets.';
             } else if (!campoHookInstalled) {
-                status.textContent =
+                statusText =
                     'Could not install the page-world campo hook.';
             } else if (!campoLoopFound) {
-                status.textContent =
-                    'Hook ready; waiting for campo.mjs → loop.';
+                statusText =
+                    'Hook ready; waiting for campo.mjs renderer.';
             } else if (!settings.enabled) {
-                status.textContent =
-                    'campo.mjs loop found; Performance+ disabled.';
+                statusText =
+                    'campo.mjs renderer found; Performance+ disabled.';
             } else if (
                 settings.profile ===
                 'performance'
             ) {
-                status.textContent =
+                statusText =
                     'Performance: native scene rate, UI stripped for maximum visible FPS.';
             } else if (
                 profile().adaptive
             ) {
-                status.textContent =
+                statusText =
                     'Adaptive · ' +
                     pressure +
                     ' load · ' +
@@ -1304,74 +1391,73 @@
                     campoSkippedPerSecond +
                     '/s.';
             } else {
-                status.textContent =
-                    'campo.mjs loop targeted directly · skipped ' +
+                statusText =
+                    'campo.mjs renderer targeted · skipped ' +
                     campoSkippedPerSecond +
                     '/s.';
             }
+
+            setText(
+                status,
+                statusText
+            );
         }
 
         if (!trigger) {
             return;
         }
 
-        trigger.classList.remove(
-            'working',
-            'warning'
-        );
+        let triggerText;
+        let working = false;
+        let warning = false;
 
         if (isNativeEconomy()) {
-            trigger.textContent =
+            triggerText =
                 'Perf · Native Eco';
 
-            trigger.classList.add(
-                'warning'
-            );
-
-            return;
-        }
-
-        if (!settings.enabled) {
-            trigger.textContent =
+            warning = true;
+        } else if (!settings.enabled) {
+            triggerText =
                 'Perf · Off';
-
-            return;
-        }
-
-        if (!campoHookInstalled) {
-            trigger.textContent =
+        } else if (!campoHookInstalled) {
+            triggerText =
                 'Perf · hook!';
 
-            trigger.classList.add(
-                'warning'
-            );
-
-            return;
-        }
-
-        if (!campoLoopFound) {
-            trigger.textContent =
+            warning = true;
+        } else if (!campoLoopFound) {
+            triggerText =
                 'Perf · campo…';
 
-            trigger.classList.add(
-                'warning'
-            );
+            warning = true;
+        } else {
+            triggerText =
+                'Perf · ' +
+                labelForMode(
+                    currentMode
+                ) +
+                ' · ' +
+                labelForUi(
+                    currentUi
+                );
 
-            return;
+            working = true;
         }
 
-        trigger.textContent =
-            'Perf · ' +
-            labelForMode(
-                currentMode
-            ) +
-            ' · ' +
-            labelForUi(
-                currentUi
-            );
+        setText(
+            trigger,
+            triggerText
+        );
 
-        trigger.classList.add(
-            'working'
+        setClass(
+            trigger,
+            'working',
+            working
+        );
+
+        setClass(
+            trigger,
+            'warning',
+            warning
         );
     }
 
@@ -1410,7 +1496,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v4 loaded'
+            '[PokéIdle Performance+] v4.1 loaded'
         );
     }
 
