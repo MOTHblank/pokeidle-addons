@@ -495,26 +495,15 @@
             return null;
         }
 
-        const stats =
-            pokemon.stats ||
-            {};
-
-        const ivs =
-            pokemon.ivs ||
-            {};
-
+        /*
+         * Pokémon id captures fixed IVs (including Speed IV). Species/loadout
+         * changes start a new profile; ordinary level-ups stay in the same
+         * rolling profile so Atlas does not forget its measurements every
+         * few minutes.
+         */
         return [
             pokemon.id,
             pokemon.speciesId,
-            pokemon.level,
-            Math.round(
-                pokemonPower(
-                    pokemon
-                )
-            ),
-            stats.atk,
-            stats.spAtk,
-            ivs.speed,
             pokemon.tmElemental,
             pokemon.tmAoe,
             pokemon.heldItemId,
@@ -863,6 +852,30 @@
                 now;
         }
 
+        const pokemon =
+            leadPokemon();
+
+        if (pokemon) {
+            record.pokemonLevel =
+                Number(
+                    pokemon.level ||
+                    0
+                );
+
+            record.pokemonPower =
+                pokemonPower(
+                    pokemon
+                );
+
+            record.pokemonSpeciesId =
+                pokemon.speciesId ??
+                record.pokemonSpeciesId;
+
+            record.pokemonName =
+                pokemon.nome ||
+                record.pokemonName;
+        }
+
         record.lastEventAt =
             now;
 
@@ -1151,16 +1164,42 @@
                     type
                 ] || {
                     count: 0,
-                    neutralDamage: 0,
-                    actualDamage: 0
+                    neutralSamples: [],
+                    actualSamples: []
                 };
 
             sample.count++;
-            sample.neutralDamage +=
+
+            sample.neutralSamples.push(
                 damage /
-                effectiveness;
-            sample.actualDamage +=
-                damage;
+                effectiveness
+            );
+
+            sample.actualSamples.push(
+                damage
+            );
+
+            if (
+                sample.neutralSamples.length >
+                80
+            ) {
+                sample.neutralSamples.splice(
+                    0,
+                    sample.neutralSamples.length -
+                        80
+                );
+            }
+
+            if (
+                sample.actualSamples.length >
+                80
+            ) {
+                sample.actualSamples.splice(
+                    0,
+                    sample.actualSamples.length -
+                        80
+                );
+            }
 
             record.moveDamage[
                 type
@@ -2306,20 +2345,406 @@
     }
 
     // ------------------------------------------------------------------
-    // XP/hour model
+    // Upstream combat catalog
     // ------------------------------------------------------------------
 
-    function attackerTypes() {
+    function mergeCombatCreature(
+        creature
+    ) {
+        const id =
+            Number(
+                creature?.pokeId
+            );
+
         if (
-            state.observedMoveTypes.size
+            !Number.isFinite(id)
         ) {
-            return [
-                ...state.observedMoveTypes
-            ];
+            return;
+        }
+
+        const previous =
+            state.speciesCombat.get(
+                id
+            ) || {};
+
+        const meta = {
+            ...previous,
+            id,
+            name:
+                creature?.name ||
+                previous.name ||
+                null,
+            baseHp:
+                Number.isFinite(
+                    Number(
+                        creature?.baseHp
+                    )
+                )
+                    ? Number(
+                        creature.baseHp
+                    )
+                    : previous.baseHp,
+            type1:
+                creature?.type1 ||
+                previous.type1 ||
+                null,
+            type2:
+                creature?.type2 ||
+                previous.type2 ||
+                null
+        };
+
+        state.speciesCombat.set(
+            id,
+            meta
+        );
+
+        const types =
+            [
+                meta.type1,
+                meta.type2
+            ]
+                .filter(Boolean)
+                .map(
+                    type =>
+                        String(type)
+                            .toUpperCase()
+                );
+
+        if (types.length) {
+            state.typesBySpecies.set(
+                id,
+                types
+            );
+        }
+    }
+
+    function speciesCombatMeta(
+        speciesId
+    ) {
+        const id =
+            Number(
+                speciesId
+            );
+
+        if (
+            !Number.isFinite(id)
+        ) {
+            return null;
+        }
+
+        const direct =
+            state.speciesCombat.get(
+                id
+            );
+
+        if (direct) {
+            return direct;
+        }
+
+        /*
+         * Orre clones use 13xxx ids and inherit the national species'
+         * stats in upstream.
+         */
+        if (id >= 13000) {
+            return (
+                state.speciesCombat.get(
+                    id %
+                        1000
+                ) ||
+                null
+            );
+        }
+
+        return null;
+    }
+
+    function ensureCombatCatalog() {
+        if (
+            state.combatCatalogStatus ===
+                'ready'
+        ) {
+            return Promise.resolve();
+        }
+
+        if (
+            state.combatCatalogPromise
+        ) {
+            return state.combatCatalogPromise;
+        }
+
+        state.combatCatalogStatus =
+            'loading';
+
+        const load =
+            url =>
+                fetch(
+                    url,
+                    {
+                        cache:
+                            'force-cache',
+                        credentials:
+                            'same-origin'
+                    }
+                )
+                    .then(
+                        response => {
+                            if (
+                                !response.ok
+                            ) {
+                                throw new Error(
+                                    'HTTP ' +
+                                    response.status
+                                );
+                            }
+
+                            return response.json();
+                        }
+                    );
+
+        state.combatCatalogPromise =
+            Promise.all([
+                load(
+                    '/assets/creatures.json'
+                ),
+                load(
+                    '/assets/creatures-novos.json'
+                ).catch(
+                    () => null
+                ),
+                load(
+                    '/assets/creatures-outland-novos.json'
+                ).catch(
+                    () => null
+                ),
+                load(
+                    '/assets/creatures-audit-overrides.json'
+                ).catch(
+                    () => null
+                )
+            ])
+                .then(
+                    ([
+                        base,
+                        novos,
+                        outland,
+                        audit
+                    ]) => {
+                        for (
+                            const data of [
+                                base,
+                                novos,
+                                outland
+                            ]
+                        ) {
+                            for (
+                                const creature of
+                                data?.creatures ||
+                                []
+                            ) {
+                                mergeCombatCreature(
+                                    creature
+                                );
+                            }
+                        }
+
+                        for (
+                            const override of
+                            audit?.overrides ||
+                            []
+                        ) {
+                            mergeCombatCreature(
+                                override
+                            );
+                        }
+
+                        state.combatCatalogStatus =
+                            'ready';
+
+                        queueRender();
+                    }
+                )
+                .catch(
+                    error => {
+                        state.combatCatalogStatus =
+                            'error';
+
+                        console.warn(
+                            '[PokéIdle Hunt Atlas] combat catalog failed',
+                            error
+                        );
+                    }
+                )
+                .finally(
+                    () => {
+                        state.combatCatalogPromise =
+                            null;
+                    }
+                );
+
+        return state.combatCatalogPromise;
+    }
+
+    function typeMultiplierExact(
+        attackType,
+        defenderType
+    ) {
+        const attack =
+            String(
+                attackType ||
+                ''
+            ).toUpperCase();
+
+        const defender =
+            String(
+                defenderType ||
+                ''
+            ).toUpperCase();
+
+        if (
+            !attack ||
+            !defender
+        ) {
+            return 1;
+        }
+
+        const chart =
+            state.serverTypeChart ||
+            TYPE_CHART;
+
+        const row =
+            chart[attack] ||
+            TYPE_CHART[
+                attack
+            ] ||
+            {};
+
+        if (
+            attack ===
+                defender &&
+            row[defender] ==
+                null
+        ) {
+            if (
+                attack ===
+                    'GHOST' ||
+                attack ===
+                    'DRAGON'
+            ) {
+                return 2;
+            }
+
+            if (
+                attack ===
+                    'NORMAL' ||
+                attack ===
+                    'GROUND' ||
+                attack ===
+                    'FLYING'
+            ) {
+                return 1;
+            }
+
+            return 0.5;
         }
 
         return (
-            state.strongestPokemon?.tipos ||
+            Number(
+                row[
+                    defender
+                ]
+            ) ||
+            (
+                row[
+                    defender
+                ] === 0
+                    ? 0
+                    : 1
+            )
+        );
+    }
+
+    function exactEffectiveness(
+        attackType,
+        defenderTypes
+    ) {
+        let value = 1;
+
+        for (
+            const defender of
+            defenderTypes ||
+            []
+        ) {
+            value *=
+                typeMultiplierExact(
+                    attackType,
+                    defender
+                );
+        }
+
+        return value;
+    }
+
+    function huntEffectiveness(
+        attackType,
+        defenderTypes
+    ) {
+        const raw =
+            exactEffectiveness(
+                attackType,
+                defenderTypes
+            );
+
+        if (
+            raw === 0 ||
+            raw === 1
+        ) {
+            return raw;
+        }
+
+        const factor =
+            Number(
+                state.huntAmplification
+            ) ||
+            1.5;
+
+        return raw > 1
+            ? 1 +
+                (
+                    raw - 1
+                ) *
+                    factor
+            : raw /
+                factor;
+    }
+
+    // ------------------------------------------------------------------
+    // XP/hour model — real combat first, prediction second
+    // ------------------------------------------------------------------
+
+    const UPSTREAM_WAVE_MS =
+        2600;
+
+    const UPSTREAM_GLOBAL_ATTACK_MS =
+        900;
+
+    const UPSTREAM_FALLBACK_MOVE_MS =
+        600;
+
+    function attackerTypes() {
+        const profile =
+            combatProfile();
+
+        if (
+            profile &&
+            profile.moveTypes.length
+        ) {
+            return profile.moveTypes;
+        }
+
+        return (
+            leadPokemon()
+                ?.tipos ||
             []
         )
             .map(
@@ -2365,35 +2790,26 @@
                     Number(
                         species?.pokeId
                     )
-                ) || [];
-
-            if (
-                !defenderTypes.length
-            ) {
-                weighted +=
-                    weight;
-
-                totalWeight +=
-                    weight;
-
-                continue;
-            }
+                ) ||
+                [];
 
             const best =
-                Math.max(
-                    ...attackTypes.map(
-                        attackType =>
-                            weaknessMultiplier(
-                                defenderTypes,
-                                attackType
-                            )
+                defenderTypes.length
+                    ? Math.max(
+                        ...attackTypes.map(
+                            attackType =>
+                                huntEffectiveness(
+                                    attackType,
+                                    defenderTypes
+                                )
+                        )
                     )
-                );
+                    : 1;
 
             weighted +=
                 weight *
                 Math.max(
-                    0.125,
+                    0.01,
                     best
                 );
 
@@ -2407,291 +2823,844 @@
             : 1;
     }
 
-    function huntPerformanceScore(
-        hunt
-    ) {
-        const strongest =
-            state.strongestPokemon;
+    function recordsForLead() {
+        const signature =
+            leadSignature();
 
-        if (!strongest) {
-            return null;
+        if (!signature) {
+            return [];
         }
 
-        const pokemonLevel =
-            Math.max(
-                1,
-                Number(
-                    strongest.level ||
-                    1
-                )
-            );
-
-        const huntLevel =
-            Math.max(
-                1,
-                Number(
-                    hunt?.nivel ||
-                    1
-                )
-            );
-
-        const matchup =
-            huntMatchupFactor(
-                hunt
-            );
-
-        /*
-         * This is deliberately a relative model, not a claim about the
-         * server's hidden combat formula. Higher-level hunts pay more XP,
-         * but become progressively slower once they approach/exceed the
-         * active Pokémon's level. Real observed XP/hour calibrates the
-         * absolute numbers below.
-         */
-        const reward =
-            huntLevel;
-
-        const pressure =
-            0.45 +
-            Math.pow(
-                huntLevel /
-                    pokemonLevel,
-                1.55
-            );
-
-        return (
-            reward *
-            Math.pow(
-                Math.max(
-                    0.2,
-                    matchup
-                ),
-                0.72
-            ) /
-            pressure
+        return [
+            ...state.huntPerf.values()
+        ].filter(
+            record =>
+                record?.version ===
+                    2 &&
+                record.signature ===
+                    signature
         );
     }
 
-    function recordObservedXph(
+    function observedRates(
         record
     ) {
-        const activeMs =
+        if (
+            !record ||
             Number(
-                record?.activeMs ||
+                record.kills ||
                 0
-            );
+            ) <
+                2
+        ) {
+            return null;
+        }
 
-        const xpGain =
-            Number(
-                record?.xpGain ||
-                0
+        const killMs =
+            robustMean(
+                record.killIntervals
             );
 
         if (
-            activeMs < 15000 ||
-            xpGain <= 0
+            !killMs ||
+            killMs <= 0
         ) {
             return null;
         }
 
-        return (
-            xpGain /
-            activeMs *
-            3600000
-        );
+        const kills =
+            Math.max(
+                1,
+                Number(
+                    record.kills
+                ) ||
+                1
+            );
+
+        const killsH =
+            3600000 /
+            killMs;
+
+        return {
+            killMs,
+            killsH,
+            trainerXpH:
+                Number(
+                    record.trainerXp ||
+                    0
+                ) /
+                kills *
+                killsH,
+            pokemonXpH:
+                Number(
+                    record.pokemonXp ||
+                    0
+                ) /
+                kills *
+                killsH,
+            goldH:
+                Number(
+                    record.gold ||
+                    0
+                ) /
+                kills *
+                killsH
+        };
     }
 
-    function modelScale() {
-        const strongest =
-            state.strongestPokemon;
+    function combatProfile() {
+        const records =
+            recordsForLead();
 
-        if (!strongest) {
+        if (!records.length) {
             return null;
         }
 
-        let numerator = 0;
-        let denominator = 0;
+        const sameTarget = [];
+        const transitions = [];
+        const allAttacks = [];
+        const hpSamples = [];
+        const trainerMult = [];
+        const pokemonMult = [];
+
+        const moves = {};
+
+        let attacks = 0;
+        let kills = 0;
 
         for (
-            const [slug, record] of
-            state.huntPerf
+            const record of
+            records
         ) {
+            sameTarget.push(
+                ...(
+                    record.sameTargetIntervals ||
+                    []
+                )
+            );
+
+            transitions.push(
+                ...(
+                    record.transitionIntervals ||
+                    []
+                )
+            );
+
+            allAttacks.push(
+                ...(
+                    record.allAttackIntervals ||
+                    []
+                )
+            );
+
+            hpSamples.push(
+                ...(
+                    record.hpSamples ||
+                    []
+                )
+            );
+
+            trainerMult.push(
+                ...(
+                    record.trainerXpMultSamples ||
+                    []
+                ).slice(-12)
+            );
+
+            pokemonMult.push(
+                ...(
+                    record.pokemonXpMultSamples ||
+                    []
+                ).slice(-12)
+            );
+
+            attacks +=
+                Number(
+                    record.attacks ||
+                    0
+                );
+
+            kills +=
+                Number(
+                    record.kills ||
+                    0
+                );
+
+            for (
+                const [
+                    type,
+                    sample
+                ] of
+                Object.entries(
+                    record.moveDamage ||
+                    {}
+                )
+            ) {
+                const bucket =
+                    moves[
+                        type
+                    ] || {
+                        samples: []
+                    };
+
+                bucket.samples.push(
+                    ...(
+                        sample
+                            ?.neutralSamples ||
+                        []
+                    ).slice(-50)
+                );
+
+                if (
+                    bucket.samples.length >
+                    100
+                ) {
+                    bucket.samples.splice(
+                        0,
+                        bucket.samples.length -
+                            100
+                    );
+                }
+
+                moves[
+                    type
+                ] =
+                    bucket;
+            }
+        }
+
+        const cadenceMeasured =
+            robustMean(
+                sameTarget
+            );
+
+        const cadenceMs =
+            cadenceMeasured ||
+            UPSTREAM_GLOBAL_ATTACK_MS;
+
+        let movementMs =
+            null;
+
+        const cleanTransitions =
+            transitions
+                .map(Number)
+                .filter(
+                    value =>
+                        Number.isFinite(
+                            value
+                        ) &&
+                        value >= 100
+                )
+                .sort(
+                    (a, b) =>
+                        a - b
+                );
+
+        if (
+            cleanTransitions.length
+        ) {
+            /*
+             * Long transition gaps include the fixed 2.6 s wave pause.
+             * The lower 60% isolates ordinary travel/pathfinding.
+             */
+            const take =
+                Math.max(
+                    1,
+                    Math.ceil(
+                        cleanTransitions.length *
+                        0.6
+                    )
+                );
+
+            movementMs =
+                robustMean(
+                    cleanTransitions.slice(
+                        0,
+                        take
+                    )
+                );
+        }
+
+        if (!movementMs) {
+            movementMs =
+                UPSTREAM_FALLBACK_MOVE_MS;
+        }
+
+        const hpScaleSamples = [];
+        const hpPerLevelSamples = [];
+
+        for (
+            const sample of
+            hpSamples
+        ) {
+            const level =
+                Number(
+                    sample?.level
+                );
+
+            const maxHp =
+                Number(
+                    sample?.maxHp
+                );
+
+            if (
+                !Number.isFinite(
+                    level
+                ) ||
+                level <= 0 ||
+                !Number.isFinite(
+                    maxHp
+                ) ||
+                maxHp <= 0
+            ) {
+                continue;
+            }
+
+            hpPerLevelSamples.push(
+                maxHp /
+                level
+            );
+
+            const meta =
+                speciesCombatMeta(
+                    sample?.speciesId
+                );
+
+            const baseHp =
+                Number(
+                    meta?.baseHp
+                );
+
+            if (
+                Number.isFinite(
+                    baseHp
+                ) &&
+                baseHp > 0
+            ) {
+                hpScaleSamples.push(
+                    maxHp /
+                    (
+                        baseHp *
+                        level
+                    )
+                );
+            }
+        }
+
+        const moveDamage = {};
+        let moveSamples = 0;
+
+        for (
+            const [
+                type,
+                bucket
+            ] of
+            Object.entries(
+                moves
+            )
+        ) {
+            const damage =
+                robustMean(
+                    bucket.samples
+                );
+
+            if (
+                !damage ||
+                damage <= 0
+            ) {
+                continue;
+            }
+
+            moveDamage[
+                type
+            ] = {
+                damage,
+                samples:
+                    bucket.samples.length
+            };
+
+            moveSamples +=
+                bucket.samples.length;
+        }
+
+        return {
+            records,
+            attacks,
+            kills,
+            cadenceMs,
+            cadenceMeasured:
+                Boolean(
+                    cadenceMeasured
+                ),
+            movementMs,
+            movementMeasured:
+                cleanTransitions.length >
+                0,
+            hpScale:
+                median(
+                    hpScaleSamples
+                ),
+            hpPerLevel:
+                median(
+                    hpPerLevelSamples
+                ),
+            hpSamples:
+                hpSamples.length,
+            moveDamage,
+            moveTypes:
+                Object.keys(
+                    moveDamage
+                ),
+            moveSamples,
+            trainerXpMult:
+                robustMean(
+                    trainerMult
+                ) ||
+                1,
+            pokemonXpMult:
+                robustMean(
+                    pokemonMult
+                ) ||
+                1
+        };
+    }
+
+    function targetHpEstimate(
+        speciesId,
+        huntLevel,
+        profile
+    ) {
+        const level =
+            Math.max(
+                1,
+                Number(
+                    huntLevel
+                ) ||
+                1
+            );
+
+        const meta =
+            speciesCombatMeta(
+                speciesId
+            );
+
+        const baseHp =
+            Number(
+                meta?.baseHp
+            );
+
+        if (
+            profile?.hpScale &&
+            Number.isFinite(
+                baseHp
+            ) &&
+            baseHp > 0
+        ) {
+            return (
+                baseHp *
+                level *
+                profile.hpScale
+            );
+        }
+
+        if (
+            profile?.hpPerLevel
+        ) {
+            return (
+                level *
+                profile.hpPerLevel
+            );
+        }
+
+        return null;
+    }
+
+    function damagePerAttackAgainst(
+        speciesId,
+        profile
+    ) {
+        const entries =
+            Object.entries(
+                profile?.moveDamage ||
+                {}
+            );
+
+        if (!entries.length) {
+            return null;
+        }
+
+        const meta =
+            speciesCombatMeta(
+                speciesId
+            );
+
+        const defenderTypes =
+            (
+                state.typesBySpecies.get(
+                    Number(
+                        speciesId
+                    )
+                ) ||
+                [
+                    meta?.type1,
+                    meta?.type2
+                ].filter(Boolean)
+            )
+                .map(
+                    type =>
+                        String(type)
+                            .toUpperCase()
+                );
+
+        let totalWeight = 0;
+        let totalDamage = 0;
+
+        for (
+            const [
+                type,
+                move
+            ] of
+            entries
+        ) {
+            const samples =
+                Math.max(
+                    1,
+                    Number(
+                        move?.samples ||
+                        1
+                    )
+                );
+
+            const multiplier =
+                defenderTypes.length
+                    ? huntEffectiveness(
+                        type,
+                        defenderTypes
+                    )
+                    : 1;
+
+            totalWeight +=
+                samples;
+
+            totalDamage +=
+                samples *
+                Number(
+                    move.damage ||
+                    0
+                ) *
+                multiplier;
+        }
+
+        return totalWeight
+            ? totalDamage /
+                totalWeight
+            : null;
+    }
+
+    function rawPredictedKillMs(
+        hunt,
+        profile
+    ) {
+        if (
+            !hunt ||
+            !profile ||
+            !profile.moveSamples ||
+            (
+                !profile.hpScale &&
+                !profile.hpPerLevel
+            )
+        ) {
+            return null;
+        }
+
+        const species =
+            Array.isArray(
+                hunt.especies
+            )
+                ? hunt.especies
+                : [];
+
+        if (!species.length) {
+            return null;
+        }
+
+        const totalPoints =
+            species.reduce(
+                (sum, row) =>
+                    sum +
+                    Math.max(
+                        1,
+                        Number(
+                            row?.pontos ||
+                            1
+                        )
+                    ),
+                0
+            ) ||
+            1;
+
+        const mobsPerWave =
+            Math.max(
+                1,
+                Math.min(
+                    16,
+                    totalPoints
+                )
+            );
+
+        /*
+         * Measured ordinary movement + exact upstream fixed wave pause,
+         * amortized over mobs in the wave.
+         */
+        const transitionMs =
+            profile.movementMs +
+            UPSTREAM_WAVE_MS /
+                mobsPerWave;
+
+        let weightedMs = 0;
+        let weightSum = 0;
+
+        for (
+            const row of
+            species
+        ) {
+            const weight =
+                Math.max(
+                    1,
+                    Number(
+                        row?.pontos ||
+                        1
+                    )
+                );
+
+            const hp =
+                targetHpEstimate(
+                    row?.pokeId,
+                    hunt.nivel,
+                    profile
+                );
+
+            const damage =
+                damagePerAttackAgainst(
+                    row?.pokeId,
+                    profile
+                );
+
+            if (
+                !hp ||
+                !damage ||
+                damage <= 0
+            ) {
+                continue;
+            }
+
+            const attacksNeeded =
+                Math.max(
+                    1,
+                    Math.ceil(
+                        hp /
+                        damage
+                    )
+                );
+
+            /*
+             * The first attack comes after transition. Further attacks use
+             * this Pokémon's measured same-target cadence.
+             */
+            const killMs =
+                transitionMs +
+                Math.max(
+                    0,
+                    attacksNeeded -
+                        1
+                ) *
+                    profile.cadenceMs;
+
+            weightedMs +=
+                killMs *
+                weight;
+
+            weightSum +=
+                weight;
+        }
+
+        return weightSum
+            ? weightedMs /
+                weightSum
+            : null;
+    }
+
+    function predictionCalibration(
+        profile
+    ) {
+        const ratios = [];
+
+        for (
+            const record of
+            profile?.records ||
+            []
+        ) {
+            const observed =
+                observedRates(
+                    record
+                );
+
+            if (!observed) {
+                continue;
+            }
+
             const hunt =
                 state.hunts.find(
                     item =>
                         item.slug ===
-                        slug
+                        record.huntSlug
                 );
 
             if (!hunt) {
                 continue;
             }
 
-            const xph =
-                recordObservedXph(
-                    record
-                );
-
-            const score =
-                huntPerformanceScore(
-                    hunt
+            const predicted =
+                rawPredictedKillMs(
+                    hunt,
+                    profile
                 );
 
             if (
-                !xph ||
-                !score
+                predicted &&
+                predicted > 0
             ) {
-                continue;
+                ratios.push(
+                    observed.killMs /
+                    predicted
+                );
             }
-
-            if (
-                record.pokemonSpeciesId &&
-                Number(
-                    record.pokemonSpeciesId
-                ) !==
-                    Number(
-                        strongest.speciesId
-                    )
-            ) {
-                continue;
-            }
-
-            const oldPower =
-                Math.max(
-                    1,
-                    Number(
-                        record.pokemonPower ||
-                        pokemonPower(
-                            strongest
-                        )
-                    )
-                );
-
-            const currentPower =
-                Math.max(
-                    1,
-                    pokemonPower(
-                        strongest
-                    )
-                );
-
-            const normalizedXph =
-                xph *
-                currentPower /
-                oldPower;
-
-            const weight =
-                Math.min(
-                    1,
-                    Number(
-                        record.activeMs ||
-                        0
-                    ) /
-                    120000
-                );
-
-            numerator +=
-                normalizedXph /
-                score *
-                weight;
-
-            denominator +=
-                weight;
         }
 
-        return denominator
-            ? numerator /
-                denominator
-            : null;
+        const ratio =
+            robustMean(
+                ratios
+            );
+
+        if (!ratio) {
+            return 1;
+        }
+
+        /*
+         * Keep one pathological sample from exploding every unvisited hunt.
+         * The measured hunt itself always uses its observed rate directly.
+         */
+        return Math.max(
+            0.4,
+            Math.min(
+                3,
+                ratio
+            )
+        );
     }
 
     function huntXpEstimate(
         hunt
     ) {
         const record =
-            state.huntPerf.get(
-                hunt?.slug
+            performanceRecord(
+                hunt?.slug,
+                false
             );
 
         const observed =
-            recordObservedXph(
+            observedRates(
                 record
             );
 
-        const strongest =
-            state.strongestPokemon;
-
-        if (
-            observed &&
-            strongest &&
-            (
-                !record?.pokemonSpeciesId ||
-                Number(
-                    record.pokemonSpeciesId
-                ) ===
-                    Number(
-                        strongest.speciesId
-                    )
-            )
-        ) {
-            const oldPower =
-                Math.max(
-                    1,
-                    Number(
-                        record.pokemonPower ||
-                        pokemonPower(
-                            strongest
-                        )
-                    )
-                );
-
+        if (observed) {
             return {
                 value:
-                    observed *
-                    Math.max(
-                        1,
-                        pokemonPower(
-                            strongest
-                        )
-                    ) /
-                    oldPower,
+                    observed.trainerXpH,
+                pokemonValue:
+                    observed.pokemonXpH,
+                goldValue:
+                    observed.goldH,
+                killsH:
+                    observed.killsH,
+                killMs:
+                    observed.killMs,
                 observed:
                     true,
-                activeMs:
-                    Number(
-                        record.activeMs ||
-                        0
+                source:
+                    'measured',
+                samples:
+                    Math.max(
+                        0,
+                        Number(
+                            record.kills ||
+                            0
+                        )
                     )
             };
         }
 
-        const scale =
-            modelScale();
+        const profile =
+            combatProfile();
 
-        const score =
-            huntPerformanceScore(
-                hunt
+        const rawKillMs =
+            rawPredictedKillMs(
+                hunt,
+                profile
             );
 
         if (
-            !scale ||
-            !score
+            !profile ||
+            !rawKillMs ||
+            rawKillMs <= 0
         ) {
             return {
                 value: null,
+                pokemonValue: null,
+                goldValue: null,
+                killsH: null,
+                killMs: null,
                 observed: false,
-                activeMs: 0,
-                score
+                source:
+                    'learning',
+                samples: 0
             };
         }
 
+        const killMs =
+            rawKillMs *
+            predictionCalibration(
+                profile
+            );
+
+        const killsH =
+            3600000 /
+            killMs;
+
+        const baseXp =
+            xpDoNivel(
+                hunt?.nivel ||
+                1
+            );
+
         return {
             value:
-                scale *
-                score,
+                baseXp *
+                profile.trainerXpMult *
+                killsH,
+            pokemonValue:
+                baseXp *
+                profile.pokemonXpMult *
+                killsH,
+            goldValue: null,
+            killsH,
+            killMs,
             observed:
                 false,
-            activeMs: 0,
-            score
+            source:
+                'combat model',
+            samples:
+                profile.moveSamples
         };
     }
 
@@ -3705,6 +4674,7 @@
                     !state.drawerOpen;
 
                 ensureTypeData();
+                ensureCombatCatalog();
                 queueRender();
             }
         );
@@ -4440,6 +5410,7 @@
             state.drawerOpen
         ) {
             ensureTypeData();
+            ensureCombatCatalog();
         }
 
         setInterval(
