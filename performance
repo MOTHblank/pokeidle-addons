@@ -1,19 +1,22 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      2.0.0
-// @description  Lightweight rendering profiles that preserve hunt/capture state.
+// @version      2.1.0
+// @description  Lightweight scene throttling that preserves hunt state and Auto Catch.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        none
+// @sandbox      raw
 // @run-at       document-start
 // ==/UserScript==
 
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'moth-pokeidle-performance-v2';
-    const ROOT_ID = 'moth-performance-plus';
+    const STORAGE_KEY = 'moth-pokeidle-performance-v3';
+    const TRIGGER_ID = 'moth-performance-trigger';
+    const PANEL_ID = 'moth-performance-panel';
+    const STYLE_ID = 'moth-performance-style';
 
     const PROFILES = {
         full: {
@@ -25,7 +28,6 @@
             effects: 'full',
             collapseChat: false
         },
-
         balanced: {
             label: 'Balanced',
             active: '30',
@@ -35,7 +37,6 @@
             effects: 'reduced',
             collapseChat: false
         },
-
         afk: {
             label: 'AFK',
             active: '15',
@@ -45,7 +46,6 @@
             effects: 'reduced',
             collapseChat: true
         },
-
         capture: {
             label: 'Capture Saver',
             active: '15',
@@ -62,33 +62,29 @@
         profile: 'balanced'
     };
 
+    const q = (selector, root = document) => root.querySelector(selector);
+
     let settings = loadSettings();
-
-    let currentRenderMode = 'full';
     let lastActivity = Date.now();
-
-    let chatCollapsedByAddon = false;
-
-    let fps = 0;
-    let fpsFrames = 0;
-    let fpsStarted = performance.now();
-
-    // Canvas frame gate.
+    let currentRenderMode = 'full';
     let frameAllowed = true;
     let lastAllowedFrame = 0;
     let lastClearCall = -Infinity;
+    let chatCollapsedByAddon = false;
 
-    // ------------------------------------------------------------------
-    // SETTINGS
-    // ------------------------------------------------------------------
+    let sceneFramesWindow = 0;
+    let blockedCallsWindow = 0;
+    let passedCallsWindow = 0;
+    let sceneFps = 0;
+    let blockedPerSecond = 0;
+    let passedPerSecond = 0;
+    let hookInstalled = false;
 
     function loadSettings() {
         try {
             return {
                 ...DEFAULTS,
-                ...JSON.parse(
-                    localStorage.getItem(STORAGE_KEY) || '{}'
-                )
+                ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
             };
         } catch {
             return { ...DEFAULTS };
@@ -96,42 +92,94 @@
     }
 
     function saveSettings() {
-        localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify(settings)
-        );
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
     }
 
     function profile() {
-        return (
-            PROFILES[settings.profile] ||
-            PROFILES.balanced
-        );
+        return PROFILES[settings.profile] || PROFILES.balanced;
+    }
+
+    function isNativeEconomy() {
+        return document.documentElement.classList.contains('modo-economia');
+    }
+
+    function autoCatchEnabled() {
+        const button = q('#moth-ac-toggle');
+        if (button) return button.textContent.trim().toUpperCase() === 'ON';
+
+        try {
+            return Boolean(
+                JSON.parse(localStorage.getItem('moth-pokeidle-autocatch-v4') || '{}').enabled
+            );
+        } catch {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------
-    // CANVAS RENDER THROTTLE
-    //
-    // IMPORTANT:
-    // We only interfere with #cena.
-    //
-    // PvP canvases, UI canvases, etc. are untouched.
-    //
-    // The game continues receiving battlefield state, so:
-    //
-    // - #caidos-lista continues updating
-    // - Auto Catch+ continues working
-    // - battle/session state continues existing
-    //
-    // We merely discard expensive drawing operations.
+    // Canvas hook
     // ------------------------------------------------------------------
 
-    const ctxProto =
-        window.CanvasRenderingContext2D?.prototype;
+    function installCanvasHook() {
+        if (hookInstalled) return true;
 
-    if (ctxProto) {
+        const proto = window.CanvasRenderingContext2D?.prototype;
+        if (!proto) return false;
+
+        const sceneContext = ctx => ctx?.canvas?.id === 'cena';
+
+        const intervalForMode = () => {
+            if (currentRenderMode === '30') return 1000 / 30;
+            if (currentRenderMode === '15') return 1000 / 15;
+            return 0;
+        };
+
+        const clearOriginal = proto.clearRect;
+
+        if (typeof clearOriginal === 'function') {
+            proto.clearRect = function (...args) {
+                if (!sceneContext(this)) {
+                    return clearOriginal.apply(this, args);
+                }
+
+                if (!settings.enabled || currentRenderMode === 'full') {
+                    frameAllowed = true;
+                    sceneFramesWindow++;
+                    passedCallsWindow++;
+                    return clearOriginal.apply(this, args);
+                }
+
+                if (currentRenderMode === 'off') {
+                    frameAllowed = false;
+                    blockedCallsWindow++;
+                    return;
+                }
+
+                const now = performance.now();
+
+                if (now - lastClearCall > 4) {
+                    const interval = intervalForMode();
+                    frameAllowed = (now - lastAllowedFrame) >= interval;
+
+                    if (frameAllowed) {
+                        lastAllowedFrame = now;
+                        sceneFramesWindow++;
+                    }
+                }
+
+                lastClearCall = now;
+
+                if (!frameAllowed) {
+                    blockedCallsWindow++;
+                    return;
+                }
+
+                passedCallsWindow++;
+                return clearOriginal.apply(this, args);
+            };
+        }
+
         const methods = [
-            // Rasterization
             'drawImage',
             'fill',
             'stroke',
@@ -140,8 +188,6 @@
             'fillText',
             'strokeText',
             'putImageData',
-
-            // Paths
             'beginPath',
             'closePath',
             'moveTo',
@@ -152,159 +198,126 @@
             'arcTo',
             'ellipse',
             'bezierCurveTo',
-            'quadraticCurveTo'
+            'quadraticCurveTo',
+            'save',
+            'restore',
+            'translate',
+            'rotate',
+            'scale',
+            'transform',
+            'setTransform',
+            'resetTransform',
+            'clip',
+            'setLineDash'
         ];
 
-        function sceneContext(ctx) {
-            return (
-                ctx?.canvas?.id === 'cena'
-            );
-        }
-
-        function intervalForMode() {
-            if (currentRenderMode === '30') {
-                return 1000 / 30;
-            }
-
-            if (currentRenderMode === '15') {
-                return 1000 / 15;
-            }
-
-            return 0;
-        }
-
-        /*
-         * clearRect is used as our frame boundary.
-         *
-         * That means we throttle the scene renderer without
-         * globally patching requestAnimationFrame.
-         */
-        if (
-            typeof ctxProto.clearRect ===
-            'function'
-        ) {
-            const originalClear =
-                ctxProto.clearRect;
-
-            ctxProto.clearRect =
-                function (...args) {
-                    if (
-                        !sceneContext(this) ||
-                        currentRenderMode === 'full'
-                    ) {
-                        return originalClear.apply(
-                            this,
-                            args
-                        );
-                    }
-
-                    if (
-                        currentRenderMode === 'off'
-                    ) {
-                        frameAllowed = false;
-                        return;
-                    }
-
-                    const now =
-                        performance.now();
-
-                    /*
-                     * Some renderers clear more than once during
-                     * the same frame. Treat clears within 5ms as
-                     * belonging to the existing frame.
-                     */
-                    if (
-                        now - lastClearCall > 5
-                    ) {
-                        const interval =
-                            intervalForMode();
-
-                        frameAllowed =
-                            (
-                                now -
-                                lastAllowedFrame
-                            ) >= interval;
-
-                        if (frameAllowed) {
-                            lastAllowedFrame =
-                                now;
-                        }
-                    }
-
-                    lastClearCall = now;
-
-                    if (!frameAllowed) {
-                        return;
-                    }
-
-                    return originalClear.apply(
-                        this,
-                        args
-                    );
-                };
-        }
-
         for (const name of methods) {
-            const original =
-                ctxProto[name];
+            const original = proto[name];
+            if (typeof original !== 'function') continue;
 
-            if (
-                typeof original !==
-                'function'
-            ) {
-                continue;
-            }
+            proto[name] = function (...args) {
+                if (
+                    sceneContext(this) &&
+                    settings.enabled &&
+                    (
+                        currentRenderMode === 'off' ||
+                        (currentRenderMode !== 'full' && !frameAllowed)
+                    )
+                ) {
+                    blockedCallsWindow++;
+                    return;
+                }
 
-            ctxProto[name] =
-                function (...args) {
-                    if (
-                        sceneContext(this) &&
-                        (
-                            currentRenderMode ===
-                                'off' ||
-                            (
-                                currentRenderMode !==
-                                    'full' &&
-                                !frameAllowed
-                            )
-                        )
-                    ) {
-                        return;
-                    }
-
-                    return original.apply(
-                        this,
-                        args
-                    );
-                };
+                if (sceneContext(this)) passedCallsWindow++;
+                return original.apply(this, args);
+            };
         }
+
+        hookInstalled = true;
+        console.info('[PokéIdle Performance+] canvas hook installed');
+        return true;
     }
 
     // ------------------------------------------------------------------
-    // EFFECT REDUCTION
+    // Adaptive mode
+    // ------------------------------------------------------------------
+
+    function calculateMode() {
+        if (!settings.enabled) return 'full';
+
+        const p = profile();
+
+        if (document.hidden) return p.background;
+
+        const idleSeconds = (Date.now() - lastActivity) / 1000;
+        if (p.idleSeconds > 0 && idleSeconds >= p.idleSeconds) return p.idle;
+
+        return p.active;
+    }
+
+    function collapseChat() {
+        const toggle = q('#btn-chat-toggle');
+        if (!toggle) return;
+
+        if (toggle.getAttribute('aria-expanded') !== 'false') {
+            toggle.click();
+            chatCollapsedByAddon = true;
+        }
+    }
+
+    function restoreChat() {
+        if (!chatCollapsedByAddon) return;
+
+        const toggle = q('#btn-chat-toggle');
+        if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+
+        chatCollapsedByAddon = false;
+    }
+
+    function applyMode() {
+        currentRenderMode = calculateMode();
+
+        const p = profile();
+        const html = document.documentElement;
+
+        html.classList.toggle('moth-scene-off', settings.enabled && currentRenderMode === 'off');
+        html.classList.toggle('moth-perf-reduced', settings.enabled && p.effects === 'reduced');
+        html.classList.toggle('moth-perf-minimal', settings.enabled && p.effects === 'minimal');
+
+        const idle = document.hidden || currentRenderMode === p.idle;
+
+        if (settings.enabled && p.collapseChat && idle) collapseChat();
+        else restoreChat();
+
+        updateUI();
+    }
+
+    function recordActivity() {
+        lastActivity = Date.now();
+        applyMode();
+    }
+
+    for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+        window.addEventListener(eventName, recordActivity, {
+            passive: true,
+            capture: true
+        });
+    }
+
+    document.addEventListener('visibilitychange', applyMode);
+
+    // ------------------------------------------------------------------
+    // Styles and light UI
     // ------------------------------------------------------------------
 
     function installStyles() {
-        if (
-            document.getElementById(
-                'moth-performance-style'
-            )
-        ) {
-            return;
-        }
+        if (q('#' + STYLE_ID)) return;
 
-        const style =
-            document.createElement('style');
-
-        style.id =
-            'moth-performance-style';
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
 
         style.textContent = `
-            /*
-             * Reduced mode only targets obviously decorative FX.
-             */
-            html.moth-perf-reduced
-            :is(
+            html.moth-perf-reduced :is(
                 .ab-confete *,
                 .recompensa *,
                 .shiny-anuncio *,
@@ -316,20 +329,22 @@
                 transition-duration: .001ms !important;
             }
 
-            html.moth-perf-minimal
-            #app *,
-            html.moth-perf-minimal
-            #app *::before,
-            html.moth-perf-minimal
-            #app *::after {
+            html.moth-perf-minimal :is(
+                .ab-confete *,
+                .recompensa *,
+                .shiny-anuncio *,
+                .lendario-anuncio *,
+                .evento-faixa *,
+                .pvp-fila-pill *
+            ) {
                 animation-duration: .001ms !important;
                 animation-iteration-count: 1 !important;
                 transition-duration: .001ms !important;
                 backdrop-filter: none !important;
+                filter: none !important;
             }
 
-            html.moth-perf-minimal
-            :is(
+            html.moth-perf-minimal :is(
                 .la-relampago,
                 .la-raios,
                 .la-faiscas,
@@ -340,843 +355,321 @@
                 display: none !important;
             }
 
-            /*
-             * Rendering is actually suppressed by the canvas hook.
-             * This merely avoids compositing a stale frame.
-             */
             html.moth-scene-off #cena {
-                opacity: .025 !important;
+                opacity: .035 !important;
             }
 
-            /* -------------------------------------------------------
-             * Tiny "render paused" indicator inside the stage.
-             * ------------------------------------------------------- */
-
-            #moth-render-badge {
-                position: absolute;
-                top: 7px;
-                right: 7px;
-
-                z-index: 25;
-
-                display: none;
-
-                padding: 3px 6px;
-
-                border-radius: 5px;
-
-                background: rgba(20, 17, 20, .75);
-
-                color: rgba(255,255,255,.72);
-
-                font: 10px/1.2 system-ui, sans-serif;
-
-                pointer-events: none;
+            #${TRIGGER_ID} {
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                flex: 0 0 auto !important;
+                min-width: 0 !important;
+                width: auto !important;
+                height: 25px !important;
+                padding: 3px 7px !important;
+                margin-left: auto !important;
+                border: 1px solid rgba(255,255,255,.16) !important;
+                border-radius: 999px !important;
+                background: rgba(40,31,35,.75) !important;
+                color: #ddd !important;
+                font: 700 9px/1 system-ui,sans-serif !important;
+                cursor: pointer !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                position: relative !important;
+                z-index: 20 !important;
             }
 
-            html.moth-scene-off
-            #moth-render-badge {
-                display: block;
+            #${TRIGGER_ID}.working {
+                color: #8fe0a5 !important;
+                border-color: rgba(100,210,130,.35) !important;
             }
 
-            /* -------------------------------------------------------
-             * Performance+ collapsed UI
-             * ------------------------------------------------------- */
-
-            #${ROOT_ID} {
-                all: initial;
-
-                position: fixed;
-
-                right: 10px;
-                bottom: 10px;
-
-                z-index: 2147483645;
-
-                color: #eee;
-
-                font:
-                    11px/1.3
-                    system-ui,
-                    sans-serif;
+            #${TRIGGER_ID}.warning {
+                color: #ffd27c !important;
+                border-color: rgba(255,190,80,.38) !important;
             }
 
-            #${ROOT_ID},
-            #${ROOT_ID} * {
-                box-sizing: border-box;
+            #${PANEL_ID} {
+                margin: 7px 0 9px !important;
+                padding: 8px !important;
+                border: 1px solid rgba(255,255,255,.12) !important;
+                border-radius: 7px !important;
+                background: rgba(20,16,19,.65) !important;
+                color: #eee !important;
+                font: 10px/1.25 system-ui,sans-serif !important;
             }
 
-            .mpp-pill {
-                all: unset;
-
-                display: flex;
-                align-items: center;
-
-                gap: 6px;
-
-                min-height: 29px;
-
-                padding: 5px 8px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.18);
-
-                border-radius: 8px;
-
-                background:
-                    rgba(26,21,24,.90);
-
-                color: #eee;
-
-                box-shadow:
-                    0 3px 12px
-                    rgba(0,0,0,.28);
-
-                cursor: pointer;
-            }
-
-            .mpp-dot {
-                width: 6px;
-                height: 6px;
-
-                border-radius: 50%;
-
-                background: #70c888;
-            }
-
-            .mpp-panel {
-                position: absolute;
-
-                right: 0;
-                bottom: 36px;
-
-                width: 250px;
-
-                padding: 9px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.15);
-
-                border-radius: 9px;
-
-                background:
-                    rgba(26,21,24,.97);
-
-                box-shadow:
-                    0 8px 28px
-                    rgba(0,0,0,.45);
-            }
-
-            .mpp-panel[hidden] {
+            #${PANEL_ID}[hidden] {
                 display: none !important;
             }
 
-            .mpp-head {
+            #${PANEL_ID} * {
+                box-sizing: border-box !important;
+            }
+
+            #${PANEL_ID} .mpp-head {
                 display: flex;
                 align-items: center;
-
                 gap: 6px;
-
-                margin-bottom: 8px;
+                margin-bottom: 7px;
             }
 
-            .mpp-head strong {
+            #${PANEL_ID} .mpp-head strong {
                 flex: 1;
-
-                font-size: 12px;
+                font-size: 11px;
             }
 
-            .mpp-head button {
-                all: unset;
-
-                padding: 2px 5px;
-
-                cursor: pointer;
-
-                color: #aaa;
-            }
-
-            .mpp-metrics {
+            #${PANEL_ID} .mpp-metrics {
                 display: grid;
-
-                grid-template-columns:
-                    repeat(3,1fr);
-
+                grid-template-columns: repeat(3,1fr);
                 gap: 4px;
-
-                margin-bottom: 8px;
+                margin-bottom: 7px;
             }
 
-            .mpp-metric {
+            #${PANEL_ID} .mpp-metric {
                 padding: 4px;
-
                 border-radius: 5px;
-
-                background:
-                    rgba(255,255,255,.05);
-
+                background: rgba(255,255,255,.05);
                 text-align: center;
             }
 
-            .mpp-metric b {
+            #${PANEL_ID} .mpp-metric b {
                 display: block;
-
-                font-size: 12px;
+                font-size: 11px;
             }
 
-            .mpp-metric span {
-                color: #948b90;
-
+            #${PANEL_ID} .mpp-metric span {
+                color: #998f93;
                 font-size: 8px;
             }
 
-            .mpp-row {
+            #${PANEL_ID} .mpp-row {
                 display: flex;
                 align-items: center;
-
-                min-height: 29px;
-
                 gap: 6px;
+                min-height: 27px;
             }
 
-            .mpp-row label {
+            #${PANEL_ID} .mpp-row label {
                 flex: 1;
-
-                color: #ccc;
-
-                font-size: 10px;
             }
 
-            .mpp-row select {
+            #${PANEL_ID} select {
                 width: 115px;
-
                 padding: 3px 4px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.12);
-
-                border-radius: 5px;
-
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 4px;
                 background: #211a1e;
-
-                color: white;
-
+                color: #fff;
                 font: inherit;
             }
 
-            .mpp-note {
-                margin-top: 7px;
-
+            #${PANEL_ID} .mpp-status {
+                margin-top: 6px;
                 padding-top: 6px;
-
-                border-top:
-                    1px solid
-                    rgba(255,255,255,.07);
-
-                color: #90878b;
-
+                border-top: 1px solid rgba(255,255,255,.07);
+                color: #a89da2;
                 font-size: 9px;
             }
         `;
 
-        document.head?.appendChild(
-            style
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // AUTO CATCH INTEGRATION
-    // ------------------------------------------------------------------
-
-    function autoCatchEnabled() {
-        const button =
-            document.querySelector(
-                '#moth-ac-toggle'
-            );
-
-        if (button) {
-            return (
-                button.textContent
-                    .trim()
-                    .toUpperCase() === 'ON'
-            );
-        }
-
-        /*
-         * Auto Catch+ v4 persistence fallback.
-         */
-        try {
-            const saved =
-                JSON.parse(
-                    localStorage.getItem(
-                        'moth-pokeidle-autocatch-v4'
-                    ) || '{}'
-                );
-
-            return Boolean(
-                saved.enabled
-            );
-        } catch {
-            return false;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // CHAT
-    // ------------------------------------------------------------------
-
-    function collapseChat() {
-        const button =
-            document.querySelector(
-                '#btn-chat-toggle'
-            );
-
-        if (!button) {
-            return;
-        }
-
-        const expanded =
-            button.getAttribute(
-                'aria-expanded'
-            ) !== 'false';
-
-        if (expanded) {
-            button.click();
-
-            chatCollapsedByAddon =
-                true;
-        }
-    }
-
-    function restoreChat() {
-        if (!chatCollapsedByAddon) {
-            return;
-        }
-
-        const button =
-            document.querySelector(
-                '#btn-chat-toggle'
-            );
-
-        if (
-            button?.getAttribute(
-                'aria-expanded'
-            ) === 'false'
-        ) {
-            button.click();
-        }
-
-        chatCollapsedByAddon =
-            false;
-    }
-
-    // ------------------------------------------------------------------
-    // EFFECTIVE PROFILE
-    // ------------------------------------------------------------------
-
-    function calculateRenderMode() {
-        if (!settings.enabled) {
-            return 'full';
-        }
-
-        const p = profile();
-
-        if (document.hidden) {
-            return p.background;
-        }
-
-        const idleSeconds =
-            (
-                Date.now() -
-                lastActivity
-            ) / 1000;
-
-        if (
-            p.idleSeconds > 0 &&
-            idleSeconds >=
-                p.idleSeconds
-        ) {
-            return p.idle;
-        }
-
-        return p.active;
-    }
-
-    function applyMode() {
-        const p =
-            profile();
-
-        currentRenderMode =
-            calculateRenderMode();
-
-        const html =
-            document.documentElement;
-
-        html.classList.toggle(
-            'moth-scene-off',
-            (
-                currentRenderMode ===
-                'off'
-            )
-        );
-
-        html.classList.toggle(
-            'moth-perf-reduced',
-            (
-                settings.enabled &&
-                p.effects ===
-                    'reduced'
-            )
-        );
-
-        html.classList.toggle(
-            'moth-perf-minimal',
-            (
-                settings.enabled &&
-                p.effects ===
-                    'minimal'
-            )
-        );
-
-        const idle =
-            (
-                currentRenderMode ===
-                    p.idle ||
-                document.hidden
-            );
-
-        if (
-            settings.enabled &&
-            p.collapseChat &&
-            idle
-        ) {
-            collapseChat();
-        } else {
-            restoreChat();
-        }
-
-        updateUI();
-    }
-
-    function recordActivity() {
-        lastActivity =
-            Date.now();
-
-        /*
-         * Immediately restore the interactive render
-         * profile when the user returns.
-         */
-        applyMode();
-    }
-
-    for (
-        const event of
-        [
-            'pointerdown',
-            'keydown',
-            'wheel',
-            'touchstart'
-        ]
-    ) {
-        window.addEventListener(
-            event,
-            recordActivity,
-            {
-                passive: true,
-                capture: true
-            }
-        );
-    }
-
-    document.addEventListener(
-        'visibilitychange',
-        applyMode
-    );
-
-    // ------------------------------------------------------------------
-    // FPS METER
-    // ------------------------------------------------------------------
-
-    function fpsTick(now) {
-        fpsFrames++;
-
-        const elapsed =
-            now - fpsStarted;
-
-        if (elapsed >= 1000) {
-            fps =
-                fpsFrames *
-                1000 /
-                elapsed;
-
-            fpsFrames = 0;
-            fpsStarted = now;
-
-            updateUI();
-        }
-
-        requestAnimationFrame(
-            fpsTick
-        );
-    }
-
-    requestAnimationFrame(
-        fpsTick
-    );
-
-    // ------------------------------------------------------------------
-    // LIGHT UI
-    // ------------------------------------------------------------------
-
-    function installUI() {
-        if (
-            !document.body ||
-            document.getElementById(
-                ROOT_ID
-            )
-        ) {
-            return;
-        }
-
-        installStyles();
-
-        /*
-         * Tiny contextual indicator in the stage.
-         */
-        const palco =
-            document.querySelector(
-                '#palco'
-            );
-
-        if (
-            palco &&
-            !document.getElementById(
-                'moth-render-badge'
-            )
-        ) {
-            const badge =
-                document.createElement(
-                    'div'
-                );
-
-            badge.id =
-                'moth-render-badge';
-
-            badge.textContent =
-                'Lite render · capture active';
-
-            palco.appendChild(
-                badge
-            );
-        }
-
-        const root =
-            document.createElement(
-                'div'
-            );
-
-        root.id =
-            ROOT_ID;
-
-        root.innerHTML = `
-            <div
-                class="mpp-panel"
-                hidden
-            >
-                <div class="mpp-head">
-                    <strong>
-                        Performance+
-                    </strong>
-
-                    <label>
-                        <input
-                            id="mpp-enabled"
-                            type="checkbox"
-                        >
-                        On
-                    </label>
-
-                    <button
-                        id="mpp-close"
-                        type="button"
-                    >
-                        ×
-                    </button>
-                </div>
-
-                <div class="mpp-metrics">
-
-                    <div class="mpp-metric">
-                        <b id="mpp-fps">
-                            —
-                        </b>
-                        <span>browser FPS</span>
-                    </div>
-
-                    <div class="mpp-metric">
-                        <b id="mpp-render">
-                            Full
-                        </b>
-                        <span>scene render</span>
-                    </div>
-
-                    <div class="mpp-metric">
-                        <b id="mpp-capture">
-                            —
-                        </b>
-                        <span>auto catch</span>
-                    </div>
-
-                </div>
-
-                <div class="mpp-row">
-                    <label>Profile</label>
-
-                    <select id="mpp-profile">
-
-                        <option value="full">
-                            Full
-                        </option>
-
-                        <option value="balanced">
-                            Balanced
-                        </option>
-
-                        <option value="afk">
-                            AFK
-                        </option>
-
-                        <option value="capture">
-                            Capture Saver
-                        </option>
-
-                    </select>
-                </div>
-
-                <div class="mpp-note">
-                    Lite rendering keeps the normal hunt
-                    connection alive. Auto Catch continues
-                    receiving fallen Pokémon even when scene
-                    rendering is fully suppressed.
-                </div>
-            </div>
-
-            <button
-                type="button"
-                class="mpp-pill"
-                id="mpp-pill"
-            >
-                <span class="mpp-dot"></span>
-
-                <span id="mpp-pill-text">
-                    Perf
-                </span>
-            </button>
-        `;
-
-        document.body.appendChild(
-            root
-        );
-
-        document
-            .querySelector(
-                '#mpp-pill'
-            )
-            .addEventListener(
-                'click',
-                () => {
-                    const panel =
-                        document.querySelector(
-                            '.mpp-panel'
-                        );
-
-                    panel.hidden =
-                        !panel.hidden;
-                }
-            );
-
-        document
-            .querySelector(
-                '#mpp-close'
-            )
-            .addEventListener(
-                'click',
-                () => {
-                    document.querySelector(
-                        '.mpp-panel'
-                    ).hidden = true;
-                }
-            );
-
-        document
-            .querySelector(
-                '#mpp-enabled'
-            )
-            .addEventListener(
-                'change',
-                event => {
-                    settings.enabled =
-                        event.target.checked;
-
-                    saveSettings();
-
-                    applyMode();
-                }
-            );
-
-        document
-            .querySelector(
-                '#mpp-profile'
-            )
-            .addEventListener(
-                'change',
-                event => {
-                    settings.profile =
-                        event.target.value;
-
-                    saveSettings();
-
-                    lastActivity =
-                        Date.now();
-
-                    applyMode();
-                }
-            );
-
-        updateUI();
+        (document.head || document.documentElement).appendChild(style);
     }
 
     function renderLabel(mode) {
         return {
             full: 'Full',
-            '30': '30 FPS',
-            '15': '15 FPS',
+            '30': '30',
+            '15': '15',
             off: 'Off'
         }[mode] || mode;
     }
 
+    function ensurePanel() {
+        let panel = q('#' + PANEL_ID);
+        if (panel) return panel;
+
+        const host = q('#auto-corpo');
+        if (!host) return null;
+
+        panel = document.createElement('section');
+        panel.id = PANEL_ID;
+        panel.hidden = true;
+        panel.innerHTML = `
+            <div class="mpp-head">
+                <strong>Performance+</strong>
+                <label><input id="mpp-enabled" type="checkbox"> On</label>
+            </div>
+
+            <div class="mpp-metrics">
+                <div class="mpp-metric"><b id="mpp-scene-fps">—</b><span>scene FPS</span></div>
+                <div class="mpp-metric"><b id="mpp-blocked">0</b><span>blocked/s</span></div>
+                <div class="mpp-metric"><b id="mpp-capture">—</b><span>auto catch</span></div>
+            </div>
+
+            <div class="mpp-row">
+                <label>Profile</label>
+                <select id="mpp-profile">
+                    <option value="full">Full</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="afk">AFK</option>
+                    <option value="capture">Capture Saver</option>
+                </select>
+            </div>
+
+            <div class="mpp-status" id="mpp-status">Hook loaded.</div>
+        `;
+
+        host.prepend(panel);
+
+        q('#mpp-enabled', panel).addEventListener('change', event => {
+            settings.enabled = event.target.checked;
+            saveSettings();
+            applyMode();
+        });
+
+        q('#mpp-profile', panel).addEventListener('change', event => {
+            settings.profile = event.target.value;
+            lastActivity = Date.now();
+            saveSettings();
+            applyMode();
+        });
+
+        return panel;
+    }
+
+    function ensureTrigger() {
+        if (!document.body) return false;
+
+        installStyles();
+        installCanvasHook();
+        ensurePanel();
+
+        let trigger = q('#' + TRIGGER_ID);
+        if (trigger) return true;
+
+        const header = q('#p-auto .painel-cab-auto') || q('#p-auto .painel-cab');
+        if (!header) return false;
+
+        trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.id = TRIGGER_ID;
+        trigger.textContent = 'Perf · load';
+        trigger.title = 'Performance+ loaded';
+
+        trigger.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const autoToggle = q('#btn-auto-toggle');
+            if (autoToggle?.getAttribute('aria-expanded') === 'false') autoToggle.click();
+
+            const panel = ensurePanel();
+            if (panel) panel.hidden = !panel.hidden;
+        });
+
+        const collapse = q('#btn-auto-toggle', header);
+        if (collapse) header.insertBefore(trigger, collapse);
+        else header.appendChild(trigger);
+
+        return true;
+    }
+
     function updateUI() {
-        const root =
-            document.getElementById(
-                ROOT_ID
-            );
+        const trigger = q('#' + TRIGGER_ID);
+        const panel = q('#' + PANEL_ID);
 
-        if (!root) {
-            return;
+        if (panel) {
+            const enabled = q('#mpp-enabled', panel);
+            const select = q('#mpp-profile', panel);
+
+            if (enabled) enabled.checked = settings.enabled;
+            if (select) select.value = settings.profile;
+
+            const fpsEl = q('#mpp-scene-fps', panel);
+            const blockedEl = q('#mpp-blocked', panel);
+            const captureEl = q('#mpp-capture', panel);
+            const statusEl = q('#mpp-status', panel);
+
+            if (fpsEl) fpsEl.textContent = isNativeEconomy() ? 'Eco' : sceneFps;
+            if (blockedEl) blockedEl.textContent = blockedPerSecond.toLocaleString();
+            if (captureEl) captureEl.textContent = autoCatchEnabled() ? 'ON' : 'OFF';
+
+            if (statusEl) {
+                if (isNativeEconomy()) {
+                    statusEl.textContent =
+                        'Native Economy is active. It removes battlefield state, so Auto Catch has no fallen targets.';
+                } else if (!hookInstalled) {
+                    statusEl.textContent =
+                        'Canvas hook not installed yet.';
+                } else if (!settings.enabled) {
+                    statusEl.textContent =
+                        'Loaded, but disabled.';
+                } else if (currentRenderMode === 'full') {
+                    statusEl.textContent =
+                        'Loaded. Full scene rendering is allowed by this profile.';
+                } else if (blockedPerSecond > 0) {
+                    statusEl.textContent =
+                        `Working: suppressing ${blockedPerSecond.toLocaleString()} scene canvas calls each second.`;
+                } else {
+                    statusEl.textContent =
+                        'Hook loaded; waiting for #cena drawing. If this stays at 0 during a hunt, the game is using a different render path.';
+                }
+            }
         }
 
-        const enabled =
-            root.querySelector(
-                '#mpp-enabled'
-            );
+        if (trigger) {
+            trigger.classList.remove('working', 'warning');
 
-        const select =
-            root.querySelector(
-                '#mpp-profile'
-            );
+            if (isNativeEconomy()) {
+                trigger.textContent = 'Perf · Native Eco';
+                trigger.classList.add('warning');
+            } else if (!settings.enabled) {
+                trigger.textContent = 'Perf · Off';
+            } else {
+                trigger.textContent =
+                    `Perf · ${renderLabel(currentRenderMode)} · ↓${blockedPerSecond.toLocaleString()}`;
 
-        if (enabled) {
-            enabled.checked =
-                settings.enabled;
-        }
-
-        if (select) {
-            select.value =
-                settings.profile;
-        }
-
-        const fpsEl =
-            root.querySelector(
-                '#mpp-fps'
-            );
-
-        if (fpsEl) {
-            fpsEl.textContent =
-                document.hidden
-                    ? 'BG'
-                    : Math.round(fps);
-        }
-
-        const renderEl =
-            root.querySelector(
-                '#mpp-render'
-            );
-
-        if (renderEl) {
-            renderEl.textContent =
-                renderLabel(
-                    currentRenderMode
-                );
-        }
-
-        const capture =
-            autoCatchEnabled();
-
-        const captureEl =
-            root.querySelector(
-                '#mpp-capture'
-            );
-
-        if (captureEl) {
-            captureEl.textContent =
-                capture
-                    ? 'ON'
-                    : 'OFF';
-        }
-
-        const pill =
-            root.querySelector(
-                '#mpp-pill-text'
-            );
-
-        if (pill) {
-            pill.textContent =
-                `Perf · ${
-                    renderLabel(
-                        currentRenderMode
-                    )
-                }`;
+                if (blockedPerSecond > 0) trigger.classList.add('working');
+                else if (currentRenderMode !== 'full') trigger.classList.add('warning');
+            }
         }
     }
 
     // ------------------------------------------------------------------
-    // BOOTSTRAP
+    // Metrics + bootstrap
     // ------------------------------------------------------------------
+
+    setInterval(() => {
+        sceneFps = sceneFramesWindow;
+        blockedPerSecond = blockedCallsWindow;
+        passedPerSecond = passedCallsWindow;
+
+        sceneFramesWindow = 0;
+        blockedCallsWindow = 0;
+        passedCallsWindow = 0;
+
+        updateUI();
+    }, 1000);
 
     function bootstrap() {
-        installStyles();
-        installUI();
-
-        lastActivity =
-            Date.now();
-
+        ensureTrigger();
+        installCanvasHook();
         applyMode();
 
-        /*
-         * Deliberately low-frequency housekeeping.
-         * No broad MutationObserver.
-         */
-        setInterval(
-            () => {
-                installUI();
-                applyMode();
-            },
-            1000
-        );
+        setInterval(() => {
+            ensureTrigger();
+            installCanvasHook();
+            applyMode();
+        }, 1000);
+
+        console.info('[PokéIdle Performance+] loaded');
     }
 
-    if (
-        document.readyState ===
-        'loading'
-    ) {
-        document.addEventListener(
-            'DOMContentLoaded',
-            bootstrap,
-            { once: true }
-        );
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
     } else {
         bootstrap();
     }
