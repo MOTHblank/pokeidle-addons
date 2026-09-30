@@ -1,0 +1,2132 @@
+// ==UserScript==
+// @name         PokéIdle Experimental Actions
+// @namespace    moth.pokeidle
+// @version      1.0.0
+// @description  One-shot client/server boundary probes for PokéIdle actions that the normal UI restricts by context.
+// @match        https://pokeidle.io/*
+// @match        https://www.pokeidle.io/*
+// @grant        unsafeWindow
+// @run-at       document-start
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    const ROOT_ID = 'moth-experimental-actions';
+    const BUTTON_ID = 'moth-experimental-actions-button';
+    const STYLE_ID = 'moth-experimental-actions-style';
+    const SCRAPE_BUTTON_ID = 'moth-upstream-scraper-button';
+
+    const RESPONSE_WINDOW_MS = 3200;
+    const CLICK_COOLDOWN_MS = 700;
+    const MAX_HISTORY = 30;
+
+    const page =
+        typeof unsafeWindow !== 'undefined'
+            ? unsafeWindow
+            : window;
+
+    const q = (selector, root = document) =>
+        root.querySelector(selector);
+
+    const qa = (selector, root = document) =>
+        [...root.querySelectorAll(selector)];
+
+    const runtime = {
+        socket: null,
+        hookInstalled: false,
+        socketsSeen: 0,
+        messagesSeen: 0,
+
+        gameState: null,
+        welcome: null,
+        catalogoBolas: [],
+        bossesJogaveis: [],
+
+        activeProbe: null,
+        probeTimer: null,
+        lastActionAt: 0,
+        history: []
+    };
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    function clone(value) {
+        if (value == null) return value;
+
+        try {
+            return structuredClone(value);
+        } catch {
+            try {
+                return JSON.parse(JSON.stringify(value));
+            } catch {
+                return value;
+            }
+        }
+    }
+
+    function isPlainObject(value) {
+        return Boolean(
+            value &&
+            typeof value === 'object' &&
+            !Array.isArray(value)
+        );
+    }
+
+    function mergeDelta(base, delta) {
+        if (!isPlainObject(delta)) {
+            return clone(delta);
+        }
+
+        const out =
+            isPlainObject(base)
+                ? { ...base }
+                : {};
+
+        for (const [key, value] of Object.entries(delta)) {
+            if (isPlainObject(value)) {
+                out[key] =
+                    mergeDelta(
+                        out[key],
+                        value
+                    );
+            } else {
+                out[key] =
+                    clone(value);
+            }
+        }
+
+        return out;
+    }
+
+    function decodeProtocolData(data) {
+        if (typeof data === 'string') {
+            try {
+                return JSON.parse(data);
+            } catch {
+                return null;
+            }
+        }
+
+        if (data instanceof ArrayBuffer) {
+            try {
+                return JSON.parse(
+                    new TextDecoder().decode(data)
+                );
+            } catch {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    function socketReady() {
+        return Boolean(
+            runtime.socket &&
+            runtime.socket.readyState ===
+                page.WebSocket.OPEN
+        );
+    }
+
+    function sceneLabel(state = runtime.gameState) {
+        if (!state) return 'unknown';
+
+        if (state.mistico) {
+            return 'mystic arena';
+        }
+
+        if (state.boss && state.boss.arena) {
+            return 'boss arena';
+        }
+
+        if (state.casa && state.casa.dentro != null) {
+            return 'house #' + state.casa.dentro;
+        }
+
+        if (state.noCentro) {
+            return 'PokéCenter';
+        }
+
+        if (state.huntSlug) {
+            return 'hunt ' + state.huntSlug;
+        }
+
+        return 'no scene';
+    }
+
+    function summary(state = runtime.gameState) {
+        const pokemons =
+            Array.isArray(state && state.pokemons)
+                ? state.pokemons
+                : [];
+
+        return {
+            scene:
+                sceneLabel(state),
+            noCentro:
+                Boolean(state && state.noCentro),
+            huntSlug:
+                state && state.huntSlug != null
+                    ? state.huntSlug
+                    : null,
+            casaDentro:
+                state &&
+                state.casa &&
+                state.casa.dentro != null
+                    ? state.casa.dentro
+                    : null,
+            bossArena:
+                Boolean(
+                    state &&
+                    state.boss &&
+                    state.boss.arena
+                ),
+            mistico:
+                Boolean(state && state.mistico),
+            activeId:
+                state && state.activeId != null
+                    ? state.activeId
+                    : null,
+            bike:
+                state &&
+                state.bicicleta &&
+                state.bicicleta.equipada != null
+                    ? state.bicicleta.equipada
+                    : null,
+            gold:
+                state && state.gold != null
+                    ? Number(state.gold)
+                    : null,
+            alive:
+                pokemons.filter(
+                    pokemon =>
+                        Number(pokemon.hp || 0) > 0
+                ).length,
+            team:
+                pokemons.filter(
+                    pokemon =>
+                        pokemon.slot != null
+                ).length
+        };
+    }
+
+    function diffSummary(before, after) {
+        const changes = [];
+
+        for (const key of Object.keys(after || {})) {
+            const a =
+                before
+                    ? before[key]
+                    : undefined;
+
+            const b =
+                after[key];
+
+            if (
+                JSON.stringify(a) !==
+                JSON.stringify(b)
+            ) {
+                changes.push(
+                    key +
+                    ': ' +
+                    String(a) +
+                    ' → ' +
+                    String(b)
+                );
+            }
+        }
+
+        return changes;
+    }
+
+    function compactPayload(payload) {
+        try {
+            return JSON.stringify(payload);
+        } catch {
+            return String(payload);
+        }
+    }
+
+    function addProbeEvent(text, kind) {
+        const probe =
+            runtime.activeProbe;
+
+        if (!probe) return;
+
+        const now =
+            Date.now();
+
+        probe.events.push({
+            at:
+                now -
+                probe.startedAt,
+            kind:
+                kind || 'message',
+            text:
+                String(text)
+        });
+
+        if (probe.events.length > 40) {
+            probe.events.splice(
+                0,
+                probe.events.length - 40
+            );
+        }
+
+        updateUI();
+    }
+
+    function summarizeBattleEvent(event) {
+        if (!event || !event.k) return null;
+
+        if (event.k === 'aviso') {
+            return {
+                kind: 'notice',
+                text:
+                    'aviso: ' +
+                    String(
+                        event.msg ||
+                        event.texto ||
+                        event.mensagem ||
+                        '(no text)'
+                    )
+            };
+        }
+
+        if (event.k === 'joy') {
+            return {
+                kind: 'accepted',
+                text:
+                    'joy: ' +
+                    String(
+                        event.msg ||
+                        event.texto ||
+                        event.mensagem ||
+                        'server responded'
+                    )
+            };
+        }
+
+        if (
+            event.k === 'erro' ||
+            event.k === 'error'
+        ) {
+            return {
+                kind: 'error',
+                text:
+                    event.k +
+                    ': ' +
+                    String(
+                        event.msg ||
+                        event.texto ||
+                        '(no text)'
+                    )
+            };
+        }
+
+        return null;
+    }
+
+    function inspectIncoming(data) {
+        runtime.messagesSeen++;
+
+        const message =
+            decodeProtocolData(data);
+
+        if (!message) return;
+
+        if (message.t === 'welcome') {
+            runtime.welcome =
+                clone(message);
+
+            runtime.gameState =
+                clone(message.estado || null);
+
+            runtime.catalogoBolas =
+                Array.isArray(message.catalogoBolas)
+                    ? clone(message.catalogoBolas)
+                    : [];
+
+            runtime.bossesJogaveis =
+                Array.isArray(message.bossesJogaveis)
+                    ? clone(message.bossesJogaveis)
+                    : [];
+
+            updateUI();
+        } else if (message.t === 'estado') {
+            runtime.gameState =
+                mergeDelta(
+                    runtime.gameState,
+                    message.estado || {}
+                );
+        }
+
+        const probe =
+            runtime.activeProbe;
+
+        if (!probe) {
+            updateUI();
+            return;
+        }
+
+        if (message.t === 'batalha' && Array.isArray(message.ev)) {
+            for (const event of message.ev) {
+                const summarized =
+                    summarizeBattleEvent(event);
+
+                if (summarized) {
+                    addProbeEvent(
+                        summarized.text,
+                        summarized.kind
+                    );
+                }
+            }
+        } else if (message.t === 'campo.init') {
+            addProbeEvent(
+                'campo.init received',
+                'state'
+            );
+        } else if (
+            message.t !== 'campo' &&
+            message.t !== 'pong' &&
+            message.t !== 'estado'
+        ) {
+            addProbeEvent(
+                'message: ' +
+                String(message.t || 'unknown'),
+                'message'
+            );
+        }
+
+        if (message.t === 'estado') {
+            const nowSummary =
+                summary();
+
+            const previous =
+                probe.lastSummary ||
+                probe.before;
+
+            const changes =
+                diffSummary(
+                    previous,
+                    nowSummary
+                );
+
+            for (const change of changes) {
+                addProbeEvent(
+                    'state ' + change,
+                    'state'
+                );
+            }
+
+            probe.lastSummary =
+                nowSummary;
+        }
+
+        updateUI();
+    }
+
+    function attachSocket(socket) {
+        runtime.socketsSeen++;
+        runtime.socket =
+            socket;
+
+        socket.addEventListener(
+            'close',
+            () => {
+                if (
+                    runtime.socket ===
+                    socket
+                ) {
+                    runtime.socket =
+                        null;
+
+                    updateUI();
+                }
+            }
+        );
+
+        socket.addEventListener(
+            'message',
+            event => {
+                if (
+                    typeof Blob !== 'undefined' &&
+                    event.data instanceof Blob
+                ) {
+                    event.data
+                        .text()
+                        .then(inspectIncoming)
+                        .catch(() => {});
+
+                    return;
+                }
+
+                inspectIncoming(
+                    event.data
+                );
+            }
+        );
+    }
+
+    function installProtocolHook() {
+        if (runtime.hookInstalled) {
+            return true;
+        }
+
+        const NativeWebSocket =
+            page.WebSocket;
+
+        if (
+            typeof NativeWebSocket !==
+            'function'
+        ) {
+            return false;
+        }
+
+        if (
+            page.__mothExperimentalActionsHookV1
+        ) {
+            runtime.hookInstalled =
+                true;
+
+            return true;
+        }
+
+        const WrappedWebSocket =
+            new Proxy(
+                NativeWebSocket,
+                {
+                    construct(
+                        target,
+                        args
+                    ) {
+                        const socket =
+                            Reflect.construct(
+                                target,
+                                args,
+                                target
+                            );
+
+                        attachSocket(
+                            socket
+                        );
+
+                        return socket;
+                    }
+                }
+            );
+
+        try {
+            page.WebSocket =
+                WrappedWebSocket;
+
+            page.__mothExperimentalActionsHookV1 =
+                true;
+
+            runtime.hookInstalled =
+                page.WebSocket ===
+                WrappedWebSocket;
+        } catch (error) {
+            console.warn(
+                '[PokéIdle Experimental Actions] WebSocket hook failed',
+                error
+            );
+
+            runtime.hookInstalled =
+                false;
+        }
+
+        return runtime.hookInstalled;
+    }
+
+    installProtocolHook();
+
+    function send(payload) {
+        if (!socketReady()) {
+            throw new Error(
+                'No live game socket. Reload PokéIdle after enabling the userscript.'
+            );
+        }
+
+        runtime.socket.send(
+            JSON.stringify(payload)
+        );
+    }
+
+    function teamPokemon() {
+        const pokemons =
+            Array.isArray(
+                runtime.gameState &&
+                runtime.gameState.pokemons
+            )
+                ? runtime.gameState.pokemons
+                : [];
+
+        return pokemons
+            .filter(
+                pokemon =>
+                    pokemon.slot != null
+            )
+            .sort(
+                (a, b) =>
+                    Number(a.slot) -
+                    Number(b.slot)
+            );
+    }
+
+    function ownedHouses() {
+        const list =
+            runtime.gameState &&
+            runtime.gameState.casa &&
+            Array.isArray(runtime.gameState.casa.lista)
+                ? runtime.gameState.casa.lista
+                : [];
+
+        return list.filter(
+            house =>
+                house &&
+                house.id != null &&
+                !house.anunciada
+        );
+    }
+
+    function inUseHouse() {
+        const houses =
+            ownedHouses();
+
+        return (
+            houses.find(
+                house =>
+                    Array.isArray(house.postos) &&
+                    house.guardada !== true
+            ) ||
+            houses.find(
+                house =>
+                    Array.isArray(house.postos)
+            ) ||
+            null
+        );
+    }
+
+    function storedHouse() {
+        return (
+            ownedHouses().find(
+                house =>
+                    house.guardada === true
+            ) ||
+            null
+        );
+    }
+
+    function occupiedHouseSlot() {
+        for (const house of ownedHouses()) {
+            if (!Array.isArray(house.postos)) {
+                continue;
+            }
+
+            for (
+                let slot = 0;
+                slot < house.postos.length;
+                slot++
+            ) {
+                const pokemonId =
+                    house.postos[slot];
+
+                if (pokemonId != null) {
+                    return {
+                        house,
+                        slot,
+                        pokemonId
+                    };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    function cheapestPurchasableBall() {
+        return (
+            runtime.catalogoBolas
+                .filter(
+                    ball =>
+                        ball &&
+                        ball.compravel &&
+                        Number(ball.priceGold || 0) > 0
+                )
+                .sort(
+                    (a, b) =>
+                        Number(a.priceGold) -
+                        Number(b.priceGold)
+                )[0] ||
+            null
+        );
+    }
+
+    function actionAvailability(action) {
+        if (!socketReady()) {
+            return {
+                ok: false,
+                reason:
+                    'socket not observed; reload page'
+            };
+        }
+
+        if (!runtime.gameState) {
+            return {
+                ok: false,
+                reason:
+                    'waiting for game state'
+            };
+        }
+
+        try {
+            const result =
+                action.available
+                    ? action.available()
+                    : true;
+
+            if (result === true) {
+                return {
+                    ok: true,
+                    reason: ''
+                };
+            }
+
+            if (result === false) {
+                return {
+                    ok: false,
+                    reason:
+                        'not applicable now'
+                };
+            }
+
+            return (
+                result || {
+                    ok: false,
+                    reason:
+                        'not applicable now'
+                }
+            );
+        } catch (error) {
+            return {
+                ok: false,
+                reason:
+                    String(
+                        error &&
+                        error.message ||
+                        error
+                    )
+            };
+        }
+    }
+
+    const actions = [
+        {
+            id: 'remote-heal',
+            group: 'Context probes',
+            label: 'Remote PokéCenter heal',
+            risk: 'low',
+            description:
+                'Send centro.curar from the current scene without traveling to the Center.',
+            available:
+                () => ({
+                    ok:
+                        !runtime.gameState.noCentro,
+                    reason:
+                        runtime.gameState.noCentro
+                            ? 'already in PokéCenter; not a boundary test'
+                            : ''
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'centro.curar'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'center-move-pulse',
+            group: 'Context probes',
+            label: 'Center movement outside Center',
+            risk: 'low',
+            description:
+                'Send a short centro.andar pulse while hunting/elsewhere, then release it.',
+            available:
+                () => ({
+                    ok:
+                        !runtime.gameState.noCentro &&
+                        !(
+                            runtime.gameState.casa &&
+                            runtime.gameState.casa.dentro != null
+                        ),
+                    reason:
+                        'only interesting outside Center/house'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'centro.andar',
+                            dir: 1
+                        }
+                    },
+                    {
+                        delay: 250,
+                        payload: {
+                            t: 'centro.andar',
+                            dir: 0
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'house-exit-outside',
+            group: 'Context probes',
+            label: 'House exit while not in a house',
+            risk: 'low',
+            description:
+                'Send casa.sair from a scene where the button does not exist.',
+            available:
+                () => ({
+                    ok:
+                        !(
+                            runtime.gameState.casa &&
+                            runtime.gameState.casa.dentro != null
+                        ),
+                    reason:
+                        'currently inside a house; this would be a normal exit'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'casa.sair'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'boss-exit-outside',
+            group: 'Context probes',
+            label: 'Boss exit outside boss',
+            risk: 'low',
+            description:
+                'Send boss.sair while no boss arena is active.',
+            available:
+                () => ({
+                    ok:
+                        !(
+                            runtime.gameState.boss &&
+                            runtime.gameState.boss.arena
+                        ) &&
+                        !runtime.gameState.mistico,
+                    reason:
+                        'currently in an arena; this would actually abandon it'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'boss.sair'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'active-reassert',
+            group: 'Idempotent state probes',
+            label: 'Re-assert active Pokémon',
+            risk: 'low',
+            description:
+                'Send team.active for the Pokémon that is already active.',
+            available:
+                () => ({
+                    ok:
+                        runtime.gameState.activeId != null,
+                    reason:
+                        'no active Pokémon'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'team.active',
+                            pokemonId:
+                                runtime.gameState.activeId
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'house-reassert',
+            group: 'Idempotent state probes',
+            label: 'Re-assert house in use',
+            risk: 'low',
+            description:
+                'Send casa.usar:true for a house that already appears to be in use.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(inUseHouse()),
+                    reason:
+                        'no in-use house found'
+                }),
+            steps:
+                () => {
+                    const house =
+                        inUseHouse();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'casa.usar',
+                                casaId:
+                                    house.id,
+                                usar: true
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'xpshare-reassert',
+            group: 'Idempotent state probes',
+            label: 'Re-assert House XP Share',
+            risk: 'low',
+            description:
+                'Re-send the same Pokémon to the same occupied House XP Share slot.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            occupiedHouseSlot()
+                        ),
+                    reason:
+                        'no occupied House XP Share slot'
+                }),
+            steps:
+                () => {
+                    const slot =
+                        occupiedHouseSlot();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'xpshare.escolher',
+                                casaId:
+                                    slot.house.id,
+                                slot:
+                                    slot.slot,
+                                pokemonId:
+                                    slot.pokemonId
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'bike-reassert',
+            group: 'Idempotent state probes',
+            label: 'Re-assert current bike',
+            risk: 'medium',
+            description:
+                'Send bicicleta.equipar with the already-equipped bike. May still touch the server cooldown.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            runtime.gameState.bicicleta &&
+                            runtime.gameState.bicicleta.equipada != null
+                        ),
+                    reason:
+                        'no bike equipped'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'bicicleta.equipar',
+                            bicicletaId:
+                                runtime.gameState.bicicleta.equipada
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'remote-shop-ball',
+            group: 'Controlled side effects',
+            label: 'Buy 1 ball from anywhere',
+            risk: 'medium',
+            description:
+                'Send shop.buy for one cheapest server-purchasable ball without opening the Market.',
+            available:
+                () => {
+                    const ball =
+                        cheapestPurchasableBall();
+
+                    if (!ball) {
+                        return {
+                            ok: false,
+                            reason:
+                                'no purchasable ball in catalog'
+                        };
+                    }
+
+                    const gold =
+                        Number(
+                            runtime.gameState.gold ||
+                            0
+                        );
+
+                    return {
+                        ok:
+                            gold >=
+                            Number(
+                                ball.priceGold ||
+                                0
+                            ),
+                        reason:
+                            'needs ' +
+                            String(ball.priceGold) +
+                            ' gold'
+                    };
+                },
+            steps:
+                () => {
+                    const ball =
+                        cheapestPurchasableBall();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'shop.buy',
+                                kind: 'ball',
+                                id:
+                                    ball.id,
+                                qty: 1
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'cycle-active',
+            group: 'Controlled side effects',
+            label: 'Switch active remotely',
+            risk: 'medium',
+            description:
+                'Switch to the next Pokémon in the team directly, without opening the Team UI.',
+            available:
+                () => ({
+                    ok:
+                        teamPokemon().length >
+                        1,
+                    reason:
+                        'needs at least two team Pokémon'
+                }),
+            steps:
+                () => {
+                    const team =
+                        teamPokemon();
+
+                    const currentIndex =
+                        team.findIndex(
+                            pokemon =>
+                                pokemon.id ===
+                                runtime.gameState.activeId
+                        );
+
+                    const next =
+                        team[
+                            (
+                                Math.max(
+                                    0,
+                                    currentIndex
+                                ) +
+                                1
+                            ) %
+                            team.length
+                        ];
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'team.active',
+                                pokemonId:
+                                    next.id
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'xpshare-remove',
+            group: 'Controlled side effects',
+            label: 'Remove House XP Share remotely',
+            risk: 'medium',
+            description:
+                'Clear the first occupied House XP Share slot from the current scene.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            occupiedHouseSlot()
+                        ),
+                    reason:
+                        'no occupied House XP Share slot'
+                }),
+            steps:
+                () => {
+                    const slot =
+                        occupiedHouseSlot();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'xpshare.escolher',
+                                casaId:
+                                    slot.house.id,
+                                slot:
+                                    slot.slot,
+                                pokemonId: null
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'force-center',
+            group: 'Disruptive transitions',
+            label: 'Force Go Center',
+            risk: 'high',
+            description:
+                'Send centro.ir immediately, ignoring the client button visibility/cooldown checks.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            runtime.gameState.huntSlug &&
+                            !runtime.gameState.noCentro &&
+                            !(
+                                runtime.gameState.boss &&
+                                runtime.gameState.boss.arena
+                            ) &&
+                            !runtime.gameState.mistico
+                        ),
+                    reason:
+                        'requires a normal active hunt'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'centro.ir'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'enter-house-from-hunt',
+            group: 'Disruptive transitions',
+            label: 'Enter house from hunt',
+            risk: 'high',
+            description:
+                'Bypass the client check that normally permits casa.entrar only from Center/another house.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            runtime.gameState.huntSlug &&
+                            !runtime.gameState.noCentro &&
+                            !(
+                                runtime.gameState.casa &&
+                                runtime.gameState.casa.dentro != null
+                            ) &&
+                            inUseHouse()
+                        ),
+                    reason:
+                        'requires a hunt and an available in-use house'
+                }),
+            steps:
+                () => {
+                    const house =
+                        inUseHouse();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'casa.entrar',
+                                casaId:
+                                    house.id
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'activate-stored-house',
+            group: 'Disruptive transitions',
+            label: 'Activate stored house remotely',
+            risk: 'high',
+            description:
+                'Send casa.usar:true for a stored house from the current scene.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            storedHouse()
+                        ),
+                    reason:
+                        'no clearly stored house found'
+                }),
+            steps:
+                () => {
+                    const house =
+                        storedHouse();
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'casa.usar',
+                                casaId:
+                                    house.id,
+                                usar: true
+                            }
+                        }
+                    ];
+                }
+        },
+        {
+            id: 'reselect-hunt',
+            group: 'Disruptive transitions',
+            label: 'Reselect current hunt',
+            risk: 'high',
+            description:
+                'Send hunt.select for the hunt already active and observe whether the server resets/rebuilds anything.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            runtime.gameState.huntSlug
+                        ),
+                    reason:
+                        'no current hunt'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'hunt.select',
+                            slug:
+                                runtime.gameState.huntSlug
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'unequip-bike',
+            group: 'Disruptive transitions',
+            label: 'Unequip bike remotely',
+            risk: 'high',
+            description:
+                'Send bicicleta.equipar:null from the current scene. This can trigger the normal bike swap cooldown.',
+            available:
+                () => ({
+                    ok:
+                        Boolean(
+                            runtime.gameState.bicicleta &&
+                            runtime.gameState.bicicleta.equipada != null
+                        ),
+                    reason:
+                        'no bike equipped'
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'bicicleta.equipar',
+                            bicicletaId: null
+                        }
+                    }
+                ]
+        }
+    ];
+
+    function finishProbe(reason) {
+        const probe =
+            runtime.activeProbe;
+
+        if (!probe) return;
+
+        if (runtime.probeTimer) {
+            clearTimeout(
+                runtime.probeTimer
+            );
+
+            runtime.probeTimer =
+                null;
+        }
+
+        probe.finishedAt =
+            Date.now();
+
+        probe.after =
+            summary();
+
+        probe.changes =
+            diffSummary(
+                probe.before,
+                probe.after
+            );
+
+        const accepted =
+            probe.events.some(
+                event =>
+                    event.kind ===
+                    'accepted'
+            );
+
+        const error =
+            probe.events.some(
+                event =>
+                    event.kind ===
+                    'error'
+            );
+
+        const notice =
+            probe.events.some(
+                event =>
+                    event.kind ===
+                    'notice'
+            );
+
+        if (accepted) {
+            probe.result =
+                'explicit server acceptance';
+        } else if (probe.changes.length) {
+            probe.result =
+                'state changed';
+        } else if (error) {
+            probe.result =
+                'server error';
+        } else if (notice) {
+            probe.result =
+                'server notice / likely rejection';
+        } else {
+            probe.result =
+                reason ||
+                'no explicit response';
+        }
+
+        runtime.history.unshift(
+            probe
+        );
+
+        if (
+            runtime.history.length >
+            MAX_HISTORY
+        ) {
+            runtime.history.splice(
+                MAX_HISTORY
+            );
+        }
+
+        runtime.activeProbe =
+            null;
+
+        updateUI();
+    }
+
+    function runAction(action) {
+        const availability =
+            actionAvailability(
+                action
+            );
+
+        if (!availability.ok) {
+            return;
+        }
+
+        if (
+            runtime.activeProbe
+        ) {
+            finishProbe(
+                'interrupted by next probe'
+            );
+        }
+
+        const now =
+            Date.now();
+
+        if (
+            now -
+                runtime.lastActionAt <
+            CLICK_COOLDOWN_MS
+        ) {
+            return;
+        }
+
+        runtime.lastActionAt =
+            now;
+
+        let steps;
+
+        try {
+            steps =
+                action.steps();
+        } catch (error) {
+            runtime.history.unshift({
+                label:
+                    action.label,
+                result:
+                    'build failed: ' +
+                    String(
+                        error &&
+                        error.message ||
+                        error
+                    ),
+                startedAt:
+                    now,
+                events: [],
+                changes: []
+            });
+
+            updateUI();
+            return;
+        }
+
+        runtime.activeProbe = {
+            id:
+                action.id,
+            label:
+                action.label,
+            risk:
+                action.risk,
+            startedAt:
+                now,
+            before:
+                summary(),
+            lastSummary:
+                summary(),
+            outgoing: [],
+            events: [],
+            changes: [],
+            result:
+                'waiting'
+        };
+
+        try {
+            for (const step of steps) {
+                const delay =
+                    Math.max(
+                        0,
+                        Number(
+                            step.delay ||
+                            0
+                        )
+                    );
+
+                setTimeout(
+                    () => {
+                        if (
+                            !runtime.activeProbe ||
+                            runtime.activeProbe.id !==
+                                action.id
+                        ) {
+                            return;
+                        }
+
+                        try {
+                            send(
+                                step.payload
+                            );
+
+                            runtime.activeProbe
+                                .outgoing
+                                .push({
+                                    at:
+                                        Date.now() -
+                                        runtime.activeProbe
+                                            .startedAt,
+                                    payload:
+                                        clone(
+                                            step.payload
+                                        )
+                                });
+
+                            updateUI();
+                        } catch (error) {
+                            addProbeEvent(
+                                'send failed: ' +
+                                String(
+                                    error &&
+                                    error.message ||
+                                    error
+                                ),
+                                'error'
+                            );
+                        }
+                    },
+                    delay
+                );
+            }
+        } catch (error) {
+            addProbeEvent(
+                'probe failed: ' +
+                String(
+                    error &&
+                    error.message ||
+                    error
+                ),
+                'error'
+            );
+        }
+
+        runtime.probeTimer =
+            setTimeout(
+                () =>
+                    finishProbe(
+                        'no explicit response in window'
+                    ),
+                RESPONSE_WINDOW_MS
+            );
+
+        updateUI();
+    }
+
+    function injectStyle() {
+        if (q('#' + STYLE_ID)) {
+            return;
+        }
+
+        const style =
+            document.createElement(
+                'style'
+            );
+
+        style.id =
+            STYLE_ID;
+
+        style.textContent = [
+            '#' + BUTTON_ID + '{',
+            'display:inline-flex!important;',
+            'align-items:center!important;',
+            'justify-content:center!important;',
+            'width:auto!important;',
+            'height:30px!important;',
+            'padding:5px 8px!important;',
+            'border:1px solid rgba(255,255,255,.17)!important;',
+            'border-radius:6px!important;',
+            'background:rgba(74,38,48,.9)!important;',
+            'color:#eee!important;',
+            'font:700 10px/1 system-ui,sans-serif!important;',
+            'cursor:pointer!important;',
+            '}',
+            '#' + ROOT_ID + '{',
+            'position:fixed!important;',
+            'right:405px!important;',
+            'bottom:12px!important;',
+            'z-index:2147483646!important;',
+            'width:min(440px,calc(100vw - 24px))!important;',
+            'max-height:82vh!important;',
+            'overflow:auto!important;',
+            'padding:10px!important;',
+            'border:1px solid rgba(255,255,255,.18)!important;',
+            'border-radius:9px!important;',
+            'background:#171316!important;',
+            'color:#eee7ea!important;',
+            'box-shadow:0 10px 35px rgba(0,0,0,.5)!important;',
+            'font:11px/1.35 system-ui,sans-serif!important;',
+            '}',
+            '#' + ROOT_ID + '[hidden]{display:none!important;}',
+            '#' + ROOT_ID + ' *{box-sizing:border-box!important;}',
+            '.mea-head{display:flex;align-items:center;gap:7px;margin-bottom:7px;}',
+            '.mea-head strong{flex:1;font-size:12px;}',
+            '.mea-head button,.mea-clear,.mea-copy{border:1px solid rgba(255,255,255,.14);border-radius:5px;background:rgba(255,255,255,.06);color:#eee;padding:5px 7px;font:inherit;cursor:pointer;}',
+            '.mea-state{padding:7px;border-radius:6px;background:rgba(255,255,255,.045);color:#cfc4c9;margin-bottom:8px;}',
+            '.mea-state b{color:#fff;}',
+            '.mea-group{margin-top:9px;}',
+            '.mea-group-title{margin-bottom:4px;color:#a99fa3;font-size:9px;text-transform:uppercase;letter-spacing:.08em;}',
+            '.mea-action{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:start;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);}',
+            '.mea-action:first-of-type{border-top:0;}',
+            '.mea-action b{display:block;font-size:10px;margin-bottom:1px;}',
+            '.mea-action small{display:block;color:#92878c;font-size:9px;}',
+            '.mea-action button{min-width:58px;border:1px solid rgba(255,255,255,.15);border-radius:5px;padding:5px 7px;background:#273a2e;color:#f2fff5;font:700 9px/1 system-ui,sans-serif;cursor:pointer;}',
+            '.mea-action button[data-risk="medium"]{background:#594619;}',
+            '.mea-action button[data-risk="high"]{background:#602d33;}',
+            '.mea-action button:disabled{opacity:.38;cursor:default;}',
+            '.mea-live{margin-top:8px;padding:7px;border-radius:6px;background:rgba(255,255,255,.045);}',
+            '.mea-live strong{display:block;margin-bottom:4px;}',
+            '.mea-payload{font:9px/1.25 ui-monospace,SFMono-Regular,Consolas,monospace;color:#b9aeb3;overflow-wrap:anywhere;}',
+            '.mea-log-head{display:flex;align-items:center;gap:6px;margin-top:10px;margin-bottom:4px;}',
+            '.mea-log-head b{flex:1;}',
+            '.mea-history{display:grid;gap:5px;}',
+            '.mea-entry{padding:6px;border-radius:5px;background:rgba(255,255,255,.04);}',
+            '.mea-entry-top{display:flex;justify-content:space-between;gap:8px;}',
+            '.mea-entry-top span{color:#a89da2;font-size:9px;}',
+            '.mea-entry-result{margin-top:2px;font-weight:700;}',
+            '.mea-entry-detail{margin-top:3px;color:#968b90;font-size:9px;overflow-wrap:anywhere;}',
+            '@media(max-width:900px){#' + ROOT_ID + '{right:12px!important;}}'
+        ].join('');
+
+        (
+            document.head ||
+            document.documentElement
+        ).appendChild(
+            style
+        );
+    }
+
+    function ensureButton() {
+        injectStyle();
+
+        let button =
+            q('#' + BUTTON_ID);
+
+        if (!button) {
+            button =
+                document.createElement(
+                    'button'
+                );
+
+            button.type =
+                'button';
+
+            button.id =
+                BUTTON_ID;
+
+            button.textContent =
+                'Experiments';
+
+            button.title =
+                'PokéIdle experimental one-shot protocol actions';
+
+            button.addEventListener(
+                'click',
+                () => {
+                    const panel =
+                        ensurePanel();
+
+                    panel.hidden =
+                        !panel.hidden;
+
+                    updateUI();
+                }
+            );
+        }
+
+        const scrape =
+            q(
+                '#' +
+                SCRAPE_BUTTON_ID
+            );
+
+        const host =
+            scrape &&
+            scrape.parentElement
+                ? scrape.parentElement
+                : q('.menu-topo') ||
+                  document.body;
+
+        if (!host) return;
+
+        if (scrape) {
+            if (
+                button.parentElement !==
+                    host ||
+                button.previousElementSibling !==
+                    scrape
+            ) {
+                scrape.insertAdjacentElement(
+                    'afterend',
+                    button
+                );
+            }
+        } else if (
+            button.parentElement !==
+            host
+        ) {
+            host.appendChild(
+                button
+            );
+        }
+    }
+
+    function groupedActions() {
+        const groups =
+            new Map();
+
+        for (const action of actions) {
+            if (!groups.has(action.group)) {
+                groups.set(
+                    action.group,
+                    []
+                );
+            }
+
+            groups.get(
+                action.group
+            ).push(
+                action
+            );
+        }
+
+        return groups;
+    }
+
+    function panelMarkup() {
+        let html = '';
+
+        html +=
+            '<div class="mea-head">' +
+            '<strong>Experimental Actions</strong>' +
+            '<button type="button" data-mea-close>×</button>' +
+            '</div>';
+
+        html +=
+            '<div class="mea-state" data-mea-state></div>';
+
+        for (
+            const [
+                group,
+                groupActions
+            ] of
+            groupedActions()
+        ) {
+            html +=
+                '<section class="mea-group">' +
+                '<div class="mea-group-title">' +
+                escapeHtml(group) +
+                '</div>';
+
+            for (const action of groupActions) {
+                html +=
+                    '<div class="mea-action" data-mea-action="' +
+                    escapeHtml(action.id) +
+                    '">' +
+                    '<div><b>' +
+                    escapeHtml(action.label) +
+                    '</b><small>' +
+                    escapeHtml(action.description) +
+                    '</small><small data-mea-reason></small></div>' +
+                    '<button type="button" data-mea-run="' +
+                    escapeHtml(action.id) +
+                    '" data-risk="' +
+                    escapeHtml(action.risk) +
+                    '">Test</button>' +
+                    '</div>';
+            }
+
+            html +=
+                '</section>';
+        }
+
+        html +=
+            '<div class="mea-live" data-mea-live hidden></div>';
+
+        html +=
+            '<div class="mea-log-head">' +
+            '<b>Probe history</b>' +
+            '<button type="button" class="mea-copy" data-mea-copy>Copy last</button>' +
+            '<button type="button" class="mea-clear" data-mea-clear>Clear</button>' +
+            '</div>' +
+            '<div class="mea-history" data-mea-history></div>';
+
+        return html;
+    }
+
+    function ensurePanel() {
+        injectStyle();
+
+        let root =
+            q('#' + ROOT_ID);
+
+        if (root) {
+            return root;
+        }
+
+        root =
+            document.createElement(
+                'section'
+            );
+
+        root.id =
+            ROOT_ID;
+
+        root.hidden =
+            true;
+
+        root.innerHTML =
+            panelMarkup();
+
+        document.body.appendChild(
+            root
+        );
+
+        q(
+            '[data-mea-close]',
+            root
+        ).addEventListener(
+            'click',
+            () => {
+                root.hidden =
+                    true;
+            }
+        );
+
+        for (
+            const button of
+            qa(
+                '[data-mea-run]',
+                root
+            )
+        ) {
+            button.addEventListener(
+                'click',
+                () => {
+                    const action =
+                        actions.find(
+                            item =>
+                                item.id ===
+                                button.dataset
+                                    .meaRun
+                        );
+
+                    if (action) {
+                        runAction(
+                            action
+                        );
+                    }
+                }
+            );
+        }
+
+        q(
+            '[data-mea-clear]',
+            root
+        ).addEventListener(
+            'click',
+            () => {
+                runtime.history = [];
+                updateUI();
+            }
+        );
+
+        q(
+            '[data-mea-copy]',
+            root
+        ).addEventListener(
+            'click',
+            async () => {
+                const item =
+                    runtime.history[0] ||
+                    runtime.activeProbe;
+
+                if (!item) return;
+
+                const text =
+                    JSON.stringify(
+                        item,
+                        null,
+                        2
+                    );
+
+                try {
+                    await navigator.clipboard.writeText(
+                        text
+                    );
+                } catch {}
+            }
+        );
+
+        return root;
+    }
+
+    function renderHistory(root) {
+        const host =
+            q(
+                '[data-mea-history]',
+                root
+            );
+
+        if (!host) return;
+
+        host.innerHTML =
+            runtime.history
+                .slice(0, 12)
+                .map(
+                    item => {
+                        const outgoing =
+                            (item.outgoing || [])
+                                .map(
+                                    row =>
+                                        compactPayload(
+                                            row.payload
+                                        )
+                                )
+                                .join(' · ');
+
+                        const events =
+                            (item.events || [])
+                                .map(
+                                    row =>
+                                        row.text
+                                )
+                                .join(' · ');
+
+                        const changes =
+                            (item.changes || [])
+                                .join(' · ');
+
+                        return (
+                            '<div class="mea-entry">' +
+                            '<div class="mea-entry-top"><b>' +
+                            escapeHtml(item.label || item.id || 'Probe') +
+                            '</b><span>' +
+                            escapeHtml(
+                                new Date(
+                                    item.startedAt ||
+                                    Date.now()
+                                ).toLocaleTimeString()
+                            ) +
+                            '</span></div>' +
+                            '<div class="mea-entry-result">' +
+                            escapeHtml(item.result || '') +
+                            '</div>' +
+                            (
+                                outgoing
+                                    ? '<div class="mea-entry-detail">out: ' +
+                                      escapeHtml(outgoing) +
+                                      '</div>'
+                                    : ''
+                            ) +
+                            (
+                                events
+                                    ? '<div class="mea-entry-detail">in: ' +
+                                      escapeHtml(events) +
+                                      '</div>'
+                                    : ''
+                            ) +
+                            (
+                                changes
+                                    ? '<div class="mea-entry-detail">Δ ' +
+                                      escapeHtml(changes) +
+                                      '</div>'
+                                    : ''
+                            ) +
+                            '</div>'
+                        );
+                    }
+                )
+                .join('');
+    }
+
+    function updateUI() {
+        ensureButton();
+
+        const root =
+            q('#' + ROOT_ID);
+
+        if (!root) return;
+
+        const stateHost =
+            q(
+                '[data-mea-state]',
+                root
+            );
+
+        const current =
+            summary();
+
+        stateHost.innerHTML =
+            '<b>' +
+            escapeHtml(
+                socketReady()
+                    ? 'Protocol live'
+                    : runtime.hookInstalled
+                        ? 'Waiting for socket'
+                        : 'Protocol hook failed'
+            ) +
+            '</b> · ' +
+            escapeHtml(
+                current.scene
+            ) +
+            ' · active ' +
+            escapeHtml(
+                current.activeId == null
+                    ? '—'
+                    : current.activeId
+            ) +
+            ' · gold ' +
+            escapeHtml(
+                current.gold == null
+                    ? '—'
+                    : current.gold
+            );
+
+        for (const action of actions) {
+            const row =
+                q(
+                    '[data-mea-action="' +
+                    action.id +
+                    '"]',
+                    root
+                );
+
+            if (!row) continue;
+
+            const availability =
+                actionAvailability(
+                    action
+                );
+
+            const button =
+                q(
+                    '[data-mea-run]',
+                    row
+                );
+
+            const reason =
+                q(
+                    '[data-mea-reason]',
+                    row
+                );
+
+            button.disabled =
+                !availability.ok ||
+                Boolean(
+                    runtime.activeProbe
+                );
+
+            reason.textContent =
+                availability.ok
+                    ? ''
+                    : availability.reason ||
+                      'not available';
+        }
+
+        const live =
+            q(
+                '[data-mea-live]',
+                root
+            );
+
+        if (
+            runtime.activeProbe
+        ) {
+            const probe =
+                runtime.activeProbe;
+
+            live.hidden =
+                false;
+
+            const outgoing =
+                probe.outgoing
+                    .map(
+                        row =>
+                            compactPayload(
+                                row.payload
+                            )
+                    )
+                    .join(' · ');
+
+            const incoming =
+                probe.events
+                    .map(
+                        row =>
+                            row.text
+                    )
+                    .join(' · ');
+
+            live.innerHTML =
+                '<strong>Testing: ' +
+                escapeHtml(
+                    probe.label
+                ) +
+                '</strong>' +
+                '<div class="mea-payload">out: ' +
+                escapeHtml(
+                    outgoing ||
+                    'scheduled'
+                ) +
+                '</div>' +
+                '<div class="mea-payload">in: ' +
+                escapeHtml(
+                    incoming ||
+                    'waiting…'
+                ) +
+                '</div>';
+        } else {
+            live.hidden =
+                true;
+
+            live.innerHTML =
+                '';
+        }
+
+        renderHistory(
+            root
+        );
+    }
+
+    function bootstrap() {
+        installProtocolHook();
+        ensureButton();
+        ensurePanel();
+        updateUI();
+
+        setInterval(
+            () => {
+                ensureButton();
+                updateUI();
+            },
+            1000
+        );
+
+        console.info(
+            '[PokéIdle Experimental Actions] v1.0 loaded'
+        );
+    }
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            bootstrap,
+            {
+                once: true
+            }
+        );
+    } else {
+        bootstrap();
+    }
+})();
