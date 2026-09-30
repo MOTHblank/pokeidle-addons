@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Contextual Quick Actions
 // @namespace    moth.pokeidle
-// @version      1.1.0
+// @version      1.2.0
 // @description  Small context-aware quick navigation palette for PokéIdle.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -133,6 +133,11 @@
             () => clickSelector('#ir-centro'),
             () => visible(q('#ir-centro'))
         ),
+        heal: action(
+            'heal', 'Curar equipe', 'Usar a cura do Centro Pokémon',
+            () => clickSelector('#centro-curar'),
+            () => visible(q('#centro-curar')) && !q('#centro-curar')?.disabled
+        ),
         team: action(
             'team', 'Equipe', 'Abrir painel da equipe',
             () => {
@@ -180,7 +185,7 @@
     const BY_CONTEXT = {
         hunt: ['captures', 'session', 'inventory', 'map', 'popup', 'center', 'autoCatch', 'captureHud', 'performance'],
         pvp: ['pvp', 'team', 'inventory', 'ranking', 'map', 'performance', 'settings'],
-        center: ['map', 'inventory', 'team', 'pokedex', 'market', 'pvp', 'performance', 'settings'],
+        center: ['heal', 'team', 'inventory', 'map', 'pokedex', 'market', 'pvp', 'performance', 'settings'],
         modal: ['closeModal', 'map', 'inventory', 'pokedex', 'market', 'pvp'],
         general: ['map', 'inventory', 'pokedex', 'market', 'pvp', 'team', 'performance', 'settings']
     };
