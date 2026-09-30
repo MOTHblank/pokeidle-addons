@@ -346,6 +346,42 @@
 
     function savePerformance() {
         try {
+            const entries =
+                [...state.huntPerf.entries()]
+                    .sort(
+                        (a, b) =>
+                            Number(
+                                b[1]?.updatedAt ||
+                                0
+                            ) -
+                            Number(
+                                a[1]?.updatedAt ||
+                                0
+                            )
+                    );
+
+            /*
+             * Records are level-specific for accuracy. Keep a generous
+             * rolling history without letting localStorage grow forever.
+             */
+            if (
+                entries.length >
+                160
+            ) {
+                for (
+                    const [
+                        key
+                    ] of
+                    entries.slice(
+                        160
+                    )
+                ) {
+                    state.huntPerf.delete(
+                        key
+                    );
+                }
+            }
+
             localStorage.setItem(
                 PERF_KEY,
                 JSON.stringify(
