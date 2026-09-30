@@ -1,0 +1,1329 @@
+// ==UserScript==
+// @name         PokéIdle Contextual Quick Actions
+// @namespace    moth.pokeidle
+// @version      1.0.0
+// @description  Context-aware quick navigation and utility palette for PokéIdle.
+// @match        https://pokeidle.io/*
+// @match        https://www.pokeidle.io/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    const ROOT_ID = 'moth-quick-actions';
+    const STORAGE_KEY = 'moth-pokeidle-quick-actions-v1';
+
+    const state = {
+        open: false,
+        lastContext: null,
+        prefs: loadPrefs()
+    };
+
+    function loadPrefs() {
+        try {
+            return {
+                shortcut: true,
+                ...JSON.parse(
+                    localStorage.getItem(STORAGE_KEY) || '{}'
+                )
+            };
+        } catch {
+            return {
+                shortcut: true
+            };
+        }
+    }
+
+    function savePrefs() {
+        localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(state.prefs)
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Generic helpers
+    // ---------------------------------------------------------------------
+
+    function visible(el) {
+        if (!el || !el.isConnected) {
+            return false;
+        }
+
+        if (el.classList.contains('hidden')) {
+            return false;
+        }
+
+        const style = getComputedStyle(el);
+
+        return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+        );
+    }
+
+    function clickSelector(selector) {
+        const el = document.querySelector(selector);
+
+        if (!el) {
+            return false;
+        }
+
+        el.click();
+
+        closeMenu();
+
+        return true;
+    }
+
+    function openModal(name) {
+        return clickSelector(
+            `[data-modal="${CSS.escape(name)}"]`
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Context detection
+    // ---------------------------------------------------------------------
+
+    function currentContext() {
+        /*
+         * Hunt gets priority because the normal game UI
+         * remains present underneath it.
+         */
+        if (
+            visible(
+                document.querySelector('#hunt-saida')
+            )
+        ) {
+            return 'hunt';
+        }
+
+        if (
+            visible(
+                document.querySelector('#pvp-mini')
+            ) ||
+            visible(
+                document.querySelector('#pvp-fila-pill')
+            ) ||
+            visible(
+                document.querySelector('#pvp-tick')
+            )
+        ) {
+            return 'pvp';
+        }
+
+        if (
+            visible(
+                document.querySelector('#centro-dpad')
+            ) ||
+            visible(
+                document.querySelector('#centro-curar')
+            ) ||
+            visible(
+                document.querySelector('#centro-tm')
+            )
+        ) {
+            return 'center';
+        }
+
+        if (
+            visible(
+                document.querySelector('#modal')
+            )
+        ) {
+            return 'modal';
+        }
+
+        return 'general';
+    }
+
+    function contextLabel(context) {
+        return {
+            hunt: 'Hunt',
+            pvp: 'PvP',
+            center: 'Centro',
+            modal: 'Menu aberto',
+            general: 'Geral'
+        }[context] || 'Geral';
+    }
+
+    // ---------------------------------------------------------------------
+    // Actions
+    // ---------------------------------------------------------------------
+
+    function makeAction(
+        id,
+        label,
+        hint,
+        run,
+        available = () => true
+    ) {
+        return {
+            id,
+            label,
+            hint,
+            run,
+            available
+        };
+    }
+
+    const ACTIONS = {
+        map: makeAction(
+            'map',
+            'Mapa',
+            'Escolher área',
+            () => openModal('mapa'),
+            () =>
+                !!document.querySelector(
+                    '[data-modal="mapa"]'
+                )
+        ),
+
+        inventory: makeAction(
+            'inventory',
+            'Inventário',
+            'Bolas e itens',
+            () => clickSelector('#btn-bolsa'),
+            () =>
+                !!document.querySelector(
+                    '#btn-bolsa'
+                )
+        ),
+
+        pokedex: makeAction(
+            'pokedex',
+            'Pokédex',
+            'Coleção e espécies',
+            () => openModal('pokedex'),
+            () =>
+                !!document.querySelector(
+                    '[data-modal="pokedex"]'
+                )
+        ),
+
+        market: makeAction(
+            'market',
+            'Market',
+            'Abrir mercado',
+            () => openModal('market'),
+            () =>
+                !!document.querySelector(
+                    '[data-modal="market"]'
+                )
+        ),
+
+        pvp: makeAction(
+            'pvp',
+            'PvP',
+            'Abrir painel PvP',
+            () => openModal('pvp'),
+            () =>
+                !!document.querySelector(
+                    '[data-modal="pvp"]'
+                )
+        ),
+
+        ranking: makeAction(
+            'ranking',
+            'Ranks',
+            'Ranking PvP',
+            () => openModal('ranking'),
+            () =>
+                !!document.querySelector(
+                    '[data-modal="ranking"]'
+                )
+        ),
+
+        captures: makeAction(
+            'captures',
+            'Capturas',
+            'Histórico da sessão',
+            () =>
+                clickSelector(
+                    '#cena-capturas'
+                ),
+            () =>
+                !!document.querySelector(
+                    '#cena-capturas'
+                )
+        ),
+
+        session: makeAction(
+            'session',
+            'Sessão',
+            'Estatísticas da hunt',
+            () =>
+                clickSelector(
+                    '#cena-sessao'
+                ),
+            () =>
+                !!document.querySelector(
+                    '#cena-sessao'
+                )
+        ),
+
+        popup: makeAction(
+            'popup',
+            'Pop-up',
+            'Acompanhar em janela',
+            () =>
+                clickSelector(
+                    '#hunt-popup'
+                ),
+            () =>
+                visible(
+                    document.querySelector(
+                        '#hunt-popup'
+                    )
+                )
+        ),
+
+        center: makeAction(
+            'center',
+            'Centro Pokémon',
+            'Sair da hunt normalmente',
+            () =>
+                clickSelector(
+                    '#ir-centro'
+                ),
+            () =>
+                visible(
+                    document.querySelector(
+                        '#ir-centro'
+                    )
+                )
+        ),
+
+        team: makeAction(
+            'team',
+            'Equipe',
+            'Ir para o painel da equipe',
+            () => {
+                const panel =
+                    document.querySelector(
+                        '#p-equipe'
+                    );
+
+                const toggle =
+                    document.querySelector(
+                        '#btn-equipe-toggle'
+                    );
+
+                if (!panel) {
+                    return;
+                }
+
+                if (
+                    toggle?.getAttribute(
+                        'aria-expanded'
+                    ) === 'false'
+                ) {
+                    toggle.click();
+                }
+
+                panel.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
+
+                closeMenu();
+            },
+            () =>
+                !!document.querySelector(
+                    '#p-equipe'
+                )
+        ),
+
+        settings: makeAction(
+            'settings',
+            'Configurações',
+            'Preferências do jogo',
+            () =>
+                clickSelector(
+                    '#btn-config'
+                ),
+            () =>
+                !!document.querySelector(
+                    '#btn-config'
+                )
+        ),
+
+        closeModal: makeAction(
+            'close-modal',
+            'Fechar menu',
+            'Voltar ao jogo',
+            () =>
+                clickSelector(
+                    '#modal-fechar'
+                ),
+            () =>
+                visible(
+                    document.querySelector(
+                        '#modal'
+                    )
+                ) &&
+                !!document.querySelector(
+                    '#modal-fechar'
+                )
+        ),
+
+        /*
+         * Integration with our other userscript.
+         * These simply don't appear when Auto Catch+
+         * is not installed.
+         */
+        autoCatch: makeAction(
+            'auto-catch',
+            'Auto Catch',
+            'Alternar addon de captura',
+            () =>
+                clickSelector(
+                    '#moth-ac-toggle'
+                ),
+            () =>
+                !!document.querySelector(
+                    '#moth-ac-toggle'
+                )
+        ),
+
+        captureHud: makeAction(
+            'capture-hud',
+            'Capture HUD',
+            'Mostrar/ocultar HUD',
+            () => {
+                const checkbox =
+                    document.querySelector(
+                        '#moth-ac-hud-check'
+                    );
+
+                if (!checkbox) {
+                    return;
+                }
+
+                checkbox.click();
+
+                closeMenu();
+            },
+            () =>
+                !!document.querySelector(
+                    '#moth-ac-hud-check'
+                )
+        )
+    };
+
+    /*
+     * Ordering matters: the most useful contextual
+     * actions should appear first.
+     */
+    const CONTEXT_ACTIONS = {
+        hunt: [
+            'captures',
+            'session',
+            'inventory',
+            'map',
+            'popup',
+            'center',
+            'autoCatch',
+            'captureHud'
+        ],
+
+        pvp: [
+            'pvp',
+            'team',
+            'inventory',
+            'ranking',
+            'map',
+            'settings'
+        ],
+
+        center: [
+            'map',
+            'inventory',
+            'team',
+            'pokedex',
+            'market',
+            'pvp',
+            'settings'
+        ],
+
+        modal: [
+            'closeModal',
+            'map',
+            'inventory',
+            'pokedex',
+            'market',
+            'pvp'
+        ],
+
+        general: [
+            'map',
+            'inventory',
+            'pokedex',
+            'market',
+            'pvp',
+            'team',
+            'settings'
+        ]
+    };
+
+    // ---------------------------------------------------------------------
+    // Style
+    // ---------------------------------------------------------------------
+
+    function injectStyle() {
+        if (
+            document.getElementById(
+                `${ROOT_ID}-style`
+            )
+        ) {
+            return;
+        }
+
+        const style =
+            document.createElement('style');
+
+        style.id =
+            `${ROOT_ID}-style`;
+
+        style.textContent = `
+            #${ROOT_ID} {
+                all: initial;
+
+                position: fixed;
+
+                left: 12px;
+                bottom: 12px;
+
+                z-index: 2147483646;
+
+                font-family:
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    "Segoe UI",
+                    sans-serif;
+
+                color: #f6eef1;
+            }
+
+            #${ROOT_ID},
+            #${ROOT_ID} * {
+                box-sizing: border-box;
+            }
+
+            #${ROOT_ID} button {
+                font: inherit;
+            }
+
+            /* ---------------------------------------------------------
+             * Launcher
+             * --------------------------------------------------------- */
+
+            .mqa-launcher {
+                all: unset;
+
+                box-sizing: border-box;
+
+                display: flex;
+                align-items: center;
+
+                gap: 7px;
+
+                min-height: 34px;
+
+                padding: 7px 10px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.22);
+
+                border-radius: 9px;
+
+                background:
+                    rgba(31,23,28,.94);
+
+                color: #fff;
+
+                box-shadow:
+                    0 5px 18px
+                    rgba(0,0,0,.34);
+
+                cursor: pointer;
+                user-select: none;
+            }
+
+            .mqa-launcher:hover {
+                background:
+                    rgba(48,35,42,.98);
+            }
+
+            .mqa-launcher-dot {
+                width: 8px;
+                height: 8px;
+
+                border-radius: 50%;
+
+                background: #d0a34a;
+
+                box-shadow:
+                    0 0 0 2px
+                    rgba(208,163,74,.14);
+            }
+
+            .mqa-launcher-label {
+                font-size: 12px;
+                font-weight: 750;
+
+                letter-spacing: .01em;
+            }
+
+            /* ---------------------------------------------------------
+             * Palette
+             * --------------------------------------------------------- */
+
+            .mqa-panel {
+                position: absolute;
+
+                left: 0;
+                bottom: 42px;
+
+                width: 260px;
+
+                padding: 9px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.18);
+
+                border-radius: 11px;
+
+                background:
+                    rgba(24,18,22,.97);
+
+                color: #fff;
+
+                box-shadow:
+                    0 12px 36px
+                    rgba(0,0,0,.5);
+
+                backdrop-filter:
+                    blur(7px);
+            }
+
+            .mqa-panel[hidden] {
+                display: none !important;
+            }
+
+            /* ---------------------------------------------------------
+             * Header
+             * --------------------------------------------------------- */
+
+            .mqa-head {
+                display: flex;
+                align-items: center;
+
+                gap: 8px;
+
+                padding: 2px 2px 8px;
+
+                border-bottom:
+                    1px solid
+                    rgba(255,255,255,.08);
+
+                margin-bottom: 8px;
+            }
+
+            .mqa-title {
+                min-width: 0;
+                flex: 1;
+            }
+
+            .mqa-title b {
+                display: block;
+
+                font-size: 13px;
+                line-height: 1.2;
+            }
+
+            .mqa-title span {
+                display: block;
+
+                margin-top: 2px;
+
+                color: #aaa0a5;
+
+                font-size: 10px;
+            }
+
+            .mqa-close {
+                all: unset;
+
+                box-sizing: border-box;
+
+                width: 25px;
+                height: 25px;
+
+                display: grid;
+                place-items: center;
+
+                border-radius: 6px;
+
+                color: #bbb0b5;
+
+                cursor: pointer;
+
+                font-size: 17px;
+                line-height: 1;
+            }
+
+            .mqa-close:hover {
+                background:
+                    rgba(255,255,255,.08);
+
+                color: #fff;
+            }
+
+            /* ---------------------------------------------------------
+             * Actions
+             * --------------------------------------------------------- */
+
+            .mqa-actions {
+                display: grid;
+
+                grid-template-columns:
+                    1fr 1fr;
+
+                gap: 6px;
+            }
+
+            .mqa-action {
+                all: unset;
+
+                box-sizing: border-box;
+
+                min-width: 0;
+
+                padding: 8px 9px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.10);
+
+                border-radius: 7px;
+
+                background:
+                    rgba(255,255,255,.045);
+
+                color: #f2eaed;
+
+                cursor: pointer;
+            }
+
+            .mqa-action:hover {
+                background:
+                    rgba(255,255,255,.10);
+
+                border-color:
+                    rgba(255,255,255,.18);
+            }
+
+            .mqa-action b {
+                display: block;
+
+                overflow: hidden;
+
+                text-overflow:
+                    ellipsis;
+
+                white-space: nowrap;
+
+                font-size: 11px;
+                line-height: 1.2;
+            }
+
+            .mqa-action span {
+                display: block;
+
+                overflow: hidden;
+
+                text-overflow:
+                    ellipsis;
+
+                white-space: nowrap;
+
+                margin-top: 3px;
+
+                color: #9e9499;
+
+                font-size: 9px;
+                line-height: 1.2;
+            }
+
+            /* ---------------------------------------------------------
+             * Footer
+             * --------------------------------------------------------- */
+
+            .mqa-foot {
+                display: flex;
+
+                justify-content:
+                    space-between;
+
+                align-items: center;
+
+                gap: 8px;
+
+                margin-top: 8px;
+
+                padding:
+                    7px 2px 1px;
+
+                border-top:
+                    1px solid
+                    rgba(255,255,255,.08);
+
+                color: #8f858a;
+
+                font-size: 9px;
+            }
+
+            .mqa-foot label {
+                display: flex;
+
+                align-items: center;
+
+                gap: 4px;
+
+                cursor: pointer;
+            }
+
+            .mqa-foot input {
+                margin: 0;
+            }
+
+            @media (max-width: 620px) {
+                #${ROOT_ID} {
+                    left: 8px;
+                    bottom: 8px;
+                }
+
+                .mqa-panel {
+                    width:
+                        min(
+                            260px,
+                            calc(100vw - 16px)
+                        );
+                }
+            }
+        `;
+
+        document.head?.appendChild(style);
+    }
+
+    // ---------------------------------------------------------------------
+    // Installation
+    // ---------------------------------------------------------------------
+
+    function install() {
+        if (!document.body) {
+            return false;
+        }
+
+        injectStyle();
+
+        if (
+            document.getElementById(
+                ROOT_ID
+            )
+        ) {
+            return true;
+        }
+
+        const root =
+            document.createElement('div');
+
+        root.id =
+            ROOT_ID;
+
+        root.innerHTML = `
+            <div
+                class="mqa-panel"
+                hidden
+            >
+                <div class="mqa-head">
+
+                    <div class="mqa-title">
+                        <b>
+                            Quick Actions
+                        </b>
+
+                        <span
+                            id="mqa-context"
+                        >
+                            Geral
+                        </span>
+                    </div>
+
+                    <button
+                        type="button"
+                        class="mqa-close"
+                        aria-label="Fechar"
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+                <div
+                    class="mqa-actions"
+                    id="mqa-actions"
+                ></div>
+
+                <div class="mqa-foot">
+
+                    <span>
+                        Shift+Q
+                    </span>
+
+                    <label>
+                        <input
+                            id="mqa-shortcut"
+                            type="checkbox"
+                        >
+                        atalho ativo
+                    </label>
+
+                </div>
+            </div>
+
+            <button
+                type="button"
+                class="mqa-launcher"
+                title="Quick Actions — Shift+Q"
+            >
+                <span
+                    class="mqa-launcher-dot"
+                ></span>
+
+                <span
+                    class="mqa-launcher-label"
+                >
+                    Quick
+                </span>
+            </button>
+        `;
+
+        document.body.appendChild(root);
+
+        root
+            .querySelector(
+                '.mqa-launcher'
+            )
+            .addEventListener(
+                'click',
+                toggleMenu
+            );
+
+        root
+            .querySelector(
+                '.mqa-close'
+            )
+            .addEventListener(
+                'click',
+                closeMenu
+            );
+
+        const shortcut =
+            root.querySelector(
+                '#mqa-shortcut'
+            );
+
+        shortcut.checked =
+            state.prefs.shortcut;
+
+        shortcut.addEventListener(
+            'change',
+            () => {
+                state.prefs.shortcut =
+                    shortcut.checked;
+
+                savePrefs();
+            }
+        );
+
+        renderActions();
+
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Rendering
+    // ---------------------------------------------------------------------
+
+    function escapeHtml(value) {
+        return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    function renderActions() {
+        const root =
+            document.getElementById(
+                ROOT_ID
+            );
+
+        if (!root) {
+            return;
+        }
+
+        const context =
+            currentContext();
+
+        state.lastContext =
+            context;
+
+        root.querySelector(
+            '#mqa-context'
+        ).textContent =
+            contextLabel(context);
+
+        const container =
+            root.querySelector(
+                '#mqa-actions'
+            );
+
+        container.replaceChildren();
+
+        const ids =
+            CONTEXT_ACTIONS[context] ||
+            CONTEXT_ACTIONS.general;
+
+        const actions =
+            ids
+                .map(
+                    id =>
+                        ACTIONS[id]
+                )
+                .filter(
+                    action =>
+                        action?.available()
+                );
+
+        for (
+            const action of
+            actions
+        ) {
+            const button =
+                document.createElement(
+                    'button'
+                );
+
+            button.type =
+                'button';
+
+            button.className =
+                'mqa-action';
+
+            let label =
+                action.label;
+
+            let hint =
+                action.hint;
+
+            /*
+             * Reflect Auto Catch+ state when
+             * the other addon exists.
+             */
+            if (
+                action.id ===
+                'auto-catch'
+            ) {
+                const ac =
+                    document.querySelector(
+                        '#moth-ac-toggle'
+                    );
+
+                const on =
+                    ac
+                        ?.textContent
+                        ?.trim()
+                        .toUpperCase() ===
+                    'ON';
+
+                label =
+                    `Auto Catch: ${
+                        on
+                            ? 'ON'
+                            : 'OFF'
+                    }`;
+
+                hint =
+                    'Alternar captura automática';
+            }
+
+            if (
+                action.id ===
+                'capture-hud'
+            ) {
+                const check =
+                    document.querySelector(
+                        '#moth-ac-hud-check'
+                    );
+
+                label =
+                    `Capture HUD: ${
+                        check?.checked
+                            ? 'ON'
+                            : 'OFF'
+                    }`;
+            }
+
+            button.innerHTML = `
+                <b>
+                    ${escapeHtml(label)}
+                </b>
+
+                <span>
+                    ${escapeHtml(hint)}
+                </span>
+            `;
+
+            button.addEventListener(
+                'click',
+                action.run
+            );
+
+            container.appendChild(
+                button
+            );
+        }
+
+        if (!actions.length) {
+            const empty =
+                document.createElement(
+                    'div'
+                );
+
+            empty.textContent =
+                'Nenhuma ação disponível neste contexto.';
+
+            empty.style.cssText = `
+                grid-column: 1 / -1;
+                padding: 10px;
+                color: #aaa;
+                font-size: 11px;
+            `;
+
+            container.appendChild(
+                empty
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Open / close
+    // ---------------------------------------------------------------------
+
+    function toggleMenu() {
+        if (state.open) {
+            closeMenu();
+        } else {
+            openMenu();
+        }
+    }
+
+    function openMenu() {
+        const root =
+            document.getElementById(
+                ROOT_ID
+            );
+
+        if (!root) {
+            return;
+        }
+
+        renderActions();
+
+        root.querySelector(
+            '.mqa-panel'
+        ).hidden = false;
+
+        state.open = true;
+    }
+
+    function closeMenu() {
+        const root =
+            document.getElementById(
+                ROOT_ID
+            );
+
+        if (!root) {
+            return;
+        }
+
+        root.querySelector(
+            '.mqa-panel'
+        ).hidden = true;
+
+        state.open = false;
+    }
+
+    // ---------------------------------------------------------------------
+    // Shortcut
+    // ---------------------------------------------------------------------
+
+    function isTypingTarget(target) {
+        return (
+            target instanceof HTMLElement &&
+            !!target.closest(
+                [
+                    'input',
+                    'textarea',
+                    'select',
+                    '[contenteditable="true"]'
+                ].join(',')
+            )
+        );
+    }
+
+    document.addEventListener(
+        'keydown',
+        event => {
+            if (
+                !state.prefs.shortcut
+            ) {
+                return;
+            }
+
+            if (
+                isTypingTarget(
+                    event.target
+                )
+            ) {
+                return;
+            }
+
+            /*
+             * Shift+Q avoids Alt, Ctrl+K,
+             * browser menus, etc.
+             */
+            if (
+                event.shiftKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.metaKey &&
+                event.code === 'KeyQ'
+            ) {
+                event.preventDefault();
+
+                toggleMenu();
+
+                return;
+            }
+
+            if (
+                event.key ===
+                    'Escape' &&
+                state.open
+            ) {
+                event.preventDefault();
+
+                closeMenu();
+            }
+        },
+        true
+    );
+
+    // Close by clicking elsewhere.
+
+    document.addEventListener(
+        'pointerdown',
+        event => {
+            if (!state.open) {
+                return;
+            }
+
+            const root =
+                document.getElementById(
+                    ROOT_ID
+                );
+
+            if (
+                root &&
+                !root.contains(
+                    event.target
+                )
+            ) {
+                closeMenu();
+            }
+        },
+        true
+    );
+
+    // ---------------------------------------------------------------------
+    // Bootstrap / dynamic page handling
+    // ---------------------------------------------------------------------
+
+    function bootstrap() {
+        install();
+
+        const observer =
+            new MutationObserver(
+                () => {
+                    install();
+
+                    /*
+                     * Rebuild only if context
+                     * changed while open.
+                     */
+                    if (state.open) {
+                        const context =
+                            currentContext();
+
+                        if (
+                            context !==
+                            state.lastContext
+                        ) {
+                            renderActions();
+                        }
+                    }
+                }
+            );
+
+        observer.observe(
+            document.documentElement,
+            {
+                childList: true,
+                subtree: true,
+
+                attributes: true,
+
+                attributeFilter: [
+                    'class',
+                    'aria-expanded'
+                ]
+            }
+        );
+    }
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            bootstrap,
+            {
+                once: true
+            }
+        );
+    } else {
+        bootstrap();
+    }
+})();
