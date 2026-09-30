@@ -1503,15 +1503,15 @@
                     reason ||
                     'no explicit rejection';
             }
-        } else if (accepted) {
-            probe.result =
-                'expected response received';
         } else if (error) {
             probe.result =
                 'server error';
         } else if (notice) {
             probe.result =
                 'server notice / likely rejection';
+        } else if (accepted) {
+            probe.result =
+                'expected response received';
         } else if (
             probe.changes.length
         ) {
