@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.1.0
+// @version      5.2.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -66,7 +66,13 @@
 
     const inventoryBaseline = new Map();
     const targetStates = new Map();
-    const recentProtocolFingerprints = new Map();
+
+    /*
+     * Local click -> outgoing ball.throw -> incoming batalha.ev[k="bola"].
+     * The server slot is the authoritative correlation key.
+     */
+    const pendingLocalAttempts = [];
+    const pendingBySlot = new Map();
 
     let stats = freshStats();
     let protocolHookInstalled = false;
@@ -365,6 +371,10 @@
                     lastBallKey: null,
                     lastBallLabel: null,
                     lastResult: null,
+                    slot: null,
+                    lastServerBallId: null,
+                    lastChance: null,
+                    shiny: false,
                     captured: false,
                     capturedAt: 0
                 };
@@ -398,8 +408,21 @@
             }
         }
 
-        for (const [fingerprint, time] of recentProtocolFingerprints) {
-            if (now - time > 10000) recentProtocolFingerprints.delete(fingerprint);
+        while (
+            pendingLocalAttempts.length &&
+            now - pendingLocalAttempts[0].createdAt > 12000
+        ) {
+            pendingLocalAttempts.shift();
+        }
+
+        for (const [slot, state] of pendingBySlot) {
+            if (
+                state.captured ||
+                !state.lastAttemptAt ||
+                now - state.lastAttemptAt > 12000
+            ) {
+                pendingBySlot.delete(slot);
+            }
         }
     }
 
@@ -447,158 +470,6 @@
     // Authoritative WebSocket capture result
     // ---------------------------------------------------------------------
 
-    function primitive(value) {
-        return (
-            value === null ||
-            ['string', 'number', 'boolean'].includes(typeof value)
-        );
-    }
-
-    function outcomeValue(value) {
-        if (typeof value === 'boolean') return value;
-        if (value === 1 || value === '1') return true;
-        if (value === 0 || value === '0') return false;
-
-        const text = normalize(value);
-
-        if (/^(success|successful|sucesso|captured|caught|capturado|capturada|capturou|pegou|ok)$/.test(text)) {
-            return true;
-        }
-
-        if (/^(fail|failed|failure|falha|falhou|escaped|escape|fugiu|nao|não)$/.test(text)) {
-            return false;
-        }
-
-        return null;
-    }
-
-    function captureCandidateFromObject(object, path) {
-        if (!object || typeof object !== 'object' || Array.isArray(object)) return null;
-
-        const entries = Object.entries(object);
-        const normalizedEntries = entries.map(([key, value]) => [
-            normalize(key),
-            primitive(value) ? normalize(value) : ''
-        ]);
-
-        const context = normalizedEntries
-            .flatMap(([key, value]) => [key, value])
-            .join(' ');
-
-        const captureContext = /captur|capture|caught|catch/.test(context);
-        const ballContext = /poke.?ball|pokeball|bola|ball/.test(context);
-
-        let success = null;
-        let explicitCaptureOutcome = false;
-
-        for (const [rawKey, value] of entries) {
-            const key = normalize(rawKey);
-
-            if (
-                /^(capturou|capturado|capturada|captured|caught)$/.test(key)
-            ) {
-                const parsed = outcomeValue(value);
-                if (parsed !== null) {
-                    success = parsed;
-                    explicitCaptureOutcome = true;
-                }
-            }
-
-            if (
-                /^(success|sucesso|ok|resultado|result|status|estado)$/.test(key)
-            ) {
-                const parsed = outcomeValue(value);
-                if (parsed !== null && captureContext) success = parsed;
-            }
-
-            if (
-                /^(tipo|type|evento|event|acao|action|op|kind)$/.test(key)
-            ) {
-                const type = normalize(value);
-
-                if (/capturad|caught|capture.?success|captura.?sucesso/.test(type)) {
-                    success = true;
-                    explicitCaptureOutcome = true;
-                } else if (/captur.*(?:fail|falh)|capture.*fail/.test(type)) {
-                    success = false;
-                    explicitCaptureOutcome = true;
-                }
-            }
-        }
-
-        if (
-            success === null ||
-            (!captureContext && !explicitCaptureOutcome) ||
-            (!captureContext && ballContext && !explicitCaptureOutcome)
-        ) {
-            return null;
-        }
-
-        const ids = new Set();
-        let name = '';
-        let type = '';
-
-        for (const [rawKey, value] of entries) {
-            if (!primitive(value)) continue;
-
-            const key = normalize(rawKey);
-
-            if (
-                /(?:^|_)(?:id|uid)$/.test(key) ||
-                /(?:pokemon|poke|caido|corpo|alvo|target).*id/.test(key)
-            ) {
-                if (value !== null && value !== '') ids.add(String(value));
-            }
-
-            if (
-                !name &&
-                /^(?:nome|name|species|especie|pokemon_name|pokemon_nome)$/.test(key)
-            ) {
-                name = String(value);
-            }
-
-            if (
-                !type &&
-                /^(?:tipo|type|evento|event|acao|action|op|kind)$/.test(key)
-            ) {
-                type = String(value);
-            }
-        }
-
-        return {
-            success,
-            ids,
-            name,
-            type: type || path,
-            path
-        };
-    }
-
-    function findCaptureCandidates(value, path = 'root', depth = 0, out = []) {
-        if (depth > 7 || value == null) return out;
-
-        if (Array.isArray(value)) {
-            for (let i = 0; i < value.length; i++) {
-                findCaptureCandidates(value[i], `${path}[${i}]`, depth + 1, out);
-            }
-
-            return out;
-        }
-
-        if (typeof value !== 'object') return out;
-
-        const candidate = captureCandidateFromObject(value, path);
-        if (candidate) out.push(candidate);
-
-        for (const [key, child] of Object.entries(value)) {
-            if (child && typeof child === 'object') {
-                findCaptureCandidates(child, `${path}.${key}`, depth + 1, out);
-            }
-        }
-
-        return out;
-    }
-
     function decodeProtocolData(data) {
         if (typeof data === 'string') {
             try {
@@ -619,122 +490,242 @@
         return null;
     }
 
-    function candidateFingerprint(candidate) {
-        return [
-            candidate.success ? '1' : '0',
-            normalize(candidate.type),
-            [...candidate.ids].sort().join(','),
-            normalize(candidate.name)
-        ].join('|');
-    }
-
-    function matchTargetForProtocol(candidate) {
+    function newestUnboundLocalAttempt() {
         const now = Date.now();
 
-        let states = [...targetStates.values()]
+        for (let i = pendingLocalAttempts.length - 1; i >= 0; i--) {
+            const pending = pendingLocalAttempts[i];
+
+            if (
+                !pending.bound &&
+                now - pending.createdAt < 1600
+            ) {
+                return pending;
+            }
+        }
+
+        return null;
+    }
+
+    function bindOutgoingThrow(message) {
+        if (
+            !message ||
+            message.t !== 'ball.throw' ||
+            message.slot === undefined ||
+            message.slot === null
+        ) {
+            return;
+        }
+
+        const pending = newestUnboundLocalAttempt();
+
+        if (!pending) {
+            return;
+        }
+
+        const slot = String(message.slot);
+
+        pending.bound = true;
+        pending.slot = slot;
+
+        pending.state.slot = slot;
+        pending.state.lastServerBallId =
+            message.ballId ?? null;
+
+        pendingBySlot.set(
+            slot,
+            pending.state
+        );
+
+        protocolLastType = 'ball.throw';
+    }
+
+    function stateForBallResult(event) {
+        if (
+            event?.slot === undefined ||
+            event?.slot === null
+        ) {
+            return null;
+        }
+
+        const slot = String(event.slot);
+        const direct = pendingBySlot.get(slot);
+
+        if (direct) {
+            return direct;
+        }
+
+        const now = Date.now();
+
+        return [...targetStates.values()]
             .filter(state =>
                 !state.captured &&
+                state.slot === slot &&
                 state.lastAttemptAt > 0 &&
                 now - state.lastAttemptAt < 12000
-            );
-
-        if (!states.length) return null;
-
-        if (candidate.ids.size) {
-            const exact = states.find(state =>
-                [...candidate.ids].some(id => state.ids.has(id))
-            );
-
-            if (exact) return exact;
-        }
-
-        const candidateName = normalize(candidate.name);
-
-        if (candidateName) {
-            const named = states
-                .filter(state => {
-                    const stateName = normalize(state.name);
-                    return (
-                        stateName === candidateName ||
-                        stateName.includes(candidateName) ||
-                        candidateName.includes(stateName)
-                    );
-                })
-                .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0];
-
-            if (named) return named;
-        }
-
-        // The result is still authoritative; only target correlation falls
-        // back to the most recent unresolved throw.
-        return states.sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0];
+            )
+            .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0]
+            || null;
     }
 
-    function handleCaptureCandidate(candidate) {
-        const now = Date.now();
-        const fingerprint = candidateFingerprint(candidate);
-        const previous = recentProtocolFingerprints.get(fingerprint);
-
-        // One server result may be represented more than once in nested
-        // payload objects. De-duplicate identical semantic results.
-        if (previous && now - previous < 1800) return;
-        recentProtocolFingerprints.set(fingerprint, now);
+    function handleBallResult(event) {
+        if (
+            !event ||
+            event.k !== 'bola' ||
+            typeof event.sucesso !== 'boolean'
+        ) {
+            return;
+        }
 
         protocolCaptureSignals++;
-        protocolLastType = candidate.type || candidate.path || 'capture';
+        protocolLastType =
+            event.sucesso
+                ? 'bola · captured'
+                : 'bola · failed';
 
-        const state = matchTargetForProtocol(candidate);
+        const state = stateForBallResult(event);
 
         if (!state) {
-            stats.status = candidate.success
-                ? 'Capture signal received · no matching target'
-                : 'Capture failure signal · no matching target';
+            /*
+             * This may be a manual/native-auto throw. It is authoritative,
+             * but it does not belong to this addon's statistics.
+             */
+            return;
+        }
+
+        const slot = String(event.slot);
+
+        state.lastServerBallId =
+            event.ballId ?? state.lastServerBallId;
+
+        state.lastChance =
+            typeof event.chance === 'number'
+                ? event.chance
+                : null;
+
+        state.shiny =
+            Boolean(event.shiny);
+
+        state.lastResult =
+            event.sucesso
+                ? 'captured'
+                : 'failed';
+
+        pendingBySlot.delete(slot);
+
+        if (!event.sucesso) {
+            stats.status =
+                `${state.name} · failed · ${state.throws} throws`;
+
             updateUI();
             return;
         }
 
-        state.lastResult = candidate.success ? 'captured' : 'failed';
-
-        if (!candidate.success) {
-            stats.status = `${state.name} · capture failed · ${state.throws} throws`;
-            updateUI();
+        if (state.captured) {
             return;
         }
-
-        if (state.captured) return;
 
         state.captured = true;
-        state.capturedAt = now;
+        state.capturedAt = Date.now();
+
         stats.captures++;
-        stats.status = `${state.name} · captured · ${state.throws} throws`;
+        stats.status =
+            `${state.name} · captured · ${state.throws} throws`;
 
         updateUI();
     }
 
-    function inspectProtocolMessage(data) {
+    function handleBattleWarning(event) {
+        if (
+            event?.k !== 'aviso' ||
+            !/nao esta mais no chao|não está mais no chão/i.test(
+                normalize(event.msg)
+            )
+        ) {
+            return;
+        }
+
+        const state = currentTargetState();
+
+        if (!state) {
+            return;
+        }
+
+        state.lastResult = 'gone';
+        stats.status =
+            `${state.name} · no longer on ground`;
+
+        if (state.slot !== null) {
+            pendingBySlot.delete(
+                String(state.slot)
+            );
+        }
+
+        updateUI();
+    }
+
+    function inspectIncomingProtocolMessage(data) {
         protocolMessages++;
 
         const decoded = decodeProtocolData(data);
-        if (!decoded) return;
 
-        for (const candidate of findCaptureCandidates(decoded)) {
-            handleCaptureCandidate(candidate);
+        if (
+            !decoded ||
+            decoded.t !== 'batalha' ||
+            !Array.isArray(decoded.ev)
+        ) {
+            return;
         }
+
+        for (const event of decoded.ev) {
+            if (event?.k === 'bola') {
+                handleBallResult(event);
+            } else if (event?.k === 'aviso') {
+                handleBattleWarning(event);
+            }
+        }
+    }
+
+    function inspectOutgoingProtocolMessage(data) {
+        const decoded = decodeProtocolData(data);
+
+        if (!decoded) {
+            return;
+        }
+
+        bindOutgoingThrow(decoded);
     }
 
     function attachProtocolSocket(socket) {
         protocolSockets++;
 
         socket.addEventListener('message', event => {
-            if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+            if (
+                typeof Blob !== 'undefined' &&
+                event.data instanceof Blob
+            ) {
                 event.data.text()
-                    .then(inspectProtocolMessage)
+                    .then(inspectIncomingProtocolMessage)
                     .catch(() => {});
+
                 return;
             }
 
-            inspectProtocolMessage(event.data);
+            inspectIncomingProtocolMessage(
+                event.data
+            );
         });
+
+        const nativeSend = socket.send;
+
+        socket.send = function (data) {
+            inspectOutgoingProtocolMessage(data);
+
+            return nativeSend.call(
+                this,
+                data
+            );
+        };
     }
 
     function installProtocolHook() {
@@ -759,13 +750,20 @@
         try {
             page.WebSocket = WrappedWebSocket;
             page.__mothAutoCatchWebSocketHook = true;
-            protocolHookInstalled = page.WebSocket === WrappedWebSocket;
+            protocolHookInstalled =
+                page.WebSocket === WrappedWebSocket;
 
             if (protocolHookInstalled) {
-                console.info('[PokéIdle Auto Catch+] WebSocket capture hook installed');
+                console.info(
+                    '[PokéIdle Auto Catch+] exact ball protocol hook installed'
+                );
             }
         } catch (error) {
-            console.warn('[PokéIdle Auto Catch+] WebSocket hook failed', error);
+            console.warn(
+                '[PokéIdle Auto Catch+] WebSocket hook failed',
+                error
+            );
+
             protocolHookInstalled = false;
         }
 
@@ -859,12 +857,11 @@
                 return;
             }
 
-            if (!fireClick(clickTarget)) {
-                stats.status = 'Target click failed';
-                updateUI();
-                return;
-            }
-
+            /*
+             * Register the local attempt BEFORE click(). PokéIdle sends
+             * ball.throw synchronously from its click handler, so the
+             * outgoing WebSocket hook can bind its exact server slot.
+             */
             const now = Date.now();
 
             state.throws++;
@@ -876,6 +873,30 @@
             state.lastResult = 'pending';
 
             stats.attempts++;
+
+            const pending = {
+                state,
+                createdAt: now,
+                bound: false,
+                slot: null
+            };
+
+            pendingLocalAttempts.push(pending);
+
+            if (!fireClick(clickTarget)) {
+                pendingLocalAttempts.splice(
+                    pendingLocalAttempts.indexOf(pending),
+                    1
+                );
+
+                state.throws--;
+                stats.attempts--;
+
+                stats.status = 'Target click failed';
+                updateUI();
+                return;
+            }
+
             stats.status = formatTargetState(state);
 
             /*
@@ -915,7 +936,8 @@
         stats = freshStats();
         inventoryBaseline.clear();
         targetStates.clear();
-        recentProtocolFingerprints.clear();
+        pendingLocalAttempts.length = 0;
+        pendingBySlot.clear();
 
         syncInventoryUsage();
         updateUI();
@@ -1328,7 +1350,28 @@
 
     function setText(selector, value) {
         const el = q(selector);
-        if (el) el.textContent = String(value);
+
+        if (!el) {
+            return;
+        }
+
+        const next = String(value);
+
+        if (el.textContent !== next) {
+            el.textContent = next;
+        }
+    }
+
+    function setClass(el, className, enabled) {
+        if (
+            el &&
+            el.classList.contains(className) !== enabled
+        ) {
+            el.classList.toggle(
+                className,
+                enabled
+            );
+        }
     }
 
     function protocolLabel() {
@@ -1349,8 +1392,24 @@
         const toggle = q('#moth-ac-toggle');
 
         if (toggle) {
-            toggle.textContent = settings.enabled ? 'ON' : 'OFF';
-            toggle.classList.toggle('on', settings.enabled);
+            const toggleText =
+                settings.enabled
+                    ? 'ON'
+                    : 'OFF';
+
+            if (
+                toggle.textContent !==
+                toggleText
+            ) {
+                toggle.textContent =
+                    toggleText;
+            }
+
+            setClass(
+                toggle,
+                'on',
+                settings.enabled
+            );
         }
 
         setText('#moth-ac-status', stats.status);
@@ -1363,7 +1422,18 @@
         const hud = q('#moth-capture-hud');
 
         if (hud) {
-            hud.style.display = settings.showHud ? 'block' : 'none';
+            const display =
+                settings.showHud
+                    ? 'block'
+                    : 'none';
+
+            if (
+                hud.style.display !==
+                display
+            ) {
+                hud.style.display =
+                    display;
+            }
         }
 
         setText('#moth-hud-status', settings.enabled ? stats.status : 'Paused');
@@ -1408,7 +1478,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5.1 loaded');
+        console.info('[PokéIdle Auto Catch+] v5.2 loaded');
     }
 
     if (document.readyState === 'loading') {
