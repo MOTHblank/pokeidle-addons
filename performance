@@ -1145,7 +1145,8 @@
     }
 
     function updateAdaptiveDecision() {
-        const p = profile();
+        const p =
+            profile();
 
         if (!p.adaptive) {
             return;
@@ -1155,19 +1156,38 @@
             (
                 Date.now() -
                 lastActivity
-            ) / 1000;
+            ) /
+            1000;
 
         if (
-            document.hidden ||
-            (
-                p.idleSeconds > 0 &&
-                idleSeconds >=
-                    p.idleSeconds
-            )
+            document.hidden
         ) {
-            adaptiveDecision = '2';
-            heavyStreak = 0;
-            lightStreak = 0;
+            adaptiveDecision =
+                p.backgroundScene;
+
+            adaptiveCandidate =
+                adaptiveDecision;
+
+            adaptiveCandidateStreak =
+                0;
+
+            return;
+        }
+
+        if (
+            p.idleSeconds > 0 &&
+            idleSeconds >=
+                p.idleSeconds
+        ) {
+            adaptiveDecision =
+                p.idleScene;
+
+            adaptiveCandidate =
+                adaptiveDecision;
+
+            adaptiveCandidateStreak =
+                0;
+
             return;
         }
 
@@ -1175,39 +1195,82 @@
             Date.now() <
             interactionBoostUntil
         ) {
-            adaptiveDecision = '30';
+            adaptiveDecision =
+                p.scene;
+
+            adaptiveCandidate =
+                adaptiveDecision;
+
+            adaptiveCandidateStreak =
+                0;
+
             return;
         }
 
-        if (pressure === 'heavy') {
-            heavyStreak++;
-            lightStreak = 0;
-        } else if (
-            pressure === 'light'
+        const desired =
+            pressure ===
+                'heavy'
+                ? '12'
+                : pressure ===
+                    'medium'
+                    ? '20'
+                    : p.scene;
+
+        if (
+            desired ===
+            adaptiveDecision
         ) {
-            lightStreak++;
-            heavyStreak = 0;
-        } else {
-            heavyStreak = 0;
-            lightStreak = 0;
+            adaptiveCandidate =
+                desired;
+
+            adaptiveCandidateStreak =
+                0;
+
+            return;
         }
 
-        /*
-         * Hysteresis prevents 30/15 bouncing when load sits near a
-         * threshold.
-         */
         if (
-            adaptiveDecision === '30' &&
-            heavyStreak >= 2
+            adaptiveCandidate ===
+                desired
         ) {
-            adaptiveDecision = '15';
-            heavyStreak = 0;
-        } else if (
-            adaptiveDecision === '15' &&
-            lightStreak >= 4
+            adaptiveCandidateStreak++;
+        } else {
+            adaptiveCandidate =
+                desired;
+
+            adaptiveCandidateStreak =
+                1;
+        }
+
+        const currentFps =
+            Number(
+                adaptiveDecision
+            ) ||
+            0;
+
+        const desiredFps =
+            Number(desired) ||
+            0;
+
+        /*
+         * Reduce quickly under sustained load, recover more slowly so the
+         * renderer does not oscillate around a threshold.
+         */
+        const required =
+            desiredFps <
+                currentFps
+                ? 2
+                : 4;
+
+        if (
+            adaptiveCandidateStreak >=
+            required
         ) {
-            adaptiveDecision = '30';
-            lightStreak = 0;
+            adaptiveDecision =
+                desired;
+
+            adaptiveCandidateStreak =
+                0;
         }
     }
 
@@ -1369,6 +1432,7 @@
                 currentMode === '2'
         );
 
+        syncNativeOptimized();
         syncChatPolicy();
         updateUI();
     }
@@ -1386,7 +1450,14 @@
         if (
             profile().adaptive
         ) {
-            adaptiveDecision = '30';
+            adaptiveDecision =
+                profile().scene;
+
+            adaptiveCandidate =
+                adaptiveDecision;
+
+            adaptiveCandidateStreak =
+                0;
         }
 
         applyMode();
@@ -1412,7 +1483,34 @@
 
     document.addEventListener(
         'visibilitychange',
-        applyMode
+        () => {
+            if (
+                !document.hidden
+            ) {
+                lastActivity =
+                    Date.now();
+
+                interactionBoostUntil =
+                    Date.now() +
+                    1500;
+
+                if (
+                    profile()
+                        .adaptive
+                ) {
+                    adaptiveDecision =
+                        profile().scene;
+
+                    adaptiveCandidate =
+                        adaptiveDecision;
+
+                    adaptiveCandidateStreak =
+                        0;
+                }
+            }
+
+            applyMode();
+        }
     );
 
     // ------------------------------------------------------------------
@@ -1572,7 +1670,7 @@
 
             #${PANEL_ID} .mpp-metrics {
                 display: grid;
-                grid-template-columns: repeat(3,1fr);
+                grid-template-columns: repeat(4,1fr);
                 gap: 4px;
                 margin-bottom: 7px;
             }
@@ -1624,12 +1722,22 @@
     }
 
     function labelForMode(mode) {
-        return {
-            full: 'Full',
-            '30': '30fps',
-            '15': '15fps',
-            '2': '2fps'
-        }[mode] || mode;
+        if (
+            mode ===
+                'full'
+        ) {
+            return 'Full';
+        }
+
+        const fps =
+            Number(mode);
+
+        return Number.isFinite(
+            fps
+        )
+            ? fps +
+              'fps'
+            : mode;
     }
 
     function labelForUi(level) {
@@ -1739,6 +1847,11 @@
                 <div class="mpp-metric">
                     <b id="mpp-scene-runs">0</b>
                     <span>campo runs/s</span>
+                </div>
+
+                <div class="mpp-metric">
+                    <b id="mpp-ui-skips">0</b>
+                    <span>UI skips/s</span>
                 </div>
 
                 <div class="mpp-metric">
@@ -1937,6 +2050,14 @@
 
             setText(
                 q(
+                    '#mpp-ui-skips',
+                    panel
+                ),
+                uiTimerSkippedPerSecond
+            );
+
+            setText(
+                q(
                     '#mpp-long',
                     panel
                 ),
@@ -1970,7 +2091,7 @@
                 'performance'
             ) {
                 statusText =
-                    'Performance: native scene rate, nonessential effects reduced; core UI preserved.';
+                    'Performance: 30fps active · 15fps idle · native Optimized · hot UI timers throttled · core controls preserved.';
             } else if (
                 profile().adaptive
             ) {
@@ -1978,17 +2099,39 @@
                     'Adaptive · ' +
                     pressure +
                     ' load · ' +
+                    labelForMode(
+                        currentMode
+                    ) +
+                    ' · ' +
                     Math.round(
                         jankPerSecond * 10
                     ) / 10 +
-                    ' jank/s · skipped ' +
+                    ' jank/s · scene skipped ' +
                     campoSkippedPerSecond +
-                    '/s.';
+                    '/s · UI skipped ' +
+                    uiTimerSkippedPerSecond +
+                    '/s' +
+                    (
+                        npcLoopFound
+                            ? ' · NPC ' +
+                              npcRunsPerSecond +
+                              '/s'
+                            : ''
+                    ) +
+                    '.';
             } else {
                 statusText =
-                    'campo.mjs renderer targeted · skipped ' +
+                    'Upstream render/UI loops targeted · scene skipped ' +
                     campoSkippedPerSecond +
-                    '/s.';
+                    '/s · UI skipped ' +
+                    uiTimerSkippedPerSecond +
+                    '/s · native Optimized ' +
+                    (
+                        nativeOptimizedEnabled()
+                            ? 'on'
+                            : 'off'
+                    ) +
+                    '.';
             }
 
             setText(
@@ -2059,15 +2202,31 @@
     // Tick / bootstrap
     // ------------------------------------------------------------------
 
-    setInterval(() => {
+    nativeSetInterval(() => {
         campoRunsPerSecond =
             campoRunsWindow;
 
         campoSkippedPerSecond =
             campoSkippedWindow;
 
+        uiTimerRunsPerSecond =
+            uiTimerRunsWindow;
+
+        uiTimerSkippedPerSecond =
+            uiTimerSkippedWindow;
+
+        npcRunsPerSecond =
+            npcRunsWindow;
+
+        npcSkippedPerSecond =
+            npcSkippedWindow;
+
         campoRunsWindow = 0;
         campoSkippedWindow = 0;
+        uiTimerRunsWindow = 0;
+        uiTimerSkippedWindow = 0;
+        npcRunsWindow = 0;
+        npcSkippedWindow = 0;
 
         prunePerformanceSamples();
         updateAdaptiveDecision();
@@ -2084,13 +2243,14 @@
 
         applyMode();
 
-        setInterval(() => {
+        nativeSetInterval(() => {
             installCampoHook();
+            installUiTimerHook();
             ensureTrigger();
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v4.2.1 loaded'
+            '[PokéIdle Performance+] v5.0.0 loaded'
         );
     }
 
