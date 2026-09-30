@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Experimental Actions
 // @namespace    moth.pokeidle
-// @version      1.1.0
-// @description  One-shot client/server boundary probes for PokéIdle actions that the normal UI restricts by context.
+// @version      1.2.0
+// @description  One-shot protocol probes for untested PokéIdle actions, read surfaces, idempotency, and server validation paths.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -163,60 +163,96 @@
     }
 
     function summary(state = runtime.gameState) {
+        if (!state) {
+            return {
+                scene: 'unknown',
+                noCentro: false,
+                huntSlug: null,
+                casaDentro: null,
+                bossArena: false,
+                mistico: false,
+                activeId: null,
+                bike: null,
+                gold: null,
+                diamonds: null,
+                gems: null,
+                ballsTotal: null,
+                itemsTotal: null,
+                alive: 0,
+                hp: 0,
+                maxHp: 0,
+                team: 0,
+                teamSlots: '',
+                automation: null,
+                tutorialSeen: null,
+                skinsWorn: 0,
+                escapeRope: null
+            };
+        }
+
         const pokemons =
-            Array.isArray(state && state.pokemons)
+            Array.isArray(state.pokemons)
                 ? state.pokemons
                 : [];
+
+        const team =
+            pokemons
+                .filter(
+                    pokemon =>
+                        pokemon.slot != null
+                )
+                .sort(
+                    (a, b) =>
+                        Number(a.slot) -
+                        Number(b.slot)
+                );
 
         return {
             scene:
                 sceneLabel(state),
             noCentro:
-                Boolean(state && state.noCentro),
+                Boolean(state.noCentro),
             huntSlug:
-                state && state.huntSlug != null
+                state.huntSlug != null
                     ? state.huntSlug
                     : null,
             casaDentro:
-                state &&
                 state.casa &&
                 state.casa.dentro != null
                     ? state.casa.dentro
                     : null,
             bossArena:
                 Boolean(
-                    state &&
                     state.boss &&
                     state.boss.arena
                 ),
             mistico:
-                Boolean(state && state.mistico),
+                Boolean(state.mistico),
             activeId:
-                state && state.activeId != null
+                state.activeId != null
                     ? state.activeId
                     : null,
             bike:
-                state &&
                 state.bicicleta &&
                 state.bicicleta.equipada != null
                     ? state.bicicleta.equipada
                     : null,
             gold:
-                state && state.gold != null
+                state.gold != null
                     ? Number(state.gold)
                     : null,
             diamonds:
-                state && state.diamonds != null
+                state.diamonds != null
                     ? Number(state.diamonds)
                     : null,
             gems:
-                state && state.gems != null
+                state.gems != null
                     ? Number(state.gems)
-                    : state && state.gemas != null
+                    : state.gemas != null
                         ? Number(state.gemas)
                         : null,
             ballsTotal:
-                state && state.balls &&
+                state.balls &&
                 typeof state.balls === 'object'
                     ? Object.values(state.balls)
                         .reduce(
@@ -230,7 +266,7 @@
                         )
                     : null,
             itemsTotal:
-                state && state.items &&
+                state.items &&
                 typeof state.items === 'object'
                     ? Object.values(state.items)
                         .reduce(
@@ -254,10 +290,7 @@
                         sum +
                         Math.max(
                             0,
-                            Number(
-                                pokemon.hp ||
-                                0
-                            )
+                            Number(pokemon.hp || 0)
                         ),
                     0
                 ),
@@ -267,18 +300,39 @@
                         sum +
                         Math.max(
                             0,
-                            Number(
-                                pokemon.maxHp ||
-                                0
-                            )
+                            Number(pokemon.maxHp || 0)
                         ),
                     0
                 ),
             team:
+                team.length,
+            teamSlots:
+                team
+                    .map(
+                        pokemon =>
+                            String(pokemon.id) +
+                            ':' +
+                            String(pokemon.slot)
+                    )
+                    .join(','),
+            automation:
+                isPlainObject(state.automation)
+                    ? JSON.stringify(state.automation)
+                    : null,
+            tutorialSeen:
+                state.tutorialVisto != null
+                    ? Boolean(state.tutorialVisto)
+                    : null,
+            skinsWorn:
                 pokemons.filter(
                     pokemon =>
-                        pokemon.slot != null
-                ).length
+                        pokemon.skin != null
+                ).length,
+            escapeRope:
+                state.items &&
+                typeof state.items === 'object'
+                    ? Number(state.items[70010] || 0)
+                    : null
         };
     }
 
@@ -316,83 +370,35 @@
         probe
     ) {
         const map = {
-            'remote-heal': [
-                'hp',
-                'alive'
+            'team-slot-reassert': [
+                'teamSlots',
+                'activeId'
             ],
-            'center-move-pulse': [
+            'automation-reassert': [
+                'automation'
+            ],
+            'tutorial-reassert': [
+                'tutorialSeen'
+            ],
+            'skin-remove-unskinned': [
+                'skinsWorn'
+            ],
+            'invalid-ball-slot': [
+                'ballsTotal'
+            ],
+            'escape-rope-empty': [
+                'itemsTotal',
+                'escapeRope',
                 'scene',
                 'noCentro',
-                'casaDentro',
                 'huntSlug'
             ],
-            'house-exit-outside': [
-                'scene',
-                'casaDentro',
-                'noCentro',
-                'huntSlug'
-            ],
-            'boss-exit-outside': [
+            'invalid-boss-key': [
                 'scene',
                 'bossArena',
                 'mistico',
                 'huntSlug',
                 'noCentro'
-            ],
-            'active-reassert': [
-                'activeId'
-            ],
-            'house-reassert': [
-                'scene',
-                'casaDentro'
-            ],
-            'xpshare-reassert': [],
-            'bike-reassert': [
-                'bike'
-            ],
-            'remote-shop-ball': [
-                'gold'
-            ],
-            'cycle-active': [
-                'activeId'
-            ],
-            'xpshare-remove': [],
-            'force-center': [
-                'scene',
-                'noCentro',
-                'huntSlug'
-            ],
-            'enter-house-from-hunt': [
-                'scene',
-                'casaDentro',
-                'huntSlug',
-                'noCentro'
-            ],
-            'activate-stored-house': [],
-            'reselect-hunt': [
-                'scene',
-                'huntSlug'
-            ],
-            'unequip-bike': [
-                'bike'
-            ],
-            'claim-pass': [
-                'gold',
-                'diamonds',
-                'gems',
-                'ballsTotal',
-                'itemsTotal'
-            ],
-            'claim-affiliate': [
-                'diamonds',
-                'gems'
-            ],
-            'claim-zero-all': [
-                'gold',
-                'diamonds',
-                'gems',
-                'ballsTotal',
-                'itemsTotal'
             ]
         };
 
@@ -427,127 +433,6 @@
                     change.split(':')[0]
                 )
         );
-    }
-
-    function probeSpecificSuccess(
-        probe,
-        after
-    ) {
-        if (!probe) {
-            return false;
-        }
-
-        if (
-            probe.id ===
-                'remote-heal'
-        ) {
-            return (
-                Number(
-                    after &&
-                    after.hp
-                ) >
-                Number(
-                    probe.before &&
-                    probe.before.hp
-                )
-            );
-        }
-
-        if (
-            probe.id ===
-                'remote-shop-ball'
-        ) {
-            return (
-                Number(
-                    after &&
-                    after.gold
-                ) <
-                Number(
-                    probe.before &&
-                    probe.before.gold
-                )
-            );
-        }
-
-        if (
-            probe.id ===
-                'cycle-active'
-        ) {
-            return (
-                after &&
-                after.activeId !==
-                    probe.before.activeId
-            );
-        }
-
-        if (
-            probe.id ===
-                'force-center'
-        ) {
-            return Boolean(
-                after &&
-                after.noCentro
-            );
-        }
-
-        if (
-            probe.id ===
-                'enter-house-from-hunt'
-        ) {
-            return Boolean(
-                after &&
-                after.casaDentro != null
-            );
-        }
-
-        if (
-            probe.id ===
-                'unequip-bike'
-        ) {
-            return Boolean(
-                after &&
-                after.bike == null &&
-                probe.before.bike != null
-            );
-        }
-
-        if (
-            probe.id === 'claim-pass' ||
-            probe.id === 'claim-affiliate' ||
-            probe.id === 'claim-zero-all'
-        ) {
-            const rewardKeys = [
-                'gold',
-                'diamonds',
-                'gems',
-                'ballsTotal',
-                'itemsTotal'
-            ];
-
-            return rewardKeys.some(
-                key => {
-                    const before =
-                        Number(
-                            probe.before &&
-                            probe.before[key]
-                        );
-
-                    const afterValue =
-                        Number(
-                            after &&
-                            after[key]
-                        );
-
-                    return (
-                        Number.isFinite(before) &&
-                        Number.isFinite(afterValue) &&
-                        afterValue > before
-                    );
-                }
-            );
-        }
-
-        return false;
     }
 
     function compactPayload(payload) {
@@ -696,6 +581,52 @@
         if (!probe) {
             updateUI();
             return;
+        }
+
+        if (
+            Array.isArray(probe.expect) &&
+            probe.expect.includes(
+                message.t
+            )
+        ) {
+            addProbeEvent(
+                'expected response: ' +
+                String(message.t),
+                'accepted'
+            );
+        }
+
+        const rejection =
+            message.recusa ||
+            message.erro ||
+            message.error ||
+            null;
+
+        if (message.t === 'erro') {
+            addProbeEvent(
+                'error: ' +
+                String(
+                    message.msg ||
+                    message.texto ||
+                    message.mensagem ||
+                    rejection ||
+                    '(no text)'
+                ),
+                'error'
+            );
+        } else if (rejection) {
+            addProbeEvent(
+                String(message.t || 'message') +
+                ' rejection: ' +
+                (
+                    typeof rejection === 'string'
+                        ? rejection
+                        : compactPayload(
+                            rejection
+                        )
+                ),
+                'notice'
+            );
         }
 
         if (message.t === 'batalha' && Array.isArray(message.ev)) {
@@ -904,96 +835,86 @@
             );
     }
 
-    function ownedHouses() {
-        const list =
+    function allPokemon() {
+        return Array.isArray(
             runtime.gameState &&
-            runtime.gameState.casa &&
-            Array.isArray(runtime.gameState.casa.lista)
-                ? runtime.gameState.casa.lista
-                : [];
-
-        return list.filter(
-            house =>
-                house &&
-                house.id != null &&
-                !house.anunciada
-        );
+            runtime.gameState.pokemons
+        )
+            ? runtime.gameState.pokemons
+            : [];
     }
 
-    function inUseHouse() {
-        const houses =
-            ownedHouses();
+    function currentAutomation() {
+        const automation =
+            runtime.gameState &&
+            runtime.gameState.automation;
 
-        return (
-            houses.find(
-                house =>
-                    Array.isArray(house.postos) &&
-                    house.guardada !== true
-            ) ||
-            houses.find(
-                house =>
-                    Array.isArray(house.postos)
-            ) ||
-            null
-        );
+        return isPlainObject(automation)
+            ? automation
+            : null;
     }
 
-    function storedHouse() {
-        return (
-            ownedHouses().find(
-                house =>
-                    house.guardada === true
-            ) ||
-            null
-        );
-    }
+    function firstOwnedBallId() {
+        const balls =
+            runtime.gameState &&
+            runtime.gameState.balls;
 
-    function occupiedHouseSlot() {
-        for (const house of ownedHouses()) {
-            if (!Array.isArray(house.postos)) {
-                continue;
-            }
-
-            for (
-                let slot = 0;
-                slot < house.postos.length;
-                slot++
-            ) {
-                const pokemonId =
-                    house.postos[slot];
-
-                if (pokemonId != null) {
-                    return {
-                        house,
-                        slot,
-                        pokemonId
-                    };
-                }
-            }
+        if (
+            !balls ||
+            typeof balls !== 'object'
+        ) {
+            return null;
         }
 
-        return null;
-    }
-
-    function cheapestPurchasableBall() {
-        return (
-            runtime.catalogoBolas
+        const entry =
+            Object.entries(balls)
+                .map(
+                    ([id, count]) => ({
+                        id: Number(id),
+                        count: Number(count) || 0
+                    })
+                )
                 .filter(
-                    ball =>
-                        ball &&
-                        ball.compravel &&
-                        Number(ball.priceGold || 0) > 0
+                    row =>
+                        Number.isFinite(row.id) &&
+                        row.count > 0
                 )
                 .sort(
                     (a, b) =>
-                        Number(a.priceGold) -
-                        Number(b.priceGold)
-                )[0] ||
+                        a.id - b.id
+                )[0];
+
+        return entry
+            ? entry.id
+            : null;
+    }
+
+    function unskinnedPokemon() {
+        return (
+            allPokemon().find(
+                pokemon =>
+                    pokemon &&
+                    pokemon.id != null &&
+                    pokemon.skin == null
+            ) ||
             null
         );
     }
 
-    function actionAvailability(action) {
+    function escapeRopeCount() {
+        const items =
+            runtime.gameState &&
+            runtime.gameState.items;
+
+        return (
+            items &&
+            typeof items === 'object'
+                ? Number(items[70010] || 0)
+                : 0
+        );
+    }
+
+    function actionAvailability(action) {    function actionAvailability(action) {
         if (!socketReady()) {
             return {
                 ok: false,
@@ -1053,173 +974,326 @@
 
     const actions = [
         {
-            id: 'claim-pass',
-            group: 'Zero-argument claims',
-            label: 'Claim Battle Pass',
+            id: 'profile-stats-anywhere',
+            group: 'Read-only remote queries',
+            label: 'Account stats from current scene',
             risk: 'low',
             description:
-                'Send only {t:"passe.resgatar"}. The server decides whether any free/VIP reward is actually pending.',
-            available:
-                () => ({
-                    ok: true,
-                    reason: ''
-                }),
+                'Request perfil.estatisticas without opening Profile. Confirms whether this read surface is scene-independent.',
+            expect: [
+                'estatisticas'
+            ],
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'passe.resgatar'
+                            t: 'perfil.estatisticas'
                         }
                     }
                 ]
         },
         {
-            id: 'claim-affiliate',
-            group: 'Zero-argument claims',
-            label: 'Claim affiliate rewards',
+            id: 'pvp-info-anywhere',
+            group: 'Read-only remote queries',
+            label: 'PvP info from current scene',
             risk: 'low',
             description:
-                'Send only {t:"afiliado.recolher"}. No referral code, amount, or target is supplied.',
-            available:
-                () => ({
-                    ok: true,
-                    reason: ''
-                }),
+                'Request pvp.info directly without opening the ranked PvP interface.',
+            expect: [
+                'pvp'
+            ],
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'afiliado.recolher'
+                            t: 'pvp.info'
                         }
                     }
                 ]
         },
         {
-            id: 'claim-zero-all',
-            group: 'Zero-argument claims',
-            label: 'Claim all zero-arg rewards',
+            id: 'friends-info-anywhere',
+            group: 'Read-only remote queries',
+            label: 'Friends info from current scene',
             risk: 'low',
             description:
-                'Try every known zero-argument reward claim: Battle Pass, then affiliate rewards.',
-            available:
-                () => ({
-                    ok: true,
-                    reason: ''
-                }),
+                'Request amigos.info directly without opening the Friends interface.',
+            expect: [
+                'amigos'
+            ],
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'passe.resgatar'
-                        }
-                    },
-                    {
-                        delay: 350,
-                        payload: {
-                            t: 'afiliado.recolher'
+                            t: 'amigos.info'
                         }
                     }
                 ]
         },
         {
-            id: 'remote-heal',
-            group: 'Context probes',
-            label: 'Remote PokéCenter heal',
+            id: 'guild-info-anywhere',
+            group: 'Read-only remote queries',
+            label: 'Guild info from current scene',
             risk: 'low',
             description:
-                'Send centro.curar from the current scene without traveling to the Center.',
+                'Request guild.info directly. This is read-only even when the account is not in a guild.',
+            expect: [
+                'guild'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'guild.info'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'trade-info-anywhere',
+            group: 'Read-only remote queries',
+            label: 'Trade info from current scene',
+            risk: 'low',
+            description:
+                'Request comercio.info directly without entering the trade view. No offer or message is sent.',
+            expect: [
+                'comercio'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'comercio.info'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'orbs-panel-anywhere',
+            group: 'Read-only remote queries',
+            label: 'Orb panel from current scene',
+            risk: 'low',
+            description:
+                'Request orbs.painel directly. It reads the panel state but does not deposit, withdraw, or cancel anything.',
+            expect: [
+                'orbs'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'orbs.painel'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'shiny-registry',
+            group: 'Read-only registries',
+            label: 'Query Shiny registry directly',
+            risk: 'low',
+            description:
+                'Request the first default page of shiny.listar without opening the registry.',
+            expect: [
+                'shiny.lista'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'shiny.listar',
+                            busca: '',
+                            tipo: '',
+                            soAVenda: false,
+                            ordem: 'recentes',
+                            pagina: 0
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'p5-registry',
+            group: 'Read-only registries',
+            label: 'Query Power V registry directly',
+            risk: 'low',
+            description:
+                'Request the first default page of p5.listar without opening the registry.',
+            expect: [
+                'p5.lista'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'p5.listar',
+                            busca: '',
+                            tipo: '',
+                            soAVenda: false,
+                            ordem: 'recentes',
+                            pagina: 0
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'house-registry',
+            group: 'Read-only registries',
+            label: 'Query house registry directly',
+            risk: 'low',
+            description:
+                'Request casas.listar page 0 with no rarity filter.',
+            expect: [
+                'casas.lista'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'casas.listar',
+                            raridade: null,
+                            pagina: 0
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'bike-registry',
+            group: 'Read-only registries',
+            label: 'Query bike registry directly',
+            risk: 'low',
+            description:
+                'Request bicicletas.listar page 0 with no rarity filter.',
+            expect: [
+                'bicicletas.lista'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'bicicletas.listar',
+                            raridade: null,
+                            pagina: 0
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'gym-directory',
+            group: 'Read-only registries',
+            label: 'Query Gym directory directly',
+            risk: 'low',
+            description:
+                'Request ginasio.info without opening the Gym interface.',
+            expect: [
+                'ginasio'
+            ],
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'ginasio.info'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'team-slot-reassert',
+            group: 'Idempotency probes',
+            label: 'Re-assert current team slot',
+            risk: 'low',
+            description:
+                'Send team.move for a Pokémon already occupying that exact slot. No team layout should change.',
             available:
                 () => ({
                     ok:
-                        !runtime.gameState.noCentro,
+                        teamPokemon().length > 0,
                     reason:
-                        runtime.gameState.noCentro
-                            ? 'already in PokéCenter; not a boundary test'
-                            : ''
+                        'needs at least one Pokémon in the team'
                 }),
             steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'centro.curar'
+                () => {
+                    const pokemon =
+                        teamPokemon()[0];
+
+                    return [
+                        {
+                            delay: 0,
+                            payload: {
+                                t: 'team.move',
+                                pokemonId:
+                                    pokemon.id,
+                                slot:
+                                    pokemon.slot
+                            }
                         }
-                    }
-                ]
+                    ];
+                }
         },
         {
-            id: 'center-move-pulse',
-            group: 'Context probes',
-            label: 'Center movement outside Center',
+            id: 'automation-reassert',
+            group: 'Idempotency probes',
+            label: 'Re-assert automation state',
             risk: 'low',
             description:
-                'Send a short centro.andar pulse while hunting/elsewhere, then release it.',
+                'Send auto.set with the exact automation object already present in the authoritative state.',
             available:
                 () => ({
                     ok:
-                        !runtime.gameState.noCentro &&
-                        !(
-                            runtime.gameState.casa &&
-                            runtime.gameState.casa.dentro != null
+                        Boolean(
+                            currentAutomation()
                         ),
                     reason:
-                        'only interesting outside Center/house'
+                        'automation state not present'
                 }),
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'centro.andar',
-                            dir: 1
-                        }
-                    },
-                    {
-                        delay: 250,
-                        payload: {
-                            t: 'centro.andar',
-                            dir: 0
+                            t: 'auto.set',
+                            ...clone(
+                                currentAutomation()
+                            )
                         }
                     }
                 ]
         },
         {
-            id: 'house-exit-outside',
-            group: 'Context probes',
-            label: 'House exit while not in a house',
+            id: 'tutorial-reassert',
+            group: 'Idempotency probes',
+            label: 'Re-submit tutorial completion',
             risk: 'low',
             description:
-                'Send casa.sair from a scene where the button does not exist.',
-            available:
-                () => ({
-                    ok:
-                        !(
-                            runtime.gameState.casa &&
-                            runtime.gameState.casa.dentro != null
-                        ),
-                    reason:
-                        'currently inside a house; this would be a normal exit'
-                }),
+                'Send tutorial.concluir again after onboarding. Tests whether completion is safely idempotent.',
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'casa.sair'
+                            t: 'tutorial.concluir'
                         }
                     }
                 ]
         },
         {
-            id: 'boss-exit-outside',
-            group: 'Context probes',
-            label: 'Boss exit outside boss',
+            id: 'invalid-boss-key',
+            group: 'Validation probes',
+            label: 'Challenge nonexistent boss key',
             risk: 'low',
             description:
-                'Send boss.sair while no boss arena is active.',
+                'Send boss.entrar with an impossible key. Expected result is a clean server rejection with no scene/resource change.',
+            expectsRejection: true,
             available:
                 () => ({
                     ok:
@@ -1229,294 +1303,72 @@
                         ) &&
                         !runtime.gameState.mistico,
                     reason:
-                        'currently in an arena; this would actually abandon it'
+                        'leave active arenas before testing'
                 }),
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'boss.sair'
+                            t: 'boss.entrar',
+                            key: '__moth_invalid_boss__'
                         }
                     }
                 ]
         },
         {
-            id: 'active-reassert',
-            group: 'Idempotent state probes',
-            label: 'Re-assert active Pokémon',
+            id: 'invalid-gym-type',
+            group: 'Validation probes',
+            label: 'Challenge nonexistent Gym type',
             risk: 'low',
             description:
-                'Send team.active for the Pokémon that is already active.',
+                'Send ginasio.desafiar with an impossible type. Expected result is a clean server rejection.',
+            expectsRejection: true,
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'ginasio.desafiar',
+                            tipo: '__moth_invalid_gym__'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'escape-rope-empty',
+            group: 'Validation probes',
+            label: 'Use missing Escape Rope',
+            risk: 'low',
+            description:
+                'Only enabled when you own zero Escape Ropes. Sends item.use for item 70010 to test inventory validation.',
+            expectsRejection: true,
             available:
                 () => ({
                     ok:
-                        runtime.gameState.activeId != null,
+                        escapeRopeCount() <= 0,
                     reason:
-                        'no active Pokémon'
+                        'you currently own an Escape Rope; this probe only runs at zero inventory'
                 }),
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'team.active',
-                            pokemonId:
-                                runtime.gameState.activeId
+                            t: 'item.use',
+                            itemId: 70010
                         }
                     }
                 ]
         },
         {
-            id: 'house-reassert',
-            group: 'Idempotent state probes',
-            label: 'Re-assert house in use',
-            risk: 'low',
-            description:
-                'Send casa.usar:true for a house that already appears to be in use.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(inUseHouse()),
-                    reason:
-                        'no in-use house found'
-                }),
-            steps:
-                () => {
-                    const house =
-                        inUseHouse();
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'casa.usar',
-                                casaId:
-                                    house.id,
-                                usar: true
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'xpshare-reassert',
-            group: 'Idempotent state probes',
-            label: 'Re-assert House XP Share',
-            risk: 'low',
-            description:
-                'Re-send the same Pokémon to the same occupied House XP Share slot.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            occupiedHouseSlot()
-                        ),
-                    reason:
-                        'no occupied House XP Share slot'
-                }),
-            steps:
-                () => {
-                    const slot =
-                        occupiedHouseSlot();
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'xpshare.escolher',
-                                casaId:
-                                    slot.house.id,
-                                slot:
-                                    slot.slot,
-                                pokemonId:
-                                    slot.pokemonId
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'bike-reassert',
-            group: 'Idempotent state probes',
-            label: 'Re-assert current bike',
+            id: 'invalid-ball-slot',
+            group: 'Validation probes',
+            label: 'Throw ball at invalid ground slot',
             risk: 'medium',
             description:
-                'Send bicicleta.equipar with the already-equipped bike. May still touch the server cooldown.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            runtime.gameState.bicicleta &&
-                            runtime.gameState.bicicleta.equipada != null
-                        ),
-                    reason:
-                        'no bike equipped'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'bicicleta.equipar',
-                            bicicletaId:
-                                runtime.gameState.bicicleta.equipada
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'remote-shop-ball',
-            group: 'Controlled side effects',
-            label: 'Buy 1 ball from anywhere',
-            risk: 'medium',
-            description:
-                'Send shop.buy for one cheapest server-purchasable ball without opening the Market.',
-            available:
-                () => {
-                    const ball =
-                        cheapestPurchasableBall();
-
-                    if (!ball) {
-                        return {
-                            ok: false,
-                            reason:
-                                'no purchasable ball in catalog'
-                        };
-                    }
-
-                    const gold =
-                        Number(
-                            runtime.gameState.gold ||
-                            0
-                        );
-
-                    return {
-                        ok:
-                            gold >=
-                            Number(
-                                ball.priceGold ||
-                                0
-                            ),
-                        reason:
-                            'needs ' +
-                            String(ball.priceGold) +
-                            ' gold'
-                    };
-                },
-            steps:
-                () => {
-                    const ball =
-                        cheapestPurchasableBall();
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'shop.buy',
-                                kind: 'ball',
-                                id:
-                                    ball.id,
-                                qty: 1
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'cycle-active',
-            group: 'Controlled side effects',
-            label: 'Switch active remotely',
-            risk: 'medium',
-            description:
-                'Switch to the next Pokémon in the team directly, without opening the Team UI.',
-            available:
-                () => ({
-                    ok:
-                        teamPokemon().length >
-                        1,
-                    reason:
-                        'needs at least two team Pokémon'
-                }),
-            steps:
-                () => {
-                    const team =
-                        teamPokemon();
-
-                    const currentIndex =
-                        team.findIndex(
-                            pokemon =>
-                                pokemon.id ===
-                                runtime.gameState.activeId
-                        );
-
-                    const next =
-                        team[
-                            (
-                                Math.max(
-                                    0,
-                                    currentIndex
-                                ) +
-                                1
-                            ) %
-                            team.length
-                        ];
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'team.active',
-                                pokemonId:
-                                    next.id
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'xpshare-remove',
-            group: 'Controlled side effects',
-            label: 'Remove House XP Share remotely',
-            risk: 'medium',
-            description:
-                'Clear the first occupied House XP Share slot from the current scene.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            occupiedHouseSlot()
-                        ),
-                    reason:
-                        'no occupied House XP Share slot'
-                }),
-            steps:
-                () => {
-                    const slot =
-                        occupiedHouseSlot();
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'xpshare.escolher',
-                                casaId:
-                                    slot.house.id,
-                                slot:
-                                    slot.slot,
-                                pokemonId: null
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'force-center',
-            group: 'Disruptive transitions',
-            label: 'Force Go Center',
-            risk: 'high',
-            description:
-                'Send centro.ir immediately, ignoring the client button visibility/cooldown checks.',
+                'During a normal hunt, throw one owned ball at slot -1. A correct rejection should not consume the ball.',
+            expectsRejection: true,
             available:
                 () => ({
                     ok:
@@ -1527,153 +1379,62 @@
                                 runtime.gameState.boss &&
                                 runtime.gameState.boss.arena
                             ) &&
-                            !runtime.gameState.mistico
+                            !runtime.gameState.mistico &&
+                            firstOwnedBallId() != null
                         ),
                     reason:
-                        'requires a normal active hunt'
+                        'requires a normal hunt and at least one ball'
                 }),
             steps:
                 () => [
                     {
                         delay: 0,
                         payload: {
-                            t: 'centro.ir'
+                            t: 'ball.throw',
+                            ballId:
+                                firstOwnedBallId(),
+                            slot: -1
                         }
                     }
                 ]
         },
         {
-            id: 'enter-house-from-hunt',
-            group: 'Disruptive transitions',
-            label: 'Enter house from hunt',
-            risk: 'high',
+            id: 'skin-remove-unskinned',
+            group: 'Validation probes',
+            label: 'Remove skin from unskinned Pokémon',
+            risk: 'low',
             description:
-                'Bypass the client check that normally permits casa.entrar only from Center/another house.',
+                'Send skin.tirar for a Pokémon that currently has no skin. Expected result is rejection or a harmless no-op.',
+            expectsRejection: true,
             available:
                 () => ({
                     ok:
                         Boolean(
-                            runtime.gameState.huntSlug &&
-                            !runtime.gameState.noCentro &&
-                            !(
-                                runtime.gameState.casa &&
-                                runtime.gameState.casa.dentro != null
-                            ) &&
-                            inUseHouse()
+                            unskinnedPokemon()
                         ),
                     reason:
-                        'requires a hunt and an available in-use house'
+                        'no unskinned Pokémon found'
                 }),
             steps:
                 () => {
-                    const house =
-                        inUseHouse();
+                    const pokemon =
+                        unskinnedPokemon();
 
                     return [
                         {
                             delay: 0,
                             payload: {
-                                t: 'casa.entrar',
-                                casaId:
-                                    house.id
+                                t: 'skin.tirar',
+                                pokemonId:
+                                    pokemon.id
                             }
                         }
                     ];
                 }
-        },
-        {
-            id: 'activate-stored-house',
-            group: 'Disruptive transitions',
-            label: 'Activate stored house remotely',
-            risk: 'high',
-            description:
-                'Send casa.usar:true for a stored house from the current scene.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            storedHouse()
-                        ),
-                    reason:
-                        'no clearly stored house found'
-                }),
-            steps:
-                () => {
-                    const house =
-                        storedHouse();
-
-                    return [
-                        {
-                            delay: 0,
-                            payload: {
-                                t: 'casa.usar',
-                                casaId:
-                                    house.id,
-                                usar: true
-                            }
-                        }
-                    ];
-                }
-        },
-        {
-            id: 'reselect-hunt',
-            group: 'Disruptive transitions',
-            label: 'Reselect current hunt',
-            risk: 'high',
-            description:
-                'Send hunt.select for the hunt already active and observe whether the server resets/rebuilds anything.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            runtime.gameState.huntSlug
-                        ),
-                    reason:
-                        'no current hunt'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'hunt.select',
-                            slug:
-                                runtime.gameState.huntSlug
-                        }
-                    }
-                ]
-        },
-        {
-            id: 'unequip-bike',
-            group: 'Disruptive transitions',
-            label: 'Unequip bike remotely',
-            risk: 'high',
-            description:
-                'Send bicicleta.equipar:null from the current scene. This can trigger the normal bike swap cooldown.',
-            available:
-                () => ({
-                    ok:
-                        Boolean(
-                            runtime.gameState.bicicleta &&
-                            runtime.gameState.bicicleta.equipada != null
-                        ),
-                    reason:
-                        'no bike equipped'
-                }),
-            steps:
-                () => [
-                    {
-                        delay: 0,
-                        payload: {
-                            t: 'bicicleta.equipar',
-                            bicicletaId: null
-                        }
-                    }
-                ]
         }
     ];
 
-    function finishProbe(reason) {
+    function finishProbe(reason) {    function finishProbe(reason) {
         const probe =
             runtime.activeProbe;
 
@@ -1723,16 +1484,28 @@
             );
 
         if (
-            accepted ||
-            probeSpecificSuccess(
-                probe,
-                probe.after
-            )
+            probe.expectsRejection
         ) {
+            if (
+                error ||
+                notice
+            ) {
+                probe.result =
+                    'rejected as expected';
+            } else if (
+                accepted ||
+                probe.changes.length
+            ) {
+                probe.result =
+                    'unexpected acceptance / state change';
+            } else {
+                probe.result =
+                    reason ||
+                    'no explicit rejection';
+            }
+        } else if (accepted) {
             probe.result =
-                accepted
-                    ? 'explicit server acceptance'
-                    : 'relevant state changed';
+                'expected response received';
         } else if (error) {
             probe.result =
                 'server error';
@@ -1844,7 +1617,17 @@
             events: [],
             changes: [],
             result:
-                'waiting'
+                'waiting',
+            expect:
+                Array.isArray(
+                    action.expect
+                )
+                    ? [...action.expect]
+                    : [],
+            expectsRejection:
+                Boolean(
+                    action.expectsRejection
+                )
         };
 
         try {
@@ -2117,7 +1900,7 @@
 
         html +=
             '<div class="mea-state" data-mea-state></div>' +
-            '<div class="mea-state">One-shot probes only. No VIP/premium spoofing, currency fabrication, marketplace actions, or held Exp. Share equip/remove race testing.</div>';
+            '<div class="mea-state">Fresh batch: read-only queries plus bounded validation/no-op probes. No VIP/premium spoofing, currency fabrication, market/trade writes, guild/social mutations, destructive Pokémon operations, or held Exp. Share race testing.</div>';
 
         for (
             const [
