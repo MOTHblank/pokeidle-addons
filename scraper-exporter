@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Upstream Scraper & Exporter
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.0.1
 // @description  Mirrors PokéIdle's same-origin client code and exports a repo-ready upstream/ TAR plus manifest.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -35,7 +35,7 @@
         [...root.querySelectorAll(selector)];
 
     function escapeHtml(value) {
-        return String(value ?? '')
+        return String(value == null ? '' : value)
             .replaceAll('&', '&amp;')
             .replaceAll('<', '&lt;')
             .replaceAll('>', '&gt;')
@@ -96,7 +96,7 @@
                     part !== '..'
             )
             .map(part =>
-                part.replace(/[<>:"|?*\x00-\x1f]/g, '_')
+                part.replace(/[<>:"|?*]/g, '_')
             )
             .join('/');
 
@@ -542,7 +542,7 @@
                     url,
                     error:
                         String(
-                            error?.message ||
+                            (error && error.message) ||
                             error
                         )
                 });
@@ -819,7 +819,7 @@
             header,
             100,
             8,
-            0o644
+            420
         );
 
         tarOctal(
@@ -1434,7 +1434,7 @@
         );
 
         console.info(
-            '[PokéIdle Upstream Scraper] v1.0 loaded'
+            '[PokéIdle Upstream Scraper] v1.0.1 loaded'
         );
     }
 
