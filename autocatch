@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      4.2.0
-// @description  Configurable auto-catch with capture statistics HUD.
+// @version      5.0.0
+// @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
-// @grant        none
+// @grant        unsafeWindow
 // @run-at       document-start
 // ==/UserScript==
 
@@ -13,30 +13,21 @@
     'use strict';
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const q = (selector, root = document) => root.querySelector(selector);
+    const qa = (selector, root = document) => [...root.querySelectorAll(selector)];
 
     const DEFAULTS = {
         enabled: false,
-
-        // How often to attempt a throw.
         intervalMs: 650,
-
-        // 0 = keep using the weakest ball forever.
-        // Example: 5 = after 5 attempts use the next available tier.
-        escalateAfter: 0,
-
         showHud: true,
-
         use: {
             poke: true,
             super: true,
             ultra: true,
-
-            // Deliberately disabled by default.
             master: false,
             other: false
         },
-
-        // Never spend below these quantities.
         reserve: {
             poke: 0,
             super: 0,
@@ -48,9 +39,9 @@
 
     function loadSettings() {
         try {
-            const saved =
-                JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+            const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
 
+            // escalation existed in v4; intentionally ignore it from now on.
             return {
                 ...DEFAULTS,
                 ...saved,
@@ -69,40 +60,24 @@
     }
 
     let settings = loadSettings();
-
     let timer = null;
 
-    let currentTargetSignature = null;
-    let currentTargetToken = 0;
-    let targetThrows = 0;
-
-    let resolvedTokens = new Set();
-
-    let lastHistoryFingerprint = '';
-    let historyObserver = null;
-    let sessionObserver = null;
-    let observedSessionCaptures = null;
-    let sessionCaptureBase = null;
-
-    /*
-     * Most recent accepted throw against the current body. Used only as
-     * a fallback when the game's capture/session UI does not expose a
-     * direct success update.
-     */
-    let pendingOutcome = null;
-
     const inventoryBaseline = new Map();
+    const targetStates = new Map();
+    const recentProtocolFingerprints = new Map();
 
     let stats = freshStats();
+    let protocolHookInstalled = false;
+    let protocolSockets = 0;
+    let protocolMessages = 0;
+    let protocolCaptureSignals = 0;
+    let protocolLastType = 'waiting';
 
     function freshStats() {
         return {
             startedAt: Date.now(),
-
             attempts: 0,
             captures: 0,
-            inferredCaptures: 0,
-
             used: {
                 poke: 0,
                 super: 0,
@@ -110,98 +85,60 @@
                 master: 0,
                 other: 0
             },
-
             status: 'Idle'
         };
     }
 
-    // ---------------------------------------------------------------------
-    // Settings
-    // ---------------------------------------------------------------------
-
     function saveSettings() {
-        localStorage.setItem(
-            SETTINGS_KEY,
-            JSON.stringify(settings)
-        );
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     }
 
-    // ---------------------------------------------------------------------
-    // General helpers
-    // ---------------------------------------------------------------------
-
     function normalize(value) {
-        return String(value || '')
+        return String(value ?? '')
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
-            .toLowerCase();
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     function visible(el) {
-        if (!el || !el.isConnected) {
-            return false;
-        }
-
-        if (
-            el.hidden ||
-            el.classList?.contains('hidden')
-        ) {
-            return false;
-        }
+        if (!el?.isConnected || el.hidden || el.classList?.contains('hidden')) return false;
 
         const style = getComputedStyle(el);
-
         if (
             style.display === 'none' ||
             style.visibility === 'hidden' ||
             style.pointerEvents === 'none'
-        ) {
-            return false;
-        }
+        ) return false;
 
-        /*
-         * getClientRects() also catches hidden ancestors, which
-         * getComputedStyle(el) alone does not.
-         */
         return el.getClientRects().length > 0;
     }
 
     function fireClick(el) {
-        if (!el?.isConnected) {
-            return false;
-        }
+        if (!el?.isConnected) return false;
 
-        /*
-         * HTMLElement.click() follows the browser's normal activation
-         * behavior and is considerably more reliable in Chrome than
-         * manually manufacturing PointerEvent/MouseEvent sequences.
-         */
         try {
             if (typeof el.click === 'function') {
                 el.click();
                 return true;
             }
-        } catch (_) {}
+        } catch {}
 
-        /*
-         * Fallback for a non-HTMLElement interactive node.
-         */
         try {
-            return el.dispatchEvent(
-                new MouseEvent('click', {
-                    bubbles: true,
-                    cancelable: true,
-                    composed: true,
-                    view: window
-                })
-            );
-        } catch (_) {
+            return el.dispatchEvent(new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window
+            }));
+        } catch {
             return false;
         }
     }
 
     // ---------------------------------------------------------------------
-    // Poké Balls
+    // Ball inventory
     // ---------------------------------------------------------------------
 
     function classifyBall(button) {
@@ -209,112 +146,60 @@
             button?.title,
             button?.getAttribute('aria-label'),
             button?.querySelector('img')?.src
-        ]
-            .filter(Boolean)
-            .join(' '));
+        ].filter(Boolean).join(' '));
 
-        if (text.includes('master')) {
-            return 'master';
-        }
-
-        if (text.includes('ultra')) {
-            return 'ultra';
-        }
-
-        if (
-            text.includes('super') ||
-            text.includes('great')
-        ) {
-            return 'super';
-        }
-
-        if (text.includes('poke')) {
-            return 'poke';
-        }
-
+        if (text.includes('master')) return 'master';
+        if (text.includes('ultra')) return 'ultra';
+        if (text.includes('super') || text.includes('great')) return 'super';
+        if (text.includes('poke')) return 'poke';
         return 'other';
     }
 
     function ballCount(button) {
         const title = button?.title || '';
+        const match = title.match(/(?:voce tem|você tem|you have|tienes)\s+([\d.,]+)/i);
+        if (!match) return null;
 
-        const match = title.match(
-            /(?:voce tem|você tem)\s+([\d.,]+)/i
-        );
-
-        if (!match) {
-            return null;
-        }
-
-        // Ball counts are integers:
-        // 4.972 -> 4972
-        const digits = match[1]
-            .replace(/\D/g, '');
-
-        return digits
-            ? Number(digits)
-            : null;
+        const digits = match[1].replace(/\D/g, '');
+        return digits ? Number(digits) : null;
     }
 
     function ballLabel(button) {
         const title = button?.title || '';
-
-        return (
-            title.split('—')[0].trim() ||
-            classifyBall(button)
-        );
+        return title.split('—')[0].trim() || classifyBall(button);
     }
 
     function ballIdentity(button) {
-        const key = classifyBall(button);
-
-        const img = normalize(
-            button?.querySelector('img')?.src || ''
-        );
-
         return [
-            key,
+            classifyBall(button),
             normalize(ballLabel(button)),
-            img
+            normalize(button?.querySelector('img')?.src || '')
         ].join('|');
     }
 
     function getBallButtons() {
-        return [
-            ...document.querySelectorAll(
-                '#caidos-bolas button.caidos-bola'
-            )
-        ];
+        return qa('#caidos-bolas button.caidos-bola');
     }
 
-    /*
-     * Track actual inventory decreases instead of assuming
-     * every generated click was accepted by the game.
-     */
     function syncInventoryUsage() {
         for (const button of getBallButtons()) {
             const count = ballCount(button);
-
-            if (count === null) {
-                continue;
-            }
+            if (count === null) continue;
 
             const id = ballIdentity(button);
             const key = classifyBall(button);
+            const previous = inventoryBaseline.get(id);
 
-            const previous =
-                inventoryBaseline.get(id);
-
-            if (
-                previous !== undefined &&
-                count < previous
-            ) {
-                stats.used[key] +=
-                    previous - count;
+            if (previous !== undefined && count < previous) {
+                stats.used[key] += previous - count;
             }
 
             inventoryBaseline.set(id, count);
         }
+    }
+
+    function totalUsed() {
+        return Object.values(stats.used).reduce((sum, value) => sum + value, 0);
     }
 
     function rankFor(key) {
@@ -329,95 +214,32 @@
 
     function getEligibleBalls() {
         return getBallButtons()
-            .map((button, index) => {
-                const key = classifyBall(button);
-
-                return {
-                    button,
-                    key,
-                    index,
-                    count: ballCount(button),
-                    rank: rankFor(key)
-                };
-            })
-
-            .filter(({
+            .map((button, index) => ({
                 button,
-                key,
-                count
-            }) => {
-                if (
-                    button.disabled ||
-                    !visible(button)
-                ) {
-                    return false;
-                }
+                key: classifyBall(button),
+                index,
+                count: ballCount(button),
+                rank: rankFor(classifyBall(button))
+            }))
+            .filter(({ button, key, count }) => {
+                if (button.disabled || !visible(button) || !settings.use[key]) return false;
 
-                if (!settings.use[key]) {
-                    return false;
-                }
-
-                const reserve =
-                    Number(
-                        settings.reserve[key] || 0
-                    );
-
-                return (
-                    count === null ||
-                    count > reserve
-                );
+                const reserve = Number(settings.reserve[key] || 0);
+                return count === null || count > reserve;
             })
-
-            .sort(
-                (a, b) =>
-                    a.rank - b.rank ||
-                    a.index - b.index
-            );
+            .sort((a, b) => a.rank - b.rank || a.index - b.index);
     }
 
     function chooseBall() {
-        const eligible =
-            getEligibleBalls();
-
-        if (!eligible.length) {
-            return null;
-        }
-
-        // Weakest ball by default.
-        let index = 0;
-
-        /*
-         * Optional escalation:
-         *
-         * escalateAfter = 5
-         *
-         * throws 0-4  -> Poké
-         * throws 5-9  -> Super
-         * throws 10+  -> Ultra
-         */
-        if (settings.escalateAfter > 0) {
-            index = Math.floor(
-                targetThrows /
-                settings.escalateAfter
-            );
-
-            index = Math.min(
-                index,
-                eligible.length - 1
-            );
-        }
-
-        return eligible[index];
+        // v5 intentionally has no escalation. Always use the weakest
+        // enabled ball that is above its configured reserve.
+        return getEligibleBalls()[0] || null;
     }
 
     function selectBall(choice) {
-        if (!choice?.button?.isConnected) {
-            return false;
-        }
+        if (!choice?.button?.isConnected) return false;
 
-        if (
-            !choice.button.classList.contains('on')
-        ) {
+        if (!choice.button.classList.contains('on')) {
             return fireClick(choice.button);
         }
 
@@ -425,32 +247,140 @@
     }
 
     // ---------------------------------------------------------------------
-    // Targets
+    // Per-target state
     // ---------------------------------------------------------------------
 
-    function getTarget() {
-        const list =
-            document.querySelector('#caidos-lista');
+    function targetProtocolIds(target) {
+        const ids = new Set();
 
-        if (!list) {
-            return null;
+        for (const attr of [
+            'data-id',
+            'data-pokemon-id',
+            'data-poke-id',
+            'data-uid',
+            'data-caido-id',
+            'data-corpo-id',
+            'data-target-id'
+        ]) {
+            const value = target?.getAttribute?.(attr);
+            if (value) ids.add(String(value));
         }
 
-        for (const child of list.children) {
-            if (visible(child)) {
-                return child;
+        if (target?.dataset) {
+            for (const [key, value] of Object.entries(target.dataset)) {
+                if (value && /id$/i.test(key)) ids.add(String(value));
             }
         }
 
-        return null;
+        return ids;
+    }
+
+    function targetName(target) {
+        const explicit = [
+            target?.getAttribute?.('data-name'),
+            target?.getAttribute?.('data-pokemon-name'),
+            target?.getAttribute?.('aria-label'),
+            target?.getAttribute?.('title'),
+            target?.querySelector?.('img')?.alt,
+            target?.querySelector?.('[data-nome]')?.getAttribute('data-nome')
+        ].find(Boolean);
+
+        if (explicit) return String(explicit).trim();
+
+        const text = String(target?.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!text) return 'Pokémon';
+
+        // Avoid turning the whole card into the HUD label.
+        return text.split(/[·•|—\n]/)[0].trim().slice(0, 36) || 'Pokémon';
+    }
+
+    function fallbackTargetSignature(target) {
+        return [
+            normalize(target?.querySelector?.('img')?.src || ''),
+            normalize(targetName(target))
+        ].join('|');
+    }
+
+    function scanTargets() {
+        const list = q('#caidos-lista');
+        if (!list) return [];
+
+        const occurrences = new Map();
+        const now = Date.now();
+        const entries = [];
+
+        for (const element of [...list.children]) {
+            if (!visible(element)) continue;
+
+            const ids = targetProtocolIds(element);
+            const strongId = [...ids][0] || null;
+            const base = strongId ? 'id:' + strongId : fallbackTargetSignature(element);
+
+            const occurrence = occurrences.get(base) || 0;
+            occurrences.set(base, occurrence + 1);
+
+            const key = strongId ? base : `${base}#${occurrence}`;
+
+            let state = targetStates.get(key);
+
+            if (!state) {
+                state = {
+                    key,
+                    ids,
+                    name: targetName(element),
+                    element,
+                    firstSeenAt: now,
+                    lastSeenAt: now,
+                    lastAttemptAt: 0,
+                    throws: 0,
+                    lastBallKey: null,
+                    lastBallLabel: null,
+                    lastResult: null,
+                    captured: false,
+                    capturedAt: 0
+                };
+
+                targetStates.set(key, state);
+            } else {
+                state.element = element;
+                state.ids = ids;
+                state.name = targetName(element) || state.name;
+                state.lastSeenAt = now;
+            }
+
+            entries.push(state);
+        }
+
+        pruneTargetStates(now);
+        return entries;
+    }
+
+    function pruneTargetStates(now = Date.now()) {
+        for (const [key, state] of targetStates) {
+            const unseenFor = now - state.lastSeenAt;
+            const attemptAge = state.lastAttemptAt ? now - state.lastAttemptAt : Infinity;
+
+            if (
+                (state.captured && unseenFor > 2000) ||
+                (unseenFor > 8000 && attemptAge > 12000) ||
+                unseenFor > 45000
+            ) {
+                targetStates.delete(key);
+            }
+        }
+
+        for (const [fingerprint, time] of recentProtocolFingerprints) {
+            if (now - time > 10000) recentProtocolFingerprints.delete(fingerprint);
+        }
     }
 
     function getTargetClickElement(target) {
-        if (!target?.isConnected) {
-            return null;
-        }
+        if (!target?.isConnected) return null;
 
-        const interactiveSelector = [
+        const selector = [
             'button:not([disabled])',
             '[role="button"]',
             'a[href]',
@@ -458,767 +388,491 @@
             '[onclick]'
         ].join(',');
 
-        /*
-         * If the row itself is interactive, use it. Otherwise click the
-         * deepest explicit control. Clicking a descendant still bubbles
-         * to row-level handlers, so this covers both DOM designs.
-         */
-        if (target.matches?.(interactiveSelector)) {
-            return target;
-        }
+        if (target.matches?.(selector)) return target;
 
+        return qa(selector, target).find(visible) || target;
+    }
+
+    function currentTargetState() {
+        const states = [...targetStates.values()];
+
+        return states
+            .filter(state => state.lastAttemptAt > 0 && !state.captured)
+            .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0]
+            || states.find(state => !state.captured)
+            || null;
+    }
+
+    function formatTargetState(state) {
+        if (!state) return 'No target';
+
+        const parts = [
+            state.name || 'Pokémon',
+            `${state.throws} throw${state.throws === 1 ? '' : 's'}`
+        ];
+
+        if (state.lastBallLabel) parts.push(state.lastBallLabel);
+        if (state.captured) parts.push('captured');
+
+        return parts.join(' · ');
+    }
+
+    // ---------------------------------------------------------------------
+    // Authoritative WebSocket capture result
+    // ---------------------------------------------------------------------
+
+    function primitive(value) {
         return (
-            [...target.querySelectorAll(interactiveSelector)]
-                .find(visible) ||
-            target
+            value === null ||
+            ['string', 'number', 'boolean'].includes(typeof value)
         );
     }
 
-    function targetSignature(target) {
-        if (!target) {
-            return '';
+    function outcomeValue(value) {
+        if (typeof value === 'boolean') return value;
+        if (value === 1 || value === '1') return true;
+        if (value === 0 || value === '0') return false;
+
+        const text = normalize(value);
+
+        if (/^(success|successful|sucesso|captured|caught|capturado|capturada|capturou|pegou|ok)$/.test(text)) {
+            return true;
         }
 
-        for (
-            const attr of [
-                'data-id',
-                'data-pokemon-id',
-                'data-poke-id',
-                'data-uid'
-            ]
-        ) {
-            const value =
-                target.getAttribute?.(attr);
-
-            if (value) {
-                return `${attr}:${value}`;
-            }
-        }
-
-        const image = normalize(
-            target.querySelector?.('img')?.src || ''
-        );
-
-        const text = normalize(
-            target.textContent
-        )
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        return `${image}|${text.slice(0, 120)}`;
-    }
-
-    // ---------------------------------------------------------------------
-    // Capture detection
-    // ---------------------------------------------------------------------
-
-    function historyFingerprint() {
-        const panel =
-            document.querySelector(
-                '#capturas-painel'
-            );
-
-        if (!panel) {
-            return '';
-        }
-
-        const text = normalize(
-            panel.textContent
-        )
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        const images = [
-            ...panel.querySelectorAll('img')
-        ]
-            .map(img => normalize(img.src))
-            .join('|');
-
-        return [
-            panel.children.length,
-            text,
-            images
-        ].join('|');
-    }
-
-    function signatureStillPresent(signature) {
-        const list =
-            document.querySelector(
-                '#caidos-lista'
-            );
-
-        if (
-            !list ||
-            !signature
-        ) {
+        if (/^(fail|failed|failure|falha|falhou|escaped|escape|fugiu|nao|não)$/.test(text)) {
             return false;
         }
 
-        return [...list.children].some(
-            child =>
-                targetSignature(child) ===
-                signature
-        );
+        return null;
     }
 
-    function recordCapture(
-        token,
-        inferred,
-        source = inferred ? 'target removed' : 'game UI'
-    ) {
-        if (resolvedTokens.has(token)) {
-            return;
-        }
+    function captureCandidateFromObject(object, path) {
+        if (!object || typeof object !== 'object' || Array.isArray(object)) return null;
 
-        resolvedTokens.add(token);
+        const entries = Object.entries(object);
+        const normalizedEntries = entries.map(([key, value]) => [
+            normalize(key),
+            primitive(value) ? normalize(value) : ''
+        ]);
 
-        stats.captures++;
+        const context = normalizedEntries
+            .flatMap(([key, value]) => [key, value])
+            .join(' ');
 
-        if (inferred) {
-            stats.inferredCaptures++;
+        const captureContext = /captur|capture|caught|catch/.test(context);
+        const ballContext = /poke.?ball|pokeball|bola|ball/.test(context);
+
+        let success = null;
+        let explicitCaptureOutcome = false;
+
+        for (const [rawKey, value] of entries) {
+            const key = normalize(rawKey);
+
+            if (
+                /^(capturou|capturado|capturada|captured|caught)$/.test(key)
+            ) {
+                const parsed = outcomeValue(value);
+                if (parsed !== null) {
+                    success = parsed;
+                    explicitCaptureOutcome = true;
+                }
+            }
+
+            if (
+                /^(success|sucesso|ok|resultado|result|status|estado)$/.test(key)
+            ) {
+                const parsed = outcomeValue(value);
+                if (parsed !== null && captureContext) success = parsed;
+            }
+
+            if (
+                /^(tipo|type|evento|event|acao|action|op|kind)$/.test(key)
+            ) {
+                const type = normalize(value);
+
+                if (/capturad|caught|capture.?success|captura.?sucesso/.test(type)) {
+                    success = true;
+                    explicitCaptureOutcome = true;
+                } else if (/captur.*(?:fail|falh)|capture.*fail/.test(type)) {
+                    success = false;
+                    explicitCaptureOutcome = true;
+                }
+            }
         }
 
         if (
-            pendingOutcome?.token === token
+            success === null ||
+            (!captureContext && !explicitCaptureOutcome) ||
+            (!captureContext && ballContext && !explicitCaptureOutcome)
         ) {
-            pendingOutcome = null;
-        }
-
-        currentTargetSignature = null;
-        targetThrows = 0;
-
-        stats.status = inferred
-            ? `Captured ~ (${source})`
-            : `Captured (${source})`;
-
-        updateUI();
-    }
-
-    function sessionCaptureCount() {
-        const panel =
-            document.querySelector(
-                '#sessao-painel'
-            );
-
-        if (!panel) {
             return null;
         }
 
-        const text = normalize(
-            panel.textContent
-        )
-            .replace(/\s+/g, ' ')
-            .trim();
+        const ids = new Set();
+        let name = '';
+        let type = '';
 
-        if (!text) {
-            return null;
-        }
+        for (const [rawKey, value] of entries) {
+            if (!primitive(value)) continue;
 
-        /*
-         * The session card is localized, so accept the common Portuguese
-         * and English labels rather than depending on one exact sentence.
-         */
-        const patterns = [
-            /(?:capturas?|capturados?)\s*[:\-]?\s*([\d.,]+)/i,
-            /(?:captures?|caught)\s*[:\-]?\s*([\d.,]+)/i
-        ];
+            const key = normalize(rawKey);
 
-        for (const pattern of patterns) {
-            const match =
-                text.match(pattern);
-
-            if (!match) {
-                continue;
+            if (
+                /(?:^|_)(?:id|uid)$/.test(key) ||
+                /(?:pokemon|poke|caido|corpo|alvo|target).*id/.test(key)
+            ) {
+                if (value !== null && value !== '') ids.add(String(value));
             }
 
-            const digits =
-                match[1].replace(/\D/g, '');
+            if (
+                !name &&
+                /^(?:nome|name|species|especie|pokemon_name|pokemon_nome)$/.test(key)
+            ) {
+                name = String(value);
+            }
 
-            if (digits) {
-                return Number(digits);
+            if (
+                !type &&
+                /^(?:tipo|type|evento|event|acao|action|op|kind)$/.test(key)
+            ) {
+                type = String(value);
+            }
+        }
+
+        return {
+            success,
+            ids,
+            name,
+            type: type || path,
+            path
+        };
+    }
+
+    function findCaptureCandidates(value, path = 'root', depth = 0, out = []) {
+        if (depth > 7 || value == null) return out;
+
+        if (Array.isArray(value)) {
+            for (let i = 0; i < value.length; i++) {
+                findCaptureCandidates(value[i], `${path}[${i}]`, depth + 1, out);
+            }
+
+            return out;
+        }
+
+        if (typeof value !== 'object') return out;
+
+        const candidate = captureCandidateFromObject(value, path);
+        if (candidate) out.push(candidate);
+
+        for (const [key, child] of Object.entries(value)) {
+            if (child && typeof child === 'object') {
+                findCaptureCandidates(child, `${path}.${key}`, depth + 1, out);
+            }
+        }
+
+        return out;
+    }
+
+    function decodeProtocolData(data) {
+        if (typeof data === 'string') {
+            try {
+                return JSON.parse(data);
+            } catch {
+                return null;
+            }
+        }
+
+        if (data instanceof ArrayBuffer) {
+            try {
+                return JSON.parse(new TextDecoder().decode(data));
+            } catch {
+                return null;
             }
         }
 
         return null;
     }
 
-    function syncSessionCaptureCount() {
-        const total =
-            sessionCaptureCount();
+    function candidateFingerprint(candidate) {
+        return [
+            candidate.success ? '1' : '0',
+            normalize(candidate.type),
+            [...candidate.ids].sort().join(','),
+            normalize(candidate.name)
+        ].join('|');
+    }
 
-        if (total === null) {
-            return false;
+    function matchTargetForProtocol(candidate) {
+        const now = Date.now();
+
+        let states = [...targetStates.values()]
+            .filter(state =>
+                !state.captured &&
+                state.lastAttemptAt > 0 &&
+                now - state.lastAttemptAt < 12000
+            );
+
+        if (!states.length) return null;
+
+        if (candidate.ids.size) {
+            const exact = states.find(state =>
+                [...candidate.ids].some(id => state.ids.has(id))
+            );
+
+            if (exact) return exact;
         }
 
-        if (
-            observedSessionCaptures === null
-        ) {
-            observedSessionCaptures =
-                total;
+        const candidateName = normalize(candidate.name);
 
-            sessionCaptureBase =
-                total;
+        if (candidateName) {
+            const named = states
+                .filter(state => {
+                    const stateName = normalize(state.name);
+                    return (
+                        stateName === candidateName ||
+                        stateName.includes(candidateName) ||
+                        candidateName.includes(stateName)
+                    );
+                })
+                .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0];
 
-            return false;
+            if (named) return named;
         }
 
-        /*
-         * Session reset / new hunt.
-         */
-        if (
-            total <
-            observedSessionCaptures
-        ) {
-            observedSessionCaptures =
-                total;
+        // The result is still authoritative; only target correlation falls
+        // back to the most recent unresolved throw.
+        return states.sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0];
+    }
 
-            sessionCaptureBase =
-                total;
+    function handleCaptureCandidate(candidate) {
+        const now = Date.now();
+        const fingerprint = candidateFingerprint(candidate);
+        const previous = recentProtocolFingerprints.get(fingerprint);
 
-            return false;
+        // One server result may be represented more than once in nested
+        // payload objects. De-duplicate identical semantic results.
+        if (previous && now - previous < 1800) return;
+        recentProtocolFingerprints.set(fingerprint, now);
+
+        protocolCaptureSignals++;
+        protocolLastType = candidate.type || candidate.path || 'capture';
+
+        const state = matchTargetForProtocol(candidate);
+
+        if (!state) {
+            stats.status = candidate.success
+                ? 'Capture signal received · no matching target'
+                : 'Capture failure signal · no matching target';
+            updateUI();
+            return;
         }
 
-        if (
-            total ===
-            observedSessionCaptures
-        ) {
-            return false;
+        state.lastResult = candidate.success ? 'captured' : 'failed';
+
+        if (!candidate.success) {
+            stats.status = `${state.name} · capture failed · ${state.throws} throws`;
+            updateUI();
+            return;
         }
 
-        const delta =
-            total -
-            observedSessionCaptures;
+        if (state.captured) return;
 
-        observedSessionCaptures =
-            total;
+        state.captured = true;
+        state.capturedAt = now;
+        stats.captures++;
+        stats.status = `${state.name} · captured · ${state.throws} throws`;
 
-        /*
-         * A server/session counter is authoritative. Apply every newly
-         * observed capture, but resolve the current target token first so
-         * a later DOM-removal fallback cannot double count it.
-         */
-        for (
-            let i = 0;
-            i < delta;
-            i++
-        ) {
-            if (
-                i === 0 &&
-                currentTargetToken &&
-                !resolvedTokens.has(
-                    currentTargetToken
-                )
-            ) {
-                recordCapture(
-                    currentTargetToken,
-                    false,
-                    'session'
-                );
-            } else {
-                stats.captures++;
-                stats.status =
-                    'Captured (session)';
+        updateUI();
+    }
+
+    function inspectProtocolMessage(data) {
+        protocolMessages++;
+
+        const decoded = decodeProtocolData(data);
+        if (!decoded) return;
+
+        for (const candidate of findCaptureCandidates(decoded)) {
+            handleCaptureCandidate(candidate);
+        }
+    }
+
+    function attachProtocolSocket(socket) {
+        protocolSockets++;
+
+        socket.addEventListener('message', event => {
+            if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+                event.data.text()
+                    .then(inspectProtocolMessage)
+                    .catch(() => {});
+                return;
             }
-        }
 
-        updateUI();
-        return true;
+            inspectProtocolMessage(event.data);
+        });
     }
 
-    function checkPendingOutcome() {
-        const pending =
-            pendingOutcome;
+    function installProtocolHook() {
+        if (protocolHookInstalled) return true;
 
-        if (
-            !pending ||
-            resolvedTokens.has(
-                pending.token
-            )
-        ) {
-            return;
+        const NativeWebSocket = page.WebSocket;
+        if (typeof NativeWebSocket !== 'function') return false;
+
+        if (page.__mothAutoCatchWebSocketHook) {
+            protocolHookInstalled = true;
+            return true;
         }
 
-        const age =
-            Date.now() -
-            pending.sentAt;
+        const WrappedWebSocket = new Proxy(NativeWebSocket, {
+            construct(target, args) {
+                const socket = Reflect.construct(target, args, target);
+                attachProtocolSocket(socket);
+                return socket;
+            }
+        });
 
-        /*
-         * Keep the correlation alive much longer than the old 1.45 s
-         * polling window. Captures can resolve after the ball animation
-         * and network response.
-         */
-        if (age > 6500) {
-            pendingOutcome = null;
-            return;
+        try {
+            page.WebSocket = WrappedWebSocket;
+            page.__mothAutoCatchWebSocketHook = true;
+            protocolHookInstalled = page.WebSocket === WrappedWebSocket;
+
+            if (protocolHookInstalled) {
+                console.info('[PokéIdle Auto Catch+] WebSocket capture hook installed');
+            }
+        } catch (error) {
+            console.warn('[PokéIdle Auto Catch+] WebSocket hook failed', error);
+            protocolHookInstalled = false;
         }
 
-        const history =
-            historyFingerprint();
-
-        if (
-            history &&
-            history !==
-                pending.beforeHistory &&
-            history !==
-                lastHistoryFingerprint
-        ) {
-            lastHistoryFingerprint =
-                history;
-
-            recordCapture(
-                pending.token,
-                false,
-                'history'
-            );
-
-            return;
-        }
-
-        if (syncSessionCaptureCount()) {
-            return;
-        }
-
-        if (age < 500) {
-            return;
-        }
-
-        const list =
-            document.querySelector(
-                '#caidos-lista'
-            );
-
-        const nowCount =
-            list?.children.length ?? 0;
-
-        const gone =
-            !signatureStillPresent(
-                pending.signature
-            );
-
-        if (!gone) {
-            return;
-        }
-
-        /*
-         * Only infer a capture if the throw was actually accepted by the
-         * game (the chosen ball count went down) and the target vanished
-         * shortly afterwards. This is much safer than body disappearance
-         * by itself.
-         */
-        const currentButton =
-            getBallButtons().find(
-                button =>
-                    ballIdentity(button) ===
-                    pending.ballIdentity
-            );
-
-        const countNow =
-            ballCount(currentButton);
-
-        const ballConsumed =
-            (
-                pending.ballCountBefore !==
-                    null &&
-                countNow !== null &&
-                countNow <
-                    pending.ballCountBefore
-            ) ||
-            (
-                pending.ballCountBefore ===
-                    null &&
-                totalUsed() >
-                    pending.usedBefore
-            );
-
-        if (
-            ballConsumed &&
-            nowCount <=
-                pending.beforeCount
-        ) {
-            recordCapture(
-                pending.token,
-                true,
-                'accepted throw + target removed'
-            );
-        }
+        return protocolHookInstalled;
     }
 
-    function installCaptureObservers() {
-        const historyPanel =
-            document.querySelector(
-                '#capturas-painel'
-            );
-
-        if (
-            historyPanel &&
-            historyObserver?.target !==
-                historyPanel
-        ) {
-            historyObserver?.observer
-                ?.disconnect();
-
-            const observer =
-                new MutationObserver(() => {
-                    checkPendingOutcome();
-                });
-
-            observer.observe(
-                historyPanel,
-                {
-                    childList: true,
-                    subtree: true,
-                    characterData: true
-                }
-            );
-
-            historyObserver = {
-                observer,
-                target: historyPanel
-            };
-        }
-
-        const sessionPanel =
-            document.querySelector(
-                '#sessao-painel'
-            );
-
-        if (
-            sessionPanel &&
-            sessionObserver?.target !==
-                sessionPanel
-        ) {
-            sessionObserver?.observer
-                ?.disconnect();
-
-            const observer =
-                new MutationObserver(() => {
-                    syncSessionCaptureCount();
-                });
-
-            observer.observe(
-                sessionPanel,
-                {
-                    childList: true,
-                    subtree: true,
-                    characterData: true
-                }
-            );
-
-            sessionObserver = {
-                observer,
-                target: sessionPanel
-            };
-
-            syncSessionCaptureCount();
-        }
-    }
-
-    function monitorOutcome({
-        target,
-        signature,
-        token,
-        beforeHistory,
-        beforeCount,
-        ballIdentity: thrownBallIdentity,
-        ballCountBefore,
-        usedBefore
-    }) {
-        pendingOutcome = {
-            target,
-            signature,
-            token,
-            beforeHistory,
-            beforeCount,
-            ballIdentity:
-                thrownBallIdentity,
-            ballCountBefore,
-            usedBefore,
-            sentAt: Date.now()
-        };
-
-        /*
-         * Mutation observers normally resolve this immediately. These
-         * delayed checks cover clients that batch UI updates.
-         */
-        for (
-            const delay of [
-                250,
-                500,
-                900,
-                1400,
-                2200,
-                3200,
-                4500,
-                6200
-            ]
-        ) {
-            setTimeout(
-                checkPendingOutcome,
-                delay
-            );
-        }
-    }
+    // Install before PokéIdle creates its socket.
+    installProtocolHook();
 
     // ---------------------------------------------------------------------
-    // Statistics
-    // ---------------------------------------------------------------------
-
-    function resetStats() {
-        stats = freshStats();
-
-        inventoryBaseline.clear();
-
-        resolvedTokens =
-            new Set();
-
-        currentTargetSignature =
-            null;
-
-        targetThrows = 0;
-
-        lastHistoryFingerprint =
-            historyFingerprint();
-
-        observedSessionCaptures =
-            null;
-
-        sessionCaptureBase =
-            null;
-
-        pendingOutcome =
-            null;
-
-        installCaptureObservers();
-        syncSessionCaptureCount();
-
-        syncInventoryUsage();
-        updateUI();
-    }
-
-    function totalUsed() {
-        return Object
-            .values(stats.used)
-            .reduce(
-                (sum, value) =>
-                    sum + value,
-                0
-            );
-    }
-
-    // ---------------------------------------------------------------------
-    // Automation loop
+    // Automation
     // ---------------------------------------------------------------------
 
     function setEnabled(value) {
-        settings.enabled =
-            Boolean(value);
-
+        settings.enabled = Boolean(value);
         saveSettings();
 
         clearTimeout(timer);
         timer = null;
 
-        stats.status =
-            settings.enabled
-                ? 'Starting'
-                : 'Paused';
-
+        stats.status = settings.enabled ? 'Starting' : 'Paused';
         updateUI();
 
-        if (settings.enabled) {
-            tick();
-        }
+        if (settings.enabled) tick();
     }
 
     function schedule() {
         clearTimeout(timer);
         timer = null;
 
-        if (!settings.enabled) {
-            return;
-        }
+        if (!settings.enabled) return;
 
         timer = setTimeout(
             tick,
-            Math.max(
-                250,
-                Number(
-                    settings.intervalMs
-                ) || 650
-            )
+            Math.max(250, Number(settings.intervalMs) || 650)
         );
     }
 
     function tick() {
         timer = null;
 
-        if (!settings.enabled) {
-            return;
-        }
+        if (!settings.enabled) return;
 
         installPanel();
         installHud();
-
         syncInventoryUsage();
 
-        const fallenPanel =
-            document.querySelector('#caidos');
-
-        const target = getTarget();
+        const fallenPanel = q('#caidos');
+        const states = scanTargets();
+        const state = states.find(item => !item.captured);
 
         if (
             !fallenPanel ||
-            fallenPanel.classList.contains(
-                'hidden'
-            ) ||
-            !target
+            fallenPanel.classList.contains('hidden') ||
+            !state
         ) {
-            stats.status =
-                'Waiting for target';
-
+            stats.status = 'Waiting for target';
             updateUI();
             schedule();
-
             return;
-        }
-
-        const signature =
-            targetSignature(target);
-
-        /*
-         * New defeated Pokémon.
-         */
-        if (
-            signature !==
-            currentTargetSignature
-        ) {
-            currentTargetSignature =
-                signature;
-
-            currentTargetToken++;
-            targetThrows = 0;
         }
 
         const choice = chooseBall();
 
         if (!choice) {
-            stats.status =
-                'No allowed balls';
-
+            stats.status = 'No allowed balls';
             updateUI();
             schedule();
-
             return;
         }
 
         selectBall(choice);
 
-        const list =
-            document.querySelector(
-                '#caidos-lista'
-            );
-
-        const beforeHistory =
-            historyFingerprint();
-
-        const beforeCount =
-            list?.children.length ?? 0;
-
-        const token =
-            currentTargetToken;
-
-        /*
-         * Let the game's selected-ball class settle. Chrome can commit
-         * the button state on a later task, so 160 ms is deliberately
-         * less aggressive than the old 90 ms.
-         */
-        const chosenIdentity =
-            ballIdentity(choice.button);
-
-        const countBeforeThrow =
-            choice.count;
+        const targetElement = state.element;
+        const ballId = ballIdentity(choice.button);
+        const ballBefore = choice.count;
+        const ballName = ballLabel(choice.button);
 
         setTimeout(() => {
             if (
                 !settings.enabled ||
-                !target.isConnected
-            ) {
-                return;
-            }
+                state.captured ||
+                !targetElement?.isConnected
+            ) return;
 
-            const clickTarget =
-                getTargetClickElement(target);
+            const clickTarget = getTargetClickElement(targetElement);
 
             if (!clickTarget) {
-                stats.status =
-                    'Target has no clickable control';
-
+                stats.status = 'Target has no clickable control';
                 updateUI();
                 return;
             }
 
-            const sent =
-                fireClick(clickTarget);
-
-            if (!sent) {
-                stats.status =
-                    'Target click failed';
-
+            if (!fireClick(clickTarget)) {
+                stats.status = 'Target click failed';
                 updateUI();
                 return;
             }
+
+            const now = Date.now();
+
+            state.throws++;
+            state.lastAttemptAt = now;
+            state.lastBallKey = choice.key;
+            state.lastBallLabel = ballName;
+            state.lastBallIdentity = ballId;
+            state.lastBallCountBefore = ballBefore;
+            state.lastResult = 'pending';
 
             stats.attempts++;
-            targetThrows++;
-
-            stats.status =
-                `Throwing ${ballLabel(
-                    choice.button
-                )}`;
-
-            monitorOutcome({
-                target,
-                signature,
-                token,
-                beforeHistory,
-                beforeCount,
-                ballIdentity:
-                    chosenIdentity,
-                ballCountBefore:
-                    countBeforeThrow,
-                usedBefore:
-                    totalUsed()
-            });
+            stats.status = formatTargetState(state);
 
             /*
-             * Confirm that Chrome/game accepted the throw by watching the
-             * selected ball inventory. This does not affect gameplay; it
-             * only makes failures visible in the HUD.
+             * Ball inventory is still useful for "balls used" statistics,
+             * but it no longer decides whether a capture succeeded.
              */
             setTimeout(() => {
                 syncInventoryUsage();
 
                 if (
-                    countBeforeThrow !== null &&
-                    target.isConnected
+                    ballBefore !== null &&
+                    !state.captured
                 ) {
-                    const currentButton =
-                        getBallButtons().find(
-                            button =>
-                                ballIdentity(button) ===
-                                chosenIdentity
-                        );
+                    const currentButton = getBallButtons().find(
+                        button => ballIdentity(button) === ballId
+                    );
 
-                    const countAfterThrow =
-                        ballCount(currentButton);
+                    const after = ballCount(currentButton);
 
-                    if (
-                        countAfterThrow !== null &&
-                        countAfterThrow >=
-                            countBeforeThrow
-                    ) {
+                    if (after !== null && after >= ballBefore) {
+                        state.lastResult = 'not-consumed';
                         stats.status =
-                            'Click sent · ball not consumed';
+                            `${state.name} · click sent · ball not consumed`;
                     }
                 }
 
@@ -1231,62 +885,45 @@
         schedule();
     }
 
+    function resetStats() {
+        stats = freshStats();
+        inventoryBaseline.clear();
+        targetStates.clear();
+        recentProtocolFingerprints.clear();
+
+        syncInventoryUsage();
+        updateUI();
+    }
+
     // ---------------------------------------------------------------------
-    // Styling
+    // UI
     // ---------------------------------------------------------------------
 
     function injectStyle() {
-        if (
-            document.getElementById(
-                'moth-ac-style'
-            )
-        ) {
-            return;
-        }
+        if (q('#moth-ac-style')) return;
 
-        const style =
-            document.createElement('style');
-
-        style.id =
-            'moth-ac-style';
-
+        const style = document.createElement('style');
+        style.id = 'moth-ac-style';
         style.textContent = `
             #moth-ac-panel {
                 margin: 8px 0 10px;
                 padding: 9px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.14);
-
+                border: 1px solid rgba(255,255,255,.14);
                 border-radius: 8px;
-
-                background:
-                    rgba(18,15,18,.72);
-
+                background: rgba(18,15,18,.72);
                 color: #f4edf0;
-
-                font:
-                    12px/1.3
-                    system-ui,
-                    sans-serif;
+                font: 12px/1.3 system-ui,sans-serif;
             }
 
-            #moth-ac-panel * {
-                box-sizing: border-box;
-            }
-
+            #moth-ac-panel * { box-sizing: border-box; }
             #moth-ac-panel button,
-            #moth-ac-panel input {
-                font: inherit;
-            }
+            #moth-ac-panel input { font: inherit; }
 
             .moth-ac-head {
                 display: flex;
                 align-items: center;
                 gap: 8px;
-
-                margin-bottom: 8px;
+                margin-bottom: 7px;
             }
 
             .moth-ac-title {
@@ -1297,57 +934,48 @@
             .moth-ac-status {
                 min-width: 0;
                 flex: 1;
-
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-
                 color: #b9adb2;
-                font-size: 11px;
+                font-size: 10px;
             }
 
             .moth-ac-toggle {
-                border:
-                    1px solid
-                    rgba(255,255,255,.18);
-
+                border: 1px solid rgba(255,255,255,.18);
                 border-radius: 999px;
-
                 padding: 4px 9px;
-
                 color: white;
                 background: #5b3038;
-
                 cursor: pointer;
                 font-weight: 700;
             }
 
-            .moth-ac-toggle.on {
-                background: #23683d;
+            .moth-ac-toggle.on { background: #23683d; }
+
+            .moth-ac-current {
+                margin-bottom: 7px;
+                padding: 5px 7px;
+                border-radius: 5px;
+                background: rgba(255,255,255,.045);
+                color: #d7cdd1;
+                font-size: 10px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
             .moth-ac-stats {
                 display: grid;
-
-                grid-template-columns:
-                    repeat(
-                        3,
-                        minmax(0, 1fr)
-                    );
-
+                grid-template-columns: repeat(3,minmax(0,1fr));
                 gap: 5px;
-
-                margin-bottom: 8px;
+                margin-bottom: 7px;
             }
 
             .moth-ac-stat {
                 padding: 5px 6px;
-
                 border-radius: 6px;
-
-                background:
-                    rgba(255,255,255,.06);
-
+                background: rgba(255,255,255,.06);
                 text-align: center;
             }
 
@@ -1358,65 +986,39 @@
 
             .moth-ac-stat span {
                 color: #aaa0a4;
-                font-size: 10px;
+                font-size: 9px;
             }
 
             .moth-ac-grid {
                 display: grid;
-
-                grid-template-columns:
-                    1fr 72px;
-
+                grid-template-columns: 1fr 72px;
                 gap: 5px 8px;
-
                 align-items: center;
             }
 
-            .moth-ac-grid label {
-                color: #d6cdd0;
-            }
-
-            .moth-ac-grid input[type="number"] {
-                width: 72px;
-
+            .moth-ac-grid input[type="number"],
+            .moth-ac-ball input[type="number"] {
                 padding: 3px 5px;
-
                 border-radius: 5px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.14);
-
+                border: 1px solid rgba(255,255,255,.14);
                 color: white;
-
-                background:
-                    rgba(0,0,0,.22);
+                background: rgba(0,0,0,.22);
             }
+
+            .moth-ac-grid input[type="number"] { width: 72px; }
 
             .moth-ac-balls {
                 display: grid;
-
-                grid-template-columns:
-                    repeat(
-                        2,
-                        minmax(0, 1fr)
-                    );
-
+                grid-template-columns: repeat(2,minmax(0,1fr));
                 gap: 4px 8px;
-
-                margin-top: 8px;
+                margin-top: 7px;
             }
 
             .moth-ac-ball {
                 display: grid;
-
-                grid-template-columns:
-                    auto 1fr 54px;
-
+                grid-template-columns: auto 1fr 54px;
                 align-items: center;
-
                 gap: 4px;
-
                 min-width: 0;
             }
 
@@ -1425,36 +1027,17 @@
                 text-overflow: ellipsis;
             }
 
-            .moth-ac-ball
-            input[type="number"] {
-                width: 54px;
-
-                padding: 2px 4px;
-
-                border-radius: 4px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.12);
-
-                color: white;
-
-                background:
-                    rgba(0,0,0,.22);
-            }
+            .moth-ac-ball input[type="number"] { width: 54px; }
 
             .moth-ac-foot {
                 display: flex;
                 align-items: center;
-
                 gap: 8px;
-
-                margin-top: 8px;
-                padding-top: 7px;
-
-                border-top:
-                    1px solid
-                    rgba(255,255,255,.08);
+                margin-top: 7px;
+                padding-top: 6px;
+                border-top: 1px solid rgba(255,255,255,.08);
+                color: #aaa0a4;
+                font-size: 10px;
             }
 
             .moth-ac-foot label {
@@ -1465,70 +1048,36 @@
 
             .moth-ac-reset {
                 margin-left: auto;
-
                 padding: 3px 7px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.15);
-
+                border: 1px solid rgba(255,255,255,.15);
                 border-radius: 5px;
-
                 color: #ddd;
-
-                background:
-                    rgba(255,255,255,.05);
-
+                background: rgba(255,255,255,.05);
                 cursor: pointer;
             }
 
-            /*
-             * Arena HUD
-             */
             #moth-capture-hud {
                 position: absolute;
-
                 top: 42px;
                 right: 8px;
-
                 z-index: 45;
-
-                min-width: 158px;
-
+                min-width: 174px;
+                max-width: 245px;
                 padding: 7px 8px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.18);
-
+                border: 1px solid rgba(255,255,255,.18);
                 border-radius: 7px;
-
-                background:
-                    rgba(18,16,20,.82);
-
+                background: rgba(18,16,20,.82);
                 color: white;
-
-                font:
-                    11px/1.25
-                    system-ui,
-                    sans-serif;
-
+                font: 11px/1.25 system-ui,sans-serif;
                 pointer-events: none;
-
-                backdrop-filter:
-                    blur(3px);
+                backdrop-filter: blur(3px);
             }
 
             .moth-hud-head {
                 display: flex;
-
-                justify-content:
-                    space-between;
-
+                justify-content: space-between;
                 gap: 8px;
-
                 margin-bottom: 5px;
-
                 font-weight: 700;
             }
 
@@ -1539,21 +1088,14 @@
 
             .moth-hud-row {
                 display: grid;
-
-                grid-template-columns:
-                    repeat(3, 1fr);
-
+                grid-template-columns: repeat(3,1fr);
                 gap: 4px;
             }
 
             .moth-hud-cell {
                 padding: 4px;
-
                 border-radius: 4px;
-
-                background:
-                    rgba(255,255,255,.07);
-
+                background: rgba(255,255,255,.07);
                 text-align: center;
             }
 
@@ -1567,47 +1109,33 @@
                 font-size: 9px;
             }
 
-            .moth-hud-balls {
+            .moth-hud-target {
                 margin-top: 5px;
-
-                color: #c6bcc0;
-
-                text-align: center;
-
+                overflow: hidden;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+                color: #ded4d8;
                 font-size: 10px;
+            }
+
+            .moth-hud-balls,
+            .moth-hud-protocol {
+                margin-top: 4px;
+                color: #a99fa3;
+                text-align: center;
+                font-size: 9px;
             }
         `;
 
-        document.head?.appendChild(style);
+        (document.head || document.documentElement).appendChild(style);
     }
 
-    // ---------------------------------------------------------------------
-    // Configuration panel
-    // ---------------------------------------------------------------------
-
-    function ballControl(
-        key,
-        label
-    ) {
+    function ballControl(key, label) {
         return `
-            <label
-                class="moth-ac-ball"
-                title="Enable this ball type and keep the configured reserve."
-            >
-                <input
-                    type="checkbox"
-                    data-moth-use="${key}"
-                >
-
+            <label class="moth-ac-ball" title="Enable this ball type and keep this reserve.">
+                <input type="checkbox" data-moth-use="${key}">
                 <span>${label}</span>
-
-                <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    data-moth-reserve="${key}"
-                    title="Reserve"
-                >
+                <input type="number" min="0" step="1" data-moth-reserve="${key}" title="Reserve">
             </label>
         `;
     }
@@ -1615,128 +1143,35 @@
     function panelMarkup() {
         return `
             <div class="moth-ac-head">
-                <span class="moth-ac-title">
-                    Auto Catch+
-                </span>
-
-                <span
-                    class="moth-ac-status"
-                    id="moth-ac-status"
-                >
-                    Idle
-                </span>
-
-                <button
-                    type="button"
-                    class="moth-ac-toggle"
-                    id="moth-ac-toggle"
-                >
-                    OFF
-                </button>
+                <span class="moth-ac-title">Auto Catch+</span>
+                <span class="moth-ac-status" id="moth-ac-status">Idle</span>
+                <button type="button" class="moth-ac-toggle" id="moth-ac-toggle">OFF</button>
             </div>
 
+            <div class="moth-ac-current" id="moth-ac-current">No target</div>
+
             <div class="moth-ac-stats">
-
-                <div class="moth-ac-stat">
-                    <b id="moth-ac-captures">
-                        0
-                    </b>
-                    <span>captures</span>
-                </div>
-
-                <div class="moth-ac-stat">
-                    <b id="moth-ac-balls-used">
-                        0
-                    </b>
-                    <span>balls used</span>
-                </div>
-
-                <div class="moth-ac-stat">
-                    <b id="moth-ac-rate">
-                        0%
-                    </b>
-                    <span>success</span>
-                </div>
-
+                <div class="moth-ac-stat"><b id="moth-ac-captures">0</b><span>captures</span></div>
+                <div class="moth-ac-stat"><b id="moth-ac-balls-used">0</b><span>balls used</span></div>
+                <div class="moth-ac-stat"><b id="moth-ac-rate">0%</b><span>success</span></div>
             </div>
 
             <div class="moth-ac-grid">
-
-                <label for="moth-ac-interval">
-                    Throw interval
-                </label>
-
-                <input
-                    id="moth-ac-interval"
-                    type="number"
-                    min="250"
-                    max="5000"
-                    step="50"
-                >
-
-                <label for="moth-ac-escalate">
-                    Escalate every N throws
-                    <small>(0 = never)</small>
-                </label>
-
-                <input
-                    id="moth-ac-escalate"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                >
-
+                <label for="moth-ac-interval">Throw interval</label>
+                <input id="moth-ac-interval" type="number" min="250" max="5000" step="50">
             </div>
 
             <div class="moth-ac-balls">
-
-                ${ballControl(
-                    'poke',
-                    'Poké'
-                )}
-
-                ${ballControl(
-                    'super',
-                    'Super'
-                )}
-
-                ${ballControl(
-                    'ultra',
-                    'Ultra'
-                )}
-
-                ${ballControl(
-                    'master',
-                    'Master'
-                )}
-
+                ${ballControl('poke', 'Poké')}
+                ${ballControl('super', 'Super')}
+                ${ballControl('ultra', 'Ultra')}
+                ${ballControl('master', 'Master')}
             </div>
 
             <div class="moth-ac-foot">
-
-                <label>
-                    <input
-                        id="moth-ac-hud-check"
-                        type="checkbox"
-                    >
-                    HUD
-                </label>
-
-                <span
-                    title="Reserve means the addon will not spend below this amount."
-                >
-                    Reserve = keep
-                </span>
-
-                <button
-                    type="button"
-                    class="moth-ac-reset"
-                    id="moth-ac-reset"
-                >
-                    Reset stats
-                </button>
-
+                <label><input id="moth-ac-hud-check" type="checkbox"> HUD</label>
+                <span id="moth-ac-protocol">Protocol: loading</span>
+                <button type="button" class="moth-ac-reset" id="moth-ac-reset">Reset stats</button>
             </div>
         `;
     }
@@ -1744,514 +1179,182 @@
     function installPanel() {
         injectStyle();
 
-        if (
-            document.getElementById(
-                'moth-ac-panel'
-            )
-        ) {
-            return true;
-        }
+        if (q('#moth-ac-panel')) return true;
 
-        const host =
-            document.querySelector(
-                '#auto-corpo'
-            );
+        const host = q('#auto-corpo');
+        if (!host) return false;
 
-        if (!host) {
-            return false;
-        }
-
-        const panel =
-            document.createElement(
-                'section'
-            );
-
-        panel.id =
-            'moth-ac-panel';
-
-        panel.innerHTML =
-            panelMarkup();
-
+        const panel = document.createElement('section');
+        panel.id = 'moth-ac-panel';
+        panel.innerHTML = panelMarkup();
         host.prepend(panel);
 
-        // Main toggle
+        q('#moth-ac-toggle', panel).addEventListener('click', () => {
+            setEnabled(!settings.enabled);
+        });
 
-        panel
-            .querySelector(
-                '#moth-ac-toggle'
-            )
-            .addEventListener(
-                'click',
-                () => {
-                    setEnabled(
-                        !settings.enabled
-                    );
-                }
+        const interval = q('#moth-ac-interval', panel);
+        interval.value = settings.intervalMs;
+
+        interval.addEventListener('change', () => {
+            settings.intervalMs = Math.max(
+                250,
+                Math.min(5000, Number(interval.value) || 650)
             );
 
-        // Interval
+            interval.value = settings.intervalMs;
+            saveSettings();
 
-        const interval =
-            panel.querySelector(
-                '#moth-ac-interval'
-            );
+            if (settings.enabled) schedule();
+        });
 
-        interval.value =
-            settings.intervalMs;
+        for (const checkbox of qa('[data-moth-use]', panel)) {
+            const key = checkbox.dataset.mothUse;
+            checkbox.checked = Boolean(settings.use[key]);
 
-        interval.addEventListener(
-            'change',
-            () => {
-                settings.intervalMs =
-                    Math.max(
-                        250,
-                        Math.min(
-                            5000,
-                            Number(
-                                interval.value
-                            ) || 650
-                        )
-                    );
-
-                interval.value =
-                    settings.intervalMs;
-
-                saveSettings();
-
-                if (settings.enabled) {
-                    schedule();
-                }
-            }
-        );
-
-        // Escalation
-
-        const escalate =
-            panel.querySelector(
-                '#moth-ac-escalate'
-            );
-
-        escalate.value =
-            settings.escalateAfter;
-
-        escalate.addEventListener(
-            'change',
-            () => {
-                settings.escalateAfter =
-                    Math.max(
-                        0,
-                        Math.min(
-                            100,
-                            Number(
-                                escalate.value
-                            ) || 0
-                        )
-                    );
-
-                escalate.value =
-                    settings.escalateAfter;
-
-                saveSettings();
-            }
-        );
-
-        // Enabled ball types
-
-        for (
-            const checkbox of
-            panel.querySelectorAll(
-                '[data-moth-use]'
-            )
-        ) {
-            const key =
-                checkbox.dataset.mothUse;
-
-            checkbox.checked =
-                Boolean(
-                    settings.use[key]
-                );
-
-            checkbox.addEventListener(
-                'change',
-                () => {
-                    settings.use[key] =
-                        checkbox.checked;
-
-                    saveSettings();
-                    updateUI();
-                }
-            );
-        }
-
-        // Ball reserves
-
-        for (
-            const input of
-            panel.querySelectorAll(
-                '[data-moth-reserve]'
-            )
-        ) {
-            const key =
-                input.dataset.mothReserve;
-
-            input.value =
-                Number(
-                    settings.reserve[key] ||
-                    0
-                );
-
-            input.addEventListener(
-                'change',
-                () => {
-                    settings.reserve[key] =
-                        Math.max(
-                            0,
-                            Number(
-                                input.value
-                            ) || 0
-                        );
-
-                    input.value =
-                        settings.reserve[key];
-
-                    saveSettings();
-                }
-            );
-        }
-
-        // HUD
-
-        const hudCheck =
-            panel.querySelector(
-                '#moth-ac-hud-check'
-            );
-
-        hudCheck.checked =
-            settings.showHud;
-
-        hudCheck.addEventListener(
-            'change',
-            () => {
-                settings.showHud =
-                    hudCheck.checked;
-
+            checkbox.addEventListener('change', () => {
+                settings.use[key] = checkbox.checked;
                 saveSettings();
                 updateUI();
-            }
-        );
+            });
+        }
 
-        // Reset
+        for (const input of qa('[data-moth-reserve]', panel)) {
+            const key = input.dataset.mothReserve;
+            input.value = Number(settings.reserve[key] || 0);
 
-        panel
-            .querySelector(
-                '#moth-ac-reset'
-            )
-            .addEventListener(
-                'click',
-                resetStats
-            );
+            input.addEventListener('change', () => {
+                settings.reserve[key] = Math.max(0, Number(input.value) || 0);
+                input.value = settings.reserve[key];
+                saveSettings();
+            });
+        }
+
+        const hudCheck = q('#moth-ac-hud-check', panel);
+        hudCheck.checked = settings.showHud;
+
+        hudCheck.addEventListener('change', () => {
+            settings.showHud = hudCheck.checked;
+            saveSettings();
+            updateUI();
+        });
+
+        q('#moth-ac-reset', panel).addEventListener('click', resetStats);
 
         updateUI();
-
         return true;
     }
-
-    // ---------------------------------------------------------------------
-    // Capture HUD
-    // ---------------------------------------------------------------------
 
     function installHud() {
         injectStyle();
 
-        if (
-            document.getElementById(
-                'moth-capture-hud'
-            )
-        ) {
-            return true;
+        if (q('#moth-capture-hud')) return true;
+
+        const palco = q('#palco');
+        if (!palco) return false;
+
+        if (getComputedStyle(palco).position === 'static') {
+            palco.style.position = 'relative';
         }
 
-        const palco =
-            document.querySelector(
-                '#palco'
-            );
-
-        if (!palco) {
-            return false;
-        }
-
-        if (
-            getComputedStyle(palco)
-                .position === 'static'
-        ) {
-            palco.style.position =
-                'relative';
-        }
-
-        const hud =
-            document.createElement('div');
-
-        hud.id =
-            'moth-capture-hud';
-
+        const hud = document.createElement('div');
+        hud.id = 'moth-capture-hud';
         hud.innerHTML = `
             <div class="moth-hud-head">
                 <span>Capture HUD</span>
-                <span
-                    class="moth-hud-state"
-                    id="moth-hud-status"
-                >
-                    Idle
-                </span>
+                <span class="moth-hud-state" id="moth-hud-status">Idle</span>
             </div>
 
             <div class="moth-hud-row">
-
-                <div class="moth-hud-cell">
-                    <b id="moth-hud-captures">
-                        0
-                    </b>
-                    <span>captures</span>
-                </div>
-
-                <div class="moth-hud-cell">
-                    <b id="moth-hud-used">
-                        0
-                    </b>
-                    <span>balls</span>
-                </div>
-
-                <div class="moth-hud-cell">
-                    <b id="moth-hud-rate">
-                        0%
-                    </b>
-                    <span>rate</span>
-                </div>
-
+                <div class="moth-hud-cell"><b id="moth-hud-captures">0</b><span>captures</span></div>
+                <div class="moth-hud-cell"><b id="moth-hud-used">0</b><span>balls</span></div>
+                <div class="moth-hud-cell"><b id="moth-hud-rate">0%</b><span>rate</span></div>
             </div>
 
-            <div
-                class="moth-hud-balls"
-                id="moth-hud-balls"
-            ></div>
+            <div class="moth-hud-target" id="moth-hud-target">No target</div>
+            <div class="moth-hud-balls" id="moth-hud-balls"></div>
+            <div class="moth-hud-protocol" id="moth-hud-protocol"></div>
         `;
 
         palco.appendChild(hud);
-
         updateUI();
 
         return true;
     }
 
-    // ---------------------------------------------------------------------
-    // UI update
-    // ---------------------------------------------------------------------
-
     function formatDuration(ms) {
-        const total =
-            Math.max(
-                0,
-                Math.floor(ms / 1000)
-            );
-
-        const hours =
-            Math.floor(total / 3600);
-
-        const minutes =
-            Math.floor(
-                (total % 3600) / 60
-            );
-
-        const seconds =
-            total % 60;
+        const total = Math.max(0, Math.floor(ms / 1000));
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const seconds = total % 60;
 
         if (hours) {
             return [
                 hours,
-                String(minutes).padStart(
-                    2,
-                    '0'
-                ),
-                String(seconds).padStart(
-                    2,
-                    '0'
-                )
+                String(minutes).padStart(2, '0'),
+                String(seconds).padStart(2, '0')
             ].join(':');
         }
 
-        return (
-            `${minutes}:` +
-            String(seconds).padStart(
-                2,
-                '0'
-            )
-        );
+        return `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
-    function setText(
-        selector,
-        value
-    ) {
-        const el =
-            document.querySelector(
-                selector
-            );
+    function setText(selector, value) {
+        const el = q(selector);
+        if (el) el.textContent = String(value);
+    }
 
-        if (el) {
-            el.textContent =
-                String(value);
-        }
+    function protocolLabel() {
+        if (!protocolHookInstalled) return 'Protocol: hook failed';
+        if (!protocolSockets) return 'Protocol: waiting for socket';
+        if (!protocolCaptureSignals) return `Protocol: live · ${protocolMessages} msgs`;
+        return `Protocol: ${protocolLastType}`;
     }
 
     function updateUI() {
-        const used =
-            totalUsed();
+        const used = totalUsed();
+        const denominator = used || stats.attempts;
+        const rate = denominator ? (stats.captures / denominator) * 100 : 0;
+        const state = currentTargetState();
+        const targetText = formatTargetState(state);
+        const protocolText = protocolLabel();
 
-        /*
-         * Prefer actual inventory consumption.
-         * If unavailable, fall back to click attempts.
-         */
-        const denominator =
-            used ||
-            stats.attempts;
-
-        const rate =
-            denominator
-                ? (
-                    stats.captures /
-                    denominator
-                ) * 100
-                : 0;
-
-        /*
-         * "~" means at least one capture had
-         * to be inferred from target removal.
-         */
-        const capturesText =
-            stats.inferredCaptures
-                ? `${stats.captures}~`
-                : String(
-                    stats.captures
-                );
-
-        const toggle =
-            document.querySelector(
-                '#moth-ac-toggle'
-            );
+        const toggle = q('#moth-ac-toggle');
 
         if (toggle) {
-            toggle.textContent =
-                settings.enabled
-                    ? 'ON'
-                    : 'OFF';
-
-            toggle.classList.toggle(
-                'on',
-                settings.enabled
-            );
+            toggle.textContent = settings.enabled ? 'ON' : 'OFF';
+            toggle.classList.toggle('on', settings.enabled);
         }
 
-        setText(
-            '#moth-ac-status',
-            stats.status
-        );
+        setText('#moth-ac-status', stats.status);
+        setText('#moth-ac-current', targetText);
+        setText('#moth-ac-captures', stats.captures);
+        setText('#moth-ac-balls-used', used);
+        setText('#moth-ac-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
+        setText('#moth-ac-protocol', protocolText);
 
-        setText(
-            '#moth-ac-captures',
-            capturesText
-        );
-
-        setText(
-            '#moth-ac-balls-used',
-            used
-        );
-
-        setText(
-            '#moth-ac-rate',
-            `${rate.toFixed(
-                rate >= 10
-                    ? 0
-                    : 1
-            )}%`
-        );
-
-        const hud =
-            document.querySelector(
-                '#moth-capture-hud'
-            );
+        const hud = q('#moth-capture-hud');
 
         if (hud) {
-            hud.style.display =
-                settings.showHud
-                    ? 'block'
-                    : 'none';
+            hud.style.display = settings.showHud ? 'block' : 'none';
         }
 
-        setText(
-            '#moth-hud-status',
-            settings.enabled
-                ? stats.status
-                : 'Paused'
-        );
-
-        setText(
-            '#moth-hud-captures',
-            capturesText
-        );
-
-        setText(
-            '#moth-hud-used',
-            used
-        );
-
-        setText(
-            '#moth-hud-rate',
-            `${rate.toFixed(
-                rate >= 10
-                    ? 0
-                    : 1
-            )}%`
-        );
-
-        const balls = [
-            `P ${stats.used.poke}`,
-            `S ${stats.used.super}`,
-            `U ${stats.used.ultra}`,
-
-            stats.used.master
-                ? `M ${stats.used.master}`
-                : null,
-
-            `· ${
-                formatDuration(
-                    Date.now() -
-                    stats.startedAt
-                )
-            }`
-        ]
-            .filter(Boolean)
-            .join('  ');
-
+        setText('#moth-hud-status', settings.enabled ? stats.status : 'Paused');
+        setText('#moth-hud-captures', stats.captures);
+        setText('#moth-hud-used', used);
+        setText('#moth-hud-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
+        setText('#moth-hud-target', targetText);
         setText(
             '#moth-hud-balls',
-            balls
+            [
+                `P ${stats.used.poke}`,
+                `S ${stats.used.super}`,
+                `U ${stats.used.ultra}`,
+                stats.used.master ? `M ${stats.used.master}` : null,
+                `· ${formatDuration(Date.now() - stats.startedAt)}`
+            ].filter(Boolean).join('  ')
         );
-
-        const panel =
-            document.querySelector(
-                '#moth-ac-panel'
-            );
-
-        if (panel) {
-            panel.title =
-                stats.inferredCaptures
-                    ? (
-                        '~ means ' +
-                        `${stats.inferredCaptures} ` +
-                        'capture(s) were inferred.'
-                    )
-                    : '';
-        }
+        setText('#moth-hud-protocol', protocolText);
     }
 
     // ---------------------------------------------------------------------
@@ -2259,46 +1362,29 @@
     // ---------------------------------------------------------------------
 
     function bootstrap() {
+        installProtocolHook();
         installPanel();
         installHud();
-        installCaptureObservers();
 
-        lastHistoryFingerprint =
-            historyFingerprint();
-
-        syncSessionCaptureCount();
+        scanTargets();
         syncInventoryUsage();
         updateUI();
 
-        /*
-         * Keeps the addon alive if the site's UI
-         * is rebuilt/moved dynamically.
-         */
         setInterval(() => {
             installPanel();
             installHud();
-            installCaptureObservers();
-
-            syncSessionCaptureCount();
-            checkPendingOutcome();
+            scanTargets();
             syncInventoryUsage();
             updateUI();
         }, 1000);
 
-        if (settings.enabled) {
-            tick();
-        }
+        if (settings.enabled) tick();
+
+        console.info('[PokéIdle Auto Catch+] v5 loaded');
     }
 
-    if (
-        document.readyState ===
-        'loading'
-    ) {
-        document.addEventListener(
-            'DOMContentLoaded',
-            bootstrap,
-            { once: true }
-        );
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
     } else {
         bootstrap();
     }
