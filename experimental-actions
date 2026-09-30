@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Experimental Actions
 // @namespace    moth.pokeidle
-// @version      1.0.1
+// @version      1.1.0
 // @description  One-shot client/server boundary probes for PokéIdle actions that the normal UI restricts by context.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -205,6 +205,44 @@
                 state && state.gold != null
                     ? Number(state.gold)
                     : null,
+            diamonds:
+                state && state.diamonds != null
+                    ? Number(state.diamonds)
+                    : null,
+            gems:
+                state && state.gems != null
+                    ? Number(state.gems)
+                    : state && state.gemas != null
+                        ? Number(state.gemas)
+                        : null,
+            ballsTotal:
+                state && state.balls &&
+                typeof state.balls === 'object'
+                    ? Object.values(state.balls)
+                        .reduce(
+                            (sum, value) =>
+                                sum +
+                                Math.max(
+                                    0,
+                                    Number(value) || 0
+                                ),
+                            0
+                        )
+                    : null,
+            itemsTotal:
+                state && state.items &&
+                typeof state.items === 'object'
+                    ? Object.values(state.items)
+                        .reduce(
+                            (sum, value) =>
+                                sum +
+                                Math.max(
+                                    0,
+                                    Number(value) || 0
+                                ),
+                            0
+                        )
+                    : null,
             alive:
                 pokemons.filter(
                     pokemon =>
@@ -337,6 +375,24 @@
             ],
             'unequip-bike': [
                 'bike'
+            ],
+            'claim-pass': [
+                'gold',
+                'diamonds',
+                'gems',
+                'ballsTotal',
+                'itemsTotal'
+            ],
+            'claim-affiliate': [
+                'diamonds',
+                'gems'
+            ],
+            'claim-zero-all': [
+                'gold',
+                'diamonds',
+                'gems',
+                'ballsTotal',
+                'itemsTotal'
             ]
         };
 
@@ -455,6 +511,42 @@
             );
         }
 
+        if (
+            probe.id === 'claim-pass' ||
+            probe.id === 'claim-affiliate' ||
+            probe.id === 'claim-zero-all'
+        ) {
+            const rewardKeys = [
+                'gold',
+                'diamonds',
+                'gems',
+                'ballsTotal',
+                'itemsTotal'
+            ];
+
+            return rewardKeys.some(
+                key => {
+                    const before =
+                        Number(
+                            probe.before &&
+                            probe.before[key]
+                        );
+
+                    const afterValue =
+                        Number(
+                            after &&
+                            after[key]
+                        );
+
+                    return (
+                        Number.isFinite(before) &&
+                        Number.isFinite(afterValue) &&
+                        afterValue > before
+                    );
+                }
+            );
+        }
+
         return false;
     }
 
@@ -523,6 +615,24 @@
                         event.mensagem ||
                         'server responded'
                     )
+            };
+        }
+
+        if (
+            event.k === 'afiliadoRecolhido'
+        ) {
+            return {
+                kind: 'accepted',
+                text:
+                    'affiliate claimed: ' +
+                    String(
+                        Number(event.diamantes || 0)
+                    ) +
+                    ' diamonds · ' +
+                    String(
+                        Number(event.gemas || 0)
+                    ) +
+                    ' gems'
             };
         }
 
@@ -942,6 +1052,78 @@
     }
 
     const actions = [
+        {
+            id: 'claim-pass',
+            group: 'Zero-argument claims',
+            label: 'Claim Battle Pass',
+            risk: 'low',
+            description:
+                'Send only {t:"passe.resgatar"}. The server decides whether any free/VIP reward is actually pending.',
+            available:
+                () => ({
+                    ok: true,
+                    reason: ''
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'passe.resgatar'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'claim-affiliate',
+            group: 'Zero-argument claims',
+            label: 'Claim affiliate rewards',
+            risk: 'low',
+            description:
+                'Send only {t:"afiliado.recolher"}. No referral code, amount, or target is supplied.',
+            available:
+                () => ({
+                    ok: true,
+                    reason: ''
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'afiliado.recolher'
+                        }
+                    }
+                ]
+        },
+        {
+            id: 'claim-zero-all',
+            group: 'Zero-argument claims',
+            label: 'Claim all zero-arg rewards',
+            risk: 'low',
+            description:
+                'Try every known zero-argument reward claim: Battle Pass, then affiliate rewards.',
+            available:
+                () => ({
+                    ok: true,
+                    reason: ''
+                }),
+            steps:
+                () => [
+                    {
+                        delay: 0,
+                        payload: {
+                            t: 'passe.resgatar'
+                        }
+                    },
+                    {
+                        delay: 350,
+                        payload: {
+                            t: 'afiliado.recolher'
+                        }
+                    }
+                ]
+        },
         {
             id: 'remote-heal',
             group: 'Context probes',
@@ -2213,6 +2395,12 @@
                 current.gold == null
                     ? '—'
                     : current.gold
+            ) +
+            ' · 💎 ' +
+            escapeHtml(
+                current.diamonds == null
+                    ? '—'
+                    : current.diamonds
             );
 
         for (const action of actions) {
@@ -2335,7 +2523,7 @@
         );
 
         console.info(
-            '[PokéIdle Experimental Actions] v1.0.1 loaded'
+            '[PokéIdle Experimental Actions] v1.1.0 loaded'
         );
     }
 
