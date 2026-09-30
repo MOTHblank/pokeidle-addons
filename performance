@@ -202,68 +202,331 @@
     }
 
     // ------------------------------------------------------------------
-    // Exact campo.mjs loop throttle
+    // Native optimized mode cooperation
     // ------------------------------------------------------------------
 
-    function scheduleComesFromCampo() {
+    function nativeOptimizedEnabled() {
         try {
-            return /(?:https:\/\/pokeidle\.io)?\/campo\.mjs(?:\?|:)/i
-                .test(String(new Error().stack || ''));
+            return (
+                localStorage.getItem(
+                    'cfg-otimizado'
+                ) === '1'
+            );
         } catch {
             return false;
         }
     }
 
-    function isCampoLoopRequest(callback) {
+    function forceNativeOptimized() {
+        try {
+            const owned =
+                localStorage.getItem(
+                    NATIVE_OPT_OWNER_KEY
+                ) === '1';
+
+            if (owned) {
+                localStorage.setItem(
+                    'cfg-otimizado',
+                    '1'
+                );
+
+                return;
+            }
+
+            if (
+                localStorage.getItem(
+                    'cfg-otimizado'
+                ) === '1'
+            ) {
+                /*
+                 * The player already enabled PokéIdle's own optimization.
+                 * Leave it entirely under their control.
+                 */
+                return;
+            }
+
+            const previous =
+                localStorage.getItem(
+                    'cfg-otimizado'
+                );
+
+            localStorage.setItem(
+                NATIVE_OPT_BASE_KEY,
+                previous === null
+                    ? '__null__'
+                    : previous
+            );
+
+            localStorage.setItem(
+                NATIVE_OPT_OWNER_KEY,
+                '1'
+            );
+
+            localStorage.setItem(
+                'cfg-otimizado',
+                '1'
+            );
+        } catch {}
+    }
+
+    function restoreNativeOptimized() {
+        try {
+            if (
+                localStorage.getItem(
+                    NATIVE_OPT_OWNER_KEY
+                ) !== '1'
+            ) {
+                return;
+            }
+
+            const previous =
+                localStorage.getItem(
+                    NATIVE_OPT_BASE_KEY
+                );
+
+            if (
+                previous ===
+                '__null__'
+            ) {
+                localStorage.removeItem(
+                    'cfg-otimizado'
+                );
+            } else if (
+                previous !==
+                null
+            ) {
+                localStorage.setItem(
+                    'cfg-otimizado',
+                    previous
+                );
+            }
+
+            localStorage.removeItem(
+                NATIVE_OPT_OWNER_KEY
+            );
+
+            localStorage.removeItem(
+                NATIVE_OPT_BASE_KEY
+            );
+        } catch {}
+    }
+
+    function syncNativeOptimized() {
+        const shouldForce =
+            settings.enabled &&
+            profile()
+                .nativeOptimized &&
+            !isNativeEconomy();
+
+        if (shouldForce) {
+            forceNativeOptimized();
+        } else {
+            restoreNativeOptimized();
+        }
+    }
+
+    /*
+     * Restore the user's own native preference on navigation/reload. The
+     * next page load re-enables it at document-start if Performance+ still
+     * needs it.
+     */
+    page.addEventListener(
+        'pagehide',
+        restoreNativeOptimized
+    );
+
+    // Apply before app.js/campo.mjs start using otimizadoLigado().
+    syncNativeOptimized();
+
+    // ------------------------------------------------------------------
+    // Upstream-aware requestAnimationFrame throttling
+    // ------------------------------------------------------------------
+
+    function scheduleComesFromCampo() {
+        try {
+            return /(?:https:\/\/pokeidle\.io)?\/campo\.mjs(?:\?|:)/i
+                .test(
+                    String(
+                        new Error()
+                            .stack ||
+                        ''
+                    )
+                );
+        } catch {
+            return false;
+        }
+    }
+
+    function classifyRafCallback(
+        callback
+    ) {
         if (
             typeof callback !==
-            'function'
+                'function'
         ) {
-            return false;
+            return null;
         }
 
         if (
-            campoCallbacks.has(
+            rafClassification.has(
                 callback
             )
         ) {
-            return true;
+            return (
+                rafClassification.get(
+                    callback
+                ) ||
+                null
+            );
         }
+
+        const name =
+            String(
+                callback.name ||
+                ''
+            );
+
+        let kind =
+            null;
 
         /*
-         * Firefox's profiler labels the renderer as campo.mjs -> loop,
-         * but Function.name is not guaranteed for module-local callbacks.
-         * v4 incorrectly required callback.name === "loop", which is why
-         * it could remain stuck at "campo…".
-         *
-         * Discover once from the requestAnimationFrame call site itself.
-         * After the first campo callback is found, unrelated rAF calls no
-         * longer pay the cost of creating Error stacks.
+         * app.js has a permanent rAF in the Pokémon Center solely to keep
+         * the nurse/TM/depot/house buttons visually attached to NPCs.
          */
         if (
-            campoLoopFound ||
-            !scheduleComesFromCampo()
+            name ===
+                'seguirEnfermeira' ||
+            String(
+                callback
+            ).includes(
+                'seguirBotaoCentro'
+            )
         ) {
-            return false;
+            kind =
+                'npc';
+
+            npcLoopFound =
+                true;
+        } else if (
+            scheduleComesFromCampo()
+        ) {
+            /*
+             * Every Campo instance has its own bound loop. v4 only found
+             * the first one, allowing replay/war/PvP Campo instances to
+             * run uncapped. Classify every distinct callback once.
+             */
+            kind =
+                'campo';
+
+            campoLoopFound =
+                true;
         }
 
-        campoCallbacks.add(
-            callback
+        rafClassification.set(
+            callback,
+            kind ||
+                false
         );
 
-        campoLoopFound = true;
+        if (
+            kind ===
+                'campo'
+        ) {
+            console.info(
+                '[PokéIdle Performance+] hooked a campo.mjs renderer'
+            );
+        } else if (
+            kind ===
+                'npc'
+        ) {
+            console.info(
+                '[PokéIdle Performance+] hooked Center NPC positioning loop'
+            );
+        }
 
-        console.info(
-            '[PokéIdle Performance+] hooked campo.mjs renderer from its rAF call site'
-        );
-
-        return true;
+        return kind;
     }
 
-    function intervalForMode(mode) {
-        if (mode === '30') return 1000 / 30;
-        if (mode === '15') return 1000 / 15;
-        if (mode === '2') return 500;
+    function intervalForMode(
+        mode
+    ) {
+        if (
+            mode ===
+                'full'
+        ) {
+            return 0;
+        }
+
+        const fps =
+            Number(mode);
+
+        if (
+            !Number.isFinite(
+                fps
+            ) ||
+            fps <= 0
+        ) {
+            return 0;
+        }
+
+        return (
+            1000 /
+            fps
+        );
+    }
+
+    function intervalForRafKind(
+        kind
+    ) {
+        if (
+            !settings.enabled
+        ) {
+            return 0;
+        }
+
+        if (
+            kind ===
+                'campo'
+        ) {
+            return intervalForMode(
+                currentMode
+            );
+        }
+
+        if (
+            kind ===
+                'npc'
+        ) {
+            if (
+                document.hidden
+            ) {
+                return 500;
+            }
+
+            if (
+                Date.now() <
+                interactionBoostUntil
+            ) {
+                return 1000 / 30;
+            }
+
+            if (
+                currentUi ===
+                    'off'
+            ) {
+                return 0;
+            }
+
+            if (
+                currentUi ===
+                    'lite'
+            ) {
+                return 1000 / 20;
+            }
+
+            return 100;
+        }
+
         return 0;
     }
 
@@ -276,66 +539,114 @@
             return campoHookInstalled;
         }
 
-        function mothRequestAnimationFrame(callback) {
-            if (!isCampoLoopRequest(callback)) {
-                return nativeRAF(callback);
+        function mothRequestAnimationFrame(
+            callback
+        ) {
+            const kind =
+                classifyRafCallback(
+                    callback
+                );
+
+            if (!kind) {
+                return nativeRAF(
+                    callback
+                );
             }
 
-            const publicId = nextSyntheticRafId--;
+            const publicId =
+                nextSyntheticRafId--;
+
             const pending = {
                 actualId: null,
                 cancelled: false
             };
 
-            const gate = timestamp => {
-                if (pending.cancelled) {
-                    throttledRequests.delete(publicId);
-                    return;
-                }
+            const gate =
+                timestamp => {
+                    if (
+                        pending.cancelled
+                    ) {
+                        throttledRequests.delete(
+                            publicId
+                        );
 
-                const interval =
-                    settings.enabled
-                        ? intervalForMode(currentMode)
-                        : 0;
+                        return;
+                    }
 
-                let state = campoState.get(callback);
+                    const interval =
+                        intervalForRafKind(
+                            kind
+                        );
 
-                if (!state) {
-                    state = {
-                        lastRun: -Infinity
-                    };
+                    let callbackState =
+                        rafState.get(
+                            callback
+                        );
 
-                    campoState.set(
-                        callback,
-                        state
+                    if (
+                        !callbackState
+                    ) {
+                        callbackState = {
+                            lastRun:
+                                -Infinity
+                        };
+
+                        rafState.set(
+                            callback,
+                            callbackState
+                        );
+                    }
+
+                    if (
+                        interval > 0 &&
+                        timestamp -
+                            callbackState
+                                .lastRun <
+                            interval
+                    ) {
+                        if (
+                            kind ===
+                                'campo'
+                        ) {
+                            campoSkippedWindow++;
+                        } else {
+                            npcSkippedWindow++;
+                        }
+
+                        pending.actualId =
+                            nativeRAF(
+                                gate
+                            );
+
+                        return;
+                    }
+
+                    callbackState.lastRun =
+                        timestamp;
+
+                    if (
+                        kind ===
+                            'campo'
+                    ) {
+                        campoRunsWindow++;
+                    } else {
+                        npcRunsWindow++;
+                    }
+
+                    throttledRequests.delete(
+                        publicId
                     );
-                }
 
-                if (
-                    interval > 0 &&
-                    timestamp - state.lastRun <
-                        interval
-                ) {
-                    campoSkippedWindow++;
-
-                    pending.actualId =
-                        nativeRAF(gate);
-
-                    return;
-                }
-
-                state.lastRun = timestamp;
-                campoRunsWindow++;
-
-                throttledRequests.delete(
-                    publicId
-                );
-
-                callback.call(page, timestamp);
-            };
+                    callback.call(
+                        page,
+                        timestamp
+                    );
+                };
 
             pending.actualId =
-                nativeRAF(gate);
+                nativeRAF(
+                    gate
+                );
 
             throttledRequests.set(
                 publicId,
@@ -345,23 +656,35 @@
             return publicId;
         }
 
-        function mothCancelAnimationFrame(id) {
+        function mothCancelAnimationFrame(
+            id
+        ) {
             const pending =
-                throttledRequests.get(id);
+                throttledRequests.get(
+                    id
+                );
 
             if (!pending) {
-                return nativeCancelRAF(id);
+                return nativeCancelRAF(
+                    id
+                );
             }
 
-            pending.cancelled = true;
+            pending.cancelled =
+                true;
 
-            if (pending.actualId != null) {
+            if (
+                pending.actualId !=
+                null
+            ) {
                 nativeCancelRAF(
                     pending.actualId
                 );
             }
 
-            throttledRequests.delete(id);
+            throttledRequests.delete(
+                id
+            );
         }
 
         try {
@@ -376,18 +699,323 @@
                 mothRequestAnimationFrame;
         } catch (error) {
             console.warn(
-                '[PokéIdle Performance+] campo hook failed',
+                '[PokéIdle Performance+] rAF hook failed',
                 error
             );
 
-            campoHookInstalled = false;
+            campoHookInstalled =
+                false;
         }
 
         return campoHookInstalled;
     }
 
-    // Install immediately, before campo.mjs starts its loop.
+    // ------------------------------------------------------------------
+    // Hot presentation interval throttling
+    // ------------------------------------------------------------------
+
+    const uiTimerClassification =
+        new WeakMap();
+
+    let uiTimerHookInstalled =
+        false;
+
+    function classifyUiTimer(
+        callback,
+        delay
+    ) {
+        if (
+            typeof callback !==
+                'function'
+        ) {
+            return null;
+        }
+
+        if (
+            uiTimerClassification.has(
+                callback
+            )
+        ) {
+            return (
+                uiTimerClassification.get(
+                    callback
+                ) ||
+                null
+            );
+        }
+
+        const name =
+            String(
+                callback.name ||
+                ''
+            );
+
+        const source =
+            String(
+                callback
+            );
+
+        let kind =
+            null;
+
+        if (
+            name ===
+                'tiqueCentroSaida'
+        ) {
+            kind =
+                'exitHud';
+        } else if (
+            name ===
+                'pintarCaidos'
+        ) {
+            kind =
+                'fallen';
+        } else if (
+            name ===
+                'pintarPillDeFila' ||
+            name ===
+                'tiqueFilaNoModal'
+        ) {
+            kind =
+                'pvpTicker';
+        } else if (
+            name ===
+                'tiqueCentro'
+        ) {
+            kind =
+                'centerTicker';
+        } else if (
+            Number(delay) ===
+                100 &&
+            source.includes(
+                'reposicionarGolpesPainel'
+            ) &&
+            source.includes(
+                'golpesCooldownFim'
+            )
+        ) {
+            kind =
+                'moveHud';
+        }
+
+        uiTimerClassification.set(
+            callback,
+            kind ||
+                false
+        );
+
+        return kind;
+    }
+
+    function uiTimerMinimum(
+        kind
+    ) {
+        if (
+            !settings.enabled ||
+            currentUi ===
+                'off'
+        ) {
+            return 0;
+        }
+
+        /*
+         * Any fresh interaction temporarily restores native UI cadence.
+         * Performance+ should disappear when the player starts using the
+         * interface, then save work again after the short boost window.
+         */
+        if (
+            Date.now() <
+            interactionBoostUntil
+        ) {
+            return 0;
+        }
+
+        if (
+            kind ===
+                'moveHud'
+        ) {
+            if (
+                currentUi ===
+                    'lite'
+            ) {
+                return 250;
+            }
+
+            /*
+             * The panel is hidden by our aggressive/performance CSS. One
+             * slow sweep keeps its state fresh for instant restoration.
+             */
+            return currentUi ===
+                'performance'
+                ? 2000
+                : 1000;
+        }
+
+        if (
+            kind ===
+                'exitHud'
+        ) {
+            if (
+                currentUi ===
+                    'lite'
+            ) {
+                return 160;
+            }
+
+            return currentUi ===
+                'performance'
+                ? 500
+                : 250;
+        }
+
+        if (
+            kind ===
+                'fallen'
+        ) {
+            /*
+             * Auto Catch consumes the upstream fallen-body DOM, so never
+             * slow this producer while Auto Catch is active.
+             */
+            if (
+                autoCatchEnabled()
+            ) {
+                return 0;
+            }
+
+            return currentUi ===
+                'performance'
+                ? 750
+                : currentUi ===
+                    'aggressive'
+                    ? 500
+                    : 250;
+        }
+
+        if (
+            kind ===
+                'pvpTicker'
+        ) {
+            return currentUi ===
+                'performance'
+                ? 1500
+                : currentUi ===
+                    'aggressive'
+                    ? 1000
+                    : 500;
+        }
+
+        if (
+            kind ===
+                'centerTicker'
+        ) {
+            return currentUi ===
+                'performance'
+                ? 1500
+                : 1000;
+        }
+
+        return 0;
+    }
+
+    function installUiTimerHook() {
+        if (
+            uiTimerHookInstalled
+        ) {
+            return true;
+        }
+
+        function mothSetInterval(
+            callback,
+            delay,
+            ...args
+        ) {
+            const kind =
+                classifyUiTimer(
+                    callback,
+                    delay
+                );
+
+            if (!kind) {
+                return nativeSetInterval(
+                    callback,
+                    delay,
+                    ...args
+                );
+            }
+
+            let lastRun =
+                -Infinity;
+
+            const wrapped =
+                function (
+                    ...callbackArgs
+                ) {
+                    const now =
+                        performance.now();
+
+                    const minimum =
+                        uiTimerMinimum(
+                            kind
+                        );
+
+                    if (
+                        minimum > 0 &&
+                        now -
+                            lastRun <
+                            minimum
+                    ) {
+                        uiTimerSkippedWindow++;
+
+                        return;
+                    }
+
+                    lastRun =
+                        now;
+
+                    uiTimerRunsWindow++;
+
+                    return callback.apply(
+                        this,
+                        callbackArgs
+                    );
+                };
+
+            return nativeSetInterval(
+                wrapped,
+                delay,
+                ...args
+            );
+        }
+
+        try {
+            page.setInterval =
+                mothSetInterval;
+
+            /*
+             * IDs are native interval IDs; clearInterval needs no mapping.
+             */
+            page.clearInterval =
+                nativeClearInterval;
+
+            uiTimerHookInstalled =
+                page.setInterval ===
+                mothSetInterval;
+        } catch (error) {
+            console.warn(
+                '[PokéIdle Performance+] UI timer hook failed',
+                error
+            );
+
+            uiTimerHookInstalled =
+                false;
+        }
+
+        return uiTimerHookInstalled;
+    }
+
+    // Install both hooks before app.js/campo.mjs schedule their permanent loops.
     installCampoHook();
+    installUiTimerHook();
 
     // ------------------------------------------------------------------
     // Runtime pressure measurement
