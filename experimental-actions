@@ -210,6 +210,32 @@
                     pokemon =>
                         Number(pokemon.hp || 0) > 0
                 ).length,
+            hp:
+                pokemons.reduce(
+                    (sum, pokemon) =>
+                        sum +
+                        Math.max(
+                            0,
+                            Number(
+                                pokemon.hp ||
+                                0
+                            )
+                        ),
+                    0
+                ),
+            maxHp:
+                pokemons.reduce(
+                    (sum, pokemon) =>
+                        sum +
+                        Math.max(
+                            0,
+                            Number(
+                                pokemon.maxHp ||
+                                0
+                            )
+                        ),
+                    0
+                ),
             team:
                 pokemons.filter(
                     pokemon =>
@@ -1711,7 +1737,8 @@
             '</div>';
 
         html +=
-            '<div class="mea-state" data-mea-state></div>';
+            '<div class="mea-state" data-mea-state></div>' +
+            '<div class="mea-state">One-shot probes only. No VIP/premium spoofing, currency fabrication, marketplace actions, or held Exp. Share equip/remove race testing.</div>';
 
         for (
             const [
