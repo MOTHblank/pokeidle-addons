@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Explorer
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.1.0
 // @description  Runtime explorer/dev console for PokéIdle addon development.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -137,6 +137,22 @@
             el.tagName.toLowerCase() +
             (classes.length ? '.' + classes.join('.') : '')
         );
+    }
+
+    function stackOrigin() {
+        try {
+            const lines = String(new Error().stack || '')
+                .split('\n')
+                .map(line => line.trim())
+                .filter(Boolean);
+
+            return lines.find(line =>
+                /pokeidle\.io\//i.test(line) &&
+                !/moth-explorer|userscript/i.test(line)
+            ) || lines[2] || lines[1] || '';
+        } catch {
+            return '';
+        }
     }
 
     function elementPath(el, limit = 6) {
@@ -624,7 +640,9 @@
                                 Number(delay) ||
                                 0,
                             createdAt:
-                                performance.now()
+                                performance.now(),
+                            origin:
+                                stackOrigin()
                         }
                     );
 
@@ -664,7 +682,9 @@
                                 Number(delay) ||
                                 0,
                             createdAt:
-                                performance.now()
+                                performance.now(),
+                            origin:
+                                stackOrigin()
                         }
                     );
 
@@ -1374,7 +1394,7 @@
                 if (
                     target instanceof Element &&
                     target.closest(
-                        '#' + ROOT_ID
+                        '#' + ROOT_ID + ', #' + BUTTON_ID
                     )
                 ) {
                     return;
@@ -1520,6 +1540,18 @@
                         histogramDelays(
                             state.timers
                                 .intervals
+                        ),
+                    timeoutOrigins:
+                        topTimerOrigins(
+                            state.timers
+                                .timeouts,
+                            30
+                        ),
+                    intervalOrigins:
+                        topTimerOrigins(
+                            state.timers
+                                .intervals,
+                            30
                         )
                 },
 
@@ -1569,6 +1601,29 @@
         };
     }
 
+    function topTimerOrigins(map, limit = 20) {
+        const counts = new Map();
+
+        for (const item of map.values()) {
+            const origin =
+                item.origin ||
+                '(unknown origin)';
+
+            counts.set(
+                origin,
+                (counts.get(origin) || 0) + 1
+            );
+        }
+
+        return [...counts.entries()]
+            .map(([origin, count]) => ({
+                origin,
+                count
+            }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, limit);
+    }
+
     function histogramDelays(map) {
         const histogram =
             new Map();
@@ -1604,6 +1659,116 @@
                     a.delayMs -
                     b.delayMs
             );
+    }
+
+    function buildTextReport() {
+        const data = buildExport();
+
+        const lines = [
+            'PokéIdle Explorer report',
+            'Generated: ' + data.generatedAt,
+            '',
+            'RUNTIME',
+            'FPS: ' + data.runtime.performance.browserFps,
+            'Long tasks: ' + data.runtime.performance.longTaskMsPerSecond + ' ms/s',
+            'rAF: ' + data.runtime.raf.executedPerSecond + ' callbacks/s',
+            'Active timeouts: ' + data.runtime.timers.activeTimeouts,
+            'Active intervals: ' + data.runtime.timers.activeIntervals,
+            '',
+            'WEBSOCKET',
+            'Sockets seen: ' + data.websocket.sockets,
+            'Messages: ' + data.websocket.messages,
+            'Message shapes: ' + data.websocket.types.length,
+            ...data.websocket.types.slice(0, 20).map(
+                item =>
+                    '  ' +
+                    item.type +
+                    ': ' +
+                    item.count +
+                    ' (in ' +
+                    item.direction.in +
+                    ' / out ' +
+                    item.direction.out +
+                    ')'
+            ),
+            '',
+            'MODULES',
+            ...data.modules.slice(0, 30).map(
+                item =>
+                    '  ' +
+                    item.name +
+                    ' — ' +
+                    item.duration +
+                    ' ms — ' +
+                    Math.round(item.transferSize / 1024) +
+                    ' KB — ' +
+                    item.url
+            ),
+            '',
+            'MUTATION HOTSPOTS',
+            ...data.hotspots.mutations.slice(0, 20).map(
+                item =>
+                    '  ' +
+                    item.region +
+                    ': ' +
+                    item.count
+            ),
+            '',
+            'RESIZE / LAYOUT ACTIVITY',
+            ...data.hotspots.resizes.slice(0, 20).map(
+                item =>
+                    '  ' +
+                    item.region +
+                    ': ' +
+                    item.count
+            ),
+            '',
+            'ACTIVE INTERVAL ORIGINS',
+            ...data.runtime.timers.intervalOrigins.slice(0, 20).map(
+                item =>
+                    '  ' +
+                    item.count +
+                    '× ' +
+                    item.origin
+            ),
+            '',
+            'LAST INSPECTION',
+            JSON.stringify(
+                data.inspections[0] || null,
+                null,
+                2
+            )
+        ];
+
+        return lines.join('\n');
+    }
+
+    async function copyTextReport() {
+        const text = buildTextReport();
+
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand('copy');
+            area.remove();
+        }
+
+        const button = q('[data-mexp-copy]');
+
+        if (button) {
+            const previous = button.textContent;
+            button.textContent = 'Copied';
+
+            setTimeout(() => {
+                button.textContent = previous;
+            }, 1200);
+        }
     }
 
     function downloadExport() {
@@ -1989,6 +2154,7 @@
                     <button type="button" data-mexp-record>Record DOM</button>
                     <button type="button" data-mexp-inspect>Inspect next click</button>
                     <button type="button" data-mexp-export>Export JSON</button>
+                    <button type="button" data-mexp-copy>Copy report</button>
                     <button type="button" data-mexp-clear>Clear</button>
                 </div>
 
@@ -2064,6 +2230,14 @@
             ).addEventListener(
                 'click',
                 downloadExport
+            );
+
+            q(
+                '[data-mexp-copy]',
+                drawer
+            ).addEventListener(
+                'click',
+                copyTextReport
             );
 
             q(
@@ -2344,7 +2518,9 @@
                     createdTimeouts: state.timers.createdTimeouts,
                     createdIntervals: state.timers.createdIntervals,
                     timeoutDelays: timeoutHistogram,
-                    intervalDelays: intervalHistogram
+                    intervalDelays: intervalHistogram,
+                    timeoutOrigins: topTimerOrigins(state.timers.timeouts, 12),
+                    intervalOrigins: topTimerOrigins(state.timers.intervals, 12)
                 }, null, 2))}</pre>
             </div>
 
@@ -2544,7 +2720,7 @@
             }, 1500);
 
         console.info(
-            '[PokéIdle Explorer] v1 loaded'
+            '[PokéIdle Explorer] v1.1 loaded'
         );
     }
 
