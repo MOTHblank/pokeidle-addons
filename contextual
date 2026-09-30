@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Contextual Quick Actions
 // @namespace    moth.pokeidle
-// @version      1.0.0
-// @description  Context-aware quick navigation and utility palette for PokéIdle.
+// @version      1.1.0
+// @description  Small context-aware quick navigation palette for PokéIdle.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        none
@@ -12,1317 +12,499 @@
 (() => {
     'use strict';
 
-    const ROOT_ID = 'moth-quick-actions';
-    const STORAGE_KEY = 'moth-pokeidle-quick-actions-v1';
+    const BUTTON_ID = 'moth-quick-actions-button';
+    const PANEL_ID = 'moth-quick-actions-panel';
+    const STYLE_ID = 'moth-quick-actions-style';
+    const STORAGE_KEY = 'moth-pokeidle-quick-actions-v2';
 
-    const state = {
-        open: false,
-        lastContext: null,
-        prefs: loadPrefs()
-    };
+    const q = (selector, root = document) => root.querySelector(selector);
+
+    function visible(el) {
+        if (!el || !el.isConnected || el.classList.contains('hidden')) return false;
+        const style = getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    }
 
     function loadPrefs() {
         try {
-            return {
-                shortcut: true,
-                ...JSON.parse(
-                    localStorage.getItem(STORAGE_KEY) || '{}'
-                )
-            };
+            return { shortcut: true, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') };
         } catch {
-            return {
-                shortcut: true
-            };
+            return { shortcut: true };
         }
     }
+
+    const prefs = loadPrefs();
 
     function savePrefs() {
-        localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify(state.prefs)
-        );
-    }
-
-    // ---------------------------------------------------------------------
-    // Generic helpers
-    // ---------------------------------------------------------------------
-
-    function visible(el) {
-        if (!el || !el.isConnected) {
-            return false;
-        }
-
-        if (el.classList.contains('hidden')) {
-            return false;
-        }
-
-        const style = getComputedStyle(el);
-
-        return (
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
-        );
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
     }
 
     function clickSelector(selector) {
-        const el = document.querySelector(selector);
-
-        if (!el) {
-            return false;
-        }
-
+        const el = q(selector);
+        if (!el) return false;
         el.click();
-
         closeMenu();
-
         return true;
     }
 
     function openModal(name) {
-        return clickSelector(
-            `[data-modal="${CSS.escape(name)}"]`
-        );
+        return clickSelector(`[data-modal="${name}"]`);
     }
 
-    // ---------------------------------------------------------------------
-    // Context detection
-    // ---------------------------------------------------------------------
-
     function currentContext() {
-        /*
-         * Hunt gets priority because the normal game UI
-         * remains present underneath it.
-         */
-        if (
-            visible(
-                document.querySelector('#hunt-saida')
-            )
-        ) {
-            return 'hunt';
-        }
+        if (visible(q('#hunt-saida'))) return 'hunt';
 
         if (
-            visible(
-                document.querySelector('#pvp-mini')
-            ) ||
-            visible(
-                document.querySelector('#pvp-fila-pill')
-            ) ||
-            visible(
-                document.querySelector('#pvp-tick')
-            )
-        ) {
-            return 'pvp';
-        }
+            visible(q('#pvp-mini')) ||
+            visible(q('#pvp-fila-pill')) ||
+            visible(q('#pvp-tick'))
+        ) return 'pvp';
 
         if (
-            visible(
-                document.querySelector('#centro-dpad')
-            ) ||
-            visible(
-                document.querySelector('#centro-curar')
-            ) ||
-            visible(
-                document.querySelector('#centro-tm')
-            )
-        ) {
-            return 'center';
-        }
+            visible(q('#centro-dpad')) ||
+            visible(q('#centro-curar')) ||
+            visible(q('#centro-tm'))
+        ) return 'center';
 
-        if (
-            visible(
-                document.querySelector('#modal')
-            )
-        ) {
-            return 'modal';
-        }
-
+        if (visible(q('#modal'))) return 'modal';
         return 'general';
     }
 
-    function contextLabel(context) {
-        return {
-            hunt: 'Hunt',
-            pvp: 'PvP',
-            center: 'Centro',
-            modal: 'Menu aberto',
-            general: 'Geral'
-        }[context] || 'Geral';
-    }
+    const contextLabels = {
+        hunt: 'Hunt',
+        pvp: 'PvP',
+        center: 'Centro',
+        modal: 'Menu aberto',
+        general: 'Geral'
+    };
 
-    // ---------------------------------------------------------------------
-    // Actions
-    // ---------------------------------------------------------------------
-
-    function makeAction(
-        id,
-        label,
-        hint,
-        run,
-        available = () => true
-    ) {
-        return {
-            id,
-            label,
-            hint,
-            run,
-            available
-        };
+    function action(id, label, hint, run, available = () => true) {
+        return { id, label, hint, run, available };
     }
 
     const ACTIONS = {
-        map: makeAction(
-            'map',
-            'Mapa',
-            'Escolher área',
-            () => openModal('mapa'),
-            () =>
-                !!document.querySelector(
-                    '[data-modal="mapa"]'
-                )
+        captures: action(
+            'captures', 'Capturas', 'Histórico da sessão',
+            () => clickSelector('#cena-capturas'),
+            () => visible(q('#cena-capturas'))
         ),
-
-        inventory: makeAction(
-            'inventory',
-            'Inventário',
-            'Bolas e itens',
+        session: action(
+            'session', 'Sessão', 'Estatísticas da hunt',
+            () => clickSelector('#cena-sessao'),
+            () => visible(q('#cena-sessao'))
+        ),
+        inventory: action(
+            'inventory', 'Inventário', 'Bolas e itens',
             () => clickSelector('#btn-bolsa'),
-            () =>
-                !!document.querySelector(
-                    '#btn-bolsa'
-                )
+            () => !!q('#btn-bolsa')
         ),
-
-        pokedex: makeAction(
-            'pokedex',
-            'Pokédex',
-            'Coleção e espécies',
+        map: action(
+            'map', 'Mapa', 'Escolher área',
+            () => openModal('mapa'),
+            () => !!q('[data-modal="mapa"]')
+        ),
+        pokedex: action(
+            'pokedex', 'Pokédex', 'Coleção e espécies',
             () => openModal('pokedex'),
-            () =>
-                !!document.querySelector(
-                    '[data-modal="pokedex"]'
-                )
+            () => !!q('[data-modal="pokedex"]')
         ),
-
-        market: makeAction(
-            'market',
-            'Market',
-            'Abrir mercado',
+        market: action(
+            'market', 'Market', 'Abrir mercado',
             () => openModal('market'),
-            () =>
-                !!document.querySelector(
-                    '[data-modal="market"]'
-                )
+            () => !!q('[data-modal="market"]')
         ),
-
-        pvp: makeAction(
-            'pvp',
-            'PvP',
-            'Abrir painel PvP',
+        pvp: action(
+            'pvp', 'PvP', 'Abrir painel PvP',
             () => openModal('pvp'),
-            () =>
-                !!document.querySelector(
-                    '[data-modal="pvp"]'
-                )
+            () => !!q('[data-modal="pvp"]')
         ),
-
-        ranking: makeAction(
-            'ranking',
-            'Ranks',
-            'Ranking PvP',
+        ranking: action(
+            'ranking', 'Ranks', 'Ranking',
             () => openModal('ranking'),
-            () =>
-                !!document.querySelector(
-                    '[data-modal="ranking"]'
-                )
+            () => !!q('[data-modal="ranking"]')
         ),
-
-        captures: makeAction(
-            'captures',
-            'Capturas',
-            'Histórico da sessão',
-            () =>
-                clickSelector(
-                    '#cena-capturas'
-                ),
-            () =>
-                !!document.querySelector(
-                    '#cena-capturas'
-                )
+        popup: action(
+            'popup', 'Pop-up', 'Acompanhar a hunt',
+            () => clickSelector('#hunt-popup'),
+            () => visible(q('#hunt-popup'))
         ),
-
-        session: makeAction(
-            'session',
-            'Sessão',
-            'Estatísticas da hunt',
-            () =>
-                clickSelector(
-                    '#cena-sessao'
-                ),
-            () =>
-                !!document.querySelector(
-                    '#cena-sessao'
-                )
+        center: action(
+            'center', 'Centro Pokémon', 'Sair da hunt',
+            () => clickSelector('#ir-centro'),
+            () => visible(q('#ir-centro'))
         ),
-
-        popup: makeAction(
-            'popup',
-            'Pop-up',
-            'Acompanhar em janela',
-            () =>
-                clickSelector(
-                    '#hunt-popup'
-                ),
-            () =>
-                visible(
-                    document.querySelector(
-                        '#hunt-popup'
-                    )
-                )
-        ),
-
-        center: makeAction(
-            'center',
-            'Centro Pokémon',
-            'Sair da hunt normalmente',
-            () =>
-                clickSelector(
-                    '#ir-centro'
-                ),
-            () =>
-                visible(
-                    document.querySelector(
-                        '#ir-centro'
-                    )
-                )
-        ),
-
-        team: makeAction(
-            'team',
-            'Equipe',
-            'Ir para o painel da equipe',
+        team: action(
+            'team', 'Equipe', 'Abrir painel da equipe',
             () => {
-                const panel =
-                    document.querySelector(
-                        '#p-equipe'
-                    );
-
-                const toggle =
-                    document.querySelector(
-                        '#btn-equipe-toggle'
-                    );
-
-                if (!panel) {
-                    return;
-                }
-
-                if (
-                    toggle?.getAttribute(
-                        'aria-expanded'
-                    ) === 'false'
-                ) {
-                    toggle.click();
-                }
-
-                panel.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center'
-                });
-
+                const toggle = q('#btn-equipe-toggle');
+                const panel = toggle?.closest('.painel');
+                if (!panel) return;
+                if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+                panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 closeMenu();
             },
-            () =>
-                !!document.querySelector(
-                    '#p-equipe'
-                )
+            () => !!q('#btn-equipe-toggle')
         ),
-
-        settings: makeAction(
-            'settings',
-            'Configurações',
-            'Preferências do jogo',
-            () =>
-                clickSelector(
-                    '#btn-config'
-                ),
-            () =>
-                !!document.querySelector(
-                    '#btn-config'
-                )
+        settings: action(
+            'settings', 'Configurações', 'Preferências',
+            () => clickSelector('#btn-config'),
+            () => !!q('#btn-config')
         ),
-
-        closeModal: makeAction(
-            'close-modal',
-            'Fechar menu',
-            'Voltar ao jogo',
-            () =>
-                clickSelector(
-                    '#modal-fechar'
-                ),
-            () =>
-                visible(
-                    document.querySelector(
-                        '#modal'
-                    )
-                ) &&
-                !!document.querySelector(
-                    '#modal-fechar'
-                )
+        closeModal: action(
+            'closeModal', 'Fechar', 'Voltar ao jogo',
+            () => clickSelector('#modal-fechar'),
+            () => visible(q('#modal')) && !!q('#modal-fechar')
         ),
-
-        /*
-         * Integration with our other userscript.
-         * These simply don't appear when Auto Catch+
-         * is not installed.
-         */
-        autoCatch: makeAction(
-            'auto-catch',
-            'Auto Catch',
-            'Alternar addon de captura',
-            () =>
-                clickSelector(
-                    '#moth-ac-toggle'
-                ),
-            () =>
-                !!document.querySelector(
-                    '#moth-ac-toggle'
-                )
+        autoCatch: action(
+            'autoCatch', 'Auto Catch', 'Alternar captura automática',
+            () => clickSelector('#moth-ac-toggle'),
+            () => !!q('#moth-ac-toggle')
         ),
-
-        captureHud: makeAction(
-            'capture-hud',
-            'Capture HUD',
-            'Mostrar/ocultar HUD',
+        captureHud: action(
+            'captureHud', 'Capture HUD', 'Mostrar / ocultar',
             () => {
-                const checkbox =
-                    document.querySelector(
-                        '#moth-ac-hud-check'
-                    );
-
-                if (!checkbox) {
-                    return;
-                }
-
-                checkbox.click();
-
+                const check = q('#moth-ac-hud-check');
+                if (!check) return;
+                check.click();
                 closeMenu();
             },
-            () =>
-                !!document.querySelector(
-                    '#moth-ac-hud-check'
-                )
+            () => !!q('#moth-ac-hud-check')
+        ),
+        performance: action(
+            'performance', 'Performance+', 'Abrir controles',
+            () => clickSelector('#moth-performance-trigger'),
+            () => !!q('#moth-performance-trigger')
         )
     };
 
-    /*
-     * Ordering matters: the most useful contextual
-     * actions should appear first.
-     */
-    const CONTEXT_ACTIONS = {
-        hunt: [
-            'captures',
-            'session',
-            'inventory',
-            'map',
-            'popup',
-            'center',
-            'autoCatch',
-            'captureHud'
-        ],
-
-        pvp: [
-            'pvp',
-            'team',
-            'inventory',
-            'ranking',
-            'map',
-            'settings'
-        ],
-
-        center: [
-            'map',
-            'inventory',
-            'team',
-            'pokedex',
-            'market',
-            'pvp',
-            'settings'
-        ],
-
-        modal: [
-            'closeModal',
-            'map',
-            'inventory',
-            'pokedex',
-            'market',
-            'pvp'
-        ],
-
-        general: [
-            'map',
-            'inventory',
-            'pokedex',
-            'market',
-            'pvp',
-            'team',
-            'settings'
-        ]
+    const BY_CONTEXT = {
+        hunt: ['captures', 'session', 'inventory', 'map', 'popup', 'center', 'autoCatch', 'captureHud', 'performance'],
+        pvp: ['pvp', 'team', 'inventory', 'ranking', 'map', 'performance', 'settings'],
+        center: ['map', 'inventory', 'team', 'pokedex', 'market', 'pvp', 'performance', 'settings'],
+        modal: ['closeModal', 'map', 'inventory', 'pokedex', 'market', 'pvp'],
+        general: ['map', 'inventory', 'pokedex', 'market', 'pvp', 'team', 'performance', 'settings']
     };
 
-    // ---------------------------------------------------------------------
-    // Style
-    // ---------------------------------------------------------------------
-
     function injectStyle() {
-        if (
-            document.getElementById(
-                `${ROOT_ID}-style`
-            )
-        ) {
-            return;
-        }
+        if (q('#' + STYLE_ID)) return;
 
-        const style =
-            document.createElement('style');
-
-        style.id =
-            `${ROOT_ID}-style`;
-
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
         style.textContent = `
-            #${ROOT_ID} {
-                all: initial;
-
-                position: fixed;
-
-                left: 12px;
-                bottom: 12px;
-
-                z-index: 2147483646;
-
-                font-family:
-                    system-ui,
-                    -apple-system,
-                    BlinkMacSystemFont,
-                    "Segoe UI",
-                    sans-serif;
-
-                color: #f6eef1;
+            #${BUTTON_ID} {
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 5px !important;
+                min-width: 0 !important;
+                width: auto !important;
+                height: auto !important;
+                min-height: 30px !important;
+                padding: 5px 9px !important;
+                margin: 0 !important;
+                border: 1px solid rgba(255,255,255,.18) !important;
+                border-radius: 6px !important;
+                background: rgba(49,36,42,.88) !important;
+                color: #fff !important;
+                font: 700 11px/1 system-ui,sans-serif !important;
+                cursor: pointer !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                position: relative !important;
+                z-index: 20 !important;
             }
 
-            #${ROOT_ID},
-            #${ROOT_ID} * {
-                box-sizing: border-box;
+            #${BUTTON_ID}::before {
+                content: "⚡";
+                font-size: 11px;
             }
 
-            #${ROOT_ID} button {
-                font: inherit;
+            #${PANEL_ID} {
+                position: fixed !important;
+                z-index: 2147483647 !important;
+                width: 265px !important;
+                padding: 9px !important;
+                border: 1px solid rgba(255,255,255,.18) !important;
+                border-radius: 9px !important;
+                background: rgba(24,18,22,.98) !important;
+                color: #f5eef1 !important;
+                box-shadow: 0 10px 32px rgba(0,0,0,.5) !important;
+                font: 11px/1.25 system-ui,sans-serif !important;
             }
 
-            /* ---------------------------------------------------------
-             * Launcher
-             * --------------------------------------------------------- */
+            #${PANEL_ID}[hidden] { display: none !important; }
 
-            .mqa-launcher {
-                all: unset;
+            #${PANEL_ID} * { box-sizing: border-box !important; }
 
-                box-sizing: border-box;
-
+            #${PANEL_ID} .mqa-head {
                 display: flex;
                 align-items: center;
-
                 gap: 7px;
-
-                min-height: 34px;
-
-                padding: 7px 10px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.22);
-
-                border-radius: 9px;
-
-                background:
-                    rgba(31,23,28,.94);
-
-                color: #fff;
-
-                box-shadow:
-                    0 5px 18px
-                    rgba(0,0,0,.34);
-
-                cursor: pointer;
-                user-select: none;
+                margin-bottom: 7px;
             }
 
-            .mqa-launcher:hover {
-                background:
-                    rgba(48,35,42,.98);
-            }
-
-            .mqa-launcher-dot {
-                width: 8px;
-                height: 8px;
-
-                border-radius: 50%;
-
-                background: #d0a34a;
-
-                box-shadow:
-                    0 0 0 2px
-                    rgba(208,163,74,.14);
-            }
-
-            .mqa-launcher-label {
-                font-size: 12px;
-                font-weight: 750;
-
-                letter-spacing: .01em;
-            }
-
-            /* ---------------------------------------------------------
-             * Palette
-             * --------------------------------------------------------- */
-
-            .mqa-panel {
-                position: absolute;
-
-                left: 0;
-                bottom: 42px;
-
-                width: 260px;
-
-                padding: 9px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.18);
-
-                border-radius: 11px;
-
-                background:
-                    rgba(24,18,22,.97);
-
-                color: #fff;
-
-                box-shadow:
-                    0 12px 36px
-                    rgba(0,0,0,.5);
-
-                backdrop-filter:
-                    blur(7px);
-            }
-
-            .mqa-panel[hidden] {
-                display: none !important;
-            }
-
-            /* ---------------------------------------------------------
-             * Header
-             * --------------------------------------------------------- */
-
-            .mqa-head {
-                display: flex;
-                align-items: center;
-
-                gap: 8px;
-
-                padding: 2px 2px 8px;
-
-                border-bottom:
-                    1px solid
-                    rgba(255,255,255,.08);
-
-                margin-bottom: 8px;
-            }
-
-            .mqa-title {
-                min-width: 0;
+            #${PANEL_ID} .mqa-head strong {
                 flex: 1;
+                font-size: 12px;
             }
 
-            .mqa-title b {
-                display: block;
-
-                font-size: 13px;
-                line-height: 1.2;
-            }
-
-            .mqa-title span {
-                display: block;
-
-                margin-top: 2px;
-
-                color: #aaa0a5;
-
+            #${PANEL_ID} .mqa-context {
+                color: #b7abb0;
                 font-size: 10px;
             }
 
-            .mqa-close {
+            #${PANEL_ID} .mqa-close {
                 all: unset;
-
-                box-sizing: border-box;
-
-                width: 25px;
-                height: 25px;
-
-                display: grid;
-                place-items: center;
-
-                border-radius: 6px;
-
-                color: #bbb0b5;
-
                 cursor: pointer;
-
-                font-size: 17px;
-                line-height: 1;
+                padding: 2px 5px;
+                color: #bbb;
+                font-size: 16px;
             }
 
-            .mqa-close:hover {
-                background:
-                    rgba(255,255,255,.08);
-
-                color: #fff;
-            }
-
-            /* ---------------------------------------------------------
-             * Actions
-             * --------------------------------------------------------- */
-
-            .mqa-actions {
+            #${PANEL_ID} .mqa-grid {
                 display: grid;
-
-                grid-template-columns:
-                    1fr 1fr;
-
-                gap: 6px;
+                grid-template-columns: 1fr 1fr;
+                gap: 5px;
             }
 
-            .mqa-action {
+            #${PANEL_ID} .mqa-action {
                 all: unset;
-
-                box-sizing: border-box;
-
+                display: block;
                 min-width: 0;
-
-                padding: 8px 9px;
-
-                border:
-                    1px solid
-                    rgba(255,255,255,.10);
-
-                border-radius: 7px;
-
-                background:
-                    rgba(255,255,255,.045);
-
+                padding: 7px 8px;
+                border: 1px solid rgba(255,255,255,.09);
+                border-radius: 6px;
+                background: rgba(255,255,255,.045);
                 color: #f2eaed;
-
                 cursor: pointer;
             }
 
-            .mqa-action:hover {
-                background:
-                    rgba(255,255,255,.10);
-
-                border-color:
-                    rgba(255,255,255,.18);
+            #${PANEL_ID} .mqa-action:hover {
+                background: rgba(255,255,255,.1);
             }
 
-            .mqa-action b {
+            #${PANEL_ID} .mqa-action b {
                 display: block;
-
                 overflow: hidden;
-
-                text-overflow:
-                    ellipsis;
-
                 white-space: nowrap;
-
-                font-size: 11px;
-                line-height: 1.2;
+                text-overflow: ellipsis;
+                font-size: 10px;
             }
 
-            .mqa-action span {
+            #${PANEL_ID} .mqa-action span {
                 display: block;
-
+                margin-top: 2px;
                 overflow: hidden;
-
-                text-overflow:
-                    ellipsis;
-
                 white-space: nowrap;
-
-                margin-top: 3px;
-
-                color: #9e9499;
-
+                text-overflow: ellipsis;
+                color: #9f9599;
                 font-size: 9px;
-                line-height: 1.2;
             }
 
-            /* ---------------------------------------------------------
-             * Footer
-             * --------------------------------------------------------- */
-
-            .mqa-foot {
+            #${PANEL_ID} .mqa-foot {
                 display: flex;
-
-                justify-content:
-                    space-between;
-
+                justify-content: space-between;
                 align-items: center;
-
                 gap: 8px;
-
-                margin-top: 8px;
-
-                padding:
-                    7px 2px 1px;
-
-                border-top:
-                    1px solid
-                    rgba(255,255,255,.08);
-
-                color: #8f858a;
-
+                margin-top: 7px;
+                padding-top: 6px;
+                border-top: 1px solid rgba(255,255,255,.07);
+                color: #91868b;
                 font-size: 9px;
-            }
-
-            .mqa-foot label {
-                display: flex;
-
-                align-items: center;
-
-                gap: 4px;
-
-                cursor: pointer;
-            }
-
-            .mqa-foot input {
-                margin: 0;
-            }
-
-            @media (max-width: 620px) {
-                #${ROOT_ID} {
-                    left: 8px;
-                    bottom: 8px;
-                }
-
-                .mqa-panel {
-                    width:
-                        min(
-                            260px,
-                            calc(100vw - 16px)
-                        );
-                }
             }
         `;
 
-        document.head?.appendChild(style);
+        (document.head || document.documentElement).appendChild(style);
     }
 
-    // ---------------------------------------------------------------------
-    // Installation
-    // ---------------------------------------------------------------------
+    function ensurePanel() {
+        let panel = q('#' + PANEL_ID);
+        if (panel) return panel;
 
-    function install() {
-        if (!document.body) {
-            return false;
-        }
-
-        injectStyle();
-
-        if (
-            document.getElementById(
-                ROOT_ID
-            )
-        ) {
-            return true;
-        }
-
-        const root =
-            document.createElement('div');
-
-        root.id =
-            ROOT_ID;
-
-        root.innerHTML = `
-            <div
-                class="mqa-panel"
-                hidden
-            >
-                <div class="mqa-head">
-
-                    <div class="mqa-title">
-                        <b>
-                            Quick Actions
-                        </b>
-
-                        <span
-                            id="mqa-context"
-                        >
-                            Geral
-                        </span>
-                    </div>
-
-                    <button
-                        type="button"
-                        class="mqa-close"
-                        aria-label="Fechar"
-                    >
-                        ×
-                    </button>
-
-                </div>
-
-                <div
-                    class="mqa-actions"
-                    id="mqa-actions"
-                ></div>
-
-                <div class="mqa-foot">
-
-                    <span>
-                        Shift+Q
-                    </span>
-
-                    <label>
-                        <input
-                            id="mqa-shortcut"
-                            type="checkbox"
-                        >
-                        atalho ativo
-                    </label>
-
-                </div>
+        panel = document.createElement('div');
+        panel.id = PANEL_ID;
+        panel.hidden = true;
+        panel.innerHTML = `
+            <div class="mqa-head">
+                <strong>Quick Actions</strong>
+                <span class="mqa-context">Geral</span>
+                <button type="button" class="mqa-close" title="Fechar">×</button>
             </div>
-
-            <button
-                type="button"
-                class="mqa-launcher"
-                title="Quick Actions — Shift+Q"
-            >
-                <span
-                    class="mqa-launcher-dot"
-                ></span>
-
-                <span
-                    class="mqa-launcher-label"
-                >
-                    Quick
-                </span>
-            </button>
+            <div class="mqa-grid"></div>
+            <div class="mqa-foot">
+                <span>Shift+Q</span>
+                <label><input class="mqa-shortcut" type="checkbox"> atalho</label>
+            </div>
         `;
 
-        document.body.appendChild(root);
+        document.body.appendChild(panel);
+        panel.querySelector('.mqa-close').addEventListener('click', closeMenu);
 
-        root
-            .querySelector(
-                '.mqa-launcher'
-            )
-            .addEventListener(
-                'click',
-                toggleMenu
-            );
+        const shortcut = panel.querySelector('.mqa-shortcut');
+        shortcut.checked = prefs.shortcut;
+        shortcut.addEventListener('change', () => {
+            prefs.shortcut = shortcut.checked;
+            savePrefs();
+        });
 
-        root
-            .querySelector(
-                '.mqa-close'
-            )
-            .addEventListener(
-                'click',
-                closeMenu
-            );
+        return panel;
+    }
 
-        const shortcut =
-            root.querySelector(
-                '#mqa-shortcut'
-            );
+    function ensureButton() {
+        if (!document.body) return false;
+        injectStyle();
+        ensurePanel();
 
-        shortcut.checked =
-            state.prefs.shortcut;
+        let button = q('#' + BUTTON_ID);
+        if (button) return true;
 
-        shortcut.addEventListener(
-            'change',
-            () => {
-                state.prefs.shortcut =
-                    shortcut.checked;
+        const host = q('.menu-topo') || q('.painel-cab-auto') || q('#p-auto .painel-cab');
+        if (!host) return false;
 
-                savePrefs();
-            }
-        );
+        button = document.createElement('button');
+        button.type = 'button';
+        button.id = BUTTON_ID;
+        button.textContent = 'Quick';
+        button.title = 'Quick Actions loaded — Shift+Q';
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleMenu();
+        });
 
-        renderActions();
+        const collapse = host.querySelector('#btn-auto-toggle');
+        if (collapse) host.insertBefore(button, collapse);
+        else host.appendChild(button);
 
         return true;
     }
 
-    // ---------------------------------------------------------------------
-    // Rendering
-    // ---------------------------------------------------------------------
+    function positionPanel() {
+        const button = q('#' + BUTTON_ID);
+        const panel = q('#' + PANEL_ID);
+        if (!button || !panel || panel.hidden) return;
 
-    function escapeHtml(value) {
-        return String(value)
-            .replaceAll('&', '&amp;')
-            .replaceAll('<', '&lt;')
-            .replaceAll('>', '&gt;')
-            .replaceAll('"', '&quot;')
-            .replaceAll("'", '&#039;');
+        const rect = button.getBoundingClientRect();
+        const width = 265;
+        const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left));
+
+        panel.style.left = left + 'px';
+
+        const below = rect.bottom + 6;
+        if (below + panel.offsetHeight <= window.innerHeight - 8) {
+            panel.style.top = below + 'px';
+            panel.style.bottom = 'auto';
+        } else {
+            panel.style.top = 'auto';
+            panel.style.bottom = Math.max(8, window.innerHeight - rect.top + 6) + 'px';
+        }
+    }
+
+    function dynamicLabel(item) {
+        if (item.id === 'autoCatch') {
+            const on = q('#moth-ac-toggle')?.textContent?.trim().toUpperCase() === 'ON';
+            return `Auto Catch: ${on ? 'ON' : 'OFF'}`;
+        }
+        if (item.id === 'captureHud') {
+            return `Capture HUD: ${q('#moth-ac-hud-check')?.checked ? 'ON' : 'OFF'}`;
+        }
+        return item.label;
     }
 
     function renderActions() {
-        const root =
-            document.getElementById(
-                ROOT_ID
-            );
+        const panel = ensurePanel();
+        const context = currentContext();
+        panel.querySelector('.mqa-context').textContent = contextLabels[context] || 'Geral';
 
-        if (!root) {
-            return;
-        }
+        const grid = panel.querySelector('.mqa-grid');
+        grid.replaceChildren();
 
-        const context =
-            currentContext();
+        const items = (BY_CONTEXT[context] || BY_CONTEXT.general)
+            .map(id => ACTIONS[id])
+            .filter(item => item && item.available());
 
-        state.lastContext =
-            context;
+        for (const item of items) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'mqa-action';
 
-        root.querySelector(
-            '#mqa-context'
-        ).textContent =
-            contextLabel(context);
+            const strong = document.createElement('b');
+            strong.textContent = dynamicLabel(item);
 
-        const container =
-            root.querySelector(
-                '#mqa-actions'
-            );
+            const hint = document.createElement('span');
+            hint.textContent = item.hint;
 
-        container.replaceChildren();
-
-        const ids =
-            CONTEXT_ACTIONS[context] ||
-            CONTEXT_ACTIONS.general;
-
-        const actions =
-            ids
-                .map(
-                    id =>
-                        ACTIONS[id]
-                )
-                .filter(
-                    action =>
-                        action?.available()
-                );
-
-        for (
-            const action of
-            actions
-        ) {
-            const button =
-                document.createElement(
-                    'button'
-                );
-
-            button.type =
-                'button';
-
-            button.className =
-                'mqa-action';
-
-            let label =
-                action.label;
-
-            let hint =
-                action.hint;
-
-            /*
-             * Reflect Auto Catch+ state when
-             * the other addon exists.
-             */
-            if (
-                action.id ===
-                'auto-catch'
-            ) {
-                const ac =
-                    document.querySelector(
-                        '#moth-ac-toggle'
-                    );
-
-                const on =
-                    ac
-                        ?.textContent
-                        ?.trim()
-                        .toUpperCase() ===
-                    'ON';
-
-                label =
-                    `Auto Catch: ${
-                        on
-                            ? 'ON'
-                            : 'OFF'
-                    }`;
-
-                hint =
-                    'Alternar captura automática';
-            }
-
-            if (
-                action.id ===
-                'capture-hud'
-            ) {
-                const check =
-                    document.querySelector(
-                        '#moth-ac-hud-check'
-                    );
-
-                label =
-                    `Capture HUD: ${
-                        check?.checked
-                            ? 'ON'
-                            : 'OFF'
-                    }`;
-            }
-
-            button.innerHTML = `
-                <b>
-                    ${escapeHtml(label)}
-                </b>
-
-                <span>
-                    ${escapeHtml(hint)}
-                </span>
-            `;
-
-            button.addEventListener(
-                'click',
-                action.run
-            );
-
-            container.appendChild(
-                button
-            );
-        }
-
-        if (!actions.length) {
-            const empty =
-                document.createElement(
-                    'div'
-                );
-
-            empty.textContent =
-                'Nenhuma ação disponível neste contexto.';
-
-            empty.style.cssText = `
-                grid-column: 1 / -1;
-                padding: 10px;
-                color: #aaa;
-                font-size: 11px;
-            `;
-
-            container.appendChild(
-                empty
-            );
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Open / close
-    // ---------------------------------------------------------------------
-
-    function toggleMenu() {
-        if (state.open) {
-            closeMenu();
-        } else {
-            openMenu();
+            button.append(strong, hint);
+            button.addEventListener('click', item.run);
+            grid.appendChild(button);
         }
     }
 
     function openMenu() {
-        const root =
-            document.getElementById(
-                ROOT_ID
-            );
-
-        if (!root) {
-            return;
-        }
-
+        if (!ensureButton()) return;
+        const panel = ensurePanel();
         renderActions();
-
-        root.querySelector(
-            '.mqa-panel'
-        ).hidden = false;
-
-        state.open = true;
+        panel.hidden = false;
+        positionPanel();
     }
 
     function closeMenu() {
-        const root =
-            document.getElementById(
-                ROOT_ID
-            );
+        const panel = q('#' + PANEL_ID);
+        if (panel) panel.hidden = true;
+    }
 
-        if (!root) {
-            return;
+    function toggleMenu() {
+        const panel = ensurePanel();
+        if (panel.hidden) openMenu();
+        else closeMenu();
+    }
+
+    function isTyping(target) {
+        return target instanceof HTMLElement &&
+            !!target.closest('input,textarea,select,[contenteditable="true"]');
+    }
+
+    document.addEventListener('keydown', event => {
+        if (!prefs.shortcut || isTyping(event.target)) return;
+
+        if (
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.metaKey &&
+            event.code === 'KeyQ'
+        ) {
+            event.preventDefault();
+            toggleMenu();
+        } else if (event.key === 'Escape') {
+            closeMenu();
         }
+    }, true);
 
-        root.querySelector(
-            '.mqa-panel'
-        ).hidden = true;
+    document.addEventListener('pointerdown', event => {
+        const panel = q('#' + PANEL_ID);
+        const button = q('#' + BUTTON_ID);
+        if (!panel || panel.hidden) return;
+        if (!panel.contains(event.target) && !button?.contains(event.target)) closeMenu();
+    }, true);
 
-        state.open = false;
-    }
-
-    // ---------------------------------------------------------------------
-    // Shortcut
-    // ---------------------------------------------------------------------
-
-    function isTypingTarget(target) {
-        return (
-            target instanceof HTMLElement &&
-            !!target.closest(
-                [
-                    'input',
-                    'textarea',
-                    'select',
-                    '[contenteditable="true"]'
-                ].join(',')
-            )
-        );
-    }
-
-    document.addEventListener(
-        'keydown',
-        event => {
-            if (
-                !state.prefs.shortcut
-            ) {
-                return;
-            }
-
-            if (
-                isTypingTarget(
-                    event.target
-                )
-            ) {
-                return;
-            }
-
-            /*
-             * Shift+Q avoids Alt, Ctrl+K,
-             * browser menus, etc.
-             */
-            if (
-                event.shiftKey &&
-                !event.ctrlKey &&
-                !event.altKey &&
-                !event.metaKey &&
-                event.code === 'KeyQ'
-            ) {
-                event.preventDefault();
-
-                toggleMenu();
-
-                return;
-            }
-
-            if (
-                event.key ===
-                    'Escape' &&
-                state.open
-            ) {
-                event.preventDefault();
-
-                closeMenu();
-            }
-        },
-        true
-    );
-
-    // Close by clicking elsewhere.
-
-    document.addEventListener(
-        'pointerdown',
-        event => {
-            if (!state.open) {
-                return;
-            }
-
-            const root =
-                document.getElementById(
-                    ROOT_ID
-                );
-
-            if (
-                root &&
-                !root.contains(
-                    event.target
-                )
-            ) {
-                closeMenu();
-            }
-        },
-        true
-    );
-
-    // ---------------------------------------------------------------------
-    // Bootstrap / dynamic page handling
-    // ---------------------------------------------------------------------
+    window.addEventListener('resize', positionPanel, { passive: true });
+    window.addEventListener('scroll', positionPanel, { passive: true, capture: true });
 
     function bootstrap() {
-        install();
-
-        const observer =
-            new MutationObserver(
-                () => {
-                    install();
-
-                    /*
-                     * Rebuild only if context
-                     * changed while open.
-                     */
-                    if (state.open) {
-                        const context =
-                            currentContext();
-
-                        if (
-                            context !==
-                            state.lastContext
-                        ) {
-                            renderActions();
-                        }
-                    }
-                }
-            );
-
-        observer.observe(
-            document.documentElement,
-            {
-                childList: true,
-                subtree: true,
-
-                attributes: true,
-
-                attributeFilter: [
-                    'class',
-                    'aria-expanded'
-                ]
+        ensureButton();
+        setInterval(() => {
+            ensureButton();
+            if (!q('#' + PANEL_ID)?.hidden) {
+                renderActions();
+                positionPanel();
             }
-        );
+        }, 1200);
+        console.info('[PokéIdle Quick Actions] loaded');
     }
 
-    if (
-        document.readyState ===
-        'loading'
-    ) {
-        document.addEventListener(
-            'DOMContentLoaded',
-            bootstrap,
-            {
-                once: true
-            }
-        );
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
     } else {
         bootstrap();
     }
