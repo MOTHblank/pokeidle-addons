@@ -493,9 +493,12 @@
             );
 
         const nextNoCentro =
-            Boolean(
-                gameState?.noCentro
-            );
+            gameState?.noCentro ===
+                undefined
+                ? state.trainerNoCentro
+                : Boolean(
+                    gameState.noCentro
+                );
 
         if (
             state.trainerSampleAt &&
@@ -960,6 +963,9 @@
 
         state.currentHuntSlug =
             huntEvent.slug;
+
+        state.trainerSampleAt =
+            Date.now();
 
         state.status =
             `Entered ${huntEvent.nome || huntEvent.slug}.`;
