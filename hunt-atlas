@@ -477,7 +477,7 @@
         );
     }
 
-    function leadSignature(
+    function leadLoadoutSignature(
         pokemon =
             leadPokemon()
     ) {
@@ -485,12 +485,6 @@
             return null;
         }
 
-        /*
-         * Pokémon id captures fixed IVs (including Speed IV). Species/loadout
-         * changes start a new profile; ordinary level-ups stay in the same
-         * rolling profile so Atlas does not forget its measurements every
-         * few minutes.
-         */
         return [
             pokemon.id,
             pokemon.speciesId,
@@ -509,6 +503,29 @@
             .join(':');
     }
 
+    function leadSignature(
+        pokemon =
+            leadPokemon()
+    ) {
+        const loadout =
+            leadLoadoutSignature(
+                pokemon
+            );
+
+        if (!loadout) {
+            return null;
+        }
+
+        /* Exact measurement identity includes level. */
+        return (
+            loadout +
+            ':L' +
+            Number(
+                pokemon?.level ||
+                0
+            )
+        );
+    }
     function currentHunt() {
         return (
             state.hunts.find(
@@ -553,6 +570,10 @@
             huntSlug,
             signature:
                 leadSignature(
+                    pokemon
+                ),
+            loadoutSignature:
+                leadLoadoutSignature(
                     pokemon
                 ),
             pokemonId:
@@ -2690,20 +2711,26 @@
             return 0.5;
         }
 
-        return (
-            Number(
-                row[
-                    defender
-                ]
-            ) ||
-            (
-                row[
-                    defender
-                ] === 0
-                    ? 0
-                    : 1
+        if (
+            row[
+                defender
+            ] != null
+        ) {
+            const value =
+                Number(
+                    row[
+                        defender
+                    ]
+                );
+
+            return Number.isFinite(
+                value
             )
-        );
+                ? value
+                : 1;
+        }
+
+        return 1;
     }
 
     function exactEffectiveness(
@@ -2884,6 +2911,89 @@
         );
     }
 
+    function profileRecordsForLead() {
+        const exact =
+            recordsForLead();
+
+        if (exact.length) {
+            return {
+                records: exact,
+                warmStart: false
+            };
+        }
+
+        const pokemon =
+            leadPokemon();
+
+        const loadout =
+            leadLoadoutSignature(
+                pokemon
+            );
+
+        if (!loadout) {
+            return {
+                records: [],
+                warmStart: false
+            };
+        }
+
+        const compatible =
+            [...state.huntPerf.values()]
+                .filter(
+                    record =>
+                        record?.version ===
+                            2 &&
+                        record.loadoutSignature ===
+                            loadout &&
+                        Number(
+                            record.attacks ||
+                            0
+                        ) > 0
+                );
+
+        if (!compatible.length) {
+            return {
+                records: [],
+                warmStart: false
+            };
+        }
+
+        const currentLevel =
+            Number(
+                pokemon?.level ||
+                0
+            );
+
+        const nearestDistance =
+            Math.min(
+                ...compatible.map(
+                    record =>
+                        Math.abs(
+                            Number(
+                                record.pokemonLevel ||
+                                0
+                            ) -
+                            currentLevel
+                        )
+                )
+            );
+
+        return {
+            records:
+                compatible.filter(
+                    record =>
+                        Math.abs(
+                            Number(
+                                record.pokemonLevel ||
+                                0
+                            ) -
+                            currentLevel
+                        ) ===
+                        nearestDistance
+                ),
+            warmStart: true
+        };
+    }
     function observedRates(
         record
     ) {
@@ -2968,12 +3078,26 @@
                 .value;
         }
 
+        const recordSelection =
+            profileRecordsForLead();
+
         const records =
-            recordsForLead();
+            recordSelection.records;
 
         if (!records.length) {
             return null;
         }
+
+        const warmStart =
+            recordSelection.warmStart;
+
+        const currentPower =
+            Math.max(
+                1,
+                pokemonPower(
+                    leadPokemon()
+                )
+            );
 
         const sameTarget = [];
         const transitions = [];
@@ -3062,12 +3186,32 @@
                         samples: []
                     };
 
+                const powerScale =
+                    warmStart
+                        ? currentPower /
+                            Math.max(
+                                1,
+                                Number(
+                                    record.pokemonPower ||
+                                    currentPower
+                                )
+                            )
+                        : 1;
+
                 bucket.samples.push(
                     ...(
                         sample
                             ?.neutralSamples ||
                         []
-                    ).slice(-50)
+                    )
+                        .slice(-50)
+                        .map(
+                            damage =>
+                                Number(
+                                    damage
+                                ) *
+                                powerScale
+                        )
                 );
 
                 if (
@@ -3244,6 +3388,7 @@
 
         const value = {
             records,
+            warmStart,
             attacks,
             kills,
             cadenceMs,
@@ -3764,14 +3909,24 @@
                 1
             );
 
+        const trainerXpPerKill =
+            Math.round(
+                baseXp *
+                profile.trainerXpMult
+            );
+
+        const pokemonXpPerKill =
+            Math.round(
+                baseXp *
+                profile.pokemonXpMult
+            );
+
         return remember({
             value:
-                baseXp *
-                profile.trainerXpMult *
+                trainerXpPerKill *
                 killsH,
             pokemonValue:
-                baseXp *
-                profile.pokemonXpMult *
+                pokemonXpPerKill *
                 killsH,
             goldValue: null,
             killsH,
@@ -5282,6 +5437,9 @@
         const profileDetails =
             profile
                 ? [
+                    profile.warmStart
+                        ? 'warm-started from nearest level'
+                        : null,
                     profile.kills
                         ? `${profile.kills} kills`
                         : null,
