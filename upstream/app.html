@@ -6,7 +6,7 @@
      Discord traz `?sessao=` (o token de 30 dias) e os e-mails trazem `?redefinir=` e
      `?autorizarTrocaEmail=`; o GTM e o Pixel logo abaixo registram a URL da página. O app.js
      pega os valores de `window.__parametrosSensiveis`. -->
-<script nonce="R1aazgK8SvlwoCrIAgq35g==">
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
 (function () {
   try {
     var q = new URLSearchParams(location.search);
@@ -26,14 +26,14 @@
 })();
 </script>
 <!-- Google Tag Manager — GTM-NZLNR5N8. Logo após charset (charset nos primeiros 1024 bytes). -->
-<script nonce="R1aazgK8SvlwoCrIAgq35g==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-NZLNR5N8');</script>
 <!-- End Google Tag Manager -->
 <!-- Facebook Pixel Code — 941286091638419 (Meta Ads). -->
-<script nonce="R1aazgK8SvlwoCrIAgq35g==">
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -52,8 +52,8 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <!-- Cloudflare Turnstile — captcha do login/cadastro. Some sozinho (o app.js nem desenha o
      widget) quando o servidor não tem TURNSTILE_SITE_KEY configurada. `onload` avisa o app.js
      quando a API já existe, porque o fetch de /auth/provedores às vezes volta primeiro. -->
-<script nonce="R1aazgK8SvlwoCrIAgq35g==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
-<script nonce="R1aazgK8SvlwoCrIAgq35g==">
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
   try {
     if (localStorage.getItem('cfg-night') === '1') document.documentElement.classList.add('night-mode');
     if (localStorage.getItem('cfg-imersivo') === '1') document.documentElement.classList.add('modo-imersivo');
@@ -91,7 +91,7 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <meta name="twitter:title" content="Poke Idle IO — MMO Pokémon Idle Online">
 <meta name="twitter:description" content="Caçe, capture, evolua sua equipe, guilds e PvP — MMO Pokémon idle grátis no navegador.">
 <meta name="twitter:image" content="https://pokeidle.io/img/banner.jpg">
-<script nonce="R1aazgK8SvlwoCrIAgq35g==" type="application/ld+json">
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "VideoGame",
@@ -2678,7 +2678,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
 
 <!-- Erros de módulo ES são silenciosos na tela; jogar na UI evita depurar no escuro. -->
-<script nonce="R1aazgK8SvlwoCrIAgq35g==">
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
   window.addEventListener('error', (e) => {
     const el = document.getElementById('login-erro');
     if (el) el.textContent = `erro: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`;
@@ -2688,7 +2688,6 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     if (el) el.textContent = `falha: ${e.reason?.message ?? e.reason}`;
   });
 </script>
-<script nonce="R1aazgK8SvlwoCrIAgq35g==" type="module" src="app.js?v=1.183.0"></script>
-<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" nonce="R1aazgK8SvlwoCrIAgq35g==" data-cf-beacon='{"version":"2024.11.0","token":"77765626ca37467c98d87fc73e69fc73","r":1,"spa":2}' crossorigin="anonymous"></script>
+<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" type="module" src="app.js?v=1.183.0"></script>
 </body>
 </html>
