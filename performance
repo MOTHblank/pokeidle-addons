@@ -1,0 +1,1183 @@
+// ==UserScript==
+// @name         PokéIdle Performance+
+// @namespace    moth.pokeidle
+// @version      2.0.0
+// @description  Lightweight rendering profiles that preserve hunt/capture state.
+// @match        https://pokeidle.io/*
+// @match        https://www.pokeidle.io/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(() => {
+    'use strict';
+
+    const STORAGE_KEY = 'moth-pokeidle-performance-v2';
+    const ROOT_ID = 'moth-performance-plus';
+
+    const PROFILES = {
+        full: {
+            label: 'Full',
+            active: 'full',
+            idle: 'full',
+            background: 'full',
+            idleSeconds: 0,
+            effects: 'full',
+            collapseChat: false
+        },
+
+        balanced: {
+            label: 'Balanced',
+            active: '30',
+            idle: '15',
+            background: 'off',
+            idleSeconds: 60,
+            effects: 'reduced',
+            collapseChat: false
+        },
+
+        afk: {
+            label: 'AFK',
+            active: '15',
+            idle: 'off',
+            background: 'off',
+            idleSeconds: 20,
+            effects: 'reduced',
+            collapseChat: true
+        },
+
+        capture: {
+            label: 'Capture Saver',
+            active: '15',
+            idle: 'off',
+            background: 'off',
+            idleSeconds: 10,
+            effects: 'minimal',
+            collapseChat: true
+        }
+    };
+
+    const DEFAULTS = {
+        enabled: true,
+        profile: 'balanced'
+    };
+
+    let settings = loadSettings();
+
+    let currentRenderMode = 'full';
+    let lastActivity = Date.now();
+
+    let chatCollapsedByAddon = false;
+
+    let fps = 0;
+    let fpsFrames = 0;
+    let fpsStarted = performance.now();
+
+    // Canvas frame gate.
+    let frameAllowed = true;
+    let lastAllowedFrame = 0;
+    let lastClearCall = -Infinity;
+
+    // ------------------------------------------------------------------
+    // SETTINGS
+    // ------------------------------------------------------------------
+
+    function loadSettings() {
+        try {
+            return {
+                ...DEFAULTS,
+                ...JSON.parse(
+                    localStorage.getItem(STORAGE_KEY) || '{}'
+                )
+            };
+        } catch {
+            return { ...DEFAULTS };
+        }
+    }
+
+    function saveSettings() {
+        localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(settings)
+        );
+    }
+
+    function profile() {
+        return (
+            PROFILES[settings.profile] ||
+            PROFILES.balanced
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // CANVAS RENDER THROTTLE
+    //
+    // IMPORTANT:
+    // We only interfere with #cena.
+    //
+    // PvP canvases, UI canvases, etc. are untouched.
+    //
+    // The game continues receiving battlefield state, so:
+    //
+    // - #caidos-lista continues updating
+    // - Auto Catch+ continues working
+    // - battle/session state continues existing
+    //
+    // We merely discard expensive drawing operations.
+    // ------------------------------------------------------------------
+
+    const ctxProto =
+        window.CanvasRenderingContext2D?.prototype;
+
+    if (ctxProto) {
+        const methods = [
+            // Rasterization
+            'drawImage',
+            'fill',
+            'stroke',
+            'fillRect',
+            'strokeRect',
+            'fillText',
+            'strokeText',
+            'putImageData',
+
+            // Paths
+            'beginPath',
+            'closePath',
+            'moveTo',
+            'lineTo',
+            'rect',
+            'roundRect',
+            'arc',
+            'arcTo',
+            'ellipse',
+            'bezierCurveTo',
+            'quadraticCurveTo'
+        ];
+
+        function sceneContext(ctx) {
+            return (
+                ctx?.canvas?.id === 'cena'
+            );
+        }
+
+        function intervalForMode() {
+            if (currentRenderMode === '30') {
+                return 1000 / 30;
+            }
+
+            if (currentRenderMode === '15') {
+                return 1000 / 15;
+            }
+
+            return 0;
+        }
+
+        /*
+         * clearRect is used as our frame boundary.
+         *
+         * That means we throttle the scene renderer without
+         * globally patching requestAnimationFrame.
+         */
+        if (
+            typeof ctxProto.clearRect ===
+            'function'
+        ) {
+            const originalClear =
+                ctxProto.clearRect;
+
+            ctxProto.clearRect =
+                function (...args) {
+                    if (
+                        !sceneContext(this) ||
+                        currentRenderMode === 'full'
+                    ) {
+                        return originalClear.apply(
+                            this,
+                            args
+                        );
+                    }
+
+                    if (
+                        currentRenderMode === 'off'
+                    ) {
+                        frameAllowed = false;
+                        return;
+                    }
+
+                    const now =
+                        performance.now();
+
+                    /*
+                     * Some renderers clear more than once during
+                     * the same frame. Treat clears within 5ms as
+                     * belonging to the existing frame.
+                     */
+                    if (
+                        now - lastClearCall > 5
+                    ) {
+                        const interval =
+                            intervalForMode();
+
+                        frameAllowed =
+                            (
+                                now -
+                                lastAllowedFrame
+                            ) >= interval;
+
+                        if (frameAllowed) {
+                            lastAllowedFrame =
+                                now;
+                        }
+                    }
+
+                    lastClearCall = now;
+
+                    if (!frameAllowed) {
+                        return;
+                    }
+
+                    return originalClear.apply(
+                        this,
+                        args
+                    );
+                };
+        }
+
+        for (const name of methods) {
+            const original =
+                ctxProto[name];
+
+            if (
+                typeof original !==
+                'function'
+            ) {
+                continue;
+            }
+
+            ctxProto[name] =
+                function (...args) {
+                    if (
+                        sceneContext(this) &&
+                        (
+                            currentRenderMode ===
+                                'off' ||
+                            (
+                                currentRenderMode !==
+                                    'full' &&
+                                !frameAllowed
+                            )
+                        )
+                    ) {
+                        return;
+                    }
+
+                    return original.apply(
+                        this,
+                        args
+                    );
+                };
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // EFFECT REDUCTION
+    // ------------------------------------------------------------------
+
+    function installStyles() {
+        if (
+            document.getElementById(
+                'moth-performance-style'
+            )
+        ) {
+            return;
+        }
+
+        const style =
+            document.createElement('style');
+
+        style.id =
+            'moth-performance-style';
+
+        style.textContent = `
+            /*
+             * Reduced mode only targets obviously decorative FX.
+             */
+            html.moth-perf-reduced
+            :is(
+                .ab-confete *,
+                .recompensa *,
+                .shiny-anuncio *,
+                .lendario-anuncio *,
+                .evento-faixa *
+            ) {
+                animation-duration: .001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .001ms !important;
+            }
+
+            html.moth-perf-minimal
+            #app *,
+            html.moth-perf-minimal
+            #app *::before,
+            html.moth-perf-minimal
+            #app *::after {
+                animation-duration: .001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .001ms !important;
+                backdrop-filter: none !important;
+            }
+
+            html.moth-perf-minimal
+            :is(
+                .la-relampago,
+                .la-raios,
+                .la-faiscas,
+                .rc-flash,
+                .rc-particulas,
+                .ab-confete
+            ) {
+                display: none !important;
+            }
+
+            /*
+             * Rendering is actually suppressed by the canvas hook.
+             * This merely avoids compositing a stale frame.
+             */
+            html.moth-scene-off #cena {
+                opacity: .025 !important;
+            }
+
+            /* -------------------------------------------------------
+             * Tiny "render paused" indicator inside the stage.
+             * ------------------------------------------------------- */
+
+            #moth-render-badge {
+                position: absolute;
+                top: 7px;
+                right: 7px;
+
+                z-index: 25;
+
+                display: none;
+
+                padding: 3px 6px;
+
+                border-radius: 5px;
+
+                background: rgba(20, 17, 20, .75);
+
+                color: rgba(255,255,255,.72);
+
+                font: 10px/1.2 system-ui, sans-serif;
+
+                pointer-events: none;
+            }
+
+            html.moth-scene-off
+            #moth-render-badge {
+                display: block;
+            }
+
+            /* -------------------------------------------------------
+             * Performance+ collapsed UI
+             * ------------------------------------------------------- */
+
+            #${ROOT_ID} {
+                all: initial;
+
+                position: fixed;
+
+                right: 10px;
+                bottom: 10px;
+
+                z-index: 2147483645;
+
+                color: #eee;
+
+                font:
+                    11px/1.3
+                    system-ui,
+                    sans-serif;
+            }
+
+            #${ROOT_ID},
+            #${ROOT_ID} * {
+                box-sizing: border-box;
+            }
+
+            .mpp-pill {
+                all: unset;
+
+                display: flex;
+                align-items: center;
+
+                gap: 6px;
+
+                min-height: 29px;
+
+                padding: 5px 8px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.18);
+
+                border-radius: 8px;
+
+                background:
+                    rgba(26,21,24,.90);
+
+                color: #eee;
+
+                box-shadow:
+                    0 3px 12px
+                    rgba(0,0,0,.28);
+
+                cursor: pointer;
+            }
+
+            .mpp-dot {
+                width: 6px;
+                height: 6px;
+
+                border-radius: 50%;
+
+                background: #70c888;
+            }
+
+            .mpp-panel {
+                position: absolute;
+
+                right: 0;
+                bottom: 36px;
+
+                width: 250px;
+
+                padding: 9px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.15);
+
+                border-radius: 9px;
+
+                background:
+                    rgba(26,21,24,.97);
+
+                box-shadow:
+                    0 8px 28px
+                    rgba(0,0,0,.45);
+            }
+
+            .mpp-panel[hidden] {
+                display: none !important;
+            }
+
+            .mpp-head {
+                display: flex;
+                align-items: center;
+
+                gap: 6px;
+
+                margin-bottom: 8px;
+            }
+
+            .mpp-head strong {
+                flex: 1;
+
+                font-size: 12px;
+            }
+
+            .mpp-head button {
+                all: unset;
+
+                padding: 2px 5px;
+
+                cursor: pointer;
+
+                color: #aaa;
+            }
+
+            .mpp-metrics {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(3,1fr);
+
+                gap: 4px;
+
+                margin-bottom: 8px;
+            }
+
+            .mpp-metric {
+                padding: 4px;
+
+                border-radius: 5px;
+
+                background:
+                    rgba(255,255,255,.05);
+
+                text-align: center;
+            }
+
+            .mpp-metric b {
+                display: block;
+
+                font-size: 12px;
+            }
+
+            .mpp-metric span {
+                color: #948b90;
+
+                font-size: 8px;
+            }
+
+            .mpp-row {
+                display: flex;
+                align-items: center;
+
+                min-height: 29px;
+
+                gap: 6px;
+            }
+
+            .mpp-row label {
+                flex: 1;
+
+                color: #ccc;
+
+                font-size: 10px;
+            }
+
+            .mpp-row select {
+                width: 115px;
+
+                padding: 3px 4px;
+
+                border:
+                    1px solid
+                    rgba(255,255,255,.12);
+
+                border-radius: 5px;
+
+                background: #211a1e;
+
+                color: white;
+
+                font: inherit;
+            }
+
+            .mpp-note {
+                margin-top: 7px;
+
+                padding-top: 6px;
+
+                border-top:
+                    1px solid
+                    rgba(255,255,255,.07);
+
+                color: #90878b;
+
+                font-size: 9px;
+            }
+        `;
+
+        document.head?.appendChild(
+            style
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // AUTO CATCH INTEGRATION
+    // ------------------------------------------------------------------
+
+    function autoCatchEnabled() {
+        const button =
+            document.querySelector(
+                '#moth-ac-toggle'
+            );
+
+        if (button) {
+            return (
+                button.textContent
+                    .trim()
+                    .toUpperCase() === 'ON'
+            );
+        }
+
+        /*
+         * Auto Catch+ v4 persistence fallback.
+         */
+        try {
+            const saved =
+                JSON.parse(
+                    localStorage.getItem(
+                        'moth-pokeidle-autocatch-v4'
+                    ) || '{}'
+                );
+
+            return Boolean(
+                saved.enabled
+            );
+        } catch {
+            return false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // CHAT
+    // ------------------------------------------------------------------
+
+    function collapseChat() {
+        const button =
+            document.querySelector(
+                '#btn-chat-toggle'
+            );
+
+        if (!button) {
+            return;
+        }
+
+        const expanded =
+            button.getAttribute(
+                'aria-expanded'
+            ) !== 'false';
+
+        if (expanded) {
+            button.click();
+
+            chatCollapsedByAddon =
+                true;
+        }
+    }
+
+    function restoreChat() {
+        if (!chatCollapsedByAddon) {
+            return;
+        }
+
+        const button =
+            document.querySelector(
+                '#btn-chat-toggle'
+            );
+
+        if (
+            button?.getAttribute(
+                'aria-expanded'
+            ) === 'false'
+        ) {
+            button.click();
+        }
+
+        chatCollapsedByAddon =
+            false;
+    }
+
+    // ------------------------------------------------------------------
+    // EFFECTIVE PROFILE
+    // ------------------------------------------------------------------
+
+    function calculateRenderMode() {
+        if (!settings.enabled) {
+            return 'full';
+        }
+
+        const p = profile();
+
+        if (document.hidden) {
+            return p.background;
+        }
+
+        const idleSeconds =
+            (
+                Date.now() -
+                lastActivity
+            ) / 1000;
+
+        if (
+            p.idleSeconds > 0 &&
+            idleSeconds >=
+                p.idleSeconds
+        ) {
+            return p.idle;
+        }
+
+        return p.active;
+    }
+
+    function applyMode() {
+        const p =
+            profile();
+
+        currentRenderMode =
+            calculateRenderMode();
+
+        const html =
+            document.documentElement;
+
+        html.classList.toggle(
+            'moth-scene-off',
+            (
+                currentRenderMode ===
+                'off'
+            )
+        );
+
+        html.classList.toggle(
+            'moth-perf-reduced',
+            (
+                settings.enabled &&
+                p.effects ===
+                    'reduced'
+            )
+        );
+
+        html.classList.toggle(
+            'moth-perf-minimal',
+            (
+                settings.enabled &&
+                p.effects ===
+                    'minimal'
+            )
+        );
+
+        const idle =
+            (
+                currentRenderMode ===
+                    p.idle ||
+                document.hidden
+            );
+
+        if (
+            settings.enabled &&
+            p.collapseChat &&
+            idle
+        ) {
+            collapseChat();
+        } else {
+            restoreChat();
+        }
+
+        updateUI();
+    }
+
+    function recordActivity() {
+        lastActivity =
+            Date.now();
+
+        /*
+         * Immediately restore the interactive render
+         * profile when the user returns.
+         */
+        applyMode();
+    }
+
+    for (
+        const event of
+        [
+            'pointerdown',
+            'keydown',
+            'wheel',
+            'touchstart'
+        ]
+    ) {
+        window.addEventListener(
+            event,
+            recordActivity,
+            {
+                passive: true,
+                capture: true
+            }
+        );
+    }
+
+    document.addEventListener(
+        'visibilitychange',
+        applyMode
+    );
+
+    // ------------------------------------------------------------------
+    // FPS METER
+    // ------------------------------------------------------------------
+
+    function fpsTick(now) {
+        fpsFrames++;
+
+        const elapsed =
+            now - fpsStarted;
+
+        if (elapsed >= 1000) {
+            fps =
+                fpsFrames *
+                1000 /
+                elapsed;
+
+            fpsFrames = 0;
+            fpsStarted = now;
+
+            updateUI();
+        }
+
+        requestAnimationFrame(
+            fpsTick
+        );
+    }
+
+    requestAnimationFrame(
+        fpsTick
+    );
+
+    // ------------------------------------------------------------------
+    // LIGHT UI
+    // ------------------------------------------------------------------
+
+    function installUI() {
+        if (
+            !document.body ||
+            document.getElementById(
+                ROOT_ID
+            )
+        ) {
+            return;
+        }
+
+        installStyles();
+
+        /*
+         * Tiny contextual indicator in the stage.
+         */
+        const palco =
+            document.querySelector(
+                '#palco'
+            );
+
+        if (
+            palco &&
+            !document.getElementById(
+                'moth-render-badge'
+            )
+        ) {
+            const badge =
+                document.createElement(
+                    'div'
+                );
+
+            badge.id =
+                'moth-render-badge';
+
+            badge.textContent =
+                'Lite render · capture active';
+
+            palco.appendChild(
+                badge
+            );
+        }
+
+        const root =
+            document.createElement(
+                'div'
+            );
+
+        root.id =
+            ROOT_ID;
+
+        root.innerHTML = `
+            <div
+                class="mpp-panel"
+                hidden
+            >
+                <div class="mpp-head">
+                    <strong>
+                        Performance+
+                    </strong>
+
+                    <label>
+                        <input
+                            id="mpp-enabled"
+                            type="checkbox"
+                        >
+                        On
+                    </label>
+
+                    <button
+                        id="mpp-close"
+                        type="button"
+                    >
+                        ×
+                    </button>
+                </div>
+
+                <div class="mpp-metrics">
+
+                    <div class="mpp-metric">
+                        <b id="mpp-fps">
+                            —
+                        </b>
+                        <span>browser FPS</span>
+                    </div>
+
+                    <div class="mpp-metric">
+                        <b id="mpp-render">
+                            Full
+                        </b>
+                        <span>scene render</span>
+                    </div>
+
+                    <div class="mpp-metric">
+                        <b id="mpp-capture">
+                            —
+                        </b>
+                        <span>auto catch</span>
+                    </div>
+
+                </div>
+
+                <div class="mpp-row">
+                    <label>Profile</label>
+
+                    <select id="mpp-profile">
+
+                        <option value="full">
+                            Full
+                        </option>
+
+                        <option value="balanced">
+                            Balanced
+                        </option>
+
+                        <option value="afk">
+                            AFK
+                        </option>
+
+                        <option value="capture">
+                            Capture Saver
+                        </option>
+
+                    </select>
+                </div>
+
+                <div class="mpp-note">
+                    Lite rendering keeps the normal hunt
+                    connection alive. Auto Catch continues
+                    receiving fallen Pokémon even when scene
+                    rendering is fully suppressed.
+                </div>
+            </div>
+
+            <button
+                type="button"
+                class="mpp-pill"
+                id="mpp-pill"
+            >
+                <span class="mpp-dot"></span>
+
+                <span id="mpp-pill-text">
+                    Perf
+                </span>
+            </button>
+        `;
+
+        document.body.appendChild(
+            root
+        );
+
+        document
+            .querySelector(
+                '#mpp-pill'
+            )
+            .addEventListener(
+                'click',
+                () => {
+                    const panel =
+                        document.querySelector(
+                            '.mpp-panel'
+                        );
+
+                    panel.hidden =
+                        !panel.hidden;
+                }
+            );
+
+        document
+            .querySelector(
+                '#mpp-close'
+            )
+            .addEventListener(
+                'click',
+                () => {
+                    document.querySelector(
+                        '.mpp-panel'
+                    ).hidden = true;
+                }
+            );
+
+        document
+            .querySelector(
+                '#mpp-enabled'
+            )
+            .addEventListener(
+                'change',
+                event => {
+                    settings.enabled =
+                        event.target.checked;
+
+                    saveSettings();
+
+                    applyMode();
+                }
+            );
+
+        document
+            .querySelector(
+                '#mpp-profile'
+            )
+            .addEventListener(
+                'change',
+                event => {
+                    settings.profile =
+                        event.target.value;
+
+                    saveSettings();
+
+                    lastActivity =
+                        Date.now();
+
+                    applyMode();
+                }
+            );
+
+        updateUI();
+    }
+
+    function renderLabel(mode) {
+        return {
+            full: 'Full',
+            '30': '30 FPS',
+            '15': '15 FPS',
+            off: 'Off'
+        }[mode] || mode;
+    }
+
+    function updateUI() {
+        const root =
+            document.getElementById(
+                ROOT_ID
+            );
+
+        if (!root) {
+            return;
+        }
+
+        const enabled =
+            root.querySelector(
+                '#mpp-enabled'
+            );
+
+        const select =
+            root.querySelector(
+                '#mpp-profile'
+            );
+
+        if (enabled) {
+            enabled.checked =
+                settings.enabled;
+        }
+
+        if (select) {
+            select.value =
+                settings.profile;
+        }
+
+        const fpsEl =
+            root.querySelector(
+                '#mpp-fps'
+            );
+
+        if (fpsEl) {
+            fpsEl.textContent =
+                document.hidden
+                    ? 'BG'
+                    : Math.round(fps);
+        }
+
+        const renderEl =
+            root.querySelector(
+                '#mpp-render'
+            );
+
+        if (renderEl) {
+            renderEl.textContent =
+                renderLabel(
+                    currentRenderMode
+                );
+        }
+
+        const capture =
+            autoCatchEnabled();
+
+        const captureEl =
+            root.querySelector(
+                '#mpp-capture'
+            );
+
+        if (captureEl) {
+            captureEl.textContent =
+                capture
+                    ? 'ON'
+                    : 'OFF';
+        }
+
+        const pill =
+            root.querySelector(
+                '#mpp-pill-text'
+            );
+
+        if (pill) {
+            pill.textContent =
+                `Perf · ${
+                    renderLabel(
+                        currentRenderMode
+                    )
+                }`;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // BOOTSTRAP
+    // ------------------------------------------------------------------
+
+    function bootstrap() {
+        installStyles();
+        installUI();
+
+        lastActivity =
+            Date.now();
+
+        applyMode();
+
+        /*
+         * Deliberately low-frequency housekeeping.
+         * No broad MutationObserver.
+         */
+        setInterval(
+            () => {
+                installUI();
+                applyMode();
+            },
+            1000
+        );
+    }
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            bootstrap,
+            { once: true }
+        );
+    } else {
+        bootstrap();
+    }
+})();
