@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Explorer
 // @namespace    moth.pokeidle
-// @version      1.1.0
+// @version      1.2.0
 // @description  Runtime explorer/dev console for PokéIdle addon development.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -13,6 +13,7 @@
     'use strict';
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const explorerRAF = page.requestAnimationFrame?.bind(page);
 
     const ROOT_ID = 'moth-explorer-root';
     const BUTTON_ID = 'moth-explorer-button';
@@ -196,11 +197,17 @@
     // Sanitized schema helpers
     // ------------------------------------------------------------------
 
-    const sensitiveKeyPattern =
-        /token|secret|password|passwd|auth|cookie|session|jwt|email|mail|phone|telefone|ip|address|endereco/i;
+    function isSensitiveKey(key) {
+        const normalized = String(key || '')
+            .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+            .toLowerCase();
+
+        return /(?:^|[_-])(?:token|secret|password|passwd|auth|cookie|session|jwt|email|mail|phone|telefone|ip|address|endereco)(?:$|[_-])/i
+            .test(normalized);
+    }
 
     function primitiveShape(value, key = '') {
-        if (sensitiveKeyPattern.test(key)) {
+        if (isSensitiveKey(key)) {
             return '<redacted>';
         }
 
@@ -277,7 +284,7 @@
             Object.entries(value).slice(0, 60)
         ) {
             result[childKey] =
-                sensitiveKeyPattern.test(childKey)
+                isSensitiveKey(childKey)
                     ? '<redacted>'
                     : schemaOf(
                         child,
@@ -715,70 +722,16 @@
     // rAF instrumentation
     // ------------------------------------------------------------------
 
+    /*
+     * Explorer deliberately does NOT replace requestAnimationFrame.
+     * The first version did so to count callbacks, but that changed
+     * callback identity and could interfere with Performance+'s campo
+     * renderer hook. Browser FPS is measured with our own native rAF
+     * loop instead.
+     */
     function installRafHook() {
-        if (state.raf.hookInstalled) {
-            return true;
-        }
-
-        const nativeRAF =
-            page.requestAnimationFrame
-                ?.bind(page);
-
-        const nativeCancelRAF =
-            page.cancelAnimationFrame
-                ?.bind(page);
-
-        if (
-            !nativeRAF ||
-            !nativeCancelRAF
-        ) {
-            return false;
-        }
-
-        try {
-            page.requestAnimationFrame =
-                function (callback) {
-                    state.raf.scheduledWindow++;
-
-                    let id;
-
-                    id =
-                        nativeRAF(
-                            timestamp => {
-                                state.raf.pending.delete(
-                                    id
-                                );
-
-                                state.raf.executedWindow++;
-
-                                return callback.call(
-                                    page,
-                                    timestamp
-                                );
-                            }
-                        );
-
-                    state.raf.pending.add(id);
-
-                    return id;
-                };
-
-            page.cancelAnimationFrame =
-                function (id) {
-                    state.raf.pending.delete(
-                        id
-                    );
-
-                    return nativeCancelRAF(id);
-                };
-
-            state.raf.hookInstalled =
-                true;
-
-            return true;
-        } catch {
-            return false;
-        }
+        state.raf.hookInstalled = false;
+        return false;
     }
 
     // ------------------------------------------------------------------
@@ -956,7 +909,7 @@
             fpsStarted = now;
         }
 
-        page.requestAnimationFrame(
+        explorerRAF?.(
             fpsLoop
         );
     }
@@ -1276,7 +1229,7 @@
             [...el.attributes]
         ) {
             attributes[attr.name] =
-                sensitiveKeyPattern.test(
+                isSensitiveKey(
                     attr.name
                 )
                     ? '<redacted>'
@@ -1556,15 +1509,9 @@
                 },
 
                 raf: {
-                    scheduledPerSecond:
-                        state.raf
-                            .scheduledPerSecond,
-                    executedPerSecond:
-                        state.raf
-                            .executedPerSecond,
-                    pending:
-                        state.raf
-                            .pending.size
+                    instrumented: false,
+                    note:
+                        'Explorer does not wrap requestAnimationFrame; see browserFps instead.'
                 },
 
                 performance: {
@@ -2322,8 +2269,8 @@
                     <span>active intervals</span>
                 </div>
                 <div class="mexp-card">
-                    <b>${state.raf.executedPerSecond}</b>
-                    <span>rAF callbacks/s</span>
+                    <b>${state.perf.browserFps || '—'}</b>
+                    <span>frame monitor/s</span>
                 </div>
             </div>
 
@@ -2332,7 +2279,7 @@
                 <table class="mexp-table">
                     <tr><td>WebSocket</td><td class="${state.websocket.hookInstalled ? 'mexp-good' : 'mexp-warn'}">${state.websocket.hookInstalled ? 'active' : 'not installed'}</td></tr>
                     <tr><td>Timers</td><td class="${state.timers.hookInstalled ? 'mexp-good' : 'mexp-warn'}">${state.timers.hookInstalled ? 'active' : 'not installed'}</td></tr>
-                    <tr><td>rAF</td><td class="${state.raf.hookInstalled ? 'mexp-good' : 'mexp-warn'}">${state.raf.hookInstalled ? 'active' : 'not installed'}</td></tr>
+                    <tr><td>rAF</td><td>non-invasive FPS monitor</td></tr>
                     <tr><td>DOM profiler</td><td>${state.mutationObserver ? 'recording' : 'paused'}</td></tr>
                 </table>
             </div>
@@ -2501,8 +2448,8 @@
                     <span>browser FPS</span>
                 </div>
                 <div class="mexp-card">
-                    <b>${state.raf.executedPerSecond}</b>
-                    <span>rAF exec/s</span>
+                    <b>${state.perf.browserFps || '—'}</b>
+                    <span>frame monitor/s</span>
                 </div>
                 <div class="mexp-card">
                     <b>${state.perf.longTaskMsPerSecond.toFixed(0)}</b>
@@ -2527,9 +2474,9 @@
             <div class="mexp-section">
                 <h4>requestAnimationFrame</h4>
                 <pre class="mexp-code">${escapeHtml(JSON.stringify({
-                    scheduledPerSecond: state.raf.scheduledPerSecond,
-                    executedPerSecond: state.raf.executedPerSecond,
-                    pending: state.raf.pending.size
+                    instrumented: false,
+                    reason: 'Non-invasive by design; Explorer no longer wraps page rAF.',
+                    browserFps: state.perf.browserFps
                 }, null, 2))}</pre>
             </div>
 
@@ -2666,13 +2613,21 @@
                 renderInspect
         };
 
-        body.innerHTML =
+        const nextHtml =
             (
                 renderers[
                     state.activeTab
                 ] ||
                 renderOverview
             )();
+
+        if (
+            body.innerHTML !==
+            nextHtml
+        ) {
+            body.innerHTML =
+                nextHtml;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2681,12 +2636,10 @@
 
     installWebSocketHook();
     installTimerHooks();
-    installRafHook();
     installPerformanceObservers();
 
-    // Use the instrumented rAF intentionally so Explorer measures itself
-    // consistently with the rest of the page.
-    page.requestAnimationFrame(
+    // Keep diagnostics out of the game's animation chain.
+    explorerRAF?.(
         fpsLoop
     );
 
@@ -2720,7 +2673,7 @@
             }, 1500);
 
         console.info(
-            '[PokéIdle Explorer] v1.1 loaded'
+            '[PokéIdle Explorer] v1.2 loaded'
         );
     }
 
