@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Experimental Actions
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.0.1
 // @description  One-shot client/server boundary probes for PokéIdle actions that the normal UI restricts by context.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -273,6 +273,191 @@
         return changes;
     }
 
+
+    function relevantKeysForProbe(
+        probe
+    ) {
+        const map = {
+            'remote-heal': [
+                'hp',
+                'alive'
+            ],
+            'center-move-pulse': [
+                'scene',
+                'noCentro',
+                'casaDentro',
+                'huntSlug'
+            ],
+            'house-exit-outside': [
+                'scene',
+                'casaDentro',
+                'noCentro',
+                'huntSlug'
+            ],
+            'boss-exit-outside': [
+                'scene',
+                'bossArena',
+                'mistico',
+                'huntSlug',
+                'noCentro'
+            ],
+            'active-reassert': [
+                'activeId'
+            ],
+            'house-reassert': [
+                'scene',
+                'casaDentro'
+            ],
+            'xpshare-reassert': [],
+            'bike-reassert': [
+                'bike'
+            ],
+            'remote-shop-ball': [
+                'gold'
+            ],
+            'cycle-active': [
+                'activeId'
+            ],
+            'xpshare-remove': [],
+            'force-center': [
+                'scene',
+                'noCentro',
+                'huntSlug'
+            ],
+            'enter-house-from-hunt': [
+                'scene',
+                'casaDentro',
+                'huntSlug',
+                'noCentro'
+            ],
+            'activate-stored-house': [],
+            'reselect-hunt': [
+                'scene',
+                'huntSlug'
+            ],
+            'unequip-bike': [
+                'bike'
+            ]
+        };
+
+        return map[
+            probe &&
+            probe.id
+        ] || [];
+    }
+
+    function diffRelevantSummary(
+        probe,
+        before,
+        after
+    ) {
+        const allowed =
+            new Set(
+                relevantKeysForProbe(
+                    probe
+                )
+            );
+
+        if (!allowed.size) {
+            return [];
+        }
+
+        return diffSummary(
+            before,
+            after
+        ).filter(
+            change =>
+                allowed.has(
+                    change.split(':')[0]
+                )
+        );
+    }
+
+    function probeSpecificSuccess(
+        probe,
+        after
+    ) {
+        if (!probe) {
+            return false;
+        }
+
+        if (
+            probe.id ===
+                'remote-heal'
+        ) {
+            return (
+                Number(
+                    after &&
+                    after.hp
+                ) >
+                Number(
+                    probe.before &&
+                    probe.before.hp
+                )
+            );
+        }
+
+        if (
+            probe.id ===
+                'remote-shop-ball'
+        ) {
+            return (
+                Number(
+                    after &&
+                    after.gold
+                ) <
+                Number(
+                    probe.before &&
+                    probe.before.gold
+                )
+            );
+        }
+
+        if (
+            probe.id ===
+                'cycle-active'
+        ) {
+            return (
+                after &&
+                after.activeId !==
+                    probe.before.activeId
+            );
+        }
+
+        if (
+            probe.id ===
+                'force-center'
+        ) {
+            return Boolean(
+                after &&
+                after.noCentro
+            );
+        }
+
+        if (
+            probe.id ===
+                'enter-house-from-hunt'
+        ) {
+            return Boolean(
+                after &&
+                after.casaDentro != null
+            );
+        }
+
+        if (
+            probe.id ===
+                'unequip-bike'
+        ) {
+            return Boolean(
+                after &&
+                after.bike == null &&
+                probe.before.bike != null
+            );
+        }
+
+        return false;
+    }
+
     function compactPayload(payload) {
         try {
             return JSON.stringify(payload);
@@ -441,7 +626,8 @@
                 probe.before;
 
             const changes =
-                diffSummary(
+                diffRelevantSummary(
+                    probe,
                     previous,
                     nowSummary
                 );
@@ -1327,7 +1513,8 @@
             summary();
 
         probe.changes =
-            diffSummary(
+            diffRelevantSummary(
+                probe,
                 probe.before,
                 probe.after
             );
@@ -1353,22 +1540,32 @@
                     'notice'
             );
 
-        if (accepted) {
+        if (
+            accepted ||
+            probeSpecificSuccess(
+                probe,
+                probe.after
+            )
+        ) {
             probe.result =
-                'explicit server acceptance';
-        } else if (probe.changes.length) {
-            probe.result =
-                'state changed';
+                accepted
+                    ? 'explicit server acceptance'
+                    : 'relevant state changed';
         } else if (error) {
             probe.result =
                 'server error';
         } else if (notice) {
             probe.result =
                 'server notice / likely rejection';
+        } else if (
+            probe.changes.length
+        ) {
+            probe.result =
+                'relevant state changed';
         } else {
             probe.result =
                 reason ||
-                'no explicit response';
+                'no relevant response';
         }
 
         runtime.history.unshift(
@@ -2138,7 +2335,7 @@
         );
 
         console.info(
-            '[PokéIdle Experimental Actions] v1.0 loaded'
+            '[PokéIdle Experimental Actions] v1.0.1 loaded'
         );
     }
 
