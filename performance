@@ -1,22 +1,24 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      2.1.0
-// @description  Lightweight scene throttling that preserves hunt state and Auto Catch.
+// @version      3.0.0
+// @description  Throttles PokéIdle's scene animation loop while preserving hunt state and Auto Catch.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
-// @grant        none
-// @sandbox      raw
+// @grant        unsafeWindow
 // @run-at       document-start
 // ==/UserScript==
 
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'moth-pokeidle-performance-v3';
+    const STORAGE_KEY = 'moth-pokeidle-performance-v4';
     const TRIGGER_ID = 'moth-performance-trigger';
     const PANEL_ID = 'moth-performance-panel';
     const STYLE_ID = 'moth-performance-style';
+
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const q = (selector, root = document) => root.querySelector(selector);
 
     const PROFILES = {
         full: {
@@ -32,7 +34,7 @@
             label: 'Balanced',
             active: '30',
             idle: '15',
-            background: 'off',
+            background: '2',
             idleSeconds: 60,
             effects: 'reduced',
             collapseChat: false
@@ -40,8 +42,8 @@
         afk: {
             label: 'AFK',
             active: '15',
-            idle: 'off',
-            background: 'off',
+            idle: '2',
+            background: '2',
             idleSeconds: 20,
             effects: 'reduced',
             collapseChat: true
@@ -49,8 +51,8 @@
         capture: {
             label: 'Capture Saver',
             active: '15',
-            idle: 'off',
-            background: 'off',
+            idle: '2',
+            background: '2',
             idleSeconds: 10,
             effects: 'minimal',
             collapseChat: true
@@ -62,23 +64,31 @@
         profile: 'balanced'
     };
 
-    const q = (selector, root = document) => root.querySelector(selector);
-
     let settings = loadSettings();
     let lastActivity = Date.now();
-    let currentRenderMode = 'full';
-    let frameAllowed = true;
-    let lastAllowedFrame = 0;
-    let lastClearCall = -Infinity;
+    let currentMode = 'full';
     let chatCollapsedByAddon = false;
 
-    let sceneFramesWindow = 0;
-    let blockedCallsWindow = 0;
-    let passedCallsWindow = 0;
-    let sceneFps = 0;
-    let blockedPerSecond = 0;
-    let passedPerSecond = 0;
+    // Renderer diagnostics.
     let hookInstalled = false;
+    let detectorInstalled = false;
+    let sceneCallbacksFound = 0;
+    let sceneRunsWindow = 0;
+    let throttledWindow = 0;
+    let sceneRunsPerSecond = 0;
+    let throttledPerSecond = 0;
+
+    // rAF hook state.
+    const sceneCallbacks = new WeakSet();
+    const sceneCallbackSources = new Set();
+    const callbackState = new WeakMap();
+    const pendingRaf = new Map();
+    let nextRafId = -1;
+    let activeRafCallback = null;
+    let sceneTouchedInActiveRaf = false;
+
+    const originalRAF = page.requestAnimationFrame?.bind(page);
+    const originalCancelRAF = page.cancelAnimationFrame?.bind(page);
 
     function loadSettings() {
         try {
@@ -117,125 +127,192 @@
     }
 
     // ------------------------------------------------------------------
-    // Canvas hook
+    // Scene-loop detection
     // ------------------------------------------------------------------
 
-    function installCanvasHook() {
-        if (hookInstalled) return true;
+    function callbackSource(callback) {
+        try {
+            return Function.prototype.toString.call(callback).slice(0, 1200);
+        } catch {
+            return '';
+        }
+    }
 
-        const proto = window.CanvasRenderingContext2D?.prototype;
+    function markSceneTouch(ctx) {
+        if (!activeRafCallback || ctx?.canvas?.id !== 'cena') return;
+
+        sceneTouchedInActiveRaf = true;
+
+        if (!sceneCallbacks.has(activeRafCallback)) {
+            sceneCallbacks.add(activeRafCallback);
+
+            const source = callbackSource(activeRafCallback);
+            if (source) sceneCallbackSources.add(source);
+
+            sceneCallbacksFound++;
+            console.info('[PokéIdle Performance+] identified scene rAF callback', activeRafCallback);
+        }
+    }
+
+    function installSceneDetector() {
+        if (detectorInstalled) return true;
+
+        const proto = page.CanvasRenderingContext2D?.prototype;
         if (!proto) return false;
 
-        const sceneContext = ctx => ctx?.canvas?.id === 'cena';
-
-        const intervalForMode = () => {
-            if (currentRenderMode === '30') return 1000 / 30;
-            if (currentRenderMode === '15') return 1000 / 15;
-            return 0;
-        };
-
-        const clearOriginal = proto.clearRect;
-
-        if (typeof clearOriginal === 'function') {
-            proto.clearRect = function (...args) {
-                if (!sceneContext(this)) {
-                    return clearOriginal.apply(this, args);
-                }
-
-                if (!settings.enabled || currentRenderMode === 'full') {
-                    frameAllowed = true;
-                    sceneFramesWindow++;
-                    passedCallsWindow++;
-                    return clearOriginal.apply(this, args);
-                }
-
-                if (currentRenderMode === 'off') {
-                    frameAllowed = false;
-                    blockedCallsWindow++;
-                    return;
-                }
-
-                const now = performance.now();
-
-                if (now - lastClearCall > 4) {
-                    const interval = intervalForMode();
-                    frameAllowed = (now - lastAllowedFrame) >= interval;
-
-                    if (frameAllowed) {
-                        lastAllowedFrame = now;
-                        sceneFramesWindow++;
-                    }
-                }
-
-                lastClearCall = now;
-
-                if (!frameAllowed) {
-                    blockedCallsWindow++;
-                    return;
-                }
-
-                passedCallsWindow++;
-                return clearOriginal.apply(this, args);
-            };
-        }
-
-        const methods = [
-            'drawImage',
-            'fill',
-            'stroke',
-            'fillRect',
-            'strokeRect',
-            'fillText',
-            'strokeText',
-            'putImageData',
-            'beginPath',
-            'closePath',
-            'moveTo',
-            'lineTo',
-            'rect',
-            'roundRect',
-            'arc',
-            'arcTo',
-            'ellipse',
-            'bezierCurveTo',
-            'quadraticCurveTo',
-            'save',
-            'restore',
-            'translate',
-            'rotate',
-            'scale',
-            'transform',
-            'setTransform',
-            'resetTransform',
-            'clip',
-            'setLineDash'
-        ];
-
-        for (const name of methods) {
+        for (const name of ['clearRect', 'drawImage']) {
             const original = proto[name];
             if (typeof original !== 'function') continue;
 
-            proto[name] = function (...args) {
-                if (
-                    sceneContext(this) &&
-                    settings.enabled &&
-                    (
-                        currentRenderMode === 'off' ||
-                        (currentRenderMode !== 'full' && !frameAllowed)
-                    )
-                ) {
-                    blockedCallsWindow++;
+            // Avoid wrapping twice if Tampermonkey reinjects.
+            if (original.__mothPerformanceWrapped) continue;
+
+            const wrapped = function (...args) {
+                markSceneTouch(this);
+                return original.apply(this, args);
+            };
+
+            try {
+                Object.defineProperty(wrapped, '__mothPerformanceWrapped', {
+                    value: true
+                });
+            } catch {}
+
+            proto[name] = wrapped;
+        }
+
+        detectorInstalled = true;
+        return true;
+    }
+
+    function intervalForMode(mode) {
+        if (mode === '30') return 1000 / 30;
+        if (mode === '15') return 1000 / 15;
+        if (mode === '2') return 500;
+        return 0;
+    }
+
+    function knownSceneCallback(callback) {
+        if (sceneCallbacks.has(callback)) return true;
+
+        const source = callbackSource(callback);
+        return Boolean(source && sceneCallbackSources.has(source));
+    }
+
+    // ------------------------------------------------------------------
+    // requestAnimationFrame hook
+    //
+    // Unlike v2, this suppresses the campo.mjs animation callback itself.
+    // That avoids doing the scene's JS work on frames we were going to
+    // discard anyway.
+    // ------------------------------------------------------------------
+
+    function installRafHook() {
+        if (hookInstalled || !originalRAF || !originalCancelRAF) return hookInstalled;
+
+        installSceneDetector();
+
+        function mothRequestAnimationFrame(callback) {
+            if (typeof callback !== 'function') {
+                return originalRAF(callback);
+            }
+
+            const publicId = nextRafId--;
+            const pending = {
+                actualId: null,
+                cancelled: false,
+                callback
+            };
+
+            const runner = timestamp => {
+                if (pending.cancelled) {
+                    pendingRaf.delete(publicId);
                     return;
                 }
 
-                if (sceneContext(this)) passedCallsWindow++;
-                return original.apply(this, args);
+                const scene = knownSceneCallback(callback);
+                const interval =
+                    settings.enabled && scene
+                        ? intervalForMode(currentMode)
+                        : 0;
+
+                if (interval > 0) {
+                    let state = callbackState.get(callback);
+
+                    if (!state) {
+                        state = { lastRun: -Infinity };
+                        callbackState.set(callback, state);
+                    }
+
+                    if ((timestamp - state.lastRun) < interval) {
+                        throttledWindow++;
+                        pending.actualId = originalRAF(runner);
+                        return;
+                    }
+
+                    state.lastRun = timestamp;
+                }
+
+                activeRafCallback = callback;
+                sceneTouchedInActiveRaf = false;
+
+                try {
+                    callback.call(page, timestamp);
+                } finally {
+                    if (sceneTouchedInActiveRaf) {
+                        sceneCallbacks.add(callback);
+
+                        const source = callbackSource(callback);
+                        if (source) sceneCallbackSources.add(source);
+
+                        sceneRunsWindow++;
+                    }
+
+                    activeRafCallback = null;
+                    sceneTouchedInActiveRaf = false;
+                    pendingRaf.delete(publicId);
+                }
             };
+
+            pending.actualId = originalRAF(runner);
+            pendingRaf.set(publicId, pending);
+
+            return publicId;
         }
 
-        hookInstalled = true;
-        console.info('[PokéIdle Performance+] canvas hook installed');
-        return true;
+        function mothCancelAnimationFrame(id) {
+            const pending = pendingRaf.get(id);
+
+            if (pending) {
+                pending.cancelled = true;
+
+                if (pending.actualId != null) {
+                    originalCancelRAF(pending.actualId);
+                }
+
+                pendingRaf.delete(id);
+                return;
+            }
+
+            return originalCancelRAF(id);
+        }
+
+        try {
+            page.requestAnimationFrame = mothRequestAnimationFrame;
+            page.cancelAnimationFrame = mothCancelAnimationFrame;
+
+            hookInstalled =
+                page.requestAnimationFrame === mothRequestAnimationFrame;
+
+            if (hookInstalled) {
+                console.info('[PokéIdle Performance+] page-world rAF hook installed');
+            }
+        } catch (error) {
+            console.warn('[PokéIdle Performance+] could not patch rAF', error);
+            hookInstalled = false;
+        }
+
+        return hookInstalled;
     }
 
     // ------------------------------------------------------------------
@@ -250,17 +327,20 @@
         if (document.hidden) return p.background;
 
         const idleSeconds = (Date.now() - lastActivity) / 1000;
-        if (p.idleSeconds > 0 && idleSeconds >= p.idleSeconds) return p.idle;
+
+        if (p.idleSeconds > 0 && idleSeconds >= p.idleSeconds) {
+            return p.idle;
+        }
 
         return p.active;
     }
 
     function collapseChat() {
-        const toggle = q('#btn-chat-toggle');
-        if (!toggle) return;
+        const button = q('#btn-chat-toggle');
+        if (!button) return;
 
-        if (toggle.getAttribute('aria-expanded') !== 'false') {
-            toggle.click();
+        if (button.getAttribute('aria-expanded') !== 'false') {
+            button.click();
             chatCollapsedByAddon = true;
         }
     }
@@ -268,23 +348,34 @@
     function restoreChat() {
         if (!chatCollapsedByAddon) return;
 
-        const toggle = q('#btn-chat-toggle');
-        if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+        const button = q('#btn-chat-toggle');
+        if (button?.getAttribute('aria-expanded') === 'false') button.click();
 
         chatCollapsedByAddon = false;
     }
 
     function applyMode() {
-        currentRenderMode = calculateMode();
+        currentMode = calculateMode();
 
         const p = profile();
         const html = document.documentElement;
 
-        html.classList.toggle('moth-scene-off', settings.enabled && currentRenderMode === 'off');
-        html.classList.toggle('moth-perf-reduced', settings.enabled && p.effects === 'reduced');
-        html.classList.toggle('moth-perf-minimal', settings.enabled && p.effects === 'minimal');
+        html.classList.toggle(
+            'moth-perf-reduced',
+            settings.enabled && p.effects === 'reduced'
+        );
 
-        const idle = document.hidden || currentRenderMode === p.idle;
+        html.classList.toggle(
+            'moth-perf-minimal',
+            settings.enabled && p.effects === 'minimal'
+        );
+
+        html.classList.toggle(
+            'moth-scene-sleep',
+            settings.enabled && currentMode === '2'
+        );
+
+        const idle = document.hidden || currentMode === p.idle;
 
         if (settings.enabled && p.collapseChat && idle) collapseChat();
         else restoreChat();
@@ -307,7 +398,7 @@
     document.addEventListener('visibilitychange', applyMode);
 
     // ------------------------------------------------------------------
-    // Styles and light UI
+    // UI performance CSS
     // ------------------------------------------------------------------
 
     function installStyles() {
@@ -317,19 +408,11 @@
         style.id = STYLE_ID;
 
         style.textContent = `
+            /*
+             * Balanced removes expensive decorative motion without hiding
+             * functional controls.
+             */
             html.moth-perf-reduced :is(
-                .ab-confete *,
-                .recompensa *,
-                .shiny-anuncio *,
-                .lendario-anuncio *,
-                .evento-faixa *
-            ) {
-                animation-duration: .001ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: .001ms !important;
-            }
-
-            html.moth-perf-minimal :is(
                 .ab-confete *,
                 .recompensa *,
                 .shiny-anuncio *,
@@ -340,8 +423,22 @@
                 animation-duration: .001ms !important;
                 animation-iteration-count: 1 !important;
                 transition-duration: .001ms !important;
+            }
+
+            /*
+             * Capture Saver also strips costly visual CSS from ordinary UI.
+             * Layout, visibility and interaction remain intact.
+             */
+            html.moth-perf-minimal #app *,
+            html.moth-perf-minimal #app *::before,
+            html.moth-perf-minimal #app *::after {
+                animation-duration: .001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .001ms !important;
                 backdrop-filter: none !important;
                 filter: none !important;
+                text-shadow: none !important;
+                box-shadow: none !important;
             }
 
             html.moth-perf-minimal :is(
@@ -355,15 +452,18 @@
                 display: none !important;
             }
 
-            html.moth-scene-off #cena {
-                opacity: .035 !important;
+            /*
+             * A nearly static scene should not keep an expensive composited
+             * canvas looking like it is merely frozen by accident.
+             */
+            html.moth-scene-sleep #cena {
+                opacity: .45 !important;
             }
 
             #${TRIGGER_ID} {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
-                flex: 0 0 auto !important;
                 min-width: 0 !important;
                 width: auto !important;
                 height: 25px !important;
@@ -409,21 +509,25 @@
                 box-sizing: border-box !important;
             }
 
-            #${PANEL_ID} .mpp-head {
+            #${PANEL_ID} .mpp-head,
+            #${PANEL_ID} .mpp-row {
                 display: flex;
                 align-items: center;
                 gap: 6px;
+            }
+
+            #${PANEL_ID} .mpp-head {
                 margin-bottom: 7px;
             }
 
-            #${PANEL_ID} .mpp-head strong {
+            #${PANEL_ID} .mpp-head strong,
+            #${PANEL_ID} .mpp-row label {
                 flex: 1;
-                font-size: 11px;
             }
 
             #${PANEL_ID} .mpp-metrics {
                 display: grid;
-                grid-template-columns: repeat(3,1fr);
+                grid-template-columns: repeat(3, 1fr);
                 gap: 4px;
                 margin-bottom: 7px;
             }
@@ -446,14 +550,7 @@
             }
 
             #${PANEL_ID} .mpp-row {
-                display: flex;
-                align-items: center;
-                gap: 6px;
                 min-height: 27px;
-            }
-
-            #${PANEL_ID} .mpp-row label {
-                flex: 1;
             }
 
             #${PANEL_ID} select {
@@ -478,12 +575,12 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function renderLabel(mode) {
+    function labelForMode(mode) {
         return {
             full: 'Full',
-            '30': '30',
-            '15': '15',
-            off: 'Off'
+            '30': '30fps',
+            '15': '15fps',
+            '2': '2fps'
         }[mode] || mode;
     }
 
@@ -497,6 +594,7 @@
         panel = document.createElement('section');
         panel.id = PANEL_ID;
         panel.hidden = true;
+
         panel.innerHTML = `
             <div class="mpp-head">
                 <strong>Performance+</strong>
@@ -504,8 +602,8 @@
             </div>
 
             <div class="mpp-metrics">
-                <div class="mpp-metric"><b id="mpp-scene-fps">—</b><span>scene FPS</span></div>
-                <div class="mpp-metric"><b id="mpp-blocked">0</b><span>blocked/s</span></div>
+                <div class="mpp-metric"><b id="mpp-runs">0</b><span>scene runs/s</span></div>
+                <div class="mpp-metric"><b id="mpp-throttled">0</b><span>skipped/s</span></div>
                 <div class="mpp-metric"><b id="mpp-capture">—</b><span>auto catch</span></div>
             </div>
 
@@ -519,7 +617,7 @@
                 </select>
             </div>
 
-            <div class="mpp-status" id="mpp-status">Hook loaded.</div>
+            <div class="mpp-status" id="mpp-status">Loading renderer hook…</div>
         `;
 
         host.prepend(panel);
@@ -544,7 +642,7 @@
         if (!document.body) return false;
 
         installStyles();
-        installCanvasHook();
+        installRafHook();
         ensurePanel();
 
         let trigger = q('#' + TRIGGER_ID);
@@ -588,35 +686,38 @@
             if (enabled) enabled.checked = settings.enabled;
             if (select) select.value = settings.profile;
 
-            const fpsEl = q('#mpp-scene-fps', panel);
-            const blockedEl = q('#mpp-blocked', panel);
-            const captureEl = q('#mpp-capture', panel);
-            const statusEl = q('#mpp-status', panel);
+            q('#mpp-runs', panel).textContent =
+                isNativeEconomy() ? 'Eco' : String(sceneRunsPerSecond);
 
-            if (fpsEl) fpsEl.textContent = isNativeEconomy() ? 'Eco' : sceneFps;
-            if (blockedEl) blockedEl.textContent = blockedPerSecond.toLocaleString();
-            if (captureEl) captureEl.textContent = autoCatchEnabled() ? 'ON' : 'OFF';
+            q('#mpp-throttled', panel).textContent =
+                String(throttledPerSecond);
 
-            if (statusEl) {
-                if (isNativeEconomy()) {
-                    statusEl.textContent =
-                        'Native Economy is active. It removes battlefield state, so Auto Catch has no fallen targets.';
-                } else if (!hookInstalled) {
-                    statusEl.textContent =
-                        'Canvas hook not installed yet.';
-                } else if (!settings.enabled) {
-                    statusEl.textContent =
-                        'Loaded, but disabled.';
-                } else if (currentRenderMode === 'full') {
-                    statusEl.textContent =
-                        'Loaded. Full scene rendering is allowed by this profile.';
-                } else if (blockedPerSecond > 0) {
-                    statusEl.textContent =
-                        `Working: suppressing ${blockedPerSecond.toLocaleString()} scene canvas calls each second.`;
-                } else {
-                    statusEl.textContent =
-                        'Hook loaded; waiting for #cena drawing. If this stays at 0 during a hunt, the game is using a different render path.';
-                }
+            q('#mpp-capture', panel).textContent =
+                autoCatchEnabled() ? 'ON' : 'OFF';
+
+            const status = q('#mpp-status', panel);
+
+            if (isNativeEconomy()) {
+                status.textContent =
+                    'Native Economy is active; battlefield capture state is unavailable.';
+            } else if (!hookInstalled) {
+                status.textContent =
+                    'Page-world requestAnimationFrame hook is not installed.';
+            } else if (!settings.enabled) {
+                status.textContent =
+                    'Loaded, currently disabled.';
+            } else if (sceneCallbacksFound === 0) {
+                status.textContent =
+                    'Hook active; identifying the campo.mjs scene loop…';
+            } else if (currentMode === 'full') {
+                status.textContent =
+                    'Scene loop found. Full profile is not throttling it.';
+            } else if (throttledPerSecond > 0) {
+                status.textContent =
+                    `Working: campo scene loop identified; skipping ${throttledPerSecond} animation callbacks/s.`;
+            } else {
+                status.textContent =
+                    `Scene loop found; target is ${labelForMode(currentMode)}.`;
             }
         }
 
@@ -628,45 +729,57 @@
                 trigger.classList.add('warning');
             } else if (!settings.enabled) {
                 trigger.textContent = 'Perf · Off';
+            } else if (!hookInstalled) {
+                trigger.textContent = 'Perf · hook!';
+                trigger.classList.add('warning');
+            } else if (sceneCallbacksFound === 0) {
+                trigger.textContent = 'Perf · finding…';
+                trigger.classList.add('warning');
             } else {
                 trigger.textContent =
-                    `Perf · ${renderLabel(currentRenderMode)} · ↓${blockedPerSecond.toLocaleString()}`;
+                    `Perf · ${labelForMode(currentMode)} · ↓${throttledPerSecond}`;
 
-                if (blockedPerSecond > 0) trigger.classList.add('working');
-                else if (currentRenderMode !== 'full') trigger.classList.add('warning');
+                if (currentMode !== 'full' && throttledPerSecond > 0) {
+                    trigger.classList.add('working');
+                }
             }
         }
     }
 
     // ------------------------------------------------------------------
-    // Metrics + bootstrap
+    // Metrics / bootstrap
     // ------------------------------------------------------------------
 
     setInterval(() => {
-        sceneFps = sceneFramesWindow;
-        blockedPerSecond = blockedCallsWindow;
-        passedPerSecond = passedCallsWindow;
+        sceneRunsPerSecond = sceneRunsWindow;
+        throttledPerSecond = throttledWindow;
 
-        sceneFramesWindow = 0;
-        blockedCallsWindow = 0;
-        passedCallsWindow = 0;
+        sceneRunsWindow = 0;
+        throttledWindow = 0;
 
         updateUI();
     }, 1000);
 
     function bootstrap() {
+        installStyles();
+        installSceneDetector();
+        installRafHook();
         ensureTrigger();
-        installCanvasHook();
         applyMode();
 
         setInterval(() => {
+            installSceneDetector();
+            installRafHook();
             ensureTrigger();
-            installCanvasHook();
             applyMode();
         }, 1000);
 
-        console.info('[PokéIdle Performance+] loaded');
+        console.info('[PokéIdle Performance+] v3 loaded');
     }
+
+    // Install the page-world hooks immediately, before waiting for DOMContentLoaded.
+    installSceneDetector();
+    installRafHook();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
