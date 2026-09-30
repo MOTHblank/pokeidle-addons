@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.0.0
+// @version      5.1.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -23,6 +23,7 @@
         showHud: true,
         use: {
             poke: true,
+            great: true,
             super: true,
             ultra: true,
             master: false,
@@ -30,6 +31,7 @@
         },
         reserve: {
             poke: 0,
+            great: 0,
             super: 0,
             ultra: 0,
             master: 1,
@@ -80,6 +82,7 @@
             captures: 0,
             used: {
                 poke: 0,
+                great: 0,
                 super: 0,
                 ultra: 0,
                 master: 0,
@@ -150,7 +153,8 @@
 
         if (text.includes('master')) return 'master';
         if (text.includes('ultra')) return 'ultra';
-        if (text.includes('super') || text.includes('great')) return 'super';
+        if (text.includes('super')) return 'super';
+        if (text.includes('great')) return 'great';
         if (text.includes('poke')) return 'poke';
         return 'other';
     }
@@ -205,10 +209,11 @@
     function rankFor(key) {
         return {
             poke: 0,
-            super: 1,
-            ultra: 2,
-            other: 3,
-            master: 4
+            great: 1,
+            super: 2,
+            ultra: 3,
+            other: 4,
+            master: 5
         }[key] ?? 99;
     }
 
@@ -1184,6 +1189,7 @@
 
             <div class="moth-ac-balls">
                 ${ballControl('poke', 'Poké')}
+                ${ballControl('great', 'Great')}
                 ${ballControl('super', 'Super')}
                 ${ballControl('ultra', 'Ultra')}
                 ${ballControl('master', 'Master')}
@@ -1369,6 +1375,7 @@
             '#moth-hud-balls',
             [
                 `P ${stats.used.poke}`,
+                `G ${stats.used.great}`,
                 `S ${stats.used.super}`,
                 `U ${stats.used.ultra}`,
                 stats.used.master ? `M ${stats.used.master}` : null,
@@ -1401,7 +1408,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5 loaded');
+        console.info('[PokéIdle Auto Catch+] v5.1 loaded');
     }
 
     if (document.readyState === 'loading') {
