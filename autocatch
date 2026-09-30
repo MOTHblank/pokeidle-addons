@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.4.0
+// @version      5.5.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -15,7 +15,9 @@
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
     const BALL_SELECT_SETTLE_MS = 35;
-    const DUPLICATE_SIGNATURE_GUARD_MS = 500;
+    const RETRY_AFTER_MS = 1000;
+    const MAX_ATTEMPTS_PER_BODY = 2;
+    const DUPLICATE_SIGNATURE_GUARD_MS = 1000;
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
@@ -518,21 +520,64 @@
         const now = Date.now();
 
         return states
-            .filter(state =>
-                !state.captured &&
-                !state.resolved &&
-                !state.attempted &&
-                !state.dispatchScheduled &&
-                !signatureRecentlyAttempted(
-                    state,
-                    now
-                )
-            )
-            .sort(
-                (a, b) =>
-                    a.firstSeenAt -
-                    b.firstSeenAt
-            )[0] || null;
+            .filter(state => {
+                if (
+                    state.captured ||
+                    state.resolved ||
+                    state.dispatchScheduled
+                ) {
+                    return false;
+                }
+
+                if (!state.attempted) {
+                    return !signatureRecentlyAttempted(
+                        state,
+                        now
+                    );
+                }
+
+                /*
+                 * A real capture attempt always receives a protocol result.
+                 * If the exact same body is still present for a full second
+                 * with no result, assume the UI click/send failed and retry
+                 * once. Never retry an authoritative success/failure.
+                 */
+                return (
+                    state.lastResult ===
+                        'pending' &&
+                    state.throws <
+                        MAX_ATTEMPTS_PER_BODY &&
+                    now -
+                        state.lastAttemptAt >=
+                        RETRY_AFTER_MS &&
+                    state.element
+                        ?.isConnected &&
+                    visible(
+                        state.element
+                    )
+                );
+            })
+            .sort((a, b) => {
+                /*
+                 * Fresh bodies take priority so a retry never blocks newer
+                 * fallen Pokémon. Retries are handled after untouched bodies.
+                 */
+                if (
+                    a.attempted !==
+                    b.attempted
+                ) {
+                    return a.attempted
+                        ? 1
+                        : -1;
+                }
+
+                return (
+                    (a.lastAttemptAt ||
+                        a.firstSeenAt) -
+                    (b.lastAttemptAt ||
+                        b.firstSeenAt)
+                );
+            })[0] || null;
     }
 
     function formatTargetState(state) {
@@ -1000,9 +1045,10 @@
 
             /*
              * Register before click because PokéIdle sends ball.throw
-             * synchronously from the click handler. There is deliberately
-             * NO retry: one throw resolves the fallen Pokémon whether the
-             * server reports success or failure.
+             * synchronously from the click handler. An authoritative
+             * success/failure ends this body. The only retry is the bounded
+             * one-second recovery path when no result arrives and the same
+             * body is still visible.
              */
             const now = Date.now();
 
@@ -1041,7 +1087,14 @@
 
             state.dispatchScheduled = false;
             state.attempted = true;
-            state.throws = 1;
+            state.throws =
+                Math.min(
+                    MAX_ATTEMPTS_PER_BODY,
+                    Number(
+                        state.throws ||
+                        0
+                    ) + 1
+                );
             state.lastAttemptAt = now;
             state.lastBallKey = choice.key;
             state.lastBallLabel = ballName;
@@ -1061,9 +1114,11 @@
             stats.attempts++;
 
             stats.status =
-                formatTargetState(
-                    state
-                );
+                state.throws > 1
+                    ? `${state.name} · retry ${state.throws}/${MAX_ATTEMPTS_PER_BODY}`
+                    : formatTargetState(
+                        state
+                    );
 
             updateUI();
 
@@ -1627,7 +1682,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5.4 loaded');
+        console.info('[PokéIdle Auto Catch+] v5.5 loaded');
     }
 
     if (document.readyState === 'loading') {
