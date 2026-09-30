@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.3.0
+// @version      5.4.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -14,8 +14,8 @@
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
-    const TARGET_RETRY_MS = 220;
     const BALL_SELECT_SETTLE_MS = 35;
+    const DUPLICATE_SIGNATURE_GUARD_MS = 500;
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
@@ -77,9 +77,10 @@
      */
     const pendingLocalAttempts = [];
     const pendingBySlot = new Map();
-    const ballIdByIdentity = new Map();
 
-    let activeProtocolSocket = null;
+    const elementKeys = new WeakMap();
+    const recentAttemptBySignature = new Map();
+    let nextElementKey = 1;
 
     let stats = freshStats();
     let protocolHookInstalled = false;
@@ -343,11 +344,32 @@
         ].join('|');
     }
 
+    function stableElementKey(
+        element
+    ) {
+        let key =
+            elementKeys.get(
+                element
+            );
+
+        if (!key) {
+            key =
+                'el:' +
+                nextElementKey++;
+
+            elementKeys.set(
+                element,
+                key
+            );
+        }
+
+        return key;
+    }
+
     function scanTargets() {
         const list = q('#caidos-lista');
         if (!list) return [];
 
-        const occurrences = new Map();
         const now = Date.now();
         const entries = [];
 
@@ -356,18 +378,27 @@
 
             const ids = targetProtocolIds(element);
             const strongId = targetInstanceId(element);
-            const base = strongId ? 'id:' + strongId : fallbackTargetSignature(element);
+            const signature = fallbackTargetSignature(element);
 
-            const occurrence = occurrences.get(base) || 0;
-            occurrences.set(base, occurrence + 1);
-
-            const key = strongId ? base : `${base}#${occurrence}`;
+            /*
+             * Prefer a real game-provided identity. Otherwise bind state to
+             * this exact DOM node instead of list position. The previous
+             * occurrence-index fallback could make one corpse look "new"
+             * whenever PokéIdle reordered/re-rendered #caidos-lista.
+             */
+            const key =
+                strongId
+                    ? 'id:' + strongId
+                    : stableElementKey(
+                        element
+                    );
 
             let state = targetStates.get(key);
 
             if (!state) {
                 state = {
                     key,
+                    signature,
                     ids,
                     name: targetName(element),
                     element,
@@ -384,12 +415,15 @@
                     shiny: false,
                     captured: false,
                     capturedAt: 0,
-                    lastDispatchAt: 0
+                    attempted: false,
+                    resolved: false,
+                    dispatchScheduled: false
                 };
 
                 targetStates.set(key, state);
             } else {
                 state.element = element;
+                state.signature = signature;
                 state.ids = ids;
                 state.name = targetName(element) || state.name;
                 state.lastSeenAt = now;
@@ -460,44 +494,45 @@
             || null;
     }
 
+    function signatureRecentlyAttempted(
+        state,
+        now = Date.now()
+    ) {
+        if (!state?.signature) {
+            return false;
+        }
+
+        const at =
+            recentAttemptBySignature.get(
+                state.signature
+            );
+
+        return Boolean(
+            at &&
+            now - at <
+                DUPLICATE_SIGNATURE_GUARD_MS
+        );
+    }
+
     function chooseTargetState(states) {
         const now = Date.now();
 
         return states
-            .filter(state => {
-                if (state.captured) {
-                    return false;
-                }
-
-                /*
-                 * Do not hammer one corpse while its previous throw is
-                 * still awaiting a server result. With several fallen
-                 * Pokémon this naturally rotates between them.
-                 */
-                if (
-                    state.lastResult === 'pending' &&
-                    now - state.lastAttemptAt < TARGET_RETRY_MS
-                ) {
-                    return false;
-                }
-
-                return true;
-            })
-            .sort((a, b) => {
-                /*
-                 * Never-attempted targets first. Afterwards service the
-                 * least-recently attempted target. This prevents one
-                 * stubborn corpse from starving newer fallen Pokémon.
-                 */
-                const aAttempt = a.lastAttemptAt || 0;
-                const bAttempt = b.lastAttemptAt || 0;
-
-                if (aAttempt !== bAttempt) {
-                    return aAttempt - bAttempt;
-                }
-
-                return a.firstSeenAt - b.firstSeenAt;
-            })[0] || null;
+            .filter(state =>
+                !state.captured &&
+                !state.resolved &&
+                !state.attempted &&
+                !state.dispatchScheduled &&
+                !signatureRecentlyAttempted(
+                    state,
+                    now
+                )
+            )
+            .sort(
+                (a, b) =>
+                    a.firstSeenAt -
+                    b.firstSeenAt
+            )[0] || null;
     }
 
     function formatTargetState(state) {
@@ -580,17 +615,6 @@
         pending.state.lastServerBallId =
             message.ballId ?? null;
 
-        if (
-            pending.ballIdentity &&
-            message.ballId !== undefined &&
-            message.ballId !== null
-        ) {
-            ballIdByIdentity.set(
-                pending.ballIdentity,
-                message.ballId
-            );
-        }
-
         pendingBySlot.set(
             slot,
             pending.state
@@ -670,6 +694,8 @@
                 ? 'captured'
                 : 'failed';
 
+        state.resolved = true;
+
         pendingBySlot.delete(slot);
 
         if (!event.sucesso) {
@@ -711,6 +737,7 @@
         }
 
         state.lastResult = 'gone';
+        state.resolved = true;
         stats.status =
             `${state.name} · no longer on ground`;
 
@@ -757,13 +784,6 @@
 
     function attachProtocolSocket(socket) {
         protocolSockets++;
-        activeProtocolSocket = socket;
-
-        socket.addEventListener('close', () => {
-            if (activeProtocolSocket === socket) {
-                activeProtocolSocket = null;
-            }
-        });
 
         socket.addEventListener('message', event => {
             if (
@@ -871,113 +891,6 @@
         );
     }
 
-    function protocolSocketReady() {
-        return Boolean(
-            activeProtocolSocket &&
-            activeProtocolSocket.readyState === WebSocket.OPEN
-        );
-    }
-
-    function registerAttempt(
-        state,
-        choice,
-        ballIdentityValue,
-        ballBefore,
-        ballName
-    ) {
-        const now = Date.now();
-
-        state.throws++;
-        state.lastAttemptAt = now;
-        state.lastDispatchAt = now;
-        state.lastBallKey = choice.key;
-        state.lastBallLabel = ballName;
-        state.lastBallIdentity = ballIdentityValue;
-        state.lastBallCountBefore = ballBefore;
-        state.lastResult = 'pending';
-
-        stats.attempts++;
-
-        const pending = {
-            state,
-            createdAt: now,
-            bound: false,
-            slot: null,
-            ballIdentity: ballIdentityValue
-        };
-
-        pendingLocalAttempts.push(pending);
-
-        return pending;
-    }
-
-    function rollbackAttempt(
-        state,
-        pending
-    ) {
-        const index =
-            pendingLocalAttempts.indexOf(
-                pending
-            );
-
-        if (index >= 0) {
-            pendingLocalAttempts.splice(
-                index,
-                1
-            );
-        }
-
-        state.throws =
-            Math.max(
-                0,
-                state.throws - 1
-            );
-
-        state.lastResult = null;
-
-        stats.attempts =
-            Math.max(
-                0,
-                stats.attempts - 1
-            );
-    }
-
-    function sendDirectThrow(
-        state,
-        choice,
-        ballIdentityValue
-    ) {
-        if (
-            state.slot === null ||
-            state.slot === undefined ||
-            !protocolSocketReady()
-        ) {
-            return false;
-        }
-
-        const serverBallId =
-            ballIdByIdentity.get(
-                ballIdentityValue
-            );
-
-        if (
-            serverBallId === undefined ||
-            serverBallId === null
-        ) {
-            return false;
-        }
-
-        activeProtocolSocket.send(
-            JSON.stringify({
-                t: 'ball.throw',
-                ballId: serverBallId,
-                slot: Number(state.slot)
-            })
-        );
-
-        return true;
-    }
-
     function tick() {
         timer = null;
 
@@ -989,12 +902,11 @@
 
         const fallenPanel = q('#caidos');
         const states = scanTargets();
-        const state = chooseTargetState(states);
 
         if (
             !fallenPanel ||
             fallenPanel.classList.contains('hidden') ||
-            !states.some(item => !item.captured)
+            !states.length
         ) {
             stats.status = 'Waiting for target';
             updateUI();
@@ -1002,17 +914,19 @@
             return;
         }
 
-        /*
-         * Every visible target currently has a throw in flight. Do not
-         * send duplicates yet; come back quickly and service whichever
-         * result resolves first.
-         */
+        const state =
+            chooseTargetState(
+                states
+            );
+
         if (!state) {
+            /*
+             * Every currently visible corpse has either already received
+             * its one legal throw or is protected against a duplicate DOM
+             * redraw. Wait for PokéIdle to remove/replace those entries.
+             */
             stats.status =
-                `Waiting on ${states.filter(item =>
-                    !item.captured &&
-                    item.lastResult === 'pending'
-                ).length} throw result(s)`;
+                'Waiting for new fallen Pokémon';
 
             updateUI();
             schedule();
@@ -1028,40 +942,8 @@
             return;
         }
 
-        const targetElement = state.element;
-        const ballIdentityValue =
-            ballIdentity(choice.button);
-        const ballBefore = choice.count;
-        const ballName = ballLabel(choice.button);
-
-        const pending =
-            registerAttempt(
-                state,
-                choice,
-                ballIdentityValue,
-                ballBefore,
-                ballName
-            );
-
-        /*
-         * Once a target slot and this ball's server ID are known, skip
-         * the DOM completely. This removes the old 160 ms wait and makes
-         * retries both faster and more reliable.
-         */
-        if (
-            sendDirectThrow(
-                state,
-                choice,
-                ballIdentityValue
-            )
-        ) {
-            stats.status =
-                formatTargetState(state);
-
-            updateUI();
-            schedule();
-            return;
-        }
+        const targetElement =
+            state.element;
 
         const clickTarget =
             getTargetClickElement(
@@ -1072,11 +954,6 @@
             !clickTarget ||
             !targetElement?.isConnected
         ) {
-            rollbackAttempt(
-                state,
-                pending
-            );
-
             stats.status =
                 'Target disappeared before throw';
 
@@ -1084,6 +961,25 @@
             schedule();
             return;
         }
+
+        const ballIdentityValue =
+            ballIdentity(
+                choice.button
+            );
+
+        const ballBefore =
+            choice.count;
+
+        const ballName =
+            ballLabel(
+                choice.button
+            );
+
+        /*
+         * Reserve the corpse immediately so the 100 ms scheduler cannot
+         * schedule a second throw while ball selection/click is pending.
+         */
+        state.dispatchScheduled = true;
 
         const alreadySelected =
             choice.button.classList
@@ -1096,22 +992,45 @@
         setTimeout(() => {
             if (
                 !settings.enabled ||
-                state.captured ||
                 !targetElement?.isConnected
             ) {
-                rollbackAttempt(
-                    state,
-                    pending
-                );
-
+                state.dispatchScheduled = false;
                 return;
             }
 
+            /*
+             * Register before click because PokéIdle sends ball.throw
+             * synchronously from the click handler. There is deliberately
+             * NO retry: one throw resolves the fallen Pokémon whether the
+             * server reports success or failure.
+             */
+            const now = Date.now();
+
+            const pending = {
+                state,
+                createdAt: now,
+                bound: false,
+                slot: null
+            };
+
+            pendingLocalAttempts.push(
+                pending
+            );
+
             if (!fireClick(clickTarget)) {
-                rollbackAttempt(
-                    state,
-                    pending
-                );
+                const index =
+                    pendingLocalAttempts.indexOf(
+                        pending
+                    );
+
+                if (index >= 0) {
+                    pendingLocalAttempts.splice(
+                        index,
+                        1
+                    );
+                }
+
+                state.dispatchScheduled = false;
 
                 stats.status =
                     'Target click failed';
@@ -1120,10 +1039,38 @@
                 return;
             }
 
+            state.dispatchScheduled = false;
+            state.attempted = true;
+            state.throws = 1;
+            state.lastAttemptAt = now;
+            state.lastBallKey = choice.key;
+            state.lastBallLabel = ballName;
+            state.lastBallIdentity =
+                ballIdentityValue;
+            state.lastBallCountBefore =
+                ballBefore;
+            state.lastResult = 'pending';
+
+            if (state.signature) {
+                recentAttemptBySignature.set(
+                    state.signature,
+                    now
+                );
+            }
+
+            stats.attempts++;
+
             stats.status =
-                formatTargetState(state);
+                formatTargetState(
+                    state
+                );
 
             updateUI();
+
+            setTimeout(() => {
+                syncInventoryUsage();
+                updateUI();
+            }, 350);
         },
         alreadySelected
             ? 0
@@ -1139,7 +1086,7 @@
         targetStates.clear();
         pendingLocalAttempts.length = 0;
         pendingBySlot.clear();
-        ballIdByIdentity.clear();
+        recentAttemptBySignature.clear();
 
         syncInventoryUsage();
         updateUI();
@@ -1680,7 +1627,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5.3 loaded');
+        console.info('[PokéIdle Auto Catch+] v5.4 loaded');
     }
 
     if (document.readyState === 'loading') {
