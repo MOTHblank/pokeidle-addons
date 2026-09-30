@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      5.5.0
+// @version      6.0.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -14,10 +14,8 @@
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
-    const BALL_SELECT_SETTLE_MS = 35;
     const RETRY_AFTER_MS = 1000;
     const MAX_ATTEMPTS_PER_BODY = 2;
-    const DUPLICATE_SIGNATURE_GUARD_MS = 1000;
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
@@ -77,12 +75,7 @@
      * Local click -> outgoing ball.throw -> incoming batalha.ev[k="bola"].
      * The server slot is the authoritative correlation key.
      */
-    const pendingLocalAttempts = [];
     const pendingBySlot = new Map();
-
-    const elementKeys = new WeakMap();
-    const recentAttemptBySignature = new Map();
-    let nextElementKey = 1;
 
     let stats = freshStats();
     let protocolHookInstalled = false;
@@ -268,104 +261,16 @@
     }
 
     // ---------------------------------------------------------------------
-    // Per-target state
+    // Per-target state — authoritative upstream data-slot identity
     // ---------------------------------------------------------------------
 
-    function targetProtocolIds(target) {
-        const ids = new Set();
-
-        for (const attr of [
-            'data-id',
-            'data-pokemon-id',
-            'data-poke-id',
-            'data-uid',
-            'data-caido-id',
-            'data-corpo-id',
-            'data-target-id'
-        ]) {
-            const value = target?.getAttribute?.(attr);
-            if (value) ids.add(String(value));
-        }
-
-        if (target?.dataset) {
-            for (const [key, value] of Object.entries(target.dataset)) {
-                if (value && /id$/i.test(key)) ids.add(String(value));
-            }
-        }
-
-        return ids;
-    }
-
-    function targetInstanceId(target) {
-        /*
-         * Only identifiers that are likely to identify this fallen body,
-         * not the Pokémon species. data-pokemon-id/data-poke-id remain
-         * useful for protocol matching but are not safe map keys when two
-         * identical species are on the floor at the same time.
-         */
-        for (const attr of [
-            'data-caido-id',
-            'data-corpo-id',
-            'data-target-id',
-            'data-uid',
-            'data-id'
-        ]) {
-            const value = target?.getAttribute?.(attr);
-            if (value) return String(value);
-        }
-
-        return null;
-    }
-
     function targetName(target) {
-        const explicit = [
-            target?.getAttribute?.('data-name'),
-            target?.getAttribute?.('data-pokemon-name'),
-            target?.getAttribute?.('aria-label'),
-            target?.getAttribute?.('title'),
-            target?.querySelector?.('img')?.alt,
-            target?.querySelector?.('[data-nome]')?.getAttribute('data-nome')
-        ].find(Boolean);
-
-        if (explicit) return String(explicit).trim();
-
-        const text = String(target?.textContent || '')
+        const named = target?.querySelector?.('.caido-quem');
+        const text = String(named?.textContent || target?.textContent || 'Pokémon')
             .replace(/\s+/g, ' ')
             .trim();
 
-        if (!text) return 'Pokémon';
-
-        // Avoid turning the whole card into the HUD label.
-        return text.split(/[·•|—\n]/)[0].trim().slice(0, 36) || 'Pokémon';
-    }
-
-    function fallbackTargetSignature(target) {
-        return [
-            normalize(target?.querySelector?.('img')?.src || ''),
-            normalize(targetName(target))
-        ].join('|');
-    }
-
-    function stableElementKey(
-        element
-    ) {
-        let key =
-            elementKeys.get(
-                element
-            );
-
-        if (!key) {
-            key =
-                'el:' +
-                nextElementKey++;
-
-            elementKeys.set(
-                element,
-                key
-            );
-        }
-
-        return key;
+        return text.slice(0, 48) || 'Pokémon';
     }
 
     function scanTargets() {
@@ -373,35 +278,29 @@
         if (!list) return [];
 
         const now = Date.now();
+        const seen = new Set();
         const entries = [];
 
-        for (const element of [...list.children]) {
+        for (const element of qa('.caido[data-slot]', list)) {
             if (!visible(element)) continue;
 
-            const ids = targetProtocolIds(element);
-            const strongId = targetInstanceId(element);
-            const signature = fallbackTargetSignature(element);
+            const slot = String(element.dataset.slot || '');
+            if (!slot) continue;
 
-            /*
-             * Prefer a real game-provided identity. Otherwise bind state to
-             * this exact DOM node instead of list position. The previous
-             * occurrence-index fallback could make one corpse look "new"
-             * whenever PokéIdle reordered/re-rendered #caidos-lista.
-             */
-            const key =
-                strongId
-                    ? 'id:' + strongId
-                    : stableElementKey(
-                        element
-                    );
+            const key = 'slot:' + slot;
+            seen.add(key);
 
             let state = targetStates.get(key);
 
-            if (!state) {
+            /*
+             * PokéIdle reuses the exact same row while a corpse exists.
+             * A different DOM node for the same slot therefore means a new
+             * corpse lifecycle and must get a fresh state.
+             */
+            if (!state || state.element !== element) {
                 state = {
                     key,
-                    signature,
-                    ids,
+                    slot,
                     name: targetName(element),
                     element,
                     firstSeenAt: now,
@@ -411,7 +310,6 @@
                     lastBallKey: null,
                     lastBallLabel: null,
                     lastResult: null,
-                    slot: null,
                     lastServerBallId: null,
                     lastChance: null,
                     shiny: false,
@@ -423,10 +321,8 @@
                 };
 
                 targetStates.set(key, state);
+                pendingBySlot.delete(slot);
             } else {
-                state.element = element;
-                state.signature = signature;
-                state.ids = ids;
                 state.name = targetName(element) || state.name;
                 state.lastSeenAt = now;
             }
@@ -434,150 +330,98 @@
             entries.push(state);
         }
 
-        pruneTargetStates(now);
-        return entries;
-    }
-
-    function pruneTargetStates(now = Date.now()) {
         for (const [key, state] of targetStates) {
+            if (seen.has(key)) continue;
+
             const unseenFor = now - state.lastSeenAt;
-            const attemptAge = state.lastAttemptAt ? now - state.lastAttemptAt : Infinity;
 
-            if (
-                (state.captured && unseenFor > 2000) ||
-                (unseenFor > 8000 && attemptAge > 12000) ||
-                unseenFor > 45000
-            ) {
+            /*
+             * Keep recently-gone states briefly so a slightly-late bola
+             * event can still correlate to its server slot.
+             */
+            if (unseenFor > 5000) {
                 targetStates.delete(key);
+
+                if (pendingBySlot.get(state.slot) === state) {
+                    pendingBySlot.delete(state.slot);
+                }
             }
         }
 
-        while (
-            pendingLocalAttempts.length &&
-            now - pendingLocalAttempts[0].createdAt > 12000
-        ) {
-            pendingLocalAttempts.shift();
-        }
-
-        for (const [slot, state] of pendingBySlot) {
-            if (
-                state.captured ||
-                !state.lastAttemptAt ||
-                now - state.lastAttemptAt > 12000
-            ) {
-                pendingBySlot.delete(slot);
-            }
-        }
-    }
-
-    function getTargetClickElement(target) {
-        if (!target?.isConnected) return null;
-
-        const selector = [
-            'button:not([disabled])',
-            '[role="button"]',
-            'a[href]',
-            '[data-action]',
-            '[onclick]'
-        ].join(',');
-
-        if (target.matches?.(selector)) return target;
-
-        return qa(selector, target).find(visible) || target;
+        return entries;
     }
 
     function currentTargetState() {
         const states = [...targetStates.values()];
 
         return states
-            .filter(state => state.lastAttemptAt > 0 && !state.captured)
-            .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0]
-            || states.find(state => !state.captured)
+            .filter(state => state.element?.isConnected)
+            .sort((a, b) => (b.lastAttemptAt || b.firstSeenAt) - (a.lastAttemptAt || a.firstSeenAt))[0]
             || null;
-    }
-
-    function signatureRecentlyAttempted(
-        state,
-        now = Date.now()
-    ) {
-        if (!state?.signature) {
-            return false;
-        }
-
-        const at =
-            recentAttemptBySignature.get(
-                state.signature
-            );
-
-        return Boolean(
-            at &&
-            now - at <
-                DUPLICATE_SIGNATURE_GUARD_MS
-        );
     }
 
     function chooseTargetState(states) {
         const now = Date.now();
 
+        /* Always service untouched bodies before considering a retry. */
+        const fresh = states
+            .filter(state =>
+                !state.resolved &&
+                !state.dispatchScheduled &&
+                state.throws === 0 &&
+                state.element?.isConnected
+            )
+            .sort((a, b) => a.firstSeenAt - b.firstSeenAt)[0];
+
+        if (fresh) return fresh;
+
+        /*
+         * Retry exactly once only when the SAME upstream data-slot row is
+         * still present after one second and no authoritative bola result
+         * resolved it. A real success OR failure ends the body.
+         */
         return states
-            .filter(state => {
-                if (
-                    state.captured ||
-                    state.resolved ||
-                    state.dispatchScheduled
-                ) {
-                    return false;
-                }
+            .filter(state =>
+                !state.resolved &&
+                !state.dispatchScheduled &&
+                state.throws > 0 &&
+                state.throws < MAX_ATTEMPTS_PER_BODY &&
+                state.lastResult === 'pending' &&
+                now - state.lastAttemptAt >= RETRY_AFTER_MS &&
+                state.element?.isConnected &&
+                String(state.element?.dataset?.slot || '') === state.slot
+            )
+            .sort((a, b) => a.lastAttemptAt - b.lastAttemptAt)[0]
+            || null;
+    }
 
-                if (!state.attempted) {
-                    return !signatureRecentlyAttempted(
-                        state,
-                        now
-                    );
-                }
+    function nextRetryDelay(states) {
+        const now = Date.now();
+        let best = Infinity;
 
-                /*
-                 * A real capture attempt always receives a protocol result.
-                 * If the exact same body is still present for a full second
-                 * with no result, assume the UI click/send failed and retry
-                 * once. Never retry an authoritative success/failure.
-                 */
-                return (
-                    state.lastResult ===
-                        'pending' &&
-                    state.throws <
-                        MAX_ATTEMPTS_PER_BODY &&
-                    now -
-                        state.lastAttemptAt >=
-                        RETRY_AFTER_MS &&
-                    state.element
-                        ?.isConnected &&
-                    visible(
-                        state.element
-                    )
-                );
-            })
-            .sort((a, b) => {
-                /*
-                 * Fresh bodies take priority so a retry never blocks newer
-                 * fallen Pokémon. Retries are handled after untouched bodies.
-                 */
-                if (
-                    a.attempted !==
-                    b.attempted
-                ) {
-                    return a.attempted
-                        ? 1
-                        : -1;
-                }
+        for (const state of states) {
+            if (
+                state.resolved ||
+                state.throws <= 0 ||
+                state.throws >= MAX_ATTEMPTS_PER_BODY ||
+                state.lastResult !== 'pending'
+            ) {
+                continue;
+            }
 
-                return (
-                    (a.lastAttemptAt ||
-                        a.firstSeenAt) -
-                    (b.lastAttemptAt ||
-                        b.firstSeenAt)
-                );
-            })[0] || null;
+            best = Math.min(
+                best,
+                Math.max(0, RETRY_AFTER_MS - (now - state.lastAttemptAt))
+            );
+        }
+
+        return Number.isFinite(best) ? best : null;
+    }
+
+    function getTargetClickElement(target) {
+        /* Upstream .caido itself is the button whose onclick sends ball.throw. */
+        if (!target?.isConnected || !target.matches?.('.caido[data-slot]')) return null;
+        return target;
     }
 
     function formatTargetState(state) {
@@ -585,15 +429,15 @@
 
         const parts = [
             state.name || 'Pokémon',
-            `${state.throws} throw${state.throws === 1 ? '' : 's'}`
+            'slot ' + state.slot,
+            state.throws + ' throw' + (state.throws === 1 ? '' : 's')
         ];
 
         if (state.lastBallLabel) parts.push(state.lastBallLabel);
-        if (state.captured) parts.push('captured');
+        if (state.lastResult) parts.push(state.lastResult);
 
         return parts.join(' · ');
     }
-
     // ---------------------------------------------------------------------
     // Authoritative WebSocket capture result
     // ---------------------------------------------------------------------
@@ -618,178 +462,43 @@
         return null;
     }
 
-    function newestUnboundLocalAttempt() {
-        const now = Date.now();
-
-        for (let i = pendingLocalAttempts.length - 1; i >= 0; i--) {
-            const pending = pendingLocalAttempts[i];
-
-            if (
-                !pending.bound &&
-                now - pending.createdAt < 1600
-            ) {
-                return pending;
-            }
-        }
-
-        return null;
-    }
-
-    function bindOutgoingThrow(message) {
-        if (
-            !message ||
-            message.t !== 'ball.throw' ||
-            message.slot === undefined ||
-            message.slot === null
-        ) {
-            return;
-        }
-
-        const pending = newestUnboundLocalAttempt();
-
-        if (!pending) {
-            return;
-        }
-
-        const slot = String(message.slot);
-
-        pending.bound = true;
-        pending.slot = slot;
-
-        pending.state.slot = slot;
-        pending.state.lastServerBallId =
-            message.ballId ?? null;
-
-        pendingBySlot.set(
-            slot,
-            pending.state
-        );
-
-        protocolLastType = 'ball.throw';
-    }
-
     function stateForBallResult(event) {
-        if (
-            event?.slot === undefined ||
-            event?.slot === null
-        ) {
-            return null;
-        }
+        if (event?.slot === undefined || event?.slot === null) return null;
 
         const slot = String(event.slot);
-        const direct = pendingBySlot.get(slot);
-
-        if (direct) {
-            return direct;
-        }
-
-        const now = Date.now();
-
-        return [...targetStates.values()]
-            .filter(state =>
-                !state.captured &&
-                state.slot === slot &&
-                state.lastAttemptAt > 0 &&
-                now - state.lastAttemptAt < 12000
-            )
-            .sort((a, b) => b.lastAttemptAt - a.lastAttemptAt)[0]
-            || null;
+        return pendingBySlot.get(slot) || targetStates.get('slot:' + slot) || null;
     }
 
     function handleBallResult(event) {
-        if (
-            !event ||
-            event.k !== 'bola' ||
-            typeof event.sucesso !== 'boolean'
-        ) {
-            return;
-        }
+        if (!event || event.k !== 'bola' || typeof event.sucesso !== 'boolean') return;
 
         protocolCaptureSignals++;
-        protocolLastType =
-            event.sucesso
-                ? 'bola · captured'
-                : 'bola · failed';
+        protocolLastType = event.sucesso ? 'bola · captured' : 'bola · failed';
 
         const state = stateForBallResult(event);
-
-        if (!state) {
-            /*
-             * This may be a manual/native-auto throw. It is authoritative,
-             * but it does not belong to this addon's statistics.
-             */
+        if (!state || state.throws <= 0) {
+            /* Manual/native-auto throw; do not claim it as ours. */
             return;
         }
 
-        const slot = String(event.slot);
-
-        state.lastServerBallId =
-            event.ballId ?? state.lastServerBallId;
-
-        state.lastChance =
-            typeof event.chance === 'number'
-                ? event.chance
-                : null;
-
-        state.shiny =
-            Boolean(event.shiny);
-
-        state.lastResult =
-            event.sucesso
-                ? 'captured'
-                : 'failed';
-
+        state.lastServerBallId = event.ballId ?? state.lastServerBallId;
+        state.lastChance = typeof event.chance === 'number' ? event.chance : null;
+        state.shiny = Boolean(event.shiny);
+        state.lastResult = event.sucesso ? 'captured' : 'failed';
         state.resolved = true;
 
-        pendingBySlot.delete(slot);
+        pendingBySlot.delete(String(event.slot));
 
-        if (!event.sucesso) {
-            stats.status =
-                `${state.name} · failed · ${state.throws} throws`;
+        if (event.sucesso) {
+            if (!state.captured) {
+                state.captured = true;
+                state.capturedAt = Date.now();
+                stats.captures++;
+            }
 
-            updateUI();
-            return;
-        }
-
-        if (state.captured) {
-            return;
-        }
-
-        state.captured = true;
-        state.capturedAt = Date.now();
-
-        stats.captures++;
-        stats.status =
-            `${state.name} · captured · ${state.throws} throws`;
-
-        updateUI();
-    }
-
-    function handleBattleWarning(event) {
-        if (
-            event?.k !== 'aviso' ||
-            !/nao esta mais no chao|não está mais no chão/i.test(
-                normalize(event.msg)
-            )
-        ) {
-            return;
-        }
-
-        const state = currentTargetState();
-
-        if (!state) {
-            return;
-        }
-
-        state.lastResult = 'gone';
-        state.resolved = true;
-        stats.status =
-            `${state.name} · no longer on ground`;
-
-        if (state.slot !== null) {
-            pendingBySlot.delete(
-                String(state.slot)
-            );
+            stats.status = state.name + ' · captured';
+        } else {
+            stats.status = state.name + ' · failed';
         }
 
         updateUI();
@@ -800,62 +509,40 @@
 
         const decoded = decodeProtocolData(data);
 
-        if (
-            !decoded ||
-            decoded.t !== 'batalha' ||
-            !Array.isArray(decoded.ev)
-        ) {
-            return;
-        }
+        if (!decoded || decoded.t !== 'batalha' || !Array.isArray(decoded.ev)) return;
 
         for (const event of decoded.ev) {
-            if (event?.k === 'bola') {
-                handleBallResult(event);
-            } else if (event?.k === 'aviso') {
-                handleBattleWarning(event);
-            }
+            if (event?.k === 'bola') handleBallResult(event);
         }
     }
 
     function inspectOutgoingProtocolMessage(data) {
         const decoded = decodeProtocolData(data);
 
-        if (!decoded) {
-            return;
+        if (decoded?.t === 'ball.throw') {
+            protocolLastType = 'ball.throw';
         }
-
-        bindOutgoingThrow(decoded);
     }
 
     function attachProtocolSocket(socket) {
         protocolSockets++;
 
         socket.addEventListener('message', event => {
-            if (
-                typeof Blob !== 'undefined' &&
-                event.data instanceof Blob
-            ) {
+            if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
                 event.data.text()
                     .then(inspectIncomingProtocolMessage)
                     .catch(() => {});
-
                 return;
             }
 
-            inspectIncomingProtocolMessage(
-                event.data
-            );
+            inspectIncomingProtocolMessage(event.data);
         });
 
         const nativeSend = socket.send;
 
         socket.send = function (data) {
             inspectOutgoingProtocolMessage(data);
-
-            return nativeSend.call(
-                this,
-                data
-            );
+            return nativeSend.call(this, data);
         };
     }
 
@@ -865,7 +552,7 @@
         const NativeWebSocket = page.WebSocket;
         if (typeof NativeWebSocket !== 'function') return false;
 
-        if (page.__mothAutoCatchWebSocketHook) {
+        if (page.__mothAutoCatchWebSocketHookV6) {
             protocolHookInstalled = true;
             return true;
         }
@@ -880,21 +567,14 @@
 
         try {
             page.WebSocket = WrappedWebSocket;
-            page.__mothAutoCatchWebSocketHook = true;
-            protocolHookInstalled =
-                page.WebSocket === WrappedWebSocket;
+            page.__mothAutoCatchWebSocketHookV6 = true;
+            protocolHookInstalled = page.WebSocket === WrappedWebSocket;
 
             if (protocolHookInstalled) {
-                console.info(
-                    '[PokéIdle Auto Catch+] exact ball protocol hook installed'
-                );
+                console.info('[PokéIdle Auto Catch+] slot protocol hook installed');
             }
         } catch (error) {
-            console.warn(
-                '[PokéIdle Auto Catch+] WebSocket hook failed',
-                error
-            );
-
+            console.warn('[PokéIdle Auto Catch+] WebSocket hook failed', error);
             protocolHookInstalled = false;
         }
 
@@ -903,7 +583,6 @@
 
     // Install before PokéIdle creates its socket.
     installProtocolHook();
-
     // ---------------------------------------------------------------------
     // Automation
     // ---------------------------------------------------------------------
@@ -921,19 +600,23 @@
         if (settings.enabled) tick();
     }
 
-    function schedule() {
+    function schedule(delayMs = null) {
         clearTimeout(timer);
         timer = null;
 
         if (!settings.enabled) return;
 
-        timer = setTimeout(
-            tick,
-            Math.max(
-                MIN_INTERVAL_MS,
-                Number(settings.intervalMs) || 650
-            )
+        const normalDelay = Math.max(
+            MIN_INTERVAL_MS,
+            Number(settings.intervalMs) || MIN_INTERVAL_MS
         );
+
+        const requested =
+            delayMs === null || delayMs === undefined
+                ? normalDelay
+                : Math.max(MIN_INTERVAL_MS, Number(delayMs) || 0);
+
+        timer = setTimeout(tick, Math.min(normalDelay, requested));
     }
 
     function tick() {
@@ -959,22 +642,17 @@
             return;
         }
 
-        const state =
-            chooseTargetState(
-                states
-            );
+        const state = chooseTargetState(states);
 
         if (!state) {
-            /*
-             * Every currently visible corpse has either already received
-             * its one legal throw or is protected against a duplicate DOM
-             * redraw. Wait for PokéIdle to remove/replace those entries.
-             */
-            stats.status =
-                'Waiting for new fallen Pokémon';
+            const retryDelay = nextRetryDelay(states);
+
+            stats.status = retryDelay !== null
+                ? 'Waiting for result'
+                : 'Waiting for new fallen Pokémon';
 
             updateUI();
-            schedule();
+            schedule(retryDelay);
             return;
         }
 
@@ -987,161 +665,81 @@
             return;
         }
 
-        const targetElement =
-            state.element;
+        const wasRetry = state.throws > 0;
+        state.dispatchScheduled = true;
 
-        const clickTarget =
-            getTargetClickElement(
-                targetElement
-            );
-
-        if (
-            !clickTarget ||
-            !targetElement?.isConnected
-        ) {
-            stats.status =
-                'Target disappeared before throw';
-
+        /*
+         * Upstream ball-button selection is synchronous. It updates
+         * estado.bolaCaidos and immediately repaints, so there is no
+         * arbitrary settle timeout anymore.
+         */
+        if (!selectBall(choice)) {
+            state.dispatchScheduled = false;
+            stats.status = 'Could not select ball';
             updateUI();
             schedule();
             return;
         }
 
-        const ballIdentityValue =
-            ballIdentity(
-                choice.button
-            );
-
-        const ballBefore =
-            choice.count;
-
-        const ballName =
-            ballLabel(
-                choice.button
-            );
-
         /*
-         * Reserve the corpse immediately so the 100 ms scheduler cannot
-         * schedule a second throw while ball selection/click is pending.
+         * Re-find by authoritative slot after the ball selector repaint.
+         * Do not trust an old DOM reference if upstream ever redraws it.
          */
-        state.dispatchScheduled = true;
+        const targetElement = qa('#caidos-lista .caido[data-slot]')
+            .find(element => String(element.dataset.slot || '') === state.slot);
 
-        const alreadySelected =
-            choice.button.classList
-                .contains('on');
+        const clickTarget = getTargetClickElement(targetElement);
 
-        if (!alreadySelected) {
-            selectBall(choice);
+        if (!clickTarget || !visible(clickTarget)) {
+            state.dispatchScheduled = false;
+            stats.status = 'Target disappeared before throw';
+            updateUI();
+            schedule();
+            return;
         }
 
-        setTimeout(() => {
-            if (
-                !settings.enabled ||
-                !targetElement?.isConnected
-            ) {
-                state.dispatchScheduled = false;
-                return;
-            }
+        const now = Date.now();
 
-            /*
-             * Register before click because PokéIdle sends ball.throw
-             * synchronously from the click handler. An authoritative
-             * success/failure ends this body. The only retry is the bounded
-             * one-second recovery path when no result arrives and the same
-             * body is still visible.
-             */
-            const now = Date.now();
+        state.element = clickTarget;
+        state.name = targetName(clickTarget);
+        state.throws++;
+        state.attempted = true;
+        state.lastAttemptAt = now;
+        state.lastBallKey = choice.key;
+        state.lastBallLabel = ballLabel(choice.button);
+        state.lastResult = 'pending';
+        state.resolved = false;
 
-            const pending = {
-                state,
-                createdAt: now,
-                bound: false,
-                slot: null
-            };
+        pendingBySlot.set(state.slot, state);
 
-            pendingLocalAttempts.push(
-                pending
-            );
-
-            if (!fireClick(clickTarget)) {
-                const index =
-                    pendingLocalAttempts.indexOf(
-                        pending
-                    );
-
-                if (index >= 0) {
-                    pendingLocalAttempts.splice(
-                        index,
-                        1
-                    );
-                }
-
-                state.dispatchScheduled = false;
-
-                stats.status =
-                    'Target click failed';
-
-                updateUI();
-                return;
-            }
-
+        if (!fireClick(clickTarget)) {
+            pendingBySlot.delete(state.slot);
+            state.throws--;
+            state.attempted = state.throws > 0;
+            state.lastResult = state.throws > 0 ? 'pending' : null;
             state.dispatchScheduled = false;
-            state.attempted = true;
-            state.throws =
-                Math.min(
-                    MAX_ATTEMPTS_PER_BODY,
-                    Number(
-                        state.throws ||
-                        0
-                    ) + 1
-                );
-            state.lastAttemptAt = now;
-            state.lastBallKey = choice.key;
-            state.lastBallLabel = ballName;
-            state.lastBallIdentity =
-                ballIdentityValue;
-            state.lastBallCountBefore =
-                ballBefore;
-            state.lastResult = 'pending';
 
-            if (state.signature) {
-                recentAttemptBySignature.set(
-                    state.signature,
-                    now
-                );
-            }
-
-            stats.attempts++;
-
-            stats.status =
-                state.throws > 1
-                    ? `${state.name} · retry ${state.throws}/${MAX_ATTEMPTS_PER_BODY}`
-                    : formatTargetState(
-                        state
-                    );
-
+            stats.status = state.name + ' · click failed';
             updateUI();
+            schedule();
+            return;
+        }
 
-            setTimeout(() => {
-                syncInventoryUsage();
-                updateUI();
-            }, 350);
-        },
-        alreadySelected
-            ? 0
-            : BALL_SELECT_SETTLE_MS
-        );
+        state.dispatchScheduled = false;
+        stats.attempts++;
 
+        stats.status = wasRetry
+            ? state.name + ' · retry 2/2'
+            : state.name + ' · throwing';
+
+        updateUI();
         schedule();
     }
-
     function resetStats() {
         stats = freshStats();
         inventoryBaseline.clear();
         targetStates.clear();
-        pendingLocalAttempts.length = 0;
         pendingBySlot.clear();
-        recentAttemptBySignature.clear();
 
         syncInventoryUsage();
         updateUI();
@@ -1682,7 +1280,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v5.5 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.0 loaded');
     }
 
     if (document.readyState === 'loading') {
