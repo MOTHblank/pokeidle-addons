@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      4.2.0
+// @version      4.2.1
 // @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -674,29 +674,12 @@
     }
 
     function syncChatPolicy() {
-        if (!settings.enabled) {
-            restoreChat();
-            return;
-        }
-
-        const p = profile();
-        const idle =
-            isIdleForProfile(p);
-
         /*
-         * Never collapse chat just because UI load is high. That changes
-         * user-visible state and made the panel appear broken. Only AFK-like
-         * profiles explicitly configured for idle collapse may do it.
+         * Performance+ no longer changes chat expansion state at all.
+         * Collapsing a core communication panel is too intrusive and can
+         * leave the interface looking broken after profile/script changes.
          */
-        const shouldCollapse =
-            p.chat === 'idle' &&
-            idle;
-
-        if (shouldCollapse) {
-            collapseChat();
-        } else {
-            restoreChat();
-        }
+        restoreChat();
     }
 
     function applyMode() {
@@ -836,25 +819,6 @@
              */
             html.moth-ui-performance #ir-centro-conta {
                 display: none !important;
-            }
-
-            /*
-             * Let Chrome skip off-screen panel rendering where possible.
-             * These are presentation optimizations only; no game state is
-             * disconnected.
-             */
-            html:is(
-                .moth-ui-lite,
-                .moth-ui-aggressive,
-                .moth-ui-performance
-            ) :is(
-                #p-ativo,
-                #p-equipe,
-                #p-treinador,
-                #p-chat
-            ) {
-                content-visibility: auto;
-                contain-intrinsic-size: auto 260px;
             }
 
             html.moth-perf-reduced :is(
@@ -1482,7 +1446,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v4.2 loaded'
+            '[PokéIdle Performance+] v4.2.1 loaded'
         );
     }
 
