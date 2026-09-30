@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      4.0.0
+// @version      4.1.0
 // @description  Configurable auto-catch with capture statistics HUD.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -131,44 +131,62 @@
             return false;
         }
 
+        if (
+            el.hidden ||
+            el.classList?.contains('hidden')
+        ) {
+            return false;
+        }
+
         const style = getComputedStyle(el);
 
-        return (
-            style.display !== 'none' &&
-            style.visibility !== 'hidden'
-        );
+        if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.pointerEvents === 'none'
+        ) {
+            return false;
+        }
+
+        /*
+         * getClientRects() also catches hidden ancestors, which
+         * getComputedStyle(el) alone does not.
+         */
+        return el.getClientRects().length > 0;
     }
 
     function fireClick(el) {
-        if (!el) return;
+        if (!el?.isConnected) {
+            return false;
+        }
 
-        const opts = {
-            bubbles: true,
-            cancelable: true,
-            view: window
-        };
-
+        /*
+         * HTMLElement.click() follows the browser's normal activation
+         * behavior and is considerably more reliable in Chrome than
+         * manually manufacturing PointerEvent/MouseEvent sequences.
+         */
         try {
-            el.dispatchEvent(
-                new PointerEvent('pointerdown', opts)
-            );
-
-            el.dispatchEvent(
-                new PointerEvent('pointerup', opts)
-            );
+            if (typeof el.click === 'function') {
+                el.click();
+                return true;
+            }
         } catch (_) {}
 
-        el.dispatchEvent(
-            new MouseEvent('mousedown', opts)
-        );
-
-        el.dispatchEvent(
-            new MouseEvent('mouseup', opts)
-        );
-
-        el.dispatchEvent(
-            new MouseEvent('click', opts)
-        );
+        /*
+         * Fallback for a non-HTMLElement interactive node.
+         */
+        try {
+            return el.dispatchEvent(
+                new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                    view: window
+                })
+            );
+        } catch (_) {
+            return false;
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -382,14 +400,14 @@
     }
 
     function selectBall(choice) {
-        if (!choice?.button) {
+        if (!choice?.button?.isConnected) {
             return false;
         }
 
         if (
             !choice.button.classList.contains('on')
         ) {
-            fireClick(choice.button);
+            return fireClick(choice.button);
         }
 
         return true;
@@ -414,6 +432,35 @@
         }
 
         return null;
+    }
+
+    function getTargetClickElement(target) {
+        if (!target?.isConnected) {
+            return null;
+        }
+
+        const interactiveSelector = [
+            'button:not([disabled])',
+            '[role="button"]',
+            'a[href]',
+            '[data-action]',
+            '[onclick]'
+        ].join(',');
+
+        /*
+         * If the row itself is interactive, use it. Otherwise click the
+         * deepest explicit control. Clicking a descendant still bubbles
+         * to row-level handlers, so this covers both DOM designs.
+         */
+        if (target.matches?.(interactiveSelector)) {
+            return target;
+        }
+
+        return (
+            [...target.querySelectorAll(interactiveSelector)]
+                .find(visible) ||
+            target
+        );
     }
 
     function targetSignature(target) {
@@ -779,8 +826,16 @@
             currentTargetToken;
 
         /*
-         * Let ball selection settle first.
+         * Let the game's selected-ball class settle. Chrome can commit
+         * the button state on a later task, so 160 ms is deliberately
+         * less aggressive than the old 90 ms.
          */
+        const chosenIdentity =
+            ballIdentity(choice.button);
+
+        const countBeforeThrow =
+            choice.count;
+
         setTimeout(() => {
             if (
                 !settings.enabled ||
@@ -789,7 +844,27 @@
                 return;
             }
 
-            fireClick(target);
+            const clickTarget =
+                getTargetClickElement(target);
+
+            if (!clickTarget) {
+                stats.status =
+                    'Target has no clickable control';
+
+                updateUI();
+                return;
+            }
+
+            const sent =
+                fireClick(clickTarget);
+
+            if (!sent) {
+                stats.status =
+                    'Target click failed';
+
+                updateUI();
+                return;
+            }
 
             stats.attempts++;
             targetThrows++;
@@ -808,16 +883,42 @@
             });
 
             /*
-             * Allow the game's inventory UI
-             * to update before reading it.
+             * Confirm that Chrome/game accepted the throw by watching the
+             * selected ball inventory. This does not affect gameplay; it
+             * only makes failures visible in the HUD.
              */
             setTimeout(() => {
                 syncInventoryUsage();
+
+                if (
+                    countBeforeThrow !== null &&
+                    target.isConnected
+                ) {
+                    const currentButton =
+                        getBallButtons().find(
+                            button =>
+                                ballIdentity(button) ===
+                                chosenIdentity
+                        );
+
+                    const countAfterThrow =
+                        ballCount(currentButton);
+
+                    if (
+                        countAfterThrow !== null &&
+                        countAfterThrow >=
+                            countBeforeThrow
+                    ) {
+                        stats.status =
+                            'Click sent · ball not consumed';
+                    }
+                }
+
                 updateUI();
-            }, 300);
+            }, 450);
 
             updateUI();
-        }, 90);
+        }, 160);
 
         schedule();
     }
