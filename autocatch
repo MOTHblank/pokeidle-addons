@@ -495,6 +495,568 @@
         return parts.join(' · ');
     }
     // ---------------------------------------------------------------------
+    // Server-backed ball inventory / automatic restocking
+    // ---------------------------------------------------------------------
+
+    function classifyBallName(
+        value
+    ) {
+        const text =
+            normalize(
+                value
+            );
+
+        if (
+            text.includes(
+                'master'
+            )
+        ) {
+            return 'master';
+        }
+
+        if (
+            text.includes(
+                'ultra'
+            )
+        ) {
+            return 'ultra';
+        }
+
+        if (
+            text.includes(
+                'super'
+            )
+        ) {
+            return 'super';
+        }
+
+        if (
+            text.includes(
+                'great'
+            )
+        ) {
+            return 'great';
+        }
+
+        if (
+            text.includes(
+                'poke'
+            )
+        ) {
+            return 'poke';
+        }
+
+        return 'other';
+    }
+
+    function mergeBallCatalog(
+        catalog
+    ) {
+        if (
+            !Array.isArray(
+                catalog
+            )
+        ) {
+            return;
+        }
+
+        for (
+            const ball of
+            catalog
+        ) {
+            const id =
+                Number(
+                    ball?.id
+                );
+
+            if (
+                !Number.isFinite(
+                    id
+                )
+            ) {
+                continue;
+            }
+
+            ballCatalog.set(
+                id,
+                {
+                    id,
+                    nome:
+                        ball?.nome ||
+                        'Ball ' +
+                        id,
+                    key:
+                        classifyBallName(
+                            ball?.nome ||
+                            ''
+                        ),
+                    catchRate:
+                        Number(
+                            ball?.catchRate ||
+                            0
+                        ),
+                    priceGold:
+                        Number(
+                            ball?.priceGold ||
+                            0
+                        ),
+                    compravel:
+                        Boolean(
+                            ball?.compravel
+                        )
+                }
+            );
+        }
+    }
+
+    function mergeProtocolState(
+        gameState
+    ) {
+        if (
+            !gameState ||
+            typeof gameState !==
+                'object'
+        ) {
+            return;
+        }
+
+        if (
+            gameState.gold !==
+                undefined &&
+            gameState.gold !==
+                null
+        ) {
+            const gold =
+                Number(
+                    gameState.gold
+                );
+
+            if (
+                Number.isFinite(
+                    gold
+                )
+            ) {
+                protocolGold =
+                    gold;
+            }
+        }
+
+        if (
+            gameState.balls &&
+            typeof gameState.balls ===
+                'object'
+        ) {
+            for (
+                const [
+                    rawId,
+                    rawCount
+                ] of
+                Object.entries(
+                    gameState.balls
+                )
+            ) {
+                const id =
+                    Number(rawId);
+
+                const count =
+                    Number(
+                        rawCount
+                    );
+
+                if (
+                    !Number.isFinite(
+                        id
+                    ) ||
+                    !Number.isFinite(
+                        count
+                    )
+                ) {
+                    continue;
+                }
+
+                const previous =
+                    protocolBalls.get(
+                        id
+                    );
+
+                protocolBalls.set(
+                    id,
+                    count
+                );
+
+                const pending =
+                    restockPending.get(
+                        id
+                    );
+
+                if (
+                    pending &&
+                    (
+                        count >
+                            pending.before ||
+                        previous !==
+                            undefined &&
+                        count >
+                            previous
+                    )
+                ) {
+                    const bought =
+                        Math.max(
+                            0,
+                            count -
+                                pending.before
+                        );
+
+                    stats.restockBought +=
+                        bought;
+
+                    restockPending.delete(
+                        id
+                    );
+
+                    restockFailures =
+                        0;
+
+                    restockBlockedUntil =
+                        0;
+
+                    const meta =
+                        ballCatalog.get(
+                            id
+                        );
+
+                    restockLastAction =
+                        (
+                            meta?.nome ||
+                            'Ball ' +
+                                id
+                        ) +
+                        ' +' +
+                        bought;
+                }
+            }
+        }
+    }
+
+    function socketReady() {
+        return Boolean(
+            activeProtocolSocket &&
+            activeProtocolSocket.readyState ===
+                page.WebSocket.OPEN
+        );
+    }
+
+    function sendProtocol(
+        payload
+    ) {
+        if (
+            !socketReady()
+        ) {
+            return false;
+        }
+
+        try {
+            activeProtocolSocket.send(
+                JSON.stringify(
+                    payload
+                )
+            );
+
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function restockMetaForKey(
+        key
+    ) {
+        return [
+            ...ballCatalog.values()
+        ]
+            .filter(
+                ball =>
+                    ball.key ===
+                        key &&
+                    ball.compravel &&
+                    Number(
+                        ball.priceGold ||
+                        0
+                    ) > 0
+            )
+            .sort(
+                (a, b) =>
+                    a.priceGold -
+                    b.priceGold
+            )[0] ||
+            null;
+    }
+
+    function maybeRestock() {
+        if (
+            !settings.enabled ||
+            !settings.restock
+                ?.enabled
+        ) {
+            restockLastAction =
+                'off';
+
+            return false;
+        }
+
+        if (
+            Date.now() <
+            restockBlockedUntil
+        ) {
+            return false;
+        }
+
+        if (
+            !socketReady() ||
+            !ballCatalog.size ||
+            protocolGold ===
+                null
+        ) {
+            restockLastAction =
+                'waiting for server state';
+
+            return false;
+        }
+
+        const now =
+            Date.now();
+
+        for (
+            const [
+                id,
+                pending
+            ] of
+            restockPending
+        ) {
+            if (
+                now -
+                    pending.sentAt <
+                    RESTOCK_RETRY_MS
+            ) {
+                continue;
+            }
+
+            restockPending.delete(
+                id
+            );
+
+            restockFailures++;
+
+            if (
+                restockFailures >=
+                3
+            ) {
+                restockBlockedUntil =
+                    now +
+                    RESTOCK_BACKOFF_MS;
+
+                restockLastAction =
+                    'backoff after rejected/late purchases';
+
+                return false;
+            }
+        }
+
+        const order = [
+            'poke',
+            'great',
+            'super',
+            'ultra'
+        ];
+
+        for (
+            const key of
+            order
+        ) {
+            const meta =
+                restockMetaForKey(
+                    key
+                );
+
+            if (!meta) {
+                continue;
+            }
+
+            if (
+                restockPending.has(
+                    meta.id
+                )
+            ) {
+                continue;
+            }
+
+            const count =
+                Number(
+                    protocolBalls.get(
+                        meta.id
+                    ) ||
+                    0
+                );
+
+            const at =
+                Math.max(
+                    0,
+                    Number(
+                        settings.restock
+                            .at?.[
+                            key
+                        ] ||
+                        0
+                    )
+                );
+
+            const target =
+                Math.max(
+                    at,
+                    Number(
+                        settings.restock
+                            .to?.[
+                            key
+                        ] ||
+                        0
+                    )
+                );
+
+            if (
+                target <= 0 ||
+                count > at ||
+                count >= target
+            ) {
+                continue;
+            }
+
+            const price =
+                Number(
+                    meta.priceGold
+                );
+
+            if (
+                !Number.isFinite(
+                    price
+                ) ||
+                price <= 0
+            ) {
+                continue;
+            }
+
+            const goldReserve =
+                Math.max(
+                    0,
+                    Number(
+                        settings.restock
+                            .goldReserve ||
+                        0
+                    )
+                );
+
+            const spendable =
+                Math.max(
+                    0,
+                    protocolGold -
+                        goldReserve
+                );
+
+            const affordable =
+                Math.floor(
+                    spendable /
+                    price
+                );
+
+            const wanted =
+                Math.min(
+                    RESTOCK_MAX_QTY,
+                    target -
+                        count
+                );
+
+            const qty =
+                Math.max(
+                    0,
+                    Math.min(
+                        wanted,
+                        affordable
+                    )
+                );
+
+            if (
+                qty <= 0
+            ) {
+                restockLastAction =
+                    (
+                        meta.nome ||
+                        key
+                    ) +
+                    ' low · gold reserve protected';
+
+                continue;
+            }
+
+            if (
+                !sendProtocol({
+                    t:
+                        'shop.buy',
+                    kind:
+                        'ball',
+                    id:
+                        meta.id,
+                    qty
+                })
+            ) {
+                restockLastAction =
+                    'purchase send failed';
+
+                return false;
+            }
+
+            restockPending.set(
+                meta.id,
+                {
+                    before:
+                        count,
+                    qty,
+                    sentAt:
+                        now
+                }
+            );
+
+            stats.restockOrders++;
+
+            /*
+             * Locally reserve the expected cost so two different ball types
+             * cannot both spend the same visible gold before the next state
+             * update arrives.
+             */
+            protocolGold -=
+                qty *
+                price;
+
+            restockLastAction =
+                'buying ' +
+                qty +
+                '× ' +
+                meta.nome;
+
+            stats.status =
+                'Restock · ' +
+                restockLastAction;
+
+            updateUI();
+
+            return true;
+        }
+
+        restockLastAction =
+            'stock OK';
+
+        return false;
+    }
+
+    // ---------------------------------------------------------------------
     // Authoritative WebSocket capture result
     // ---------------------------------------------------------------------
 
