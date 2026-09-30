@@ -2,7 +2,7 @@
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
 // @version      5.0.0
-// @description  Targets PokéIdle's campo.mjs loop, reduces expensive UI work, and adapts scene rate to load.
+// @description  Upstream-aware renderer and UI-loop optimizer with adaptive scene rate, native Optimized integration, and Auto Catch-safe throttling.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -1576,9 +1576,32 @@
                 transition-duration: .001ms !important;
             }
 
-            html.moth-perf-minimal #app *,
-            html.moth-perf-minimal #app *::before,
-            html.moth-perf-minimal #app *::after {
+            /*
+             * Do not put a wildcard rule on every #app descendant: PokéIdle
+             * creates/reuses DOM constantly, and forcing every new node and
+             * pseudo-element through a giant override selector becomes its
+             * own style-recalculation tax. Native Optimized already removes
+             * scene hit effects; target the remaining decorative surfaces.
+             */
+            html.moth-perf-minimal :is(
+                .ab-confete,
+                .ab-confete *,
+                .recompensa,
+                .recompensa *,
+                .shiny-anuncio,
+                .shiny-anuncio *,
+                .lendario-anuncio,
+                .lendario-anuncio *,
+                .evento-faixa,
+                .evento-faixa *,
+                .pvp-fila-pill,
+                .pvp-fila-pill *,
+                .rc-flash,
+                .rc-particulas,
+                .la-relampago,
+                .la-raios,
+                .la-faiscas
+            ) {
                 animation-duration: .001ms !important;
                 animation-iteration-count: 1 !important;
                 transition-duration: .001ms !important;
@@ -2077,9 +2100,12 @@
             if (isNativeEconomy()) {
                 statusText =
                     'Native Economy is active; Auto Catch cannot receive fallen targets.';
-            } else if (!campoHookInstalled) {
+            } else if (
+                !campoHookInstalled ||
+                !uiTimerHookInstalled
+            ) {
                 statusText =
-                    'Could not install the page-world campo hook.';
+                    'Could not install one or more page-world performance hooks.';
             } else if (!campoLoopFound) {
                 statusText =
                     'Hook ready; waiting for campo.mjs renderer.';
@@ -2156,7 +2182,10 @@
         } else if (!settings.enabled) {
             triggerText =
                 'Perf · Off';
-        } else if (!campoHookInstalled) {
+        } else if (
+            !campoHookInstalled ||
+            !uiTimerHookInstalled
+        ) {
             triggerText =
                 'Perf · hook!';
 
