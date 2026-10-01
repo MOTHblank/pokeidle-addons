@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.3
+// @version      6.1.4
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -450,13 +450,33 @@
         return null;
     }
 
+    function targetRemainingPercent(state) {
+        const bar = state?.element?.querySelector?.('.caido-tempo i');
+        const inline = Number.parseFloat(bar?.style?.width || '');
+
+        if (Number.isFinite(inline)) {
+            return Math.max(0, Math.min(100, inline));
+        }
+
+        /*
+         * Upstream adds .acabando below six seconds. It is less precise than
+         * the inline progress width, but still lets us rescue an expiring body
+         * if a future client stops exposing the exact percentage.
+         */
+        return state?.element?.classList?.contains('acabando')
+            ? 19.9
+            : 100;
+    }
+
     function chooseTargetState(states) {
         const now = Date.now();
 
         /*
-         * Fairly rotate unresolved bodies instead of exhausting every fresh
-         * body before retrying older failures. A body's service timestamp is
-         * updated after each throw, so both new targets and retries get turns.
+         * A corpse has a hard 30 s deadline. Fair round-robin alone is wrong
+         * under sustained kills: an almost-expired body can wait behind safer
+         * work and disappear. Among targets currently eligible for a throw,
+         * earliest deadline wins; last-service time breaks ties so retries
+         * still rotate fairly.
          */
         return states
             .filter(state => {
@@ -476,6 +496,14 @@
                     now - state.lastAttemptAt >= retryDelay;
             })
             .sort((a, b) => {
+                const remaining =
+                    targetRemainingPercent(a) -
+                    targetRemainingPercent(b);
+
+                if (Math.abs(remaining) > 0.05) {
+                    return remaining;
+                }
+
                 const aServiceAt = a.lastAttemptAt || a.firstSeenAt;
                 const bServiceAt = b.lastAttemptAt || b.firstSeenAt;
                 return aServiceAt - bServiceAt || a.firstSeenAt - b.firstSeenAt;
@@ -2177,7 +2205,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.3 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.4 loaded');
     }
 
     if (document.readyState === 'loading') {
