@@ -48,7 +48,7 @@ import {
 } from '../shared/mistico.mjs';
 import {
   OVOS, OVO_POR_ID, OVO_POR_ITEM, ehItemOvo, CHOCADEIRAS_MAX, PRECO_CHOCADEIRA_DIAMANTES,
-  normalizarChocadeira, ovoNoSlot, primeiroSlotLivre,
+  PRECO_BULBO_DIAMANTES, BULBO_FATOR, normalizarChocadeira, ovoNoSlot, primeiroSlotLivre,
 } from '../shared/chocadeira.mjs';
 import { herdarLooktypeOutland } from '../shared/herdar-looktype-outland.mjs';
 import { herdarBaseOutland } from '../shared/herdar-base-outland.mjs';
@@ -991,7 +991,11 @@ const estado = {
   // Abre em `pokemon`: sem a aba "Todos" o tipo nunca é vazio, e pokémon é o que a maioria
   // vem procurar no mercado.
   cmFiltro: {
-    tipo: 'pokemon', moeda: 'gold', busca: '', elemento: '', categoria: '', ordem: 'recentes',
+    // A moeda abre em "Todas" (Coins e gemas juntos). Quem chega ao Mercado está procurando um
+    // bicho, não uma moeda — e um Dragonite anunciado em gema não pode ficar invisível para
+    // quem nunca mexeu neste botão. Escolher UMA passa a ser o recorte, e não o ponto de
+    // partida. Ver `MOEDA_TODAS`; nas abas que não a aceitam ela é lida como Coins.
+    tipo: 'pokemon', moeda: 'todas', busca: '', elemento: '', categoria: '', ordem: 'recentes',
     // Os critérios de pokémon do "Filtrar por", NA ORDEM em que foram ligados — a ordem é a
     // prioridade da ordenação. Ver `CRITERIOS_MERCADO`.
     criterios: [],
@@ -1005,6 +1009,10 @@ const estado = {
   },
   cmPagina: 0,
   cmDados: null, // a última resposta do servidor, como veio
+  // A ESPÉCIE aberta na aba de pokémon (`{ id, nome }`), ou `null` na grade de espécies. É
+  // navegação, não filtro: não vai para o `localStorage` e o Mercado sempre abre na grade.
+  cmEspecieSel: null,
+  cmEspeciesFav: {}, // speciesId → resumo (quantas ofertas, a partir de quanto), para a aba Favoritos
   cmHistPagina: 0,
   cmHistDados: null,
   cmHistModo: 'vendas',
@@ -5184,6 +5192,14 @@ function montarAtivosDaLoja() {
     : '';
 }
 
+/**
+ * O desconto de uma faixa, como o selo escreve: "10%", "17,5%".
+ *
+ * Uma casa decimal, e só quando ela existe — a escada da Beast Ball tem 17,5% e 22,5% no meio
+ * de inteiros, e escrever "10,0%" ao lado deles só engorda o selo sem dizer nada a mais.
+ */
+const pctDesconto = (v) => `${Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+
 function montarLoja() {
   const host = $('#loja-grade');
   if (!host) return;
@@ -5279,7 +5295,12 @@ function montarLoja() {
         ? `<span class="loja-tag ${emEspera ? 'espera' : ''}">${
             emEspera ? t('loja.liberaEm', { tempo: faltaPara(esperaAte) }) : t('loja.porSemana')
           }</span>`
-        : '';
+        // Pacote em escada (a Beast Ball): o selo é quanto a faixa abate contra a MENOR. É a
+        // única coisa que distingue sete cards do mesmo desenho, e é o que responde a pergunta
+        // que o jogador faz na frente deles — "compensa levar o maior?".
+        : prod.desconto > 0
+          ? `<span class="loja-tag off">−${pctDesconto(prod.desconto)}</span>`
+          : '';
 
     card.innerHTML = `
       <div class="loja-arte"></div>
@@ -5336,6 +5357,23 @@ function montarLoja() {
         btn.onclick = null;
         btn.classList.remove('sem-saldo');
       }
+    }
+    // O ABSORB BULB aquece UM OVO que já esteja chocando, e é na Chocadeira que se escolhe qual.
+    // Comprar pela vitrine, sem espaço, só produziria a recusa do servidor — então aqui o botão
+    // LEVA à aba em vez de cobrar, e o selo diz quantos ovos ainda podem ser aquecidos.
+    if (prod.id === 'bulbo') {
+      const est = chocadeiraDe(estado.eu);
+      const frios = est.ovos.filter((o) => o.luz !== true).length;
+      if (!selo && frios) {
+        card.insertAdjacentHTML('afterbegin', `<span class="loja-tag">${num(frios)}</span>`);
+      }
+      btn.textContent = frios ? t('chocadeira.luzEscolher') : t('chocadeira.luzSemOvoCurto');
+      btn.disabled = false;
+      btn.classList.remove('sem-saldo');
+      btn.onclick = () => {
+        estado.abaBolsa = 'chocadeira';
+        abrirModal('bolsa');
+      };
     }
     host.appendChild(card);
   }
@@ -12195,6 +12233,52 @@ function especiesQueUsamPedra(itemId) {
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
+
+/**
+ * A MEGA de uma espécie, do jeito que a FICHA precisa: no que ela vira e com que pedra.
+ *
+ * Irmã de `infoMega`, e separada dela de propósito: aquela responde "este pokémon PODE
+ * megaevoluir agora?" e por isso olha o inventário, o shiny e a pedra certa do bicho. Esta
+ * responde "esta espécie TEM mega?", que é uma verdade do catálogo — vale na Pokédex de quem
+ * nunca viu um fragmento, e vale na ficha do bicho de outro jogador, onde não há inventário
+ * nenhum para consultar.
+ *
+ * `null` para quem não tem mega, para a própria mega (não megaevolui de novo) e para as
+ * variantes de Outland — as três recusas moram em `dexDaMega`, no `shared/megas.mjs`, que é
+ * também quem deixa o clone de Orre passar.
+ */
+function megaDaFicha(especie) {
+  const meta = especie ? megaDaEspecie(especie.pokeId) : null;
+  if (!meta) return null;
+  const mega = estado.especies.get(MEGA_POKE_BASE + meta.dex);
+  // Sem arte jogável a mega não entra: seria prometer uma forma que o jogo ainda não desenha.
+  if (!mega || !temSpriteJogo(mega)) return null;
+  const linha = estado.mega?.pedras?.find((x) => x.dex === meta.dex) ?? null;
+  const item = linha?.itemId != null ? estado.itens.get(linha.itemId) : null;
+  return {
+    pokeId: mega.pokeId,
+    nome: mega.name,
+    // O nome do item manda quando ele existe (é o que está traduzido e o que a bolsa mostra);
+    // o da tabela é a reserva para o cliente que abriu antes de o catálogo de itens chegar.
+    pedra: { itemId: linha?.itemId ?? null, nome: item?.name ?? meta.pedra },
+  };
+}
+
+/**
+ * A linha "Mega Evolução" das duas fichas — a da espécie e a de um bicho concreto.
+ *
+ * O nome é CLICÁVEL pela mesma razão do destino de evolução logo acima: a mega é uma espécie de
+ * verdade, com ficha própria na faixa #3000, e quem lê "vira Mega Venusaur" quer ver os números
+ * dela antes de gastar dez fragmentos de boss.
+ */
+const linhaMegaDaFicha = (mega) =>
+  mega
+    ? fichaLinha(
+        t('dex.megaEvolucao'),
+        `<span class="fi-evo-linha"><button class="fi-evo-link" data-especie="${mega.pokeId}">${escapar(mega.nome)}</button>`
+        + ` · ${htmlPedraEvolucao(mega.pedra)}</span>`,
+      )
+    : '';
 
 const htmlPedraEvolucao = (pedra) =>
   pedra
@@ -19592,7 +19676,9 @@ function pintarIconesPasse(host) {
 
 /**
  * Quanto a trilha VIP vale na LOJA, em diamantes: boosts pelo preço da mesma duração, dias de
- * VIP pelo VIP de 30 dias, Beast Ball pelo pacote de 100. É o número do "vale X 💎" — calculado
+ * VIP pelo VIP de 30 dias, Beast Ball pelo pacote de 500 (a faixa sem desconto, que é a régua
+ * da prateleira — avaliar pela faixa grande inflaria o prêmio de um punhado de bolas). É o
+ * número do "vale X 💎" — calculado
  * pela tabela de preços que o servidor mandou, e não escrito à mão.
  */
 function valorVipNaLoja() {
@@ -19608,7 +19694,7 @@ function valorVipNaLoja() {
       } else if (pr.tipo === 'vip') {
         total += ((preco('vip30') ?? 10) / 30) * pr.dias;
       } else if (pr.tipo === 'bola' && pr.id === 5) {
-        total += ((preco('beast100') ?? 2) / 100) * pr.qtd;
+        total += ((preco('beast500') ?? 10) / 500) * pr.qtd;
       }
     }
   }
@@ -20329,6 +20415,8 @@ function verAnuncioDaCasa({ verAnuncio, rar, moeda, minha, peca }) {
   if (bike) estado.cmFiltro.categoria = 'bicicleta';
   estado.cmFiltro.elemento = '';
   estado.cmFiltro.busca = '';
+  // Sai da aba de pokémon: a espécie aberta fecha junto, como em qualquer troca de aba.
+  estado.cmEspecieSel = null;
   estado.cmItemSel = itemId;
   estado.cmItemMoeda = moeda === 'orb' ? 'orb' : 'gold';
   estado.cmAbrirAnuncio = { id: Number(verAnuncio), itemId };
@@ -21731,6 +21819,68 @@ function colocarOvo(slot, ovoId) {
   enviar({ t: 'chocadeira.colocar', slot, ovo: ovoId });
 }
 
+/** Os "25%" escritos na tela saem do MESMO fator que o servidor usa para descontar a espera. */
+const PCT_BULBO = Math.round((1 - BULBO_FATOR) * 100);
+
+/**
+ * Aquecer o ovo de uma chocadeira com o Absorb Bulb: 3 💎, a espera cai 25% na hora, e a lamparina
+ * quebra quando esse ovo abrir.
+ *
+ * A confirmação diz as TRÊS coisas — o preço que sai agora, o que ele ganha e que a lamparina não
+ * sobrevive ao ovo. É uma compra pequena e repetível: quem clica sem ler isso compraria a segunda
+ * achando que ainda tem a primeira.
+ *
+ * `chcAcendendo` guarda o espaço pedido para a montagem seguinte saber que a luz é NOVA e rodar a
+ * animação de acender. Ele fica marcado enquanto a compra não volta: quem decide se acendeu é o
+ * snapshot, não o clique — uma compra recusada (sem saldo) nunca acende nada.
+ */
+function aquecerOvo(slot, def) {
+  const horas = def ? Math.round(def.horas * BULBO_FATOR) : 0;
+  confirmar({
+    titulo: t('chocadeira.acenderTitulo'),
+    texto: t('chocadeira.acenderTexto', {
+      preco: PRECO_BULBO_DIAMANTES,
+      n: slot + 1,
+      pct: PCT_BULBO,
+      ovo: escapar(nomeItem(def?.itemId ?? 0, def?.nome ?? '')),
+      de: def?.horas ?? 0,
+      para: horas,
+    }),
+    rotuloSim: t('chocadeira.acenderSim', { preco: PRECO_BULBO_DIAMANTES }),
+    aoConfirmar: () => {
+      estado.chcAcendendo = slot;
+      enviar({ t: 'loja.comprar', id: 'bulbo', slot });
+    },
+  });
+}
+
+/**
+ * A linha da lamparina no pé de um espaço: o selo de quem já está aquecido, ou o botão de aquecer.
+ *
+ * SÓ EM ESPAÇO COM OVO. É a regra do servidor desenhada na tela (ver `motivoRecusaAcender`): a
+ * lamparina não existe fora de um ovo, então num espaço livre ou trancado não há botão nenhum para
+ * clicar — e não há como comprar antes para usar depois.
+ */
+function montarLuzDoSlot(card, slot, ovo, def) {
+  if (!ovo) return;
+  if (ovo.luz === true) {
+    card.insertAdjacentHTML('beforeend', `
+      <div class="chc-luz acesa" title="${escapar(t('chocadeira.luzAcesaDica', { pct: PCT_BULBO }))}">
+        <img class="chc-bulbo" src="/img/itens/absorb-bulb.png" width="18" height="18" alt="">
+        <span>${t('chocadeira.luzAcesa', { pct: PCT_BULBO })}</span>
+      </div>`);
+    return;
+  }
+  const bt = document.createElement('button');
+  bt.type = 'button';
+  bt.className = 'chc-luz apagada';
+  bt.innerHTML = `<img class="chc-bulbo" src="/img/itens/absorb-bulb.png" width="18" height="18" alt="">
+    <span>${t('chocadeira.acender', { preco: PRECO_BULBO_DIAMANTES })}</span>`;
+  bt.title = t('chocadeira.luzDica', { pct: PCT_BULBO, preco: PRECO_BULBO_DIAMANTES });
+  bt.onclick = () => aquecerOvo(slot, def);
+  card.appendChild(bt);
+}
+
 /**
  * A aba CHOCADEIRA da bolsa: os seis espaços lado a lado — chocando (com a barra e a hora em que
  * abre), livre (com os ovos que o jogador tem para pôr ali) ou trancado (50 💎 para liberar).
@@ -21769,6 +21919,7 @@ function montarChocadeira(host) {
   for (let slot = 0; slot < CHOCADEIRAS_MAX; slot++) {
     const card = document.createElement('div');
     const ovo = slot < est.total ? ovoNoSlot(est, slot) : null;
+    const aceso = ovo?.luz === true;
     const numero = `<span class="chc-num">${slot + 1}</span>`;
     if (slot >= est.total) {
       card.className = 'chc-slot trancado';
@@ -21781,13 +21932,14 @@ function montarChocadeira(host) {
     } else if (ovo) {
       const def = OVO_POR_ID.get(ovo.ovo);
       const pct = Math.max(0, Math.min(100, ((agora - ovo.inicio) / (ovo.fim - ovo.inicio)) * 100));
-      card.className = `chc-slot ocupado pot-${def.id}`;
+      card.className = `chc-slot ocupado pot-${def.id}${aceso ? ' aceso' : ''}`;
       card.innerHTML = `${numero}
         <img class="chc-ovo" src="/img/itens/ovo-${def.id}.png" width="56" height="56" alt="">
         <b>${escapar(nomeItem(def.itemId))}</b>
         <div class="chc-barra" data-inicio="${ovo.inicio}" data-fim="${ovo.fim}"><i style="width:${pct.toFixed(1)}%"></i></div>
         <span class="chc-falta" data-fim="${ovo.fim}">${escapar(t('chocadeira.falta', { tempo: tempoCurto(ovo.fim - agora) }))}</span>
         <small>${escapar(t('chocadeira.abreEm', { quando: quandoAbre(ovo.fim) }))}</small>`;
+      montarLuzDoSlot(card, slot, ovo, def);
     } else {
       card.className = `chc-slot livre${sel ? ' alvo' : ''}`;
       card.innerHTML = `${numero}
@@ -21814,6 +21966,13 @@ function montarChocadeira(host) {
       } else {
         acoes.innerHTML = `<small>${t('chocadeira.semOvos')}</small>`;
       }
+    }
+    // A luz que ACABOU de chegar ganha a piscada de lâmpada velha firmando (`chc-acende`), uma vez
+    // só: a classe sai no fim da animação e a montagem seguinte já encontra `chcAcendendo` nulo.
+    if (aceso && estado.chcAcendendo === slot) {
+      card.classList.add('acendendo');
+      estado.chcAcendendo = null;
+      card.addEventListener('animationend', () => card.classList.remove('acendendo'), { once: true });
     }
     grade.appendChild(card);
   }
@@ -21898,7 +22057,10 @@ function revelarOvoChocado(e) {
     faixa: t('chocadeira.chocouFaixa'),
     lead: t('chocadeira.chocouLead', { ovo: nomeItem(def?.itemId ?? 0, def?.nome ?? '') }),
     nome: `${pk.shiny ? prefixoShiny() : ''}${pk.nome ?? ''}`,
-    sub: t('chocadeira.chocouSub', { nivel: num(pk.level ?? 1), pot: pk.potencia ?? def?.potencia ?? '?' }),
+    // O ovo aquecido diz, aqui, que a lamparina foi junto com ele: é o único momento em que dá
+    // para avisar sem atrapalhar, e evita o "cadê a minha lamparina?" no ovo seguinte.
+    sub: t('chocadeira.chocouSub', { nivel: num(pk.level ?? 1), pot: pk.potencia ?? def?.potencia ?? '?' })
+      + (e.luz ? ` ${t('chocadeira.luzQuebrou')}` : ''),
     arte: spritePokemon({ speciesId: pk.speciesId, shiny: !!pk.shiny }, 112),
   });
 }
@@ -21953,10 +22115,7 @@ function montarTwitch() {
   canais.sort((a, b) => Number(b.aoVivo) - Number(a.aoVivo) || b.espectadores - a.espectadores);
   // O comando que liga o bônus na live de um streamer: o faasii como moderador do canal dele.
   const comandoMod = `/mod ${tw.canal ?? 'faasii'}`;
-  const listaCanais = `
-    <div class="tw-canais">
-      <div class="af-secao-titulo">${t('twitch.oficiais')}</div>
-      ${canais.map((c) => `
+  const linhaCanal = (c) => `
         <a class="tw-canal${c.aoVivo ? ' ao-vivo' : ''}${c.bonus ? ' com-bonus' : ''}" href="${escapar(linkDe(c.login))}" target="_blank" rel="noopener noreferrer">
           ${GLIFO_TWITCH}
           <span class="tw-canal-nome">${escapar(c.nome || c.login)}</span>
@@ -21977,7 +22136,35 @@ function montarTwitch() {
           <span class="tw-canal-selo">${c.aoVivo
             ? `<i class="tw-verde" aria-hidden="true"></i>${t('twitch.aoVivo')}`
             : t('twitch.valorOffline')}</span>
-        </a>`).join('')}
+        </a>`;
+
+  // OS OFFLINE FICAM DOBRADOS, e fechados por padrão.
+  //
+  // A lista oficial cresce a cada streamer parceiro novo, e quase todos estão offline a qualquer
+  // hora: sem a dobra, quem abre a tela para achar uma live rola por oito linhas apagadas até a
+  // única que está no ar. Fechado, sobra o que ele veio ver — e o botão continua dizendo quantos
+  // existem, para a lista não parecer menor do que é.
+  //
+  // `estado.twOfflineAberto` guarda a escolha da sessão: o modal é remontado a cada snapshot do
+  // servidor (a contagem de espectadores muda sozinha), e sem isso a lista se fecharia na cara de
+  // quem acabou de abri-la.
+  const aoVivo = canais.filter((c) => c.aoVivo);
+  const offline = canais.filter((c) => !c.aoVivo);
+  const offlineAberto = !!estado.twOfflineAberto;
+  const listaCanais = `
+    <div class="tw-canais">
+      <div class="af-secao-titulo">${t('twitch.oficiais')}</div>
+      ${aoVivo.map(linhaCanal).join('')}
+      ${!aoVivo.length ? `<div class="tw-ninguem">${t('twitch.ninguemAoVivo')}</div>` : ''}
+      ${offline.length ? `
+        <button type="button" class="tw-offline-btn${offlineAberto ? ' aberto' : ''}" id="tw-offline-btn"
+                aria-expanded="${offlineAberto}" aria-controls="tw-offline-lista">
+          <span>${t('twitch.offlineDobra', { n: num(offline.length) })}</span>
+          <i class="tw-seta" aria-hidden="true">▾</i>
+        </button>
+        <div class="tw-offline-lista${offlineAberto ? ' aberto' : ''}" id="tw-offline-lista">
+          <div class="tw-offline-dentro">${offline.map(linhaCanal).join('')}</div>
+        </div>` : ''}
       <div class="tw-mod-dica">
         <p>${t('twitch.modDica')}</p>
         <button type="button" class="tw-mod-cmd" id="tw-copiar-mod" title="${escapar(t('twitch.copiar'))}">
@@ -22086,6 +22273,15 @@ function montarTwitch() {
 
   host.innerHTML = topo + corpo + passos;
   $('#tw-vincular')?.addEventListener('click', (ev) => irParaTwitch(ev.currentTarget));
+  // Abrir e fechar os offline: troca a classe nos dois elementos em vez de remontar o modal — uma
+  // repintura aqui recalcularia a lista inteira (e a ordem por espectadores) no meio do clique.
+  $('#tw-offline-btn')?.addEventListener('click', (ev) => {
+    const aberto = !estado.twOfflineAberto;
+    estado.twOfflineAberto = aberto;
+    ev.currentTarget.classList.toggle('aberto', aberto);
+    ev.currentTarget.setAttribute('aria-expanded', String(aberto));
+    $('#tw-offline-lista')?.classList.toggle('aberto', aberto);
+  });
   // Copiar o `/mod faasii` num clique: é o que o streamer vai colar no chat da própria live.
   $('#tw-copiar-mod')?.addEventListener('click', () => {
     // Sem área de transferência (http puro, navegador antigo), o aviso mostra o comando para copiar à mão.
@@ -24476,6 +24672,27 @@ const FILTROS_TIPO = [
  */
 const abaFiltraMoeda = (tipo) => tipo === 'pokemon' || tipo === 'diamante';
 
+/**
+ * "Todas" — Coins E gemas na mesma vitrine. Só na aba de POKÉMON.
+ *
+ * A escolha exclusiva existe porque os dois preços não se comparam por número, e ela continua
+ * sendo o padrão. Só que na grade por ESPÉCIE a comparação deixa de ser o produto: o card diz "a
+ * partir de X Coins" e "a partir de Y gemas" em linhas separadas, e quem procura um Dragonite não
+ * quer descobrir na terceira tentativa que o único à venda está anunciado na outra moeda.
+ *
+ * Na lista de ofertas de uma espécie o cuidado volta, e mora no servidor: sem moeda escolhida,
+ * "mais barato" ordena DENTRO de cada moeda (ver `ORDENS_DUAS_MOEDAS`, em `market-db.mjs`).
+ *
+ * Diamante fica de fora: ali a lista inteira é uma comparação de preço por unidade — é para isso
+ * que a aba existe —, e misturar as moedas nela desfaria a única leitura que ela oferece.
+ */
+const MOEDA_TODAS = 'todas';
+const abaAceitaTodasMoedas = (tipo) => tipo === 'pokemon';
+const moedaDoPedido = (f) =>
+  !abaFiltraMoeda(f.tipo) || (f.moeda === MOEDA_TODAS && abaAceitaTodasMoedas(f.tipo))
+    ? ''
+    : f.moeda === 'orb' ? 'orb' : 'gold';
+
 /** Quem desenha a chave de moeda NA BARRA LATERAL. Só pokémon. */
 const abaEscolheMoeda = (tipo) => tipo === 'pokemon';
 /** Filtros extras da Tabela de preços — depósitos e saques de gemas (RMT). */
@@ -25391,7 +25608,10 @@ function contarFiltrosDoMercado(f) {
   if (f.tipo !== 'pokemon') return 0;
   return [
     f.elemento, f.soShiny, f.soP5, f.soTmElemental, f.soTmAoe, f.semOutland,
-    f.moeda === 'orb' ? 'orb' : '',
+    // Escolher UMA moeda é que conta como filtro agora: "Todas" é o ponto de partida, e uma
+    // vitrine recortada a Coins (ou a gemas) é o que precisa se explicar no celular, onde a
+    // chave mora dentro da folha que fecha.
+    f.moeda !== MOEDA_TODAS ? f.moeda : '',
   ].filter((v) => v !== '' && v != null && v !== false).length
     // Uma faixa conta UMA vez, com piso, teto ou os dois: na tela ela é um filtro só.
     + FAIXAS_MERCADO.filter(({ campos }) => campos.some((c) => String(f[c] ?? '') !== '')).length
@@ -25404,7 +25624,7 @@ function contarFiltrosDoMercado(f) {
 /** Zera tudo que `contarFiltrosDoMercado` conta, sem mexer na aba nem na busca. */
 function limparFiltrosDoMercado() {
   Object.assign(estado.cmFiltro, {
-    moeda: 'gold', elemento: '', categoria: '', soShiny: false, soP5: false,
+    moeda: MOEDA_TODAS, elemento: '', categoria: '', soShiny: false, soP5: false,
     soTmElemental: false, soTmAoe: false, semOutland: false, criterios: [],
     soComEstoque: false,
   });
@@ -25429,10 +25649,22 @@ function limparFiltrosDoMercado() {
  */
 const CHAVE_FILTROS_MERCADO = 'cm-filtros';
 
+/**
+ * A versão do que está guardado, e para que ela serve.
+ *
+ * Quando a MOEDA abria em Coins, ninguém escolhia Coins — era só o padrão, e é isso que está
+ * gravado no navegador de todo mundo que já abriu o Mercado. Com "Todas" no lugar, ler aquele
+ * "gold" como escolha manteria a metade em gemas escondida justamente de quem nunca mexeu no
+ * botão. Então o `v` marca o que foi gravado JÁ SABENDO que "Todas" existe: abaixo disso, a
+ * moeda salva é ignorada e vale o padrão novo. O resto dos filtros (que não mudaram de sentido)
+ * volta inteiro.
+ */
+const VERSAO_FILTROS_MERCADO = 2;
+
 function guardarFiltrosDoMercado() {
   const { busca, ...resto } = estado.cmFiltro;
   try {
-    localStorage.setItem(CHAVE_FILTROS_MERCADO, JSON.stringify(resto));
+    localStorage.setItem(CHAVE_FILTROS_MERCADO, JSON.stringify({ ...resto, v: VERSAO_FILTROS_MERCADO }));
   } catch { /* privado / quota */ }
 }
 
@@ -25450,15 +25682,21 @@ function restaurarFiltrosDoMercado() {
   }
   if (!salvo || typeof salvo !== 'object') return;
   const f = estado.cmFiltro;
+  // A moeda de uma gravação anterior a "Todas" não entra — ver `VERSAO_FILTROS_MERCADO`.
+  const moedaVale = Number(salvo.v) >= VERSAO_FILTROS_MERCADO;
   for (const [campo, padrao] of Object.entries(f)) {
     if (campo === 'busca' || !Object.hasOwn(salvo, campo)) continue;
+    if (campo === 'moeda' && !moedaVale) continue;
     const v = salvo[campo];
     if (Array.isArray(padrao)) {
       if (Array.isArray(v)) f[campo] = v;
     } else if (typeof v === typeof padrao) f[campo] = v;
   }
   if (!FILTROS_TIPO.some((x) => x.id === f.tipo)) f.tipo = 'pokemon';
-  if (f.moeda !== 'orb') f.moeda = 'gold';
+  // "Todas" é um valor válido em qualquer aba: as que não a oferecem (itens, diamantes) a leem
+  // como Coins sozinhas (ver `moedaDoPedido` e o switch do painel de diamantes). Converter aqui
+  // faria o jogador que passou pela aba de itens voltar para Pokémon com o padrão trocado.
+  if (f.moeda !== 'orb' && f.moeda !== 'gold' && f.moeda !== MOEDA_TODAS) f.moeda = MOEDA_TODAS;
   if (!ORDENS_MERCADO.some((o) => o.id === f.ordem)) f.ordem = ORDENS_MERCADO[0].id;
   if (f.elemento && !TIPOS_FILTRO.includes(f.elemento)) f.elemento = '';
   if (!CATEGORIAS_ITEM.some((c) => c.id === f.categoria)) f.categoria = '';
@@ -25474,9 +25712,15 @@ restaurarFiltrosDoMercado();
  * por preço produziria uma ordem sem sentido nenhum. Vale nas duas abas em que existe preço
  * unitário comparável — pokémon e diamante.
  */
-function htmlFiltroMoedaMercado(moeda, { inline = false } = {}) {
-  const botoes = `<div class="cm-moedas cm-moedas-filtro">
-    <button type="button" class="cm-moeda ${moeda !== 'orb' ? 'on' : ''}" data-moeda-filtro="gold">
+function htmlFiltroMoedaMercado(moeda, { inline = false, comTodas = false } = {}) {
+  const todas = comTodas && moeda === MOEDA_TODAS;
+  const botoes = `<div class="cm-moedas cm-moedas-filtro${comTodas ? ' cm-moedas-tres' : ''}">
+    ${comTodas
+      ? `<button type="button" class="cm-moeda ${todas ? 'on' : ''}" data-moeda-filtro="${MOEDA_TODAS}">
+           ${t('cm.moedaTodas')}
+         </button>`
+      : ''}
+    <button type="button" class="cm-moeda ${!todas && moeda !== 'orb' ? 'on' : ''}" data-moeda-filtro="gold">
       ${seloOuro(18)}${t('cm.emCoins')}
     </button>
     <button type="button" class="cm-moeda ${moeda === 'orb' ? 'on' : ''}" data-moeda-filtro="orb">
@@ -25614,7 +25858,7 @@ function renderComunidade() {
   return `
     ${barraTopo}
     ${movel && abaEscolheMoeda(f.tipo) && !meus
-      ? `<div class="cm-moeda-bar">${htmlFiltroMoedaMercado(f.moeda, { inline: true })}</div>`
+      ? `<div class="cm-moeda-bar">${htmlFiltroMoedaMercado(f.moeda, { inline: true, comTodas: abaAceitaTodasMoedas(f.tipo) })}</div>`
       : ''}
     <div class="cm-corpo">
       <div class="cm-filtros">
@@ -25630,7 +25874,7 @@ function renderComunidade() {
                     <span class="cm-fico" data-ico="${x.ico}" data-ico-px="16"></span>${t(x.nome)}</button>`,
         ).join('')}
 
-        ${abaEscolheMoeda(f.tipo) && !movel ? htmlFiltroMoedaMercado(f.moeda) : ''}
+        ${abaEscolheMoeda(f.tipo) && !movel ? htmlFiltroMoedaMercado(f.moeda, { comTodas: abaAceitaTodasMoedas(f.tipo) }) : ''}
 
         ${f.tipo === 'pokemon'
           ? `<div class="cm-fgrupo">${t('cm.raridade')}</div>
@@ -25694,6 +25938,8 @@ function pedirMercado() {
     // Os cards de ITEM favorito mostram quantos vendem e a partir de quanto: é o resumo da
     // vitrine de itens, pedido inteiro (sem o filtro de categoria da vitrine).
     if (favoritosItensMercado().length) enviar({ t: 'market.itens' });
+    // O mesmo para as ESPÉCIES favoritas, na lista à parte que o servidor guarda.
+    if (favoritosEspeciesMercado().length) enviar({ t: 'market.especies', favoritos: 1 });
     return enviar({ t: 'market.favoritos' });
   }
   // A aba de itens não pagina anúncio a anúncio: pede o resumo do catálogo e, se já houver
@@ -25705,10 +25951,12 @@ function pedirMercado() {
     return;
   }
   const f = estado.cmFiltro;
-  enviar({
-    t: 'market.listar',
+  // Os mesmos filtros descem nas duas leituras da aba de pokémon — a grade de espécies e a
+  // lista de ofertas de uma delas. É o que faz o "Só shiny" da grade e o da lista contarem a
+  // mesma história: o servidor recorta as duas com o mesmo `WHERE`.
+  const pedido = {
     tipo: f.tipo,
-    moeda: abaFiltraMoeda(f.tipo) ? (f.moeda === 'orb' ? 'orb' : 'gold') : '',
+    moeda: moedaDoPedido(f),
     busca: f.busca,
     // Diamante é sempre do mais barato para o mais caro — é a mesma ordem fixa do painel de
     // item, e a razão é a mesma: quem abre a aba está comprando diamante, não escolhendo um
@@ -25727,6 +25975,14 @@ function pedirMercado() {
     semOutland: f.tipo === 'pokemon' ? f.semOutland : false,
     ...faixasDoPedido(f),
     pagina: estado.cmPagina,
+  };
+  // A aba de pokémon abre na grade de ESPÉCIES (uma por card) e só desce à lista de anúncios
+  // quando o jogador escolhe uma.
+  if (vitrineDeEspecies()) return enviar({ t: 'market.especies', ...pedido });
+  enviar({
+    t: 'market.listar',
+    ...pedido,
+    especieId: estado.cmEspecieSel?.id ?? 0,
   });
 }
 
@@ -25781,15 +26037,248 @@ function receberMercado(m) {
     abrirAnuncioPendente(m);
     return;
   }
-  // Resposta de uma aba que o jogador já deixou: a lista dos Favoritos chegando depois de ele voltar
-  // à vitrine (ou o contrário) desenharia a grade errada por cima da certa.
-  if ((m.aba === 'favoritos') !== (estado.cmAba === 'favoritos')) return;
+  // O resumo das ESPÉCIES favoritas, para os cards da aba Favoritos. Mapa próprio, como o dos
+  // itens (`cmItens`): ele não é a grade, é o que cada card daquela grade diz.
+  if (m.aba === 'especiesFav') {
+    estado.cmEspeciesFav = Object.fromEntries((m.linhas ?? []).map((l) => [l.speciesId, l]));
+    if (estado.modalAberto === 'community') pintarMercado();
+    return;
+  }
+  // Resposta de uma GRADE que o jogador já deixou: a lista dos Favoritos chegando depois de ele
+  // voltar à vitrine (ou as espécies depois de ele abrir uma) desenharia a grade errada por cima
+  // da certa. As quatro dividem o mesmo `cmDados` e o mesmo `#cm-lista`, então cada uma só entra
+  // se ainda for a que está na tela.
+  if (m.aba === 'favoritos' || m.aba === 'especies' || m.aba === 'vitrine' || m.aba === 'meus') {
+    if (m.aba !== gradeEsperadaDoMercado()) return;
+  }
+  // Página que ficou FORA DO FIM: o jogador estava na 3 e as espécies de lá saíram (venderam, ou
+  // um filtro encolheu a lista). A grade agrupada conta os grupos da própria consulta, então uma
+  // página vazia volta sem total — e sem total não há paginação desenhada, o que deixaria a
+  // pessoa presa numa grade vazia sem botão de voltar. Volta ao começo e pede de novo; a página 0
+  // vazia é o "não há nada", e aí não repete.
+  if (m.aba === 'especies' && !m.linhas?.length && (m.pagina ?? 0) > 0) {
+    estado.cmPagina = 0;
+    return pedirMercado();
+  }
   estado.cmDados = m;
   if (estado.modalAberto === 'community') pintarMercado();
 }
 
+/** Qual das grades o `#cm-lista` está mostrando agora — o crachá que as respostas têm de trazer. */
+function gradeEsperadaDoMercado() {
+  if (estado.cmAba === 'favoritos') return 'favoritos';
+  if (estado.cmAba === 'meus') return 'meus';
+  return vitrineDeEspecies() ? 'especies' : 'vitrine';
+}
+
 /** A aba de itens usa a vitrine em lista; pokémon, "meus anúncios" e Favoritos seguem na grade. */
 const vitrineDeItens = () => estado.cmFiltro.tipo === 'item' && estado.cmAba === 'vitrine';
+
+/**
+ * A grade de ESPÉCIES: a primeira tela da aba de pokémon.
+ *
+ * Um card por espécie, com "12 ofertas · a partir de X" e o botão "Ver ofertas" — e não trinta
+ * cards do mesmo Scizor empurrando todo o resto para a página onze. A lista de anúncios continua
+ * existindo inteira; ela passou a ser o SEGUNDO passo (`cmEspecieSel`), como na aba de itens.
+ *
+ * "Meus anúncios" e os Favoritos ficam de fora: lá a lista é curta e é do jogador — agrupar as
+ * suas três vendas por espécie esconderia cada uma atrás de um clique sem economizar nada.
+ */
+const vitrineDeEspecies = () =>
+  estado.cmFiltro.tipo === 'pokemon' && estado.cmAba === 'vitrine' && !estado.cmEspecieSel;
+
+/** A ESPÉCIE de um card da grade agrupada, do catálogo do cliente — nome, tipos e arte. */
+const especieDoCard = (e) => estado.especies?.get(Number(e?.speciesId)) ?? null;
+
+/**
+ * O nome de uma espécie na grade. O catálogo manda; o que o servidor mandou é a queda.
+ *
+ * Os dois deveriam bater sempre — o servidor já resolve pelo catálogo dele no caminho de volta
+ * (ver `market.especies`) —, e é justamente por isso que a preferência é local: numa janela de
+ * deploy os dois catálogos podem estar uma versão distantes, e quem desenha a grade é este.
+ */
+const nomeDaEspecieCard = (e) => especieDoCard(e)?.name ?? e?.nome ?? `#${e?.speciesId ?? '?'}`;
+
+/**
+ * A ficha de mentira que desenha o sprite do card de espécie.
+ *
+ * `shiny` só quando TODA oferta do grupo é shiny — o que acontece com o "Só shiny" ligado, e é
+ * exatamente quando a arte shiny é a arte certa. Com um shiny entre dez comuns, o card mostra o
+ * comum e o selo ✨ diz que há shiny lá dentro; desenhar o dourado ali prometeria uma vitrine
+ * inteira de shinys por um único anúncio.
+ */
+const fichaDoCardEspecie = (e) => ({
+  speciesId: Number(e.speciesId),
+  nome: nomeDaEspecieCard(e),
+  shiny: !!e.shinys && e.shinys === e.anuncios,
+});
+
+/** Os tipos elementais do card de espécie — do catálogo, com queda no que o servidor mandou. */
+const tiposDaEspecieCard = (e) => {
+  const esp = especieDoCard(e);
+  return esp ? [esp.type1, esp.type2].filter(Boolean) : (e.tipos ?? []);
+};
+
+/**
+ * Entra nas ofertas de uma espécie: a lista de anúncios, com os filtros da vitrine mantidos.
+ *
+ * Os filtros FICAM de propósito. Quem está com "Só shiny · em gemas" ligado e clica em Dragonite
+ * pediu os Dragonite shiny em gemas — e foi um card que o servidor só desenhou porque existe pelo
+ * menos um. Zerar aqui abriria uma lista que não é a que o card prometeu.
+ */
+function irParaOfertasDaEspecie(speciesId, nome) {
+  const id = Number(speciesId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  estado.cmAba = 'vitrine';
+  estado.cmFiltro.tipo = 'pokemon';
+  estado.cmEspecieSel = { id, nome: String(nome ?? '') };
+  estado.cmPagina = 0;
+  estado.cmDados = { linhas: [], carregando: true };
+  abrirModal('community');
+}
+
+/** Volta da lista de ofertas para a grade de espécies. */
+function voltarParaEspecies() {
+  if (!estado.cmEspecieSel) return;
+  estado.cmEspecieSel = null;
+  estado.cmPagina = 0;
+  estado.cmDados = { linhas: [], carregando: true };
+  abrirModal('community');
+}
+
+/**
+ * A faixa que abre a lista de ofertas de uma espécie: o caminho de volta, o nome e a conta.
+ *
+ * Ocupa a linha inteira da grade (é a mesma fôrma dos títulos da aba Favoritos) porque ela é o
+ * cabeçalho desta tela — sem ela, a segunda tela e a primeira são duas grades de cards iguais e
+ * nada diz ao jogador onde ele está nem como sair.
+ */
+function faixaDaEspecieAberta(dados) {
+  const sel = estado.cmEspecieSel;
+  const el = document.createElement('div');
+  el.className = 'cm-esp-faixa';
+  const total = Number(dados?.total);
+  const conta = Number.isFinite(total) && !dados?.carregando
+    ? `<em>${t(total === 1 ? 'cm.especieOferta' : 'cm.especieOfertas', { n: num(total) })}</em>`
+    : '';
+  el.innerHTML = `
+    <button type="button" class="cm-esp-voltar">‹ ${t('cm.voltarEspecies')}</button>
+    <b>${escapar(sel?.nome ?? '')}</b>${conta}`;
+  el.querySelector('.cm-esp-voltar').onclick = voltarParaEspecies;
+  el.appendChild(botaoFavoritoEspecieMercado(sel?.id));
+  return el;
+}
+
+/**
+ * "A partir de" nas moedas que o filtro deixa passar — o rodapé dos cards de espécie.
+ *
+ * Com uma moeda escolhida sai UMA linha: mostrar "💎 —" numa vitrine filtrada por Coins diria
+ * "ninguém vende em gemas", que é falso — o filtro é que não deixou passar. Em "Todas" saem as
+ * duas, e é aí que a linha vazia passa a ser informação de verdade.
+ */
+function precosDaEspecie(resumo, { moedas = ['gold', 'orb'] } = {}) {
+  return moedas.map((moedaId) => {
+    const v = apartirDe(resumo, moedaId);
+    const ico = moedaId === 'orb' ? ICONE_GEMA : srcIcone(ICONE_OURO);
+    const valor = v == null
+      ? `<span class="cm-preco${moedaId === 'orb' ? ' orb' : ''}"><img src="${ico}" alt="">—</span>`
+      : precoComMoeda(v, moedaId);
+    return `<div class="cm-fav-item-preco${v == null ? ' nada' : ''}"><i>${t('cm.apartirDe')}</i>${valor}</div>`;
+  }).join('');
+}
+
+/**
+ * Os SELOS do card de espécie: o que existe lá dentro sem ter de entrar.
+ *
+ * "Tem um shiny", "tem um P5", "tem TM" é a informação que o card de anúncio dava de graça (ele
+ * mostra UM bicho) e que o agrupamento esconderia. São pistas, não filtros: quem quer só os shiny
+ * liga o "Só shiny" na barra e a grade inteira passa a ser de espécies que têm.
+ */
+function selosDaEspecie(e) {
+  return [
+    // O ✨ leva o NÚMERO: "há shiny aqui dentro" é a pista, e "há dois" é a pista inteira — num
+    // selo que já existe, sem custar uma linha a mais no card.
+    e.shinys ? `<span class="cm-selo-shiny" title="${escapar(t('cm.especieTemShiny', { n: num(e.shinys) }))}">✨ ${num(e.shinys)}</span>` : '',
+    e.temP5 ? `<span class="cm-pot p5" title="${escapar(t('cm.especieTemP5'))}">P5</span>` : '',
+    e.temTmElemental ? `<span class="tm-selo" title="${escapar(t('cm.especieTemTmElemental'))}">TM</span>` : '',
+    e.temTmAoe ? `<span class="tm-selo aoe" title="${escapar(t('cm.especieTemTmAoe'))}">AoE</span>` : '',
+  ].filter(Boolean).join('');
+}
+
+/**
+ * O card de uma ESPÉCIE na grade.
+ *
+ * É o card de pokémon que já existia, com o miolo trocado: onde havia a fileira P·IV·Q·N de UM
+ * exemplar e o botão "Comprar", há quantas ofertas existem, a partir de quanto, e "Ver ofertas".
+ * Aqueles números são de um indivíduo e não existem para uma espécie — a média de dez Dragonite
+ * diferentes não descreve nenhum deles.
+ */
+function cardEspecieMercado(e, { moedas = null } = {}) {
+  const ficha = fichaDoCardEspecie(e);
+  const daVitrine = moedaDoPedido(estado.cmFiltro);
+  const linhas = moedas ?? (daVitrine ? [daVitrine] : ['gold', 'orb']);
+  const nome = nomeDaEspecieCard(e);
+
+  const el = document.createElement('div');
+  el.className = 'cm-card poke cm-card-especie tem-fav' + (ficha.shiny ? ' shiny' : '');
+  el.tabIndex = 0;
+  el.setAttribute('role', 'button');
+  el.innerHTML = `
+    <div class="cm-arte-slot"></div>
+    <div class="cm-selos">${selosDaEspecie(e)}</div>
+    <div class="cm-info">
+      <div class="cm-nome" title="${escapar(nome)}"><span class="cm-nome-txt">${escapar(nome)}</span></div>
+      <div class="cm-chips">${chipsDeTipo(tiposDaEspecieCard(e))}</div>
+      <div class="cm-sub">${t(e.anuncios === 1 ? 'cm.especieOferta' : 'cm.especieOfertas', { n: num(e.anuncios) })}</div>
+    </div>
+    <div class="cm-rodape">${precosDaEspecie(e, { moedas: linhas })}</div>
+    <div class="cm-botoes"><button type="button" class="cm-btn comprar">${t('cm.verOfertas')}</button></div>`;
+
+  const arte = document.createElement('div');
+  arte.className = 'cm-arte';
+  arte.appendChild(spritePokemon(ficha, 64));
+  el.querySelector('.cm-arte-slot').replaceWith(arte);
+  el.appendChild(botaoFavoritoEspecieMercado(e.speciesId));
+
+  const abrir = (ev) => {
+    if (ev.target.closest('.cm-fav')) return;
+    irParaOfertasDaEspecie(e.speciesId, nome);
+  };
+  el.onclick = abrir;
+  el.onkeydown = (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      abrir(ev);
+    }
+  };
+  return el;
+}
+
+/**
+ * O card de uma espécie FAVORITA, na aba Favoritos.
+ *
+ * Mesmo card da grade, com os números vindos do resumo à parte (`cmEspeciesFav`) — que o servidor
+ * monta SEM os filtros da vitrine. A estrela é sobre a espécie, e o que ela guarda é "quero saber
+ * o preço de Dragonite", não "de Dragonite P5 em gemas".
+ *
+ * Espécie favoritada sem nenhuma oferta hoje continua na grade, com "nenhuma oferta agora": é
+ * justamente a pergunta que a estrela existe para responder.
+ */
+function cardEspecieFavorita(speciesId) {
+  const esp = estado.especies?.get(Number(speciesId));
+  const resumo = estado.cmEspeciesFav?.[speciesId] ?? null;
+  if (!esp && !resumo) return null;
+  const e = resumo ?? { speciesId: Number(speciesId), anuncios: 0, shinys: 0, minGold: null, minOrb: null };
+  // As DUAS moedas, sempre: o resumo desta grade vem sem os filtros da vitrine (ver
+  // `market.especies`), e mostrar só a moeda escolhida lá esconderia metade do que ele traz.
+  const card = cardEspecieMercado(e, { moedas: ['gold', 'orb'] });
+  if (!e.anuncios) {
+    card.classList.add('cm-esp-vazia');
+    const sub = card.querySelector('.cm-sub');
+    if (sub) sub.textContent = t('cm.especieSemOfertas');
+  }
+  return card;
+}
 
 // ------------------------------------------------- vitrine de DIAMANTES (lista)
 //
@@ -25953,21 +26442,29 @@ function pintarVitrineDoMercado() {
   const dados = estado.cmDados ?? { linhas: [] };
   const meus = estado.cmAba === 'meus';
   const favoritos = estado.cmAba === 'favoritos';
+  const especies = vitrineDeEspecies();
   host.innerHTML = '';
+
+  // A ESPÉCIE ABERTA: a faixa de volta fica ACIMA da grade, e fora do `if` do vazio — "nenhum
+  // anúncio de Dragonite com esses filtros" sem o caminho de volta seria um beco.
+  if (estado.cmEspecieSel && estado.cmAba === 'vitrine' && estado.cmFiltro.tipo === 'pokemon') {
+    host.appendChild(faixaDaEspecieAberta(dados));
+  }
 
   // Acabou de trocar para os Favoritos: a lista ainda está a caminho, e a grade vazia diria
   // "nenhum favorito" a quem tem vinte.
   if (dados.carregando) {
-    host.innerHTML = `<div class="cm-vazio">…</div>`;
+    host.insertAdjacentHTML('beforeend', `<div class="cm-vazio">…</div>`);
     pintarPaginas();
     return;
   }
 
-  // Os ITENS favoritos vêm antes dos anúncios: são poucos, não saem da lista quando alguém vende,
-  // e são o atalho que o jogador mais usa — "quanto está o Boss Token hoje?".
+  // Os ITENS e as ESPÉCIES favoritas vêm antes dos anúncios: são poucos, não saem da lista quando
+  // alguém vende, e são o atalho que o jogador mais usa — "quanto está o Boss Token hoje?".
   const itensFav = favoritos ? favoritosItensMercado().map(cardItemFavorito).filter(Boolean) : [];
+  const especiesFav = favoritos ? favoritosEspeciesMercado().map(cardEspecieFavorita).filter(Boolean) : [];
 
-  if (!dados.linhas?.length && !itensFav.length) {
+  if (!dados.linhas?.length && !itensFav.length && !especiesFav.length) {
     const f = estado.cmFiltro;
     const msgVazio = favoritos
       ? 'cm.semFavoritos'
@@ -25975,29 +26472,44 @@ function pintarVitrineDoMercado() {
       ? 'cm.semMeus'
       : f.tipo === 'diamante'
         ? 'cm.semDiamantes'
-        : f.tipo === 'pokemon' && f.moeda === 'orb'
-          ? 'cm.semPokemonGema'
-          : f.tipo === 'pokemon'
-            ? 'cm.semPokemonCoin'
-            : 'cm.semAnuncios';
-    host.innerHTML = `<div class="cm-vazio">${t(msgVazio)}</div>`;
+        // Com "Todas" ligada não há o que dizer sobre a moeda: a frase que sugere trocar de
+        // moeda só ajuda quem está com uma escolhida.
+        : f.tipo === 'pokemon' && f.moeda === MOEDA_TODAS
+          ? 'cm.semPokemon'
+          : f.tipo === 'pokemon' && f.moeda === 'orb'
+            ? 'cm.semPokemonGema'
+            : f.tipo === 'pokemon'
+              ? 'cm.semPokemonCoin'
+              : 'cm.semAnuncios';
+    host.insertAdjacentHTML('beforeend', `<div class="cm-vazio">${t(msgVazio)}</div>`);
+    pintarPaginas();
+    return;
+  }
+
+  // A grade por ESPÉCIE: um card por espécie, e o clique abre as ofertas dela.
+  if (especies) {
+    for (const e of dados.linhas ?? []) host.appendChild(cardEspecieMercado(e));
     pintarPaginas();
     return;
   }
 
   if (favoritos) {
-    // Com os dois tipos na grade, cada um ganha um título: sem ele, o card de item (que leva às
-    // ofertas) e o de anúncio (que compra) pareceriam a mesma coisa lado a lado.
+    // Com os três tipos na grade, cada um ganha um título: sem ele, o card de espécie e o de item
+    // (que levam às ofertas) e o de anúncio (que compra) pareceriam a mesma coisa lado a lado.
     const titulo = (chave) => {
       const h = document.createElement('div');
       h.className = 'cm-fav-secao';
       h.textContent = t(chave);
       return h;
     };
-    const temAnuncios = !!dados.linhas?.length;
-    if (itensFav.length && temAnuncios) host.appendChild(titulo('cm.favItensTitulo'));
+    // O título só aparece quando há MAIS DE UM grupo na grade: com só espécies favoritas, um
+    // "ESPÉCIES" sozinho em cima da grade inteira não separa nada de nada.
+    const grupos = [especiesFav.length, itensFav.length, dados.linhas?.length].filter(Boolean).length;
+    if (especiesFav.length && grupos > 1) host.appendChild(titulo('cm.favEspeciesTitulo'));
+    for (const card of especiesFav) host.appendChild(card);
+    if (itensFav.length && grupos > 1) host.appendChild(titulo('cm.favItensTitulo'));
     for (const card of itensFav) host.appendChild(card);
-    if (itensFav.length && temAnuncios) host.appendChild(titulo('cm.favAnunciosTitulo'));
+    if (dados.linhas?.length && grupos > 1) host.appendChild(titulo('cm.favAnunciosTitulo'));
     // O aviso de quem saiu: vendido ou retirado desde que o jogador favoritou. Os cards ficam na
     // grade, apagados, até ele limpar — ou até a poda do servidor, dias depois.
     const fechados = (dados.linhas ?? []).filter((a) => a.estado && a.estado !== 'aberto');
@@ -26866,15 +27378,33 @@ const ehFavoritoMercado = (id) => favoritosMercado().includes(Number(id));
  */
 const favoritosItensMercado = () => estado.eu?.automation?.mercadoFavItens ?? [];
 const ehItemFavoritoMercado = (itemId) => favoritosItensMercado().includes(Number(itemId));
-/** O número do botão "Meus favoritos": anúncios e itens somados. */
-const totalFavoritosMercado = () => favoritosMercado().length + favoritosItensMercado().length;
 
-function pintarBotaoFavorito(b, on) {
+/**
+ * As ESPÉCIES marcadas com a estrela (`automation.mercadoFavEspecies`) — terceira lista, pela
+ * mesma razão da de itens: o que se guarda é o atalho para as ofertas de Dragonite, e ele não
+ * morre quando o último Dragonite à venda é comprado.
+ */
+const favoritosEspeciesMercado = () => estado.eu?.automation?.mercadoFavEspecies ?? [];
+const ehEspecieFavoritaMercado = (speciesId) => favoritosEspeciesMercado().includes(Number(speciesId));
+
+/** O número do botão "Meus favoritos": anúncios, itens e espécies somados. */
+const totalFavoritosMercado = () =>
+  favoritosMercado().length + favoritosItensMercado().length + favoritosEspeciesMercado().length;
+
+/**
+ * Acende ou apaga uma estrela. `chaves` troca o texto do título — a estrela de uma ESPÉCIE guarda
+ * "as ofertas de Dragonite", e não aquele anúncio ali: dizer "guardar nos favoritos" nas duas faria
+ * o jogador achar que perdeu o anúncio quando ele for vendido.
+ */
+function pintarBotaoFavorito(b, on, chaves = ['cm.favoritar', 'cm.desfavoritar']) {
   b.classList.toggle('on', on);
   b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  b.title = t(on ? 'cm.desfavoritar' : 'cm.favoritar');
+  b.title = t(on ? chaves[1] : chaves[0]);
   b.setAttribute('aria-label', b.title);
 }
+
+/** As duas frases da estrela de uma espécie. */
+const CHAVES_FAV_ESPECIE = ['cm.favoritarEspecie', 'cm.desfavoritarEspecie'];
 
 /**
  * Liga ou desliga a estrela de um anúncio. Sem `ativo`, inverte.
@@ -26937,6 +27467,47 @@ function alternarFavoritoItemMercado(itemId, ativo = !ehItemFavoritoMercado(item
   if (!ativo && estado.cmAba === 'favoritos') pintarMercado();
 }
 
+/** Liga ou desliga a estrela de uma ESPÉCIE. Mesma regra das duas de cima. */
+function alternarFavoritoEspecieMercado(speciesId, ativo = !ehEspecieFavoritaMercado(speciesId)) {
+  const auto = estado.eu?.automation;
+  if (!auto) return;
+  const lista = (auto.mercadoFavEspecies ??= []);
+  const id = Number(speciesId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const i = lista.indexOf(id);
+  if (ativo) {
+    if (i >= 0) return;
+    if (lista.length >= MAX_FAVORITOS_MERCADO) return toast(t('cm.favLimite', { n: num(MAX_FAVORITOS_MERCADO) }));
+    lista.push(id);
+  } else {
+    if (i < 0) return;
+    lista.splice(i, 1);
+  }
+  enviar({ t: 'market.favoritarEspecie', speciesId: id, ativo });
+  // Todas as estrelas daquela espécie na tela, e não só a clicada: a mesma espécie pode estar na
+  // grade E na faixa da lista de ofertas aberta.
+  for (const b of document.querySelectorAll(`.cm-fav[data-fav-especie="${id}"]`)) pintarBotaoFavorito(b, ativo, CHAVES_FAV_ESPECIE);
+  const conta = $('#cm-favoritos .cm-fav-conta');
+  if (conta) conta.textContent = num(totalFavoritosMercado());
+  // Na aba Favoritos o card sai na hora, como o de item.
+  if (!ativo && estado.cmAba === 'favoritos') pintarMercado();
+}
+
+/** A estrela de uma ESPÉCIE — no card da grade e na faixa da lista de ofertas dela. */
+function botaoFavoritoEspecieMercado(speciesId) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'cm-fav';
+  b.dataset.favEspecie = speciesId;
+  b.textContent = '★';
+  pintarBotaoFavorito(b, ehEspecieFavoritaMercado(speciesId), CHAVES_FAV_ESPECIE);
+  b.onclick = (ev) => {
+    ev.stopPropagation();
+    alternarFavoritoEspecieMercado(speciesId);
+  };
+  return b;
+}
+
 /** A estrela de um item — no cabeçalho do painel de ofertas e no card da aba Favoritos. */
 function botaoFavoritoItemMercado(itemId) {
   const b = document.createElement('button');
@@ -26971,6 +27542,9 @@ function irParaOfertasDoItem(itemId) {
   f.soTmElemental = false;
   f.soTmAoe = false;
   f.semOutland = false;
+  // Como no clique em "Itens" da barra: sair da aba de pokémon fecha a espécie aberta. A moeda
+  // não é tocada — a vitrine de itens tem a chave dela dentro do painel de ofertas.
+  estado.cmEspecieSel = null;
   zerarFaixasDoMercado(f);
   f.criterios = [];
   f.categoria = item.categoria ?? '';
@@ -27906,6 +28480,22 @@ const formatarDataCaptura = (ms) =>
 
 /** Data de captura/nascimento — aceita `caughtAt` ou legado `capturadoEm` (registro). */
 const caughtAtDoPokemon = (pk) => pk?.caughtAt ?? pk?.capturadoEm ?? null;
+
+/**
+ * O TREINADOR que capturou este bicho, como nome na tela. `null` quando não se sabe.
+ *
+ * `caughtBy === true` é o sentinela do servidor para "quem capturou é o dono de hoje" — ele o
+ * manda assim em vez do nick porque o nick já está aqui, e repeti-lo nos ~300 bichos de uma
+ * coleção seria peso de rede por nada (ver `capturadorDaLinha` em `server/db.mjs`). Quem
+ * resolve o sentinela é esta linha: `pk.dono` nas fichas de outros jogadores (ranking, guild,
+ * perfil, Registro), e o próprio nick na coleção de quem está olhando.
+ *
+ * Uma string é o nick de OUTRO treinador — o bicho mudou de mão no Mercado, e é exatamente o
+ * caso que a linha existe para contar. Ausente é pokémon anterior à coluna `caught_by`: a ficha
+ * omite a linha em vez de chutar que foi o dono atual.
+ */
+const capturadorDoPokemon = (pk) =>
+  pk?.caughtBy === true ? (pk.dono ?? estado.eu?.nick ?? null) : (pk?.caughtBy || null);
 
 /** Linha de data/hora nas vitrines globais de shiny e P5 da Pokédex. */
 const subDataCapturaRegistro = (s) => {
@@ -32906,6 +33496,11 @@ function corpoDaEspecie(especie) {
   // Uma pedra por destino (o Eevee) não cabe na linha única "Pedra: X" — ela vai para dentro de
   // cada linha de evolução. Quando a família toda usa a mesma, a linha única continua melhor.
   const pedraPorDestino = new Set(pedrasDex.map((x) => x?.itemId)).size > 1;
+  // A MEGA não é uma evolução por nível, então ela ganha linha PRÓPRIA em vez de entrar na
+  // lista acima: "evolui para Mega Venusaur no Nv 0" seria falso nas duas metades — não há
+  // nível que a dispare, e o que a dispara (a Venusaurite) não aparece em lugar nenhum da
+  // linha de evolução comum.
+  const megaFicha = megaDaFicha(especie);
   const evolucao = destinosDex.length
     ? destinosDex
         .map((d, i) => {
@@ -32919,7 +33514,10 @@ function corpoDaEspecie(especie) {
           return `<span class="fi-evo-linha">${t('dex.evoluiPara', { nome: alvo, nv: num(d.nivel) })}${comPedra}</span>`;
         })
         .join('')
-    : t('dex.naoEvolui');
+    // "não evolui" ao lado de uma linha dizendo que ele vira Mega Venusaur é a ficha se
+    // contradizendo — foi o que o jogador viu e reportou. Quando a única saída da espécie é a
+    // mega, a linha da mega é a resposta inteira e esta some.
+    : (megaFicha ? '' : t('dex.naoEvolui'));
   const linhaPedra = pedra && !pedraPorDestino
     ? fichaLinha(t('dex.pedraEvolucao'), htmlPedraEvolucao(pedra))
     : '';
@@ -32967,7 +33565,8 @@ function corpoDaEspecie(especie) {
                  ${fichaLinha(t('dex.nivelCaptura'), textoNivelCaptura(especie, nivelRef))}
                  ${fichaLinha(t('dex.xpPorDerrota'), num(xpDoNivel(nivelRef)))}
                  ${fichaLinha(t('dex.valorNpc'), moeda(especie.sellValue ?? 0))}`}
-          ${fichaLinha(t('dex.evolucao'), evolucao)}
+          ${evolucao ? fichaLinha(t('dex.evolucao'), evolucao) : ''}
+          ${linhaMegaDaFicha(megaFicha)}
           ${linhaPedra}
         </div>
         <div class="fi-dexcont">
@@ -33163,6 +33762,8 @@ function corpoDoPokemon(pk) {
   // ficha do ranking e na compartilhada no chat ele seria um botão que não faz nada — e o
   // servidor recusaria de qualquer forma, porque o bicho não está na coleção de quem clicou.
   const infoRed = infoReducaoNivel(pk);
+  const capturador = capturadorDoPokemon(pk);
+  const megaFicha = megaDaFicha(especie);
   const evo = infoEvolucao(pk);
   const linhaEvo = evo
     ? fichaLinha(
@@ -33209,6 +33810,7 @@ function corpoDoPokemon(pk) {
           ${pk.maxHp ? fichaLinha(t('dex.hpCombate'), num(pk.maxHp)) : ''}
           ${codigoPokemon(pk.id) ? fichaLinha(t('dex.identidade'), `<b class="txt-num">${codigoPokemon(pk.id)}</b>`) : ''}
           ${codigoPokemon(pk.id) && caughtAtDoPokemon(pk) ? fichaLinha(t('dex.capturadoEm'), `<b class="txt-num">${formatarDataCaptura(caughtAtDoPokemon(pk))}</b>`) : ''}
+          ${capturador ? fichaLinha(t('dex.capturadoPor'), `<b class="txt-num">${escapar(capturador)}</b>`) : ''}
           ${medalhasDe(pk) > 0 ? fichaLinha(
             t('medalha.ficha'),
             `<b class="txt-num fi-medalha">🎖️ ${escapar(vezesMedalha(medalhasDe(pk)))}</b>`,
@@ -33219,6 +33821,7 @@ function corpoDoPokemon(pk) {
           )).join('')}
           ${especie ? fichaLinha(t('dex.especie'), `#${dexExibicao(especie.pokeId)} ${escapar(especie.name)}`) : ''}
           ${linhaEvo}
+          ${linhaMegaDaFicha(megaFicha)}
         </div>
       </div>
     </div>
@@ -36871,9 +37474,15 @@ function abrirModal(nome) {
         else if (b.id === 'cm-so-estoque') estado.cmFiltro.soComEstoque = !estado.cmFiltro.soComEstoque;
         else if ('tipo' in b.dataset) {
           estado.cmFiltro.tipo = b.dataset.tipo;
+          // Trocar de aba volta para a GRADE de espécies: a aba de pokémon tem de reabrir na
+          // primeira tela, e não dentro do Dragonite que o jogador olhou antes de ir aos itens.
+          estado.cmEspecieSel = null;
           if (b.dataset.tipo === 'pokemon') {
-            if (!estado.cmFiltro.moeda) estado.cmFiltro.moeda = 'gold';
+            if (!estado.cmFiltro.moeda) estado.cmFiltro.moeda = MOEDA_TODAS;
           } else {
+            // A MOEDA fica como está, inclusive em "Todas": itens e diamantes a leem como
+            // Coins (ver `moedaDoPedido`), e zerá-la aqui faria quem deu uma olhada nos itens
+            // voltar para Pokémon com o padrão trocado sem ter pedido nada.
             estado.cmFiltro.soShiny = false;
             estado.cmFiltro.soP5 = false;
             estado.cmFiltro.soTmElemental = false;
@@ -36953,6 +37562,9 @@ function abrirModal(nome) {
       estado.cmFiltro.busca = ev.target.value;
       estado.cmPagina = 0;
       estado.cmAba = 'vitrine';
+      // Buscar por nome é procurar OUTRA espécie: quem digita "chariz" dentro das ofertas de
+      // Dragonite quer a grade de volta, não uma lista de Dragonite chamados Charizard (vazia).
+      estado.cmEspecieSel = null;
       clearTimeout(timerBusca);
       timerBusca = setTimeout(pedirMercado, 250);
     };
@@ -39181,10 +39793,10 @@ function montarBotaoSair(caixa) {
 const REDES_DO_PROJETO = [
   { id: 'discord', url: DISCORD_URL, nome: 'Discord', arte: '/img/social-discord.svg' },
   { id: 'x', url: 'https://x.com/pokeidleio', nome: 'X', arte: '/img/social-x.png' },
-  // O @ do Instagram NÃO é o mesmo das outras duas (lá é `pokeidleio`, aqui `pixelidlebr`).
+  // O @ do Instagram NÃO é o mesmo das outras duas (lá é `pokeidleio`, aqui `playidle.io`).
   // Não unifique: são contas diferentes, e adivinhar o handle manda o jogador para um perfil
   // que não é nosso.
-  { id: 'instagram', url: 'https://www.instagram.com/pixelidlebr/', nome: 'Instagram', arte: '/img/social-instagram.png' },
+  { id: 'instagram', url: 'https://www.instagram.com/playidle.io/', nome: 'Instagram', arte: '/img/social-instagram.png' },
 ];
 
 /**

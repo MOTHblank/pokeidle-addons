@@ -6766,6 +6766,38 @@ html.mobile .cm-folha-caixa:has(.xsh-grade) { height: min(560px, 92vh); max-heig
    uma em sua linha — "a partir de" à esquerda, o preço à direita, como na vitrine de itens. */
 .cm-card-item-fav { cursor: pointer; }
 .cm-card-item-fav:hover { filter: brightness(1.06); }
+/* O card de ESPÉCIE, na aba de pokémon: mesmo comportamento do de item favorito, porque é a
+   mesma promessa — o card inteiro leva às ofertas daquela espécie. */
+.cm-card-especie { cursor: pointer; }
+.cm-card-especie:hover { filter: brightness(1.06); }
+/* Os selos aqui são PISTAS do que há lá dentro ("tem shiny", "tem P5"), e não os atributos de um
+   exemplar: ficam miúdos e numa fileira só, para caberem os quatro sem empurrar a estrela. */
+.cm-card-especie .cm-selos { display: flex; gap: 3px; align-items: center; }
+.cm-card-especie .cm-selos > * { font-size: 9px; padding: 2px 4px; }
+/* Espécie favorita sem nenhuma oferta hoje: continua na grade — é a pergunta que a estrela
+   existe para responder —, apagada, e sem o botão prometendo ofertas que não existem. */
+.cm-esp-vazia .cm-arte, .cm-esp-vazia .cm-info, .cm-esp-vazia .cm-rodape { filter: grayscale(.8) brightness(.75); }
+.cm-esp-vazia .cm-botoes { opacity: .5; }
+/* A FAIXA da espécie aberta: o cabeçalho da lista de ofertas. Linha inteira da grade, com o
+   caminho de volta à esquerda, o nome no meio e a estrela da espécie no fim. */
+.cm-esp-faixa {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 10px; border-radius: 6px;
+  background: var(--vao2); box-shadow: inset 0 0 0 1px var(--mad-linha);
+}
+.cm-esp-faixa > b {
+  font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-size: 13px; color: #fff;
+}
+.cm-esp-faixa > em { font-style: normal; font-size: 11px; color: var(--vao-dim); }
+/* A estrela da faixa não é a do canto de um card: ela mora na linha, no fim dela. */
+.cm-esp-faixa .cm-fav { position: static; margin-left: auto; flex: none; }
+.cm-esp-voltar {
+  border: 0; border-radius: 5px; cursor: pointer; padding: 5px 10px;
+  font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-weight: 700; font-size: 11.5px;
+  color: var(--sobre-mad-dim); background: var(--vao);
+  box-shadow: inset 0 0 0 1px var(--mad-linha);
+}
+.cm-esp-voltar:hover { color: #fff; background: var(--vao-luz); }
 .cm-fav-item-preco {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
   font-size: 10.5px; white-space: nowrap;
@@ -7308,6 +7340,13 @@ html:not(.mobile) .cm-hist-global .pk-selos.compacto .cm-pot { font-size: 9.5px;
 
 .cm-moedas { display: flex; gap: 6px; }
 .cm-moedas-filtro { width: 100%; margin-bottom: 2px; }
+/* Com TRÊS botões ("Todas · Coins · Gemas", só na aba de pokémon) a palavra não cabe ao lado do
+   ícone numa barra lateral de 170 px — com os três na mesma linha, "Gemas" saía cortado.
+   Então o "Todas" (que não tem ícone) sobe para uma linha própria, e os dois com moeda ficam
+   lado a lado embaixo, do tamanho que sempre tiveram. Na barra do CELULAR não há esse aperto:
+   ela usa a largura da tela, e os três cabem numa linha só. */
+.cm-filtros .cm-moedas-tres { flex-wrap: wrap; }
+.cm-filtros .cm-moedas-tres .cm-moeda:first-child { flex-basis: 100%; }
 /* Com ícone, o botão vira flex para centrar figura + palavra. Vale no filtro da vitrine e no
    seletor do anúncio — são o mesmo par de botões em dois lugares. */
 .cm-moedas-filtro .cm-moeda,
@@ -10257,6 +10296,10 @@ html:not(.mobile) .tm-disco { height: 42px; font-size: 13px; }
 /* A duração de um boost é o que separa um card do outro dentro do mesmo tipo: em roxo, que
    aqui é a cor do que está aceso. */
 .loja-tag.duracao { background: var(--rx-esc); color: #fff; font-size: 9.5px; }
+/* O abatimento da faixa (a escada da Beast Ball) no VERDE dos sinais bons — o mesmo selo que
+   os pacotes de diamante usam (`.dia-off`), para "quanto você economiza" ter uma cor só no
+   jogo inteiro. Fora do canto do card ele competiria com o preço dentro do botão. */
+.loja-tag.off { background: var(--verde); color: #10240f; font-size: 9.5px; }
 .loja-nome {
   font-family: Tahoma, Verdana, "Segoe UI", sans-serif;
   font-size: 12px; font-weight: 700; color: #fff; line-height: 1.25;
@@ -11609,12 +11652,12 @@ html.mobile .skin-folha-artes { align-self: center; }
    canal leria como 15% por live. No celular o texto encurta para "BÔNUS". */
 .tw-canal-bonus {
   position: relative; overflow: hidden; flex: none;
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 3px 9px; border-radius: 999px;
-  font-size: 10.5px; letter-spacing: .6px; text-transform: uppercase; color: #3d2800;
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 7px; border-radius: 999px;
+  font-size: 8.5px; letter-spacing: .3px; text-transform: uppercase; color: #3d2800;
   text-shadow: 0 1px 0 #fff6;
   background: linear-gradient(180deg, #fff3a8 0%, #ffd23f 45%, #f0a500 100%);
-  box-shadow: inset 0 0 0 1px #fff8, 0 0 0 1px #b87800, 0 0 12px #ffd23f99;
+  box-shadow: inset 0 0 0 1px #fff8, 0 0 0 1px #b87800, 0 0 10px #ffd23f88;
   animation: tw-bonus-pulsa 1.6s ease-in-out infinite;
 }
 .tw-canal-bonus b { font-weight: 700; }
@@ -11624,7 +11667,7 @@ html.mobile .skin-folha-artes { align-self: center; }
   animation: tw-bonus-brilha 2.4s ease-in-out infinite;
 }
 @keyframes tw-bonus-pulsa {
-  50% { box-shadow: inset 0 0 0 1px #fff8, 0 0 0 1px #b87800, 0 0 22px #ffd23fdd; transform: scale(1.05); }
+  50% { box-shadow: inset 0 0 0 1px #fff8, 0 0 0 1px #b87800, 0 0 18px #ffd23fcc; transform: scale(1.04); }
 }
 @keyframes tw-bonus-brilha { 0% { left: -60%; } 60%, 100% { left: 130%; } }
 /* Canal com bônus mas offline: um fio dourado na moldura, para o selo não parecer solto na linha apagada. */
@@ -11653,9 +11696,47 @@ html.mobile .skin-folha-artes { align-self: center; }
 .tw-canal-nome { flex: 0 1 auto; }
 .tw-canal-espect, .tw-canal-selo { margin-left: auto; }
 .tw-canal-espect ~ .tw-canal-selo { margin-left: 0; }
+/* OS OFFLINE, DOBRADOS — fechados por padrão (ver `montarTwitch`).
+ *
+ * A dobra é `grid-template-rows: 0fr → 1fr`: ela anima da altura zero até a altura real sem ninguém
+ * precisar medir a lista em JS, e continua certa quando um streamer entra ou sai do ar. O `<div>`
+ * de dentro carrega o `min-height: 0` que o grid exige para poder encolher, e o `overflow: hidden`
+ * que corta as linhas enquanto ela abre. */
+.tw-offline-btn {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; padding: 6px 12px; border: 0; border-radius: 6px; cursor: pointer;
+  font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-weight: 700; font-size: 11px;
+  letter-spacing: .4px; text-transform: uppercase;
+  color: var(--vao-dim); background: #00000024;
+  box-shadow: inset 0 0 0 1px var(--mad-linha);
+  transition: background .12s, color .12s;
+}
+.tw-offline-btn:hover { color: #fff; background: color-mix(in srgb, #9146ff 16%, var(--vao)); }
+.tw-offline-btn:active { transform: translateY(1px); }
+.tw-seta { font-style: normal; font-size: 13px; line-height: 1; transition: transform .18s ease; }
+.tw-offline-btn.aberto .tw-seta { transform: rotate(180deg); }
+.tw-offline-lista {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows .22s ease;
+}
+.tw-offline-lista.aberto { grid-template-rows: 1fr; }
+/* O filho ÚNICO que a linha de `0fr` mede. Os canais moram aqui dentro, com o `gap` deles: fechada,
+   a dobra tem altura zero, e um gap no `.tw-canais` deixaria uma faixa vazia entre o botão e a
+   instrução do `/mod`. `min-height: 0` é o que permite ao grid encolher o filho abaixo do conteúdo. */
+.tw-offline-dentro {
+  min-height: 0; overflow: hidden;
+  display: grid; gap: 6px; padding-top: 6px;
+}
+.tw-offline-lista:not(.aberto) .tw-offline-dentro { padding-top: 0; }
+/* Ninguém no ar: a lista de ao vivo fica vazia, e uma lista vazia parece defeito. */
+.tw-ninguem {
+  padding: 10px 12px; border-radius: 6px; border: 1px dashed var(--mad-linha);
+  font-size: 11.5px; color: var(--vao-dim); text-align: center;
+}
 @media (prefers-reduced-motion: reduce) {
   .tw-canal-bonus { animation: none; }
   .tw-bonus-brilho { display: none; }
+  .tw-offline-lista, .tw-seta { transition: none; }
 }
 /* "Para ativar o BÔNUS em sua live…": a instrução para o STREAMER, embaixo da lista, com o comando
    num botão que copia — é o que ele cola no chat da própria live. */
@@ -15984,6 +16065,67 @@ html.mobile .aviso-versao {
 }
 .chc-liberar:hover { filter: brightness(1.1); }
 
+/* ---------------------------------------------------------------- Absorb Bulb
+ *
+ * A lamparina que aquece UM OVO: ele choca 25% mais rápido e ela quebra quando ele abre. Os dois
+ * estados só existem em espaço COM OVO — num espaço livre não há nada disto, porque a lamparina
+ * não existe fora de um ovo (ver `montarLuzDoSlot`).
+ *
+ * O bulbo do pokesprite já é âmbar, então não precisa de arte nova: apagado é o mesmo PNG
+ * dessaturado e escuro — a mesma receita da máquina trancada, logo acima —, e aceso é o PNG
+ * original com um halo quente por trás. É essa a diferença que o jogador lê à distância.
+ *
+ * Tudo em `--luz` para o tom quente aparecer uma vez só; o brilho respira devagar (3,2 s) porque
+ * a sensação pedida é aconchego, e não alarme — um pulso rápido no canto de seis cards ao mesmo
+ * tempo cansaria a vista de quem só quer ver quanto falta para o ovo abrir.
+ */
+.chc { --luz: #f0c24a; }
+.chc-luz {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 100%;
+  margin-top: auto; padding: 4px 6px; border: 0; border-radius: 6px;
+  font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-weight: 700; font-size: 10.5px;
+}
+.chc-bulbo { image-rendering: pixelated; flex: none; }
+/* Apagada: é um BOTÃO — clicar compra a luz daquele espaço. */
+.chc-luz.apagada {
+  cursor: pointer; color: var(--vao-dim);
+  background: color-mix(in srgb, var(--luz) 9%, var(--vao));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--luz) 28%, transparent);
+}
+.chc-luz.apagada .chc-bulbo { filter: grayscale(1) brightness(.5); opacity: .8; }
+.chc-luz.apagada:hover { color: #fff; background: color-mix(in srgb, var(--luz) 20%, var(--vao)); }
+.chc-luz.apagada:hover .chc-bulbo { filter: none; opacity: 1; }
+.chc-luz.apagada:active { transform: translateY(1px); }
+/* Acesa: não é botão, é o selo de quem já tem — e o bulbo fica com o halo respirando. */
+.chc-luz.acesa {
+  color: var(--luz); background: color-mix(in srgb, var(--luz) 12%, var(--vao));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--luz) 45%, transparent);
+}
+.chc-luz.acesa .chc-bulbo { animation: chc-luz-respira 3.2s ease-in-out infinite; }
+@keyframes chc-luz-respira {
+  0%, 100% { filter: drop-shadow(0 0 2px var(--luz)); }
+  50% { filter: drop-shadow(0 0 7px var(--luz)) brightness(1.15); }
+}
+/* O espaço com o ovo aquecido ganha o calor na moldura, e o ovo um brilho quente por baixo do
+   balanço que ele já tinha. Só existe em `.ocupado`: a classe `aceso` vem do ovo, não do espaço. */
+.chc-slot.aceso { box-shadow: inset 0 0 0 2px var(--pot), 0 2px 0 var(--mad-base), 0 0 14px color-mix(in srgb, var(--luz) 55%, transparent); }
+.chc-slot.aceso .chc-ovo { filter: drop-shadow(0 3px 0 #0008) drop-shadow(0 0 6px color-mix(in srgb, var(--luz) 70%, transparent)); }
+/* A piscada de quem acabou de acender: duas hesitações e a luz firma. Roda UMA vez. */
+.chc-slot.acendendo { animation: chc-acende 1.1s ease-out 1; }
+.chc-slot.acendendo .chc-bulbo { animation: chc-acende-bulbo 1.1s ease-out 1; }
+@keyframes chc-acende {
+  0% { box-shadow: inset 0 0 0 2px var(--pot), 0 2px 0 var(--mad-base); }
+  12% { box-shadow: inset 0 0 0 2px var(--luz), 0 2px 0 var(--mad-base), 0 0 26px var(--luz); }
+  22%, 42% { box-shadow: inset 0 0 0 2px var(--pot), 0 2px 0 var(--mad-base); }
+  55% { box-shadow: inset 0 0 0 2px var(--luz), 0 2px 0 var(--mad-base), 0 0 30px var(--luz); }
+  70% { box-shadow: inset 0 0 0 2px var(--pot), 0 2px 0 var(--mad-base), 0 0 6px var(--luz); }
+  100% { box-shadow: inset 0 0 0 2px var(--pot), 0 2px 0 var(--mad-base), 0 0 14px color-mix(in srgb, var(--luz) 55%, transparent); }
+}
+@keyframes chc-acende-bulbo {
+  0%, 20%, 40% { filter: grayscale(1) brightness(.5); }
+  12%, 55% { filter: drop-shadow(0 0 12px var(--luz)) brightness(1.5); }
+  100% { filter: drop-shadow(0 0 2px var(--luz)); }
+}
 .chc-rodape {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-radius: 8px;
   background: var(--vao); box-shadow: inset 0 0 0 2px var(--mad-linha); font-size: 12px; color: var(--vao-dim);
@@ -16018,5 +16160,8 @@ html.mobile .aviso-versao {
   .mst-bola small { font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chc-ovo, .chc-sel { animation: none; }
+  /* A luz continua ACESA — só para de respirar e de piscar ao acender: o que ela comunica é o
+     estado do espaço, e isso não pode depender de movimento. */
+  .chc-ovo, .chc-sel, .chc-slot.acendendo, .chc-slot.acendendo .chc-bulbo { animation: none; }
+  .chc-luz.acesa .chc-bulbo { animation: none; filter: drop-shadow(0 0 5px var(--luz)); }
 }
