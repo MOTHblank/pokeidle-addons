@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.4
+// @version      6.1.5
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -131,6 +131,7 @@
     const protocolBalls = new Map();
     const protocolItems = new Map();
     const restockPending = new Map();
+    let itemCatalogLoadPromise = null;
 
     let protocolGold = null;
     let activeProtocolSocket = null;
@@ -667,22 +668,34 @@
     }
 
     function mergeItemCatalog(catalog) {
-        if (!Array.isArray(catalog)) return;
+        const list = Array.isArray(catalog)
+            ? catalog
+            : Array.isArray(catalog?.items)
+                ? catalog.items
+                : [];
+
+        if (!list.length) return;
 
         const defsById = new Map(
             Object.entries(RESTOCK_ITEM_DEFS)
                 .map(([key, def]) => [def.id, { ...def, key }])
         );
 
-        for (const item of catalog) {
+        for (const item of list) {
             const id = Number(item?.itemId ?? item?.id);
             const def = defsById.get(id);
             if (!def) continue;
 
+            /*
+             * welcome.itensCompraveis only contains special Market items.
+             * Normal potions/revives come from /assets/items.json and the
+             * Market charges npcPrice for them. A server-provided preco
+             * remains authoritative when present.
+             */
             const priceGold = Number(
                 item?.preco ??
-                item?.priceGold ??
                 item?.npcPrice ??
+                item?.priceGold ??
                 0
             );
 
@@ -692,6 +705,40 @@
                 compravel: Number.isFinite(priceGold) && priceGold > 0
             });
         }
+    }
+
+    function ensureRestockItemCatalog() {
+        if (itemCatalogLoadPromise) return itemCatalogLoadPromise;
+
+        itemCatalogLoadPromise = fetch('/assets/items.json', {
+            cache: 'no-store'
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('items catalog HTTP ' + response.status);
+                }
+
+                return response.json();
+            })
+            .then(payload => {
+                mergeItemCatalog(payload);
+                return itemCatalog;
+            })
+            .catch(error => {
+                console.warn(
+                    '[PokéIdle Auto Catch+] item catalog load failed',
+                    error
+                );
+
+                itemCatalogLoadPromise = null;
+                return null;
+            })
+            .finally(() => {
+                maybeRestock();
+                updateUI();
+            });
+
+        return itemCatalogLoadPromise;
     }
 
     function mergeProtocolInventory(kind, rawInventory, inventory) {
@@ -902,6 +949,10 @@
         ) {
             restockLastAction = 'waiting for server state';
             return false;
+        }
+
+        if (!itemCatalog.size) {
+            ensureRestockItemCatalog();
         }
 
         const now = Date.now();
@@ -2188,6 +2239,7 @@
 
     function bootstrap() {
         installProtocolHook();
+        ensureRestockItemCatalog();
         installPanel();
         installHud();
 
@@ -2205,7 +2257,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.4 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.5 loaded');
     }
 
     if (document.readyState === 'loading') {
