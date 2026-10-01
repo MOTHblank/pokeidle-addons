@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.0
+// @version      6.1.1
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -14,8 +14,8 @@
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
-    const RETRY_AFTER_MS = 1000;
-    const MAX_ATTEMPTS_PER_BODY = 2;
+    const RESULT_TIMEOUT_MS = 1000;
+    const MAX_PENDING_TIMEOUT_RETRIES = 1;
     const RESTOCK_RETRY_MS = 5000;
     const RESTOCK_BACKOFF_MS = 30000;
     const RESTOCK_MAX_QTY = 5000;
@@ -363,6 +363,7 @@
                     lastSeenAt: now,
                     lastAttemptAt: 0,
                     throws: 0,
+                    pendingTimeoutRetries: 0,
                     lastBallKey: null,
                     lastBallLabel: null,
                     lastResult: null,
@@ -416,39 +417,56 @@
             || null;
     }
 
+    function retryDelayForState(state) {
+        if (!state || state.throws <= 0 || state.resolved) return null;
+
+        if (state.lastResult === 'failed') {
+            return Math.max(
+                MIN_INTERVAL_MS,
+                Number(settings.intervalMs) || MIN_INTERVAL_MS
+            );
+        }
+
+        if (
+            state.lastResult === 'pending' &&
+            state.pendingTimeoutRetries < MAX_PENDING_TIMEOUT_RETRIES
+        ) {
+            return RESULT_TIMEOUT_MS;
+        }
+
+        return null;
+    }
+
     function chooseTargetState(states) {
         const now = Date.now();
 
-        /* Always service untouched bodies before considering a retry. */
-        const fresh = states
-            .filter(state =>
-                !state.resolved &&
-                !state.dispatchScheduled &&
-                state.throws === 0 &&
-                state.element?.isConnected
-            )
-            .sort((a, b) => a.firstSeenAt - b.firstSeenAt)[0];
-
-        if (fresh) return fresh;
-
         /*
-         * Retry exactly once only when the SAME upstream data-slot row is
-         * still present after one second and no authoritative bola result
-         * resolved it. A real success OR failure ends the body.
+         * Fairly rotate unresolved bodies instead of exhausting every fresh
+         * body before retrying older failures. A body's service timestamp is
+         * updated after each throw, so both new targets and retries get turns.
          */
         return states
-            .filter(state =>
-                !state.resolved &&
-                !state.dispatchScheduled &&
-                state.throws > 0 &&
-                state.throws < MAX_ATTEMPTS_PER_BODY &&
-                state.lastResult === 'pending' &&
-                now - state.lastAttemptAt >= RETRY_AFTER_MS &&
-                state.element?.isConnected &&
-                String(state.element?.dataset?.slot || '') === state.slot
-            )
-            .sort((a, b) => a.lastAttemptAt - b.lastAttemptAt)[0]
-            || null;
+            .filter(state => {
+                if (
+                    state.resolved ||
+                    state.dispatchScheduled ||
+                    !state.element?.isConnected ||
+                    String(state.element?.dataset?.slot || '') !== state.slot
+                ) {
+                    return false;
+                }
+
+                if (state.throws === 0) return true;
+
+                const retryDelay = retryDelayForState(state);
+                return retryDelay !== null &&
+                    now - state.lastAttemptAt >= retryDelay;
+            })
+            .sort((a, b) => {
+                const aServiceAt = a.lastAttemptAt || a.firstSeenAt;
+                const bServiceAt = b.lastAttemptAt || b.firstSeenAt;
+                return aServiceAt - bServiceAt || a.firstSeenAt - b.firstSeenAt;
+            })[0] || null;
     }
 
     function nextRetryDelay(states) {
@@ -456,18 +474,12 @@
         let best = Infinity;
 
         for (const state of states) {
-            if (
-                state.resolved ||
-                state.throws <= 0 ||
-                state.throws >= MAX_ATTEMPTS_PER_BODY ||
-                state.lastResult !== 'pending'
-            ) {
-                continue;
-            }
+            const retryDelay = retryDelayForState(state);
+            if (retryDelay === null) continue;
 
             best = Math.min(
                 best,
-                Math.max(0, RETRY_AFTER_MS - (now - state.lastAttemptAt))
+                Math.max(0, retryDelay - (now - state.lastAttemptAt))
             );
         }
 
@@ -1141,7 +1153,8 @@
         state.lastChance = typeof event.chance === 'number' ? event.chance : null;
         state.shiny = Boolean(event.shiny);
         state.lastResult = event.sucesso ? 'captured' : 'failed';
-        state.resolved = true;
+        state.resolved = Boolean(event.sucesso);
+        state.pendingTimeoutRetries = 0;
 
         pendingBySlot.delete(String(event.slot));
 
@@ -1154,7 +1167,11 @@
 
             stats.status = state.name + ' · captured';
         } else {
-            stats.status = state.name + ' · failed';
+            /*
+             * Failure is not terminal: the same fallen Pokémon remains
+             * eligible until a later throw succeeds or the slot disappears.
+             */
+            stats.status = state.name + ' · failed · retry queued';
         }
 
         updateUI();
@@ -1253,7 +1270,7 @@
         if (typeof NativeWebSocket !== 'function') return false;
 
         if (
-            page.__mothAutoCatchWebSocketHookV61
+            page.__mothAutoCatchWebSocketHookV611
         ) {
             protocolHookInstalled = true;
             return true;
@@ -1269,7 +1286,7 @@
 
         try {
             page.WebSocket = WrappedWebSocket;
-            page.__mothAutoCatchWebSocketHookV61 = true;
+            page.__mothAutoCatchWebSocketHookV611 = true;
             protocolHookInstalled = page.WebSocket === WrappedWebSocket;
 
             if (protocolHookInstalled) {
@@ -1369,6 +1386,7 @@
         }
 
         const wasRetry = state.throws > 0;
+        const retryingTimedOutPending = state.lastResult === 'pending';
         state.dispatchScheduled = true;
 
         /*
@@ -1406,6 +1424,9 @@
         state.element = clickTarget;
         state.name = targetName(clickTarget);
         state.throws++;
+        if (retryingTimedOutPending) {
+            state.pendingTimeoutRetries++;
+        }
         state.attempted = true;
         state.lastAttemptAt = now;
         state.lastBallKey = choice.key;
@@ -1418,6 +1439,12 @@
         if (!fireClick(clickTarget)) {
             pendingBySlot.delete(state.slot);
             state.throws--;
+            if (retryingTimedOutPending) {
+                state.pendingTimeoutRetries = Math.max(
+                    0,
+                    state.pendingTimeoutRetries - 1
+                );
+            }
             state.attempted = state.throws > 0;
             state.lastResult = state.throws > 0 ? 'pending' : null;
             state.dispatchScheduled = false;
@@ -1432,7 +1459,7 @@
         stats.attempts++;
 
         stats.status = wasRetry
-            ? state.name + ' · retry 2/2'
+            ? state.name + ' · retry ' + state.throws
             : state.name + ' · throwing';
 
         updateUI();
@@ -2252,7 +2279,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.1 loaded');
     }
 
     if (document.readyState === 'loading') {
