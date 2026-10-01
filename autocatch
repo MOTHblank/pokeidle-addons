@@ -1058,6 +1058,15 @@
             return;
         }
 
+        /*
+         * Timeout retries can leave more than one server response in flight.
+         * Once this exact corpse has been captured, a late failure from an
+         * older throw must never reopen it and queue another retry.
+         */
+        if (state.captured && !event.sucesso) {
+            return;
+        }
+
         state.lastServerBallId = event.ballId ?? state.lastServerBallId;
         state.lastChance = typeof event.chance === 'number' ? event.chance : null;
         state.shiny = Boolean(event.shiny);
