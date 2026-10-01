@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.3.0
+// @version      1.3.1
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -297,6 +297,8 @@
         const defaults = {
             search: '',
             region: 'all',
+            minLevel: '',
+            maxLevel: '',
             type: 'all',
             weakness: 'all',
             availability: 'unlocked',
@@ -4254,6 +4256,18 @@
         const regionFilter =
             state.filters.region;
 
+        const minLevelFilter =
+            Number.parseInt(
+                state.filters.minLevel,
+                10
+            );
+
+        const maxLevelFilter =
+            Number.parseInt(
+                state.filters.maxLevel,
+                10
+            );
+
         const availabilityFilter =
             state.filters.availability;
 
@@ -4333,6 +4347,32 @@
                                     hunt.area
                                 ) !==
                                     regionFilter
+                            ) {
+                                return false;
+                            }
+
+                            const huntLevel =
+                                Number(
+                                    hunt.nivel ||
+                                    0
+                                );
+
+                            if (
+                                Number.isFinite(
+                                    minLevelFilter
+                                ) &&
+                                huntLevel <
+                                    minLevelFilter
+                            ) {
+                                return false;
+                            }
+
+                            if (
+                                Number.isFinite(
+                                    maxLevelFilter
+                                ) &&
+                                huntLevel >
+                                    maxLevelFilter
                             ) {
                                 return false;
                             }
@@ -5099,6 +5139,10 @@
 
                 <select data-mha-filter="region"></select>
 
+                <input data-mha-filter="minLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Min level">
+
+                <input data-mha-filter="maxLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Max level">
+
                 <select data-mha-filter="type"></select>
 
                 <select data-mha-filter="weakness"></select>
@@ -5160,7 +5204,11 @@
                     .mhaFilter;
 
             const eventName =
-                key === 'search'
+                (
+                    key === 'search' ||
+                    key === 'minLevel' ||
+                    key === 'maxLevel'
+                )
                     ? 'input'
                     : 'change';
 
@@ -5238,6 +5286,32 @@
 
         region.value =
             state.filters.region;
+
+        for (
+            const key of [
+                'minLevel',
+                'maxLevel'
+            ]
+        ) {
+            const control =
+                q(
+                    `[data-mha-filter="${key}"]`,
+                    drawer
+                );
+
+            if (
+                control &&
+                control.value !==
+                    String(
+                        state.filters[key] ??
+                        ''
+                    )
+            ) {
+                control.value =
+                    state.filters[key] ??
+                    '';
+            }
+        }
 
         const type =
             q(
