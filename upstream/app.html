@@ -6,7 +6,7 @@
      Discord traz `?sessao=` (o token de 30 dias) e os e-mails trazem `?redefinir=` e
      `?autorizarTrocaEmail=`; o GTM e o Pixel logo abaixo registram a URL da página. O app.js
      pega os valores de `window.__parametrosSensiveis`. -->
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
 (function () {
   try {
     var q = new URLSearchParams(location.search);
@@ -26,14 +26,14 @@
 })();
 </script>
 <!-- Google Tag Manager — GTM-NZLNR5N8. Logo após charset (charset nos primeiros 1024 bytes). -->
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-NZLNR5N8');</script>
 <!-- End Google Tag Manager -->
 <!-- Facebook Pixel Code — 941286091638419 (Meta Ads). -->
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -52,8 +52,8 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <!-- Cloudflare Turnstile — captcha do login/cadastro. Some sozinho (o app.js nem desenha o
      widget) quando o servidor não tem TURNSTILE_SITE_KEY configurada. `onload` avisa o app.js
      quando a API já existe, porque o fetch de /auth/provedores às vezes volta primeiro. -->
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
   try {
     if (localStorage.getItem('cfg-night') === '1') document.documentElement.classList.add('night-mode');
     if (localStorage.getItem('cfg-imersivo') === '1') document.documentElement.classList.add('modo-imersivo');
@@ -82,16 +82,21 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <meta property="og:title" content="Poke Idle IO — MMO Pokémon Idle Online">
 <meta property="og:description" content="Caçe, capture, evolua sua equipe, guilds e PvP — MMO Pokémon idle grátis no navegador.">
 <meta property="og:url" content="https://pokeidle.io/app">
-<meta property="og:image" content="https://pokeidle.io/img/banner.jpg">
-<meta property="og:image:alt" content="Arte promocional do Pokéidle.io">
-<meta property="og:image:width" content="1600">
-<meta property="og:image:height" content="800">
+<!-- O mesmo cartão da landing (divulgacao/og-card.html). O `img/banner.jpg` continua sendo a
+     arte da tela de carga aqui dentro — ele só deixou de ser a imagem do link, que é vista
+     pequena e pedia uma peça desenhada para esse tamanho. -->
+<meta property="og:image" content="https://pokeidle.io/midia/og-card.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="Cartão do pokeidle.io: “Seu pokémon caça sozinho”, com um Charizard shiny e o botão Jogar agora.">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta property="og:locale" content="pt_BR">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Poke Idle IO — MMO Pokémon Idle Online">
 <meta name="twitter:description" content="Caçe, capture, evolua sua equipe, guilds e PvP — MMO Pokémon idle grátis no navegador.">
-<meta name="twitter:image" content="https://pokeidle.io/img/banner.jpg">
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" type="application/ld+json">
+<meta name="twitter:image" content="https://pokeidle.io/midia/og-card.png">
+<meta name="twitter:image:alt" content="Cartão do pokeidle.io: “Seu pokémon caça sozinho”, com um Charizard shiny e o botão Jogar agora.">
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "VideoGame",
@@ -99,7 +104,7 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
   "alternateName": ["Pokéidle.io", "pokeidle.io", "Poke Idle", "Pokeidle"],
   "url": "https://pokeidle.io/",
   "description": "MMO Pokémon idle no navegador: caça, captura, evolução, guilds e PvP.",
-  "image": "https://pokeidle.io/img/banner.jpg",
+  "image": "https://pokeidle.io/midia/og-card.png",
   "applicationCategory": "Game",
   "operatingSystem": "Web browser",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -107,10 +112,10 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 </script>
 <!-- A logo do jogo como ícone da aba. Três tamanhos porque o navegador escolhe o mais próximo
      do que precisa: 32 para a aba comum, 64 para telas HiDPI e 180 para o atalho de iOS. -->
-<link rel="stylesheet" href="estilo.css?v=1.183.0">
+<link rel="stylesheet" href="estilo.css?v=1.188.0">
 <!-- A montagem de CELULAR. Tudo lá dentro pende de `html.mobile`, classe que só o mobile.mjs
      acende — no desktop o arquivo é regra que não casa com nada. -->
-<link rel="stylesheet" href="mobile.css?v=1.183.0">
+<link rel="stylesheet" href="mobile.css?v=1.188.0">
 </head>
 <body>
 <!-- Google Tag Manager (noscript) -->
@@ -2678,7 +2683,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
 
 <!-- Erros de módulo ES são silenciosos na tela; jogar na UI evita depurar no escuro. -->
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==">
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
   window.addEventListener('error', (e) => {
     const el = document.getElementById('login-erro');
     if (el) el.textContent = `erro: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`;
@@ -2688,6 +2693,6 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     if (el) el.textContent = `falha: ${e.reason?.message ?? e.reason}`;
   });
 </script>
-<script nonce="oKC6w/BPGQWd9+2yAWxt/Q==" type="module" src="app.js?v=1.183.0"></script>
+<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" type="module" src="app.js?v=1.188.0"></script>
 </body>
 </html>
