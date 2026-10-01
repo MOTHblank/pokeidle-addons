@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.2
+// @version      6.1.3
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -1005,6 +1005,68 @@
         updateUI();
     }
 
+    function handlePurchaseResult(event) {
+        if (!event || event.k !== 'compra' || !restockPending.size) return;
+
+        const eventName = normalize(event.nome || '');
+        const eventQty = Number(event.qtd);
+        const eventSpend = Number(event.gasto);
+
+        const candidates = [...restockPending.entries()]
+            .map(([key, pending]) => {
+                const nameMatches =
+                    eventName &&
+                    normalize(pending.name || '') === eventName;
+
+                const qtyMatches =
+                    Number.isFinite(eventQty) &&
+                    eventQty === Number(pending.qty);
+
+                const spendMatches =
+                    Number.isFinite(eventSpend) &&
+                    eventSpend ===
+                        Number(pending.qty) *
+                        Number(pending.price);
+
+                return {
+                    key,
+                    pending,
+                    score:
+                        (nameMatches ? 4 : 0) +
+                        (qtyMatches ? 2 : 0) +
+                        (spendMatches ? 1 : 0)
+                };
+            })
+            .filter(candidate => candidate.score >= 4 || candidate.score === 3)
+            .sort((a, b) =>
+                b.score - a.score ||
+                a.pending.sentAt - b.pending.sentAt
+            );
+
+        const match = candidates[0];
+        if (!match) return;
+
+        restockPending.delete(match.key);
+        restockFailures = 0;
+        restockBlockedUntil = 0;
+
+        const bought =
+            Number.isFinite(eventQty) && eventQty > 0
+                ? eventQty
+                : Number(match.pending.qty || 0);
+
+        stats.restockBought += bought;
+        restockLastAction =
+            (match.pending.name || 'Purchase') +
+            ' +' +
+            bought;
+        stats.status =
+            'Restock · ' +
+            restockLastAction;
+
+        updateUI();
+    }
+
     function inspectIncomingProtocolMessage(data) {
         protocolMessages++;
 
@@ -1051,6 +1113,7 @@
 
         for (const event of decoded.ev) {
             if (event?.k === 'bola') handleBallResult(event);
+            if (event?.k === 'compra') handlePurchaseResult(event);
         }
     }
 
@@ -2114,7 +2177,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.2 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.3 loaded');
     }
 
     if (document.readyState === 'loading') {
