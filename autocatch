@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.1
+// @version      6.1.2
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -19,6 +19,11 @@
     const RESTOCK_RETRY_MS = 5000;
     const RESTOCK_BACKOFF_MS = 30000;
     const RESTOCK_MAX_QTY = 5000;
+    const RESTOCK_ITEM_DEFS = Object.freeze({
+        smallPotion: { id: 200, name: 'Small Potion' },
+        greatPotion: { id: 201, name: 'Great Potion' },
+        revive: { id: 205, name: 'Revive' }
+    });
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const q = (selector, root = document) => root.querySelector(selector);
@@ -53,7 +58,10 @@
                 super: 15,
                 ultra: 10,
                 master: 0,
-                other: 0
+                other: 0,
+                smallPotion: 10,
+                greatPotion: 5,
+                revive: 3
             },
             to: {
                 poke: 500,
@@ -61,7 +69,10 @@
                 super: 150,
                 ultra: 100,
                 master: 0,
-                other: 0
+                other: 0,
+                smallPotion: 50,
+                greatPotion: 25,
+                revive: 10
             }
         }
     };
@@ -116,7 +127,9 @@
     const targetStates = new Map();
 
     const ballCatalog = new Map();
+    const itemCatalog = new Map();
     const protocolBalls = new Map();
+    const protocolItems = new Map();
     const restockPending = new Map();
 
     let protocolGold = null;
@@ -621,488 +634,303 @@
         }
     }
 
-    function mergeProtocolState(
-        gameState
-    ) {
-        if (
-            !gameState ||
-            typeof gameState !==
-                'object'
-        ) {
-            return;
-        }
+    function restockPendingKey(kind, id) {
+        return kind + ':' + id;
+    }
 
-        if (
-            gameState.gold !==
-                undefined &&
-            gameState.gold !==
-                null
-        ) {
-            const gold =
-                Number(
-                    gameState.gold
-                );
+    function mergeItemCatalog(catalog) {
+        if (!Array.isArray(catalog)) return;
+
+        const defsById = new Map(
+            Object.entries(RESTOCK_ITEM_DEFS)
+                .map(([key, def]) => [def.id, { ...def, key }])
+        );
+
+        for (const item of catalog) {
+            const id = Number(item?.itemId ?? item?.id);
+            const def = defsById.get(id);
+            if (!def) continue;
+
+            const priceGold = Number(
+                item?.preco ??
+                item?.priceGold ??
+                item?.npcPrice ??
+                0
+            );
+
+            itemCatalog.set(id, {
+                ...def,
+                priceGold,
+                compravel: Number.isFinite(priceGold) && priceGold > 0
+            });
+        }
+    }
+
+    function mergeProtocolInventory(kind, rawInventory, inventory) {
+        if (!rawInventory || typeof rawInventory !== 'object') return;
+
+        for (const [rawId, rawCount] of Object.entries(rawInventory)) {
+            const id = Number(rawId);
+            const count = Number(rawCount);
+
+            if (!Number.isFinite(id) || !Number.isFinite(count)) continue;
+
+            const previous = inventory.get(id);
+            inventory.set(id, count);
+
+            const key = restockPendingKey(kind, id);
+            const pending = restockPending.get(key);
 
             if (
-                Number.isFinite(
-                    gold
+                pending &&
+                (
+                    count > pending.before ||
+                    previous !== undefined &&
+                    count > previous
                 )
             ) {
-                protocolGold =
-                    gold;
+                const bought = Math.max(0, count - pending.before);
+                stats.restockBought += bought;
+                restockPending.delete(key);
+                restockFailures = 0;
+                restockBlockedUntil = 0;
+                restockLastAction =
+                    (pending.name || kind + ' ' + id) +
+                    ' +' +
+                    bought;
             }
         }
+    }
 
-        if (
-            gameState.balls &&
-            typeof gameState.balls ===
-                'object'
-        ) {
-            for (
-                const [
-                    rawId,
-                    rawCount
-                ] of
-                Object.entries(
-                    gameState.balls
-                )
-            ) {
-                const id =
-                    Number(rawId);
+    function mergeProtocolState(gameState) {
+        if (!gameState || typeof gameState !== 'object') return;
 
-                const count =
-                    Number(
-                        rawCount
-                    );
-
-                if (
-                    !Number.isFinite(
-                        id
-                    ) ||
-                    !Number.isFinite(
-                        count
-                    )
-                ) {
-                    continue;
-                }
-
-                const previous =
-                    protocolBalls.get(
-                        id
-                    );
-
-                protocolBalls.set(
-                    id,
-                    count
-                );
-
-                const pending =
-                    restockPending.get(
-                        id
-                    );
-
-                if (
-                    pending &&
-                    (
-                        count >
-                            pending.before ||
-                        previous !==
-                            undefined &&
-                        count >
-                            previous
-                    )
-                ) {
-                    const bought =
-                        Math.max(
-                            0,
-                            count -
-                                pending.before
-                        );
-
-                    stats.restockBought +=
-                        bought;
-
-                    restockPending.delete(
-                        id
-                    );
-
-                    restockFailures =
-                        0;
-
-                    restockBlockedUntil =
-                        0;
-
-                    const meta =
-                        ballCatalog.get(
-                            id
-                        );
-
-                    restockLastAction =
-                        (
-                            meta?.nome ||
-                            'Ball ' +
-                                id
-                        ) +
-                        ' +' +
-                        bought;
-                }
-            }
+        if (gameState.gold !== undefined && gameState.gold !== null) {
+            const gold = Number(gameState.gold);
+            if (Number.isFinite(gold)) protocolGold = gold;
         }
+
+        mergeProtocolInventory('ball', gameState.balls, protocolBalls);
+        mergeProtocolInventory('item', gameState.items, protocolItems);
     }
 
     function socketReady() {
         return Boolean(
             activeProtocolSocket &&
-            activeProtocolSocket.readyState ===
-                page.WebSocket.OPEN
+            activeProtocolSocket.readyState === page.WebSocket.OPEN
         );
     }
 
-    function sendProtocol(
-        payload
-    ) {
-        if (
-            !socketReady()
-        ) {
-            return false;
-        }
+    function sendProtocol(payload) {
+        if (!socketReady()) return false;
 
         try {
-            activeProtocolSocket.send(
-                JSON.stringify(
-                    payload
-                )
-            );
-
+            activeProtocolSocket.send(JSON.stringify(payload));
             return true;
         } catch {
             return false;
         }
     }
 
-    function restockMetaForKey(
-        key
-    ) {
-        return [
-            ...ballCatalog.values()
-        ]
-            .filter(
-                ball =>
-                    ball.key ===
-                        key &&
-                    ball.compravel &&
-                    Number(
-                        ball.priceGold ||
-                        0
-                    ) > 0
+    function restockBallMetaForKey(key) {
+        return [...ballCatalog.values()]
+            .filter(ball =>
+                ball.key === key &&
+                ball.compravel &&
+                Number(ball.priceGold || 0) > 0
             )
-            .sort(
-                (a, b) =>
-                    a.priceGold -
-                    b.priceGold
-            )[0] ||
-            null;
+            .sort((a, b) => a.priceGold - b.priceGold)[0] || null;
+    }
+
+    function restockItemMetaForKey(key) {
+        const def = RESTOCK_ITEM_DEFS[key];
+        if (!def) return null;
+
+        const item = itemCatalog.get(def.id);
+        return item?.compravel ? item : null;
+    }
+
+    function pendingRestockSpend() {
+        return [...restockPending.values()]
+            .reduce(
+                (sum, pending) =>
+                    sum +
+                    Math.max(
+                        0,
+                        Number(pending.qty || 0) *
+                        Number(pending.price || 0)
+                    ),
+                0
+            );
+    }
+
+    function tryRestockCandidate({
+        kind,
+        key,
+        meta,
+        count,
+        now
+    }) {
+        if (!meta) return false;
+
+        const pendingKey = restockPendingKey(kind, meta.id);
+        if (restockPending.has(pendingKey)) return false;
+
+        const at = Math.max(
+            0,
+            Number(settings.restock.at?.[key] || 0)
+        );
+
+        const target = Math.max(
+            at,
+            Number(settings.restock.to?.[key] || 0)
+        );
+
+        if (target <= 0 || count > at || count >= target) {
+            return false;
+        }
+
+        const price = Number(meta.priceGold);
+        if (!Number.isFinite(price) || price <= 0) return false;
+
+        const goldReserve = Math.max(
+            0,
+            Number(settings.restock.goldReserve || 0)
+        );
+
+        const spendable = Math.max(
+            0,
+            protocolGold -
+            goldReserve -
+            pendingRestockSpend()
+        );
+
+        const affordable = Math.floor(spendable / price);
+        const wanted = Math.min(
+            RESTOCK_MAX_QTY,
+            target - count
+        );
+
+        const qty = Math.max(
+            0,
+            Math.min(wanted, affordable)
+        );
+
+        if (qty <= 0) {
+            restockLastAction =
+                (meta.nome || meta.name || key) +
+                ' low · gold reserve protected';
+            return false;
+        }
+
+        if (!sendProtocol({
+            t: 'shop.buy',
+            kind,
+            id: meta.id,
+            qty
+        })) {
+            restockLastAction = 'purchase send failed';
+            return false;
+        }
+
+        restockPending.set(pendingKey, {
+            kind,
+            id: meta.id,
+            name: meta.nome || meta.name || key,
+            before: count,
+            qty,
+            price,
+            sentAt: now
+        });
+
+        stats.restockOrders++;
+
+        restockLastAction =
+            'buying ' +
+            qty +
+            '× ' +
+            (meta.nome || meta.name || key);
+
+        stats.status =
+            'Restock · ' +
+            restockLastAction;
+
+        updateUI();
+        return true;
     }
 
     function maybeRestock() {
-        if (
-            !settings.enabled ||
-            !settings.restock
-                ?.enabled
-        ) {
-            restockLastAction =
-                'off';
-
+        if (!settings.enabled || !settings.restock?.enabled) {
+            restockLastAction = 'off';
             return false;
         }
 
-        if (
-            Date.now() <
-            restockBlockedUntil
-        ) {
-            return false;
-        }
+        if (Date.now() < restockBlockedUntil) return false;
 
         if (
             !socketReady() ||
-            !ballCatalog.size ||
-            protocolGold ===
-                null
+            (!ballCatalog.size && !itemCatalog.size) ||
+            protocolGold === null
         ) {
-            restockLastAction =
-                'waiting for server state';
-
+            restockLastAction = 'waiting for server state';
             return false;
         }
 
-        const now =
-            Date.now();
+        const now = Date.now();
 
-        for (
-            const [
-                id,
-                pending
-            ] of
-            restockPending
-        ) {
-            if (
-                now -
-                    pending.sentAt <
-                    RESTOCK_RETRY_MS
-            ) {
-                continue;
-            }
+        for (const [pendingKey, pending] of restockPending) {
+            if (now - pending.sentAt < RESTOCK_RETRY_MS) continue;
 
-            restockPending.delete(
-                id
-            );
-
+            restockPending.delete(pendingKey);
             restockFailures++;
 
-            if (
-                restockFailures >=
-                3
-            ) {
+            if (restockFailures >= 3) {
                 restockBlockedUntil =
                     now +
                     RESTOCK_BACKOFF_MS;
-
                 restockLastAction =
                     'backoff after rejected/late purchases';
-
                 return false;
             }
         }
 
-        const order = [
-            'poke',
-            'great',
-            'super',
-            'ultra'
-        ];
+        for (const key of ['poke', 'great', 'super', 'ultra']) {
+            if (!settings.use[key]) continue;
 
-        for (
-            const key of
-            order
-        ) {
-            if (
-                !settings.use[
-                    key
-                ]
-            ) {
-                continue;
-            }
-
-            const meta =
-                restockMetaForKey(
-                    key
-                );
-
-            if (!meta) {
-                continue;
-            }
-
-            if (
-                restockPending.has(
-                    meta.id
-                )
-            ) {
-                continue;
-            }
-
-            const count =
-                Number(
-                    protocolBalls.get(
-                        meta.id
-                    ) ||
-                    0
-                );
-
-            const at =
-                Math.max(
-                    0,
-                    Number(
-                        settings.restock
-                            .at?.[
-                            key
-                        ] ||
-                        0
-                    )
-                );
-
-            const target =
-                Math.max(
-                    at,
-                    Number(
-                        settings.restock
-                            .to?.[
-                            key
-                        ] ||
-                        0
-                    )
-                );
-
-            if (
-                target <= 0 ||
-                count > at ||
-                count >= target
-            ) {
-                continue;
-            }
-
-            const price =
-                Number(
-                    meta.priceGold
-                );
-
-            if (
-                !Number.isFinite(
-                    price
-                ) ||
-                price <= 0
-            ) {
-                continue;
-            }
-
-            const goldReserve =
-                Math.max(
-                    0,
-                    Number(
-                        settings.restock
-                            .goldReserve ||
-                        0
-                    )
-                );
-
-            const pendingSpend =
-                [...restockPending.entries()]
-                    .reduce(
-                        (
-                            sum,
-                            [
-                                pendingId,
-                                pending
-                            ]
-                        ) => {
-                            const pendingMeta =
-                                ballCatalog.get(
-                                    pendingId
-                                );
-
-                            const pendingPrice =
-                                Number(
-                                    pending.price ||
-                                    pendingMeta?.priceGold ||
-                                    0
-                                );
-
-                            return (
-                                sum +
-                                Math.max(
-                                    0,
-                                    Number(
-                                        pending.qty ||
-                                        0
-                                    ) *
-                                    pendingPrice
-                                )
-                            );
-                        },
-                        0
-                    );
-
-            const spendable =
-                Math.max(
-                    0,
-                    protocolGold -
-                        goldReserve -
-                        pendingSpend
-                );
-
-            const affordable =
-                Math.floor(
-                    spendable /
-                    price
-                );
-
-            const wanted =
-                Math.min(
-                    RESTOCK_MAX_QTY,
-                    target -
-                        count
-                );
-
-            const qty =
-                Math.max(
-                    0,
-                    Math.min(
-                        wanted,
-                        affordable
-                    )
-                );
-
-            if (
-                qty <= 0
-            ) {
-                restockLastAction =
-                    (
-                        meta.nome ||
-                        key
-                    ) +
-                    ' low · gold reserve protected';
-
-                continue;
-            }
-
-            if (
-                !sendProtocol({
-                    t:
-                        'shop.buy',
-                    kind:
-                        'ball',
-                    id:
-                        meta.id,
-                    qty
-                })
-            ) {
-                restockLastAction =
-                    'purchase send failed';
-
-                return false;
-            }
-
-            restockPending.set(
-                meta.id,
-                {
-                    before:
-                        count,
-                    qty,
-                    price,
-                    sentAt:
-                        now
-                }
+            const meta = restockBallMetaForKey(key);
+            const count = Number(
+                protocolBalls.get(meta?.id) || 0
             );
 
-            stats.restockOrders++;
-
-            restockLastAction =
-                'buying ' +
-                qty +
-                '× ' +
-                meta.nome;
-
-            stats.status =
-                'Restock · ' +
-                restockLastAction;
-
-            updateUI();
-
-            return true;
+            if (tryRestockCandidate({
+                kind: 'ball',
+                key,
+                meta,
+                count,
+                now
+            })) {
+                return true;
+            }
         }
 
-        restockLastAction =
-            'stock OK';
+        for (const key of ['smallPotion', 'greatPotion', 'revive']) {
+            const meta = restockItemMetaForKey(key);
+            const count = Number(
+                protocolItems.get(meta?.id) || 0
+            );
 
+            if (tryRestockCandidate({
+                kind: 'item',
+                key,
+                meta,
+                count,
+                now
+            })) {
+                return true;
+            }
+        }
+
+        restockLastAction = 'stock OK';
         return false;
     }
 
@@ -1187,6 +1015,10 @@
         if (decoded.t === 'welcome') {
             mergeBallCatalog(
                 decoded.catalogoBolas
+            );
+
+            mergeItemCatalog(
+                decoded.itensCompraveis
             );
 
             mergeProtocolState(
@@ -1824,7 +1656,7 @@
 
             <div class="moth-ac-restock">
                 <div class="moth-ac-restock-head">
-                    <label title="Automatically buy enabled, server-purchasable balls while Auto Catch is ON.">
+                    <label title="Automatically buy configured balls, potions, and revives while Auto Catch is ON.">
                         <input id="moth-ac-restock-enabled" type="checkbox">
                         Auto-restock
                     </label>
@@ -1837,6 +1669,9 @@
                     ${restockControl('great', 'Great')}
                     ${restockControl('super', 'Super')}
                     ${restockControl('ultra', 'Ultra')}
+                    ${restockControl('smallPotion', 'Small Potion')}
+                    ${restockControl('greatPotion', 'Great Potion')}
+                    ${restockControl('revive', 'Revive')}
                 </div>
 
                 <div class="moth-ac-grid moth-ac-restock-gold">
@@ -2279,7 +2114,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.1 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.2 loaded');
     }
 
     if (document.readyState === 'loading') {
