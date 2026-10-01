@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.5
+// @version      6.1.6
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -15,7 +15,6 @@
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
     const RESULT_TIMEOUT_MS = 1000;
-    const MAX_PENDING_TIMEOUT_RETRIES = 1;
     const RESTOCK_RETRY_MS = 5000;
     const RESTOCK_BACKOFF_MS = 30000;
     const RESTOCK_MAX_QTY = 5000;
@@ -441,10 +440,13 @@
             );
         }
 
-        if (
-            state.lastResult === 'pending' &&
-            state.pendingTimeoutRetries < MAX_PENDING_TIMEOUT_RETRIES
-        ) {
+        if (state.lastResult === 'pending') {
+            /*
+             * A throw with no authoritative result is not terminal. If the
+             * exact corpse is still present after the result timeout, retry
+             * it again. Keep doing that until a bola result succeeds or the
+             * corpse/slot disappears.
+             */
             return RESULT_TIMEOUT_MS;
         }
 
@@ -2257,7 +2259,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.5 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.1.6 loaded');
     }
 
     if (document.readyState === 'loading') {
