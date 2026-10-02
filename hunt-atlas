@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.7.4
+// @version      1.7.5
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -54,14 +54,51 @@
         50;
 
     /*
-     * Aerodactyl's upstream creature catalog exposes priceNpc=6,500,000,000,
-     * but the species is not sellable to the NPC. Treat that catalog value as
-     * non-payable metadata instead of feeding it into the normal sell formula.
+     * Keep these in sync with PokéIdle shared/sell-value.mjs.
+     *
+     * The creature JSON is a raw mirror. Values above 500k can be import
+     * garbage (Aerodactyl's historical 6.5b is the canonical example), and
+     * high-region species are normalized from hunt level before sale pricing.
      */
-    const NPC_UNSELLABLE_SPECIES_IDS =
-        new Set([
-            142
-        ]);
+    const SELL_VALUE_ANCHOR_LEVEL =
+        150;
+
+    const SELL_VALUE_ANCHOR_GOLD =
+        12000;
+
+    const NPC_CATALOG_PRICE_MAX =
+        500000;
+
+    const GOLD_KILL_LEVEL_1 =
+        36;
+
+    const GOLD_KILL_ANCHOR_LEVEL =
+        5000;
+
+    const GOLD_KILL_ANCHOR =
+        6000;
+
+    const GOLD_KILL_EXPONENT =
+        Math.log(
+            GOLD_KILL_ANCHOR /
+                GOLD_KILL_LEVEL_1
+        ) /
+        Math.log(
+            GOLD_KILL_ANCHOR_LEVEL
+        );
+
+    const GOLD_KILL_LEVEL_CAP =
+        25000;
+
+    const NPC_SELL_BASE_CAP =
+        6 *
+        Math.round(
+            GOLD_KILL_LEVEL_1 *
+            Math.pow(
+                GOLD_KILL_LEVEL_CAP,
+                GOLD_KILL_EXPONENT
+            )
+        );
 
     const BUTTON_ID =
         'moth-hunt-atlas-button';
@@ -316,7 +353,6 @@
             'price.playersMissing': 'RMT —',
             'price.npcTip': 'MKT: NPC sale reference at the visible hunt level{plural} and quality 1.0{range} · actual captured Pokémon vary with quality; shiny ×10',
             'price.npcMissingTip': 'MKT: NPC sell value is not available for this species yet.',
-            'price.npcUnsellableTip': 'MKT: this species cannot be sold to the NPC.',
             'price.playerTip': 'RMT: recent non-shiny completed player Market sales · {count} {sample} · range {min}–{max}',
             'price.playerListingTip': 'RMT: lowest current gold listing in the player Market. Completed-sale averages are preferred when available.',
             'price.playerMissingTip': 'RMT: no recent completed sale or current gold listing was found.',
@@ -469,7 +505,6 @@
             'price.playersMissing': 'RMT —',
             'price.npcTip': 'MKT: referência de venda ao NPC no{plural} nível{plural} de hunt visível{plural} e qualidade 1,0{range} · o valor real varia com a qualidade; shiny ×10',
             'price.npcMissingTip': 'MKT: o valor de venda ao NPC ainda não está disponível para esta espécie.',
-            'price.npcUnsellableTip': 'MKT: esta espécie não pode ser vendida ao NPC.',
             'price.playerTip': 'RMT: vendas recentes concluídas de Pokémon não shiny no Mercado de jogadores · {count} {sample} · faixa {min}–{max}',
             'price.playerListingTip': 'RMT: menor anúncio atual em ouro no Mercado de jogadores. A média de vendas concluídas tem prioridade quando disponível.',
             'price.playerMissingTip': 'RMT: nenhuma venda concluída recente nem anúncio atual em ouro foi encontrado.',
@@ -1181,6 +1216,16 @@
             return '—';
         }
 
+        if (n >= 1000000000) {
+            return (
+                n / 1000000000
+            ).toFixed(
+                n >= 10000000000
+                    ? 0
+                    : 1
+            ) + 'b';
+        }
+
         if (n >= 1000000) {
             return (
                 n / 1000000
@@ -1619,6 +1664,110 @@
                         150,
                     1.25
                 )
+        );
+    }
+
+    function goldValueAtLevel(
+        level
+    ) {
+        const n =
+            Math.max(
+                1,
+                Number(level) ||
+                1
+            );
+
+        return Math.round(
+            SELL_VALUE_ANCHOR_GOLD *
+            Math.pow(
+                n /
+                    SELL_VALUE_ANCHOR_LEVEL,
+                0.6
+            )
+        );
+    }
+
+    function normalizedNpcBaseFromCatalog(
+        meta
+    ) {
+        if (!meta) {
+            return 0;
+        }
+
+        const huntLevel =
+            Math.max(
+                1,
+                Number(
+                    meta.huntLevel
+                ) ||
+                1
+            );
+
+        const rawSell =
+            Number(
+                meta.catalogSellValue
+            );
+
+        const rawNpc =
+            Number(
+                meta.priceNpc
+            );
+
+        let value;
+
+        /*
+         * Mirrors normalizarSellValue()/valorEconomicoDe().
+         * High-region rows are always derived from their hunt level. For the
+         * raw mirror, a >500k value is not trusted as an economic value.
+         */
+        if (
+            huntLevel >
+                SELL_VALUE_ANCHOR_LEVEL
+        ) {
+            value =
+                goldValueAtLevel(
+                    huntLevel
+                );
+        } else if (
+            Number.isFinite(rawSell) &&
+            rawSell > 0 &&
+            rawSell <=
+                NPC_CATALOG_PRICE_MAX
+        ) {
+            value = rawSell;
+        } else if (
+            Number.isFinite(rawSell) &&
+            rawSell >
+                NPC_CATALOG_PRICE_MAX
+        ) {
+            value =
+                goldValueAtLevel(
+                    huntLevel
+                );
+        } else if (
+            Number.isFinite(rawNpc) &&
+            rawNpc > 0 &&
+            rawNpc <=
+                NPC_CATALOG_PRICE_MAX
+        ) {
+            value = rawNpc;
+        } else {
+            value =
+                goldValueAtLevel(
+                    huntLevel
+                );
+        }
+
+        /*
+         * Mirrors sellValueBaseDe(): sale pricing has its own economic cap,
+         * independent of the raw species catalog.
+         */
+        return Math.min(
+            Math.max(
+                1,
+                value
+            ),
+            NPC_SELL_BASE_CAP
         );
     }
 
@@ -2398,6 +2547,54 @@
         }
     }
 
+    function removePokedex(entries) {
+        if (!Array.isArray(entries)) {
+            return;
+        }
+
+        for (const id of entries) {
+            state.pokedex.delete(
+                String(id)
+            );
+        }
+    }
+
+    function rebuildOwnedSpecies() {
+        state.ownedSpecies.clear();
+
+        for (
+            const pokemon of
+            state.pokemons.values()
+        ) {
+            const speciesId =
+                Number(
+                    pokemon?.speciesId
+                );
+
+            if (
+                Number.isFinite(
+                    speciesId
+                )
+            ) {
+                state.ownedSpecies.add(
+                    speciesId
+                );
+            }
+        }
+    }
+
+    function removeOwnedPokemon(ids) {
+        if (!Array.isArray(ids)) {
+            return;
+        }
+
+        for (const id of ids) {
+            state.pokemons.delete(
+                Number(id)
+            );
+        }
+    }
+
     function mergeOwnedPokemon(list) {
         if (!Array.isArray(list)) {
             return;
@@ -2466,6 +2663,10 @@
             return;
         }
 
+        const fullSnapshot =
+            full ||
+            gameState.cheio === true;
+
         if (
             Number.isFinite(
                 Number(gameState.level)
@@ -2477,53 +2678,107 @@
                 );
         }
 
+        /*
+         * In the delta protocol, a missing key means "unchanged" while an
+         * explicit null means "clear it".
+         */
         if (
-            typeof gameState.huntSlug ===
-                'string'
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'huntSlug'
+            )
         ) {
             state.currentHuntSlug =
-                gameState.huntSlug;
+                typeof gameState.huntSlug ===
+                    'string'
+                    ? gameState.huntSlug
+                    : null;
         }
 
         if (
-            gameState.activeId !==
-                undefined &&
-            gameState.activeId !==
-                null
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'activeId'
+            )
         ) {
             const nextActiveId =
-                Number(
-                    gameState.activeId
-                );
+                gameState.activeId ===
+                    null
+                    ? null
+                    : Number(
+                        gameState.activeId
+                    );
 
             if (
-                Number.isFinite(
-                    nextActiveId
-                ) &&
                 nextActiveId !==
-                    Number(
-                        state.activePokemonId
+                    state.activePokemonId &&
+                (
+                    nextActiveId === null ||
+                    Number.isFinite(
+                        nextActiveId
                     )
+                )
             ) {
                 state.combatTargets.clear();
             }
 
             state.activePokemonId =
-                nextActiveId;
+                nextActiveId === null ||
+                Number.isFinite(
+                    nextActiveId
+                )
+                    ? nextActiveId
+                    : state.activePokemonId;
+        }
+
+        /*
+         * Match shared/estado-delta.mjs: complete collections replace local
+         * state; pkMud/dexMud patch it; pkFora/dexFora remove entries.
+         */
+        if (
+            gameState.pokedex &&
+            typeof gameState.pokedex ===
+                'object'
+        ) {
+            state.pokedex.clear();
+            mergePokedex(
+                gameState.pokedex
+            );
+        } else if (fullSnapshot) {
+            state.pokedex.clear();
         }
 
         mergePokedex(
-            gameState.pokedex ||
             gameState.dexMud
         );
 
-        mergeOwnedPokemon(
-            gameState.pokemons
+        removePokedex(
+            gameState.dexFora
         );
+
+        if (
+            Array.isArray(
+                gameState.pokemons
+            )
+        ) {
+            state.pokemons.clear();
+            mergeOwnedPokemon(
+                gameState.pokemons
+            );
+        } else if (fullSnapshot) {
+            state.pokemons.clear();
+        }
 
         mergeOwnedPokemon(
             gameState.pkMud
         );
+
+        removeOwnedPokemon(
+            gameState.pkFora
+        );
+
+        rebuildOwnedSpecies();
+        refreshStrongestPokemon();
 
         if (
             gameState.selvagem &&
@@ -3793,19 +4048,42 @@
                 creature?.type2 ||
                 previous.type2 ||
                 null,
-            sellValue:
+            huntLevel:
                 Number.isFinite(
                     Number(
-                        creature?.sellValue ??
+                        creature?.huntLevel
+                    )
+                )
+                    ? Number(
+                        creature.huntLevel
+                    )
+                    : previous.huntLevel,
+            catalogSellValue:
+                Number.isFinite(
+                    Number(
+                        creature?.sellValue
+                    )
+                )
+                    ? Number(
+                        creature.sellValue
+                    )
+                    : previous.catalogSellValue,
+            priceNpc:
+                Number.isFinite(
+                    Number(
                         creature?.priceNpc
                     )
                 )
                     ? Number(
-                        creature.sellValue ??
                         creature.priceNpc
                     )
-                    : previous.sellValue
+                    : previous.priceNpc
         };
+
+        meta.sellValue =
+            normalizedNpcBaseFromCatalog(
+                meta
+            );
 
         state.speciesCombat.set(
             id,
@@ -5840,9 +6118,34 @@
                     );
 
                 if (
-                    !Number.isFinite(id) ||
-                    index.has(id)
+                    !Number.isFinite(id)
                 ) {
+                    continue;
+                }
+
+                const existing =
+                    index.get(id);
+
+                if (existing) {
+                    const level =
+                        Number(
+                            hunt?.nivel
+                        );
+
+                    if (
+                        Number.isFinite(level) &&
+                        (
+                            !Number.isFinite(
+                                existing.lowestHuntLevel
+                            ) ||
+                            level <
+                                existing.lowestHuntLevel
+                        )
+                    ) {
+                        existing.lowestHuntLevel =
+                            level;
+                    }
+
                     continue;
                 }
 
@@ -5854,7 +6157,12 @@
                             species.nome ||
                             'Pokémon ' +
                             id,
-                        hunt
+                        hunt,
+                        lowestHuntLevel:
+                            Number(
+                                hunt?.nivel
+                            ) ||
+                            null
                     }
                 );
             }
@@ -5936,38 +6244,61 @@
         );
     }
 
-    function npcSellIsBlockedForSpecies(
-        species
-    ) {
-        const id =
-            Number(
-                species?.id
-            );
-
-        return (
-            Number.isFinite(id) &&
-            NPC_UNSELLABLE_SPECIES_IDS.has(
-                id
-            )
-        );
-    }
-
     function npcBaseSellValueForSpecies(
         species
     ) {
-        if (
-            npcSellIsBlockedForSpecies(
-                species
-            )
-        ) {
+        const meta =
+            speciesCombatMeta(
+                species?.id
+            );
+
+        if (!meta) {
             return 0;
         }
 
-        return Number(
-            speciesCombatMeta(
-                species?.id
-            )?.sellValue ||
-            0
+        let base =
+            Number(
+                meta.sellValue ||
+                0
+            );
+
+        /*
+         * Mirrors valor-cadeia.mjs's "raise to the hunt" pass for mirror
+         * species whose catalog still carries a Kanto-scale hunt level.
+         */
+        const catalogLevel =
+            Number(
+                meta.huntLevel ||
+                0
+            );
+
+        const lowestHuntLevel =
+            Number(
+                species?.lowestHuntLevel ||
+                0
+            );
+
+        if (
+            catalogLevel <=
+                SELL_VALUE_ANCHOR_LEVEL &&
+            lowestHuntLevel >
+                SELL_VALUE_ANCHOR_LEVEL
+        ) {
+            base =
+                Math.max(
+                    base,
+                    goldValueAtLevel(
+                        lowestHuntLevel
+                    )
+                );
+        }
+
+        return Math.min(
+            Math.max(
+                0,
+                base
+            ),
+            NPC_SELL_BASE_CAP
         );
     }
 
@@ -8279,11 +8610,6 @@
                 'common.lead'
             );
 
-        const npcSellBlocked =
-            npcSellIsBlockedForSpecies(
-                species
-            );
-
         const npcStats =
             npcSellStatsForSpecies(
                 species
@@ -8330,9 +8656,7 @@
                                 }
                             )
                             : tr(
-                                npcSellBlocked
-                                    ? 'price.npcUnsellableTip'
-                                    : 'price.npcMissingTip'
+                                'price.npcMissingTip'
                             )
                     )}"
                 >${escapeHtml(
