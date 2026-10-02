@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.7.1
+// @version      1.7.2
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -286,7 +286,6 @@
             'sort.npc': 'MKT',
             'sort.player': 'RMT',
             'sort.matchup': 'Matchup',
-            'sort.spawn': 'Encounter rate',
             'sort.asc': 'Ascending',
             'sort.desc': 'Descending',
             'filter.clear': 'Clear filters',
@@ -323,7 +322,6 @@
             'matchup.dealTitle': '{lead}’s best known attack type ({type}) vs {species}: {multiplier}.',
             'matchup.takeTitle': '{species}’s best STAB type ({type}) vs {lead}: {multiplier}.',
             'hunt.level': 'Lv {level}',
-            'hunt.weight': '~{value}% weight',
             'hunt.unlocked': 'unlocked',
             'hunt.locked': 'locked',
             'hunt.here': 'Here',
@@ -369,8 +367,8 @@
             'results.showMore': 'Show more · {count} Pokémon remaining',
             'results.noMatch': 'No Pokémon match these filters. Use Clear filters to reset the Atlas.',
             'results.waiting': 'Waiting for PokéIdle hunt data. Reload the page once after installing Hunt Atlas if this remains empty.',
-            'results.count': '{pokemon} Pokémon · {hunts} hunts',
-            'results.countPartial': '{shown}/{pokemon} Pokémon · {hunts} hunts',
+            'results.count': '{pokemon} Pokémon',
+            'results.countPartial': '{shown}/{pokemon} Pokémon',
             'status.waitingGameData': 'Waiting for game data…',
             'status.cachedCatalog': 'Using cached hunt catalog until live state arrives.',
             'status.entered': 'Entered {hunt}.',
@@ -440,7 +438,6 @@
             'sort.npc': 'MKT',
             'sort.player': 'RMT',
             'sort.matchup': 'Matchup',
-            'sort.spawn': 'Taxa de encontro',
             'sort.asc': 'Crescente',
             'sort.desc': 'Decrescente',
             'filter.clear': 'Limpar filtros',
@@ -477,7 +474,6 @@
             'matchup.dealTitle': 'Melhor tipo de ataque conhecido de {lead} ({type}) contra {species}: {multiplier}.',
             'matchup.takeTitle': 'Melhor STAB de {species} ({type}) contra {lead}: {multiplier}.',
             'hunt.level': 'Nv {level}',
-            'hunt.weight': '~{value}% peso',
             'hunt.unlocked': 'liberada',
             'hunt.locked': 'bloqueada',
             'hunt.here': 'Aqui',
@@ -523,8 +519,8 @@
             'results.showMore': 'Mostrar mais · restam {count} Pokémon',
             'results.noMatch': 'Nenhum Pokémon corresponde aos filtros. Use Limpar filtros para redefinir o Atlas.',
             'results.waiting': 'Aguardando os dados de hunts do PokéIdle. Recarregue a página uma vez após instalar o Hunt Atlas se isto continuar vazio.',
-            'results.count': '{pokemon} Pokémon · {hunts} hunts',
-            'results.countPartial': '{shown}/{pokemon} Pokémon · {hunts} hunts',
+            'results.count': '{pokemon} Pokémon',
+            'results.countPartial': '{shown}/{pokemon} Pokémon',
             'status.waitingGameData': 'Aguardando dados do jogo…',
             'status.cachedCatalog': 'Usando o catálogo de hunts em cache até chegarem dados atuais.',
             'status.entered': 'Entrou em {hunt}.',
@@ -843,7 +839,7 @@
                     'asc'
                 ],
                 spawn_desc: [
-                    'spawn',
+                    'xp',
                     'desc'
                 ],
                 level_desc: [
@@ -881,6 +877,16 @@
                     )
                         ? 'asc'
                         : 'desc';
+            }
+
+            if (
+                next.sort ===
+                    'spawn'
+            ) {
+                next.sort =
+                    'xp';
+                next.sortDirection =
+                    'desc';
             }
 
             if (
@@ -5666,14 +5672,11 @@
                 ? [
                     ...new Map(
                         speciesResults
-                            .flatMap(
-                                species =>
-                                    species.hunts.map(
-                                        item => [
-                                            item.hunt.slug,
-                                            item.hunt
-                                        ]
-                                    )
+                            .map(
+                                species => [
+                                    species.hunt.slug,
+                                    species.hunt
+                                ]
                             )
                     ).values()
                 ]
@@ -5826,38 +5829,23 @@
                     );
 
                 if (
-                    !Number.isFinite(id)
+                    !Number.isFinite(id) ||
+                    index.has(id)
                 ) {
                     continue;
                 }
 
-                let entry =
-                    index.get(id);
-
-                if (!entry) {
-                    entry = {
+                index.set(
+                    id,
+                    {
                         id,
                         name:
                             species.nome ||
                             'Pokémon ' +
                             id,
-                        hunts: []
-                    };
-
-                    index.set(
-                        id,
-                        entry
-                    );
-                }
-
-                entry.hunts.push({
-                    hunt,
-                    points:
-                        Number(
-                            species.pontos ||
-                            0
-                        )
-                });
+                        hunt
+                    }
+                );
             }
         }
 
@@ -5994,58 +5982,34 @@
     function npcSellStatsForSpecies(
         species
     ) {
-        const values =
-            (
-                species?.hunts ||
-                []
-            )
-                .map(
-                    item =>
-                        npcSellValueAtLevel(
-                            species,
-                            item?.hunt?.nivel
-                        )
-                )
-                .filter(
-                    value =>
-                        value > 0
-                );
+        const value =
+            npcSellValueAtLevel(
+                species,
+                species?.hunt?.nivel
+            );
 
-        if (!values.length) {
-            const base =
-                npcBaseSellValueForSpecies(
-                    species
-                );
-
-            return base > 0
-                ? {
-                    average: base,
-                    min: base,
-                    max: base,
-                    count: 1
-                }
-                : null;
+        if (value > 0) {
+            return {
+                average: value,
+                min: value,
+                max: value,
+                count: 1
+            };
         }
 
-        return {
-            average:
-                values.reduce(
-                    (sum, value) =>
-                        sum + value,
-                    0
-                ) /
-                values.length,
-            min:
-                Math.min(
-                    ...values
-                ),
-            max:
-                Math.max(
-                    ...values
-                ),
-            count:
-                values.length
-        };
+        const base =
+            npcBaseSellValueForSpecies(
+                species
+            );
+
+        return base > 0
+            ? {
+                average: base,
+                min: base,
+                max: base,
+                count: 1
+            }
+            : null;
     }
 
     function npcSellValueForSpecies(
@@ -6059,25 +6023,7 @@
         );
     }
 
-    function bestSpawnPercent(
-        species
-    ) {
-        return Math.max(
-            ...(
-                species?.hunts ||
-                []
-            ).map(
-                item =>
-                    Number(
-                        huntSpawnPercent(
-                            item
-                        ) ||
-                        0
-                    )
-            ),
-            0
-        );
-    }
+
 
     function bestMatchupScore(
         species
@@ -6284,116 +6230,48 @@
 
             if (
                 weaknessFilter !==
-                    'all'
-            ) {
-                if (
+                    'all' &&
+                (
                     !types.length ||
                     weaknessMultiplier(
                         types,
                         weaknessFilter
                     ) <= 1
-                ) {
-                    continue;
-                }
+                )
+            ) {
+                continue;
             }
 
-            const hunts =
-                species.hunts
-                    .filter(
-                        item => {
-                            const hunt =
-                                item.hunt;
+            const hunt =
+                species.hunt;
 
-                            if (
-                                !huntMatchesScope(
-                                    hunt
-                                )
-                            ) {
-                                return false;
-                            }
+            if (
+                !hunt ||
+                !huntMatchesScope(
+                    hunt
+                )
+            ) {
+                continue;
+            }
 
-                            if (!search) {
-                                return true;
-                            }
-
-                            return [
-                                species.name,
-                                hunt.nome,
-                                hunt.slug,
-                                hunt.area
-                            ]
-                                .map(
-                                    normalize
-                                )
-                                .some(
-                                    text =>
-                                        text.includes(
-                                            search
-                                        )
-                                );
-                        }
+            if (
+                search &&
+                ![
+                    species.name,
+                    hunt.nome,
+                    hunt.slug,
+                    hunt.area
+                ]
+                    .map(
+                        normalize
                     )
-                    .sort(
-                        (a, b) => {
-                            const au =
-                                isUnlocked(
-                                    a.hunt
-                                );
-
-                            const bu =
-                                isUnlocked(
-                                    b.hunt
-                                );
-
-                            if (
-                                au !== bu
-                            ) {
-                                return au
-                                    ? -1
-                                    : 1;
-                            }
-
-                            if (
-                                state.filters.sort ===
-                                'xp'
-                            ) {
-                                const ax =
-                                    Number(
-                                        huntXpEstimate(
-                                            a.hunt
-                                        )?.value ||
-                                        0
-                                    );
-
-                                const bx =
-                                    Number(
-                                        huntXpEstimate(
-                                            b.hunt
-                                        )?.value ||
-                                        0
-                                    );
-
-                                if (ax !== bx) {
-                                    return bx - ax;
-                                }
-                            }
-
-                            return (
-                                Number(
-                                    a.hunt
-                                        .nivel ||
-                                    0
-                                ) -
-                                Number(
-                                    b.hunt
-                                        .nivel ||
-                                    0
-                                )
-                            );
-                        }
-                    );
-
-            if (!hunts.length) {
+                    .some(
+                        text =>
+                            text.includes(
+                                search
+                            )
+                    )
+            ) {
                 continue;
             }
 
@@ -6405,7 +6283,6 @@
                         species.id
                     ),
                 types,
-                hunts,
                 market:
                     marketStatsForSpecies(
                         species
@@ -6507,16 +6384,10 @@
                 ) {
                     const value =
                         species =>
-                            Math.max(
-                                ...species.hunts.map(
-                                    item =>
-                                        Number(
-                                            huntXpEstimate(
-                                                item.hunt
-                                            )?.value ||
-                                            0
-                                        )
-                                ),
+                            Number(
+                                huntXpEstimate(
+                                    species.hunt
+                                )?.value ||
                                 0
                             );
 
@@ -6552,45 +6423,17 @@
                             ),
                             true
                         );
-                } else if (
-                    sort === 'spawn'
-                ) {
-                    comparison =
-                        compareNumbers(
-                            bestSpawnPercent(
-                                a
-                            ),
-                            bestSpawnPercent(
-                                b
-                            )
-                        );
+
                 } else if (
                     sort === 'level'
                 ) {
                     const value =
                         species =>
-                            direction > 0
-                                ? Math.min(
-                                    ...species.hunts.map(
-                                        item =>
-                                            Number(
-                                                item.hunt
-                                                    .nivel ||
-                                                Infinity
-                                            )
-                                    )
-                                )
-                                : Math.max(
-                                    ...species.hunts.map(
-                                        item =>
-                                            Number(
-                                                item.hunt
-                                                    .nivel ||
-                                                0
-                                            )
-                                    ),
-                                    0
-                                );
+                            Number(
+                                species.hunt
+                                    ?.nivel ||
+                                0
+                            );
 
                     comparison =
                         compareNumbers(
@@ -7961,7 +7804,6 @@
                             <option value="npc">${tr('sort.npc')}</option>
                             <option value="player_market">${tr('sort.player')}</option>
                             <option value="matchup">${tr('sort.matchup')}</option>
-                            <option value="spawn">${tr('sort.spawn')}</option>
                         </select>
 
                         <button
@@ -8364,29 +8206,7 @@
         }
     }
 
-    function huntSpawnPercent(
-        item
-    ) {
-        const total =
-            Number(
-                item.hunt
-                    .totalSpawns ||
-                0
-            );
 
-        if (
-            !total ||
-            !item.points
-        ) {
-            return null;
-        }
-
-        return (
-            item.points /
-            total *
-            100
-        );
-    }
 
     function speciesMarkup(
         species
@@ -8573,55 +8393,90 @@
                 `
                 : '';
 
-        const huntsMarkup =
-            species.hunts
-                .map(
-                    (item, index) => {
-                        const hunt =
-                            item.hunt;
+        const hunt =
+            species.hunt;
 
-                        const unlocked =
-                            isUnlocked(
-                                hunt
-                            );
+        const unlocked =
+            isUnlocked(
+                hunt
+            );
 
-                        const current =
-                            hunt.slug ===
-                            state.currentHuntSlug;
+        const current =
+            hunt.slug ===
+            state.currentHuntSlug;
 
-                        const percent =
-                            huntSpawnPercent(
-                                item
-                            );
+        const xpInfo =
+            huntXpEstimate(
+                hunt
+            );
 
-                        const xpInfo =
-                            huntXpEstimate(
-                                hunt
-                            );
+        const xpLabel =
+            xpInfo?.value
+                ? tr(
+                    xpInfo.observed
+                        ? 'hunt.measuredXp'
+                        : 'hunt.modeledXp',
+                    {
+                        value:
+                            formatRate(
+                                xpInfo.value
+                            )
+                    }
+                )
+                : null;
 
-                        const xpLabel =
-                            xpInfo?.value
+        const sub =
+            [
+                String(
+                    hunt.area ||
+                    ''
+                ).toUpperCase(),
+                tr(
+                    'hunt.level',
+                    {
+                        level:
+                            Number(
+                                hunt.nivel ||
+                                0
+                            )
+                    }
+                ),
+                tr(
+                    unlocked
+                        ? 'hunt.unlocked'
+                        : 'hunt.locked'
+                ),
+                xpLabel
+            ]
+                .filter(Boolean)
+                .join(' · ');
+
+        const label =
+            tr(
+                current
+                    ? 'hunt.here'
+                    : unlocked
+                        ? 'hunt.go'
+                        : 'hunt.locked'
+            );
+
+        const huntMarkup =
+            `
+                <div class="mha-hunt ${current ? 'current' : ''} ${!unlocked ? 'locked' : ''}">
+                    <div class="mha-hunt-main">
+                        <div class="mha-hunt-title">${escapeHtml(hunt.nome || hunt.slug)}</div>
+                        <div class="mha-hunt-sub">${escapeHtml(sub)}</div>
+                    </div>
+
+                    <button
+                        type="button"
+                        class="mha-go ${current ? 'current' : ''}"
+                        data-mha-go="${escapeHtml(hunt.slug)}"
+                        ${!unlocked || current ? 'disabled' : ''}
+                        title="${escapeHtml(
+                            !unlocked
                                 ? tr(
-                                    xpInfo.observed
-                                        ? 'hunt.measuredXp'
-                                        : 'hunt.modeledXp',
-                                    {
-                                        value:
-                                            formatRate(
-                                                xpInfo.value
-                                            )
-                                    }
-                                )
-                                : null;
-
-                        const sub =
-                            [
-                                String(
-                                    hunt.area ||
-                                    ''
-                                ).toUpperCase(),
-                                tr(
-                                    'hunt.level',
+                                    'hunt.requiresLevel',
                                     {
                                         level:
                                             Number(
@@ -8629,78 +8484,18 @@
                                                 0
                                             )
                                     }
-                                ),
-                                percent !== null
+                                )
+                                : current
                                     ? tr(
-                                        'hunt.weight',
-                                        {
-                                            value:
-                                                percent.toFixed(
-                                                    percent >=
-                                                        10
-                                                        ? 0
-                                                        : 1
-                                                )
-                                        }
+                                        'hunt.current'
                                     )
-                                    : null,
-                                tr(
-                                    unlocked
-                                        ? 'hunt.unlocked'
-                                        : 'hunt.locked'
-                                ),
-                                xpLabel
-                            ]
-                                .filter(Boolean)
-                                .join(' · ');
-
-                        const label =
-                            tr(
-                                current
-                                    ? 'hunt.here'
-                                    : unlocked
-                                        ? 'hunt.go'
-                                        : 'hunt.locked'
-                            );
-
-                        return `
-                            <div class="mha-hunt ${current ? 'current' : ''} ${!unlocked ? 'locked' : ''}">
-                                <div class="mha-hunt-main">
-                                    <div class="mha-hunt-title">${escapeHtml(hunt.nome || hunt.slug)}</div>
-                                    <div class="mha-hunt-sub">${escapeHtml(sub)}</div>
-                                </div>
-
-                                <button
-                                    type="button"
-                                    class="mha-go ${current ? 'current' : ''}"
-                                    data-mha-go="${escapeHtml(hunt.slug)}"
-                                    ${!unlocked || current ? 'disabled' : ''}
-                                    title="${escapeHtml(
-                                        !unlocked
-                                            ? tr(
-                                                'hunt.requiresLevel',
-                                                {
-                                                    level:
-                                                        Number(
-                                                            hunt.nivel ||
-                                                            0
-                                                        )
-                                                }
-                                            )
-                                            : current
-                                                ? tr(
-                                                    'hunt.current'
-                                                )
-                                                : tr(
-                                                    'hunt.travel'
-                                                )
-                                    )}"
-                                >${label}</button>
-                            </div>
-                        `;
-                    }
-                )
-                .join('');
+                                    : tr(
+                                        'hunt.travel'
+                                    )
+                        )}"
+                    >${label}</button>
+                </div>
+            `;
 
         return `
             <section class="mha-species">
@@ -8714,7 +8509,7 @@
                 </div>
 
                 <div class="mha-hunts">
-                    ${huntsMarkup}
+                    ${huntMarkup}
                 </div>
             </section>
         `;
@@ -9364,17 +9159,6 @@
                 drawer
             );
 
-        const huntCount =
-            new Set(
-                results.flatMap(
-                    species =>
-                        species.hunts.map(
-                            item =>
-                                item.hunt.slug
-                        )
-                )
-            ).size;
-
         const countText =
             hasMore
                 ? tr(
@@ -9383,18 +9167,14 @@
                         shown:
                             visibleResults.length,
                         pokemon:
-                            results.length,
-                        hunts:
-                            huntCount
+                            results.length
                     }
                 )
                 : tr(
                     'results.count',
                     {
                         pokemon:
-                            results.length,
-                        hunts:
-                            huntCount
+                            results.length
                     }
                 );
 
