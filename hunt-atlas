@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.4.1
+// @author       MOTHblank
+// @version      1.5.0
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -30,6 +31,18 @@
 
     const PERF_KEY =
         'moth-pokeidle-hunt-atlas-performance-v2';
+
+    const MARKET_CACHE_KEY =
+        'moth-pokeidle-hunt-atlas-market-v1';
+
+    const MARKET_REFRESH_MS =
+        15 * 60 * 1000;
+
+    const MARKET_CACHE_MAX_AGE_MS =
+        7 * 24 * 60 * 60 * 1000;
+
+    const MARKET_HISTORY_MAX_PAGES =
+        8;
 
     const BUTTON_ID =
         'moth-hunt-atlas-button';
@@ -232,6 +245,9 @@
         (selector, root = document) =>
             [...root.querySelectorAll(selector)];
 
+    const initialMarketCache =
+        loadMarketCache();
+
     const state = {
         hunts: [],
         playerLevel: 0,
@@ -244,6 +260,16 @@
         activePokemonId: null,
 
         huntPerf: loadPerformance(),
+
+        marketValues:
+            initialMarketCache.values,
+        marketCacheSavedAt:
+            initialMarketCache.savedAt,
+        marketStatus:
+            initialMarketCache.values.size
+                ? 'cached'
+                : 'idle',
+        marketFetch: null,
 
         combatTargets: new Map(),
         speciesCombat: new Map(),
@@ -354,6 +380,68 @@
                 state.filters
             )
         );
+    }
+
+    function loadMarketCache() {
+        try {
+            const raw =
+                JSON.parse(
+                    localStorage.getItem(
+                        MARKET_CACHE_KEY
+                    ) || 'null'
+                );
+
+            const savedAt =
+                Number(
+                    raw?.savedAt ||
+                    0
+                );
+
+            if (
+                !savedAt ||
+                Date.now() - savedAt >
+                    MARKET_CACHE_MAX_AGE_MS ||
+                !raw?.values ||
+                typeof raw.values !==
+                    'object'
+            ) {
+                return {
+                    savedAt: 0,
+                    values: new Map()
+                };
+            }
+
+            return {
+                savedAt,
+                values:
+                    new Map(
+                        Object.entries(
+                            raw.values
+                        )
+                    )
+            };
+        } catch {
+            return {
+                savedAt: 0,
+                values: new Map()
+            };
+        }
+    }
+
+    function saveMarketCache() {
+        try {
+            localStorage.setItem(
+                MARKET_CACHE_KEY,
+                JSON.stringify({
+                    savedAt:
+                        state.marketCacheSavedAt,
+                    values:
+                        Object.fromEntries(
+                            state.marketValues
+                        )
+                })
+            );
+        } catch {}
     }
 
     function loadPerformance() {
@@ -1967,6 +2055,18 @@
 
         if (
             message?.t ===
+                'market' &&
+            message?.aba ===
+                'historicoGlobal'
+        ) {
+            handleMarketHistory(
+                message
+            );
+            return;
+        }
+
+        if (
+            message?.t ===
                 'welcome'
         ) {
             if (
@@ -2028,6 +2128,310 @@
         }
     }
 
+    function addMarketSample(
+        bucket,
+        key,
+        price,
+        soldAt
+    ) {
+        if (
+            !key ||
+            !Number.isFinite(price) ||
+            price <= 0
+        ) {
+            return;
+        }
+
+        const previous =
+            bucket.get(
+                key
+            ) || {
+                sum: 0,
+                count: 0,
+                min: price,
+                max: price,
+                lastSaleAt: 0
+            };
+
+        previous.sum +=
+            price;
+        previous.count++;
+        previous.min =
+            Math.min(
+                previous.min,
+                price
+            );
+        previous.max =
+            Math.max(
+                previous.max,
+                price
+            );
+        previous.lastSaleAt =
+            Math.max(
+                Number(
+                    previous.lastSaleAt ||
+                    0
+                ),
+                Number(
+                    soldAt ||
+                    0
+                )
+            );
+
+        bucket.set(
+            key,
+            previous
+        );
+    }
+
+    function processMarketSale(
+        line,
+        bucket
+    ) {
+        if (
+            line?.tipo !==
+                'pokemon' ||
+            line?.moeda !==
+                'gold'
+        ) {
+            return;
+        }
+
+        const ficha =
+            line.ficha ||
+            {};
+
+        if (ficha.shiny) {
+            return;
+        }
+
+        const price =
+            Number(
+                line.bruto ??
+                line.preco
+            );
+
+        if (
+            !Number.isFinite(price) ||
+            price <= 0
+        ) {
+            return;
+        }
+
+        const speciesId =
+            Number(
+                ficha.speciesId ??
+                ficha.pokeId
+            );
+
+        if (
+            Number.isFinite(
+                speciesId
+            ) &&
+            speciesId > 0
+        ) {
+            addMarketSample(
+                bucket,
+                'id:' + speciesId,
+                price,
+                line.em
+            );
+        }
+
+        const name =
+            normalize(
+                ficha.nome ||
+                ficha.name ||
+                ''
+            );
+
+        if (name) {
+            addMarketSample(
+                bucket,
+                'name:' + name,
+                price,
+                line.em
+            );
+        }
+    }
+
+    function finalizeMarketFetch() {
+        const fetch =
+            state.marketFetch;
+
+        if (!fetch) {
+            return;
+        }
+
+        const now =
+            Date.now();
+
+        for (
+            const [key, sample] of
+            fetch.batch
+        ) {
+            if (
+                !sample.count
+            ) {
+                continue;
+            }
+
+            state.marketValues.set(
+                key,
+                {
+                    average:
+                        sample.sum /
+                        sample.count,
+                    count:
+                        sample.count,
+                    min:
+                        sample.min,
+                    max:
+                        sample.max,
+                    lastSaleAt:
+                        sample.lastSaleAt,
+                    sampledAt:
+                        now
+                }
+            );
+        }
+
+        state.marketCacheSavedAt =
+            now;
+        state.marketStatus =
+            'ready';
+        state.marketFetch =
+            null;
+
+        saveMarketCache();
+        queueRender();
+    }
+
+    function requestMarketHistoryPage() {
+        const fetch =
+            state.marketFetch;
+
+        if (
+            !fetch ||
+            !state.activeSocket ||
+            state.activeSocket
+                .readyState !==
+                page.WebSocket.OPEN
+        ) {
+            return false;
+        }
+
+        if (
+            q('#cm-hist-corpo')
+        ) {
+            finalizeMarketFetch();
+            return false;
+        }
+
+        try {
+            state.activeSocket.send(
+                JSON.stringify({
+                    t:
+                        'market.historicoGlobal',
+                    pagina:
+                        fetch.page,
+                    tipo:
+                        'pokemon',
+                    moeda:
+                        'gold'
+                })
+            );
+
+            return true;
+        } catch {
+            state.marketFetch =
+                null;
+            state.marketStatus =
+                state.marketValues.size
+                    ? 'cached'
+                    : 'error';
+            return false;
+        }
+    }
+
+    function ensureMarketValues() {
+        if (
+            state.marketFetch ||
+            (
+                state.marketCacheSavedAt &&
+                Date.now() -
+                    state.marketCacheSavedAt <
+                    MARKET_REFRESH_MS
+            )
+        ) {
+            return;
+        }
+
+        if (
+            !state.activeSocket ||
+            state.activeSocket
+                .readyState !==
+                page.WebSocket.OPEN ||
+            q('#cm-hist-corpo')
+        ) {
+            return;
+        }
+
+        state.marketFetch = {
+            page: 0,
+            batch:
+                new Map()
+        };
+
+        state.marketStatus =
+            'loading';
+
+        requestMarketHistoryPage();
+        queueRender();
+    }
+
+    function handleMarketHistory(
+        message
+    ) {
+        const fetch =
+            state.marketFetch;
+
+        if (
+            !fetch ||
+            Number(
+                message?.pagina ??
+                0
+            ) !==
+                fetch.page
+        ) {
+            return;
+        }
+
+        for (
+            const line of
+            message.linhas ||
+            []
+        ) {
+            processMarketSale(
+                line,
+                fetch.batch
+            );
+        }
+
+        if (
+            message.temMais &&
+            fetch.page + 1 <
+                MARKET_HISTORY_MAX_PAGES &&
+            !q('#cm-hist-corpo')
+        ) {
+            fetch.page++;
+            requestMarketHistoryPage();
+            return;
+        }
+
+        finalizeMarketFetch();
+    }
+
     function attachSocket(
         socket
     ) {
@@ -2044,6 +2448,17 @@
                 ) {
                     state.activeSocket =
                         null;
+
+                    if (
+                        state.marketFetch
+                    ) {
+                        state.marketFetch =
+                            null;
+                        state.marketStatus =
+                            state.marketValues.size
+                                ? 'cached'
+                                : 'idle';
+                    }
                 }
             }
         );
@@ -4560,6 +4975,145 @@
         return index;
     }
 
+    function marketKeyForSpecies(
+        species
+    ) {
+        const id =
+            Number(
+                species?.id
+            );
+
+        if (Number.isFinite(id)) {
+            return 'id:' + id;
+        }
+
+        const name =
+            normalize(
+                species?.name
+            );
+
+        return name
+            ? 'name:' + name
+            : null;
+    }
+
+    function marketStatsForSpecies(
+        species
+    ) {
+        const idKey =
+            Number.isFinite(
+                Number(
+                    species?.id
+                )
+            )
+                ? 'id:' +
+                    Number(
+                        species.id
+                    )
+                : null;
+
+        if (
+            idKey &&
+            state.marketValues.has(
+                idKey
+            )
+        ) {
+            return state.marketValues.get(
+                idKey
+            );
+        }
+
+        const nameKey =
+            'name:' +
+            normalize(
+                species?.name
+            );
+
+        return state.marketValues.get(
+            nameKey
+        ) || null;
+    }
+
+    function marketValueForSpecies(
+        species
+    ) {
+        return Number(
+            (
+                species?.market ||
+                marketStatsForSpecies(
+                    species
+                )
+            )?.average ||
+            0
+        );
+    }
+
+    function bestSpawnPercent(
+        species
+    ) {
+        return Math.max(
+            ...(
+                species?.hunts ||
+                []
+            ).map(
+                item =>
+                    Number(
+                        huntSpawnPercent(
+                            item
+                        ) ||
+                        0
+                    )
+            ),
+            0
+        );
+    }
+
+    function bestMatchupScore(
+        species
+    ) {
+        const matchup =
+            speciesMatchup(
+                species
+            );
+
+        if (
+            !matchup?.offense ||
+            !matchup?.defense
+        ) {
+            return -Infinity;
+        }
+
+        const deal =
+            Number(
+                matchup.offense
+                    .multiplier
+            );
+
+        const take =
+            Number(
+                matchup.defense
+                    .multiplier
+            );
+
+        if (
+            !Number.isFinite(deal) ||
+            !Number.isFinite(take)
+        ) {
+            return -Infinity;
+        }
+
+        const safety =
+            take === 0
+                ? 4
+                : 1 /
+                    Math.max(
+                        0.25,
+                        take
+                    );
+
+        return deal * safety;
+    }
+
     function regionOptions() {
         return [
             ...new Set(
@@ -4840,16 +5394,20 @@
                         species.id
                     ),
                 types,
-                hunts
+                hunts,
+                market:
+                    marketStatsForSpecies(
+                        species
+                    )
             });
         }
 
         result.sort(
             (a, b) => {
-                if (
-                    state.filters.sort ===
-                    'xp'
-                ) {
+                const sort =
+                    state.filters.sort;
+
+                if (sort === 'xp') {
                     const ax =
                         Math.max(
                             ...a.hunts.map(
@@ -4884,8 +5442,137 @@
                 }
 
                 if (
+                    sort ===
+                        'market_desc' ||
+                    sort ===
+                        'market_asc'
+                ) {
+                    const av =
+                        marketValueForSpecies(
+                            a
+                        );
+
+                    const bv =
+                        marketValueForSpecies(
+                            b
+                        );
+
+                    if (
+                        av > 0 ||
+                        bv > 0
+                    ) {
+                        if (av <= 0) {
+                            return 1;
+                        }
+
+                        if (bv <= 0) {
+                            return -1;
+                        }
+
+                        if (av !== bv) {
+                            return sort ===
+                                'market_desc'
+                                ? bv - av
+                                : av - bv;
+                        }
+                    }
+                }
+
+                if (
+                    sort ===
+                    'spawn_desc'
+                ) {
+                    const difference =
+                        bestSpawnPercent(
+                            b
+                        ) -
+                        bestSpawnPercent(
+                            a
+                        );
+
+                    if (difference) {
+                        return difference;
+                    }
+                }
+
+                if (
+                    sort ===
+                        'level_asc' ||
+                    sort ===
+                        'level_desc'
+                ) {
+                    const aLevel =
+                        Math.min(
+                            ...a.hunts.map(
+                                item =>
+                                    Number(
+                                        item.hunt
+                                            .nivel ||
+                                        Infinity
+                                    )
+                            )
+                        );
+
+                    const bLevel =
+                        Math.min(
+                            ...b.hunts.map(
+                                item =>
+                                    Number(
+                                        item.hunt
+                                            .nivel ||
+                                        Infinity
+                                    )
+                            )
+                        );
+
+                    if (aLevel !== bLevel) {
+                        return sort ===
+                            'level_desc'
+                            ? bLevel - aLevel
+                            : aLevel - bLevel;
+                    }
+                }
+
+                if (
+                    sort ===
+                    'matchup'
+                ) {
+                    const difference =
+                        bestMatchupScore(
+                            b
+                        ) -
+                        bestMatchupScore(
+                            a
+                        );
+
+                    if (
+                        Number.isFinite(
+                            difference
+                        ) &&
+                        difference
+                    ) {
+                        return difference;
+                    }
+                }
+
+                if (
+                    sort ===
+                    'pokedex'
+                ) {
+                    const difference =
+                        Number(a.id) -
+                        Number(b.id);
+
+                    if (difference) {
+                        return difference;
+                    }
+                }
+
+                if (
+                    sort !== 'name' &&
+                    sort !== 'pokedex' &&
                     a.captured !==
-                    b.captured
+                        b.captured
                 ) {
                     return a.captured
                         ? 1
@@ -5322,6 +6009,15 @@
                 white-space: nowrap;
             }
 
+            .mha-credit {
+                padding: 4px 8px 5px;
+                border-top: 1px solid rgba(255,255,255,.045);
+                color: #665e62;
+                font-size: 7px;
+                text-align: right;
+                user-select: text;
+            }
+
             .mha-body {
                 flex: 1;
                 min-height: 0;
@@ -5370,6 +6066,16 @@
                 background: rgba(235,178,74,.11);
                 color: #ffd27d;
                 font-size: 9px;
+                white-space: nowrap;
+            }
+
+            .mha-market {
+                padding: 2px 5px;
+                border: 1px solid rgba(236,198,98,.16);
+                border-radius: 999px;
+                background: rgba(236,198,98,.07);
+                color: #d8c58c;
+                font-size: 8px;
                 white-space: nowrap;
             }
 
@@ -5583,6 +6289,7 @@
 
                 ensureTypeData();
                 ensureCombatCatalog();
+                ensureMarketValues();
                 queueRender();
 
                 if (
@@ -5698,7 +6405,14 @@
                     <span>Sort</span>
                     <select data-mha-filter="sort">
                         <option value="xp">Best XP/hour</option>
-                        <option value="default">Pokédex order</option>
+                        <option value="market_desc">Market value · high first</option>
+                        <option value="market_asc">Market value · low first</option>
+                        <option value="matchup">Best matchup</option>
+                        <option value="spawn_desc">Highest encounter rate</option>
+                        <option value="level_asc">Lowest hunt level</option>
+                        <option value="level_desc">Highest hunt level</option>
+                        <option value="pokedex">Pokédex number</option>
+                        <option value="name">Name A–Z</option>
                     </select>
                 </label>
 
@@ -5716,6 +6430,10 @@
             </div>
 
             <div class="mha-body"></div>
+
+            <div class="mha-credit">
+                by MOTHblank · Pix and contact: (37) 99993-3376
+            </div>
         `;
 
         document.body.appendChild(
@@ -6073,6 +6791,32 @@
             matchup?.lead?.nome ||
             'Lead';
 
+        const market =
+            species.market;
+
+        const marketMarkup =
+            market?.count
+                ? `
+                    <span
+                        class="mha-market"
+                        title="${escapeHtml(
+                            'Recent non-shiny completed Market sales · ' +
+                            market.count +
+                            ' sample' +
+                            (market.count === 1 ? '' : 's') +
+                            ' · range ' +
+                            Math.round(market.min).toLocaleString() +
+                            '–' +
+                            Math.round(market.max).toLocaleString()
+                        )}"
+                    >Market ~${escapeHtml(
+                        formatRate(
+                            market.average
+                        )
+                    )}</span>
+                `
+                : '';
+
         const matchupMarkup =
             matchup
                 ? `
@@ -6192,6 +6936,7 @@
             <section class="mha-species">
                 <div class="mha-species-head">
                     <span class="mha-species-name">${escapeHtml(species.name)}</span>
+                    ${marketMarkup}
                     ${matchupMarkup}
                     ${typeMarkup}
                     ${capturedMarkup}
@@ -6558,9 +7303,16 @@
                     ? ' · type data unavailable'
                     : '';
 
+        const marketSuffix =
+            state.marketStatus ===
+                'loading'
+                ? ' · sampling Market prices'
+                : '';
+
         const statusText =
             state.status +
-            typeSuffix;
+            typeSuffix +
+            marketSuffix;
 
         if (
             status.textContent !==
@@ -6647,7 +7399,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.4.1 loaded'
+            '[PokéIdle Hunt Atlas] v1.5.0 loaded'
         );
     }
 
