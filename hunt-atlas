@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.6.1
+// @version      1.7.0
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -276,17 +276,16 @@
             'filter.uncaughtOnly': 'Uncaught only',
             'filter.caughtOnly': 'Caught only',
             'filter.sort': 'Sort',
-            'sort.xp': 'Best XP/hour',
-            'sort.npcDesc': 'NPC sell value · high first',
-            'sort.npcAsc': 'NPC sell value · low first',
-            'sort.playerDesc': 'Player Market · high first',
-            'sort.playerAsc': 'Player Market · low first',
-            'sort.matchup': 'Best matchup',
-            'sort.spawnDesc': 'Highest encounter rate',
-            'sort.levelAsc': 'Lowest hunt level',
-            'sort.levelDesc': 'Highest hunt level',
+            'sort.xp': 'XP/hour',
+            'sort.name': 'Name',
             'sort.pokedex': 'Pokédex number',
-            'sort.name': 'Name A–Z',
+            'sort.level': 'Level',
+            'sort.npc': 'MKT',
+            'sort.player': 'RMT',
+            'sort.matchup': 'Matchup',
+            'sort.spawn': 'Encounter rate',
+            'sort.asc': 'Ascending',
+            'sort.desc': 'Descending',
             'filter.clear': 'Clear filters',
             'filter.defaults': 'Default filters',
             'filter.changedOne': '1 filter changed from default',
@@ -300,10 +299,14 @@
             'capture.notCaught': 'not caught',
             'capture.typeUnknown': 'type ?',
             'common.lead': 'Lead',
-            'price.npc': 'NPC ~{value}',
-            'price.players': 'Players ~{value}',
-            'price.npcTip': 'NPC sale reference at the visible hunt level{plural} and quality 1.0{range} · actual captured Pokémon vary with quality; shiny ×10',
-            'price.playerTip': 'Recent non-shiny completed player Market sales · {count} {sample} · range {min}–{max}',
+            'price.npc': 'MKT ~{value}',
+            'price.npcMissing': 'MKT —',
+            'price.players': 'RMT ~{value}',
+            'price.playersMissing': 'RMT —',
+            'price.npcTip': 'MKT: NPC sale reference at the visible hunt level{plural} and quality 1.0{range} · actual captured Pokémon vary with quality; shiny ×10',
+            'price.npcMissingTip': 'MKT: NPC sell value is not available for this species yet.',
+            'price.playerTip': 'RMT: recent non-shiny completed player Market sales · {count} {sample} · range {min}–{max}',
+            'price.playerMissingTip': 'RMT: no recent completed player-Market sale was found in the sampled history.',
             'price.sample': 'sample',
             'price.samples': 'samples',
             'price.range': ' · range {min}–{max}',
@@ -344,7 +347,12 @@
             'xp.pokemonPerHour': '{value} Pokémon XP/h',
             'xp.measuredShort': 'measured {value} XP/h',
             'xp.modelShort': 'model {value} XP/h',
-            'xp.best': 'Best XP in current filters',
+            'xp.sectionTitle': 'XP/hour recommendations',
+            'xp.sectionSubtitle': 'Best hunt for {lead} within the current filters.',
+            'xp.best': 'Best: {hunt}',
+            'xp.showTopFive': 'Show top 5',
+            'xp.hideTopFive': 'Hide top 5',
+            'xp.topFiveTitle': 'Top 5 hunts by trainer XP/hour',
             'xp.measuredTrainer': 'measured {value} trainer XP/h',
             'xp.modeledTrainer': 'modeled {value} trainer XP/h',
             'xp.noEstimate': 'No unlocked XP estimate matches the current filters.',
@@ -421,17 +429,16 @@
             'filter.uncaughtOnly': 'Só não capturados',
             'filter.caughtOnly': 'Só capturados',
             'filter.sort': 'Ordenar',
-            'sort.xp': 'Melhor XP/hora',
-            'sort.npcDesc': 'Venda ao NPC · maior primeiro',
-            'sort.npcAsc': 'Venda ao NPC · menor primeiro',
-            'sort.playerDesc': 'Mercado de jogadores · maior primeiro',
-            'sort.playerAsc': 'Mercado de jogadores · menor primeiro',
-            'sort.matchup': 'Melhor matchup',
-            'sort.spawnDesc': 'Maior chance de encontro',
-            'sort.levelAsc': 'Menor nível de hunt',
-            'sort.levelDesc': 'Maior nível de hunt',
+            'sort.xp': 'XP/hora',
+            'sort.name': 'Nome',
             'sort.pokedex': 'Número da Pokédex',
-            'sort.name': 'Nome A–Z',
+            'sort.level': 'Nível',
+            'sort.npc': 'MKT',
+            'sort.player': 'RMT',
+            'sort.matchup': 'Matchup',
+            'sort.spawn': 'Taxa de encontro',
+            'sort.asc': 'Crescente',
+            'sort.desc': 'Decrescente',
             'filter.clear': 'Limpar filtros',
             'filter.defaults': 'Filtros padrão',
             'filter.changedOne': '1 filtro alterado',
@@ -445,10 +452,14 @@
             'capture.notCaught': 'não capturado',
             'capture.typeUnknown': 'tipo ?',
             'common.lead': 'Líder',
-            'price.npc': 'NPC ~{value}',
-            'price.players': 'Jogadores ~{value}',
-            'price.npcTip': 'Referência de venda ao NPC no{plural} nível{plural} de hunt visível{plural} e qualidade 1,0{range} · o valor real varia com a qualidade; shiny ×10',
-            'price.playerTip': 'Vendas recentes concluídas de Pokémon não shiny no Mercado de jogadores · {count} {sample} · faixa {min}–{max}',
+            'price.npc': 'MKT ~{value}',
+            'price.npcMissing': 'MKT —',
+            'price.players': 'RMT ~{value}',
+            'price.playersMissing': 'RMT —',
+            'price.npcTip': 'MKT: referência de venda ao NPC no{plural} nível{plural} de hunt visível{plural} e qualidade 1,0{range} · o valor real varia com a qualidade; shiny ×10',
+            'price.npcMissingTip': 'MKT: o valor de venda ao NPC ainda não está disponível para esta espécie.',
+            'price.playerTip': 'RMT: vendas recentes concluídas de Pokémon não shiny no Mercado de jogadores · {count} {sample} · faixa {min}–{max}',
+            'price.playerMissingTip': 'RMT: nenhuma venda recente concluída no Mercado de jogadores foi encontrada na amostra.',
             'price.sample': 'amostra',
             'price.samples': 'amostras',
             'price.range': ' · faixa {min}–{max}',
@@ -489,7 +500,12 @@
             'xp.pokemonPerHour': '{value} XP de Pokémon/h',
             'xp.measuredShort': 'medido {value} XP/h',
             'xp.modelShort': 'modelo {value} XP/h',
-            'xp.best': 'Melhor XP nos filtros atuais',
+            'xp.sectionTitle': 'Recomendações de XP/hora',
+            'xp.sectionSubtitle': 'Melhor hunt para {lead} dentro dos filtros atuais.',
+            'xp.best': 'Melhor: {hunt}',
+            'xp.showTopFive': 'Ver top 5',
+            'xp.hideTopFive': 'Ocultar top 5',
+            'xp.topFiveTitle': 'Top 5 hunts por XP de treinador/hora',
             'xp.measuredTrainer': 'medido {value} XP de treinador/h',
             'xp.modeledTrainer': 'modelado {value} XP de treinador/h',
             'xp.noEstimate': 'Nenhuma estimativa de XP liberada corresponde aos filtros atuais.',
@@ -719,7 +735,7 @@
             loadAtlasEnabled(),
         lastLocale: null,
         resultLimit: 120,
-        xpDetailsOpen: false,
+        xpDetailsOpen: true,
         mapObserver: null,
         mapSyncQueued: false,
         keyboardBound: false,
@@ -767,7 +783,8 @@
             weakness: 'all',
             availability: 'unlocked',
             captured: 'all',
-            sort: 'xp'
+            sort: 'xp',
+            sortDirection: 'desc'
         };
     }
 
@@ -776,14 +793,99 @@
             defaultFilters();
 
         try {
-            return {
-                ...defaults,
-                ...JSON.parse(
+            const saved =
+                JSON.parse(
                     localStorage.getItem(
                         FILTER_KEY
                     ) || '{}'
-                )
+                );
+
+            const next = {
+                ...defaults,
+                ...saved
             };
+
+            const legacySorts = {
+                npc_desc: [
+                    'npc',
+                    'desc'
+                ],
+                npc_asc: [
+                    'npc',
+                    'asc'
+                ],
+                player_market_desc: [
+                    'player_market',
+                    'desc'
+                ],
+                player_market_asc: [
+                    'player_market',
+                    'asc'
+                ],
+                market_desc: [
+                    'player_market',
+                    'desc'
+                ],
+                market_asc: [
+                    'player_market',
+                    'asc'
+                ],
+                default: [
+                    'pokedex',
+                    'asc'
+                ],
+                spawn_desc: [
+                    'spawn',
+                    'desc'
+                ],
+                level_desc: [
+                    'level',
+                    'desc'
+                ],
+                level_asc: [
+                    'level',
+                    'asc'
+                ]
+            };
+
+            if (
+                legacySorts[
+                    next.sort
+                ]
+            ) {
+                [
+                    next.sort,
+                    next.sortDirection
+                ] =
+                    legacySorts[
+                        next.sort
+                    ];
+            } else if (
+                saved.sortDirection ===
+                    undefined
+            ) {
+                next.sortDirection =
+                    (
+                        next.sort ===
+                            'name' ||
+                        next.sort ===
+                            'pokedex'
+                    )
+                        ? 'asc'
+                        : 'desc';
+            }
+
+            if (
+                next.sortDirection !==
+                    'asc' &&
+                next.sortDirection !==
+                    'desc'
+            ) {
+                next.sortDirection =
+                    defaults.sortDirection;
+            }
+
+            return next;
         } catch {
             return defaults;
         }
@@ -798,6 +900,7 @@
         ).filter(
             key =>
                 key !== 'sort' &&
+                key !== 'sortDirection' &&
                 String(
                     state.filters[key] ??
                     ''
@@ -6054,129 +6157,169 @@
                 const sort =
                     state.filters.sort;
 
-                if (sort === 'xp') {
-                    const ax =
-                        Math.max(
-                            ...a.hunts.map(
-                                item =>
-                                    Number(
-                                        huntXpEstimate(
-                                            item.hunt
-                                        )?.value ||
-                                        0
-                                    )
-                            ),
-                            0
-                        );
+                const direction =
+                    state.filters
+                        .sortDirection ===
+                    'asc'
+                        ? 1
+                        : -1;
 
-                    const bx =
-                        Math.max(
-                            ...b.hunts.map(
-                                item =>
-                                    Number(
-                                        huntXpEstimate(
-                                            item.hunt
-                                        )?.value ||
-                                        0
-                                    )
-                            ),
-                            0
-                        );
+                const compareNumbers =
+                    (
+                        av,
+                        bv,
+                        missingBottom =
+                            false
+                    ) => {
+                        const an =
+                            Number(av);
 
-                    if (ax !== bx) {
-                        return bx - ax;
-                    }
-                }
+                        const bn =
+                            Number(bv);
 
-                if (
-                    sort ===
-                        'npc_desc' ||
-                    sort ===
-                        'npc_asc'
-                ) {
-                    const av =
-                        npcSellValueForSpecies(
-                            a
-                        );
+                        const aMissing =
+                            !Number.isFinite(
+                                an
+                            ) ||
+                            (
+                                missingBottom &&
+                                an <= 0
+                            );
 
-                    const bv =
-                        npcSellValueForSpecies(
-                            b
-                        );
+                        const bMissing =
+                            !Number.isFinite(
+                                bn
+                            ) ||
+                            (
+                                missingBottom &&
+                                bn <= 0
+                            );
 
-                    if (av !== bv) {
-                        return sort ===
-                            'npc_desc'
-                            ? bv - av
-                            : av - bv;
-                    }
-                }
+                        if (
+                            aMissing &&
+                            bMissing
+                        ) {
+                            return 0;
+                        }
 
-                if (
-                    sort ===
-                        'player_market_desc' ||
-                    sort ===
-                        'player_market_asc'
-                ) {
-                    const av =
-                        playerMarketValueForSpecies(
-                            a
-                        );
-
-                    const bv =
-                        playerMarketValueForSpecies(
-                            b
-                        );
-
-                    if (
-                        av > 0 ||
-                        bv > 0
-                    ) {
-                        if (av <= 0) {
+                        if (aMissing) {
                             return 1;
                         }
 
-                        if (bv <= 0) {
+                        if (bMissing) {
                             return -1;
                         }
 
-                        if (av !== bv) {
-                            return sort ===
-                                'player_market_desc'
-                                ? bv - av
-                                : av - bv;
+                        if (an === bn) {
+                            return 0;
                         }
-                    }
-                }
 
-                if (
-                    sort ===
-                    'spawn_desc'
+                        return (
+                            an -
+                            bn
+                        ) * direction;
+                    };
+
+                let comparison = 0;
+
+                if (sort === 'name') {
+                    comparison =
+                        a.name.localeCompare(
+                            b.name,
+                            currentLocale(),
+                            {
+                                sensitivity:
+                                    'base'
+                            }
+                        ) *
+                        direction;
+                } else if (
+                    sort === 'pokedex'
                 ) {
-                    const difference =
-                        bestSpawnPercent(
-                            b
-                        ) -
-                        bestSpawnPercent(
-                            a
+                    comparison =
+                        compareNumbers(
+                            a.id,
+                            b.id
                         );
-
-                    if (difference) {
-                        return difference;
-                    }
-                }
-
-                if (
-                    sort ===
-                        'level_asc' ||
-                    sort ===
-                        'level_desc'
+                } else if (
+                    sort === 'xp'
                 ) {
-                    const levelValue =
+                    const value =
                         species =>
-                            sort ===
-                                'level_desc'
-                                ? Math.max(
+                            Math.max(
+                                ...species.hunts.map(
+                                    item =>
+                                        Number(
+                                            huntXpEstimate(
+                                                item.hunt
+                                            )?.value ||
+                                            0
+                                        )
+                                ),
+                                0
+                            );
+
+                    comparison =
+                        compareNumbers(
+                            value(a),
+                            value(b)
+                        );
+                } else if (
+                    sort === 'npc'
+                ) {
+                    comparison =
+                        compareNumbers(
+                            npcSellValueForSpecies(
+                                a
+                            ),
+                            npcSellValueForSpecies(
+                                b
+                            ),
+                            true
+                        );
+                } else if (
+                    sort ===
+                    'player_market'
+                ) {
+                    comparison =
+                        compareNumbers(
+                            playerMarketValueForSpecies(
+                                a
+                            ),
+                            playerMarketValueForSpecies(
+                                b
+                            ),
+                            true
+                        );
+                } else if (
+                    sort === 'spawn'
+                ) {
+                    comparison =
+                        compareNumbers(
+                            bestSpawnPercent(
+                                a
+                            ),
+                            bestSpawnPercent(
+                                b
+                            )
+                        );
+                } else if (
+                    sort === 'level'
+                ) {
+                    const value =
+                        species =>
+                            direction > 0
+                                ? Math.min(
+                                    ...species.hunts.map(
+                                        item =>
+                                            Number(
+                                                item.hunt
+                                                    .nivel ||
+                                                Infinity
+                                            )
+                                    )
+                                )
+                                : Math.max(
                                     ...species.hunts.map(
                                         item =>
                                             Number(
@@ -6186,84 +6329,38 @@
                                             )
                                     ),
                                     0
-                                )
-                                : Math.min(
-                                    ...species.hunts.map(
-                                        item =>
-                                            Number(
-                                                item.hunt
-                                                    .nivel ||
-                                                Infinity
-                                            )
-                                    )
                                 );
 
-                    const aLevel =
-                        levelValue(
-                            a
+                    comparison =
+                        compareNumbers(
+                            value(a),
+                            value(b)
                         );
-
-                    const bLevel =
-                        levelValue(
-                            b
+                } else if (
+                    sort === 'matchup'
+                ) {
+                    comparison =
+                        compareNumbers(
+                            bestMatchupScore(
+                                a
+                            ),
+                            bestMatchupScore(
+                                b
+                            )
                         );
-
-                    if (aLevel !== bLevel) {
-                        return sort ===
-                            'level_desc'
-                            ? bLevel - aLevel
-                            : aLevel - bLevel;
-                    }
                 }
 
-                if (
-                    sort ===
-                    'matchup'
-                ) {
-                    const difference =
-                        bestMatchupScore(
-                            b
-                        ) -
-                        bestMatchupScore(
-                            a
-                        );
-
-                    if (
-                        Number.isFinite(
-                            difference
-                        ) &&
-                        difference
-                    ) {
-                        return difference;
-                    }
-                }
-
-                if (
-                    sort ===
-                    'pokedex'
-                ) {
-                    const difference =
-                        Number(a.id) -
-                        Number(b.id);
-
-                    if (difference) {
-                        return difference;
-                    }
-                }
-
-                if (
-                    sort !== 'name' &&
-                    sort !== 'pokedex' &&
-                    a.captured !==
-                        b.captured
-                ) {
-                    return a.captured
-                        ? 1
-                        : -1;
+                if (comparison) {
+                    return comparison;
                 }
 
                 return a.name.localeCompare(
-                    b.name
+                    b.name,
+                    currentLocale(),
+                    {
+                        sensitivity:
+                            'base'
+                    }
                 );
             }
         );
@@ -6520,10 +6617,6 @@
                 font: 11px/1.35 system-ui,sans-serif !important;
             }
 
-            #${DRAWER_ID} .mha-head {
-                display: none !important;
-            }
-
             #${DRAWER_ID}[hidden] {
                 display: none !important;
             }
@@ -6536,15 +6629,21 @@
             .mha-head {
                 display: flex;
                 align-items: center;
-                gap: 7px;
-                min-height: 42px;
-                padding: 7px 9px;
+                gap: 9px;
+                min-height: 38px;
+                padding: 6px 10px;
                 border-bottom: 1px solid rgba(255,255,255,.08);
+                background: rgba(255,255,255,.018);
             }
 
             .mha-head strong {
-                flex: 1;
-                font-size: 12px;
+                flex: 0 0 auto;
+                font-size: 13px;
+                white-space: nowrap;
+            }
+
+            .mha-head [data-mha-close] {
+                display: none !important;
             }
 
             .mha-head button,
@@ -6586,7 +6685,8 @@
 
             .mha-filters input,
             .mha-filters select,
-            .mha-filter-actions button {
+            .mha-filter-actions button,
+            .mha-sort-control button {
                 width: 100%;
                 min-width: 0;
                 height: 30px;
@@ -6607,6 +6707,21 @@
                 grid-template-columns: 1fr auto 1fr;
                 align-items: center;
                 gap: 4px;
+            }
+
+            .mha-sort-control {
+                display: grid;
+                grid-template-columns: minmax(0,1fr) 31px;
+                gap: 4px;
+            }
+
+            .mha-sort-dir {
+                width: 31px !important;
+                padding: 0 !important;
+                cursor: pointer;
+                font-size: 15px !important;
+                font-weight: 800 !important;
+                line-height: 1 !important;
             }
 
             .mha-level-inputs > span {
@@ -6644,9 +6759,30 @@
             }
 
             .mha-xp-summary {
-                padding: 7px 8px;
+                padding: 8px 10px;
                 border-bottom: 1px solid rgba(255,255,255,.07);
                 background: rgba(102,176,255,.055);
+            }
+
+            .mha-xp-heading {
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+                margin-bottom: 6px;
+            }
+
+            .mha-xp-heading strong {
+                color: #e8e1e4;
+                font-size: 11px;
+            }
+
+            .mha-xp-heading span {
+                min-width: 0;
+                overflow: hidden;
+                color: #93898e;
+                font-size: 8px;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
             .mha-xp-primary {
@@ -6694,10 +6830,18 @@
                 display: none;
             }
 
+            .mha-xp-list-title {
+                margin-bottom: 4px;
+                color: #b9d8fb;
+                font-size: 9px;
+                font-weight: 750;
+            }
+
             .mha-best-list {
                 display: grid;
                 gap: 3px;
-                margin-top: 6px;
+                margin-top: 0;
+                margin-bottom: 6px;
             }
 
             .mha-best-row {
@@ -6751,44 +6895,47 @@
             .mha-credit {
                 display: flex;
                 align-items: center;
-                justify-content: flex-end;
                 gap: 5px;
-                padding: 4px 8px 5px;
-                border-top: 1px solid rgba(255,255,255,.045);
-                color: #665e62;
-                font-size: 7px;
+                min-width: 0;
+                color: #8f858a;
+                font-size: 8px;
+                white-space: nowrap;
+            }
+
+            .mha-head .mha-credit {
+                margin-right: auto;
             }
 
             .mha-credit a {
-                color: #776d72;
+                color: #9c9196;
                 text-decoration: none;
             }
 
             .mha-credit a:hover,
             .mha-credit a:focus-visible {
-                color: #b8adb2;
+                color: #d2c7cc;
                 text-decoration: underline;
             }
 
             .mha-credit-icon {
                 display: inline-grid;
-                width: 16px;
-                height: 16px;
+                width: 18px;
+                height: 18px;
                 place-items: center;
-                border: 1px solid rgba(255,255,255,.08);
+                border: 1px solid rgba(255,255,255,.11);
                 border-radius: 50%;
-                color: #857a80;
+                color: #a1979c;
                 text-decoration: none !important;
             }
 
             .mha-credit-icon svg {
-                width: 10px;
-                height: 10px;
+                width: 11px;
+                height: 11px;
                 fill: currentColor;
             }
 
             .mha-credit-sep {
-                color: #50494d;
+                color: #62595e;
             }
 
             .mha-body {
@@ -7033,8 +7180,13 @@
                     padding: 0;
                 }
 
-                .mha-credit {
-                    justify-content: center;
+                .mha-head {
+                    gap: 6px;
+                    overflow-x: auto;
+                }
+
+                .mha-head .mha-credit {
+                    justify-content: flex-start;
                 }
             }
         `;
@@ -7379,6 +7531,56 @@
         drawer.innerHTML = `
             <div class="mha-head">
                 <strong>${tr('title')}</strong>
+                <div class="mha-credit">
+                    <span>${tr('footer.by')}</span>
+
+                    <a
+                        class="mha-credit-icon"
+                        href="https://play.google.com/store/apps/developer?id=MOTHblank"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="${escapeHtml(tr('footer.play'))}"
+                        aria-label="${escapeHtml(tr('footer.play'))}"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M3.7 2.7c-.45.48-.7 1.2-.7 2.1v14.4c0 .9.25 1.62.7 2.1l.08.08L12.9 12 3.78 2.62l-.08.08Zm10.42 10.52-2.05-2.1L4.7 3.55c.17-.03.36-.01.57.1l11.7 6.65-2.85 2.92Zm-9.42 7.23 7.38-7.57 2.04-2.1 2.9 2.95-11.75 6.62c-.2.11-.4.13-.57.1Zm13.72-7.43-1.98-1.12 1.98-2.02c.95.54 1.48 1.08 1.48 1.57 0 .5-.53 1.03-1.48 1.57Z"/>
+                        </svg>
+                    </a>
+
+                    <a
+                        class="mha-credit-icon"
+                        href="https://x.com/MOTHblank"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="${escapeHtml(tr('footer.x'))}"
+                        aria-label="${escapeHtml(tr('footer.x'))}"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M18.9 2H22l-6.77 7.74L23.2 22h-6.24l-4.89-6.39L6.48 22H3.36l7.25-8.29L2.96 2H9.36l4.42 5.84L18.9 2Zm-1.1 17.84h1.72L8.42 4.05H6.57L17.8 19.84Z"/>
+                        </svg>
+                    </a>
+
+                    <a
+                        class="mha-credit-icon"
+                        href="https://wa.me/+5537999933376"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="${escapeHtml(tr('footer.whatsapp'))}"
+                        aria-label="${escapeHtml(tr('footer.whatsapp'))}"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 2a9.8 9.8 0 0 0-8.43 14.8L2 22l5.35-1.52A9.95 9.95 0 1 0 12 2Zm0 17.94a8 8 0 0 1-4.08-1.12l-.29-.17-3.18.9.86-3.1-.19-.3A7.9 7.9 0 1 1 12 19.94Zm4.35-5.9c-.24-.12-1.4-.69-1.62-.77-.22-.08-.38-.12-.54.12-.16.24-.62.77-.76.93-.14.16-.28.18-.52.06-.24-.12-1-.37-1.91-1.18-.7-.63-1.18-1.41-1.32-1.65-.14-.24-.02-.37.1-.49.11-.11.24-.28.36-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.54-1.3-.74-1.78-.2-.47-.39-.4-.54-.41h-.46c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.32.98 2.48c.12.16 1.69 2.58 4.1 3.62.57.25 1.02.4 1.37.51.58.18 1.1.16 1.51.1.46-.07 1.4-.57 1.6-1.13.2-.55.2-1.03.14-1.13-.06-.1-.22-.16-.46-.28Z"/>
+                        </svg>
+                    </a>
+
+                    <span class="mha-credit-sep">·</span>
+
+                    <a
+                        href="https://github.com/MOTHblank/pokeidle-huntatlas"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >${tr('footer.source')}</a>
+                </div>
                 <button type="button" data-mha-close>×</button>
             </div>
 
@@ -7432,19 +7634,24 @@
 
                 <label class="mha-field">
                     <span>${tr('filter.sort')}</span>
-                    <select data-mha-filter="sort">
-                        <option value="xp">${tr('sort.xp')}</option>
-                        <option value="npc_desc">${tr('sort.npcDesc')}</option>
-                        <option value="npc_asc">${tr('sort.npcAsc')}</option>
-                        <option value="player_market_desc">${tr('sort.playerDesc')}</option>
-                        <option value="player_market_asc">${tr('sort.playerAsc')}</option>
-                        <option value="matchup">${tr('sort.matchup')}</option>
-                        <option value="spawn_desc">${tr('sort.spawnDesc')}</option>
-                        <option value="level_asc">${tr('sort.levelAsc')}</option>
-                        <option value="level_desc">${tr('sort.levelDesc')}</option>
-                        <option value="pokedex">${tr('sort.pokedex')}</option>
-                        <option value="name">${tr('sort.name')}</option>
-                    </select>
+                    <div class="mha-sort-control">
+                        <select data-mha-filter="sort">
+                            <option value="xp">${tr('sort.xp')}</option>
+                            <option value="name">${tr('sort.name')}</option>
+                            <option value="pokedex">${tr('sort.pokedex')}</option>
+                            <option value="level">${tr('sort.level')}</option>
+                            <option value="npc">${tr('sort.npc')}</option>
+                            <option value="player_market">${tr('sort.player')}</option>
+                            <option value="matchup">${tr('sort.matchup')}</option>
+                            <option value="spawn">${tr('sort.spawn')}</option>
+                        </select>
+
+                        <button
+                            type="button"
+                            class="mha-sort-dir"
+                            data-mha-sort-dir
+                        ></button>
+                    </div>
                 </label>
 
                 <div class="mha-filter-actions">
@@ -7462,56 +7669,7 @@
 
             <div class="mha-body"></div>
 
-            <div class="mha-credit">
-                <span>${tr('footer.by')}</span>
 
-                <a
-                    class="mha-credit-icon"
-                    href="https://play.google.com/store/apps/developer?id=MOTHblank"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="${escapeHtml(tr('footer.play'))}"
-                    aria-label="${escapeHtml(tr('footer.play'))}"
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M3.7 2.7c-.45.48-.7 1.2-.7 2.1v14.4c0 .9.25 1.62.7 2.1l.08.08L12.9 12 3.78 2.62l-.08.08Zm10.42 10.52-2.05-2.1L4.7 3.55c.17-.03.36-.01.57.1l11.7 6.65-2.85 2.92Zm-9.42 7.23 7.38-7.57 2.04-2.1 2.9 2.95-11.75 6.62c-.2.11-.4.13-.57.1Zm13.72-7.43-1.98-1.12 1.98-2.02c.95.54 1.48 1.08 1.48 1.57 0 .5-.53 1.03-1.48 1.57Z"/>
-                    </svg>
-                </a>
-
-                <a
-                    class="mha-credit-icon"
-                    href="https://x.com/MOTHblank"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="${escapeHtml(tr('footer.x'))}"
-                    aria-label="${escapeHtml(tr('footer.x'))}"
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M18.9 2H22l-6.77 7.74L23.2 22h-6.24l-4.89-6.39L6.48 22H3.36l7.25-8.29L2.96 2H9.36l4.42 5.84L18.9 2Zm-1.1 17.84h1.72L8.42 4.05H6.57L17.8 19.84Z"/>
-                    </svg>
-                </a>
-
-                <a
-                    class="mha-credit-icon"
-                    href="https://wa.me/+5537999933376"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="${escapeHtml(tr('footer.whatsapp'))}"
-                    aria-label="${escapeHtml(tr('footer.whatsapp'))}"
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M12 2a9.8 9.8 0 0 0-8.43 14.8L2 22l5.35-1.52A9.95 9.95 0 1 0 12 2Zm0 17.94a8 8 0 0 1-4.08-1.12l-.29-.17-3.18.9.86-3.1-.19-.3A7.9 7.9 0 1 1 12 19.94Zm4.35-5.9c-.24-.12-1.4-.69-1.62-.77-.22-.08-.38-.12-.54.12-.16.24-.62.77-.76.93-.14.16-.28.18-.52.06-.24-.12-1-.37-1.91-1.18-.7-.63-1.18-1.41-1.32-1.65-.14-.24-.02-.37.1-.49.11-.11.24-.28.36-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.54-1.3-.74-1.78-.2-.47-.39-.4-.54-.41h-.46c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.32.98 2.48c.12.16 1.69 2.58 4.1 3.62.57.25 1.02.4 1.37.51.58.18 1.1.16 1.51.1.46-.07 1.4-.57 1.6-1.13.2-.55.2-1.03.14-1.13-.06-.1-.22-.16-.46-.28Z"/>
-                    </svg>
-                </a>
-
-                <span class="mha-credit-sep">·</span>
-
-                <a
-                    href="https://github.com/MOTHblank/pokeidle-huntatlas"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >${tr('footer.source')}</a>
-            </div>
         `;
 
         modalBody.appendChild(
@@ -7540,9 +7698,14 @@
                 const sort =
                     state.filters.sort;
 
+                const sortDirection =
+                    state.filters
+                        .sortDirection;
+
                 state.filters = {
                     ...defaultFilters(),
-                    sort
+                    sort,
+                    sortDirection
                 };
                 state.resultLimit =
                     120;
@@ -7592,6 +7755,28 @@
                 }
             );
         }
+
+        q(
+            '[data-mha-sort-dir]',
+            drawer
+        )?.addEventListener(
+            'click',
+            () => {
+                state.filters
+                    .sortDirection =
+                    state.filters
+                        .sortDirection ===
+                    'asc'
+                        ? 'desc'
+                        : 'asc';
+
+                state.resultLimit =
+                    120;
+
+                saveFilters();
+                renderDrawer();
+            }
+        );
 
         for (
             const control of
@@ -7806,6 +7991,36 @@
             }
         }
 
+        const sortDirection =
+            q(
+                '[data-mha-sort-dir]',
+                drawer
+            );
+
+        if (sortDirection) {
+            const ascending =
+                state.filters
+                    .sortDirection ===
+                'asc';
+
+            sortDirection.textContent =
+                ascending
+                    ? '↑'
+                    : '↓';
+
+            sortDirection.title =
+                tr(
+                    ascending
+                        ? 'sort.asc'
+                        : 'sort.desc'
+                );
+
+            sortDirection.setAttribute(
+                'aria-label',
+                sortDirection.title
+            );
+        }
+
         const activeCount =
             activeFilterCount();
 
@@ -7933,12 +8148,12 @@
                 : '';
 
         const npcMarkup =
-            npcStats?.average > 0
-                ? `
-                    <span
-                        class="mha-npc-value"
-                        title="${escapeHtml(
-                            tr(
+            `
+                <span
+                    class="mha-npc-value"
+                    title="${escapeHtml(
+                        npcStats?.average > 0
+                            ? tr(
                                 'price.npcTip',
                                 {
                                     plural:
@@ -7949,9 +8164,13 @@
                                         npcRange
                                 }
                             )
-                        )}"
-                    >${escapeHtml(
-                        tr(
+                            : tr(
+                                'price.npcMissingTip'
+                            )
+                    )}"
+                >${escapeHtml(
+                    npcStats?.average > 0
+                        ? tr(
                             'price.npc',
                             {
                                 value:
@@ -7960,20 +8179,22 @@
                                     )
                             }
                         )
-                    )}</span>
-                `
-                : '';
+                        : tr(
+                            'price.npcMissing'
+                        )
+                )}</span>
+            `;
 
         const market =
             species.market;
 
         const marketMarkup =
-            market?.count
-                ? `
-                    <span
-                        class="mha-market"
-                        title="${escapeHtml(
-                            tr(
+            `
+                <span
+                    class="mha-market"
+                    title="${escapeHtml(
+                        market?.count
+                            ? tr(
                                 'price.playerTip',
                                 {
                                     count:
@@ -7998,9 +8219,13 @@
                                         )
                                 }
                             )
-                        )}"
-                    >${escapeHtml(
-                        tr(
+                            : tr(
+                                'price.playerMissingTip'
+                            )
+                    )}"
+                >${escapeHtml(
+                    market?.count
+                        ? tr(
                             'price.players',
                             {
                                 value:
@@ -8009,9 +8234,11 @@
                                     )
                             }
                         )
-                    )}</span>
-                `
-                : '';
+                        : tr(
+                            'price.playersMissing'
+                        )
+                )}</span>
+            `;
 
         const matchupMarkup =
             matchup
@@ -8450,12 +8677,36 @@
             state.currentHuntSlug;
 
         host.innerHTML = `
+            <div class="mha-xp-heading">
+                <strong>${escapeHtml(
+                    tr(
+                        'xp.sectionTitle'
+                    )
+                )}</strong>
+                <span>${escapeHtml(
+                    tr(
+                        'xp.sectionSubtitle',
+                        {
+                            lead:
+                                lead.nome ||
+                                'Pokémon'
+                        }
+                    )
+                )}</span>
+            </div>
+
             <div class="mha-xp-primary">
                 <div class="mha-xp-primary-main">
                     <strong>${best
                         ? escapeHtml(
-                            best.hunt.nome ||
-                            best.hunt.slug
+                            tr(
+                                'xp.best',
+                                {
+                                    hunt:
+                                        best.hunt.nome ||
+                                        best.hunt.slug
+                                }
+                            )
                         ) +
                           ' · ' +
                           escapeHtml(
@@ -8472,7 +8723,7 @@
                           )
                         : escapeHtml(
                             tr(
-                                'xp.best'
+                                'xp.noEstimate'
                             )
                         )}</strong>
                     <span>${best
@@ -8489,11 +8740,7 @@
                                 }
                             )
                         )
-                        : escapeHtml(
-                            tr(
-                                'xp.noEstimate'
-                            )
-                        )}</span>
+                        : ''}</span>
                 </div>
 
                 ${best ? `
@@ -8512,27 +8759,28 @@
                 <button type="button" class="mha-xp-toggle" data-mha-xp-toggle>
                     ${tr(
                         state.xpDetailsOpen
-                            ? 'xp.hideDetails'
-                            : 'xp.details'
+                            ? 'xp.hideTopFive'
+                            : 'xp.showTopFive'
                     )}
                 </button>
             </div>
 
-            <div class="mha-xp-note">
-                ${escapeHtml(
-                    tr(
-                        'xp.recommendationNote',
-                        {
-                            lead:
-                                leadText
-                        }
-                    )
-                )}
-            </div>
-
             <div class="mha-xp-details" ${state.xpDetailsOpen ? '' : 'hidden'}>
+                <div class="mha-xp-list-title">
+                    ${escapeHtml(
+                        tr(
+                            'xp.topFiveTitle'
+                        )
+                    )}
+                </div>
+
+                <div class="mha-best-list">
+                    ${bestRows}
+                </div>
+
                 <div class="mha-xp-note">
-                    ${escapeHtml(calibrationText)}
+                    ${escapeHtml(leadText)}
+                    · ${escapeHtml(calibrationText)}
                     ${currentXp?.value
                         ? escapeHtml(
                             tr(
@@ -8553,10 +8801,6 @@
                             'xp.modelNote'
                         )
                     )}
-                </div>
-
-                <div class="mha-best-list">
-                    ${bestRows}
                 </div>
             </div>
         `;
