@@ -4919,6 +4919,11 @@
                 cursor: pointer;
             }
 
+            .mha-filter-actions button:disabled {
+                cursor: default;
+                opacity: .45;
+            }
+
             .mha-xp-summary {
                 padding: 7px 8px;
                 border-bottom: 1px solid rgba(255,255,255,.07);
@@ -5410,8 +5415,13 @@
         ).addEventListener(
             'click',
             () => {
-                state.filters =
-                    defaultFilters();
+                const sort =
+                    state.filters.sort;
+
+                state.filters = {
+                    ...defaultFilters(),
+                    sort
+                };
                 state.resultLimit =
                     120;
                 saveFilters();
