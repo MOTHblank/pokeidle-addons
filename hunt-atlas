@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.6.0
+// @version      1.6.1
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -32,6 +32,9 @@
 
     const FILTER_KEY =
         'moth-pokeidle-hunt-atlas-filters-v2';
+
+    const ENABLED_KEY =
+        'moth-pokeidle-hunt-atlas-enabled-v1';
 
     const PERF_KEY =
         'moth-pokeidle-hunt-atlas-performance-v2';
@@ -241,6 +244,425 @@
         }
     };
 
+
+    const TEXT = {
+        en: {
+            'title': 'Hunt Atlas',
+            'toggle.on': 'Atlas on',
+            'toggle.off': 'Atlas off',
+            'toggle.onTitle': 'Hunt Atlas is replacing the native map. Click to use PokéIdle’s map.',
+            'toggle.offTitle': 'PokéIdle’s native map is active. Click to enable Hunt Atlas.',
+            'filter.search': 'Search',
+            'filter.searchPlaceholder': 'Pokémon, hunt or region…',
+            'filter.region': 'Region',
+            'filter.allRegions': 'All regions',
+            'filter.level': 'Level',
+            'filter.min': 'Min',
+            'filter.max': 'Max',
+            'filter.minLevelAria': 'Minimum hunt level',
+            'filter.maxLevelAria': 'Maximum hunt level',
+            'filter.availability': 'Availability',
+            'filter.all': 'All',
+            'filter.unlocked': 'Unlocked',
+            'filter.locked': 'Locked',
+            'filter.type': 'Type',
+            'filter.allTypes': 'All types',
+            'filter.typeLoading': 'Type: loading…',
+            'filter.weakTo': 'Weak to',
+            'filter.anyWeakness': 'Any weakness',
+            'filter.weaknessLoading': 'Weakness: loading…',
+            'filter.collection': 'Collection',
+            'filter.caughtAndUncaught': 'Caught + uncaught',
+            'filter.uncaughtOnly': 'Uncaught only',
+            'filter.caughtOnly': 'Caught only',
+            'filter.sort': 'Sort',
+            'sort.xp': 'Best XP/hour',
+            'sort.npcDesc': 'NPC sell value · high first',
+            'sort.npcAsc': 'NPC sell value · low first',
+            'sort.playerDesc': 'Player Market · high first',
+            'sort.playerAsc': 'Player Market · low first',
+            'sort.matchup': 'Best matchup',
+            'sort.spawnDesc': 'Highest encounter rate',
+            'sort.levelAsc': 'Lowest hunt level',
+            'sort.levelDesc': 'Highest hunt level',
+            'sort.pokedex': 'Pokédex number',
+            'sort.name': 'Name A–Z',
+            'filter.clear': 'Clear filters',
+            'filter.defaults': 'Default filters',
+            'filter.changedOne': '1 filter changed from default',
+            'filter.changedMany': '{count} filters changed from default',
+            'footer.by': 'by MOTHblank',
+            'footer.play': 'MOTHblank on Google Play',
+            'footer.x': 'MOTHblank on X',
+            'footer.whatsapp': 'WhatsApp / Pix',
+            'footer.source': 'source code',
+            'capture.caught': 'caught',
+            'capture.notCaught': 'not caught',
+            'capture.typeUnknown': 'type ?',
+            'common.lead': 'Lead',
+            'price.npc': 'NPC ~{value}',
+            'price.players': 'Players ~{value}',
+            'price.npcTip': 'NPC sale reference at the visible hunt level{plural} and quality 1.0{range} · actual captured Pokémon vary with quality; shiny ×10',
+            'price.playerTip': 'Recent non-shiny completed player Market sales · {count} {sample} · range {min}–{max}',
+            'price.sample': 'sample',
+            'price.samples': 'samples',
+            'price.range': ' · range {min}–{max}',
+            'matchup.immune': 'immune',
+            'matchup.weak': 'weak',
+            'matchup.resists': 'resists',
+            'matchup.neutral': 'neutral',
+            'matchup.deal': 'Deal {multiplier} · {relation}',
+            'matchup.take': 'Take {multiplier} · {relation}',
+            'matchup.dealTitle': '{lead}’s best known attack type ({type}) vs {species}: {multiplier}.',
+            'matchup.takeTitle': '{species}’s best STAB type ({type}) vs {lead}: {multiplier}.',
+            'hunt.level': 'Lv {level}',
+            'hunt.weight': '~{value}% weight',
+            'hunt.unlocked': 'unlocked',
+            'hunt.locked': 'locked',
+            'hunt.here': 'Here',
+            'hunt.go': 'Go',
+            'hunt.requiresLevel': 'Requires level {level}',
+            'hunt.current': 'Current hunt',
+            'hunt.travel': 'Travel to this hunt',
+            'hunt.measuredXp': 'measured {value} trainer XP/h',
+            'hunt.modeledXp': 'combat model {value} trainer XP/h',
+            'xp.waitingLead': 'Waiting for the active Pokémon before calculating trainer XP/hour.',
+            'xp.lead': '{name} Lv {level} · lead · power {power}',
+            'xp.warmStart': 'warm-started from nearest level',
+            'xp.kills': '{count} kills',
+            'xp.attacks': '{count} attacks',
+            'xp.cadence': '{seconds}s attack cadence{detail}',
+            'xp.throughput': ' (attack throughput)',
+            'xp.floor': ' (900ms floor)',
+            'xp.travel': '{seconds}s travel',
+            'xp.hpSamples': '{count} HP samples',
+            'xp.measuredHunt': '{count} measured hunt',
+            'xp.measuredHunts': '{count} measured hunts',
+            'xp.calibrating': 'combat model calibrating',
+            'xp.learning': 'learning this lead Pokémon: waiting for real attack and kill events',
+            'xp.killsPerHour': '{count} kills/h',
+            'xp.pokemonPerHour': '{value} Pokémon XP/h',
+            'xp.measuredShort': 'measured {value} XP/h',
+            'xp.modelShort': 'model {value} XP/h',
+            'xp.best': 'Best XP in current filters',
+            'xp.measuredTrainer': 'measured {value} trainer XP/h',
+            'xp.modeledTrainer': 'modeled {value} trainer XP/h',
+            'xp.noEstimate': 'No unlocked XP estimate matches the current filters.',
+            'xp.details': 'Details',
+            'xp.hideDetails': 'Hide details',
+            'xp.recommendationNote': '{lead} · recommendations respect the current Atlas filters.',
+            'xp.currentMeasured': ' · current measured {value} trainer XP/h',
+            'xp.currentModeled': ' · current modeled {value} trainer XP/h',
+            'xp.modelNote': ' · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon’s real combat.',
+            'results.showMore': 'Show more · {count} Pokémon remaining',
+            'results.noMatch': 'No Pokémon match these filters. Use Clear filters to reset the Atlas.',
+            'results.waiting': 'Waiting for PokéIdle hunt data. Reload the page once after installing Hunt Atlas if this remains empty.',
+            'results.count': '{pokemon} Pokémon · {hunts} hunts',
+            'results.countPartial': '{shown}/{pokemon} Pokémon · {hunts} hunts',
+            'status.waitingGameData': 'Waiting for game data…',
+            'status.cachedCatalog': 'Using cached hunt catalog until live state arrives.',
+            'status.entered': 'Entered {hunt}.',
+            'status.huntsLoaded': '{count} hunt regions loaded.',
+            'status.gameNotReady': 'Game connection is not ready yet.',
+            'status.traveling': 'Traveling to {hunt}…',
+            'status.notAccepted': 'PokéIdle did not accept {hunt}. It may still be locked or hunt switching may be on cooldown.',
+            'status.couldNotSend': 'Could not send hunt selection.',
+            'status.huntLocked': '{hunt} is locked — requires level {level}.',
+            'status.alreadyHere': 'Already hunting in {hunt}.',
+            'status.loadingTypes': ' · loading type data',
+            'status.typesUnavailable': ' · type data unavailable',
+            'status.marketSampling': ' · sampling Market prices',
+            'type.NORMAL': 'Normal',
+            'type.FIRE': 'Fire',
+            'type.WATER': 'Water',
+            'type.ELECTRIC': 'Electric',
+            'type.GRASS': 'Grass',
+            'type.ICE': 'Ice',
+            'type.FIGHTING': 'Fighting',
+            'type.POISON': 'Poison',
+            'type.GROUND': 'Ground',
+            'type.FLYING': 'Flying',
+            'type.PSYCHIC': 'Psychic',
+            'type.BUG': 'Bug',
+            'type.ROCK': 'Rock',
+            'type.GHOST': 'Ghost',
+            'type.DRAGON': 'Dragon',
+            'type.DARK': 'Dark',
+            'type.STEEL': 'Steel',
+            'type.FAIRY': 'Fairy'
+        },
+        'pt-BR': {
+            'title': 'Hunt Atlas',
+            'toggle.on': 'Atlas ligado',
+            'toggle.off': 'Atlas desligado',
+            'toggle.onTitle': 'O Hunt Atlas está substituindo o mapa padrão. Clique para usar o mapa do PokéIdle.',
+            'toggle.offTitle': 'O mapa padrão do PokéIdle está ativo. Clique para ativar o Hunt Atlas.',
+            'filter.search': 'Buscar',
+            'filter.searchPlaceholder': 'Pokémon, hunt ou região…',
+            'filter.region': 'Região',
+            'filter.allRegions': 'Todas as regiões',
+            'filter.level': 'Nível',
+            'filter.min': 'Mín.',
+            'filter.max': 'Máx.',
+            'filter.minLevelAria': 'Nível mínimo da hunt',
+            'filter.maxLevelAria': 'Nível máximo da hunt',
+            'filter.availability': 'Disponibilidade',
+            'filter.all': 'Todas',
+            'filter.unlocked': 'Liberadas',
+            'filter.locked': 'Bloqueadas',
+            'filter.type': 'Tipo',
+            'filter.allTypes': 'Todos os tipos',
+            'filter.typeLoading': 'Tipo: carregando…',
+            'filter.weakTo': 'Fraco contra',
+            'filter.anyWeakness': 'Qualquer fraqueza',
+            'filter.weaknessLoading': 'Fraqueza: carregando…',
+            'filter.collection': 'Coleção',
+            'filter.caughtAndUncaught': 'Capturados + não capturados',
+            'filter.uncaughtOnly': 'Só não capturados',
+            'filter.caughtOnly': 'Só capturados',
+            'filter.sort': 'Ordenar',
+            'sort.xp': 'Melhor XP/hora',
+            'sort.npcDesc': 'Venda ao NPC · maior primeiro',
+            'sort.npcAsc': 'Venda ao NPC · menor primeiro',
+            'sort.playerDesc': 'Mercado de jogadores · maior primeiro',
+            'sort.playerAsc': 'Mercado de jogadores · menor primeiro',
+            'sort.matchup': 'Melhor matchup',
+            'sort.spawnDesc': 'Maior chance de encontro',
+            'sort.levelAsc': 'Menor nível de hunt',
+            'sort.levelDesc': 'Maior nível de hunt',
+            'sort.pokedex': 'Número da Pokédex',
+            'sort.name': 'Nome A–Z',
+            'filter.clear': 'Limpar filtros',
+            'filter.defaults': 'Filtros padrão',
+            'filter.changedOne': '1 filtro alterado',
+            'filter.changedMany': '{count} filtros alterados',
+            'footer.by': 'por MOTHblank',
+            'footer.play': 'MOTHblank no Google Play',
+            'footer.x': 'MOTHblank no X',
+            'footer.whatsapp': 'WhatsApp / Pix',
+            'footer.source': 'código-fonte',
+            'capture.caught': 'capturado',
+            'capture.notCaught': 'não capturado',
+            'capture.typeUnknown': 'tipo ?',
+            'common.lead': 'Líder',
+            'price.npc': 'NPC ~{value}',
+            'price.players': 'Jogadores ~{value}',
+            'price.npcTip': 'Referência de venda ao NPC no{plural} nível{plural} de hunt visível{plural} e qualidade 1,0{range} · o valor real varia com a qualidade; shiny ×10',
+            'price.playerTip': 'Vendas recentes concluídas de Pokémon não shiny no Mercado de jogadores · {count} {sample} · faixa {min}–{max}',
+            'price.sample': 'amostra',
+            'price.samples': 'amostras',
+            'price.range': ' · faixa {min}–{max}',
+            'matchup.immune': 'imune',
+            'matchup.weak': 'fraco',
+            'matchup.resists': 'resiste',
+            'matchup.neutral': 'neutro',
+            'matchup.deal': 'Causa {multiplier} · {relation}',
+            'matchup.take': 'Recebe {multiplier} · {relation}',
+            'matchup.dealTitle': 'Melhor tipo de ataque conhecido de {lead} ({type}) contra {species}: {multiplier}.',
+            'matchup.takeTitle': 'Melhor STAB de {species} ({type}) contra {lead}: {multiplier}.',
+            'hunt.level': 'Nv {level}',
+            'hunt.weight': '~{value}% peso',
+            'hunt.unlocked': 'liberada',
+            'hunt.locked': 'bloqueada',
+            'hunt.here': 'Aqui',
+            'hunt.go': 'Ir',
+            'hunt.requiresLevel': 'Requer nível {level}',
+            'hunt.current': 'Hunt atual',
+            'hunt.travel': 'Ir para esta hunt',
+            'hunt.measuredXp': 'medido {value} XP de treinador/h',
+            'hunt.modeledXp': 'modelo de combate {value} XP de treinador/h',
+            'xp.waitingLead': 'Aguardando o Pokémon ativo para calcular XP de treinador/hora.',
+            'xp.lead': '{name} Nv {level} · líder · poder {power}',
+            'xp.warmStart': 'iniciado com dados do nível mais próximo',
+            'xp.kills': '{count} abates',
+            'xp.attacks': '{count} ataques',
+            'xp.cadence': '{seconds}s entre ataques{detail}',
+            'xp.throughput': ' (ritmo observado)',
+            'xp.floor': ' (piso de 900ms)',
+            'xp.travel': '{seconds}s de deslocamento',
+            'xp.hpSamples': '{count} amostras de HP',
+            'xp.measuredHunt': '{count} hunt medida',
+            'xp.measuredHunts': '{count} hunts medidas',
+            'xp.calibrating': 'modelo de combate calibrando',
+            'xp.learning': 'aprendendo este Pokémon líder: aguardando ataques e abates reais',
+            'xp.killsPerHour': '{count} abates/h',
+            'xp.pokemonPerHour': '{value} XP de Pokémon/h',
+            'xp.measuredShort': 'medido {value} XP/h',
+            'xp.modelShort': 'modelo {value} XP/h',
+            'xp.best': 'Melhor XP nos filtros atuais',
+            'xp.measuredTrainer': 'medido {value} XP de treinador/h',
+            'xp.modeledTrainer': 'modelado {value} XP de treinador/h',
+            'xp.noEstimate': 'Nenhuma estimativa de XP liberada corresponde aos filtros atuais.',
+            'xp.details': 'Detalhes',
+            'xp.hideDetails': 'Ocultar detalhes',
+            'xp.recommendationNote': '{lead} · recomendações respeitam os filtros atuais do Atlas.',
+            'xp.currentMeasured': ' · atual medido {value} XP de treinador/h',
+            'xp.currentModeled': ' · atual modelado {value} XP de treinador/h',
+            'xp.modelNote': ' · curva oficial de XP/abate; deslocamento, cadência, dano e velocidade de abate vêm do combate real deste Pokémon líder.',
+            'results.showMore': 'Mostrar mais · restam {count} Pokémon',
+            'results.noMatch': 'Nenhum Pokémon corresponde aos filtros. Use Limpar filtros para redefinir o Atlas.',
+            'results.waiting': 'Aguardando os dados de hunts do PokéIdle. Recarregue a página uma vez após instalar o Hunt Atlas se isto continuar vazio.',
+            'results.count': '{pokemon} Pokémon · {hunts} hunts',
+            'results.countPartial': '{shown}/{pokemon} Pokémon · {hunts} hunts',
+            'status.waitingGameData': 'Aguardando dados do jogo…',
+            'status.cachedCatalog': 'Usando o catálogo de hunts em cache até chegarem dados atuais.',
+            'status.entered': 'Entrou em {hunt}.',
+            'status.huntsLoaded': '{count} regiões de hunt carregadas.',
+            'status.gameNotReady': 'A conexão com o jogo ainda não está pronta.',
+            'status.traveling': 'Indo para {hunt}…',
+            'status.notAccepted': 'O PokéIdle não aceitou {hunt}. A área pode estar bloqueada ou a troca de hunt pode estar em cooldown.',
+            'status.couldNotSend': 'Não foi possível enviar a troca de hunt.',
+            'status.huntLocked': '{hunt} está bloqueada — requer nível {level}.',
+            'status.alreadyHere': 'Você já está caçando em {hunt}.',
+            'status.loadingTypes': ' · carregando tipos',
+            'status.typesUnavailable': ' · dados de tipo indisponíveis',
+            'status.marketSampling': ' · amostrando preços do Mercado',
+            'type.NORMAL': 'Normal',
+            'type.FIRE': 'Fogo',
+            'type.WATER': 'Água',
+            'type.ELECTRIC': 'Elétrico',
+            'type.GRASS': 'Planta',
+            'type.ICE': 'Gelo',
+            'type.FIGHTING': 'Lutador',
+            'type.POISON': 'Veneno',
+            'type.GROUND': 'Terra',
+            'type.FLYING': 'Voador',
+            'type.PSYCHIC': 'Psíquico',
+            'type.BUG': 'Inseto',
+            'type.ROCK': 'Pedra',
+            'type.GHOST': 'Fantasma',
+            'type.DRAGON': 'Dragão',
+            'type.DARK': 'Sombrio',
+            'type.STEEL': 'Aço',
+            'type.FAIRY': 'Fada'
+        }
+    };
+
+    function currentLocale() {
+        let gameLanguage = null;
+
+        try {
+            gameLanguage =
+                localStorage.getItem(
+                    'idioma'
+                );
+        } catch {}
+
+        if (gameLanguage) {
+            return gameLanguage ===
+                'pt'
+                ? 'pt-BR'
+                : 'en';
+        }
+
+        const htmlLanguage =
+            String(
+                document.documentElement
+                    ?.lang ||
+                ''
+            ).toLowerCase();
+
+        if (htmlLanguage) {
+            return htmlLanguage.startsWith(
+                'pt'
+            )
+                ? 'pt-BR'
+                : 'en';
+        }
+
+        const browserLanguage =
+            String(
+                navigator.language ||
+                ''
+            ).toLowerCase();
+
+        return browserLanguage.startsWith(
+            'pt'
+        )
+            ? 'pt-BR'
+            : 'en';
+    }
+
+    function tr(
+        key,
+        params = null
+    ) {
+        const dictionary =
+            TEXT[currentLocale()] ||
+            TEXT.en;
+
+        let value =
+            dictionary[key] ??
+            TEXT.en[key] ??
+            key;
+
+        if (!params) {
+            return value;
+        }
+
+        return value.replace(
+            /\{(\w+)\}/g,
+            (
+                whole,
+                name
+            ) =>
+                params[name] !==
+                    undefined
+                    ? String(
+                        params[name]
+                    )
+                    : whole
+        );
+    }
+
+    function typeLabel(
+        type
+    ) {
+        return tr(
+            'type.' +
+            String(
+                type ||
+                ''
+            ).toUpperCase()
+        );
+    }
+
+    function localizedNumber(
+        value
+    ) {
+        return Number(
+            value ||
+            0
+        ).toLocaleString(
+            currentLocale()
+        );
+    }
+
+    function loadAtlasEnabled() {
+        try {
+            return (
+                localStorage.getItem(
+                    ENABLED_KEY
+                ) !== '0'
+            );
+        } catch {
+            return true;
+        }
+    }
+
+    function saveAtlasEnabled(
+        enabled
+    ) {
+        try {
+            localStorage.setItem(
+                ENABLED_KEY,
+                enabled
+                    ? '1'
+                    : '0'
+            );
+        } catch {}
+    }
+
     const q =
         (selector, root = document) =>
             root.querySelector(selector);
@@ -293,6 +715,9 @@
         lockOverrides: new Map(),
 
         drawerOpen: false,
+        atlasEnabled:
+            loadAtlasEnabled(),
+        lastLocale: null,
         resultLimit: 120,
         xpDetailsOpen: false,
         mapObserver: null,
@@ -303,7 +728,11 @@
         activeSocket: null,
         pendingTravel: null,
 
-        status: 'Waiting for game data…',
+        status: {
+            key:
+                'status.waitingGameData',
+            params: {}
+        },
 
         filters: loadFilters(),
 
@@ -386,6 +815,32 @@
             JSON.stringify(
                 state.filters
             )
+        );
+    }
+
+    function setStatus(
+        key,
+        params = {}
+    ) {
+        state.status = {
+            key,
+            params
+        };
+    }
+
+    function localizedStatus() {
+        if (
+            typeof state.status ===
+                'string'
+        ) {
+            return state.status;
+        }
+
+        return tr(
+            state.status?.key ||
+                'status.waitingGameData',
+            state.status?.params ||
+                {}
         );
     }
 
@@ -1761,8 +2216,9 @@
             if (
                 state.hunts.length
             ) {
-                state.status =
-                    'Using cached hunt catalog until live state arrives.';
+                setStatus(
+                    'status.cachedCatalog'
+                );
             }
         } catch {}
     }
@@ -2014,8 +2470,14 @@
                 null;
         }
 
-        state.status =
-            `Entered ${huntEvent.nome || huntEvent.slug}.`;
+        setStatus(
+            'status.entered',
+            {
+                hunt:
+                    huntEvent.nome ||
+                    huntEvent.slug
+            }
+        );
 
         state.pendingTravel = null;
 
@@ -2106,8 +2568,13 @@
                 state.hunts =
                     message.hunts;
 
-                state.status =
-                    `${state.hunts.length} hunt regions loaded.`;
+                setStatus(
+                    'status.huntsLoaded',
+                    {
+                        count:
+                            state.hunts.length
+                    }
+                );
             }
 
             mergeState(
@@ -3396,27 +3863,39 @@
         if (value === 0) {
             return {
                 key: 'immune',
-                label: 'immune'
+                label:
+                    tr(
+                        'matchup.immune'
+                    )
             };
         }
 
         if (value > 1) {
             return {
                 key: 'weak',
-                label: 'weak'
+                label:
+                    tr(
+                        'matchup.weak'
+                    )
             };
         }
 
         if (value < 1) {
             return {
                 key: 'resist',
-                label: 'resists'
+                label:
+                    tr(
+                        'matchup.resists'
+                    )
             };
         }
 
         return {
             key: 'neutral',
-            label: 'neutral'
+            label:
+                tr(
+                    'matchup.neutral'
+                )
         };
     }
 
@@ -3523,14 +4002,34 @@
             direction === 'deal';
 
         const label =
-            isDeal
-                ? `Deal ${multiplier} · ${relation.label}`
-                : `Take ${multiplier} · ${relation.label}`;
+            tr(
+                isDeal
+                    ? 'matchup.deal'
+                    : 'matchup.take',
+                {
+                    multiplier,
+                    relation:
+                        relation.label
+                }
+            );
 
         const title =
-            isDeal
-                ? `${leadName}'s best known attack type (${result.attackType}) vs ${speciesName}: ${multiplier}.`
-                : `${speciesName}'s best STAB type (${result.attackType}) vs ${leadName}: ${multiplier}.`;
+            tr(
+                isDeal
+                    ? 'matchup.dealTitle'
+                    : 'matchup.takeTitle',
+                {
+                    lead:
+                        leadName,
+                    species:
+                        speciesName,
+                    type:
+                        typeLabel(
+                            result.attackType
+                        ),
+                    multiplier
+                }
+            );
 
         const favorability =
             isDeal
@@ -5795,8 +6294,9 @@
         }
 
         if (!socketReady()) {
-            state.status =
-                'Game connection is not ready yet.';
+            setStatus(
+                'status.gameNotReady'
+            );
 
             queueRender();
             return false;
@@ -5810,8 +6310,14 @@
                     Date.now()
             };
 
-            state.status =
-                `Traveling to ${hunt.nome || hunt.slug}…`;
+            setStatus(
+                'status.traveling',
+                {
+                    hunt:
+                        hunt.nome ||
+                        hunt.slug
+                }
+            );
 
             /*
              * Explorer captured PokéIdle's exact map action:
@@ -5839,8 +6345,14 @@
                         state.currentHuntSlug !==
                             hunt.slug
                     ) {
-                        state.status =
-                            `PokéIdle did not accept ${hunt.nome || hunt.slug}. It may still be locked or hunt switching may be on cooldown.`;
+                        setStatus(
+                            'status.notAccepted',
+                            {
+                                hunt:
+                                    hunt.nome ||
+                                    hunt.slug
+                            }
+                        );
 
                         state.pendingTravel =
                             null;
@@ -5861,8 +6373,9 @@
             state.pendingTravel =
                 null;
 
-            state.status =
-                'Could not send hunt selection.';
+            setStatus(
+                'status.couldNotSend'
+            );
 
             queueRender();
             return false;
@@ -5875,8 +6388,15 @@
         if (
             !isUnlocked(hunt)
         ) {
-            state.status =
-                `${hunt.nome} is locked — requires level ${hunt.nivel}.`;
+            setStatus(
+                'status.huntLocked',
+                {
+                    hunt:
+                        hunt.nome,
+                    level:
+                        hunt.nivel
+                }
+            );
 
             queueRender();
             return;
@@ -5886,8 +6406,13 @@
             hunt.slug ===
             state.currentHuntSlug
         ) {
-            state.status =
-                `Already hunting in ${hunt.nome}.`;
+            setStatus(
+                'status.alreadyHere',
+                {
+                    hunt:
+                        hunt.nome
+                }
+            );
 
             queueRender();
             return;
@@ -5940,6 +6465,24 @@
         style.textContent = `
             #${BUTTON_ID} {
                 display: none !important;
+            }
+
+            #mha-map-toggle {
+                margin-left: 8px;
+                padding: 3px 8px;
+                border: 1px solid rgba(255,255,255,.14);
+                border-radius: 999px;
+                background: rgba(255,255,255,.06);
+                color: #a99fa3;
+                cursor: pointer;
+                font: 700 9px/1 system-ui,sans-serif;
+                white-space: nowrap;
+            }
+
+            #mha-map-toggle[data-enabled="1"] {
+                border-color: rgba(104,190,130,.28);
+                background: rgba(104,190,130,.10);
+                color: #a8ddb7;
             }
 
             #modal .modal-caixa[data-mha-atlas-active="1"] {
@@ -6524,15 +7067,124 @@
         );
     }
 
-    function cleanupMapIntegration() {
-        q(
-            '#modal .modal-caixa'
-        )?.removeAttribute(
+    function restoreNativeMapView() {
+        const box =
+            q(
+                '#modal .modal-caixa'
+            );
+
+        box?.removeAttribute(
             'data-mha-atlas-active'
         );
 
+        const drawer =
+            q(
+                '#' + DRAWER_ID
+            );
+
+        if (drawer) {
+            drawer.hidden =
+                true;
+        }
+
+    }
+
+    function cleanupMapIntegration() {
+        restoreNativeMapView();
+
+        q(
+            '#mha-map-toggle'
+        )?.remove();
+
         state.drawerOpen =
             false;
+    }
+
+    function ensureMapToggle() {
+        if (!isMapModalOpen()) {
+            return null;
+        }
+
+        const title =
+            q('#modal-titulo');
+
+        if (!title) {
+            return null;
+        }
+
+        let toggle =
+            q('#mha-map-toggle');
+
+        if (
+            !toggle ||
+            toggle.parentElement !==
+                title.parentElement
+        ) {
+            toggle?.remove();
+
+            toggle =
+                document.createElement(
+                    'button'
+                );
+
+            toggle.type =
+                'button';
+            toggle.id =
+                'mha-map-toggle';
+
+            title.insertAdjacentElement(
+                'afterend',
+                toggle
+            );
+
+            toggle.addEventListener(
+                'click',
+                () => {
+                    state.atlasEnabled =
+                        !state.atlasEnabled;
+
+                    saveAtlasEnabled(
+                        state.atlasEnabled
+                    );
+
+                    if (
+                        !state.atlasEnabled
+                    ) {
+                        restoreNativeMapView();
+                    }
+
+                    scheduleMapSync();
+                }
+            );
+        }
+
+        toggle.dataset.enabled =
+            state.atlasEnabled
+                ? '1'
+                : '0';
+
+        toggle.textContent =
+            tr(
+                state.atlasEnabled
+                    ? 'toggle.on'
+                    : 'toggle.off'
+            );
+
+        toggle.title =
+            tr(
+                state.atlasEnabled
+                    ? 'toggle.onTitle'
+                    : 'toggle.offTitle'
+            );
+
+        toggle.setAttribute(
+            'aria-pressed',
+            state.atlasEnabled
+                ? 'true'
+                : 'false'
+        );
+
+        return toggle;
     }
 
     function scheduleMapSync() {
@@ -6556,13 +7208,24 @@
                 const wasOpen =
                     state.drawerOpen;
 
-                state.drawerOpen =
-                    open;
-
                 if (!open) {
                     cleanupMapIntegration();
                     return;
                 }
+
+                ensureMapToggle();
+
+                if (
+                    !state.atlasEnabled
+                ) {
+                    state.drawerOpen =
+                        false;
+                    restoreNativeMapView();
+                    return;
+                }
+
+                state.drawerOpen =
+                    true;
 
                 if (!wasOpen) {
                     ensureTypeData();
@@ -6658,7 +7321,8 @@
     function ensureDrawer() {
         if (
             !document.body ||
-            !isMapModalOpen()
+            !isMapModalOpen() ||
+            !state.atlasEnabled
         ) {
             return null;
         }
@@ -6684,18 +7348,6 @@
             'data-mha-atlas-active',
             '1'
         );
-
-        const modalTitle =
-            q('#modal-titulo');
-
-        if (
-            modalTitle &&
-            modalTitle.textContent !==
-                'Hunt Atlas'
-        ) {
-            modalTitle.textContent =
-                'Hunt Atlas';
-        }
 
         let drawer =
             q('#' + DRAWER_ID);
@@ -6726,78 +7378,78 @@
 
         drawer.innerHTML = `
             <div class="mha-head">
-                <strong>Hunt Atlas</strong>
+                <strong>${tr('title')}</strong>
                 <button type="button" data-mha-close>×</button>
             </div>
 
             <div class="mha-filters">
                 <label class="mha-field mha-search">
-                    <span>Search</span>
-                    <input data-mha-filter="search" type="search" placeholder="Pokémon, hunt or region…">
+                    <span>${tr('filter.search')}</span>
+                    <input data-mha-filter="search" type="search" placeholder="${escapeHtml(tr('filter.searchPlaceholder'))}">
                 </label>
 
                 <label class="mha-field">
-                    <span>Region</span>
+                    <span>${tr('filter.region')}</span>
                     <select data-mha-filter="region"></select>
                 </label>
 
                 <div class="mha-field">
-                    <span>Level</span>
+                    <span>${tr('filter.level')}</span>
                     <div class="mha-level-inputs">
-                        <input data-mha-filter="minLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Min" aria-label="Minimum hunt level">
+                        <input data-mha-filter="minLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="${escapeHtml(tr('filter.min'))}" aria-label="${escapeHtml(tr('filter.minLevelAria'))}">
                         <span>–</span>
-                        <input data-mha-filter="maxLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Max" aria-label="Maximum hunt level">
+                        <input data-mha-filter="maxLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="${escapeHtml(tr('filter.max'))}" aria-label="${escapeHtml(tr('filter.maxLevelAria'))}">
                     </div>
                 </div>
 
                 <label class="mha-field">
-                    <span>Availability</span>
+                    <span>${tr('filter.availability')}</span>
                     <select data-mha-filter="availability">
-                        <option value="all">All</option>
-                        <option value="unlocked">Unlocked</option>
-                        <option value="locked">Locked</option>
+                        <option value="all">${tr('filter.all')}</option>
+                        <option value="unlocked">${tr('filter.unlocked')}</option>
+                        <option value="locked">${tr('filter.locked')}</option>
                     </select>
                 </label>
 
                 <label class="mha-field">
-                    <span>Type</span>
+                    <span>${tr('filter.type')}</span>
                     <select data-mha-filter="type"></select>
                 </label>
 
                 <label class="mha-field">
-                    <span>Weak to</span>
+                    <span>${tr('filter.weakTo')}</span>
                     <select data-mha-filter="weakness"></select>
                 </label>
 
                 <label class="mha-field">
-                    <span>Collection</span>
+                    <span>${tr('filter.collection')}</span>
                     <select data-mha-filter="captured">
-                        <option value="all">Caught + uncaught</option>
-                        <option value="uncaught">Uncaught only</option>
-                        <option value="captured">Caught only</option>
+                        <option value="all">${tr('filter.caughtAndUncaught')}</option>
+                        <option value="uncaught">${tr('filter.uncaughtOnly')}</option>
+                        <option value="captured">${tr('filter.caughtOnly')}</option>
                     </select>
                 </label>
 
                 <label class="mha-field">
-                    <span>Sort</span>
+                    <span>${tr('filter.sort')}</span>
                     <select data-mha-filter="sort">
-                        <option value="xp">Best XP/hour</option>
-                        <option value="npc_desc">NPC sell value · high first</option>
-                        <option value="npc_asc">NPC sell value · low first</option>
-                        <option value="player_market_desc">Player Market · high first</option>
-                        <option value="player_market_asc">Player Market · low first</option>
-                        <option value="matchup">Best matchup</option>
-                        <option value="spawn_desc">Highest encounter rate</option>
-                        <option value="level_asc">Lowest hunt level</option>
-                        <option value="level_desc">Highest hunt level</option>
-                        <option value="pokedex">Pokédex number</option>
-                        <option value="name">Name A–Z</option>
+                        <option value="xp">${tr('sort.xp')}</option>
+                        <option value="npc_desc">${tr('sort.npcDesc')}</option>
+                        <option value="npc_asc">${tr('sort.npcAsc')}</option>
+                        <option value="player_market_desc">${tr('sort.playerDesc')}</option>
+                        <option value="player_market_asc">${tr('sort.playerAsc')}</option>
+                        <option value="matchup">${tr('sort.matchup')}</option>
+                        <option value="spawn_desc">${tr('sort.spawnDesc')}</option>
+                        <option value="level_asc">${tr('sort.levelAsc')}</option>
+                        <option value="level_desc">${tr('sort.levelDesc')}</option>
+                        <option value="pokedex">${tr('sort.pokedex')}</option>
+                        <option value="name">${tr('sort.name')}</option>
                     </select>
                 </label>
 
                 <div class="mha-filter-actions">
                     <span class="mha-filter-state"></span>
-                    <button type="button" data-mha-clear>Clear filters</button>
+                    <button type="button" data-mha-clear>${tr('filter.clear')}</button>
                 </div>
             </div>
 
@@ -6811,15 +7463,15 @@
             <div class="mha-body"></div>
 
             <div class="mha-credit">
-                <span>by MOTHblank</span>
+                <span>${tr('footer.by')}</span>
 
                 <a
                     class="mha-credit-icon"
                     href="https://play.google.com/store/apps/developer?id=MOTHblank"
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="MOTHblank on Google Play"
-                    aria-label="MOTHblank on Google Play"
+                    title="${escapeHtml(tr('footer.play'))}"
+                    aria-label="${escapeHtml(tr('footer.play'))}"
                 >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M3.7 2.7c-.45.48-.7 1.2-.7 2.1v14.4c0 .9.25 1.62.7 2.1l.08.08L12.9 12 3.78 2.62l-.08.08Zm10.42 10.52-2.05-2.1L4.7 3.55c.17-.03.36-.01.57.1l11.7 6.65-2.85 2.92Zm-9.42 7.23 7.38-7.57 2.04-2.1 2.9 2.95-11.75 6.62c-.2.11-.4.13-.57.1Zm13.72-7.43-1.98-1.12 1.98-2.02c.95.54 1.48 1.08 1.48 1.57 0 .5-.53 1.03-1.48 1.57Z"/>
@@ -6831,8 +7483,8 @@
                     href="https://x.com/MOTHblank"
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="MOTHblank on X"
-                    aria-label="MOTHblank on X"
+                    title="${escapeHtml(tr('footer.x'))}"
+                    aria-label="${escapeHtml(tr('footer.x'))}"
                 >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M18.9 2H22l-6.77 7.74L23.2 22h-6.24l-4.89-6.39L6.48 22H3.36l7.25-8.29L2.96 2H9.36l4.42 5.84L18.9 2Zm-1.1 17.84h1.72L8.42 4.05H6.57L17.8 19.84Z"/>
@@ -6844,8 +7496,8 @@
                     href="https://wa.me/+5537999933376"
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="WhatsApp / Pix"
-                    aria-label="WhatsApp / Pix"
+                    title="${escapeHtml(tr('footer.whatsapp'))}"
+                    aria-label="${escapeHtml(tr('footer.whatsapp'))}"
                 >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M12 2a9.8 9.8 0 0 0-8.43 14.8L2 22l5.35-1.52A9.95 9.95 0 1 0 12 2Zm0 17.94a8 8 0 0 1-4.08-1.12l-.29-.17-3.18.9.86-3.1-.19-.3A7.9 7.9 0 1 1 12 19.94Zm4.35-5.9c-.24-.12-1.4-.69-1.62-.77-.22-.08-.38-.12-.54.12-.16.24-.62.77-.76.93-.14.16-.28.18-.52.06-.24-.12-1-.37-1.91-1.18-.7-.63-1.18-1.41-1.32-1.65-.14-.24-.02-.37.1-.49.11-.11.24-.28.36-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.54-1.3-.74-1.78-.2-.47-.39-.4-.54-.41h-.46c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.32.98 2.48c.12.16 1.69 2.58 4.1 3.62.57.25 1.02.4 1.37.51.58.18 1.1.16 1.51.1.46-.07 1.4-.57 1.6-1.13.2-.55.2-1.03.14-1.13-.06-.1-.22-.16-.46-.28Z"/>
@@ -6858,7 +7510,7 @@
                     href="https://github.com/MOTHblank/pokeidle-huntatlas"
                     target="_blank"
                     rel="noopener noreferrer"
-                >source code</a>
+                >${tr('footer.source')}</a>
             </div>
         `;
 
@@ -6985,13 +7637,15 @@
         values,
         selected,
         allValue,
-        allLabel
+        allLabel,
+        labelForValue =
+            value => value
     ) {
         return [
             `<option value="${escapeHtml(allValue)}">${escapeHtml(allLabel)}</option>`,
             ...values.map(
                 value =>
-                    `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(value)}</option>`
+                    `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(labelForValue(value))}</option>`
             )
         ].join('');
     }
@@ -7025,7 +7679,9 @@
                 regionOptions(),
                 state.filters.region,
                 'all',
-                'All regions'
+                tr(
+                    'filter.allRegions'
+                )
             );
 
         if (
@@ -7078,8 +7734,13 @@
                 'all',
                 state.typeStatus ===
                     'loading'
-                    ? 'Type: loading…'
-                    : 'All types'
+                    ? tr(
+                        'filter.typeLoading'
+                    )
+                    : tr(
+                        'filter.allTypes'
+                    ),
+                typeLabel
             );
 
         if (
@@ -7106,8 +7767,13 @@
                 'all',
                 state.typeStatus ===
                     'loading'
-                    ? 'Weakness: loading…'
-                    : 'Any weakness'
+                    ? tr(
+                        'filter.weaknessLoading'
+                    )
+                    : tr(
+                        'filter.anyWeakness'
+                    ),
+                typeLabel
             );
 
         if (
@@ -7152,8 +7818,18 @@
         if (filterState) {
             filterState.textContent =
                 activeCount
-                    ? `${activeCount} filter${activeCount === 1 ? '' : 's'} changed from default`
-                    : 'Default filters';
+                    ? tr(
+                        activeCount === 1
+                            ? 'filter.changedOne'
+                            : 'filter.changedMany',
+                        {
+                            count:
+                                activeCount
+                        }
+                    )
+                    : tr(
+                        'filter.defaults'
+                    );
         }
 
         const clearButton =
@@ -7197,13 +7873,25 @@
     ) {
         const capturedMarkup =
             species.captured
-                ? `<span class="mha-caught">✓ caught${species.captureCount > 1 ? ' ×' + species.captureCount : ''}</span>`
-                : '<span class="mha-uncaught">○ not caught</span>';
+                ? `<span class="mha-caught">✓ ${escapeHtml(
+                    tr(
+                        'capture.caught'
+                    )
+                )}${species.captureCount > 1 ? ' ×' + species.captureCount : ''}</span>`
+                : `<span class="mha-uncaught">○ ${escapeHtml(
+                    tr(
+                        'capture.notCaught'
+                    )
+                )}</span>`;
 
         const typeMarkup =
             species.types.length
-                ? `<span class="mha-types">${species.types.map(type => `<span class="mha-type">${escapeHtml(type)}</span>`).join('')}</span>`
-                : '<span class="mha-types"><span class="mha-type">type ?</span></span>';
+                ? `<span class="mha-types">${species.types.map(type => `<span class="mha-type">${escapeHtml(typeLabel(type))}</span>`).join('')}</span>`
+                : `<span class="mha-types"><span class="mha-type">${escapeHtml(
+                    tr(
+                        'capture.typeUnknown'
+                    )
+                )}</span></span>`;
 
         const matchup =
             speciesMatchup(
@@ -7212,12 +7900,37 @@
 
         const leadName =
             matchup?.lead?.nome ||
-            'Lead';
+            tr(
+                'common.lead'
+            );
 
         const npcStats =
             npcSellStatsForSpecies(
                 species
             );
+
+        const npcRange =
+            npcStats &&
+            npcStats.min !==
+                npcStats.max
+                ? tr(
+                    'price.range',
+                    {
+                        min:
+                            localizedNumber(
+                                Math.round(
+                                    npcStats.min
+                                )
+                            ),
+                        max:
+                            localizedNumber(
+                                Math.round(
+                                    npcStats.max
+                                )
+                            )
+                    }
+                )
+                : '';
 
         const npcMarkup =
             npcStats?.average > 0
@@ -7225,20 +7938,27 @@
                     <span
                         class="mha-npc-value"
                         title="${escapeHtml(
-                            'NPC sale reference at the visible hunt level' +
-                            (npcStats.count === 1 ? '' : 's') +
-                            ' and quality 1.0' +
-                            (npcStats.min !== npcStats.max
-                                ? ' · range ' +
-                                  Math.round(npcStats.min).toLocaleString() +
-                                  '–' +
-                                  Math.round(npcStats.max).toLocaleString()
-                                : '') +
-                            ' · actual captured Pokémon vary with quality; shiny ×10'
+                            tr(
+                                'price.npcTip',
+                                {
+                                    plural:
+                                        npcStats.count === 1
+                                            ? ''
+                                            : 's',
+                                    range:
+                                        npcRange
+                                }
+                            )
                         )}"
-                    >NPC ~${escapeHtml(
-                        formatRate(
-                            npcStats.average
+                    >${escapeHtml(
+                        tr(
+                            'price.npc',
+                            {
+                                value:
+                                    formatRate(
+                                        npcStats.average
+                                    )
+                            }
                         )
                     )}</span>
                 `
@@ -7253,18 +7973,41 @@
                     <span
                         class="mha-market"
                         title="${escapeHtml(
-                            'Recent non-shiny completed player Market sales · ' +
-                            market.count +
-                            ' sample' +
-                            (market.count === 1 ? '' : 's') +
-                            ' · range ' +
-                            Math.round(market.min).toLocaleString() +
-                            '–' +
-                            Math.round(market.max).toLocaleString()
+                            tr(
+                                'price.playerTip',
+                                {
+                                    count:
+                                        market.count,
+                                    sample:
+                                        tr(
+                                            market.count === 1
+                                                ? 'price.sample'
+                                                : 'price.samples'
+                                        ),
+                                    min:
+                                        localizedNumber(
+                                            Math.round(
+                                                market.min
+                                            )
+                                        ),
+                                    max:
+                                        localizedNumber(
+                                            Math.round(
+                                                market.max
+                                            )
+                                        )
+                                }
+                            )
                         )}"
-                    >Players ~${escapeHtml(
-                        formatRate(
-                            market.average
+                    >${escapeHtml(
+                        tr(
+                            'price.players',
+                            {
+                                value:
+                                    formatRate(
+                                        market.average
+                                    )
+                            }
                         )
                     )}</span>
                 `
@@ -7318,15 +8061,17 @@
 
                         const xpLabel =
                             xpInfo?.value
-                                ? (
+                                ? tr(
                                     xpInfo.observed
-                                        ? 'measured '
-                                        : 'combat model '
-                                ) +
-                                  formatRate(
-                                      xpInfo.value
-                                  ) +
-                                  ' trainer XP/h'
+                                        ? 'hunt.measuredXp'
+                                        : 'hunt.modeledXp',
+                                    {
+                                        value:
+                                            formatRate(
+                                                xpInfo.value
+                                            )
+                                    }
+                                )
                                 : null;
 
                         const sub =
@@ -7335,35 +8080,48 @@
                                     hunt.area ||
                                     ''
                                 ).toUpperCase(),
-                                'Lv ' +
-                                    Number(
-                                        hunt.nivel ||
-                                        0
-                                    ),
+                                tr(
+                                    'hunt.level',
+                                    {
+                                        level:
+                                            Number(
+                                                hunt.nivel ||
+                                                0
+                                            )
+                                    }
+                                ),
                                 percent !== null
-                                    ? '~' +
-                                      percent.toFixed(
-                                          percent >=
-                                              10
-                                              ? 0
-                                              : 1
-                                      ) +
-                                      '% weight'
+                                    ? tr(
+                                        'hunt.weight',
+                                        {
+                                            value:
+                                                percent.toFixed(
+                                                    percent >=
+                                                        10
+                                                        ? 0
+                                                        : 1
+                                                )
+                                        }
+                                    )
                                     : null,
-                                unlocked
-                                    ? 'unlocked'
-                                    : 'locked',
+                                tr(
+                                    unlocked
+                                        ? 'hunt.unlocked'
+                                        : 'hunt.locked'
+                                ),
                                 xpLabel
                             ]
                                 .filter(Boolean)
                                 .join(' · ');
 
                         const label =
-                            current
-                                ? 'Here'
-                                : unlocked
-                                    ? 'Go'
-                                    : 'Locked';
+                            tr(
+                                current
+                                    ? 'hunt.here'
+                                    : unlocked
+                                        ? 'hunt.go'
+                                        : 'hunt.locked'
+                            );
 
                         return `
                             <div class="mha-hunt ${current ? 'current' : ''} ${!unlocked ? 'locked' : ''}">
@@ -7377,7 +8135,26 @@
                                     class="mha-go ${current ? 'current' : ''}"
                                     data-mha-go="${escapeHtml(hunt.slug)}"
                                     ${!unlocked || current ? 'disabled' : ''}
-                                    title="${!unlocked ? 'Requires level ' + Number(hunt.nivel || 0) : current ? 'Current hunt' : 'Travel to this hunt'}"
+                                    title="${escapeHtml(
+                                        !unlocked
+                                            ? tr(
+                                                'hunt.requiresLevel',
+                                                {
+                                                    level:
+                                                        Number(
+                                                            hunt.nivel ||
+                                                            0
+                                                        )
+                                                }
+                                            )
+                                            : current
+                                                ? tr(
+                                                    'hunt.current'
+                                                )
+                                                : tr(
+                                                    'hunt.travel'
+                                                )
+                                    )}"
                                 >${label}</button>
                             </div>
                         `;
@@ -7422,7 +8199,11 @@
 
         if (!lead) {
             host.innerHTML =
-                '<div class="mha-xp-note">Waiting for the active Pokémon before calculating trainer XP/hour.</div>';
+                `<div class="mha-xp-note">${escapeHtml(
+                    tr(
+                        'xp.waitingLead'
+                    )
+                )}</div>`;
 
             return;
         }
@@ -7468,28 +8249,94 @@
                 .length;
 
         const leadText =
-            `${lead.nome || 'Pokémon'} Lv ${Number(lead.level || 0)} · lead · power ${Math.round(pokemonPower(lead))}`;
+            tr(
+                'xp.lead',
+                {
+                    name:
+                        lead.nome ||
+                        'Pokémon',
+                    level:
+                        Number(
+                            lead.level ||
+                            0
+                        ),
+                    power:
+                        Math.round(
+                            pokemonPower(
+                                lead
+                            )
+                        )
+                }
+            );
 
         const profileDetails =
             profile
                 ? [
                     profile.warmStart
-                        ? 'warm-started from nearest level'
+                        ? tr(
+                            'xp.warmStart'
+                        )
                         : null,
                     profile.kills
-                        ? `${profile.kills} kills`
+                        ? tr(
+                            'xp.kills',
+                            {
+                                count:
+                                    profile.kills
+                            }
+                        )
                         : null,
                     profile.attacks
-                        ? `${profile.attacks} attacks`
+                        ? tr(
+                            'xp.attacks',
+                            {
+                                count:
+                                    profile.attacks
+                            }
+                        )
                         : null,
                     profile.cadenceMs
-                        ? `${(profile.cadenceMs / 1000).toFixed(2)}s attack cadence${profile.cadenceMeasured ? '' : profile.cadenceFromThroughput ? ' (attack throughput)' : ' (900ms floor)'}`
+                        ? tr(
+                            'xp.cadence',
+                            {
+                                seconds:
+                                    (
+                                        profile.cadenceMs /
+                                        1000
+                                    ).toFixed(2),
+                                detail:
+                                    profile.cadenceMeasured
+                                        ? ''
+                                        : profile.cadenceFromThroughput
+                                            ? tr(
+                                                'xp.throughput'
+                                            )
+                                            : tr(
+                                                'xp.floor'
+                                            )
+                            }
+                        )
                         : null,
                     profile.movementMs
-                        ? `${(profile.movementMs / 1000).toFixed(2)}s travel`
+                        ? tr(
+                            'xp.travel',
+                            {
+                                seconds:
+                                    (
+                                        profile.movementMs /
+                                        1000
+                                    ).toFixed(2)
+                            }
+                        )
                         : null,
                     profile.hpSamples
-                        ? `${profile.hpSamples} HP samples`
+                        ? tr(
+                            'xp.hpSamples',
+                            {
+                                count:
+                                    profile.hpSamples
+                            }
+                        )
                         : null
                 ]
                     .filter(Boolean)
@@ -7498,8 +8345,30 @@
 
         const calibrationText =
             profile?.attacks
-                ? `${measuredHunts ? measuredHunts + ' measured hunt' + (measuredHunts === 1 ? '' : 's') : 'combat model calibrating'}${profileDetails ? ' · ' + profileDetails : ''}`
-                : 'learning this lead Pokémon: waiting for real attack and kill events';
+                ? (
+                    measuredHunts
+                        ? tr(
+                            measuredHunts === 1
+                                ? 'xp.measuredHunt'
+                                : 'xp.measuredHunts',
+                            {
+                                count:
+                                    measuredHunts
+                            }
+                        )
+                        : tr(
+                            'xp.calibrating'
+                        )
+                ) +
+                  (
+                      profileDetails
+                          ? ' · ' +
+                            profileDetails
+                          : ''
+                  )
+                : tr(
+                    'xp.learning'
+                );
         const bestRows =
             usable
                 .slice(0, 5)
@@ -7512,14 +8381,64 @@
                         return `
                             <div class="mha-best-row">
                                 <span class="mha-best-rank">${index + 1}</span>
-                                <span class="mha-best-name">${escapeHtml(row.hunt.nome || row.hunt.slug)} · Lv ${Number(row.hunt.nivel || 0)}</span>
-                                <span class="mha-xp-value" title="${escapeHtml([row.xp.killsH ? Math.round(row.xp.killsH) + ' kills/h' : null, row.xp.pokemonValue ? formatRate(row.xp.pokemonValue) + ' Pokémon XP/h' : null].filter(Boolean).join(' · '))}">${row.xp.observed ? 'measured ' : 'model '}${formatRate(row.xp.value)} XP/h</span>
+                                <span class="mha-best-name">${escapeHtml(row.hunt.nome || row.hunt.slug)} · ${escapeHtml(
+                                    tr(
+                                        'hunt.level',
+                                        {
+                                            level:
+                                                Number(
+                                                    row.hunt.nivel ||
+                                                    0
+                                                )
+                                        }
+                                    )
+                                )}</span>
+                                <span class="mha-xp-value" title="${escapeHtml([
+                                    row.xp.killsH
+                                        ? tr(
+                                            'xp.killsPerHour',
+                                            {
+                                                count:
+                                                    Math.round(
+                                                        row.xp.killsH
+                                                    )
+                                            }
+                                        )
+                                        : null,
+                                    row.xp.pokemonValue
+                                        ? tr(
+                                            'xp.pokemonPerHour',
+                                            {
+                                                value:
+                                                    formatRate(
+                                                        row.xp.pokemonValue
+                                                    )
+                                            }
+                                        )
+                                        : null
+                                ].filter(Boolean).join(' · '))}">${escapeHtml(
+                                    tr(
+                                        row.xp.observed
+                                            ? 'xp.measuredShort'
+                                            : 'xp.modelShort',
+                                        {
+                                            value:
+                                                formatRate(
+                                                    row.xp.value
+                                                )
+                                        }
+                                    )
+                                )}</span>
                                 <button
                                     type="button"
                                     class="mha-go ${here ? 'current' : ''}"
                                     data-mha-best-go="${escapeHtml(row.hunt.slug)}"
                                     ${here ? 'disabled' : ''}
-                                >${here ? 'Here' : 'Go'}</button>
+                                >${tr(
+                                    here
+                                        ? 'hunt.here'
+                                        : 'hunt.go'
+                                )}</button>
                             </div>
                         `;
                     }
@@ -7533,8 +8452,48 @@
         host.innerHTML = `
             <div class="mha-xp-primary">
                 <div class="mha-xp-primary-main">
-                    <strong>${best ? escapeHtml(best.hunt.nome || best.hunt.slug) + ' · Lv ' + Number(best.hunt.nivel || 0) : 'Best XP in current filters'}</strong>
-                    <span>${best ? (best.xp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(best.xp.value)) + ' trainer XP/h' : 'No unlocked XP estimate matches the current filters.'}</span>
+                    <strong>${best
+                        ? escapeHtml(
+                            best.hunt.nome ||
+                            best.hunt.slug
+                        ) +
+                          ' · ' +
+                          escapeHtml(
+                              tr(
+                                  'hunt.level',
+                                  {
+                                      level:
+                                          Number(
+                                              best.hunt.nivel ||
+                                              0
+                                          )
+                                  }
+                              )
+                          )
+                        : escapeHtml(
+                            tr(
+                                'xp.best'
+                            )
+                        )}</strong>
+                    <span>${best
+                        ? escapeHtml(
+                            tr(
+                                best.xp.observed
+                                    ? 'xp.measuredTrainer'
+                                    : 'xp.modeledTrainer',
+                                {
+                                    value:
+                                        formatRate(
+                                            best.xp.value
+                                        )
+                                }
+                            )
+                        )
+                        : escapeHtml(
+                            tr(
+                                'xp.noEstimate'
+                            )
+                        )}</span>
                 </div>
 
                 ${best ? `
@@ -7543,23 +8502,57 @@
                         class="mha-go ${bestHere ? 'current' : ''}"
                         data-mha-best-go="${escapeHtml(best.hunt.slug)}"
                         ${bestHere ? 'disabled' : ''}
-                    >${bestHere ? 'Here' : 'Go'}</button>
+                    >${tr(
+                        bestHere
+                            ? 'hunt.here'
+                            : 'hunt.go'
+                    )}</button>
                 ` : ''}
 
                 <button type="button" class="mha-xp-toggle" data-mha-xp-toggle>
-                    ${state.xpDetailsOpen ? 'Hide details' : 'Details'}
+                    ${tr(
+                        state.xpDetailsOpen
+                            ? 'xp.hideDetails'
+                            : 'xp.details'
+                    )}
                 </button>
             </div>
 
             <div class="mha-xp-note">
-                ${escapeHtml(leadText)} · recommendations respect the current Atlas filters.
+                ${escapeHtml(
+                    tr(
+                        'xp.recommendationNote',
+                        {
+                            lead:
+                                leadText
+                        }
+                    )
+                )}
             </div>
 
             <div class="mha-xp-details" ${state.xpDetailsOpen ? '' : 'hidden'}>
                 <div class="mha-xp-note">
                     ${escapeHtml(calibrationText)}
-                    ${currentXp?.value ? ' · current ' + (currentXp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(currentXp.value)) + ' trainer XP/h' : ''}
-                    · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon's real combat.
+                    ${currentXp?.value
+                        ? escapeHtml(
+                            tr(
+                                currentXp.observed
+                                    ? 'xp.currentMeasured'
+                                    : 'xp.currentModeled',
+                                {
+                                    value:
+                                        formatRate(
+                                            currentXp.value
+                                        )
+                                }
+                            )
+                        )
+                        : ''}
+                    ${escapeHtml(
+                        tr(
+                            'xp.modelNote'
+                        )
+                    )}
                 </div>
 
                 <div class="mha-best-list">
@@ -7616,6 +8609,23 @@
     }
 
     function renderDrawer() {
+        const locale =
+            currentLocale();
+
+        if (
+            state.lastLocale !==
+                locale
+        ) {
+            state.lastLocale =
+                locale;
+
+            q(
+                '#' + DRAWER_ID
+            )?.remove();
+
+            ensureMapToggle();
+        }
+
         const drawer =
             ensureDrawer();
 
@@ -7674,16 +8684,29 @@
                       hasMore
                           ? `
                               <button type="button" class="mha-show-more" data-mha-show-more>
-                                  Show more · ${results.length - visibleResults.length} Pokémon remaining
+                                  ${escapeHtml(
+                                      tr(
+                                          'results.showMore',
+                                          {
+                                              count:
+                                                  results.length -
+                                                  visibleResults.length
+                                          }
+                                      )
+                                  )}
                               </button>
                           `
                           : ''
                   )
                 : `
                     <div class="mha-empty">
-                        ${state.hunts.length
-                            ? 'No Pokémon match these filters. Use Clear filters to reset the Atlas.'
-                            : 'Waiting for PokéIdle hunt data. Reload the page once after installing Hunt Atlas if this remains empty.'}
+                        ${escapeHtml(
+                            tr(
+                                state.hunts.length
+                                    ? 'results.noMatch'
+                                    : 'results.waiting'
+                            )
+                        )}
                     </div>
                 `;
 
@@ -7747,20 +8770,26 @@
         const typeSuffix =
             state.typeStatus ===
                 'loading'
-                ? ' · loading type data'
+                ? tr(
+                    'status.loadingTypes'
+                )
                 : state.typeStatus ===
                     'error'
-                    ? ' · type data unavailable'
+                    ? tr(
+                        'status.typesUnavailable'
+                    )
                     : '';
 
         const marketSuffix =
             state.marketStatus ===
                 'loading'
-                ? ' · sampling Market prices'
+                ? tr(
+                    'status.marketSampling'
+                )
                 : '';
 
         const statusText =
-            state.status +
+            localizedStatus() +
             typeSuffix +
             marketSuffix;
 
@@ -7791,8 +8820,26 @@
 
         const countText =
             hasMore
-                ? `${visibleResults.length}/${results.length} Pokémon · ${huntCount} hunts`
-                : `${results.length} Pokémon · ${huntCount} hunts`;
+                ? tr(
+                    'results.countPartial',
+                    {
+                        shown:
+                            visibleResults.length,
+                        pokemon:
+                            results.length,
+                        hunts:
+                            huntCount
+                    }
+                )
+                : tr(
+                    'results.count',
+                    {
+                        pokemon:
+                            results.length,
+                        hunts:
+                            huntCount
+                    }
+                );
 
         if (
             count.textContent !==
@@ -7823,9 +8870,19 @@
                 if (
                     isMapModalOpen()
                 ) {
-                    state.drawerOpen =
-                        true;
-                    renderDrawer();
+                    ensureMapToggle();
+
+                    if (
+                        state.atlasEnabled
+                    ) {
+                        state.drawerOpen =
+                            true;
+                        renderDrawer();
+                    } else {
+                        state.drawerOpen =
+                            false;
+                        restoreNativeMapView();
+                    }
                 } else {
                     cleanupMapIntegration();
                 }
@@ -7846,9 +8903,19 @@
                 if (
                     isMapModalOpen()
                 ) {
-                    state.drawerOpen =
-                        true;
-                    renderDrawer();
+                    ensureMapToggle();
+
+                    if (
+                        state.atlasEnabled
+                    ) {
+                        state.drawerOpen =
+                            true;
+                        renderDrawer();
+                    } else {
+                        state.drawerOpen =
+                            false;
+                        restoreNativeMapView();
+                    }
                 } else {
                     cleanupMapIntegration();
                 }
@@ -7857,7 +8924,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.6.0 loaded'
+            '[PokéIdle Hunt Atlas] v1.6.1 loaded'
         );
     }
 
