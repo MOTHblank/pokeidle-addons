@@ -1,5 +1,6 @@
 /**
- * Os golpes que vêm de planilha de balanceamento, espécie por espécie. Hoje são seis:
+ * Os golpes que vêm de planilha de balanceamento, espécie por espécie. Hoje são seis, mais uma
+ * tabela no mesmo formato para as espécies que ganham arte depois:
  *
  *   · "Moves PokeIdle Iniciais" → `GOLPES_INICIAIS`, as últimas evoluções dos 20 iniciais;
  *   · "Rework Moves Pseudo Lendários Revisado" → `GOLPES_PSEUDO_LENDARIOS`, os 8 pseudo-lendários;
@@ -9,7 +10,9 @@
  *   · "Iniciais Kanto Moves Atuais" → `GOLPES_PRE_EVOLUCOES_KANTO`, os dois primeiros
  *     estágios dos três iniciais de Kanto;
  *   · "Rework Moveset 28-09" → `GOLPES_REWORK_2026_09_28`, Electivire, Lucario, Mr. Mime,
- *     Drifblim e Camerupt.
+ *     Drifblim e Camerupt;
+ *   · `GOLPES_ARTE_NOVA`, sem planilha: as espécies que estavam no catálogo com `looktype: 1`
+ *     e entram no jogo quando a sprite chega ao Pokedex Backup (Mimikyu).
  *
  * Mora em código, e não editado direto no JSON, pelo mesmo motivo do `AJUSTE_HUNT_LEVEL`:
  * Kanto/Johto/Hoenn vêm de `creatures-audit-overrides.json` (gerado por
@@ -1494,6 +1497,36 @@ export const GOLPES_REWORK_2026_09_28 = {
   ],
 };
 
+/**
+ * As espécies que estavam no catálogo sem sprite (`looktype: 1`) e entram no jogo quando a arte
+ * chega. O gerador de `creatures-novos.json` deu a elas golpes de enchimento — quase tudo com
+ * poder 56, Shadow Ball inclusive (o resto do catálogo usa 80) —, e ninguém mexeu porque a
+ * espécie não aparecia em lugar nenhum.
+ *
+ * Não há planilha: a lista segue o formato delas (11 golpes no nível 1, poder crescente, um de
+ * 120 no topo e DOIS de 600, um por tipo) e só usa nomes que já existem no catálogo, com o
+ * poder que eles já têm nas outras espécies.
+ *
+ * Mimikyu bate fisicamente (Atk 90 contra SpA 50), então os dois de 600 são PHYSICAL, como os
+ * do Aegislash e do Dhelmise, e 8 dos 11 golpes são físicos. Os especiais que ficaram (Draining
+ * Kiss, Shadow Ball, Dazzling Gleam) são TMs reais dele.
+ */
+export const GOLPES_ARTE_NOVA = {
+  778: [ // Mimikyu — GHOST/FAIRY
+    ['Astonish',         'GHOST',    'PHYSICAL',  30],
+    ['Shadow Sneak',     'GHOST',    'PHYSICAL',  40],
+    ['Draining Kiss',    'FAIRY',    'SPECIAL',   50],
+    ['Shadow Claw',      'GHOST',    'PHYSICAL',  70],
+    ['Shadow Ball',      'GHOST',    'SPECIAL',   80],
+    ['Dazzling Gleam',   'FAIRY',    'SPECIAL',   80],
+    ['Phantom Force',    'GHOST',    'PHYSICAL',  90],
+    ['Play Rough',       'FAIRY',    'PHYSICAL',  90],
+    ['Shadow Force',     'GHOST',    'PHYSICAL', 120],
+    ['Untold Nightmare', 'GHOST',    'PHYSICAL', 600],
+    ['Starlight Charm',  'FAIRY',    'PHYSICAL', 600],
+  ],
+};
+
 const TABELAS = [
   GOLPES_INICIAIS,
   GOLPES_PSEUDO_LENDARIOS,
@@ -1501,6 +1534,7 @@ const TABELAS = [
   GOLPES_REWORK_2026_09,
   GOLPES_PRE_EVOLUCOES_KANTO,
   GOLPES_REWORK_2026_09_28,
+  GOLPES_ARTE_NOVA,
 ];
 
 /**

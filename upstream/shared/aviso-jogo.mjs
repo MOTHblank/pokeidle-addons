@@ -39,6 +39,18 @@
  *   ok      a chave do texto do botão de fechar, enquanto ela está na tela
  */
 export const NOVIDADES = [
+  // O BÔNUS NA KICK: vincular a Kick (para sempre — uma conta da Kick por treinador) e trocar os
+  // PONTOS DO CANAL dos Streamers Oficiais por horas de +15% em XP, Capture Boost e Secret Lure,
+  // que se somam. Com o convite de Streamer Parceiro da Kick no meio do slide, como o da Twitch
+  // na 18. Junto: os diálogos virando cena de jogo, a barraca do Mercado, o shiny que brilha na
+  // Equipe, a mensagem fixada do chat, o Mimikyu em Alola e os links da Mega/evolução na ficha.
+  { aviso: 22, versao: '1.206.0', data: '2026-10-01', ok: 'aviso.v22Ok' },
+  // A COMISSÃO DO MERCADO: em gema, o POKÉMON passa a pagar por faixa marginal (13% / 10% / 7,5%)
+  // no lugar dos 15% planos, e o Coins sobe de 10% para 15% — os dois lados da mesma conta, e os
+  // dois no slide, porque descobrir o aumento na hora de vender seria pior. Junto: a ficha do Boss
+  // dizendo como capturar pelo MysticTicket, a recarga de golpe que pausa fora de campo (o exploit
+  // relatado no Discord), a busca de treinador, a fila do PvP que sobrevive ao deploy e o resto.
+  { aviso: 21, versao: '1.202.0', data: '2026-10-01', ok: 'aviso.v21Ok' },
   // O MYSTICTICKET e os MYSTERY EGGS: o ticket raríssimo dos Bosses que abre a Arena Mística com
   // um Lendário ou Mítico nível 100 (uma bola só), e os ovos P2/P3/P4 do Market NPC que chocam em
   // 16/32/48 h na Chocadeira. Junto: a Tag IDLE do Discord com os botões novos do #reedem-codes,

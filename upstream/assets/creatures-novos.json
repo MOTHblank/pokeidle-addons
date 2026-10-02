@@ -63406,7 +63406,7 @@
     {
       "pokeId": 778,
       "name": "Mimikyu",
-      "looktype": 1,
+      "looktype": 60778,
       "description": "a mimikyu",
       "type1": "GHOST",
       "rarity": "UNCOMMON",

@@ -251,6 +251,7 @@ html.mobile .escape-rope { height: 34px; padding: 0 6px; gap: 4px; flex: none; }
 html.mobile .escape-rope .er-ico { width: 17px; height: 17px; }
 html.mobile .escape-rope .er-qtd { font-size: 10.5px; }
 html.mobile .hunt-popup { height: 34px; width: 32px; padding: 0; flex: none; }
+html.mobile .hunt-eco { height: 34px; width: 32px; padding: 0; flex: none; }
 
 /* Os dois desenhos que substituem as frases: a cruz do Centro Pokémon e a bandeira branca de
    desistir. São MÁSCARAS, e não imagens — a cor vem do próprio botão (`currentColor`), então
@@ -432,8 +433,10 @@ html.mobile .hud-zoom-btns .sessao-btn { width: 40px; height: 40px; }
 html.mobile .hud-zoom-btns .sessao-btn,
 html.mobile .hud-zoom-par button { overflow: visible; }
 html.mobile .sessao-selo { top: -4px; right: -4px; min-width: 17px; height: 17px; font-size: 9.5px; }
-html.mobile .sessao-painel,
 html.mobile .capturas-painel { width: min(250px, calc(100vw - 32px)); }
+/* A prancheta em seções vira UMA coluna no celular (o `auto-fit` do `.ss-grade` decide sozinho) e
+   ocupa quase a largura da cena: os números grandes pedem a largura, e ela rola por dentro. */
+html.mobile .sessao-painel { width: min(360px, calc(100vw - 20px)); }
 /* RESET e COPIAR têm 15 px de altura no desktop, onde o alvo é a ponta do mouse. No dedo isso
    é metade do mínimo confortável — e o COPIAR existe justamente para o celular, então ele
    precisa ser acertável de primeira. Vale para o Reset do histórico de capturas também: mesma
@@ -634,6 +637,11 @@ html.mobile .ativo-card .pk-selos {
 }
 html.mobile .btn-evoluir { padding: 11px 10px; font-size: 13px; }
 html.mobile .poke-linha { padding: 9px 10px; gap: 10px; }
+/* O brilho do shiny segue o sprite (ver `.brilho-shiny` no estilo.css): aqui o card Em campo
+   alinha pelo topo e as linhas ganham padding, então o centro do sprite muda de lugar. */
+html.mobile .ativo-card.brilho-shiny { --sh-x: 35px; --sh-y: 35px; }
+html.mobile .poke-linha.brilho-shiny { --sh-x: 24px; }
+html.mobile .poke-linha.depot-linha.brilho-shiny { --sh-x: 26px; --sh-y: 25px; }
 html.mobile .poke-linha .pl-nome { font-size: 12.5px; }
 html.mobile .poke-linha .pl-lv { font-size: 11px; }
 /* Sem mouse não existe `:hover`, e a ficha do pokémon ficaria invisível para sempre. */
@@ -794,6 +802,9 @@ html.mobile .chat-canal-op { padding: 10px 12px; }
 html.mobile .chat-idioma { width: 34px; height: 34px; }
 html.mobile .chat-vao { min-height: 90px; }
 html.mobile .chat-msg { font-size: 14px; line-height: 1.4; }
+/* No celular a setinha de responder não aparece (sem hover, ela ficaria escondida para sempre ou
+   em toda linha): o "Responder" mora no painel que abre ao tocar na mensagem. */
+html.mobile .m-responder { display: none; }
 html.mobile .chat-entrada { gap: 6px; }
 html.mobile .chat-entrada input { height: 42px; }
 html.mobile .chat-emoji-btn { width: 42px; font-size: 19px; }
@@ -1244,6 +1255,12 @@ html.mobile .chat-mod-excluir {
    no campo do endereço é pior do que em qualquer outra. */
 html.mobile .orbs-tuto { min-height: 48px; padding: 10px 12px; gap: 12px; }
 html.mobile .orbs-tuto-txt { font-size: 13px; }
+
+/* O alerta de moeda x rede encolhe um grau no celular: em 360 px o título de 16 px quebra
+   em quatro linhas e o bloco come a tela inteira antes do formulário aparecer. */
+html.mobile .orbs-alerta { padding: 11px 12px; }
+html.mobile .orbs-alerta-tit { font-size: 14px; }
+html.mobile .orbs-alerta p { font-size: 11.5px; }
 
 /* Calculadora — busca de espécie com lista rolável no celular. */
 html.mobile .calc-especie-busca { height: 40px; font-size: 14px; }
@@ -2244,6 +2261,12 @@ html.mobile .caixa-guild-detalhe .modal-corpo {
 html.mobile .gd-cab { flex-wrap: wrap; gap: 10px; }
 html.mobile .gd-numeros { gap: 8px; font-size: 10px; }
 html.mobile .gd-membros { max-height: none; }
+/* VER PERFIL, no celular: só o ícone. O rótulo cabia no modal de 856 px do computador; aqui
+   ele roubaria do nick a largura que o nick não tem sobrando. O alvo vira quadrado de 44 px,
+   o mínimo de toque da tela — o mesmo do cabeçalho do membro, ao lado. */
+html.mobile .gd-membro-perfil { width: 44px; padding: 0; justify-content: center; }
+html.mobile .gd-membro-perfil .gd-membro-perfil-txt { display: none; }
+html.mobile .gd-membro-perfil svg { width: 17px; height: 17px; }
 /* Linha de guild que abre a ficha: alvo de 44 px, o mesmo mínimo do cabeçalho de membro.
    A seta cresce junto — ela é o que diz "isto abre" quando não existe hover para contar. */
 html.mobile .guild-abre { min-height: 44px; -webkit-tap-highlight-color: transparent; }
@@ -2310,7 +2333,11 @@ html.mobile .modal-caixa[data-modal="amigos"].ver-painel .amigos-painel {
 }
 html.mobile .amigo-voltar { display: grid; }
 html.mobile .amigo-linha,
-html.mobile .amigo-pedido { padding: 10px; min-height: 44px; }
+html.mobile .amigo-pedido,
+html.mobile .amigo-achado { padding: 10px; min-height: 44px; }
+/* Os três botões do achado não cabem na mesma fileira do nick num celular: eles descem
+   inteiros para a linha de baixo em vez de espremer o nome a três letras. */
+html.mobile .amigo-achado-bts { margin-left: 0; flex: 1 0 100%; }
 html.mobile .amigo-mini,
 html.mobile .amigo-acao,
 html.mobile .amigos-aba { min-height: 36px; }
@@ -2521,7 +2548,6 @@ html.mobile .wk-texto { flex: 1; min-height: 180px; }
 html.mobile .wk-tabela th { white-space: normal; }
 
 /* --- ficha do pokémon --- */
-html.mobile .fi-topo { flex-wrap: wrap; }
 html.mobile .fi-grade,
 html.mobile .fi-stats { grid-template-columns: 1fr 1fr; }
 
@@ -2959,6 +2985,32 @@ html.mobile .caixa-confirmar .modal-corpo {
   overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
 
+/* --- o diálogo de jogo (dlg-) ---
+   O vocabulário é o mesmo do desktop; o que muda é a ALTURA. Numa folha de rodapé o botão de
+   confirmar não pode cair abaixo da dobra, então o palco perde respiro e os bonecos, um degrau.
+   Em 360 px a placa do preço e o selo dos dias da feira encolhem para não cobrir o bicho, e os
+   atalhos de prazo ganham alvo de dedo. */
+html.mobile .dlg-palco { padding: 12px 6px 8px; }
+html.mobile .dlg-ator { flex-basis: 118px; }
+html.mobile .dlg-ator-arte { width: 76px; height: 76px; }
+html.mobile .dlg-seta { min-width: 50px; }
+html.mobile .dlg-placa { right: 8px; padding: 3px 7px 3px 5px; font-size: 11.5px; }
+html.mobile .dlg-placa img { width: 15px; height: 15px; }
+html.mobile .dlg-placa-dias { left: 8px; font-size: 11px; }
+html.mobile .dlg-dias .qtd-atalho { height: 40px; font-size: 11.5px; padding: 0 2px; white-space: nowrap; }
+/* A etiqueta de preço no celular: a moeda menor e as linhas do saldo recuando junto (34 px da
+   moeda + 8 de respiro), para os números continuarem alinhados à direita do rótulo. */
+html.mobile .dlg-custo { grid-template-columns: 34px minmax(0, 1fr) auto; column-gap: 8px; }
+html.mobile .dlg-custo-num { font-size: 18px; }
+html.mobile .dlg-custo-linha { padding-left: 42px; }
+html.mobile .dlg-custo-linha.fim { background-position: 42px 0; background-size: calc(100% - 42px) 2px; }
+html.mobile .dlg-req-nome { font-size: 13px; }
+html.mobile .dlg-lista li { font-size: 12.5px; }
+html.mobile .dlg-selo { font-size: 12px; }
+/* As cinco bolas (e as pedras da Oferenda) numa fileira só, mesmo em 360 px. */
+html.mobile .dlg-bolas { gap: 4px; }
+html.mobile .dlg-bola { min-width: 50px; padding: 5px 4px 4px; }
+
 /* Aviso de moeda ao anunciar: no celular o número é o que se lê de relance, então ele cresce
    e o ícone junto. A caixa continua com uma moeda por linha — lado a lado em 360 px viraria
    duas colunas de 150 px, e aí o "500 Coins" quebraria no meio. */
@@ -3177,6 +3229,12 @@ html.mobile .pvp-premios-bt { height: 40px; padding: 0 14px; font-size: 12px; }
 html.mobile .pvpr-pos { flex-basis: 110px; }
 /* No dedo, 28 px de botão é um alvo que erra. O piso do jogo é 34. */
 html.mobile .pvp-btn-peq { height: 34px; padding: 0 14px; font-size: 12px; }
+/* Os ícones do card de formação: quadrados de dedo e SEM o respiro de cima (que empurrava o
+   ícone 6 px para a direita num botão de 30). */
+html.mobile .pvp-form-acoes .pvp-form-ico { width: 40px; padding: 0; }
+html.mobile .pvp-form-ico .dlg-svg { width: 16px; height: 16px; }
+/* O nome no editor da formação: 16 px no campo, senão o iOS dá zoom na página ao tocar. */
+html.mobile .pvp-form-ed-campo input { height: 40px; font-size: 16px; }
 /* No celular a caixa é a tela inteira e a rolagem é a do modal: uma altura fixa aqui
    criaria uma segunda barra de rolagem dentro da primeira. */
 html.mobile .pvp-tela { height: auto; }
@@ -3418,6 +3476,9 @@ html.mobile .nota-dobravel:not(.aberta) {
   -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent);
   mask-image: linear-gradient(180deg, #000 55%, transparent);
 }
+/* A nota em faixa (o `.dlg-aviso` da folha de equipe) tem 9 px de respiro em cima e embaixo: as
+   duas linhas de texto ficam inteiras, e a máscara apaga só a terceira. */
+html.mobile .dlg-aviso.nota-dobravel:not(.aberta) { max-height: calc(2 * 1.45em + 18px); }
 html.mobile .cmpk-notas.nota-dobravel { margin-bottom: 8px; }
 html.mobile .cmpk-notas.nota-dobravel .cm-nota { font-size: inherit; line-height: inherit; }
 
@@ -3553,8 +3614,11 @@ html.mobile .trn-espera { align-self: center; font-size: 11.5px; }
   html.mobile .trn-add { min-height: 56px; }
 }
 
-/* O menu da casa (pokémon meu × pokémon teste): dois botões grandes, não dois links. */
-html.mobile .trn-menu .camp-btn { min-height: 52px; font-size: 14px; }
+/* O menu da casa (pokémon meu × pokémon teste): as duas cartas, com a legenda em corpo de
+   leitura — a coluna de 170 px de cada uma ainda cabe lado a lado num celular de 360. */
+html.mobile .trn-escolha { padding: 12px 8px 14px; }
+html.mobile .trn-escolha b { font-size: 13.5px; }
+html.mobile .trn-escolha small { font-size: 12px; }
 
 /* A folha do pokémon de teste: campo em 16 px (abaixo disso o iOS dá zoom ao focar, §8 do
    DESIGN.md), chip com 40 px e a grade de espécies mais curta, para os botões do pé caberem. */
@@ -3627,10 +3691,10 @@ html.mobile .cxm-premio-qtd { font-size: 16px; }
 html.mobile .bolsa-lixeira { padding: 8px; }
 html.mobile .bolsa-lixeira-bt { height: 42px; padding: 0 16px; font-size: 14px; }
 html.mobile .bolsa-lixeira-dica { flex: 1 1 100%; font-size: 12px; }
-html.mobile .lix-alvo { grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
-html.mobile .lix-tem { grid-column: 1 / -1; font-size: 12.5px; }
 html.mobile .lix-qtd .mk-qtd input { height: 44px; font-size: 16px; }
-html.mobile .cm-botoes .lix-sim { min-height: 48px; }
+/* O botão diz o que some ("Jogar fora 1 Darkness Stone") — cortado em "Dark…" ele deixava de
+   dizer justamente o quê. No celular ele quebra em duas linhas em vez de reticências. */
+html.mobile .cm-botoes .lix-sim { min-height: 48px; white-space: normal; line-height: 1.2; padding-top: 4px; padding-bottom: 4px; }
 
 
 /* ------------------------------------------------------------ Modo Economia
@@ -3687,14 +3751,14 @@ html.mobile.modo-economia .eco-corpo > #capturas-painel { order: 2; }
 html.mobile.modo-economia .eco-lado > #sessao-painel { order: 3; }
 html.mobile.modo-economia .eco-corpo > #capturas-painel,
 html.mobile.modo-economia .eco-lado > #sessao-painel { flex: 0 0 auto; }
-html.mobile.modo-economia .eco-lado > #sessao-painel .sessao-linhas { overflow: visible; }
+html.mobile.modo-economia .eco-lado > #sessao-painel { overflow: visible; }
 html.mobile.modo-economia .eco-corpo .capturas-corpo { overflow: visible; flex: 0 0 auto; }
 /* Os dois Reset e o Copiar são botões de 15 px no desktop — no dedo, não são botão nenhum. */
 html.mobile.modo-economia .eco-corpo .sessao-reset { height: 30px; min-width: 60px; font-size: 10px; }
-html.mobile.modo-economia .eco-corpo .sessao-linhas li,
+html.mobile.modo-economia .eco-corpo .ss-linha,
 html.mobile.modo-economia .eco-corpo .capturas-linha { font-size: 13px; }
 /* O `/h` sobe junto, mas continua um degrau abaixo do contador de que sai. */
-html.mobile.modo-economia .eco-corpo .sessao-linhas li.sessao-ritmo { font-size: 11.5px; }
+html.mobile.modo-economia .eco-corpo .ss-hora { font-size: 11.5px; }
 html.mobile.modo-economia .eco-corpo .capturas-info { width: 22px; height: 22px; font-size: 11px; }
 
 /* O PASSE DE BATALHA no celular. Herói e VIP empilham; o botão de resgatar e o de comprar crescem

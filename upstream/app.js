@@ -15,6 +15,7 @@ import {
 } from './cores-outfit.mjs';
 import {
   pintarBrasao,
+  svgBrasao,
   normalizarBrasao,
   ESCUDOS,
   EMBLEMAS,
@@ -40,11 +41,23 @@ import {
   REQ_LEVEL_MAX,
 } from '../shared/guild-recrutamento.mjs';
 import { analisarHunt, listaDropsEspecie, melhorEfetividadeContra, especiePassaFiltroMatchup, matchupDefensivo, matchupTiposHunt, ritmoDaSessao } from './hunt-analyser.mjs';
+import { DROPS_SESSAO, sessaoNova, sanearSessao, contarNaSessao, custosDaSessao, porHora } from './sessao-hunt.mjs';
+import { pisoIvDoFiltro, passaFiltroTipoIv } from '../shared/filtro-depot.mjs';
 import { herdarLooktypeOrre } from '../shared/herdar-looktype-orre.mjs';
 import { CUSTO_ALTO_FALANTE } from '../shared/alto-falante.mjs';
 import {
+  liquidoOrbDaVenda,
+  pctEfetivoOrb,
+  faixasOrbParaTela,
+  temFaixaOrb,
+  TAXA_GOLD,
+  TAXA_ORB_PLANA,
+  PRECO_MIN_ORB,
+  PRECO_MIN_GOLD,
+} from '../shared/taxa-mercado.mjs';
+import {
   MYSTIC_TICKET_ID, ARENA_MISTICA, NIVEL_LENDARIO_MISTICO, CAPTURA_MISTICA_POR_BOLA,
-  BOLAS_MISTICAS_DA_MELHOR, chanceCapturaMistica,
+  BOLAS_MISTICAS_DA_MELHOR, chanceCapturaMistica, poolLendariosMisticos,
 } from '../shared/mistico.mjs';
 import {
   OVOS, OVO_POR_ID, OVO_POR_ITEM, ehItemOvo, CHOCADEIRAS_MAX, PRECO_CHOCADEIRA_DIAMANTES,
@@ -104,6 +117,14 @@ import {
   rankDePontos,
   temporadaDe,
 } from '../shared/pvp-rank.mjs';
+import {
+  FORMACAO_NOME_MAX,
+  PVP_FORMACOES_MAX,
+  mesmaEscalacao,
+  partidasDaFormacao,
+  taxaDaFormacao,
+  validarNomeFormacao,
+} from '../shared/pvp-formacoes.mjs';
 import {
   PREMIOS_GLOBAL,
   POSICOES_BONUS_GP,
@@ -171,7 +192,7 @@ import {
   vipEhPermanente,
 } from '../shared/convites.mjs';
 import { ehPedraEvolucao, itemMortoDoJogo, itemMortoPorNome, itemVendavelAoNpc, normalizarNpcPriceItem } from '../shared/venda-npc-item.mjs';
-import { ajustarPrecoEspelho } from '../shared/preco-item-espelho.mjs';
+import { ajustarItemEspelho } from '../shared/ajuste-item-espelho.mjs';
 import { aplicarEconomiaDrop } from '../shared/economia-drop.mjs';
 import { OUTLAND_TIERS, OUTLAND_TIER_PADRAO, rotuloOutlandTier } from '../shared/outland-tiers.mjs';
 import { temSpriteJogo } from '../shared/sprite-jogo.mjs';
@@ -186,7 +207,7 @@ import {
 } from '../shared/megas.mjs';
 import {
   notaPokemon, notaDePokemon, notaMercadoDoPokemon, atendeNotaMercado, poderDePokemon, basesDaEspecie,
-  ivsDeSoma, fatiasNascimentoPorStat,
+  ivsDeSoma, fatiasNascimentoPorStat, faixaDaNota, FAIXAS_NOTA,
   IV_MIN, IV_MAX, IV_POR_STAT, QUALIDADE_MIN, QUALIDADE_MAX, POTENCIA_MIN, POTENCIA_MAX,
   MERCADO_POKEMON_MIN, AUTO_LOCK_NOTA_MIN, notaAutoLockValida, percentilQualidade,
 } from '../shared/nota-pokemon.mjs';
@@ -224,8 +245,9 @@ import {
   pedrasRefinoResolvidas,
   saldoPedrasRefino,
   simularConsumoPedrasRefino,
-  formatarConsumoPedras,
   rotuloPedrasRefino,
+  completarUsoPedrasRefino,
+  validarUsoPedrasRefino,
 } from '../shared/refino-pedras.mjs';
 import {
   otimizadoLigado, definirOtimizado, nightLigado, aplicarNight,
@@ -882,6 +904,22 @@ const selosDeTipo = (tipos) => (tipos ?? []).map((t) => `<span class="tipo ${t}"
 const prefixoShiny = () => `✨ ${t('calc.shiny')} `;
 
 /**
+ * O BRILHO do shiny nas vitrines do próprio bicho — a ficha, a Equipe e o Em campo: um halo de
+ * ouro que respira atrás do sprite e duas faíscas de pixel que piscam fora de compasso. Discreto
+ * de propósito: a festa de verdade é o aviso da captura, e este é o "olha o que você tem".
+ *
+ * A Equipe e o Em campo se redesenham a cada snapshot (duas vezes por segundo), e um elemento
+ * novo começa a animação do zero — o halo nunca sairia do primeiro quadro. Por isso a FASE vem
+ * do relógio: o atraso negativo põe cada cópia nova no ponto do ciclo em que a anterior estava,
+ * e de quebra todo shiny da tela respira junto. O ciclo é o mesmo `3.2s` do `.sh-halo`.
+ */
+const CICLO_BRILHO_SHINY_MS = 3200;
+const brilhoShiny = () => {
+  const fase = `style="--sh-fase:-${Date.now() % CICLO_BRILHO_SHINY_MS}ms" aria-hidden="true"`;
+  return `<i class="sh-halo" ${fase}></i><i class="sh-faisca f1" ${fase}></i><i class="sh-faisca f2" ${fase}></i>`;
+};
+
+/**
  * O selo do TÍTULO DE GINÁSIO no pokémon que está batendo mais forte por causa dele.
  *
  * Sem isto o +25% seria invisível: o jogador ganharia o ginásio e continuaria vendo os
@@ -962,6 +1000,7 @@ const estado = {
   shinyLooksOutland: {}, // pokeId 10xxx → looktype shiny Outland
   outlandDex: null, // pokeToDex / dexToPoke — faixa #2001+
   chanceShiny: 0, // por encontro (1/24.000) — vem do welcome
+  misticoPool: null, // Set de pokeId que a Arena Mística sorteia — vem do welcome
   captura: null, // { base, piso, teto } — as constantes da fórmula de captura
   multShinyStats: 3, // o ×3 que o shiny dá em todos os stats
   maxEquipe: 5,
@@ -979,6 +1018,9 @@ const estado = {
   mensagens: { mundo: [], comercio: [], duvidas: [], guild: [] },
   souAdmin: false, // cargo de painel (ADMIN_EMAILS ou AUDITORIA_RESOLVER_EMAILS) — vem do welcome
   chatMod: false, // admin, moderador ou helper — apagar mensagens do chat
+  // As mensagens FIXADAS por admin, uma por canal aberto e idioma: `mundo:pt` → { canal, idioma,
+  // msg, por, em }. A lista inteira chega na entrada (`chat.fixadas`); cada troca, ao vivo.
+  chatFixadas: {},
   chatCmd: false, // admin ou moderador — os comandos de barra (/mute, /unmute)
   chatMutadoAte: 0, // timestamp ms — mute de moderação
   chatNovas: 0, // quantas chegaram enquanto a lista estava rolada para cima
@@ -1002,6 +1044,9 @@ const estado = {
     soShiny: false, soP5: false, soTmElemental: false, soTmAoe: false,
     // "Omitir Pokémon de Outland": tira as variantes (#2001+) da vitrine de pokémon.
     semOutland: false,
+    // AGREGAR ESPÉCIES: uma linha por espécie (ligado, o padrão) ou a lista de anúncios de
+    // sempre (desligado). Ver `vitrineDeEspecies`.
+    agregarEspecies: true,
     // As faixas da barra lateral, piso e teto de cada uma. Ver `FAIXAS_MERCADO`.
     nivelMin: '', nivelMax: '', potenciaMin: '', potenciaMax: '', ivMin: '', ivMax: '',
     qualidadeMin: '', qualidadeMax: '', notaMin: '', notaMax: '',
@@ -1112,6 +1157,7 @@ const estado = {
   pvpPosicao: null, // meu lugar na tabela, ou null enquanto posiciono
   pvpTotalClassificados: 0,
   pvpTime: [], // os ids da equipe salva, na ordem de entrada
+  pvpFormacoes: null, // o armário de formações (`null` = ainda não chegou do servidor)
   pvpLadder: [],
   pvpHistorico: [],
   pvpHistAberta: null, // o id da partida aberta no histórico (ver `blocoDoHistorico`)
@@ -1349,13 +1395,16 @@ function conectar() {
     else if (m.t === 'chat') receberChat(m);
     else if (m.t === 'chat.historico') mesclarChatHistorico(m.canal, m.mensagens ?? []);
     else if (m.t === 'chat.del') excluirChat(m.id);
+    else if (m.t === 'chat.fixadas') receberChatFixadas(m.lista ?? []);
+    else if (m.t === 'chat.fixada') receberChatFixada(m);
     else if (m.t === 'chat.mute') aplicarMuteChat(m.ate);
     // `nick` vem em avisos que precisam de placeholder (mute ok, etc.).
     else if (m.t === 'chat.aviso') {
       if (m.chave === 'chat.modMuteOk') toast(t('chat.modMuteOk', { nick: m.nick ?? '', minutos: m.minutos ?? '' }));
       // Resposta de comando vai em TOAST e não na lista: o `/mute` pode ter sido digitado no
       // painel da guild, e a linha de aviso ficaria fora de vista.
-      else if (String(m.chave ?? '').startsWith('chat.cmd')) {
+      // As respostas de fixar/desafixar também: são confirmação de um clique no menu, e não fala.
+      else if (['chat.cmd', 'chat.fixar', 'chat.desafixar'].some((p) => String(m.chave ?? '').startsWith(p))) {
         toast(t(m.chave, { nick: m.nick ?? '', minutos: m.minutos ?? '' }));
       }
       else mostrarAvisoChat(m.chave, { nick: m.nick ?? '', minutos: m.minutos, tempo: m.tempo ?? '' });
@@ -1790,7 +1839,7 @@ async function bootstrap() {
         for (const i of it.items) {
           if (IDS_ITEM_DUPLICADO.has(i.id)) continue;
           if (itemMortoDoJogo(i)) continue;
-          estado.itens.set(i.id, ajustarPrecoEspelho(normalizarNpcPriceItem(i)));
+          estado.itens.set(i.id, ajustarItemEspelho(normalizarNpcPriceItem(i)));
           registrarIconeDoCatalogo(ic, i.id, i.icon);
         }
         estado.iconesItem = ic;
@@ -2709,7 +2758,28 @@ if (refUrl && /^[a-z0-9][a-z0-9_-]{1,18}[a-z0-9]$/i.test(refUrl)) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: refUrl }),
-  }).catch(() => {});
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => { if (d?.vipGratis) anunciarVipDoLink(d); })
+    .catch(() => {});
+}
+
+/** "1 dia" / "2 dias" — o VIP de boas-vindas é contado em horas no servidor e lido em dias. */
+const diasDeVip = (horas) => {
+  const dias = Math.max(1, Math.round((Number(horas) || 24) / 24));
+  return dias === 1 ? t('vipRef.umDia') : t('vipRef.nDias', { n: dias });
+};
+
+/**
+ * O anúncio do VIP de boas-vindas na tela de cadastro: o link é de um Referral Especial, então
+ * quem CRIAR a conta por ele ganha VIP no primeiro login. É o que o streamer anuncia na live — e
+ * a tela confirma antes de a pessoa se cadastrar, com o nome dele.
+ */
+function anunciarVipDoLink(d) {
+  const el = document.getElementById('login-vip-ref');
+  if (!el) return;
+  el.textContent = t('vipRef.convite', { padrinho: String(d.padrinho ?? ''), tempo: diasDeVip(d.horas) });
+  el.classList.remove('hidden');
 }
 const sessaoUrl = params.get('sessao');
 if (sessaoUrl) {
@@ -2745,6 +2815,14 @@ if (params.get('emailTrocado')) history.replaceState(null, '', location.pathname
 // carregamento do módulo, e um `let` declarado depois dela estaria na zona morta.
 let retornoTwitchPendente = params.get('twitch') || null;
 if (retornoTwitchPendente) history.replaceState(null, '', location.pathname);
+// `?kick=<resultado>` é a volta do "Vincular Kick" (ver `/auth/kick/retorno`), pelo mesmo caminho do
+// `?twitch=`. Leva mais duas coisas: `kv`, o vínculo que a tela tem de CONFIRMAR (o servidor só
+// grava depois do "sim" — é para sempre), e `canal`, o que aconteceu com o canal de quem é
+// streamer oficial. Quem avisa é o `welcome` (`avisarRetornoKick`).
+let retornoKickPendente = params.get('kick')
+  ? { resultado: params.get('kick'), kv: params.get('kv') || null, canal: params.get('canal') || null }
+  : null;
+if (retornoKickPendente) history.replaceState(null, '', location.pathname);
 
 function aoEntrar(m) {
   estado.hunts = m.hunts;
@@ -2769,6 +2847,9 @@ function aoEntrar(m) {
   estado.outlandDex = m.outlandDex ?? null;
   setOutlandDexMap(estado.outlandDex);
   estado.chanceShiny = Number(m.chanceShiny) || 0;
+  // Quem a Arena Mística sorteia, direto do servidor (ver `misticoPool` no welcome). Vazio
+  // significa "o servidor não mandou", e aí a ficha cai na conta feita aqui.
+  estado.misticoPool = Array.isArray(m.misticoPool) ? new Set(m.misticoPool.map(Number)) : null;
   estado.captura = m.captura ?? { base: 0.0075, piso: 0.003, teto: 0.1, raridadeDiv: 17 };
   estado.multShinyStats = m.multShinyStats ?? 3;
   estado.maxEquipe = m.maxEquipe ?? MAX_EQUIPE;
@@ -2826,12 +2907,21 @@ function aoEntrar(m) {
   estado.souAdmin = !!m.admin;
   estado.chatMod = !!m.chatMod;
   estado.chatCmd = !!m.chatCmd;
+  // A lista das fixadas chega ANTES do welcome (o gateway manda no `hello`), quando ainda não se
+  // sabia se este jogador é admin — e é isso que decide o × do cartão.
+  pintarChatFixada();
   // A volta do OAuth da Twitch: só no primeiro `welcome` desta página (o de uma reconexão não é a
   // volta de nada), e depois do `souAdmin`, que o modal consulta.
   if (retornoTwitchPendente) {
     const resultado = retornoTwitchPendente;
     retornoTwitchPendente = null;
     avisarRetornoTwitch(resultado);
+  }
+  // A volta da Kick, na mesma regra: só no primeiro `welcome` da página.
+  if (retornoKickPendente) {
+    const volta = retornoKickPendente;
+    retornoKickPendente = null;
+    avisarRetornoKick(volta);
   }
   document.querySelector('.chat-vao')?.classList.toggle('admin-mod', estado.chatMod);
   // A prancheta NÃO nasce zerada aqui: `welcome` chega também no F5 e em TODA reconexão
@@ -3019,6 +3109,28 @@ function passoDoGenero(starters, edicao = false) {
   $('#ob-cancelar')?.addEventListener('click', fecharEditorDeAvatar);
 }
 
+/**
+ * O boneco de hoje e o de amanhã, lado a lado: a pessoa confere a roupa uma última vez antes de a
+ * troca travar por um dia.
+ */
+function confirmarTrocaAvatar(rascunho, aoConfirmar) {
+  confirmar({
+    titulo: t('av.confirmarTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 72), nome: escapar(t('av.hoje')) })}
+        ${dlgSeta()}
+        ${dlgAtor({
+          arte: dlgArteTreinador(LOOK_DO_GENERO[rascunho.genero], empacotarVisual(rascunho.visual), 72),
+          nome: escapar(t('av.nova')),
+          classe: 'novo',
+        })}`)}
+      ${dlgFrase('', t('av.confirmarTexto'))}`,
+    rotuloSim: t('av.confirmar'),
+    aoConfirmar,
+  });
+}
+
 function passoDasCores(starters, edicao = false) {
   // Guarda como se remontar, para a troca de bandeira poder repetir este passo.
   repintarPassoDoOnboarding = () => passoDasCores(starters, edicao);
@@ -3108,14 +3220,9 @@ function passoDasCores(starters, edicao = false) {
     // Trocar de avatar avisa da espera ANTES de gastar a troca. É a mesma ideia da confirmação
     // de venda em lote: a ação em si é boa, mas ela custa algo que só se descobre depois.
     if (edicao) {
-      return confirmar({
-        titulo: t('av.confirmarTitulo'),
-        texto: t('av.confirmarTexto'),
-        rotuloSim: t('av.confirmar'),
-        aoConfirmar: () => {
-          if (!enviar({ t: 'visual.trocar', genero: rascunho.genero, visual: rascunho.visual })) return;
-          fecharEditorDeAvatar();
-        },
+      return confirmarTrocaAvatar(rascunho, () => {
+        if (!enviar({ t: 'visual.trocar', genero: rascunho.genero, visual: rascunho.visual })) return;
+        fecharEditorDeAvatar();
       });
     }
     if (!enviar({ t: 'visual.set', genero: rascunho.genero, visual: rascunho.visual })) return;
@@ -3677,17 +3784,21 @@ function aplicarEstado(e) {
   // Coleção que estão a caminho.
   if (colecaoPendente.size) reaplicarColecaoPendente();
 
-  // O servidor guarda o cooldown de cada golpe por NOME, no jogador — não por pokémon (ver
-  // `p.cdGolpes` em sim.mjs) — e só zera esse relógio em dois lugares: curar o time e entrar
-  // numa arena de boss. O relógio local acompanha pelos EVENTOS desses dois momentos (`case
-  // 'curado'` e `case 'bossEntrou'`, em `aoEvento`), nunca pela troca de ativo: trocar de
-  // pokémon não zera nada, e o painel continua contando de onde estava quando ele volta.
+  // O servidor guarda o cooldown de cada golpe por NOME, e o relógio só corre com o pokémon EM
+  // CAMPO: trocar de ativo PAUSA o que falta e devolve ao pokémon que saiu (ver `p.cdGolpes` e
+  // `sincronizarCooldownsDoAtivo` em sim.mjs). O espelho local é `sincronizarCooldownsDaUI`, e
+  // é chamado daqui porque o `activeId` do snapshot é a palavra final sobre quem está em campo
+  // — a troca otimista do clique e o evento `troca` só adiantam o que este `e.activeId` confirma.
+  //
+  // Zerar de verdade são dois momentos, e os dois chegam por EVENTO (`case 'curado'` e `case
+  // 'bossEntrou'`/`'misticoEntrou'`, em `aoEvento`), nunca por aqui.
   //
   // Já foi AQUI, pela arena nova no estado, e apagava o primeiro golpe do boss. O estado sai
   // DEPOIS dos eventos do mesmo tique, e o golpe de abertura (o de 600, sempre o mais forte
   // pronto) sai no mesmo tique da entrada: o relógio dele era armado e, no pacote seguinte,
   // apagado. O golpe batia, mas o ícone ficava "pronto" os 60 s da recarga — a luta inteira,
   // num boss que cai antes disso —, e o jogador via um golpe travado.
+  sincronizarCooldownsDaUI(e.activeId);
 
   if (e.servidorAgora) {
     estado.campo?.sincronizar(e.servidorAgora);
@@ -3859,6 +3970,10 @@ function aplicarEstado(e) {
     // Só o bloco `twitch` do snapshot mexe nesta tela (a live começou, o vigia achou o jogador no
     // chat, o vínculo mudou). Remontar a cada tick fecharia o diálogo de desvincular por baixo.
     if (JSON.stringify(e.twitch ?? null) !== ultimaAssinaturaTwitch) montarTwitch();
+  } else if (estado.modalAberto === 'kick') {
+    // O mesmo critério: só o bloco `kick` (um resgate creditado, a lista de canais) remonta a tela.
+    // A contagem regressiva das horas anda sozinha, no `tiqueModalKick`.
+    if (JSON.stringify(e.kick ?? null) !== ultimaAssinaturaKick) montarKick();
   } else if (estado.modalAberto === 'calculadora') {
     // Ferramenta com três campos abertos. Remontar a cada tick apagaria o que está sendo
     // digitado, que é o mesmo motivo do Market e do de diamantes.
@@ -4120,8 +4235,13 @@ function pintarAtivosDoTreinador(e) {
   const passeVipAte = Number(e.passe?.vipAte) || 0;
   const passeVip = passeVipAte > agora;
   const tw = e.twitch ?? null;
+  const kk = e.kick ?? null;
+  // O `livesTwitchQueFaltam` entra na assinatura, e não é detalhe: um segundo streamer entrando no
+  // ar não mexe em `aoVivo`, `assistindo` nem `pctAtual` de quem já está assistindo a um. Sem ele,
+  // a linha não seria redesenhada e o ponto vermelho só apareceria no próximo motivo qualquer.
   const assinatura = `${l.vip ? l.vipAte : 0}|${passeVip ? passeVipAte : 0}|${chaves}|${e.guildBonusPct ?? 0}|${e.guildBonusRank ?? 0}|${
-    tw ? `${tw.login ?? ''}:${tw.aoVivo ? 1 : 0}:${tw.assistindo ? 1 : 0}:${tw.pctAtual ?? 0}` : '-'}`;
+    tw ? `${tw.login ?? ''}:${tw.aoVivo ? 1 : 0}:${tw.assistindo ? 1 : 0}:${tw.pctAtual ?? 0}:${livesTwitchQueFaltam(tw)}` : '-'}|${
+    kk ? `${kk.vinculado ? 1 : 0}:${kk.login ?? ''}:${TIPOS_KICK_TELA.map((tp) => (Number(kk.bonus?.[tp]) > agora ? kk.bonus[tp] : 0)).join(',')}` : '-'}`;
   if (host.dataset.assinatura === assinatura) return;
   host.dataset.assinatura = assinatura;
 
@@ -4182,6 +4302,9 @@ function pintarAtivosDoTreinador(e) {
   // configurada): sem vínculo ele é o convite "Conectar Twitch"; com vínculo, diz se o +15% está
   // valendo agora. Ver `linhaTwitch`.
   if (tw) host.appendChild(linhaTwitch(tw));
+  // O BÔNUS NA KICK logo abaixo, no verde da Kick: uma linha só, com o ícone de cada bônus que está
+  // valendo — a contagem de cada um fica no modal. Ver `linhaKick`.
+  if (kk) host.appendChild(linhaKick(kk, agora));
 
   for (const [chave, ate] of Object.entries(l.boosts ?? {})) {
     if (ate <= agora) continue;
@@ -4210,6 +4333,29 @@ function pintarAtivosDoTreinador(e) {
 const GLIFO_TWITCH = `<svg class="tw-glifo" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/></svg>`;
 
 /**
+ * As lives oficiais que estão no ar DANDO bônus e que ele ainda não abriu.
+ *
+ * É a conta que separa "estou ganhando o bônus" de "estou ganhando MENOS do que dá": quem assiste
+ * ao patopapao com o axtlol e o clovao também no ar está em 15% quando podia estar em 17%. Esse
+ * número vira o ponto vermelho na ficha e nas linhas do modal.
+ *
+ * Duas exigências, e as duas evitam um ponto que mente:
+ *
+ *   · **vínculo** — sem conta da Twitch ligada não há "+1% a mais" a perder; o que a tela tem a
+ *     dizer a quem não vinculou é o convite, que já é o estado `conectar`.
+ *   · **`bonus === true`** — só conta a live cujo chat o vigia consegue ler. Numa live sem o
+ *     `/mod faasii` ninguém é detectado: mandar o jogador para lá não daria +1% nenhum, e o ponto
+ *     seria uma promessa que o servidor não tem como cumprir.
+ */
+function livesTwitchQueFaltam(tw) {
+  if (!tw?.login) return 0;
+  const minusculo = (x) => String(x ?? '').toLowerCase();
+  const jaEstou = new Set((tw.assistindoEm ?? []).map(minusculo));
+  const comBonus = new Set((tw.oficiais ?? []).filter((o) => o.bonus === true).map((o) => minusculo(o.login)));
+  return (tw.lives ?? []).filter((l) => comBonus.has(minusculo(l.login)) && !jaEstou.has(minusculo(l.login))).length;
+}
+
+/**
  * A linha do BÔNUS TWITCH na ficha do treinador. Quatro estados, e a linha é sempre um botão que
  * abre o modal da Twitch:
  *
@@ -4221,9 +4367,15 @@ const GLIFO_TWITCH = `<svg class="tw-glifo" viewBox="0 0 24 24" aria-hidden="tru
  *
  * O "aovivo" também é o estado dos primeiros minutos de quem acabou de abrir a live: a lista do
  * chat da Twitch chega atrasada, e a linha só acende quando o vigia o encontra.
+ *
+ * E, no "ativo", um PONTO VERMELHO quando sobrou live para abrir. Quem já está numa live tem a
+ * linha acesa e o "+15% XP" verde — tudo diz "está tudo certo", e era justamente aí que o jogador
+ * não tinha como saber que o colega do streamer estava no ar valendo mais um ponto. O ponto é o
+ * mesmo do "aovivo", e pela mesma razão: é o estado em que ele tem algo a FAZER.
  */
 function linhaTwitch(tw) {
   const situacao = !tw.login ? 'conectar' : tw.assistindo ? 'ativo' : tw.aoVivo ? 'aovivo' : 'offline';
+  const faltam = situacao === 'ativo' ? livesTwitchQueFaltam(tw) : 0;
   const nome = {
     conectar: t('twitch.linhaConectar'),
     ativo: t('twitch.linhaBonus'),
@@ -4236,11 +4388,64 @@ function linhaTwitch(tw) {
       : `+${Number(situacao === 'ativo' && tw.pctAtual) || Number(tw.pct) || 0}% XP`;
   const linha = document.createElement('button');
   linha.type = 'button';
-  linha.className = `tr-ativo twitch tw-${situacao}`;
-  linha.title = t('twitch.tip', { pct: Number(tw.pct) || 0, extra: Number(tw.extra) || 0 });
-  linha.innerHTML = `${GLIFO_TWITCH}<span class="tr-ativo-nome">${escapar(nome)}</span><span class="tr-ativo-valor">${valor}</span>`;
+  linha.className = `tr-ativo twitch tw-${situacao}${faltam ? ' tw-tem-mais' : ''}`;
+  linha.title = faltam
+    ? t('twitch.tipFaltam', { n: faltam, extra: Number(tw.extra) || 0 })
+    : t('twitch.tip', { pct: Number(tw.pct) || 0, extra: Number(tw.extra) || 0 });
+  linha.innerHTML = `${faltam ? '<i class="tw-ponto" aria-hidden="true"></i>' : ''}${GLIFO_TWITCH}<span class="tr-ativo-nome">${escapar(nome)}</span><span class="tr-ativo-valor">${valor}</span>`;
   linha.addEventListener('click', () => abrirModal('twitch'));
   return linha;
+}
+
+/**
+ * O glifo da Kick: o "K" de blocos da marca, desenhado em retângulos. SVG inline pelo motivo do
+ * glifo da Twitch.
+ */
+const GLIFO_KICK = `<svg class="kk-glifo" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M1.5 0h8v5.3h2.7V2.7h2.6V0h8v8h-2.6v2.7h-2.7v2.6h2.7V16h2.6v8h-8v-2.7h-2.6v-2.6H9.5V24h-8z"/></svg>`;
+
+/** Os três bônus da Kick, na ordem da tela — as mesmas chaves dos boosts da Loja (ícone e nome). */
+const TIPOS_KICK_TELA = ['xp', 'captura', 'shiny'];
+
+/**
+ * As linhas do BÔNUS NA KICK na ficha do treinador.
+ *
+ * A primeira é sempre o BOTÃO (abre o modal da Kick), em três estados:
+ *
+ *   conectar   sem vínculo          "Bônus na Kick   vincular"        — o convite, com o fundo verde
+ *   ativo      algum bônus valendo  "Bônus na Kick   [XP][CATCH][LURE]" — acesa, com o ícone de cada
+ *                                                                       bônus que está rodando
+ *   vinculado  nenhum valendo       "Bônus na Kick   resgate"         — no lugar, esperando a live
+ *
+ * Uma linha SÓ, com os três bônus valendo ao mesmo tempo: o tempo de cada um mora no modal (o clique
+ * abre), e não numa pilha de linhas na ficha. `data-kk-fim` é o fim do que acaba primeiro — o
+ * `tiqueAtivos` redesenha a linha nessa hora, para o ícone dele sair.
+ */
+function linhaKick(kk, agora) {
+  const ativos = TIPOS_KICK_TELA
+    .map((tp) => [tp, Number(kk.bonus?.[tp]) || 0])
+    .filter(([, ate]) => ate > agora);
+  // Vinculado pelo id (`kk.vinculado`), não pelo nome — a Kick devolve o nome vazio para algumas contas.
+  const situacao = !(kk.vinculado ?? !!kk.login) ? 'conectar' : ativos.length ? 'ativo' : 'vinculado';
+  const pct = Number(kk.pct) || 0;
+  const botao = document.createElement('button');
+  botao.type = 'button';
+  botao.className = `tr-ativo kick kk-${situacao}`;
+  botao.innerHTML = `${GLIFO_KICK}<span class="tr-ativo-nome">${escapar(t('kick.linha'))}</span>`;
+  if (situacao === 'ativo') {
+    const icones = document.createElement('span');
+    icones.className = 'tr-ativo-valor kk-icones';
+    for (const [tp] of ativos) icones.appendChild(iconeArquivo(tipoDeBoost(tp)?.icone ?? ICONE_DIAMANTE, 16));
+    botao.appendChild(icones);
+    botao.dataset.kkFim = String(Math.min(...ativos.map(([, ate]) => ate)));
+    botao.title = t('kick.ativosDica', { lista: ativos.map(([tp]) => t(`kick.bonus.${tp}`, { pct })).join(' · ') });
+  } else {
+    const valor = situacao === 'conectar' ? t('kick.valorVincular') : t('kick.valorResgate');
+    botao.insertAdjacentHTML('beforeend', `<span class="tr-ativo-valor">${escapar(valor)}</span>`);
+    botao.title = t('kick.tip', { pct });
+  }
+  botao.setAttribute('aria-label', `${t('kick.linha')} — ${botao.title}`);
+  botao.addEventListener('click', () => abrirModal('kick'));
+  return botao;
 }
 
 /**
@@ -4254,6 +4459,9 @@ function tiqueAtivos() {
   // A prancheta corre ANTES do `return` logo abaixo: o relógio dela não tem relação nenhuma
   // com a lista de boosts, e ficava congelado em quem não tinha nenhum ligado.
   tiqueSessao(agora);
+  // As horas do modal da Kick andam no mesmo relógio, e também antes do `return`: o modal pode
+  // estar aberto com a ficha vazia.
+  tiqueModalKick();
   const host = $('#tr-ativos');
   if (!host?.children.length) return;
   // Os carimbos `data-ate` são do SERVIDOR e só podem ser comparados com o relógio dele —
@@ -4270,6 +4478,11 @@ function tiqueAtivos() {
     el.textContent = el.dataset.dias
       ? t('painel.dias', { n: Math.max(1, Math.ceil(resta / 86400000)) })
       : tempoCurto(resta);
+  }
+  // A linha da Kick não tem contador (o tempo de cada bônus está no modal), mas o ícone do bônus
+  // que acabou tem de sair da ficha na hora — ver `linhaKick`.
+  for (const el of host.querySelectorAll('[data-kk-fim]')) {
+    if (Number(el.dataset.kkFim) - doServidor <= 0) venceu = true;
   }
   if (venceu) {
     host.dataset.assinatura = '';
@@ -4548,20 +4761,54 @@ const rearmarCombate = () => {
   estado.centroLivreEm = agoraSincronizado() + 3000;
 };
 
-$('#boss-sair').onclick = () =>
-  estado.eu?.mistico
-    // Na Arena Mística a pergunta é outra: sair é perder o lendário e o ticket, sem volta.
-    ? confirmar({
+$('#boss-sair').onclick = () => confirmarSairArena();
+
+/**
+ * Sair da arena. Na do Boss, a pergunta é "largar a entrada que já foi paga"; na Arena Mística é
+ * outra: sair é perder o lendário E o ticket, sem volta.
+ *
+ * O desenho é o de uma desistência: quem fica para trás aparece sem cor, com a bandeira branca
+ * no canto — e, na Mística, o ticket ao lado, riscado.
+ */
+function confirmarSairArena() {
+  const mst = estado.eu?.mistico;
+  if (mst) {
+    const lt = estado.especies.get(mst.speciesId)?.looktype;
+    return confirmar({
       titulo: t('mistico.sairTitulo'),
-      texto: t('mistico.sairTexto', { nome: escapar(estado.eu.mistico.nome ?? '') }),
+      texto: `
+        ${dlgPalco(`
+          ${dlgAtor({
+            arte: lt ? dlgArteLt(lt, 72) : dlgArteHtml(dlgMedalha({ icone: 'interrogacao', tom: 'mega' })),
+            nome: escapar(mst.nome ?? ''),
+            classe: 'sai',
+            marca: dlgIcone('bandeira', 15),
+          })}
+          ${dlgAtor({ arte: dlgArteItem(MYSTIC_TICKET_ID, 64), nome: 'MysticTicket', classe: 'sai', marca: dlgIcone('xis', 13) })}`, 'perigo')}
+        ${dlgFrase('', t('mistico.sairTexto', { nome: escapar(mst.nome ?? '') }))}`,
       rotuloSim: t('mistico.sairSim'),
+      tom: 'perigo',
       aoConfirmar: () => enviar({ t: 'mistico.sair' }),
-    })
-    : confirmar({
-      titulo: t('boss.abandonarTitulo'),
-      texto: t('boss.abandonarTexto'),
-      aoConfirmar: () => enviar({ t: 'boss.sair' }),
     });
+  }
+  const key = estado.eu?.boss?.arena?.key;
+  const boss = fichaDoBoss(key);
+  // A arte mora no catálogo da galeria (`bossesCatalogo`), não na ficha de quem tem arena.
+  const lt = estado.bossesCatalogo?.find((b) => b.key === key)?.looktype;
+  return confirmar({
+    titulo: t('boss.abandonarTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: lt ? dlgArteLt(lt, 76) : dlgArteHtml(dlgMedalha({ icone: 'bandeira', tom: 'perigo' })),
+        nome: escapar(boss?.nome ?? ''),
+        classe: 'sai',
+        marca: dlgIcone('bandeira', 15),
+      }), 'perigo')}
+      ${dlgFrase('', t('boss.abandonarTexto'))}`,
+    tom: 'perigo',
+    aoConfirmar: () => enviar({ t: 'boss.sair' }),
+  });
+}
 
 // ---------------------------------------------------------------------- ORBs
 //
@@ -4629,7 +4876,7 @@ function blocoDoCaixa(c) {
         <div><span>${t('orbs.arrecadado')}</span><b>${usd(c.arrecadadoUsdt)}</b></div>
         <div><span>${t('orbs.sacadoJogadores')}</span><b>${usd(c.sacadoUsdt)}</b></div>
         <div title="${escapar(t('orbs.taxasMercadoNota'))}">
-          <span>${t('orbs.taxasMercado', { pct: c.taxasMercadoPct ?? 15 })}</span>
+          <span>${t('orbs.taxasMercado', { pct: intervaloFaixasOrb(c.taxasMercadoFaixas) })}</span>
           <b>${usd(c.taxasMercadoUsdt ?? 0)}</b>
         </div>
         <div><span>${t('orbs.emCaixa')}</span><b>${usd(c.emCaixaUsdt)}</b></div>
@@ -4710,6 +4957,30 @@ const blocoDoRisco = () => `
     <p>${t('orbs.riscoRmt')}</p>
     <p>${t('orbs.riscoGolpe')}</p>
     <p>${t('orbs.riscoEndereco')}</p>
+  </div>`;
+
+/**
+ * O alerta de MOEDA x REDE — só na tela de depósito.
+ *
+ * É o erro mais caro que dá para cometer aqui, e o mais fácil de cometer: "Solana" é ao
+ * mesmo tempo o nome da rede que usamos e o nome da moeda que NÃO aceitamos. Quem nunca
+ * mexeu com cripto lê "na rede Solana (SPL)" no alto da tela e manda SOL — que chega no
+ * endereço certo e fica lá, sem virar Gema, porque o detector só conhece o token USDT.
+ *
+ * Por isso este bloco é o único da tela que PULSA: o aviso de risco logo abaixo já é
+ * vermelho, e um segundo quadrado vermelho parado ao lado dele some no mesmo tom. O pulso
+ * é da borda e do brilho, nunca do tamanho — caixa que cresce empurra o formulário inteiro
+ * e faz a tela tremer no celular, que é a forma mais rápida de alguém fechar o modal.
+ *
+ * Fica ACIMA da faixa do tutorial, e não junto do endereço: o texto termina pedindo para
+ * assistir ao vídeo, e o vídeo é a próxima coisa na tela.
+ */
+const blocoDoAlertaSolana = () => `
+  <div class="orbs-alerta" role="alert">
+    <strong class="orbs-alerta-tit">⚠ ${t('orbs.alertaSolTitulo')} ⚠</strong>
+    <p>${t('orbs.alertaSolCorpo')}</p>
+    <p>${t('orbs.alertaSolTicket')}</p>
+    <p class="orbs-alerta-tuto">${t('orbs.alertaSolTutorial')}</p>
   </div>`;
 
 /**
@@ -4812,6 +5083,7 @@ function montarDeposito() {
 
   host.innerHTML = `
     ${blocoDoSaldo(o)}
+    ${blocoDoAlertaSolana()}
     ${blocoDoTutorial(TUTORIAL_DEPOSITO, 'orbs.tutorialDeposito')}
 
     <div class="sw">
@@ -4866,6 +5138,30 @@ function montarDeposito() {
 }
 
 // ------------------------------------------------------------------ withdraw
+
+/**
+ * A confirmação do saque. Repete o endereço INTEIRO: transferência em blockchain não volta, e o
+ * erro mais caro que existe aqui é um endereço colado errado — por isso ele ganha caixa própria,
+ * em letra de máquina, em vez de ficar no meio da frase. As Gemas saem (sem cor), o USDT chega.
+ */
+function confirmarSaqueGemas({ orbs, usdt, endereco, aoConfirmar }) {
+  confirmar({
+    titulo: t('orbs.saqueConfirmarTitulo', { orbs: num(orbs) }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteArquivo(ICONE_GEMA, 56), nome: `${num(orbs)} ${escapar(t('moeda.gemas'))}`, classe: 'sai' })}
+        ${dlgSeta()}
+        ${dlgAtor({
+          arte: dlgArteHtml(dlgMedalha({ icone: 'moedas', tom: 'verde' })),
+          nome: `${escapar(usd(usdt))} USDT`,
+          classe: 'novo',
+        })}`, 'azul')}
+      ${dlgFrase('', t('orbs.saqueRecebeEm', { usdt: escapar(usd(usdt)) }))}
+      <p class="dlg-carteira"><code>${escapar(endereco)}</code></p>
+      ${dlgAviso(t('orbs.saqueAviso'))}`,
+    aoConfirmar,
+  });
+}
 
 function montarWithdraw() {
   const host = $('#orbs-corpo');
@@ -4958,14 +5254,10 @@ function montarWithdraw() {
     if (orbs > o.saldo) return toast(t('orbs.saldoInsuficiente'));
     if (!conferir()) return toast(t('orbs.enderecoInvalido', { rede: NOME_DA_REDE }));
 
-    // A confirmação repete o endereço INTEIRO. Transferência em blockchain não volta, e o
-    // erro mais caro que existe aqui é um endereço colado errado.
-    confirmar({
-      titulo: t('orbs.saqueConfirmarTitulo', { orbs: num(orbs) }),
-      texto: t('orbs.saqueConfirmarTexto', {
-        usdt: usd(orbs * o.precos.saque),
-        endereco: escapar(endereco),
-      }),
+    confirmarSaqueGemas({
+      orbs,
+      usdt: orbs * o.precos.saque,
+      endereco,
       aoConfirmar: () => enviar({ t: 'orbs.sacar', orbs, rede, endereco }),
     });
   };
@@ -5379,7 +5671,22 @@ function montarLoja() {
   }
 }
 
+/**
+ * O "tem certeza?" da Loja: o produto no palco dourado, a etiqueta de diamantes com o saldo que
+ * fica, e a descrição curta do card. O título vai por `textContent`, então o nome entra cru.
+ */
 function confirmarCompra(prod, saldo) {
+  const arte = prod.looktype != null
+    ? dlgArteLt(prod.looktype, 64)
+    : dlgArteArquivo(prod.icone ?? 'site/assets/loja/diamond.png', 56);
+  const desc = prod.boost
+    ? descricaoDoBoost(tipoDeBoost(prod.boost))
+    : textoDaLoja(prod.i18n?.desc, prod.i18n?.params, prod.descricao ?? '');
+  const corpo = (extra = '') => `
+    ${dlgPalco(dlgAtor({ arte, nome: escapar(nomeDoProduto(prod)), classe: 'novo' }), 'ouro')}
+    ${extra}
+    ${prod.preco > 0 ? dlgCusto({ moeda: 'diamante', valor: prod.preco, saldo }) : ''}
+    ${desc ? dlgFrase('', escapar(desc)) : ''}`;
   // "Troca de Nome" precisa do nome ANTES de cobrar: pedir depois deixaria o jogador com um
   // diamante gasto e um prompt cancelado.
   if (prod.pedeTexto) {
@@ -5387,20 +5694,18 @@ function confirmarCompra(prod, saldo) {
     if (!nome) return;
     if (!/^[a-zA-Z0-9_]{3,16}$/.test(nome.trim())) return toast(t('loja.trocarNomeAviso'));
     return confirmar({
-      titulo: t('loja.confirmarTitulo', { nome: escapar(nomeDoProduto(prod)) }),
-      texto: t('loja.confirmarTexto', {
-        preco: `${num(prod.preco)} ${seloDiamante()}`,
-        depois: `${num(saldo - prod.preco)} ${seloDiamante()}`,
-      }),
+      titulo: t('loja.confirmarTitulo', { nome: nomeDoProduto(prod) }),
+      texto: corpo(dlgReqs(dlgReq({
+        arte: dlgIcone('pessoa', 22),
+        nome: escapar(nome.trim()),
+        sub: escapar(t('loja.novoNome')),
+      }))),
       aoConfirmar: () => enviar({ t: 'loja.comprar', id: prod.id, nome: nome.trim() }),
     });
   }
   confirmar({
-    titulo: t('loja.confirmarTitulo', { nome: escapar(nomeDoProduto(prod)) }),
-    texto: t('loja.confirmarTexto', {
-      preco: `${num(prod.preco)} ${seloDiamante()}`,
-      depois: `${num(saldo - prod.preco)} ${seloDiamante()}`,
-    }),
+    titulo: t('loja.confirmarTitulo', { nome: nomeDoProduto(prod) }),
+    texto: corpo(),
     aoConfirmar: () => enviar({ t: 'loja.comprar', id: prod.id }),
   });
 }
@@ -5923,7 +6228,19 @@ function renderCompraDiamantes() {
           <input id="dia-qtd" type="number" min="${p.qtdMinima}" max="${p.qtdMaxima}"
                  step="10" value="${sugerido?.qtd ?? p.qtdMinima}" inputmode="numeric">
         </div>
-        <div class="orbs-receber">${t('diamantes.vocePaga')}: <b id="dia-total">—</b></div>
+        <!-- O recibo da troca: o que sai (R$) → o que entra (💎), com a seta do diálogo de jogo.
+             Os números são do cliente só para MOSTRAR; quem cobra refaz a conta no servidor. -->
+        <div class="dia-recibo">
+          <span class="dia-recibo-lado">
+            <small>${t('diamantes.vocePaga')}</small>
+            <b id="dia-total">—</b>
+          </span>
+          <span class="dlg-seta-divisas" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="dia-recibo-lado recebe">
+            <small>${t('diamantes.voceRecebe')}</small>
+            <b>${seloDiamante(22)}<span id="dia-recibo-qtd">—</span></b>
+          </span>
+        </div>
 
         <!-- CPF do tomador da nota fiscal — SÓ no PIX. No cartão o pagador costuma ser
              estrangeiro (sem CPF) e o nome/endereço vêm do Stripe; exigir CPF trancaria essas
@@ -5953,8 +6270,10 @@ function renderCompraDiamantes() {
           <button class="orbs-btn orbs-btn-sec" id="dia-verificar">${t('diamantes.verificar')}</button>
         </div>
 
-        <p class="orbs-nota dia-reembolso">${t('diamantes.reembolso')}</p>
-        <p class="orbs-nota dia-reembolso">${t('diamantes.reembolsoUso')}</p>
+        ${dlgLista([
+          { icone: 'volta', html: t('diamantes.reembolso') },
+          { icone: 'moedas', html: t('diamantes.reembolsoUso') },
+        ])}
 
         <!-- A Efí não hospeda página de pagamento — diferente do Stripe, que abre numa aba
              nova, o PIX é resolvido AQUI: QR code para escanear ou código para colar no app
@@ -5965,7 +6284,7 @@ function renderCompraDiamantes() {
           <p class="orbs-nota">${t('diamantes.pixInstrucao')}</p>
         </div>
 
-        <p class="orbs-nota">${t('diamantes.aviso')}</p>
+        ${dlgLista([{ icone: 'relogio', html: t('diamantes.aviso') }])}
         <p class="orbs-nota dia-legal">${t('diamantes.doacao')}</p>
       </div>
     </div>`;
@@ -6037,9 +6356,12 @@ function ligarCompraDiamantes() {
     // cartão é a via do estrangeiro, que não tem CPF) — e é checado no clique, não aqui, para
     // o botão poder revelar o campo. O servidor repete tudo em `/diamantes/comprar`.
     const base = qtd >= p.qtdMinima && qtd <= p.qtdMaxima && aceite.checked;
-    $('#dia-total').textContent = qtd >= p.qtdMinima && qtd <= p.qtdMaxima
+    const valida = qtd >= p.qtdMinima && qtd <= p.qtdMaxima;
+    $('#dia-total').textContent = valida
       ? reais(totalDe(qtd))
       : t('diamantes.minimoAviso', { qtd: num(p.qtdMinima) });
+    $('#dia-total').classList.toggle('invalido', !valida);
+    $('#dia-recibo-qtd').textContent = valida ? num(qtd) : '—';
     for (const b of document.querySelectorAll('.dia-metodos .orbs-btn')) b.disabled = !base;
   };
 
@@ -6404,6 +6726,11 @@ function aoReceberPvp(m) {
   if (m.posicao !== undefined) estado.pvpPosicao = m.posicao;
   if (m.totalClassificados !== undefined) estado.pvpTotalClassificados = m.totalClassificados;
   if (m.time !== undefined) estado.pvpTime = m.time ?? [];
+  if (m.formacoes !== undefined) {
+    estado.pvpFormacoes = m.formacoes ?? [];
+    // A folha de equipe do Campeonato pede o armário quando abre sem ele (ver `chipsDeFormacao`).
+    pintarFolhaDaEquipe?.();
+  }
   if (m.ladder !== undefined) estado.pvpLadder = m.ladder ?? [];
   if (m.historico !== undefined) estado.pvpHistorico = m.historico ?? [];
   // A partida aberta no histórico (`pvp.partida.ficha`). O repinte do fim deste handler já a
@@ -6427,7 +6754,20 @@ function aoReceberPvp(m) {
     estado.pvpTime = m.timeSalvo;
     estado.pvpSalvandoTime = false;
     folhaEquipePvp?.fechar();
-    toast(t('pvp.timeSalvo'));
+    // "Usar" uma formação também chega como `timeSalvo`; o aviso diz QUAL entrou.
+    if (m.formacaoOk?.acao !== 'usar') toast(t('pvp.timeSalvo'));
+  }
+  if (m.formacaoOk) {
+    estado.pvpFormacaoEnviando = 0;
+    // O editor fecha só com a confirmação da formação DELE — outra ação ainda em voo não conta.
+    if (m.formacaoOk.acao === 'salvar' && m.formacaoOk.slot === folhaFormacao?.slot) folhaFormacao.fechar();
+    toast(textoDaFormacaoOk(m.formacaoOk));
+  }
+  if (m.formacaoRecusa) {
+    estado.pvpFormacaoEnviando = 0;
+    // Recusado, o editor continua aberto com o rascunho, e o botão volta.
+    folhaFormacao?.repintar();
+    toast(t(m.formacaoRecusa.msg, { max: FORMACAO_NOME_MAX, maxPk: PVP_TIME_MAX }));
   }
   if (m.recusa) {
     estado.pvpSalvandoTime = false;
@@ -6445,6 +6785,10 @@ function aoReceberPvp(m) {
     toast(t('pvp.autoFilaDesligou'));
   }
   if (m.filaAuto) toast(t('pvp.autoFilaEntrou'));
+  // A fila continuou de onde parou depois de uma atualização do servidor. O aviso existe porque
+  // o contrário seria pior dos dois lados: sem ele, quem voltou acha que caiu da fila e clica de
+  // novo (perdendo o tempo de espera que a retomada acabou de preservar).
+  if (m.filaRetomada) toast(t('pvp.filaRetomada'));
 
   // Caiu da elite por inatividade (o `rank` novo já veio no mesmo pacote). A aba aberta pede a
   // tabela de novo: a posição e a lista mudaram junto com os pontos.
@@ -6904,12 +7248,15 @@ function pintarResultadoPvp(acabou) {
 function renderPvp() {
   return `
     <div class="pvp-tela">
+      <!-- O Ranqueado leva o ícone do PvP do menu (o data-ico vira imagem no abrirModal). O
+           escudo da Guild vai com o seletor U+FE0F: sem ele o Windows desenha o glifo de texto,
+           um contorno vazado, em vez do emoji colorido. -->
       <div class="pvp-abas" role="tablist">
         <button type="button" class="pvp-aba" data-aba="ranqueado" role="tab">
-          <span class="pvp-aba-ico" aria-hidden="true">⚔</span>${t('pvp.abaRanqueado')}
+          <span class="pvp-aba-ico" aria-hidden="true" data-ico="img:/img/menu-pvp.png" data-ico-px="20"></span>${t('pvp.abaRanqueado')}
         </button>
         <button type="button" class="pvp-aba" data-aba="guild" role="tab">
-          <span class="pvp-aba-ico" aria-hidden="true">🛡</span>${t('pvp.abaGuild')}
+          <span class="pvp-aba-ico" aria-hidden="true">${'\u{1F6E1}\uFE0F'}</span>${t('pvp.abaGuild')}
         </button>
         <button type="button" class="pvp-aba" data-aba="treino" role="tab">
           <span class="pvp-aba-ico" aria-hidden="true">🎯</span>${t('pvp.abaTreino')}
@@ -7066,18 +7413,29 @@ function abrirPremiosGuild() {
   // O bônus que a guild do jogador TEM agora: é a posição dela no ranking Diário, a mesma que
   // acende a linha "⚔ Guild" dos ativos do treinador. Sem GP hoje, nenhuma linha é dela.
   const rankHoje = estado.eu?.guild ? Number(estado.eu?.guildBonusRank) || 0 : 0;
+  // O pódio leva o troféu e as medalhas do Campeonato; dali para baixo, a posição num selo
+  // redondo. É o que faz a escada se ler de relance, sem ler "TOP" dez vezes.
+  const marcaDaPos = (pos) => (ICONE_LUGAR_CAMPEONATO[pos]
+    ? `<img class="pvpr-emblema pvpr-medalha" src="${ICONE_LUGAR_CAMPEONATO[pos]}" alt="">`
+    : `<span class="pvpr-num">${pos >= PRIMEIRA_POS_RESTO ? `>${PRIMEIRA_POS_RESTO - 1}` : pos}</span>`);
   // Uma linha por posição com % próprio, mais a do piso — a escada inteira sai de
-  // `POSICOES_BONUS_GP`, e não de uma lista escrita aqui que envelheceria no próximo ajuste.
-  const diario = [...POSICOES_BONUS_GP, PRIMEIRA_POS_RESTO].map((pos) => linhaDePremio({
-    rotulo: rotuloTopGuild(pos),
-    premio: `<span class="pvpr-item pvpr-grande">${t('pvpr.bonusFarm', {
-      n: bonusPctPorPosRanking(pos),
-    })}</span>`,
-    eu: rankHoje > 0 && (pos < PRIMEIRA_POS_RESTO ? rankHoje === pos : rankHoje >= PRIMEIRA_POS_RESTO),
-    selo: t('pvpr.suaGuild'),
-  })).join('');
+  // `POSICOES_BONUS_GP`, e não de uma lista escrita aqui que envelheceria no próximo ajuste. A
+  // barra mede o bônus contra o do 1º lugar: a distância entre o 1º e o 5º é o que motiva.
+  const topoPct = Math.max(1, bonusPctPorPosRanking(POSICOES_BONUS_GP[0] ?? 1));
+  const diario = [...POSICOES_BONUS_GP, PRIMEIRA_POS_RESTO].map((pos) => {
+    const pct = bonusPctPorPosRanking(pos);
+    return linhaDePremio({
+      rotulo: rotuloTopGuild(pos),
+      arte: marcaDaPos(pos),
+      premio: `<span class="pvpr-item pvpr-grande">${t('pvpr.bonusFarm', { n: pct })}</span>
+        <span class="pvpr-barra" aria-hidden="true"><i style="width:${Math.round((pct / topoPct) * 100)}%"></i></span>`,
+      eu: rankHoje > 0 && (pos < PRIMEIRA_POS_RESTO ? rankHoje === pos : rankHoje >= PRIMEIRA_POS_RESTO),
+      selo: t('pvpr.suaGuild'),
+    });
+  }).join('');
   const mensal = Object.entries(PREMIOS_GLOBAL).map(([pos, qtd]) => linhaDePremio({
     rotulo: `TOP ${Number(pos)}`,
+    arte: marcaDaPos(Number(pos)),
     premio: `<span class="pvpr-item pvpr-grande">${seloDiamante(20)}<b>+${num(qtd)}</b><span>${t('pvpr.porMembro')}</span></span>`,
   })).join('');
   corpo.innerHTML = `
@@ -7127,6 +7485,7 @@ function pintarRanqueado() {
              rolagem para ser encontrado. -->
         ${blocoDaFila(rank, nivelMin, time)}
         ${blocoDaEquipePvp(time)}
+        ${blocoDasFormacoes(time)}
       </section>
       <section class="pvp-r-col">
         ${blocoDaLadder()}
@@ -7298,6 +7657,233 @@ function blocoDaEquipePvp(time) {
           : ''
       }
     </div>`;
+}
+
+// ------------------------------------------------- o armário de formações
+//
+// Até `PVP_FORMACOES_MAX` equipes salvas com nome e placar, trocadas com um clique. A regra (o
+// placar é da ESCALAÇÃO exata, na ordem; trocar a escalação zera; só o dono vê) está no cabeçalho
+// de `shared/pvp-formacoes.mjs`. Aqui é só a tela: o servidor confere tudo de novo.
+
+/** O aviso de sucesso de cada ação do armário. O nome é do jogador: vai escapado (o toast é HTML). */
+function textoDaFormacaoOk(ok) {
+  const nome = escapar(ok.nome ?? '');
+  if (ok.acao === 'usar') {
+    return ok.faltaram > 0
+      ? t('pvp.formUsadaFaltaram', { nome, n: ok.faltaram })
+      : t('pvp.formUsada', { nome });
+  }
+  if (ok.acao === 'renomear') return t('pvp.formRenomeada', { nome });
+  if (ok.acao === 'apagar') return t('pvp.formApagada');
+  return t('pvp.formSalva', { nome });
+}
+
+/** "62%" verde, vermelho ou neutro — a cor responde "essa funciona?" antes de o número ser lido. */
+const classeDaTaxa = (taxa) => (taxa >= 55 ? 'boa' : taxa <= 45 ? 'ruim' : '');
+
+/** O placar de uma formação: a taxa grande, V/D ao lado e a barra. Sem partida, diz isso. */
+function placarDaFormacao(f) {
+  const taxa = taxaDaFormacao(f);
+  const dica = escapar(t('pvp.formPlacarDica', { v: num(f.v), d: num(f.d), cv: num(f.cv), cd: num(f.cd) }));
+  if (taxa == null) return `<div class="pvp-form-placar" title="${dica}"><span class="pvp-form-semjogo">${t('pvp.formSemPartidas')}</span></div>`;
+  return `
+    <div class="pvp-form-placar" title="${dica}">
+      <b class="pvp-form-pct ${classeDaTaxa(taxa)}">${taxa}%</b>
+      <span class="pvp-form-vd">${t('pvp.formVD', { v: num(f.v + f.cv), d: num(f.d + f.cd) })}</span>
+      <span class="pvp-form-barra" aria-hidden="true"><i style="width:${taxa}%"></i></span>
+    </div>`;
+}
+
+function cardDaFormacao(f, idsTime) {
+  const emUso = mesmaEscalacao(f.ids, idsTime);
+  // A escalação na ordem: o 1º abre a luta. Os sprites entram em `ligarFormacoes`.
+  const pks = f.ids.map((id) => `<span class="pvp-form-pk" data-pk="${id}"></span>`).join('');
+  // Madeira (`btn-apagado`) para as três secundárias: o roxo da aba fica para "Procurar partida"
+  // e o "Usar" — as ações que mudam o que vai lutar.
+  const ico = (attr, icone, rotulo, extra = '') =>
+    `<button type="button" class="pvp-btn pvp-btn-peq btn-apagado pvp-form-ico${extra}" ${attr}="${f.slot}" title="${escapar(rotulo)}" aria-label="${escapar(rotulo)}">${dlgIcone(icone, 14)}</button>`;
+  return `
+    <div class="pvp-form${emUso ? ' em-uso' : ''}" data-slot="${f.slot}">
+      <div class="pvp-form-topo">
+        <b class="pvp-form-nome">${escapar(f.nome)}</b>
+        ${emUso ? `<span class="pvp-form-selo">${dlgIcone('check', 11)}${t('pvp.formEmUso')}</span>` : ''}
+      </div>
+      <div class="pvp-form-pks">${pks}</div>
+      ${placarDaFormacao(f)}
+      <div class="pvp-form-acoes">
+        <button type="button" class="pvp-btn pvp-btn-peq pvp-form-usar" data-form-usar="${f.slot}"${emUso ? ' disabled' : ''}>${t(emUso ? 'pvp.formEmUso' : 'pvp.formUsar')}</button>
+        ${ico('data-form-trocar', 'volta', t('pvp.formAtualizar'))}
+        ${ico('data-form-editar', 'lapis', t('pvp.formEditar'))}
+        ${ico('data-form-apagar', 'lixeira', t('pvp.formApagar'), ' perigo')}
+      </div>
+    </div>`;
+}
+
+/**
+ * O bloco do armário, logo abaixo da equipe: as formações salvas e um botão para guardar a equipe
+ * atual na primeira vaga. Vagas vazias NÃO são desenhadas uma a uma — cinco cards de "vazio" para
+ * quem nunca salvou nada seriam meia tela de nada; o contador "2/5" já diz quanto cabe.
+ */
+function blocoDasFormacoes(time) {
+  const lista = estado.pvpFormacoes;
+  const cheio = (lista?.length ?? 0) >= PVP_FORMACOES_MAX;
+  let rodape = '';
+  if (lista != null) {
+    if (cheio) rodape = `<p class="pvp-aviso-leve">${t('pvp.formCheio', { max: PVP_FORMACOES_MAX })}</p>`;
+    else {
+      rodape = `
+        <button type="button" class="pvp-btn pvp-btn-peq btn-apagado pvp-form-nova" id="pvp-form-nova"${time.length ? '' : ' disabled'}>${t('pvp.formSalvarAtual')}</button>
+        ${time.length ? '' : `<p class="pvp-sec-nota">${t('pvp.formMonteAntes')}</p>`}`;
+    }
+  }
+  return `
+    <div class="pvp-equipe pvp-forms">
+      <div class="pvp-sec-cab">
+        <h3>${t('pvp.formTitulo')}</h3>
+        ${lista != null ? `<span class="pvp-forms-conta">${lista.length}/${PVP_FORMACOES_MAX}</span>` : ''}
+      </div>
+      <p class="pvp-sec-nota">${t('pvp.formNota')}</p>
+      ${lista == null
+        ? `<div class="pvp-forms-vazio">${t('pvp.formCarregando')}</div>`
+        : `<div class="pvp-forms-lista">${lista.map((f) => cardDaFormacao(f, estado.pvpTime ?? [])).join('')}</div>`}
+      ${rodape}
+    </div>`;
+}
+
+/** A primeira vaga livre do armário, ou `null`. */
+function vagaLivreDeFormacao() {
+  const usados = new Set((estado.pvpFormacoes ?? []).map((f) => f.slot));
+  for (let s = 1; s <= PVP_FORMACOES_MAX; s++) if (!usados.has(s)) return s;
+  return null;
+}
+
+/**
+ * Manda uma ação do armário, uma de cada vez. A trava some na resposta (`formacaoOk`/`formacaoRecusa`)
+ * ou em 8 s — resposta perdida não pode deixar os botões mortos.
+ */
+function enviarFormacao(pacote) {
+  if (estado.pvpFormacaoEnviando && Date.now() - estado.pvpFormacaoEnviando < 8000) return;
+  estado.pvpFormacaoEnviando = Date.now();
+  enviar(pacote);
+}
+
+/**
+ * A caixa do NOME do "salvar a equipe atual": a confirmação da casa com um campo dentro, conferido
+ * a cada tecla pelo MESMO validador do servidor — o botão só acende com um nome que vai ser aceito.
+ * (Renomear é no editor da formação, `abrirEditorDeFormacao`, junto com a escalação.)
+ */
+function pedirNomeDeFormacao({ titulo, texto = '', inicial = '', rotuloSim, aoConfirmar }) {
+  let valor = inicial;
+  confirmar({
+    titulo,
+    rotuloSim,
+    texto: `
+      ${texto ? `<p class="pvp-form-dlg-txt">${texto}</p>` : ''}
+      <label class="pvp-form-dlg-campo">
+        <span>${t('pvp.formNomeRotulo')}</span>
+        <input type="text" id="pvp-form-nome" maxlength="${FORMACAO_NOME_MAX}" autocomplete="off"
+               spellcheck="false" value="${escapar(inicial)}">
+      </label>
+      <p class="pvp-form-dlg-dica" id="pvp-form-dica"></p>`,
+    montar: (corpo) => {
+      const campo = corpo.querySelector('#pvp-form-nome');
+      const dica = corpo.querySelector('#pvp-form-dica');
+      const sim = $('#confirmar-sim');
+      const conferir = () => {
+        valor = campo.value;
+        const v = validarNomeFormacao(valor);
+        sim.disabled = !v.ok;
+        const ruim = !v.ok && valor.trim() !== '';
+        dica.textContent = ruim ? t(v.erro, { max: FORMACAO_NOME_MAX }) : t('pvp.formNomeDica', { max: FORMACAO_NOME_MAX });
+        dica.classList.toggle('ruim', ruim);
+      };
+      campo.oninput = conferir;
+      campo.onkeydown = (ev) => {
+        if (ev.key === 'Enter' && !sim.disabled) sim.click();
+      };
+      conferir();
+      setTimeout(() => { campo.focus(); campo.select(); }, 0);
+    },
+    aoConfirmar: () => {
+      const v = validarNomeFormacao(valor);
+      if (v.ok) aoConfirmar(v.nome);
+    },
+  });
+}
+
+/** Os ids da equipe de PvP que ainda estão na coleção, na ordem — o que "salvar a equipe atual" grava. */
+const idsDoTimePvp = () => pokemonsDoTimePvp().map((p) => p.id);
+
+function novaFormacao() {
+  const slot = vagaLivreDeFormacao();
+  const ids = idsDoTimePvp();
+  if (!slot || !ids.length) return;
+  pedirNomeDeFormacao({
+    titulo: t('pvp.formNovaTitulo'),
+    texto: t('pvp.formNovaTexto', { n: ids.length }),
+    inicial: t('pvp.formNomePadrao', { n: slot }),
+    rotuloSim: t('pvp.formSalvarBt'),
+    aoConfirmar: (nome) => enviarFormacao({ t: 'pvp.formacao.salvar', slot, nome, pokemonIds: ids }),
+  });
+}
+
+const formacaoDoSlot = (slot) => (estado.pvpFormacoes ?? []).find((f) => f.slot === slot) ?? null;
+
+/** Liga os sprites e os botões do armário — chamado pelo `ligarRanqueado` a cada repintura. */
+function ligarFormacoes(host) {
+  const meus = new Map((estado.eu?.pokemons ?? []).map((p) => [p.id, p]));
+  for (const el of host.querySelectorAll('.pvp-form-pk[data-pk]')) {
+    const pk = meus.get(Number(el.dataset.pk));
+    if (!pk) {
+      // Vendido ou anunciado desde que a formação foi salva: o buraco aparece, com o motivo.
+      el.classList.add('sumiu');
+      el.textContent = '?';
+      el.title = t('pvp.formPkSumiu');
+      continue;
+    }
+    el.appendChild(spritePokemon(pk, 30));
+    el.title = `${pk.shiny ? '★ ' : ''}${nomeExibidoPokemon(pk)} · ${t('painel.nivelCurto')}${pk.level}`;
+    el.onclick = () => abrirFichaDoPokemon(pk);
+  }
+  const nova = host.querySelector('#pvp-form-nova');
+  if (nova) nova.onclick = novaFormacao;
+  for (const bt of host.querySelectorAll('[data-form-usar]')) {
+    bt.onclick = () => {
+      bt.disabled = true;
+      enviarFormacao({ t: 'pvp.formacao.usar', slot: Number(bt.dataset.formUsar) });
+    };
+  }
+  for (const bt of host.querySelectorAll('[data-form-editar]')) {
+    bt.onclick = () => abrirEditorDeFormacao(Number(bt.dataset.formEditar));
+  }
+  for (const bt of host.querySelectorAll('[data-form-trocar]')) {
+    bt.onclick = () => {
+      const f = formacaoDoSlot(Number(bt.dataset.formTrocar));
+      const ids = idsDoTimePvp();
+      if (!f) return;
+      if (!ids.length) return toast(t('pvp.formMonteAntes'));
+      if (mesmaEscalacao(f.ids, ids)) return toast(t('pvp.formJaIgual', { nome: escapar(f.nome) }));
+      confirmar({
+        titulo: t('pvp.formAtualizarTitulo'),
+        texto: `<p class="pvp-form-dlg-txt">${t('pvp.formAtualizarTexto', { nome: escapar(f.nome), n: ids.length })}</p>`,
+        rotuloSim: t('pvp.formAtualizarBt'),
+        aoConfirmar: () => enviarFormacao({ t: 'pvp.formacao.salvar', slot: f.slot, nome: f.nome, pokemonIds: ids }),
+      });
+    };
+  }
+  for (const bt of host.querySelectorAll('[data-form-apagar]')) {
+    bt.onclick = () => {
+      const f = formacaoDoSlot(Number(bt.dataset.formApagar));
+      if (!f) return;
+      confirmar({
+        titulo: t('pvp.formApagarTitulo'),
+        texto: `<p class="pvp-form-dlg-txt">${t('pvp.formApagarTexto', { nome: escapar(f.nome) })}</p>`,
+        rotuloSim: t('pvp.formApagar'),
+        tom: 'perigo',
+        aoConfirmar: () => enviarFormacao({ t: 'pvp.formacao.apagar', slot: f.slot }),
+      });
+    };
+  }
 }
 
 /** O botão da fila, com o motivo da recusa escrito no próprio rótulo. */
@@ -7624,6 +8210,7 @@ function ligarRanqueado() {
       bt.onclick = () => alternarPartidaDoHistorico(Number(bt.dataset.partida));
     }
     ligarFichaDoHistorico(host);
+    ligarFormacoes(host);
   }
 
   if (auto) {
@@ -7679,14 +8266,21 @@ setInterval(tiqueFilaNoModal, 250);
  * remarcar, e o × para tirar. Nada vai ao servidor antes do "Salvar", que confere tudo de novo.
  *
  * Desenha dentro de `corpo` (uma folha do Mercado, ou o corpo do modal da equipe de guerra) e
- * devolve `{ repintar }`. Só a parte de baixo repinta: a busca e os filtros sobrevivem, e o campo
- * de IV reage ao dígito sem perder o foco.
+ * devolve `{ repintar, pintarBotoes }`. Só a parte de baixo repinta: a busca e os filtros
+ * sobrevivem, e o campo de IV reage ao dígito sem perder o foco.
  */
 function montarEscolhaDeEquipe(corpo, {
   max,
   idsIniciais,
   filtro,
+  // HTML no alto da folha, antes da nota (o nome da formação). Quem passa liga os campos dele
+  // depois do `montar` — o repinte nunca mexe nesse pedaço.
+  antes = '',
   nota = '',
+  // A nota vira faixa com ícone (o `info` do diálogo de jogo); `selos` a troca por pílulas,
+  // quando ela é uma lista de regras curtas ("não perde HP", "não ganha XP"…).
+  notaIcone = 'interrogacao',
+  selos = null,
   contagem,
   extraContagem = null,
   rotuloSalvar,
@@ -7694,6 +8288,11 @@ function montarEscolhaDeEquipe(corpo, {
   rotuloCheio,
   salvar,
   salvando = () => false,
+  // O "Salvar" só acende quando isto aceita o rascunho (a formação pede nome válido e alguém
+  // escalado; a equipe de PvP aceita até vazia, que é como se desmonta a equipe).
+  podeSalvar = () => true,
+  // Chamado a cada repinte com o rascunho, na ordem — para quem mostra o que muda ao salvar.
+  aoMudar = null,
 }) {
   const noJogo = () => new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
   // Só entra no rascunho o que AINDA existe na coleção: um pokémon vendido no Mercado sai sozinho,
@@ -7703,8 +8302,12 @@ function montarEscolhaDeEquipe(corpo, {
 
   corpo.classList.add('dmpk', 'eqf');
   corpo.classList.remove('pkf-aberta');
+  const topo = selos?.length
+    ? `<div class="eqf-nota">${dlgSelos(...selos.map((s) => dlgSelo(s.icone, escapar(s.texto), s.tom ?? '')))}</div>`
+    : nota ? `<p class="dlg-aviso info eqf-nota">${dlgIcone(notaIcone, 18)}<span>${nota}</span></p>` : '';
   corpo.innerHTML = `
-    ${nota ? `<p class="cm-nota eqf-nota">${nota}</p>` : ''}
+    ${antes}
+    ${topo}
     <div class="eqf-cabeca">
       <span class="eqf-conta"></span>
       <span class="eqf-extra"></span>
@@ -7754,6 +8357,10 @@ function montarEscolhaDeEquipe(corpo, {
     repintar();
   };
 
+  // Com UMA casa só (o Treino), a fileira vira um pedestal largo: o escolhido grande, com nome
+  // e nível — cinco colunas para um pokémon deixavam uma caixinha perdida no canto.
+  const umaCasa = max === 1;
+  ordem.classList.toggle('um', umaCasa);
   function pintarOrdem(porId) {
     ordem.innerHTML = '';
     for (let i = 0; i < max; i++) {
@@ -7761,7 +8368,10 @@ function montarEscolhaDeEquipe(corpo, {
       const casa = document.createElement('div');
       casa.className = `eqf-casa${pk ? ' cheia' : ''}`;
       if (!pk) {
-        casa.innerHTML = `<span class="eqf-casa-n">${i + 1}</span>`;
+        // A casa vazia é uma pokébola apagada: o lugar existe e está esperando alguém.
+        casa.innerHTML = `<span class="eqf-casa-n">${i + 1}</span><span class="eqf-casa-vazia"></span>${umaCasa
+          ? `<span class="eqf-casa-dica">${escapar(t('escolha.casaVazia'))}</span>` : ''}`;
+        casa.querySelector('.eqf-casa-vazia').appendChild(iconeBola(1, umaCasa ? 28 : 20));
         ordem.appendChild(casa);
         continue;
       }
@@ -7769,12 +8379,14 @@ function montarEscolhaDeEquipe(corpo, {
       casa.innerHTML = `
         <span class="eqf-casa-n">${i + 1}</span>
         <span class="eqf-casa-arte"></span>
+        ${umaCasa ? `<span class="eqf-casa-nome">${pk.shiny ? dlgSeloShiny(true) : ''}${escapar(nomeExibidoPokemon(pk))}
+          <small>${t('painel.nivelCurto')} ${num(pk.level)}</small></span>` : ''}
         <span class="eqf-casa-acoes">
           <button type="button" class="eqf-seta" data-mover="-1" title="${escapar(t('guild.timeSubir'))}"${i === 0 ? ' disabled' : ''}>◀</button>
           <button type="button" class="eqf-tirar" title="${escapar(t('oferenda.tirarDica', { nome: nomeExibidoPokemon(pk) }))}">×</button>
           <button type="button" class="eqf-seta" data-mover="1" title="${escapar(t('guild.timeDescer'))}"${i === sel.length - 1 ? ' disabled' : ''}>▶</button>
         </span>`;
-      casa.querySelector('.eqf-casa-arte').appendChild(spritePokemon(pk, 32));
+      casa.querySelector('.eqf-casa-arte').appendChild(spritePokemon(pk, umaCasa ? 48 : 32));
       casa.querySelector('[data-mover="-1"]').onclick = () => mover(pk.id, -1);
       casa.querySelector('[data-mover="1"]').onclick = () => mover(pk.id, 1);
       casa.querySelector('.eqf-tirar').onclick = () => alternar(pk.id);
@@ -7836,11 +8448,9 @@ function montarEscolhaDeEquipe(corpo, {
     q('.eqf-conta').textContent = contagem(sel.length);
     q('.eqf-extra').innerHTML = extraContagem ? extraContagem(sel.map((id) => porId.get(id))) : '';
     q('.eqf-achados').textContent = t('amigos.anexarConta', { n: num(lista.length), total: num(todos.length) });
-    const ocupado = salvando();
-    btSalvar.disabled = ocupado;
-    btLimpar.disabled = ocupado || !sel.length;
-    btSalvar.textContent = ocupado ? t('camp.enviando') : rotuloSalvar;
+    pintarBotoes();
     pintarOrdem(porId);
+    aoMudar?.([...sel]);
 
     const rolagem = grade.scrollTop;
     grade.innerHTML = '';
@@ -7868,6 +8478,14 @@ function montarEscolhaDeEquipe(corpo, {
       grade.appendChild(card);
     }
     grade.scrollTop = rolagem;
+  }
+
+  /** Só os dois botões do rodapé: um campo de fora (o nome) acende o "Salvar" sem refazer a grade. */
+  function pintarBotoes() {
+    const ocupado = salvando();
+    btSalvar.disabled = ocupado || !podeSalvar([...sel]);
+    btLimpar.disabled = ocupado || !sel.length;
+    btSalvar.textContent = ocupado ? t('camp.enviando') : rotuloSalvar;
   }
 
   q('.eqf-filtros').appendChild(criarFiltrosSelect({
@@ -7898,7 +8516,7 @@ function montarEscolhaDeEquipe(corpo, {
     repintar();
   };
   btSalvar.onclick = () => {
-    if (salvando()) return;
+    if (salvando() || !podeSalvar([...sel])) return;
     salvar([...sel]);
     repintar();
   };
@@ -7907,10 +8525,12 @@ function montarEscolhaDeEquipe(corpo, {
     botaoEm: q('.dmpk-topo'),
     host: corpo,
   });
-  dobrarNotaNoCelular(q('.eqf-nota'));
+  // As pílulas não dobram: são quatro regras de três palavras, e cortá-las no meio esconderia
+  // justamente as duas de baixo. Só o parágrafo de regra fica a um toque.
+  if (!selos?.length) dobrarNotaNoCelular(q('.eqf-nota'));
   repintarComAColecao(grade, repintar);
   repintar();
-  return { repintar };
+  return { repintar, pintarBotoes };
 }
 
 /** Os filtros das duas folhas de equipe, fora das funções: sobrevivem a fechar e abrir. */
@@ -7933,6 +8553,7 @@ function abrirSeletorDeTimePvp() {
     idsIniciais: estado.pvpTime ?? [],
     filtro: pvpEqFiltro,
     nota: t('pvp.equipeRegras', { max: PVP_TIME_MAX }),
+    notaIcone: 'espadas',
     contagem: (n) => t('pvp.escolhidos', { n, max: PVP_TIME_MAX }),
     extraContagem: (pks) => `${t('painel.poder')} <b>${num(pks.reduce((s, k) => s + (k?.poder ?? 0), 0))}</b>`,
     rotuloSalvar: t('pvp.salvarEquipe'),
@@ -7955,6 +8576,95 @@ function abrirSeletorDeTimePvp() {
   };
   folhaEquipePvp = { repintar: ctl.repintar, fechar: sair };
   corpo.closest('.cm-folha')?.querySelector('.cm-fechar')?.addEventListener('click', sair);
+}
+
+/** A folha de editar formação aberta: fecha com o `formacaoOk` DELA e destrava na recusa. */
+let folhaFormacao = null;
+
+/**
+ * O LÁPIS de uma formação: a mesma folha do "Sua equipe de PvP", com o NOME no alto. O rascunho
+ * parte da escalação salva (quem saiu da coleção já não entra) e o "Salvar" manda
+ * `pvp.formacao.salvar` — a mesma mensagem, e a mesma conferência no servidor, do "salvar a equipe
+ * atual". Mexer em quem entra ou na ordem zera o placar, e a linha embaixo do nome avisa ANTES do
+ * clique; trocar só o nome guarda o placar (o servidor compara a escalação).
+ */
+function abrirEditorDeFormacao(slot) {
+  const f = formacaoDoSlot(slot);
+  if (!f) return;
+  const { folha, corpo, fechar } = folhaMercado(escapar(t('pvp.formEditarTitulo')));
+  let nome = f.nome;
+  let rascunho = [];
+  const placar = partidasDaFormacao(f)
+    ? t('pvp.formVD', { v: num(f.v + f.cv), d: num(f.d + f.cd) })
+    : null;
+  const enviando = () => !!estado.pvpFormacaoEnviando && Date.now() - estado.pvpFormacaoEnviando < 8000;
+
+  /** A linha embaixo do nome: o erro do nome, o aviso de que o placar zera, ou o que vale hoje. */
+  function pintarDica() {
+    const dica = corpo.querySelector('.pvp-form-ed-dica');
+    if (!dica) return;
+    const v = validarNomeFormacao(nome);
+    const zera = placar && !mesmaEscalacao(rascunho, f.ids);
+    dica.classList.toggle('ruim', !v.ok);
+    dica.classList.toggle('zera', v.ok && !!zera);
+    if (!v.ok) dica.textContent = t(v.erro, { max: FORMACAO_NOME_MAX });
+    else if (zera) dica.innerHTML = `${dlgIcone('alerta', 12)}<span>${t('pvp.formEdZera', { vd: placar })}</span>`;
+    else if (placar) dica.textContent = t('pvp.formEdPlacar', { vd: placar });
+    else dica.textContent = t('pvp.formNomeDica', { max: FORMACAO_NOME_MAX });
+  }
+
+  const ctl = montarEscolhaDeEquipe(corpo, {
+    max: PVP_TIME_MAX,
+    idsIniciais: f.ids,
+    filtro: pvpEqFiltro,
+    antes: `
+      <div class="pvp-form-ed">
+        <label class="pvp-form-ed-campo">
+          <span>${t('pvp.formNomeRotulo')}</span>
+          <input type="text" class="pvp-form-ed-nome" maxlength="${FORMACAO_NOME_MAX}" autocomplete="off"
+                 spellcheck="false" value="${escapar(f.nome)}">
+        </label>
+        <p class="pvp-form-ed-dica"></p>
+      </div>`,
+    nota: t('pvp.equipeRegras', { max: PVP_TIME_MAX }),
+    notaIcone: 'espadas',
+    contagem: (n) => t('pvp.escolhidos', { n, max: PVP_TIME_MAX }),
+    extraContagem: (pks) => `${t('painel.poder')} <b>${num(pks.reduce((s, k) => s + (k?.poder ?? 0), 0))}</b>`,
+    rotuloSalvar: t('pvp.formEdSalvar'),
+    rotuloLimpar: t('pvp.limpar'),
+    rotuloCheio: t('pvp.equipeCheia', { max: PVP_TIME_MAX }),
+    salvando: enviando,
+    podeSalvar: (ids) => ids.length > 0 && validarNomeFormacao(nome).ok,
+    aoMudar: (ids) => {
+      rascunho = ids;
+      pintarDica();
+    },
+    salvar: (ids) => {
+      const v = validarNomeFormacao(nome);
+      if (!v.ok || !ids.length) return;
+      enviarFormacao({ t: 'pvp.formacao.salvar', slot: f.slot, nome: v.nome, pokemonIds: ids });
+      // Resposta perdida: a trava do `enviarFormacao` vence em 8 s, e o botão volta junto.
+      setTimeout(() => folhaFormacao?.pintarBotoes(), 8100);
+    },
+  });
+
+  const campo = corpo.querySelector('.pvp-form-ed-nome');
+  campo.oninput = () => {
+    nome = campo.value;
+    pintarDica();
+    ctl.pintarBotoes();
+  };
+  // Enter só fecha o teclado: salvar daqui levaria junto uma escalação ainda pela metade.
+  campo.onkeydown = (ev) => {
+    if (ev.key === 'Enter') campo.blur();
+  };
+
+  const sair = () => {
+    if (folhaFormacao?.folha === folha) folhaFormacao = null;
+    fechar();
+  };
+  folhaFormacao = { folha, slot: f.slot, repintar: ctl.repintar, pintarBotoes: ctl.pintarBotoes, fechar: sair };
+  folha.querySelector('.cm-fechar')?.addEventListener('click', sair);
 }
 
 // ------------------------------------------------------ a aba TREINAMENTO
@@ -8060,10 +8770,8 @@ function casaDeTreino(lado, i) {
     <span class="trn-casa-arte"></span>
     <span class="trn-casa-nome">${escapar(pk.nome)}${pk.shiny ? ' ✨' : ''}</span>
     <span class="trn-casa-selos">
-      <b class="trn-selo nv">Nv ${num(pk.level)}</b>
-      <b class="trn-selo p${pk.potencia}">P${pk.potencia}</b>
-      <b class="trn-selo">IV ${num(somaIv(pk.ivs))}</b>
-      <b class="trn-selo">Q ${(Number(pk.quality) || 1).toFixed(2)}</b>
+      <b class="trn-selo nv">${t('painel.nivelCurto')} ${num(pk.level)}</b>
+      ${selosAtributos(pk)}
     </span>
     ${pk.ehTeste ? `<span class="trn-marca">${escapar(t('treino.marcaTeste'))}</span>` : ''}
     <button type="button" class="trn-tirar" aria-label="${escapar(t('treino.tirar'))}">×</button>`;
@@ -8081,15 +8789,34 @@ function casaDeTreino(lado, i) {
   return el;
 }
 
-/** O menu da casa: pokémon meu ou pokémon de teste. É a escolha que o jogador faz antes. */
+/**
+ * O menu da casa: pokémon meu ou pokémon de teste. É a escolha que o jogador faz antes.
+ *
+ * Duas CARTAS de escolha, cada uma com o que ela é desenhado em cima: a sua equipe em fila, e a
+ * silhueta do "quem é esse pokémon?" que o formulário de teste vai preencher. A explicação que
+ * antes era um parágrafo em cima dos dois botões virou a legenda de cada carta — é na hora de
+ * escolher que o jogador precisa saber que o pokémon dele entra como CÓPIA.
+ */
 function abrirMenuDaCasaTreino(lado, i) {
   const { corpo, fechar } = folhaMercado(escapar(t('treino.casaTitulo', { n: i + 1 })));
+  const equipe = (estado.eu?.pokemons ?? []).filter((p) => p.slot != null).sort((a, b) => a.slot - b.slot);
+  const ltSilhueta = estado.especies.get(25)?.looktype ?? estado.especies.get(1)?.looktype ?? 0;
   corpo.innerHTML = `
-    <p class="cm-nota">${escapar(t('treino.casaExplica'))}</p>
     <div class="trn-menu">
-      <button type="button" class="camp-btn" id="trn-menu-meu">${escapar(t('treino.escolherMeu'))}</button>
-      <button type="button" class="camp-btn sec" id="trn-menu-teste">${escapar(t('treino.escolherTeste'))}</button>
+      <button type="button" class="trn-escolha" id="trn-menu-meu">
+        <span class="trn-escolha-arte">${equipe.length
+          ? dlgFila(equipe, 32, 3)
+          : dlgMedalha({ icone: 'pessoa', tom: 'rx', px: 30 })}</span>
+        <b>${escapar(t('treino.escolherMeu'))}</b>
+        <small>${escapar(t('treino.meuSub'))}</small>
+      </button>
+      <button type="button" class="trn-escolha" id="trn-menu-teste">
+        <span class="trn-escolha-arte trn-silhueta">${ltSilhueta ? dlgArteLt(ltSilhueta, 52) : ''}<i aria-hidden="true">?</i></span>
+        <b>${escapar(t('treino.escolherTeste'))}</b>
+        <small>${escapar(t('treino.testeSub'))}</small>
+      </button>
     </div>`;
+  hidratarDialogo(corpo);
   corpo.querySelector('#trn-menu-meu').onclick = () => abrirEscolhaMeuTreino(lado, i);
   corpo.querySelector('#trn-menu-teste').onclick = () => abrirFormDeTeste(lado, i, null);
   return fechar;
@@ -8112,7 +8839,14 @@ function abrirEscolhaMeuTreino(lado, i) {
     max: 1,
     idsIniciais: [],
     filtro: treinoEqFiltro,
-    nota: t('treino.escolherMeuNota'),
+    // As quatro garantias da cópia, em pílulas: é a pergunta de quem vai pôr o melhor pokémon
+    // num treino ("ele vai se machucar?") respondida antes do clique.
+    selos: [
+      { icone: 'copia', texto: t('treino.seloCopia'), tom: 'ouro' },
+      { icone: 'cura', texto: t('treino.seloHp'), tom: 'bom' },
+      { icone: 'subir', texto: t('treino.seloXp') },
+      { icone: 'cadeado', texto: t('treino.seloLugar') },
+    ],
     contagem: (n) => t('treino.escolhidos', { n }),
     rotuloSalvar: t('treino.usarEste'),
     rotuloLimpar: t('pvp.limpar'),
@@ -9427,6 +10161,7 @@ function abrirEditorEquipeGuerra() {
     idsIniciais: idsEquipeGuerraInicial(),
     filtro: guerraEqFiltro,
     nota: `${t('guild.timeIntro', { max: MAX_EQUIPE })} ${t('guild.timeCapNivel', { cheio: ARENA_NIVEL_CHEIO })}`,
+    notaIcone: 'escudo',
     contagem: (n) => t('guild.timeContagem', { n, max: MAX_EQUIPE }),
     extraContagem: (pks) => `${t('painel.poder')} <b>${num(pks.reduce((s, k) => s + (k ? poderNaGuerra(k) : 0), 0))}</b>`,
     rotuloSalvar: t('guild.timeSalvar'),
@@ -10440,20 +11175,106 @@ function pintarGuildAjustes(host, g) {
     enviar({ t: 'guild.tag', tag: rascunhoTag.tag, tagCor: rascunhoTag.cor });
   });
   $('#guild-editar-brasao')?.addEventListener('click', montarGuildEditarBrasao);
-  $('#guild-apagar')?.addEventListener('click', () =>
-    confirmar({
-      titulo: t('guild.apagarTitulo'),
-      texto: t('guild.apagarTexto'),
-      aoConfirmar: () => enviar({ t: 'guild.apagar' }),
-    }),
-  );
-  $('#guild-sair')?.addEventListener('click', () =>
-    confirmar({
-      titulo: t('guild.sairTitulo'),
-      texto: t('guild.sairTexto'),
-      aoConfirmar: () => enviar({ t: 'guild.sair' }),
-    }),
-  );
+  $('#guild-apagar')?.addEventListener('click', () => confirmarApagarGuild(estado.eu?.guild));
+  $('#guild-sair')?.addEventListener('click', () => confirmarSairGuild(estado.eu?.guild));
+}
+
+/** O brasão da guild como ator do palco (o desenho é SVG pronto, sem hidratação). */
+const dlgArteBrasao = (g, px = 72) => dlgArteHtml(`<span class="dlg-brasao">${svgBrasao(g?.brasao, px)}</span>`);
+
+/**
+ * Apagar a guild: o brasão sem cor, com a lixeira no canto, e as três perdas uma por linha — numa
+ * frase só, "os GP são perdidos" ficava no meio e passava batido.
+ */
+function confirmarApagarGuild(g) {
+  confirmar({
+    titulo: t('guild.apagarTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({ arte: dlgArteBrasao(g), nome: escapar(g?.nome ?? ''), classe: 'sai', marca: dlgIcone('lixeira', 14) }), 'perigo')}
+      ${dlgLista([
+        { icone: 'pessoaMenos', html: t('guild.apagarMembros'), perigo: true },
+        { icone: 'estrela', html: t('guild.apagarGp'), perigo: true },
+        { icone: 'espadas', html: t('guild.apagarPvp'), perigo: true },
+      ])}
+      ${dlgSelos(dlgSelo('cadeado', escapar(t('dlg.semVolta')), 'perigo'))}`,
+    tom: 'perigo',
+    aoConfirmar: () => enviar({ t: 'guild.apagar' }),
+  });
+}
+
+/** Sair da guild: você, a seta e a porta. A guild continua; quem sai é você. */
+function confirmarSairGuild(g) {
+  confirmar({
+    titulo: t('guild.sairTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteBrasao(g, 64), nome: escapar(g?.nome ?? '') })}
+        ${dlgSeta()}
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? ''), marca: dlgIcone('porta', 14) })}`, 'perigo')}
+      ${dlgFrase('', t('guild.sairTexto'))}`,
+    tom: 'perigo',
+    aoConfirmar: () => enviar({ t: 'guild.sair' }),
+  });
+}
+
+/** O membro de quem a caixa fala, animado e com as cores dele. */
+const dlgArteMembro = (mb, px = 64) => dlgArteTreinador(mb?.looktype ?? LOOKTYPE_TREINADOR, mb?.visual ?? null, px);
+
+/** Promover a sub-dono (o escudo) ou rebaixar (o ×): o membro no centro do palco. */
+function confirmarSubdono(mb, kick) {
+  const tirar = !!mb.ehSubdono;
+  confirmar({
+    titulo: t(tirar ? 'guild.tirarSubdonoTitulo' : 'guild.porSubdonoTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteMembro(mb, 72),
+        nome: escapar(mb.nick ?? ''),
+        sub: dlgNivel(mb.level ?? 1),
+        classe: tirar ? '' : 'novo',
+        marca: dlgIcone(tirar ? 'xis' : 'escudo', 14),
+      }), tirar ? 'perigo' : 'rx')}
+      ${dlgFrase('', t(tirar ? 'guild.tirarSubdonoTexto' : 'guild.porSubdonoTexto', { nick: escapar(mb.nick ?? '') }))}`,
+    aoConfirmar: () => kick.onSubdono(mb.playerId, !tirar),
+  });
+}
+
+/** Passar a coroa: ela sai de você e vai para o membro — a seta carrega a coroa. */
+function confirmarTransferirLider(mb, kick) {
+  confirmar({
+    titulo: t('guild.transferirLiderTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? '') })}
+        ${dlgSeta({ icone: 'coroa' })}
+        ${dlgAtor({
+          arte: dlgArteMembro(mb, 64),
+          nome: escapar(mb.nick ?? ''),
+          classe: 'novo',
+          marca: dlgIcone('coroa', 14),
+        })}`, 'ouro')}
+      ${dlgFrase('', t('guild.transferirLiderTexto', { nick: escapar(mb.nick ?? '') }))}
+      ${dlgSelos(dlgSelo('cadeado', escapar(t('guild.transferirSelo')), 'perigo'))}`,
+    tom: 'perigo',
+    aoConfirmar: () => kick.onTransfer(mb.playerId, mb.nick),
+  });
+}
+
+/** Expulsar: o membro sem cor, com o "−" no canto. */
+function confirmarExpulsar(mb, kick) {
+  confirmar({
+    titulo: t('guild.expulsarTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteMembro(mb, 72),
+        nome: escapar(mb.nick ?? ''),
+        sub: dlgNivel(mb.level ?? 1),
+        classe: 'sai',
+        marca: dlgIcone('pessoaMenos', 15),
+      }), 'perigo')}
+      ${dlgFrase('', t('guild.expulsarTexto'))}`,
+    tom: 'perigo',
+    aoConfirmar: () => kick.onKick(mb.playerId),
+  });
 }
 
 function montarGuildEditarBrasao() {
@@ -10723,6 +11544,33 @@ function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick =
     );
     cab.onclick = () => aoToggle(mb.playerId, aberto);
     topo.appendChild(cab);
+
+    // VER PERFIL — a ficha pública do membro, a mesma do chat, do ranking e da lista de
+    // amigos. Abre POR CIMA do modal da guild, então fechá-la devolve a lista onde estava.
+    //
+    // IRMÃO do cabeçalho, e não um filho dele: `<button>` dentro de `<button>` é HTML
+    // inválido, e o navegador desmonta o de dentro — o clique viraria "abrir a equipe".
+    //
+    // Ícone e rótulo (e só o ícone no celular, ver mobile.css): esta é a única ação que
+    // aparece em TODAS as linhas, inclusive para quem não manda na guild, e trinta rótulos
+    // empilhados são a fileira de frases que a barra do dono evita ficando escondida.
+    if (mb.nick) {
+      const perfil = document.createElement('button');
+      perfil.type = 'button';
+      perfil.className = 'gd-membro-perfil';
+      perfil.title = t('amigos.verPerfil');
+      perfil.setAttribute('aria-label', `${t('amigos.verPerfil')} — ${mb.nick}`);
+      perfil.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 12.6a5.3 5.3 0 1 0 0-10.6 5.3 5.3 0 0 0 0 10.6z" fill="currentColor"/>
+          <path d="M12 14.4c-4.6 0-8.3 2.6-8.3 5.8V22h16.6v-1.8c0-3.2-3.7-5.8-8.3-5.8z" fill="currentColor"/>
+        </svg>
+        <span class="gd-membro-perfil-txt">${escapar(t('amigos.verPerfil'))}</span>`;
+      // `stopPropagation` não bastaria sozinho (o cabeçalho é irmão, não pai), mas o clique
+      // ainda sobe até a lista — e é lá que mora o fechamento do detalhe de guild.
+      perfil.onclick = (ev) => { ev.stopPropagation(); pedirPerfil(mb.nick); };
+      topo.appendChild(perfil);
+    }
     el.appendChild(topo);
 
     if (aberto) {
@@ -10751,26 +11599,11 @@ function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick =
 
         if (souODono) {
           // Promover / rebaixar é só do dono: quem controla a permissão controla a guild.
-          mini(t(mb.ehSubdono ? 'guild.tirarSubdono' : 'guild.porSubdono'), '', () =>
-            confirmar({
-              titulo: t(mb.ehSubdono ? 'guild.tirarSubdonoTitulo' : 'guild.porSubdonoTitulo'),
-              texto: t(mb.ehSubdono ? 'guild.tirarSubdonoTexto' : 'guild.porSubdonoTexto', { nick: mb.nick ?? '' }),
-              aoConfirmar: () => kick.onSubdono(mb.playerId, !mb.ehSubdono),
-            }));
-          mini(t('guild.transferirLider'), '', () =>
-            confirmar({
-              titulo: t('guild.transferirLiderTitulo'),
-              texto: t('guild.transferirLiderTexto', { nick: mb.nick ?? '' }),
-              aoConfirmar: () => kick.onTransfer(mb.playerId, mb.nick),
-            }));
+          mini(t(mb.ehSubdono ? 'guild.tirarSubdono' : 'guild.porSubdono'), '', () => confirmarSubdono(mb, kick));
+          mini(t('guild.transferirLider'), '', () => confirmarTransferirLider(mb, kick));
         }
 
-        mini(t('guild.expulsar'), 'gd-kick', () =>
-          confirmar({
-            titulo: t('guild.expulsarTitulo'),
-            texto: t('guild.expulsarTexto'),
-            aoConfirmar: () => kick.onKick(mb.playerId),
-          }));
+        mini(t('guild.expulsar'), 'gd-kick', () => confirmarExpulsar(mb, kick));
         el.appendChild(acoes);
       }
 
@@ -11885,6 +12718,47 @@ let golpesPainelSig = null;
 let golpesAtuaisCache = [];
 const golpesCooldownFim = new Map(); // nome do golpe → { inicio, duracao }
 
+// ------------------------------------------------- a recarga PAUSA fora de campo
+//
+// O relógio do painel acompanha o do servidor: a recarga é do POKÉMON e só corre com ele em
+// campo (ver `shared/cooldown-ativo.mjs`). Trocar de ativo não zera nada e também não adianta
+// nada — o que falta de cada golpe fica guardado por id de pokémon e volta a contar de onde
+// parou quando ele entra em campo outra vez.
+//
+// Sem este espelho o painel MENTIRIA na direção pior: o ícone acenderia como "pronto" enquanto
+// o servidor ainda cobra a recarga, e o jogador acharia que o golpe sumiu.
+const golpesCooldownPausa = new Map(); // id do pokémon → Map(nome do golpe → ms que faltam)
+let golpesCooldownDe = null; // de quem é o `golpesCooldownFim` acima
+
+/** Troca de ativo: o saldo de quem saiu é guardado, o de quem entrou volta de onde parou. */
+function sincronizarCooldownsDaUI(activeId) {
+  const id = activeId ?? null;
+  if (golpesCooldownDe === id) return;
+  const agora = Date.now();
+  if (golpesCooldownDe != null) {
+    const resta = new Map();
+    for (const [nome, cd] of golpesCooldownFim) {
+      const falta = cd.duracao - (agora - cd.inicio);
+      if (falta > 0) resta.set(nome, falta);
+    }
+    if (resta.size) golpesCooldownPausa.set(golpesCooldownDe, resta);
+    else golpesCooldownPausa.delete(golpesCooldownDe);
+  }
+  golpesCooldownFim.clear();
+  for (const [nome, falta] of golpesCooldownPausa.get(id) ?? []) {
+    golpesCooldownFim.set(nome, { inicio: agora, duracao: falta });
+  }
+  golpesCooldownPausa.delete(id);
+  golpesCooldownDe = id;
+}
+
+/** A entrada numa ARENA zera a recarga do time inteiro (a cura não) — ver `zerarCooldowns` no sim. */
+function zerarCooldownsDaUI() {
+  golpesCooldownFim.clear();
+  golpesCooldownPausa.clear();
+  golpesCooldownDe = estado.eu?.activeId ?? null;
+}
+
 /**
  * Chamado pelo `case 'ataque'` de `aoEvento` — arma o relógio do golpe que acabou de sair.
  *
@@ -11981,8 +12855,8 @@ function pintarGolpesPainel(e, p) {
   }
 
   // Só remonta os ÍCONES quando o golpeset muda (pokémon diferente, level up, TM novo) — o
-  // relógio de cooldown de cada golpe (por nome) segue existindo por baixo, trocar de ativo e
-  // voltar não reseta nada (ver o comentário em `aplicarEstado`).
+  // relógio de cooldown de cada golpe (por nome) segue existindo por baixo, guardado por
+  // pokémon: trocar de ativo e voltar não reseta nem adianta nada (ver `aplicarEstado`).
   const sig = `${p.id}|${p.level}|${p.tmElemental ?? ''}`;
   if (sig !== golpesPainelSig) {
     golpesPainelSig = sig;
@@ -12058,10 +12932,10 @@ function pintarAtivo(e) {
   }
   const dentro = p.xp - p.xpNivel;
   const faixa = Math.max(1, p.xpProximo - p.xpNivel);
-  el.className = 'ativo-card';
+  el.className = 'ativo-card' + (p.shiny ? ' brilho-shiny' : '');
   el.title = t('painel.verFicha');
   el.onclick = () => abrirFichaDoPokemon(p);
-  el.innerHTML = `
+  el.innerHTML = `${p.shiny ? brilhoShiny() : ''}
     <div class="ativo-info">
       <div class="ativo-nome">${p.shiny ? prefixoShiny() : ''}${nomePkHtml(p)}${seloRefino(p)} <span class="pl-lv">${t('painel.nivelCurto')} ${p.level}</span></div>
       <div class="ativo-sub">${selosDeTipo(p.tipos)} ${selosTm(p)} ${seloGinasio(p)} ${t('painel.poder')} ${num(p.poder)}</div>
@@ -12417,22 +13291,46 @@ function pintarBotaoMega(pk) {
 /**
  * O aviso antes de megaevoluir. Diz as três coisas que não dá para desfazer depois:
  * a espécie muda, os tipos podem mudar e o pokémon fica TRANCADO na venda.
+ *
+ * Em desenho: o bicho de hoje à esquerda, a mega à direita, a pedra em cima da seta. Sem a pedra
+ * a seta para e a mega aparece apagada — dá para ver o que vem, e que ainda não veio.
  */
 function abrirModalMega(pk, info) {
   const falta = info.semShiny
     ? t('mega.semShiny', { nome: info.nome })
     : (info.qtd < 1 ? t('mega.faltaPedra', { pedra: info.pedra }) : null);
   const pode = !falta;
+  const comum = estado.especies.get(info.megaPokeId)?.looktype;
   confirmar({
     titulo: t('mega.titulo'),
-    texto: t(info.shiny ? 'mega.textoShiny' : 'mega.texto', {
-      de: rotuloEvolModal(pk.nome, info.shiny),
-      para: rotuloEvolModal(info.nome, info.shiny),
-      pedra: escapar(info.pedra),
-      qtd: num(info.qtd),
-      tipos: info.tipos.join(' / '),
-      falta: falta ? `<p class="fi-vazio">${escapar(falta)}</p>` : '',
-    }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: dlgArtePk(pk, 64),
+          nome: nomePkHtml(pk),
+          sub: dlgSeloShiny(info.shiny) + selosDeTipo(tiposDaFicha(pk)),
+        })}
+        ${dlgSeta({ item: info.itemId, qtd: '×1', travada: !pode })}
+        ${dlgAtor({
+          arte: dlgArteLt(info.looktype, 72, comum),
+          nome: escapar(info.nome),
+          sub: dlgSeloShiny(info.shiny) + selosDeTipo(info.tipos),
+          classe: pode ? 'novo' : 'travado',
+        })}`, 'mega')}
+      ${info.itemId != null ? dlgReqs(dlgReq({
+        arte: dlgReqItem(info.itemId),
+        nome: escapar(info.pedra),
+        sub: escapar(t('dlg.naBolsa')),
+        tem: info.qtd,
+        precisa: 1,
+        ok: info.qtd >= 1,
+      })) : ''}
+      ${info.semShiny ? dlgAviso(escapar(t('mega.semShiny', { nome: info.nome }))) : ''}
+      ${dlgSelos(
+        dlgSelo('cadeado', escapar(t('dlg.semVolta')), 'perigo'),
+        dlgSelo('estrela', escapar(t('dlg.vaiColecao')), 'ouro'),
+        info.shiny ? dlgSelo('brilho', escapar(t('dlg.shinyFica')), 'rx') : '',
+      )}`,
     rotuloSim: pode ? t('mega.confirmar') : t('confirmar.sim'),
     aoConfirmar: pode
       ? () => enviar({ t: 'pokemon.mega', pokemonId: pk.id })
@@ -12447,18 +13345,43 @@ function abrirModalEvolucao(pk, info) {
   const trava = travaDaOpcao(op);
   const faltaPedra = op.qtdPedra < 1;
   const pode = !trava && !faltaPedra;
-  const chaveTexto = info.shiny ? 'evol.textoShiny' : 'evol.texto';
+  // Nível e pedra têm linha própria, com a marca de ok/falta. A trava que não é nenhum dos dois
+  // (a arte que ainda não existe, o shiny sem forma shiny) não caberia ali e vira aviso.
+  const outraTrava = trava && !op.faltaNv ? trava : null;
   confirmar({
     titulo: t('evol.titulo'),
-    texto: t(chaveTexto, {
-      de: rotuloEvolModal(pk.nome, info.shiny),
-      para: rotuloEvolModal(op.nome, info.shiny),
-      pedra: escapar(op.pedra),
-      qtd: num(op.qtdPedra),
-      nivel: num(op.nivel),
-      faltaNv: trava ? `<p class="fi-vazio">${escapar(trava)}</p>` : '',
-      faltaPedra: faltaPedra ? `<p class="fi-vazio">${escapar(t('evol.faltaPedra', { pedra: op.pedra }))}</p>` : '',
-    }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: dlgArtePk(pk, 64),
+          nome: nomePkHtml(pk),
+          sub: dlgSeloShiny(info.shiny) + selosDeTipo(tiposDaFicha(pk)),
+        })}
+        ${dlgSeta({ item: op.itemId, qtd: '×1', rotulo: dlgNivel(op.nivel), travada: !pode })}
+        ${dlgAtor({
+          arte: dlgArteLt(op.looktype, 64, estado.especies.get(op.pokeId)?.looktype),
+          nome: escapar(op.nome),
+          sub: dlgSeloShiny(info.shiny) + selosDeTipo(op.tipos),
+          classe: pode ? 'novo' : 'travado',
+        })}`)}
+      ${dlgReqs(
+        dlgReq({
+          arte: dlgReqItem(op.itemId),
+          nome: escapar(op.pedra),
+          sub: escapar(t('dlg.naBolsa')),
+          tem: op.qtdPedra,
+          precisa: 1,
+          ok: !faltaPedra,
+        }),
+        dlgReq({
+          arte: dlgIcone('subir', 22),
+          nome: dlgNivel(op.nivel),
+          sub: escapar(t('dlg.nivelMin')),
+          valor: `<span class="tem">${dlgNivel(pk.level)}</span>`,
+          ok: !op.faltaNv,
+        }),
+      )}
+      ${outraTrava ? dlgAviso(escapar(outraTrava)) : ''}`,
     rotuloSim: pode ? t('evol.confirmar') : t('confirmar.sim'),
     aoConfirmar: pode
       ? () => enviar({ t: 'pokemon.evoluir', pokemonId: pk.id, alvoId: op.pokeId })
@@ -12505,20 +13428,31 @@ function abrirModalEscolhaEvolucao(pk, info) {
     })
     .join('');
 
-  // Com pedra por destino, o cabeçalho não pode anunciar UMA pedra: ela está em cada carta.
-  const chaveTexto = info.pedraPorDestino ? 'evol.escolhaTextoPedras' : 'evol.escolhaTexto';
   const escolhida = () => info.opcoes.find((o) => o.pokeId === evolucaoEscolhida) ?? null;
 
+  // O cabeçalho é o pokémon de HOJE, de frente para as cartas. Com pedra por destino ele não pode
+  // anunciar UMA pedra (ela está em cada carta); com pedra única, ela vira a linha de requisito.
   confirmar({
     largura: 'larga',
     titulo: t('evol.titulo'),
-    texto: t(chaveTexto, {
-      de: rotuloEvolModal(pk.nome, info.shiny),
-      pedra: escapar(info.pedra),
-      qtd: num(info.qtd),
-      opcoes: `<div class="evo-ops">${cartas}</div>`,
-      faltaPedra: '',
-    }),
+    texto: `
+      <div class="dlg-pergunta">
+        <span class="dlg-pergunta-arte">${dlgArtePk(pk, 56)}</span>
+        <div class="dlg-pergunta-txt">
+          <p class="dlg-lead">${t('evol.qualVira', { de: rotuloEvolModal(pk.nome, info.shiny) })}</p>
+          ${info.pedraPorDestino
+            ? `<p class="dlg-sub">${t('evol.cadaPedra')}</p>`
+            : dlgReqs(dlgReq({
+              arte: dlgReqItem(info.itemId),
+              nome: escapar(info.pedra),
+              sub: escapar(t('dlg.naBolsa')),
+              tem: info.qtd,
+              precisa: 1,
+              ok: info.qtd >= 1,
+            }))}
+        </div>
+      </div>
+      <div class="evo-ops">${cartas}</div>`,
     rotuloSim: t('evol.confirmar'),
     aoConfirmar: () => {
       const o = escolhida();
@@ -12532,7 +13466,7 @@ function abrirModalEscolhaEvolucao(pk, info) {
   // continuam sendo template de string, que é como o resto da tela é escrito.
   const corpo = $('#confirmar-texto');
   for (const el of corpo.querySelectorAll('.evo-op-arte')) {
-    el.appendChild(spriteAnimado(Number(el.dataset.lt), 56));
+    el.appendChild(spriteAnimado(Number(el.dataset.lt), 56, 3, null, null, { encaixar: true }));
   }
   for (const el of corpo.querySelectorAll('.evo-op [data-item]')) {
     if (el.dataset.item) el.appendChild(imgItem(Number(el.dataset.item), 18));
@@ -12879,44 +13813,182 @@ function pedirRefino(pk, stat) {
   const l = info.linhas.find((x) => x.stat === stat);
   if (!l) return;
   if (l.noTeto) return toast(t('refino.noTeto'));
-  if (!l.podePagar) {
-    return toast(t('refino.faltaPedraMix', {
-      n: num(l.custo - info.qtdPedra),
-      pedras: info.rotuloPedras,
-    }));
-  }
-  const consumo = simularConsumoPedrasRefino(estado.eu?.items ?? {}, info.pedras, l.custo);
-  const gastoTxt = formatarConsumoPedras(consumo);
+  // SEM pedra a caixa abre do mesmo jeito: é nela que o jogador vê quanto o degrau custa e
+  // quanto falta de cada pedra — um toast de "faltam 500" não diz de qual. O que muda é que o
+  // Refinar nasce desligado, a seta não anda e o pokémon fica apagado.
+  const pode = l.podePagar;
+  const consumo = pode ? simularConsumoPedrasRefino(estado.eu?.items ?? {}, info.pedras, l.custo) : null;
+  const gastoDe = new Map((consumo ?? []).map((c) => [c.itemId, c.qtd]));
   const resta = info.qtdPedra - l.custo;
+  const passo = cfgRefino().passo;
+  const mix = info.pedras.length > 1;
+  const subSaldo = escapar(pode ? t('refino.sobram', { n: num(resta) }) : t('refino.faltamN', { n: num(l.custo - info.qtdPedra) }));
+  // DUAL-TYPE COM PEDRA SUFICIENTE: o jogador ESCOLHE quanto sai de cada pedra. Cada linha ganha o
+  // contador − / campo / + / máx do Mercado; mexer numa faz as OUTRAS completarem o custo, maior pilha
+  // primeiro (`completarUsoPedrasRefino`), e a caixa abre com a proposta de sempre (a mesma do
+  // servidor sem escolha). A mistura vai no pedido e o servidor confere tudo de novo
+  // (`validarUsoPedrasRefino`, com o inventário e o custo DELE).
+  const escolhe = mix && pode;
+  const itensAgora = () => estado.eu?.items ?? {};
+  const saldoDe = (p) => Math.max(0, Math.floor(Number(itensAgora()[p.itemId]) || 0));
+  let uso = escolhe ? completarUsoPedrasRefino(itensAgora(), info.pedras, l.custo) : null;
+  // ± de um passo "redondo" do tamanho do degrau: 500 → 10, 3.500 → 100, 18.500 → 1.000.
+  const passoQtd = 10 ** Math.max(0, Math.floor(Math.log10(Math.max(1, l.custo))) - 1);
+  const contadorPedra = (p) => `
+    <span class="mk-qtd rf-qtd" data-rf-item="${p.itemId}">
+      <button type="button" class="mk-passo" data-passo="-1" aria-label="−${num(passoQtd)}">−</button>
+      <input type="number" inputmode="numeric" min="0" max="${Math.min(saldoDe(p), l.custo)}" step="1" value="${uso[p.itemId] ?? 0}"
+        aria-label="${escapar(p.nome)}">
+      <button type="button" class="mk-passo" data-passo="1" aria-label="+${num(passoQtd)}">+</button>
+      <button type="button" class="mk-passo rf-max" title="${escapar(t('refino.maxPedraTitulo'))}">${escapar(t('mk.max'))}</button>
+    </span>`;
+  // A linha do TOTAL, refeita a cada mudança: a soma escolhida contra o custo, com a marca de ok/falta.
+  const linhaTotal = () => {
+    const soma = escolhe ? Object.values(uso).reduce((s, q) => s + q, 0) : info.qtdPedra;
+    const fecha = escolhe ? soma === l.custo : pode;
+    return dlgReq({
+      arte: `<span data-rf-total>${dlgIcone('soma', 20)}</span>`,
+      nome: escapar(t('refino.totalAceito')),
+      sub: escolhe
+        ? escapar(fecha ? t('refino.sobram', { n: num(resta) }) : t('refino.faltamN', { n: num(l.custo - soma) }))
+        : subSaldo,
+      tem: soma,
+      precisa: l.custo,
+      ok: fecha,
+    });
+  };
+  // Uma linha POR PEDRA aceita, uma embaixo da outra, com o saldo de cada uma. No dual-type o
+  // jogador quer saber de qual das duas sai o pagamento (e, com pedra para pagar, escolhe), e a soma
+  // vira a linha de baixo, com a marca de ok/falta.
+  const reqs = escolhe
+    ? [
+      ...info.pedras.map((p) => dlgReq({
+        arte: dlgReqItem(p.itemId),
+        nome: escapar(p.nome),
+        sub: `<span data-rf-fica="${p.itemId}">${escapar(t('refino.sobram', { n: num(saldoDe(p) - (uso[p.itemId] ?? 0)) }))}</span>`,
+        valor: contadorPedra(p),
+      })),
+      linhaTotal(),
+    ]
+    : mix
+    ? [
+      ...info.pedras.map((p) => {
+        const gasta = gastoDe.get(p.itemId) ?? 0;
+        return dlgReq({
+          arte: dlgReqItem(p.itemId),
+          nome: escapar(p.nome),
+          sub: escapar(gasta ? t('refino.vaiGastarN', { n: num(gasta) }) : t('dlg.naBolsa')),
+          valor: `<span class="tem">${num(Math.max(0, Math.floor(Number(estado.eu?.items?.[p.itemId]) || 0)))}</span>`,
+        });
+      }),
+      dlgReq({
+        arte: dlgIcone('soma', 20),
+        nome: escapar(t('refino.totalAceito')),
+        sub: subSaldo,
+        tem: info.qtdPedra,
+        precisa: l.custo,
+        ok: pode,
+      }),
+    ]
+    : [dlgReq({
+      arte: dlgReqItem(info.pedra.itemId),
+      nome: escapar(info.pedra.nome),
+      sub: subSaldo,
+      tem: info.qtdPedra,
+      precisa: l.custo,
+      ok: pode,
+    })];
+  // A tela de "subiu um stat" dos jogos: o pokémon no palco com o "+1 ATK" subindo sobre ele, e
+  // embaixo o número de hoje virando o de amanhã. As pedras são as linhas de requisito — com o
+  // que sobra na bolsa, que é a conta que o jogador faz antes de clicar.
   confirmar({
-    titulo: t('refino.confirmarTitulo', { nome: escapar(info.pk.nome ?? '—') }),
-    texto: info.pedras.length > 1
-      ? t('refino.confirmarTextoMix', {
-          nome: escapar(info.pk.nome ?? '—'),
-          stat: l.rotulo,
-          de: num(l.atual),
-          para: num(l.atual + cfgRefino().passo),
-          custo: num(l.custo),
-          gasto: escapar(gastoTxt),
-          resta: num(resta),
-          pedras: escapar(info.rotuloPedras),
-          grau: num(l.nivel + 1),
-          investido: num(l.investido + l.custo),
-        })
-      : t('refino.confirmarTexto', {
-          nome: escapar(info.pk.nome ?? '—'),
-          stat: l.rotulo,
-          de: num(l.atual),
-          para: num(l.atual + cfgRefino().passo),
-          custo: num(l.custo),
-          pedra: escapar(info.pedra.nome),
-          resta: num(resta),
-          grau: num(l.nivel + 1),
-          investido: num(l.investido + l.custo),
-        }),
+    titulo: t('refino.confirmarTitulo', { nome: info.pk.nome ?? '—' }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: dlgArtePk(info.pk, 72),
+          nome: nomePkHtml(info.pk),
+          sub: dlgSeloShiny(info.pk.shiny) + dlgNivel(info.pk.level),
+          classe: pode ? 'novo' : 'travado',
+        })}
+        ${pode ? `<span class="dlg-sobe-txt">+${num(passo)} ${escapar(l.rotulo)}</span>` : ''}`, 'ouro')}
+      <div class="dlg-stat">
+        <span class="dlg-stat-rot">${escapar(l.rotulo)}<small>${escapar(t('refino.base'))}</small></span>
+        <span class="dlg-stat-de">${num(l.atual)}</span>
+        ${dlgSeta({ travada: !pode })}
+        <span class="dlg-stat-para">${num(l.atual + passo)}</span>
+        <span class="dlg-stat-grau" title="${escapar(t('refino.grauSelo'))}">+${num(l.nivel)} → <b>+${num(l.nivel + 1)}</b></span>
+      </div>
+      ${dlgReqs(...reqs)}
+      ${dlgSelos(
+        dlgSelo('cadeado', escapar(t('dlg.permanente')), 'perigo'),
+        // O TOTAL que fica dentro do stat, e não o custo do degrau: com o "antes → depois" escrito,
+        // "4.000" ao lado de um custo de 3.500 não se passa pelo preço (era o que o selo sem o
+        // "500 →" parecia dizer).
+        dlgSelo('moedas', escapar(t('refino.investidoSelo', {
+          stat: l.rotulo, de: num(l.investido), para: num(l.investido + l.custo),
+        })), 'ouro'),
+      )}`,
     rotuloSim: t('refino.confirmar'),
-    aoConfirmar: () => enviar({ t: 'pokemon.refinar', pokemonId: info.pk.id, stat }),
+    // O botão nasce desligado sem pedra suficiente (o `confirmar` religa todo botão ao abrir).
+    montar: () => {
+      $('#confirmar-sim').disabled = !pode;
+      if (escolhe) ligarMisturaRefino();
+    },
+    aoConfirmar: () => {
+      // A conferência se repete no clique: o saldo pode ter mudado com a caixa aberta (venda
+      // noutra aba, outra bancada). Quem decide de verdade é o `pokemon.refinar` do servidor.
+      const agora = infoRefino(pk);
+      const linha = agora?.linhas.find((x) => x.stat === stat);
+      if (!linha?.podePagar) {
+        return toast(t('refino.faltaPedraMix', {
+          n: num(Math.max(0, (linha?.custo ?? l.custo) - (agora?.qtdPedra ?? 0))),
+          pedras: info.rotuloPedras,
+        }));
+      }
+      if (!escolhe) return enviar({ t: 'pokemon.refinar', pokemonId: info.pk.id, stat });
+      // A mistura escolhida, conferida contra a bolsa e o custo de AGORA (outro degrau noutra aba
+      // mudaria o custo; uma venda, o saldo). Fora disso, a caixa não manda nada.
+      if (!validarUsoPedrasRefino(itensAgora(), info.pedras, linha.custo, uso).ok) return toast(t('refino.misturaMudou'));
+      enviar({ t: 'pokemon.refinar', pokemonId: info.pk.id, stat, uso: { ...uso } });
+    },
   });
+
+  /** Liga os contadores das pedras: cada mudança refaz a mistura, as linhas e o botão. */
+  function ligarMisturaRefino() {
+    const caixa = $('#confirmar');
+    if (!caixa) return;
+    const repintar = (editado = null) => {
+      for (const p of info.pedras) {
+        const campo = caixa.querySelector(`.rf-qtd[data-rf-item="${p.itemId}"] input`);
+        // O campo que a pessoa está digitando não é reescrito (o cursor pularia); ele é acertado no blur.
+        if (campo && campo !== editado) campo.value = String(uso[p.itemId] ?? 0);
+        const fica = caixa.querySelector(`[data-rf-fica="${p.itemId}"]`);
+        if (fica) fica.textContent = t('refino.sobram', { n: num(saldoDe(p) - (uso[p.itemId] ?? 0)) });
+      }
+      const total = caixa.querySelector('[data-rf-total]')?.closest('.dlg-req');
+      if (total) total.outerHTML = linhaTotal();
+      const sim = $('#confirmar-sim');
+      if (sim) sim.disabled = !validarUsoPedrasRefino(itensAgora(), info.pedras, l.custo, uso).ok;
+    };
+    const fixar = (itemId, qtd, editado = null) => {
+      uso = completarUsoPedrasRefino(itensAgora(), info.pedras, l.custo, itemId, qtd);
+      repintar(editado);
+    };
+    for (const cx of caixa.querySelectorAll('.rf-qtd')) {
+      const itemId = cx.dataset.rfItem;
+      const campo = cx.querySelector('input');
+      campo.addEventListener('input', () => fixar(itemId, Number(campo.value), campo));
+      campo.addEventListener('blur', () => repintar());
+      cx.addEventListener('click', (ev) => {
+        const b = ev.target.closest('.mk-passo');
+        if (!b) return;
+        const p = info.pedras.find((x) => String(x.itemId) === itemId);
+        const atual = uso[itemId] ?? 0;
+        fixar(itemId, b.classList.contains('rf-max') ? Math.min(saldoDe(p), l.custo) : atual + Number(b.dataset.passo) * passoQtd);
+      });
+    }
+  }
 }
 
 /** Liga os "+" de um trecho de HTML já montado (ficha ou modal). */
@@ -13089,7 +14161,10 @@ function linhaPokemon(p, ativoId, { mover = false, detalhes = false, selos = fal
   const el = document.createElement('div');
   const nvTreinador = estado.eu?.level ?? 0;
   const bloqueado = p.slot != null && !podeUsarPokemon(nvTreinador, p);
-  el.className = 'poke-linha' + (detalhes ? ' depot-linha' : '') + (p.id === ativoId ? ' ativo' : '') + (bloqueado ? ' pl-bloqueado' : '');
+  // O brilho do shiny só nas listas da EQUIPE (as que têm XP): no Depot é uma coleção inteira,
+  // e uma parede de shinys respirando ao mesmo tempo viraria ruído em vez de prêmio.
+  const brilho = !!p.shiny && xp;
+  el.className = 'poke-linha' + (detalhes ? ' depot-linha' : '') + (p.id === ativoId ? ' ativo' : '') + (bloqueado ? ' pl-bloqueado' : '') + (brilho ? ' brilho-shiny' : '');
   el.dataset.id = p.id;
   const btnMover = !mover
     ? ''
@@ -13128,7 +14203,7 @@ function linhaPokemon(p, ativoId, { mover = false, detalhes = false, selos = fal
   const barraXp = px
     ? `<div class="mini-xp" title="${escapar(`${num(px.dentro)} / ${num(px.faixa)} ${t('painel.xp')}`)}"><i style="width:${px.frac * 100}%"></i></div>`
     : '';
-  el.innerHTML = `
+  el.innerHTML = `${brilho ? brilhoShiny() : ''}
     <div class="pl-info">
       ${cabeca}
       <div class="mini-hp ${p.hp / p.maxHp < 0.35 ? 'baixo' : ''}"><i style="width:${(p.hp / p.maxHp) * 100}%"></i></div>
@@ -13173,6 +14248,11 @@ function linhaPokemon(p, ativoId, { mover = false, detalhes = false, selos = fal
       return toast(t('ev.pokemonRecusaNivel', { nome: p.nome, nivel: p.level, min: nivelMinimoTreinador(p.level), seu: nvTreinador }));
     }
     if (p.slot != null) {
+      // A pausa da recarga é adiantada no clique: o pokémon que entra ataca 300 ms depois, e o
+      // snapshot que confirma a troca pode levar até 500 ms. Sem isto, esse primeiro golpe era
+      // creditado ao relógio do pokémon anterior — e o do novo acendia como pronto. Se o
+      // servidor recusar a troca, o `activeId` do snapshot seguinte desfaz.
+      sincronizarCooldownsDaUI(p.id);
       enviar({ t: 'team.active', pokemonId: p.id });
       return;
     }
@@ -13444,9 +14524,9 @@ const DEPOT_ORDEM_I18N = {
 };
 
 // `iv` é a SOMA dos seis, antes deles na lista: quem ordena por IV quase sempre quer o total, e
-// só depois o de um stat. Serve às três folhas que usam esta lista (venda ao NPC, anexo da DM e
-// a escolha da Oferenda).
-const MK_POKEMON_ORDENS = ['padrao', 'qualidade', 'potencia', 'nota', 'iv', ...IV_ORDEM_IDS, 'tipo', 'recentes'];
+// só depois o de um stat. Serve às folhas que usam esta lista (venda ao NPC, Coleção, anexo da
+// DM, a escolha da Oferenda...).
+const MK_POKEMON_ORDENS = ['padrao', 'qualidade', 'potencia', 'nota', 'iv', ...IV_ORDEM_IDS, 'dex', 'tipo', 'recentes'];
 const MK_POKEMON_ORDEM_I18N = {
   padrao: 'mk.ordemPadrao',
   qualidade: 'depot.ordemQualidade',
@@ -13459,8 +14539,19 @@ const MK_POKEMON_ORDEM_I18N = {
   ivSpAtk: 'cm.ordIvSpAtk',
   ivSpDef: 'cm.ordIvSpDef',
   ivSpd: 'cm.ordIvSpd',
+  dex: 'mk.ordemDex',
   tipo: 'mk.ordemTipo',
   recentes: 'mk.ordemRecentes',
+};
+
+/**
+ * O número da Pokédex de um pokémon — o MESMO que a ficha e a Pokédex mostram (`dexExibicao`):
+ * nacional, Orre no nacional, Outland em #2001+ e mega em #3000+. Sem espécie, vai para o fim.
+ */
+const dexDaOrdem = (k) => {
+  const id = Number(k?.speciesId ?? especieDe(k)?.pokeId);
+  const n = Number.isFinite(id) && id > 0 ? Number(dexExibicao(id)) : NaN;
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
 };
 
 const indiceTipo = (tipo) => {
@@ -13495,6 +14586,10 @@ const ordenarMarketPokemon = (lista, ordem) => {
         if (ta !== 0) return ta;
         return (b.quality ?? 0) - (a.quality ?? 0) || b.level - a.level || b.id - a.id;
       });
+    case 'dex':
+      // CRESCENTE, como a própria Pokédex (#1 Bulbasaur primeiro) — a única da lista que não é
+      // "maior primeiro". Dentro da mesma espécie, o de nível mais alto.
+      return copia.sort((a, b) => dexDaOrdem(a) - dexDaOrdem(b) || b.level - a.level || b.id - a.id);
     case 'recentes':
       return copia.sort((a, b) => b.id - a.id);
     default:
@@ -13764,23 +14859,15 @@ const notaDoPokemon = (p) => notaDePokemon(p, especieDe(p));
 const notaDoFicha = (ficha) => notaDePokemon(ficha, especieDe(ficha));
 
 /**
- * O piso de IV digitado, já limpo. `null` = sem filtro.
- *
- * Campo vazio, texto e número fora da faixa caem todos em "sem filtro" em vez de esvaziarem a
- * lista: quem digita 999 quer os melhores, não quer uma tela em branco, e um `<input>` de
- * número aceita coisas que o teclado do celular deixa passar.
+ * O piso de IV digitado, já limpo (`null` = sem filtro), e o filtro de tipo + IV: as duas regras
+ * moram em `shared/filtro-depot.mjs` porque o servidor refaz a MESMA conta no "Vender todo o
+ * Depot (Filtrado)" — ver `vendaDepotDaTela`.
  */
-const ivMinDoFiltro = (valor) => {
-  const v = Math.round(Number(valor));
-  if (!Number.isFinite(v) || String(valor ?? '').trim() === '') return null;
-  return Math.min(IV_MAX, Math.max(IV_MIN, v));
-};
+const ivMinDoFiltro = pisoIvDoFiltro;
 
 const depotPassaFiltros = (p, busca, tipo, ivMin = null) => {
-  if (tipo && !(p.tipos ?? []).includes(tipo)) return false;
   if (busca && !(p.nome ?? '').toLowerCase().includes(busca)) return false;
-  if (ivMin != null && (ivTotalDoPokemon(p) ?? 0) < ivMin) return false;
-  return true;
+  return passaFiltroTipoIv(p, tipo, ivMin);
 };
 
 const ordenarDepot = (lista, ordem) => {
@@ -14207,19 +15294,16 @@ const FRAGMENTO_CHAVE_ID = 70011;
 const FRAGMENTO_SHINY_ID = 70012;
 const FRAGMENTO_BICICLETA_ID = 70013;
 
-const sessaoNova = () => ({
-  inicio: Date.now(),
-  xpTreinador: 0,
-  xpPokemon: 0,
-  gold: 0,
-  abates: 0,
-  capturas: 0,
-  shiniesVistos: 0,
-  shinies: 0,
-  bossTokens: 0,
-  fragChave: 0,
-  fragShiny: 0,
-  fragBicicleta: 0,
+/**
+ * O id de cada drop raro que o servidor manda no `welcome` (o fragmento da Casa, o da Shiny Stone
+ * e o da Bicicleta) — os outros saem de `DROPS_SESSAO` em `sessao-hunt.mjs`. Os contadores, a
+ * prancheta nova e o que ela soma moram lá; aqui fica o desenho e o disco.
+ */
+const idsDropsSessao = () => ({
+  bossTokens: BOSS_TOKEN_ID,
+  fragChave: estado.casas?.fragmento?.itemId ?? FRAGMENTO_CHAVE_ID,
+  fragShiny: estado.shinyStone?.fragmentoId ?? FRAGMENTO_SHINY_ID,
+  fragBicicleta: estado.bicicletas?.fragmento?.itemId ?? FRAGMENTO_BICICLETA_ID,
 });
 
 /**
@@ -14258,19 +15342,15 @@ function salvarSessaoHunt(agora = Date.now(), forcar = false) {
   } catch { /* privado / quota */ }
 }
 
-/** A prancheta gravada deste nick, ou `null` se não houver (ou se o que há não presta). */
+/**
+ * A prancheta gravada deste nick, ou `null` se não houver (ou se o que há não presta). A conta
+ * campo a campo — inclusive os gastos, que são mapas — é a de `sanearSessao`.
+ */
 function sessaoGuardada() {
   const chave = chaveSessaoHunt();
   if (!chave) return null;
   try {
-    const g = JSON.parse(localStorage.getItem(chave) ?? 'null');
-    if (!g || typeof g !== 'object') return null;
-    // Campo a campo, e sempre número: o que está no disco foi escrito por uma versão qualquer
-    // do jogo, e um contador que ainda não existia lá não pode chegar aqui como `NaN`.
-    const s = sessaoNova();
-    for (const k of Object.keys(s)) if (k !== 'inicio') s[k] = Number(g[k]) || 0;
-    s.inicio = Date.now() - Math.max(0, Number(g.ms) || 0);
-    return s;
+    return sanearSessao(JSON.parse(localStorage.getItem(chave) ?? 'null'));
   } catch {
     return null;
   }
@@ -14280,75 +15360,50 @@ function sessaoGuardada() {
 // único que o iOS entrega de verdade — lá o `beforeunload` simplesmente não roda.
 window.addEventListener('pagehide', () => salvarSessaoHunt(Date.now(), true));
 
-function dropsItem(drops, itemId, nome) {
-  return (drops ?? []).reduce(
-    (s, d) => s + (d.itemId === itemId || d.nome === nome ? Number(d.qtd) || 1 : 0),
-    0,
-  );
-}
-
-function dropsBossToken(drops) {
-  return dropsItem(drops, BOSS_TOKEN_ID, 'Bronze Boss Token');
-}
-
+/**
+ * Soma o evento na prancheta (a conta é `contarNaSessao`) e cuida do que é de TELA: o histórico de
+ * capturas, o disco e a repintura. Evento que não mexe em contador nenhum (o `spawn`, o ataque de
+ * cada golpe) não grava nem repinta.
+ */
 function registrarSessao(e) {
   const s = estado.sessao;
   if (!s) return;
-  switch (e.k) {
-    case 'spawn':
-      break;
-    case 'morte':
-      if (e.quem === 'selvagem') {
-        s.abates++;
-        s.xpTreinador += Number(e.xpTreinador ?? e.xp ?? 0) || 0;
-        s.xpPokemon += Number(e.xpPokemon ?? e.xp ?? 0) || 0;
-        s.gold += Number(e.ouro ?? 0) || 0;
-        s.gold += Number(e.ouroVendaAuto ?? 0) || 0;
-        s.bossTokens += dropsBossToken(e.drops);
-        s.fragChave += dropsItem(e.drops, estado.casas?.fragmento?.itemId ?? FRAGMENTO_CHAVE_ID, 'Key Fragment');
-        s.fragShiny += dropsItem(e.drops, estado.shinyStone?.fragmentoId ?? FRAGMENTO_SHINY_ID, 'Shiny Stone Fragment');
-        // `?? 0`: a sessão atravessa o F5, e a gravada antes deste contador existir não tem o
-        // campo — somar em `undefined` pintaria "NaN" no painel.
-        s.fragBicicleta = (s.fragBicicleta ?? 0)
-          + dropsItem(e.drops, estado.bicicletas?.fragmento?.itemId ?? FRAGMENTO_BICICLETA_ID, 'Bicycle Fragment');
-      }
-      break;
-    case 'bossMorto':
-      s.xpTreinador += Number(e.xpTreinador ?? e.xp ?? 0) || 0;
-      s.xpPokemon += Number(e.xpPokemon ?? e.xp ?? 0) || 0;
-      s.gold += Number(e.valor ?? 0) || 0;
-      s.bossTokens += dropsBossToken(e.drops);
-      break;
-    case 'bola':
-      if (e.shiny) s.shiniesVistos++;
-      break;
-    case 'capturado':
-      s.capturas++;
-      if (e.pokemon) {
-        if (e.pokemon.shiny) s.shinies++;
-        estado.capturasHist.unshift({
-          em: Date.now(),
-          id: e.pokemon.id ?? null,
-          nome: e.pokemon.nome ?? '—',
-          level: e.pokemon.level ?? 0,
-          shiny: !!e.pokemon.shiny,
-        });
-        if (estado.capturasHist.length > 100) estado.capturasHist.length = 100;
-        // Com o painel ABERTO a linha nova já está à vista e não há o que avisar. Fechado, a
-        // captura é justamente o que o VIP de auto-bola sem parar não tem como perceber — a
-        // cena rola sozinha e nada muda de lugar. Daí a bolinha.
-        if (!estado.capturasHistAberta) {
-          estado.capturasNaoVistas++;
-          pintarSeloCapturas();
-        }
-      }
-      break;
-    default:
-      break;
+  if (!contarNaSessao(s, e, idsDropsSessao())) return;
+  if (e.k === 'capturado' && e.pokemon) {
+    estado.capturasHist.unshift({
+      em: Date.now(),
+      id: e.pokemon.id ?? null,
+      nome: e.pokemon.nome ?? '—',
+      level: e.pokemon.level ?? 0,
+      shiny: !!e.pokemon.shiny,
+    });
+    if (estado.capturasHist.length > 100) estado.capturasHist.length = 100;
+    // Com o painel ABERTO a linha nova já está à vista e não há o que avisar. Fechado, a
+    // captura é justamente o que o VIP de auto-bola sem parar não tem como perceber — a
+    // cena rola sozinha e nada muda de lugar. Daí a bolinha.
+    if (!estado.capturasHistAberta) {
+      estado.capturasNaoVistas++;
+      pintarSeloCapturas();
+    }
+    if (estado.capturasHistAberta) pintarCapturasHist();
   }
   salvarSessaoHunt();
-  if (estado.sessaoAberta) pintarSessao();
-  if (estado.capturasHistAberta) pintarCapturasHist();
+  if (estado.sessaoAberta) agendarPintarSessao();
+}
+
+/**
+ * A repintura da prancheta, uma por QUADRO. A automação gasta até vinte poções num tique e cada
+ * abate traz XP, ouro e drops em eventos separados: repintar a cada um era montar os ícones do
+ * painel inteiro dezenas de vezes num instante que o olho vê como um só.
+ */
+let pinturaSessaoAgendada = false;
+function agendarPintarSessao() {
+  if (pinturaSessaoAgendada) return;
+  pinturaSessaoAgendada = true;
+  requestAnimationFrame(() => {
+    pinturaSessaoAgendada = false;
+    if (estado.sessaoAberta) pintarSessao();
+  });
 }
 
 function tempoSessao(ms) {
@@ -14360,49 +15415,61 @@ function tempoSessao(ms) {
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+/** Preço de LOJA de uma bola (o `priceGold` do catálogo) e de um item (o `npcPrice`); 0 = sem preço. */
+const precoBolaSessao = (id) => Number(estado.catalogoBolas?.find((b) => b.id === id)?.priceGold) || 0;
+const precoItemSessao = (id) => Number(estado.itens?.get(id)?.npcPrice) || 0;
+const custosSessao = (s) => custosDaSessao(s, { precoBola: precoBolaSessao, precoItem: precoItemSessao });
+const nomeBolaSessao = (id) => estado.catalogoBolas?.find((b) => b.id === id)?.nome ?? `Ball #${id}`;
+const nomeItemSessao = (id) => nomeItem(id, estado.itens?.get(id)?.name ?? `#${id}`);
+
 /**
- * As linhas da prancheta, em pares `[rótulo, valor]`.
+ * O texto do botão "Copiar", em pares `[rótulo, valor]`.
  *
- * UMA lista, dois consumidores: o painel desenha a partir dela e o botão "Copiar" escreve a
- * partir dela. É de propósito — o texto copiado é lido em planilha e colado no chat, e uma
- * segunda cópia da lista divergiria no dia em que um contador novo entrasse aqui e não lá.
+ * As quinze linhas de sempre vêm PRIMEIRO, na mesma ordem e com os mesmos rótulos: o texto é lido
+ * em planilha e colado no chat, e quem já o processa conta com esse começo. O que a prancheta
+ * passou a contar — os drops de boss, cada bola/poção/revive gasto, o gasto e o lucro — entra
+ * DEPOIS. O desenho do painel (`pintarSessao`) é outro e não sai mais daqui: ele agrupa, põe
+ * ícone e esconde o que é zero, e um texto para colar não pode mudar de forma a cada sessão.
  *
- * O `Tempo` é calculado na hora da chamada, então o texto copiado leva o relógio do clique.
- *
- * Os três `/h` entram LOGO ABAIXO do contador de que saem, e não num bloco no fim: num idle o
- * que se compara é "quanto já rendeu" com "quanto está rendendo AGORA", e separar os dois faria
- * o olho ir e voltar. A conta é a de sempre (`ritmoDaSessao`, a mesma do cartão Pocket e do
- * Hunt Analyser) — inclusive o piso de um minuto no denominador, que é o que impede o primeiro
- * abate de uma sessão de 3 s de virar um "420.000/h" que some no quadro seguinte.
+ * O `Tempo` é calculado na hora da chamada, então o texto copiado leva o relógio do clique. Os
+ * `/h` são a conta de sempre (`ritmoDaSessao`, a do Pocket e do Hunt Analyser), com o piso de um
+ * minuto no denominador que impede o primeiro abate de virar um "420.000/h".
  */
-function linhasSessao(s) {
-  const ritmo = ritmoDaSessao(s);
+function linhasSessao(s, agora = Date.now()) {
+  const ritmo = ritmoDaSessao(s, agora);
+  const custos = custosSessao(s);
+  const lucro = (s.gold || 0) - custos.total;
+  const gastos = [
+    ...custos.bolas.map((x) => [nomeBolaSessao(x.id), num(x.qtd)]),
+    ...custos.pocoes.map((x) => [nomeItemSessao(x.id), num(x.qtd)]),
+    ...custos.revives.map((x) => [nomeItemSessao(x.id), num(x.qtd)]),
+  ];
   return [
-    [t('sessao.tempo'), tempoSessao(Date.now() - s.inicio), 'sessao-tempo'],
+    [t('sessao.tempo'), tempoSessao(agora - s.inicio)],
     [t('sessao.xpTreinador'), num(s.xpTreinador)],
-    [t('sessao.xpTreinadorHora'), num(ritmo?.xpTreinadorH ?? 0), 'sessao-xp-treinador-h', true],
+    [t('sessao.xpTreinadorHora'), num(ritmo?.xpTreinadorH ?? 0)],
     [t('sessao.xpPokemon'), num(s.xpPokemon)],
-    [t('sessao.xpPokemonHora'), num(ritmo?.xpPokemonH ?? 0), 'sessao-xp-pokemon-h', true],
+    [t('sessao.xpPokemonHora'), num(ritmo?.xpPokemonH ?? 0)],
     [t('sessao.gold'), num(s.gold)],
-    [t('sessao.goldHora'), num(ritmo?.ouroH ?? 0), 'sessao-gold-h', true],
+    [t('sessao.goldHora'), num(ritmo?.ouroH ?? 0)],
     [t('sessao.abates'), num(s.abates)],
     [t('sessao.capturas'), num(s.capturas)],
     [t('sessao.shiniesVistos'), num(s.shiniesVistos)],
     [t('sessao.shinies'), num(s.shinies)],
-    [t('sessao.bossTokens'), num(s.bossTokens)],
-    [t('sessao.fragChave'), num(s.fragChave)],
-    [t('sessao.fragShiny'), num(s.fragShiny)],
-    [t('sessao.fragBicicleta'), num(s.fragBicicleta ?? 0)],
+    // Os quatro primeiros são os de sempre (Boss Tokens e os três fragmentos), na mesma ordem.
+    ...DROPS_SESSAO.map((d) => [t(`sessao.${d.campo}`), num(s[d.campo] ?? 0)]),
+    ...gastos,
+    [t('sessao.gasto'), num(custos.total)],
+    [t('sessao.gastoHora'), num(porHora(custos.total, s, agora))],
+    [t('sessao.lucro'), num(lucro)],
+    [t('sessao.lucroHora'), num(porHora(lucro, s, agora))],
   ];
 }
 
 /**
- * O texto que vai para a área de transferência.
- *
- * Rótulo e valor em LINHAS SEPARADAS, sem cabeçalho — é exatamente o que sai hoje quando se
- * seleciona o painel com o mouse e se copia no PC, e é esse formato que o pessoal já cola no
- * chat e joga em planilha. O botão existe para dar ao celular o mesmo resultado, não um
- * formato novo: mudar o desenho aqui quebraria quem já processa o texto do jeito antigo.
+ * O texto que vai para a área de transferência: rótulo e valor em LINHAS SEPARADAS, sem cabeçalho
+ * — o formato que o pessoal já cola no chat e joga em planilha desde quando o painel era copiado
+ * com o mouse.
  */
 const textoSessao = (s) => linhasSessao(s).map(([rotulo, valor]) => `${rotulo}\n${valor}`).join('\n');
 
@@ -14448,11 +15515,112 @@ async function copiarSessao() {
   toast(t(await copiarTexto(textoSessao(s)) ? 'sessao.copiado' : 'sessao.copiaFalhou'));
 }
 
+/**
+ * A PRANCHETA, desenhada em seções: Tempo (a informação principal), Treinador, Shiny, Drops raros
+ * e Custos. Com largura são duas colunas da mesma altura — Treinador e Custos à esquerda; Tempo,
+ * Shiny e Drops à direita, o Tempo no alto —; estreita (celular, Modo Economia), uma coluna só, com
+ * o Tempo em primeiro. Quem decide é a container query do `.ss-grade` (ver o estilo).
+ *
+ * Dinâmica de propósito: o contador que SUBIU desde a última pintura acende por um instante
+ * (`.ss-subiu`), o drop ainda não pego fica apagado e acende no primeiro, e os gastos aparecem
+ * conforme a automação usa — um ícone por bola, poção ou revive, com a quantidade ao lado.
+ *
+ * Os ícones entram como marcador (`data-ss-*`) e são trocados pelos elementos de sempre
+ * (`imgItem`, `iconeBola`, `iconeArquivo`) logo depois do `innerHTML` — o mesmo trato do resto da
+ * interface, com o mesmo cache de imagem.
+ */
 function pintarSessao() {
   const painel = $('#sessao-painel');
   const s = estado.sessao;
   if (!painel || !s) return;
-  const resetBloqueado = Date.now() < estado.sessaoResetLivreEm;
+  const agora = Date.now();
+  const ritmo = ritmoDaSessao(s, agora);
+  const custos = custosSessao(s);
+  const lucro = (s.gold || 0) - custos.total;
+  const resetBloqueado = agora < estado.sessaoResetLivreEm;
+  // O número de antes de cada contador: o que mudou desde a última pintura acende.
+  const antes = new Map([...painel.querySelectorAll('[data-k]')].map((el) => [el.dataset.k, el.textContent]));
+
+  const hora = (id, valor) => `<em class="ss-hora"><span id="${id}">${num(valor)}</span>/h</em>`;
+  const linha = (k, ico, rotulo, valor, porHoraHtml = '', classe = '') => `
+    <li class="ss-linha${classe ? ` ${classe}` : ''}">
+      <span class="ss-ico" aria-hidden="true">${ico}</span>
+      <span class="ss-rot">${rotulo}</span>
+      <b data-k="${k}">${valor}</b>
+      ${porHoraHtml}
+    </li>`;
+  const treinador = `
+    <section class="ss-sec ss-treinador">
+      <h4>${t('sessao.secTreinador')}</h4>
+      <ul class="ss-linhas">
+        ${linha('xpTreinador', dlgIcone('pessoa', 14), t('sessao.xpTreinador'), num(s.xpTreinador), hora('sessao-xp-treinador-h', ritmo?.xpTreinadorH ?? 0))}
+        ${linha('xpPokemon', dlgIcone('estrela', 14), t('sessao.xpPokemon'), num(s.xpPokemon), hora('sessao-xp-pokemon-h', ritmo?.xpPokemonH ?? 0))}
+        ${linha('gold', `<span data-ss-arq="${ICONE_OURO}" data-px="15"></span>`, t('sessao.gold'), num(s.gold), hora('sessao-gold-h', ritmo?.ouroH ?? 0))}
+        ${linha('abates', dlgIcone('espadas', 14), t('sessao.abates'), num(s.abates), hora('sessao-abates-h', ritmo?.abatesH ?? 0))}
+        ${linha('capturas', '<span data-ss-bola="1" data-px="15"></span>', t('sessao.capturas'), num(s.capturas))}
+      </ul>
+    </section>`;
+  const cartaoShiny = (k, valor, rotulo) => `
+    <div class="ss-shiny${valor ? ' tem' : ''}">
+      <span class="ss-shiny-ico" aria-hidden="true">${dlgIcone('brilho', 18)}</span>
+      <b data-k="${k}">${num(valor)}</b>
+      <span>${rotulo}</span>
+    </div>`;
+  const shiny = `
+    <section class="ss-sec ss-sec-shiny">
+      <h4>${t('sessao.secShiny')}</h4>
+      <div class="ss-shinies">
+        ${cartaoShiny('shiniesVistos', s.shiniesVistos, t('sessao.shinyVistos'))}
+        ${cartaoShiny('shinies', s.shinies, t('sessao.shinyCapturados'))}
+      </div>
+    </section>`;
+  const ids = idsDropsSessao();
+  const drops = `
+    <section class="ss-sec ss-sec-drops">
+      <h4>${t('sessao.secDrops')}</h4>
+      <div class="ss-drops">
+        ${DROPS_SESSAO.map((d) => {
+          const n = s[d.campo] ?? 0;
+          const nome = t(`sessao.${d.campo}`);
+          return `<div class="ss-slot${n ? ' tem' : ''}" title="${escapar(`${nome}: ${num(n)}`)}">
+            <span data-ss-item="${ids[d.campo] ?? d.id}" data-px="24"></span>
+            <b data-k="${d.campo}">${num(n)}</b>
+            <small>${t(`sessao.curto.${d.campo}`)}</small>
+          </div>`;
+        }).join('')}
+      </div>
+    </section>`;
+  const chip = (k, iconeHtml, nome, x) => `
+    <span class="ss-chip${x.unidade ? '' : ' sem-preco'}" title="${escapar(x.unidade
+      ? t('sessao.custoItem', { nome, qtd: num(x.qtd), preco: num(x.unidade), custo: num(x.custo) })
+      : t('sessao.custoSemPreco', { nome, qtd: num(x.qtd) }))}">
+      ${iconeHtml}<b data-k="${k}">${num(x.qtd)}</b>
+    </span>`;
+  const grupo = (rotulo, itens, chipDe) => (itens.length ? `
+    <div class="ss-gasto">
+      <span class="ss-gasto-rot">${rotulo}</span>
+      <div class="ss-chips">${itens.map(chipDe).join('')}</div>
+    </div>` : '');
+  const gastos = grupo(t('sessao.custoBolas'), custos.bolas,
+    (x) => chip(`bola:${x.id}`, `<span data-ss-bola="${x.id}" data-px="18"></span>`, nomeBolaSessao(x.id), x))
+    + grupo(t('sessao.custoPocoes'), custos.pocoes,
+      (x) => chip(`pocao:${x.id}`, `<span data-ss-item="${x.id}" data-px="18"></span>`, nomeItemSessao(x.id), x))
+    + grupo(t('sessao.custoRevives'), custos.revives,
+      (x) => chip(`revive:${x.id}`, `<span data-ss-item="${x.id}" data-px="18"></span>`, nomeItemSessao(x.id), x));
+  const custosHtml = `
+    <section class="ss-sec ss-custos">
+      <h4>${t('sessao.secCustos')}</h4>
+      <div class="ss-caixa">
+        ${gastos || `<p class="ss-vazio">${t('sessao.custoNada')}</p>`}
+        <ul class="ss-linhas ss-totais">
+          ${linha('gasto', dlgIcone('moedas', 14), t('sessao.gasto'),
+            custos.total ? `−${num(custos.total)}` : '0', hora('sessao-gasto-h', porHora(custos.total, s, agora)), 'gasto')}
+          ${linha('lucro', dlgIcone('trofeu', 14), t('sessao.lucro'), num(lucro),
+            hora('sessao-lucro-h', porHora(lucro, s, agora)), lucro < 0 ? 'lucro negativo' : 'lucro')}
+        </ul>
+      </div>
+    </section>`;
+
   painel.innerHTML = `
     <div class="sessao-topo">
       <h3>${t('sessao.titulo')}</h3>
@@ -14463,37 +15631,66 @@ function pintarSessao() {
           data-i18n-attr="title:tip.sessaoReset" title="${t('tip.sessaoReset')}">${t('sessao.reset')}</button>
       </div>
     </div>
-    <ul class="sessao-linhas">
-      ${linhasSessao(s)
-        .map(([rotulo, valor, id, ritmo]) => `<li${ritmo ? ' class="sessao-ritmo"' : ''}><span>${rotulo}</span><b${id ? ` id="${id}"` : ''}>${valor}</b></li>`)
-        .join('')}
-    </ul>`;
+    <div class="ss-grade">
+      <div class="ss-col">${treinador}${custosHtml}</div>
+      <div class="ss-col">
+        <section class="ss-sec ss-sec-tempo">
+          <h4>${t('sessao.tempo')}<i class="ss-vivo" aria-hidden="true"></i></h4>
+          <div class="ss-tempo">
+            <span class="ss-tempo-ico" aria-hidden="true">${dlgIcone('relogio', 26)}</span>
+            <b id="sessao-tempo">${tempoSessao(agora - s.inicio)}</b>
+          </div>
+        </section>
+        ${shiny}${drops}
+      </div>
+    </div>`;
+
+  for (const el of painel.querySelectorAll('[data-ss-item]')) {
+    el.replaceWith(imgItem(Number(el.dataset.ssItem), Number(el.dataset.px) || 24));
+  }
+  for (const el of painel.querySelectorAll('[data-ss-bola]')) {
+    el.replaceWith(iconeBola(Number(el.dataset.ssBola), Number(el.dataset.px) || 18));
+  }
+  for (const el of painel.querySelectorAll('[data-ss-arq]')) {
+    el.replaceWith(iconeArquivo(el.dataset.ssArq, Number(el.dataset.px) || 15));
+  }
+  for (const el of painel.querySelectorAll('[data-k]')) {
+    const v = antes.get(el.dataset.k);
+    if (v !== undefined && v !== el.textContent) el.classList.add('ss-subiu');
+  }
   $('#sessao-reset')?.addEventListener('click', resetarSessao);
   $('#sessao-copiar')?.addEventListener('click', copiarSessao);
 }
 
 /**
- * Os três `/h` da prancheta, repintados a cada segundo.
+ * Os `/h` da prancheta, repintados a cada segundo.
  *
  * Eles andam SOZINHOS: o denominador é o relógio, então o ritmo cai a cada segundo em que nada
  * acontece. Repintar só no evento deixaria o número do último abate congelado na tela de quem
- * saiu da hunt — e é justamente aí que ele mente mais. São três `textContent` no tique que já
- * mexe no `Tempo`, sem repintar o painel inteiro: o `innerHTML` de `pintarSessao` mataria a
- * seleção de quem está copiando o painel com o mouse.
+ * saiu da hunt — e é justamente aí que ele mente mais. São `textContent` no tique que já mexe no
+ * `Tempo`, sem repintar o painel inteiro (o `innerHTML` de `pintarSessao` refaria os ícones).
  */
 const SESSAO_RITMO_CELULAS = [
   ['sessao-xp-treinador-h', 'xpTreinadorH'],
   ['sessao-xp-pokemon-h', 'xpPokemonH'],
   ['sessao-gold-h', 'ouroH'],
+  ['sessao-abates-h', 'abatesH'],
 ];
 
 function pintarRitmoSessao(agora = Date.now()) {
-  const ritmo = ritmoDaSessao(estado.sessao, agora);
+  const s = estado.sessao;
+  const ritmo = ritmoDaSessao(s, agora);
   if (!ritmo) return;
   for (const [id, chave] of SESSAO_RITMO_CELULAS) {
     const el = $(`#${id}`);
     if (el) el.textContent = num(ritmo[chave]);
   }
+  const gastoEl = $('#sessao-gasto-h');
+  const lucroEl = $('#sessao-lucro-h');
+  if (!gastoEl && !lucroEl) return;
+  const { total } = custosSessao(s);
+  if (gastoEl) gastoEl.textContent = num(porHora(total, s, agora));
+  if (lucroEl) lucroEl.textContent = num(porHora((s.gold || 0) - total, s, agora));
 }
 
 const SESSAO_RESET_MS = 5000;
@@ -14806,6 +16003,15 @@ function definirEconomia(ligado) {
 }
 
 $('#eco-sair')?.addEventListener('click', () => definirEconomia(false));
+// O ATALHO da cena (ver o comentário do `#hunt-eco` no index.html). Só liga: ligado, a cena
+// sai do ar e leva este botão junto, e a volta é o `#eco-sair` do painel de Economia — que é
+// o único que continua na tela. Um toast porque o modo é grande demais para acontecer calado:
+// a cena some, e sem uma frase o jogador não sabe se ligou algo ou se o jogo quebrou.
+$('#hunt-eco')?.addEventListener('click', () => {
+  if (economiaLigado()) return;
+  definirEconomia(true);
+  toast(t('eco.ligadoToast'));
+});
 // A plaquinha da hunt, no celular, é a porta do Mapa (ver DESIGN.md §8) — e ela está
 // escondida aqui. Sem este botão, trocar de área no Modo Economia dependeria de lembrar da
 // gaveta de menu.
@@ -15352,9 +16558,18 @@ function mandarAutomacao(patch) {
  * na categoria certa.
  */
 function convidarParaOVip() {
+  // O VIP como vitrine: o selo dourado no palco e cada vantagem numa linha com o seu desenho —
+  // "o que eu ganho" lido de relance, em vez de um parágrafo de propaganda.
   confirmar({
     titulo: t('vip.tituloConvite'),
-    texto: t('vip.textoConvite'),
+    texto: `
+      ${dlgPalco(dlgAtor({ arte: dlgArteArquivo(ICONE_VIP_PASSE, 64), nome: 'VIP', classe: 'novo' }), 'ouro')}
+      ${dlgLista([
+        { arte: `<span data-dlg-arquivo="${SPRITE_BOLA[1]}" data-dlg-px="22"></span>`, html: t('vip.perkCatch') },
+        { icone: 'subir', html: t('vip.perkXp') },
+        { icone: 'pessoa', html: t('vip.perkOutfit') },
+        { icone: 'brilho', html: t('vip.perkEmojis') },
+      ])}`,
     rotuloSim: t('vip.irParaLoja'),
     aoConfirmar: () => {
       // Abre a Loja já na seção do VIP — é o produto que o convite acabou de vender.
@@ -15608,7 +16823,7 @@ function aoEvento(e) {
       // A entrada zera `p.cdGolpes` no servidor. O evento chega ANTES do primeiro `ataque` do
       // boss (é a ordem da fila de eventos), então zerar aqui não apaga o golpe de abertura —
       // ver o comentário em `aplicarEstado`.
-      golpesCooldownFim.clear();
+      zerarCooldownsDaUI();
       logCena(`⚔️ ${e.nome} — dano recebido ×${num(Math.round(e.penalidade.mult))}`);
       toast(`Arena de ${e.nome}!`);
       if (e.auto) fecharBossLoot();
@@ -15652,7 +16867,7 @@ function aoEvento(e) {
     case 'bossSaiu': logCena(t('ev.bossSaiu')); break;
     // ---- Arena Mística
     case 'misticoEntrou':
-      golpesCooldownFim.clear();
+      zerarCooldownsDaUI();
       misticoEscolha = null;
       fecharModal();
       logCena(t('mistico.entrouLog', { nome: e.nome, nivel: e.level ?? NIVEL_LENDARIO_MISTICO }));
@@ -15864,8 +17079,25 @@ function aoEvento(e) {
       toast(t('ev.medalhaGuerra', { nome: e.nome, n: num(e.total ?? 1) }));
       logCena(t('ev.medalhaGuerraLog', { nome: e.nome, n: num(e.total ?? 1) }));
       break;
+    // O PRÊMIO DO MÊS da Temporada Global de Guilds caiu na carteira. O anúncio do fechamento
+    // vai para o chat do servidor inteiro no mesmo segundo, e sem este aviso o premiado lia lá
+    // que tinha recebido sem ver nada mudar na tela. O saldo novo vem no mesmo pacote de estado
+    // (o sim releu o ledger antes de avisar) — aqui é só a comemoração, e a Loja aberta na hora
+    // precisa redesenhar o que ela mostra de saldo, como no crédito de compra.
+    case 'guildGlobalPremio':
+      toast(t('ev.guildGlobalPremio', { qtd: num(e.qtd) }));
+      logCena(t('ev.guildGlobalPremio', { qtd: num(e.qtd) }));
+      if (estado.modalAberto === 'shop') montarLoja();
+      if (estado.modalAberto === 'diamantes') atualizarDiamantes(estado.eu ?? {}, {});
+      break;
     case 'starter': logCena(t('ev.starter', { nome: e.nome, nivel: e.level })); toast(t('ev.starterEscolhido', { nome: e.nome })); break;
-    case 'troca': logCena(t('ev.troca', { nome: e.nome })); break;
+    // Troca que o SERVIDOR decidiu: o suplente de um nocaute, na hunt e na arena. O evento chega
+    // antes do primeiro `ataque` do suplente, então a pausa da recarga pega o pokémon certo sem
+    // esperar o snapshot.
+    case 'troca':
+      sincronizarCooldownsDaUI(e.id);
+      logCena(t('ev.troca', { nome: e.nome }));
+      break;
     // "Nocauteado" só quando o time caiu de verdade: chegar ao Centro a pé, saindo do PvP ou
     // entrando no jogo é outra frase. A antiga anunciava um nocaute que não tinha acontecido.
     case 'centro':
@@ -15885,7 +17117,9 @@ function aoEvento(e) {
     case 'curado':
       logCena(t('ev.curado'));
       toast(t('ev.timeCurado'));
-      golpesCooldownFim.clear(); // cura zera `p.cdGolpes` no servidor — ver `aplicarEstado`
+      // A enfermeira cura o HP e nada mais: a recarga dos golpes NÃO é zerada aqui (ver
+      // `curarEquipeNoCentro` no sim). Ela está pausada enquanto o pokémon não está em campo,
+      // então o tempo no Centro não custa nada — e o painel continua de onde parou.
       if (estado.eu?.boss?.auto) fecharBossLoot();
       break;
     case 'revive': logCena(t('ev.revive')); break;
@@ -15965,6 +17199,30 @@ function aoEvento(e) {
         if (estado.modalAberto === 'votar') montarVotar();
       });
       break;
+    // O VIP de boas-vindas de quem criou a conta pelo link de um Referral Especial. O VIP em si já
+    // veio no welcome (`vipAte`); isto é a comemoração, com o nome de quem trouxe o jogador.
+    case 'vipBoasVindas':
+      mostrarRecompensa({
+        nivel: 2,
+        faixa: t('vipRef.faixa'),
+        lead: t('vipRef.lead', { padrinho: String(e.padrinho ?? '') }),
+        nome: t('vipRef.nome', { tempo: diasDeVip(e.horas) }),
+        sub: escapar(t('vipRef.sub')),
+        arte: imagemRecompensa(srcIcone(ICONE_VIP_PASSE), 'rc-img-pixel'),
+      });
+      break;
+    // Um resgate na Kick virou hora de bônus (o vigia creditou e o sim recebeu as horas novas). As
+    // horas em si chegam pelo snapshot; isto é só o aviso de qual foi e até quando vale.
+    case 'kickBonus': {
+      const pct = Number(estado.eu?.kick?.pct) || 0;
+      const nome = TIPOS_KICK_TELA.includes(e.tipo) ? t(`kick.bonus.${e.tipo}`, { pct }) : t('kick.linha');
+      toast(t('kick.creditado', {
+        nome,
+        canal: e.canal || 'Kick',
+        tempo: tempoCurto(Math.max(0, (Number(e.ate) || 0) - agoraDoServidor())),
+      }));
+      break;
+    }
     case 'afiliadoComissao':
       toast(e.tipo === 'gema'
         ? t('af.comissaoGema', { qtd: num(e.qtd) })
@@ -16922,6 +18180,26 @@ function textoBalaoChat(m) {
   return null;
 }
 
+/** A setinha de RESPONDER (↩): a curva que volta para a esquerda, como nos chats que todo mundo usa. */
+const GLIFO_RESPONDER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5L4 11l6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.5 11H14a6 6 0 0 1 6 6v2" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>';
+
+/**
+ * Para quem a linha pode ser RESPONDIDA — o jogador de quem ela fala —, ou `null`. Numa fala é o
+ * autor; no ALTO-FALANTE do Mercado é o vendedor (o `de` do anúncio é o nick dele); nos avisos do
+ * sistema (shiny, Lendário, drop, convite, tag, entrada no PvP) é o jogador do aviso — "@fulano
+ * parabéns" é a resposta mais comum que essas linhas recebem.
+ *
+ * O remetente dos avisos ("⚔ PvP", "👑 Drop", "🌍 Temporada Global"…) não passa no filtro de nick
+ * de `RE_MENCAO`, e é isso — não o cargo `anuncio`, que o alto-falante também usa — que tira o
+ * sistema da conta. A própria fala não se responde.
+ */
+function alvoDeResposta(m, d) {
+  const alvo = d.dataset.jogador || m.dropLendario?.nick || m.conviteResgate?.nick || m.tagDiscord?.nick
+    || m.nickDestaque || d.dataset.de || '';
+  if (!/^[a-zA-Z0-9_]{3,16}$/.test(alvo)) return null;
+  return alvo.toLowerCase() === meuNickChat() ? null : alvo;
+}
+
 /** Uma linha da lista. Sai pronta para o `appendChild` — quem chama decide onde entra. */
 function linhaDeChat(m) {
   const d = document.createElement('div');
@@ -16979,12 +18257,38 @@ function linhaDeChat(m) {
     : `<span class="m-de">${m.anuncioChat ? '<span class="m-alto" aria-hidden="true">📢</span>' : ''}`
       + `${selo ? `<span class="m-selo">${selo}</span>` : ''}${tagGuild}` +
       `${escapar(m.de)}${m.nivel != null ? `<span class="m-nv"> [${m.nivel}]</span>` : ''}:</span> `;
+  // A setinha de responder, no canto da linha — aparece no hover (ver `.m-responder`). Quem clica
+  // começa a frase com "@nick" (`responderNoChat`); no celular a mesma ação mora no painel.
+  const responder = alvoDeResposta(m, d);
+  const btResponder = responder
+    ? `<button type="button" class="m-responder" data-nick="${escapar(responder)}"
+        title="${escapar(t('chat.responderA', { nick: responder }))}"
+        aria-label="${escapar(t('chat.responderA', { nick: responder }))}">${GLIFO_RESPONDER}</button>`
+    : '';
   d.innerHTML =
     `<span class="m-hora">${horaDaMsg(m.ts)}</span> ` +
     marcaDeCargo(m.cargo) +
     deHtml +
-    `<span class="m-txt">${corpo}</span>`;
+    `<span class="m-txt">${corpo}</span>` +
+    btResponder;
   return d;
+}
+
+/**
+ * Responder: o campo de digitar passa a começar com "@nick " e ganha o foco, com o cursor no fim.
+ * Se a frase já começava com OUTRO "@alguém", a menção é trocada — e o que estava escrito fica.
+ * Campo travado (nível, mute, guild que não existe) não muda: o aviso é o próprio motivo dele.
+ */
+function responderNoChat(nick, inp = $('#chat-input')) {
+  if (!nick || !inp) return;
+  fecharPainelModChat();
+  if (inp.disabled) return toast(inp.placeholder || t('chat.nivelMinimo', { n: CHAT_NIVEL_MIN }));
+  const menc = inp.value.match(/^@[a-zA-Z0-9_]{3,16} */);
+  const resto = menc ? inp.value.slice(menc[0].length) : inp.value.replace(/^ +/, '');
+  const max = Number(inp.maxLength) > 0 ? Number(inp.maxLength) : 200;
+  inp.value = `@${nick} ${resto}`.slice(0, max);
+  inp.focus();
+  inp.setSelectionRange?.(inp.value.length, inp.value.length);
 }
 
 /**
@@ -17123,6 +18427,10 @@ let chatVerPerfilAlvo = null;
 let chatAmigoAlvo = null;
 /** Linha do chat usada para posicionar o painel (ações ou duração). */
 let chatModLinha = null;
+/** O que o botão Fixar do painel faz: `{ id }` fixa; `{ desafixar, canal, idioma }` tira. Só admin. */
+let chatFixarAlvo = null;
+/** Nick a quem o "Responder" do painel responde — o caminho do celular, que não tem hover. */
+let chatResponderAlvo = null;
 
 function voltarPainelModAcoes() {
   $('#chat-mod-view-mute')?.classList.add('hidden');
@@ -17136,6 +18444,8 @@ function fecharPainelModChat() {
   chatVerPerfilAlvo = null;
   chatAmigoAlvo = null;
   chatModLinha = null;
+  chatFixarAlvo = null;
+  chatResponderAlvo = null;
   voltarPainelModAcoes();
   const painel = $('#chat-mod-panel');
   if (!painel) return;
@@ -17174,7 +18484,11 @@ function abrirPainelModChat(linha) {
   const podeMutar = estado.chatMod && podeIgnorar;
   const podeVerPerfil = !!alvo && !linha.classList.contains('anuncio');
   const podeAdicionarAmigo = alvoOutro && estado.canalChat !== 'guild' && podePedirAmizadeNoChat(alvo);
-  if (!podeIgnorar && !estado.chatMod && !podeVerPerfil && !podeAdicionarAmigo) return;
+  // RESPONDER vem da própria linha (`alvoDeResposta`): é o caminho do dedo, e é o único que o
+  // anúncio do alto-falante oferece a quem não é moderador — sem ele, tocar no anúncio de outro
+  // jogador no celular não abria nada.
+  const responderAlvo = linha.querySelector(':scope > .m-responder')?.dataset.nick ?? null;
+  if (!podeIgnorar && !estado.chatMod && !podeVerPerfil && !podeAdicionarAmigo && !responderAlvo) return;
 
   chatModAlvo = linha.dataset.msgId;
   chatMuteAlvo = podeMutar ? alvo : null;
@@ -17193,6 +18507,22 @@ function abrirPainelModChat(linha) {
   if (btIgnorar) {
     btIgnorar.classList.toggle('hidden', !podeIgnorar);
     btIgnorar.textContent = t(podeIgnorar && nickIgnoradoNoChat(alvo) ? 'chat.designorar' : 'chat.ignorar');
+  }
+  // RESPONDER: o mesmo da setinha do hover, aqui para o dedo — no celular não existe hover.
+  chatResponderAlvo = responderAlvo;
+  $('#chat-responder')?.classList.toggle('hidden', !chatResponderAlvo);
+  // FIXAR: só admin, e só nos canais abertos (a Guild é conversa de dentro). Na linha que já é a
+  // fixada, o mesmo botão desafixa — é ali que o admin vai procurar a volta.
+  const podeFixar = estado.souAdmin && estado.canalChat !== 'guild' && ehCanalPublico(estado.canalChat);
+  const fixadaAgora = podeFixar ? fixadaNaTela() : null;
+  chatFixarAlvo = !podeFixar ? null
+    : fixadaAgora?.msg?.id === linha.dataset.msgId
+      ? { desafixar: true, canal: fixadaAgora.canal, idioma: fixadaAgora.idioma }
+      : { id: linha.dataset.msgId };
+  const btFixar = $('#chat-mod-fixar');
+  if (btFixar) {
+    btFixar.classList.toggle('hidden', !podeFixar);
+    btFixar.textContent = t(chatFixarAlvo?.desafixar ? 'chat.desafixar' : 'chat.fixar');
   }
   $('#chat-mod-titulo').textContent = alvo || t('chat.modTitulo');
   painel.classList.remove('hidden');
@@ -17252,6 +18582,121 @@ function mesclarChatHistorico(canal, mensagens) {
   }
 }
 
+// ------------------------------------------------------------- a MENSAGEM FIXADA
+//
+// O "pinned" da Twitch: um ADMIN prende uma mensagem no topo de um canal aberto e ela fica por
+// cima da conversa, para todo mundo que lê aquele canal naquela língua, até alguém tirar. Quem
+// decide quem pode é o gateway (ver `CHAT_FIXAR`); aqui só se desenha o que ele mandou.
+
+const chaveFixada = (canal, idioma) => `${canal}:${idioma ?? 'pt'}`;
+
+/** A lista inteira — na entrada, e de novo a cada reconexão (o que mudou fora, chega aqui). */
+function receberChatFixadas(lista) {
+  estado.chatFixadas = {};
+  for (const f of lista) {
+    if (f?.canal && f?.msg) estado.chatFixadas[chaveFixada(f.canal, f.idioma)] = f;
+  }
+  pintarChatFixada();
+}
+
+/** Uma troca ao vivo: `fixada` nula é desafixar (ou a mensagem foi apagada). */
+function receberChatFixada(m) {
+  const chave = chaveFixada(m.canal, m.idioma);
+  if (m.fixada?.msg) estado.chatFixadas[chave] = m.fixada;
+  else delete estado.chatFixadas[chave];
+  pintarChatFixada();
+}
+
+/** A fixada do canal e da bandeira que estão na tela — ou `null`. O "ignorar" vale para ela também. */
+function fixadaNaTela() {
+  const f = estado.chatFixadas?.[chaveFixada(estado.canalChat, estado.idiomaChat)];
+  if (!f?.msg || msgIgnorada(f.msg)) return null;
+  return f;
+}
+
+/** Recolher é escolha de quem lê, e vale para AQUELA fixada: a próxima que um admin prender abre. */
+const CHAVE_FIXADA_RECOLHIDA = 'chatFixadaRecolhida';
+const fixadaRecolhida = () => {
+  try { return localStorage.getItem(CHAVE_FIXADA_RECOLHIDA); } catch { return null; }
+};
+function guardarFixadaRecolhida(id) {
+  try {
+    if (id) localStorage.setItem(CHAVE_FIXADA_RECOLHIDA, id);
+    else localStorage.removeItem(CHAVE_FIXADA_RECOLHIDA);
+  } catch {}
+}
+
+const GLIFO_PINO = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.6 2.4l7 7-1.8 1-3.4 3.4.6 4.8-1.7 1.7-4.4-4.4-5.6 5.6H3.9v-1.4l5.6-5.6-4.4-4.4 1.7-1.7 4.8.6 3.4-3.4z"/></svg>';
+const GLIFO_DOBRA = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/** O id da última fixada desenhada — a que é NOVA entra com o movimento; repintar a mesma, não. */
+let fixadaDesenhada = null;
+
+/**
+ * O cartão no topo do chat. A linha de dentro é a MESMA da conversa (`linhaDeChat`: selo de
+ * cargo, tag da guild, nick, emojis), sem o horário. Recolhido, ele vira uma linha só. Para
+ * admin, o × desafixa ali mesmo.
+ */
+function pintarChatFixada() {
+  const host = $('#chat-fixada');
+  if (!host) return;
+  const f = fixadaNaTela();
+  if (!f) {
+    host.classList.add('hidden');
+    host.replaceChildren();
+    fixadaDesenhada = null;
+    ajustarRespiroFixada();
+    return;
+  }
+  const recolhida = fixadaRecolhida() === f.msg.id;
+  const nova = fixadaDesenhada !== f.msg.id;
+  fixadaDesenhada = f.msg.id;
+  const rotuloDobra = t(recolhida ? 'chat.fixadaAbrir' : 'chat.fixadaRecolher');
+  host.className = `chat-fixada${recolhida ? ' recolhida' : ''}${nova ? ' entra' : ''}`;
+  host.innerHTML = `
+    <div class="chat-fixada-cab">
+      <span class="chat-fixada-pino">${GLIFO_PINO}</span>
+      <span class="chat-fixada-por">${t('chat.fixadaPor', { nick: `<b>${escapar(f.por ?? '')}</b>` })}</span>
+      ${estado.souAdmin ? `<button type="button" class="chat-fixada-bt chat-fixada-tirar"
+        title="${escapar(t('chat.desafixar'))}" aria-label="${escapar(t('chat.desafixar'))}">×</button>` : ''}
+      <button type="button" class="chat-fixada-bt chat-fixada-dobrar" aria-expanded="${recolhida ? 'false' : 'true'}"
+        title="${escapar(rotuloDobra)}" aria-label="${escapar(rotuloDobra)}">${GLIFO_DOBRA}</button>
+    </div>`;
+  const linha = linhaDeChat(f.msg);
+  // A cópia do topo não é a linha da conversa: sem o id, o "excluir" e o painel de moderação
+  // continuam achando só a de baixo.
+  delete linha.dataset.msgId;
+  linha.classList.add('chat-fixada-msg');
+  host.appendChild(linha);
+  host.querySelector('.chat-fixada-dobrar').onclick = () => {
+    guardarFixadaRecolhida(recolhida ? null : f.msg.id);
+    pintarChatFixada();
+  };
+  host.querySelector('.chat-fixada-tirar')?.addEventListener('click', () => {
+    enviar({ t: 'chat.desafixar', canal: f.canal, idioma: f.idioma });
+  });
+  ajustarRespiroFixada();
+}
+
+/**
+ * O respiro no topo da lista, da altura do cartão: subindo tudo, a primeira linha aparece
+ * inteira embaixo dele em vez de ficar escondida para sempre. Quem estava colado no fim
+ * continua colado — o respiro cresce a lista por cima, e a conversa nova não pode sumir.
+ */
+function ajustarRespiroFixada() {
+  const host = $('#chat-fixada');
+  const box = $('#chat-msgs');
+  if (!host || !box) return;
+  const colado = chatNoFim();
+  const altura = host.classList.contains('hidden') ? 0 : host.offsetHeight;
+  box.style.paddingTop = altura ? `${altura + 12}px` : '';
+  if (colado) rolarChatAoFim();
+}
+// O cartão muda de altura sozinho (o chat que reabre, a fonte que carrega, a linha que quebra
+// num celular girado) — e o respiro acompanha.
+if (typeof ResizeObserver !== 'undefined' && $('#chat-fixada')) {
+  new ResizeObserver(() => ajustarRespiroFixada()).observe($('#chat-fixada'));
+}
+
 /** Colado no fim? Só então a lista se move sozinha quando chega mensagem. */
 const chatNoFim = () => {
   const box = $('#chat-msgs');
@@ -17300,6 +18745,8 @@ function pintarChat() {
     box.appendChild(vazio);
   }
   for (const m of doCanal) box.appendChild(linhaDeChat(m));
+  // A fixada é do canal E da bandeira: trocar qualquer um dos dois troca o cartão do topo.
+  pintarChatFixada();
   rolarChatAoFim();
   marcarChatNovas(0);
   if (ehCanalPublico(estado.canalChat)) marcarCanalChatVisto(estado.canalChat);
@@ -17319,6 +18766,9 @@ $('#chat-novas').onclick = () => {
 };
 
 $('#chat-msgs').addEventListener('click', (ev) => {
+  // A setinha de responder é do ouvinte do documento (ela também mora no cartão fixado e na
+  // conversa da guild); aqui ela só não pode abrir o painel da linha por baixo.
+  if (ev.target.closest('.m-responder')) return;
   const link = ev.target.closest('.m-pk-link');
   if (link) {
     ev.stopPropagation();
@@ -17406,6 +18856,26 @@ document.querySelectorAll('.chat-mod-mute-opt').forEach((btn) => {
     if (!enviar({ t: 'chat.mute', nick, minutos })) return;
     fecharPainelModChat();
   });
+});
+
+// RESPONDER — a setinha das linhas. Um ouvinte só, no documento: as três listas que desenham
+// `linhaDeChat` (o chat, o cartão fixado e a conversa da guild no painel de amigos) usam a mesma
+// linha, e a da guild escreve no campo DELA.
+document.addEventListener('click', (ev) => {
+  const bt = ev.target.closest('.m-responder');
+  if (!bt) return;
+  ev.stopPropagation();
+  responderNoChat(bt.dataset.nick, bt.closest('#guild-chat-thread') ? $('#guild-chat-input') : $('#chat-input'));
+});
+
+$('#chat-responder')?.addEventListener('click', () => responderNoChat(chatResponderAlvo));
+
+$('#chat-mod-fixar')?.addEventListener('click', () => {
+  const alvo = chatFixarAlvo;
+  fecharPainelModChat();
+  if (!alvo) return;
+  if (alvo.desafixar) enviar({ t: 'chat.desafixar', canal: alvo.canal, idioma: alvo.idioma });
+  else enviar({ t: 'chat.fixar', id: alvo.id });
 });
 
 $('#chat-mod-excluir')?.addEventListener('click', () => {
@@ -17961,6 +19431,10 @@ function ehConversaGuild(sel) {
 function amigosUI() {
   estado.amigosUI ??= {
     sel: null, aba: 'lista', add: false, busca: '', conversas: {},
+    // A busca do "+ Adicionar amigo" (a da BASE de jogadores, não o filtro da lista ao lado).
+    // `achados` nasce `null` de propósito: "ainda não pesquisei" e "pesquisei e não achei
+    // ninguém" são duas telas diferentes.
+    buscaAdd: { termo: '', achados: null, pedindo: false, prazo: 0 },
     // O COMÉRCIO, a outra metade da tela: qual das duas está à vista, a aba de dentro dele
     // ('ofertas' = sou o comprador, 'produtos' = sou o vendedor), a busca própria e a conversa
     // aberta — ver `aoReceberComercio`.
@@ -17970,7 +19444,8 @@ function amigosUI() {
 }
 
 function amigosStore() {
-  estado.amigos ??= { lista: [], pedidos: [], enviados: [] };
+  // `max` = o teto da lista, que o servidor manda junto (0 = ainda não veio, e o rodapé some).
+  estado.amigos ??= { lista: [], pedidos: [], enviados: [], max: 0 };
   return estado.amigos;
 }
 
@@ -17993,6 +19468,64 @@ function podePedirAmizadeNoChat(nick) {
   return !(amigosStore().enviados ?? []).some((e) => String(e).toLowerCase() === bruto.toLowerCase());
 }
 const totalNaoLidasAmigos = () => amigosLista().reduce((s, a) => s + (a.naoLidas || 0), 0);
+
+/** A partir daqui o "visto há" da lista acende na cor de alerta: é quem dá para tirar. */
+const AMIGO_SUMIDO_MS = 7 * 86_400_000;
+
+/**
+ * A ORDEM da lista de amigos. Primeiro quem mandou mensagem que eu não li; depois as conversas
+ * da semana, a mais recente em cima; depois quem está online; e por fim os offline, do visto
+ * mais recente ao mais antigo — quem sumiu há mais tempo fica no fundo, que é onde se procura
+ * quem tirar.
+ *
+ * As conversas da semana vêm antes do online para a linha não fugir de baixo do dedo: abrir a
+ * conversa zera as não lidas, e sem esse degrau o amigo que estava no topo despencaria para o
+ * meio da lista no mesmo clique. A semana é a retenção das DMs — conversa mais velha que isso o
+ * servidor já apagou.
+ *
+ * Quem ordena é o cliente, e não o SQL: uma DM que chega reordena a lista na hora (o
+ * `aoReceberAmigos` carimba o `ultimaDm`), sem outra viagem ao banco.
+ */
+function compararAmigos(a, b) {
+  const na = (a.naoLidas || 0) > 0;
+  const nb = (b.naoLidas || 0) > 0;
+  if (na !== nb) return na ? -1 : 1;
+  const da = Number(a.ultimaDm) || 0;
+  const db = Number(b.ultimaDm) || 0;
+  if (da !== db) return db - da;
+  if (!!a.online !== !!b.online) return a.online ? -1 : 1;
+  if (!a.online) {
+    const va = Number(a.visto) || 0;
+    const vb = Number(b.visto) || 0;
+    if (va !== vb) return vb - va;
+  }
+  const x = String(a.nick).toLowerCase();
+  const y = String(b.nick).toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** O tempo do "visto há", numa unidade só para caber na linha da lista: 12min, 3h, 40d. */
+function tempoVistoAmigo(ms) {
+  const min = Math.floor(ms / 60_000);
+  if (min < 60) return `${min}min`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * Online, ou há quanto tempo o amigo foi visto (`visto` = o `last_seen` dele, no minuto cheio).
+ * `classe`: `on` (online) ou `sumido` (offline há uma semana ou mais).
+ */
+function vistoDoAmigo(a) {
+  if (a.online) return { texto: t('amigos.online'), classe: 'on' };
+  const visto = Number(a.visto) || 0;
+  if (!visto) return { texto: t('amigos.offline'), classe: '' };
+  const ms = Math.max(0, agoraDoServidor() - visto);
+  return {
+    texto: ms < 60_000 ? t('amigos.vistoAgora') : t('amigos.vistoHa', { tempo: tempoVistoAmigo(ms) }),
+    classe: ms >= AMIGO_SUMIDO_MS ? 'sumido' : '',
+  };
+}
 
 function renderAmigos() {
   // A chave de cima separa as duas metades da tela: os AMIGOS (lista, pedidos, DM) e o COMÉRCIO
@@ -18030,6 +19563,10 @@ function ligarAmigos() {
   // ao fechar esconderia amigos atrás de uma caixa que não mostra texto nenhum.
   ui.busca = '';
   ui.buscaCom = '';
+  // A busca de treinador também: resultado de ontem mostra relação de ontem (quem já virou
+  // amigo no meio-tempo apareceria com "Adicionar amigo").
+  clearTimeout(ui.buscaAdd?.prazo);
+  ui.buscaAdd = { termo: '', achados: null, pedindo: false, prazo: 0 };
   // não zera `sel` nem `conversas` — reabrir o modal deve cair na última conversa
   enviar({ t: 'amigos.info' });
   // O modo também fica onde estava: quem fechou a tela negociando volta negociando.
@@ -18105,13 +19642,37 @@ function ligarAmigos() {
     if (acao === 'excluir') {
       const a = amigoPorId(ui.sel);
       if (!a) return;
-      return confirmar({
-        titulo: t('amigos.excluir'),
-        texto: t('amigos.excluirConfirma', { nick: a.nick }),
-        aoConfirmar: () => enviar({ t: 'amigo.remover', amigoId: a.id }),
-      });
+      return confirmarExcluirAmigo(a);
     }
-    if (ev.target.closest('#amigos-pedir-bt')) return enviarPedidoDeAmizade();
+    if (ev.target.closest('#amigos-buscar-bt')) return buscarTreinadores();
+    // As ações de uma linha da busca. São as mesmas três da ficha pública (ver
+    // `ligarAcoesPerfilOutro`) — aqui elas só chegam sem precisar abrir a ficha antes.
+    const verPerfil = ev.target.closest('[data-ach-perfil]')?.dataset.achPerfil;
+    if (verPerfil) {
+      const meu = String(estado.eu?.nick ?? estado.nick ?? '').toLowerCase();
+      return verPerfil.toLowerCase() === meu ? abrirModal('perfil') : pedirPerfil(verPerfil);
+    }
+    const pedirNick = ev.target.closest('[data-ach-pedir]')?.dataset.achPedir;
+    if (pedirNick) {
+      if ((estado.eu?.level ?? 0) < CHAT_NIVEL_MIN && !estado.souAdmin) return toast(t('amigos.nivelMinimo'));
+      return enviar({ t: 'amigo.pedir', nick: pedirNick });
+    }
+    const bloquearNick = ev.target.closest('[data-ach-bloquear]')?.dataset.achBloquear;
+    if (bloquearNick) {
+      const bloqueado = alternarIgnorarChat(bloquearNick);
+      limparMsgsDeIgnorados();
+      toast(t(bloqueado ? 'pf.bloqueadoOk' : 'pf.desbloqueadoOk', { nick: bloquearNick }));
+      pintarChat();
+      pintarSelosChatAbas();
+      pintarPainelIgnorados();
+      return pintarAchadosAmigos();
+    }
+    if (ev.target.closest('[data-ach-pendentes]')) {
+      ui.add = false;
+      ui.aba = 'pedidos';
+      verPainelAmigos(false);
+      return montarAmigos();
+    }
     if (ev.target.closest('#dm-anexo')) return abrirSeletorPokemonDM();
     const pkCard = ev.target.closest('.dm-pk-card');
     if (pkCard) {
@@ -18147,10 +19708,46 @@ function abrirConversaAmigo(id) {
   ui.sel = id;
   ui.add = false;
   verPainelAmigos(true);
-  // Carrega o histórico (7 dias) e zera as não lidas no servidor.
+  // Carrega o histórico (7 dias) e zera as não lidas no servidor — que avisa o amigo (os
+  // tracinhos dele ficam azuis). O zero local é só para o selo sumir já, sem esperar a volta, e
+  // para o `montarPainelAmigos` abaixo não mandar um `amigo.dm.ler` repetido.
+  const a = amigoPorId(id);
+  if (a) a.naoLidas = 0;
   enviar({ t: 'amigo.dm.abrir', amigoId: id });
   montarAmigos();
 }
+
+/**
+ * A conversa com este amigo está À VISTA agora? É o que decide o "lida" — os dois tracinhos
+ * azuis do outro lado. Não basta estar escolhida: o modal aberto no modo Amigos, sem o painel de
+ * adicionar por cima, a aba do navegador em primeiro plano e, no celular, o painel deslizado
+ * para a conversa (o "voltar" mostra a lista, mas não esquece quem estava escolhido).
+ */
+function conversaAmigoAVista(id) {
+  const ui = amigosUI();
+  if (estado.modalAberto !== 'amigos' || ui.modo !== 'amigos' || ui.add || ui.sel !== id) return false;
+  if (document.hidden) return false;
+  return !montagemMovel() || !!$('#modal .modal-caixa')?.classList.contains('ver-painel');
+}
+
+/**
+ * Marca como lida a conversa À VISTA que ainda tem não lidas — a volta para a aba, ou para a
+ * conversa depois do Comércio ou do "+ Adicionar". Nada à vista, nada pendente: não manda nada.
+ */
+function lerConversaAVista() {
+  const a = amigoPorId(amigosUI().sel);
+  if (!a?.naoLidas || !conversaAmigoAVista(a.id)) return;
+  a.naoLidas = 0;
+  enviar({ t: 'amigo.dm.ler', amigoId: a.id });
+  pintarBadgeAmigos();
+  if (estado.modalAberto === 'amigos') {
+    pintarAbasAmigos();
+    pintarRolAmigos();
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) lerConversaAVista();
+});
 
 function abrirConversaGuild() {
   if (!estado.eu?.guild?.id) return;
@@ -18250,7 +19847,7 @@ function pintarRolAmigos() {
   }
 
   const busca = ui.busca.trim().toLowerCase();
-  const lista = amigosLista().filter((a) => !busca || a.nick.toLowerCase().includes(busca));
+  const lista = amigosLista().filter((a) => !busca || a.nick.toLowerCase().includes(busca)).sort(compararAmigos);
   const guild = estado.eu?.guild;
   const linhaGuild = guild && (!busca || t('amigos.guildChat').toLowerCase().includes(busca) || guild.nome.toLowerCase().includes(busca))
     ? `<div class="amigo-linha guild${ehConversaGuild(ui.sel) ? ' on' : ''}" data-guild="1">
@@ -18262,16 +19859,21 @@ function pintarRolAmigos() {
     rol.innerHTML = `<p class="amigos-vazio">${t(amigosLista().length ? 'amigos.buscaVazia' : 'amigos.semAmigos')}</p>`;
     return;
   }
+  // O rodapé com o teto ("98 de 300 amigos") fica no fim da rolagem, junto de quem sumiu há mais
+  // tempo — é ali que se decide quem tirar para abrir vaga.
+  const { max } = amigosStore();
+  const rodape = max ? `<p class="amigos-total">${t('amigos.total', { n: num(amigosLista().length), max: num(max) })}</p>` : '';
   rol.innerHTML = linhaGuild + lista
-    .map(
-      (a) => `<div class="amigo-linha${a.id === ui.sel ? ' on' : ''}" data-id="${a.id}">
+    .map((a) => {
+      const visto = vistoDoAmigo(a);
+      return `<div class="amigo-linha${a.id === ui.sel ? ' on' : ''}" data-id="${a.id}">
         <span class="amigo-av" data-lt="${a.looktype || 0}"></span>
         <span class="amigo-status ${a.online ? 'on' : ''}"></span>
-        <div class="amigo-meta"><b>${escapar(a.nick)}</b><span>${t('painel.nivelCurto')} ${num(a.level)}</span></div>
+        <div class="amigo-meta"><b>${escapar(a.nick)}</b><span class="amigo-sub">${t('painel.nivelCurto')} ${num(a.level)} · <i class="amigo-visto ${visto.classe}">${escapar(visto.texto)}</i></span></div>
         ${a.naoLidas ? `<span class="amigo-badge">${a.naoLidas > 9 ? '9+' : a.naoLidas}</span>` : ''}
-      </div>`,
-    )
-    .join('');
+      </div>`;
+    })
+    .join('') + rodape;
   for (const el of rol.querySelectorAll('.amigo-av:not(.amigo-av-guild)')) {
     el.replaceWith(retratoDeLooktype(Number(el.dataset.lt) || 0, 30));
   }
@@ -18302,6 +19904,7 @@ function montarPainelAmigos() {
   const rascunho = $('#dm-input')?.value ?? '';
   const thread = $('#dm-thread');
   const coladoNoFim = !thread || thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24;
+  const visto = vistoDoAmigo(a);
 
   host.innerHTML = `
     <div class="amigo-cab">
@@ -18309,7 +19912,7 @@ function montarPainelAmigos() {
       <span class="amigo-av amigo-av-g" data-lt="${a.looktype || 0}"></span>
       <div class="amigo-meta">
         <b>${escapar(a.nick)}</b>
-        <span>${t('painel.nivelCurto')} ${num(a.level)}${a.online ? ` · ${t('amigos.online')}` : ` · ${t('amigos.offline')}`}</span>
+        <span>${t('painel.nivelCurto')} ${num(a.level)} · <i class="amigo-visto ${visto.classe}">${escapar(visto.texto)}</i></span>
       </div>
     </div>
     <div class="amigo-acoes">
@@ -18335,6 +19938,9 @@ function montarPainelAmigos() {
       inp.setSelectionRange?.(rascunho.length, rascunho.length);
     }
   }
+  // A conversa voltou à tela (do Comércio, do "+ Adicionar") com mensagens que chegaram enquanto
+  // ela estava escondida: agora sim elas foram vistas.
+  lerConversaAVista();
 }
 
 function montarPainelGuild(host) {
@@ -18411,36 +20017,141 @@ function enviarChatGuildPainel() {
   if (inp) inp.value = '';
 }
 
+/**
+ * O "+ Adicionar amigo", que é uma BUSCA e não um envio às cegas.
+ *
+ * Antes, o botão mandava o pedido direto para o que estivesse escrito: quem não lembrasse o nick
+ * inteiro (ou errasse uma letra) só descobria pelo "Treinador não encontrado", e não tinha como
+ * ver com quem estava falando antes de pedir. Agora o campo PROCURA por pedaço do nick, e cada
+ * achado traz as três ações no lugar onde elas fazem sentido: ver o perfil, pedir amizade,
+ * bloquear.
+ *
+ * Três letras é o mínimo — o servidor recusa menos que isso, porque abaixo disso a consulta
+ * deixa de usar o índice e vira uma varredura da tabela de jogadores por tecla digitada.
+ */
+const AMIGO_BUSCA_MIN = 3;
+
 function montarPainelAdicionar(host) {
+  const ui = amigosUI();
   const enviados = (amigosStore().enviados ?? [])
     .map((n) => `<li>${escapar(n)} <em>${t('amigos.aguardando')}</em></li>`)
     .join('');
   host.innerHTML = `
     <div class="amigo-cab">
       <button type="button" class="amigo-voltar" data-voltar aria-label="${t('amigos.voltar')}">‹</button>
-      <div class="amigo-meta"><b>${t('amigos.adicionar')}</b><span>${t('amigos.adicionarDica')}</span></div>
+      <div class="amigo-meta"><b>${t('amigos.adicionar')}</b><span>${t('amigos.adicionarDica', { n: AMIGO_BUSCA_MIN })}</span></div>
     </div>
     <div class="amigo-add-form">
-      <input type="text" id="amigos-pedir" maxlength="16" placeholder="${t('amigos.pedirPlaceholder')}" autocomplete="off">
-      <button type="button" id="amigos-pedir-bt" class="dm-enviar">${t('amigos.enviarPedido')}</button>
+      <input type="text" id="amigos-pedir" maxlength="16" placeholder="${t('amigos.pedirPlaceholder')}"
+             autocomplete="off" value="${escapar(ui.buscaAdd.termo)}">
+      <button type="button" id="amigos-buscar-bt" class="dm-enviar">${t('amigos.pesquisar')}</button>
     </div>
+    <div class="amigo-achados" id="amigo-achados"></div>
     ${enviados ? `<ul class="amigo-enviados">${enviados}</ul>` : ''}`;
+  pintarAchadosAmigos();
   const inp = $('#amigos-pedir');
   inp?.focus();
   inp?.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') {
       ev.preventDefault();
-      enviarPedidoDeAmizade();
+      buscarTreinadores();
     }
   });
 }
 
-function enviarPedidoDeAmizade() {
-  const inp = $('#amigos-pedir');
-  const nick = (inp?.value ?? '').trim();
-  if (!nick) return;
-  enviar({ t: 'amigo.pedir', nick });
-  if (inp) inp.value = '';
+function buscarTreinadores() {
+  const ui = amigosUI();
+  const termo = ($('#amigos-pedir')?.value ?? '').trim();
+  if (termo.length < AMIGO_BUSCA_MIN) {
+    ui.buscaAdd = { termo, achados: null, pedindo: false };
+    return pintarAchadosAmigos();
+  }
+  // O termo fica guardado: o pacote de volta remonta o painel, e um campo que se esvaziasse
+  // sozinho obrigaria a digitar de novo para refazer a busca.
+  clearTimeout(ui.buscaAdd.prazo);
+  ui.buscaAdd = { termo, achados: ui.buscaAdd.achados, pedindo: true, prazo: 0 };
+  if (!enviar({ t: 'amigo.busca', termo })) {
+    ui.buscaAdd.pedindo = false;
+  } else {
+    // O servidor pode engolir a mensagem calado — é o que o balde de `busca` faz com quem
+    // martela o botão. Sem este prazo, o "Procurando…" ficaria para sempre na tela de quem
+    // apanhou do limite; com ele, a lista volta ao que era e o botão serve de novo.
+    ui.buscaAdd.prazo = setTimeout(() => {
+      const b = amigosUI().buscaAdd;
+      if (!b.pedindo) return;
+      b.pedindo = false;
+      pintarAchadosAmigos();
+    }, 8000);
+  }
+  pintarAchadosAmigos();
+}
+
+/**
+ * Uma linha de achado. O botão do meio é o estado da relação, não um botão sempre igual: quem
+ * já é amigo não tem o que adicionar, e quem já me pediu amizade merece um atalho para a aba
+ * de Pendentes em vez de um pedido cruzado.
+ */
+function htmlLinhaAchado(a) {
+  const meu = String(estado.eu?.nick ?? estado.nick ?? '').toLowerCase();
+  const souEu = a.nick.toLowerCase() === meu;
+  const nick = escapar(a.nick);
+
+  // A relação vem do servidor (`a.amigo`, `a.pedi`, `a.mePediu`), mas a LISTA local manda quando
+  // ela já andou: clicar em Adicionar devolve `enviados` na hora, e o achado em mãos ainda é o
+  // de antes do clique. Sem isto, o botão continuaria dizendo "Adicionar amigo" depois do pedido.
+  const localmente = estadoAmizadePerfil(a.nick); // null = sou eu
+  const jaAmigo = a.amigo || localmente === 'amigo';
+  const jaPedi = a.pedi || localmente === 'pedido_enviado';
+
+  let acaoAmizade = '';
+  if (souEu) acaoAmizade = `<span class="pf-soc-badge">${escapar(t('amigos.souEu'))}</span>`;
+  else if (jaAmigo) acaoAmizade = `<span class="pf-soc-badge ok">${escapar(t('pf.jaAmigo'))}</span>`;
+  else if (a.mePediu) {
+    acaoAmizade = `<button type="button" class="amigo-mini ok" data-ach-pendentes="1">${escapar(t('amigos.responder'))}</button>`;
+  } else if (jaPedi) {
+    acaoAmizade = `<span class="pf-soc-badge pend">${escapar(t('pf.pedidoEnviado'))}</span>`;
+  } else {
+    acaoAmizade = `<button type="button" class="amigo-mini ok" data-ach-pedir="${nick}">${escapar(t('pf.adicionarAmigo'))}</button>`;
+  }
+
+  const bloqueio = souEu ? '' : `<button type="button" class="amigo-mini perigo" data-ach-bloquear="${nick}">${
+    escapar(t(nickIgnoradoNoChat(a.nick) ? 'pf.desbloquear' : 'pf.bloquear'))
+  }</button>`;
+
+  return `<div class="amigo-achado">
+    <span class="amigo-av" data-lt="${a.looktype || 0}"></span>
+    <span class="amigo-status ${a.online ? 'on' : ''}" title="${t(a.online ? 'amigos.online' : 'amigos.offline')}"></span>
+    <div class="amigo-meta"><b>${nick}</b><span>${t('painel.nivelCurto')} ${num(a.level)}</span></div>
+    <div class="amigo-achado-bts">
+      <button type="button" class="amigo-mini" data-ach-perfil="${nick}">${escapar(t('amigos.verPerfil'))}</button>
+      ${acaoAmizade}${bloqueio}
+    </div>
+  </div>`;
+}
+
+function pintarAchadosAmigos() {
+  const host = $('#amigo-achados');
+  if (!host) return;
+  const { termo, achados, pedindo } = amigosUI().buscaAdd;
+
+  if (termo && termo.length < AMIGO_BUSCA_MIN) {
+    host.innerHTML = `<p class="amigos-vazio">${t('amigos.buscaCurta', { n: AMIGO_BUSCA_MIN })}</p>`;
+    return;
+  }
+  if (pedindo && !achados) {
+    host.innerHTML = `<p class="amigos-vazio">${t('amigos.buscando')}</p>`;
+    return;
+  }
+  if (!achados) {
+    host.innerHTML = '';
+    return;
+  }
+  host.innerHTML = achados.length
+    ? achados.map(htmlLinhaAchado).join('')
+    : `<p class="amigos-vazio">${t('amigos.buscaSemNinguem', { termo: escapar(termo) })}</p>`;
+  for (const el of host.querySelectorAll('.amigo-av')) {
+    el.replaceWith(retratoDeLooktype(Number(el.dataset.lt) || 0, 30));
+  }
 }
 
 function pintarThreadDM(id, rolarAoFim = true) {
@@ -18458,6 +20169,18 @@ function pintarThreadDM(id, rolarAoFim = true) {
   thread.scrollTop = rolarAoFim ? thread.scrollHeight : antes;
 }
 
+/**
+ * A hora da bolha e, nas MINHAS mensagens, os dois tracinhos do WhatsApp: cinza = enviada,
+ * azul = o amigo já leu (abriu a conversa depois dela — ver `lerConversaAVista` do lado de lá).
+ * Só texto e pokémon anexado: a nota de coins e o convite de PvP têm o estado próprio.
+ */
+function horaDM(mm) {
+  const hora = `<time>${horaCurta(mm.ts)}</time>`;
+  if (!mm.mine) return hora;
+  const rotulo = escapar(t(mm.lido ? 'amigos.dmLida' : 'amigos.dmEnviada'));
+  return `<span class="dm-hora">${hora}<svg class="dm-check${mm.lido ? ' lida' : ''}" viewBox="0 0 16 11" width="16" height="11" role="img" aria-label="${rotulo}"><title>${rotulo}</title><path d="M1.2 6.2l3.2 3.2 6-7.6M6.9 7.9l1.5 1.5 6-7.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+}
+
 /** Uma linha da thread: bolha de texto, nota de coins, pokémon anexado ou convite de PvP amistoso. */
 function bolhaDM(mm, nickAmigo) {
   if (mm.tipo === 3) return bolhaConviteAmistoso(mm, nickAmigo);
@@ -18473,7 +20196,7 @@ function bolhaDM(mm, nickAmigo) {
     let pk;
     try { pk = JSON.parse(mm.texto); } catch { pk = null; }
     if (!pk?.pokemonId) {
-      return `<div class="dm-bolha ${mm.mine ? 'eu' : 'ele'}"><span class="dm-txt">${escapar(mm.texto)}</span><time>${horaCurta(mm.ts)}</time></div>`;
+      return `<div class="dm-bolha ${mm.mine ? 'eu' : 'ele'}"><span class="dm-txt">${escapar(mm.texto)}</span>${horaDM(mm)}</div>`;
     }
     const nick = escapar(pk.nick ?? (mm.mine ? estado.eu?.nick : nickAmigo) ?? '');
     const nome = escapar(pk.nome ?? '?');
@@ -18491,12 +20214,12 @@ function bolhaDM(mm, nickAmigo) {
           ${selos}
         </span>
       </button>
-      <time>${horaCurta(mm.ts)}</time>
+      ${horaDM(mm)}
     </div>`;
   }
   return `<div class="dm-bolha ${mm.mine ? 'eu' : 'ele'}">
     <span class="dm-txt">${escapar(mm.texto)}</span>
-    <time>${horaCurta(mm.ts)}</time>
+    ${horaDM(mm)}
   </div>`;
 }
 
@@ -18536,10 +20259,50 @@ function desafiarAmigo(id) {
   const saida = estado.pvpa?.saida;
   if (saida && saida.expiraEm > agoraDoServidor()) return toast(t('amigos.pvpa.jaTemConvite', { nick: saida.para }));
   if (!a.online) return toast(t('amigos.pvpa.offline', { nick: a.nick }));
+  confirmarDesafioAmigo(a);
+}
+
+/**
+ * A tela de desafio dos jogos de luta: você de um lado, o amigo do outro, o VS no meio. As três
+ * regras (prazo do convite, qual equipe luta, a espera depois) viram uma linha cada.
+ */
+function confirmarDesafioAmigo(a) {
   confirmar({
     titulo: t('amigos.pvpa.titulo'),
-    texto: t('amigos.pvpa.confirmaTexto', { nick: a.nick }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? '') })}
+        <span class="dlg-vs" aria-hidden="true">VS</span>
+        ${dlgAtor({ arte: dlgArteTreinador(a.looktype || LOOKTYPE_TREINADOR, null, 64), nome: escapar(a.nick), sub: dlgNivel(a.level ?? 1), classe: 'novo' })}`)}
+      ${dlgFrase(t('amigos.pvpa.lead', { nick: escapar(a.nick) }))}
+      ${dlgLista([
+        { icone: 'relogio', html: t('amigos.pvpa.regraConvite') },
+        { icone: 'espadas', html: t('amigos.pvpa.regraEquipe') },
+        { icone: 'ampulheta', html: t('amigos.pvpa.regraEspera') },
+      ])}`,
     aoConfirmar: () => enviar({ t: 'amigo.pvp.convidar', amigoId: a.id }),
+  });
+}
+
+/**
+ * Excluir um amigo: o retrato dele sem cor, com o "−" no canto, e há quanto tempo ele não
+ * aparece — é a informação que decide a exclusão. A conversa fica guardada.
+ */
+function confirmarExcluirAmigo(a) {
+  const visto = vistoDoAmigo(a);
+  confirmar({
+    titulo: t('amigos.excluir'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteTreinador(a.looktype || LOOKTYPE_TREINADOR, null, 64),
+        nome: escapar(a.nick),
+        sub: `${dlgNivel(a.level ?? 1)} · <i class="amigo-visto ${visto.classe}">${escapar(visto.texto)}</i>`,
+        classe: 'sai',
+        marca: dlgIcone('pessoaMenos', 15),
+      }), 'perigo')}
+      ${dlgFrase('', t('amigos.excluirConfirma', { nick: `<b>${escapar(a.nick)}</b>` }))}`,
+    tom: 'perigo',
+    aoConfirmar: () => enviar({ t: 'amigo.remover', amigoId: a.id }),
   });
 }
 
@@ -18743,9 +20506,7 @@ function abrirSeletorPokemonDM() {
     conta.textContent = t('amigos.anexarConta', { n: num(lista.length), total: num(todos.length) });
     grade.innerHTML = '';
     if (!lista.length) {
-      grade.innerHTML = `<div class="cm-vazio">${
-        fora && !podem.length ? t('camp.equipeTodosBarrados') : t('amigos.anexarVazio')
-      }</div>`;
+      grade.innerHTML = `<div class="cm-vazio">${t('amigos.anexarVazio')}</div>`;
       return;
     }
     for (const k of lista) {
@@ -18805,26 +20566,49 @@ function abrirEnvioDeCoins(id) {
   const a = amigoPorId(id);
   if (!a) return;
   $('#acoin-titulo').textContent = t('amigos.coinsTitulo', { nick: a.nick });
+  // A viagem das moedas: você, a seta com a moeda (e a mordida da taxa), o amigo. Embaixo, o
+  // recibo anda com o número digitado — o que sai do seu saldo, o que a taxa queima e o que
+  // chega do outro lado.
+  const pct = Math.round(TAXA_COINS_AMIGO * 100);
   $('#acoin-corpo').innerHTML = `
-    <p class="acoin-saldo">${t('amigos.coinsSaldo', { v: num(estado.eu?.gold ?? 0) })}</p>
+    ${dlgPalco(`
+      ${dlgAtor({ arte: dlgArteTreinador(null, null, 60), nome: escapar(estado.eu?.nick ?? '') })}
+      ${dlgSeta({ arquivo: ICONE_OURO, rotulo: `−${pct}%` })}
+      ${dlgAtor({ arte: dlgArteTreinador(a.looktype || LOOKTYPE_TREINADOR, null, 60), nome: escapar(a.nick), classe: 'novo' })}`, 'ouro')}
     <label class="acoin-campo">
       <span>${t('amigos.coinsValor')}</span>
       <input type="number" id="acoin-valor" min="${MIN_COINS_AMIGO}" step="100" inputmode="numeric" placeholder="${MIN_COINS_AMIGO}">
     </label>
     <div class="acoin-resumo" id="acoin-resumo"></div>
-    <button type="button" id="acoin-enviar" class="dm-enviar" disabled>${t('amigos.coinsConfirmar')}</button>
-    <p class="acoin-nota">${t('amigos.coinsNota')}</p>`;
+    <button type="button" id="acoin-enviar" class="dm-enviar" disabled>${t('amigos.coinsConfirmar')}</button>`;
+  hidratarDialogo($('#acoin-corpo'));
   const campo = $('#acoin-valor');
   const bt = $('#acoin-enviar');
+  // O saldo é lido a cada pintura (e não guardado na abertura): o ouro anda durante a hunt, e o
+  // snapshot repinta o recibo pelo `acoinRepintar` enquanto a caixa está aberta.
   const atualizar = () => {
+    const saldo = Math.floor(estado.eu?.gold ?? 0);
     const v = Math.floor(Number(campo.value) || 0);
-    const ok = v >= MIN_COINS_AMIGO && v <= (estado.eu?.gold ?? 0);
+    const ok = v >= MIN_COINS_AMIGO && v <= saldo;
     const taxa = Math.ceil(v * TAXA_COINS_AMIGO);
     const liq = Math.max(0, v - taxa);
-    // textContent, não innerHTML: o resumo é texto puro e o nick não deve poder injetar marcação.
-    $('#acoin-resumo').textContent = v
-      ? t('amigos.coinsResumo', { v: num(v), taxa: num(taxa), nick: a.nick, liq: num(liq) })
-      : '';
+    // O nick vai ESCAPADO: o recibo agora é marcação, e o nick é texto de outra pessoa.
+    $('#acoin-resumo').innerHTML = `
+      ${dlgCusto({ moeda: 'ouro', valor: v, saldo, rotulo: t('amigos.coinsVoceEnvia') })}
+      ${dlgReqs(
+        dlgReq({
+          arte: dlgIcone('chama', 20),
+          nome: escapar(t('amigos.coinsTaxa', { pct })),
+          sub: escapar(t('amigos.coinsQueimada')),
+          valor: `<span class="tem">−${num(taxa)}</span>`,
+        }),
+        dlgReq({
+          arte: dlgIcone('pessoa', 20),
+          nome: escapar(t('amigos.coinsRecebe', { nick: a.nick })),
+          valor: `<span class="tem">+${num(liq)}</span>`,
+          ok: v ? ok : null,
+        }),
+      )}`;
     bt.disabled = !ok;
   };
   campo.oninput = atualizar;
@@ -18842,13 +20626,19 @@ function abrirEnvioDeCoins(id) {
     enviar({ t: 'amigo.coins', amigoId: a.id, valor: v });
     fecharEnvioDeCoins();
   };
+  atualizar();
+  acoinRepintar = atualizar;
   $('#amigo-coins').classList.remove('hidden');
   campo.focus();
 }
 
+/** O recibo da caixa "enviar coins" aberta — `null` com ela fechada. */
+let acoinRepintar = null;
+
 function fecharEnvioDeCoins() {
   $('#amigo-coins').classList.add('hidden');
   $('#acoin-corpo').innerHTML = '';
+  acoinRepintar = null;
 }
 
 $('#acoin-fechar').onclick = (ev) => {
@@ -18869,8 +20659,7 @@ function atualizarAmigos(e, anterior) {
   if (e?.gold === anterior?.gold) return;
   const cx = $('#amigo-coins');
   if (!cx || cx.classList.contains('hidden')) return;
-  const saldo = cx.querySelector('.acoin-saldo');
-  if (saldo) saldo.textContent = t('amigos.coinsSaldo', { v: num(e?.gold ?? 0) });
+  acoinRepintar?.();
 }
 
 /** O pontinho no botão da HUD: pedidos pendentes, DMs não lidas OU mensagens do Comércio. */
@@ -18893,6 +20682,7 @@ function aoReceberAmigos(m) {
   if (m.lista !== undefined) store.lista = m.lista;
   if (m.pedidos !== undefined) store.pedidos = m.pedidos;
   if (m.enviados !== undefined) store.enviados = m.enviados; // nicks para quem já mandei pedido
+  if (m.max !== undefined) store.max = Number(m.max) || 0;
 
   if (m.conversa) {
     ui.conversas[m.conversa.amigoId] = m.conversa.mensagens ?? [];
@@ -18906,21 +20696,54 @@ function aoReceberAmigos(m) {
     const outroNick = (meu ? m.dm.para : m.dm.de) ?? '';
     const amigo = amigosLista().find((a) => a.nick.toLowerCase() === outroNick.toLowerCase());
     if (amigo) {
+      // A conversa sobe para o topo da lista já nesta repintura (ver `compararAmigos`).
+      amigo.ultimaDm = Math.max(Number(amigo.ultimaDm) || 0, Number(m.dm.ts) || agoraDoServidor());
       (ui.conversas[amigo.id] ??= []).push({
         id: m.dm.id, mine: !!meu, texto: m.dm.texto ?? '', ts: m.dm.ts,
         tipo: m.dm.tipo ?? 0, valor: m.dm.valor ?? null,
       });
-      if (estado.modalAberto === 'amigos' && ui.sel === amigo.id) {
-        pintarThreadDM(amigo.id);
-        if (!meu && !nota) enviar({ t: 'amigo.dm.ler', amigoId: amigo.id }); // já estou vendo — marca lida
-      } else if (!meu && !nota) {
-        // A nota de coins não incrementa não lidas nem faz toast próprio — o `amigoCoinsRecebeu`
-        // já avisa, e ela fica guardada na conversa para quando o jogador abrir.
-        amigo.naoLidas = (amigo.naoLidas || 0) + 1;
-        toast(m.dm.tipo === 3 ? t('amigos.pvpa.recebido', { nick: amigo.nick }) : t('ev.amigoDM', { nick: amigo.nick }));
+      if (estado.modalAberto === 'amigos' && ui.sel === amigo.id) pintarThreadDM(amigo.id);
+      // A nota de coins não incrementa não lidas nem faz toast próprio — o `amigoCoinsRecebeu`
+      // já avisa, e ela fica guardada na conversa para quando o jogador abrir.
+      if (!meu && !nota) {
+        if (conversaAmigoAVista(amigo.id)) {
+          // Estou vendo: marca lida — e os tracinhos do outro lado ficam azuis.
+          enviar({ t: 'amigo.dm.ler', amigoId: amigo.id });
+        } else {
+          // Fechada, ou aberta mas escondida (outra aba, o Comércio, a lista do celular): conta
+          // como não lida até ser vista de verdade (`lerConversaAVista` cuida da volta).
+          amigo.naoLidas = (amigo.naoLidas || 0) + 1;
+          toast(m.dm.tipo === 3 ? t('amigos.pvpa.recebido', { nick: amigo.nick }) : t('ev.amigoDM', { nick: amigo.nick }));
+        }
       }
     } else if (!meu && !nota) {
       toast(t('ev.amigoDM', { nick: m.dm.de }));
+    }
+  }
+
+  // O amigo LEU o que eu mandei (até a mensagem `ateId`): os tracinhos ficam azuis. Só repinta a
+  // thread se for esta a conversa na tela — as outras ficam marcadas no cache para quando abrir.
+  if (m.lidas) {
+    const amigoId = Number(m.lidas.amigoId);
+    const ate = Number(m.lidas.ateId) || 0;
+    let mudou = false;
+    for (const mm of ui.conversas[amigoId] ?? []) {
+      if (mm.mine && !mm.lido && Number(mm.id) <= ate) {
+        mm.lido = true;
+        mudou = true;
+      }
+    }
+    if (mudou && estado.modalAberto === 'amigos' && ui.sel === amigoId) pintarThreadDM(amigoId, false);
+  }
+
+  // O resultado da busca do "+ Adicionar amigo". O termo volta junto para a resposta de uma
+  // busca antiga (a rede atrasou, o jogador já digitou outra coisa) não sobrescrever a nova.
+  if (m.busca) {
+    if (!ui.buscaAdd.termo || ui.buscaAdd.termo === m.busca.termo) {
+      clearTimeout(ui.buscaAdd.prazo);
+      ui.buscaAdd.achados = m.busca.achados ?? [];
+      ui.buscaAdd.pedindo = false;
+      if (estado.modalAberto === 'amigos' && ui.add) pintarAchadosAmigos();
     }
   }
 
@@ -18952,8 +20775,9 @@ function aoReceberAmigos(m) {
     // No Comércio, a lista e o painel são de lá: um pacote de amigos só mexe nos contadores.
     if (ui.modo === 'comercio') return;
     pintarRolAmigos();
-    // Se uma conversa está aberta com um amigo que ainda existe, NÃO remonta o painel — só o
-    // "marca lida" (`amigo.dm.ler`) já traz `lista` de volta, e remontar apagaria o rascunho.
+    // Se uma conversa está aberta com um amigo que ainda existe, NÃO remonta o painel — um pacote
+    // com `lista` (o sync de outro shard, um pedido aceito) chega a qualquer hora, e remontar
+    // apagaria o rascunho.
     const conversaViva =
       !ui.add && ui.sel != null && (
         ehConversaGuild(ui.sel)
@@ -19482,12 +21306,21 @@ function pedirAltoFalante(a) {
     return toast(t('cm.altoFalanteSemSaldo', { custo: num(CUSTO_ALTO_FALANTE) }));
   }
   const nick = escapar(estado.eu?.nick ?? estado.nick ?? '');
+  // O megafone e, ao lado, a linha EXATA que vai cair no chat — a prévia é a parte que decide.
+  // O preço sai da frase e vira a etiqueta com o saldo; a espera e os canais, selos.
   confirmar({
     titulo: t('cm.altoFalanteTitulo'),
-    texto: t('cm.altoFalanteTexto', {
-      frase: `<span class="cm-alto-previa"><b>📢 ${nick}:</b> ${fraseDoAnuncioNoChat(ofertaDoAnuncio(a))}</span>`,
-      custo: num(CUSTO_ALTO_FALANTE),
-    }),
+    texto: `
+      <div class="dlg-palco tom-ouro dlg-megafone">
+        ${dlgMedalha({ icone: 'megafone', tom: 'ouro', px: 34 })}
+        <span class="cm-alto-previa"><b>📢 ${nick}:</b> ${fraseDoAnuncioNoChat(ofertaDoAnuncio(a))}</span>
+      </div>
+      ${dlgFrase('', t('cm.altoFalanteLead'))}
+      ${dlgCusto({ moeda: 'ouro', valor: CUSTO_ALTO_FALANTE, saldo: Math.floor(estado.eu?.gold ?? 0) })}
+      ${dlgSelos(
+        dlgSelo('olho', escapar(t('cm.altoFalanteSeloCanais')), 'rx'),
+        dlgSelo('relogio', escapar(t('cm.altoFalanteSeloEspera')), 'info'),
+      )}`,
     rotuloSim: t('cm.altoFalanteSim', { custo: num(CUSTO_ALTO_FALANTE) }),
     aoConfirmar: () => enviar({ t: 'market.anunciarChat', id: a.id }),
   });
@@ -19614,9 +21447,18 @@ function aoReceberConvite(m) {
       <span class="cv-premio-ico" data-i="${i}"></span>
       <b>${escapar(nomePremioConvite(pr))}</b>
     </div>`).join('');
+  // O marco é o ATOR (a medalha de quem trouxe gente, acesa no palco de ouro) e os prêmios, as
+  // cartas embaixo — a mesma leitura de "você recebeu" do resto do jogo.
   confirmar({
     titulo: t('convite.resgatouTitulo'),
-    texto: `<p>${t('convite.resgatouTexto', { n: num(m.marco) })}</p>
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteHtml(dlgMedalha({ icone: 'pessoaMais', tom: 'ouro' })),
+        nome: escapar(t('convite.degrau', { n: num(m.marco) })),
+        sub: escapar(t('convite.marcoSub')),
+        classe: 'novo',
+      }), 'ouro')}
+      <p class="cv-entrou">${escapar(t('convite.entrouNaConta'))}</p>
       <div class="cv-premios">${linhas}</div>`,
     soOk: true,
     rotuloSim: t('convite.resgatouOk'),
@@ -19638,18 +21480,29 @@ function aoReceberConvite(m) {
  * promessa que desanda do resto no primeiro ajuste.
  */
 function mostrarEscadaDeConvites() {
+  // Os dois degraus de cima (o VIP de 90 dias e o PERMANENTE) ganham o anel de ouro: é para
+  // eles que a escada aponta.
   const degraus = MARCOS_CONVITE.map((mc, iDeg) => `
-    <div class="cv-degrau">
-      <b class="cv-degrau-n">${t(iDeg === MARCOS_CONVITE.length - 1 ? 'convite.degrauMais' : 'convite.degrau', { n: num(mc.amigos) })}</b>
+    <div class="cv-degrau${iDeg >= MARCOS_CONVITE.length - 2 ? ' topo' : ''}">
+      <b class="cv-degrau-n"><span class="cv-degrau-ico">${dlgIcone('pessoaMais', 15)}</span>${t(iDeg === MARCOS_CONVITE.length - 1 ? 'convite.degrauMais' : 'convite.degrau', { n: num(mc.amigos) })}</b>
       <div class="cv-degrau-premios">
         ${mc.premios.map((pr, i) => `<span class="cv-premio-linha">
             <span class="cv-premio-ico" data-deg="${iDeg}" data-i="${i}"></span>${escapar(nomePremioConvite(pr))}
           </span>`).join('')}
       </div>
     </div>`).join('');
+  // O parágrafo de instrução virou os três passos, um por linha com ícone, e a regra da conta
+  // de Discord (a que mais derruba convite) ficou numa faixa própria.
   confirmar({
     titulo: t('convite.escadaTitulo'),
-    texto: `<p>${t('convite.escadaTexto')}</p><div class="cv-escada">${degraus}</div>`,
+    texto: `
+      ${dlgLista([
+        { icone: 'pessoaMais', html: t('convite.passoChamar') },
+        { icone: 'bandeira', html: t('convite.passoCodigo') },
+        { icone: 'check', html: t('convite.passoResgatar') },
+      ])}
+      ${dlgAviso(escapar(t('convite.regraConta')), { icone: 'relogio', tom: 'info' })}
+      <div class="cv-escada">${degraus}</div>`,
     soOk: true,
     largura: 'larga',
     rotuloSim: t('convite.resgatouOk'),
@@ -19657,7 +21510,7 @@ function mostrarEscadaDeConvites() {
   });
   for (const el of document.querySelectorAll('#confirmar-texto .cv-premio-ico')) {
     const pr = MARCOS_CONVITE[Number(el.dataset.deg)]?.premios[Number(el.dataset.i)];
-    if (pr) el.appendChild(iconePremioConvite(pr, 18));
+    if (pr) el.appendChild(iconePremioConvite(pr, 22));
   }
 }
 
@@ -19742,6 +21595,26 @@ function htmlPremiosDoDia(d, trilha, trancada) {
     <span class="ps-hoje-rot"><img src="${trilha === 'vip' ? ICONE_PASSE_VIP : ICONE_PASSE_FREE}" alt="">${t(trilha === 'vip' ? 'passe.trilhaVip' : 'passe.trilhaFree')}${trancada ? ' 🔒' : ''}</span>
     ${d[trilha].map((pr, i) => `<span class="ps-hoje-pr">${lugarPremioPasse(trilha, d.dia, i, 30)}<b>${escapar(nomePremioPasse(pr))}</b></span>`).join('')}
   </div>`;
+}
+
+/**
+ * Comprar (ou estender) o Passe VIP: o selo do passe no palco com os dias que ele vale, a etiqueta
+ * de diamantes com o saldo que fica e a frase de sempre embaixo.
+ */
+function confirmarPasseVip(vipAtivo) {
+  confirmar({
+    titulo: t('passe.vipTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteArquivo(ICONE_PASSE_VIP, 64, true),
+        nome: escapar(t('passe.vipTitulo')),
+        classe: 'novo',
+        qtd: `+${num(PASSE_VIP_DIAS)}d`,
+      }), 'ouro')}
+      ${dlgCusto({ moeda: 'diamante', valor: PASSE_VIP_PRECO, saldo: Number(estado.eu?.diamonds ?? 0) })}
+      ${dlgFrase('', t(vipAtivo ? 'passe.confirmaEstender' : 'passe.confirmaComprar', { d: PASSE_VIP_DIAS }))}`,
+    aoConfirmar: () => enviar({ t: 'passe.comprarVip' }),
+  });
 }
 
 function pintarPasse({ rolarParaHoje = false } = {}) {
@@ -19867,11 +21740,7 @@ function pintarPasse({ rolarParaHoje = false } = {}) {
     if ((estado.eu?.diamonds ?? 0) < PASSE_VIP_PRECO) {
       return abrirCompraDeDiamantes(PASSE_VIP_PRECO - (estado.eu?.diamonds ?? 0));
     }
-    confirmar({
-      titulo: t('passe.vipTitulo'),
-      texto: t(vipAtivo ? 'passe.confirmaEstender' : 'passe.confirmaComprar', { n: PASSE_VIP_PRECO, d: PASSE_VIP_DIAS }),
-      aoConfirmar: () => enviar({ t: 'passe.comprarVip' }),
-    });
+    confirmarPasseVip(vipAtivo);
   });
   // A roda do mouse sobre a trilha anda para os lados — ela é uma fita horizontal.
   trilha.addEventListener('wheel', (ev) => {
@@ -19985,6 +21854,7 @@ const MODAIS = {
   afiliados: { titulo: 'modal.afiliados', render: renderAfiliados },
   votar: { titulo: 'modal.votar', render: renderVotar },
   twitch: { titulo: 'modal.twitch', render: renderTwitch },
+  kick: { titulo: 'modal.kick', render: renderKick },
   calculadora: { titulo: 'modal.calculadora', render: renderCalculadora },
   configuracoes: { titulo: 'modal.configuracoes', render: renderConfiguracoes },
   perfil: { titulo: 'modal.perfil', render: renderPerfilProprio },
@@ -20308,6 +22178,29 @@ function ligarArtesDaCasa(painel, pks) {
   if (frag) frag.appendChild(imgItem(estado.casas?.fragmento?.itemId ?? FRAGMENTO_CHAVE_ID, 26));
 }
 
+/**
+ * Guardar uma casa que tem gente nos postos: a casa à esquerda, e os pokémon que saem do XP Share
+ * do outro lado da seta, sem cor. A casa continua sua — quem perde alguma coisa são eles.
+ */
+function confirmarGuardarCasa(casa, pedir) {
+  const pks = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
+  const ocupantes = (casa.postos ?? []).filter((id) => id != null).map((id) => pks.get(id)).filter(Boolean);
+  const n = (casa.postos ?? []).filter((id) => id != null).length;
+  confirmar({
+    titulo: t('casa.guardarTitulo', { numero: numeroDaCasa(casa.id) }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: dlgArteItem(CASA_ITEM_POR_RAR[casa.rar] ?? 0, 64),
+          nome: escapar(`${nomeCasaRaridade(casa.rar)} ${numeroDaCasa(casa.id)}`),
+        })}
+        ${dlgSeta()}
+        ${dlgAtor({ arte: dlgFila(ocupantes), nome: 'XP Share', classe: 'sai', qtd: ocupantes.length ? '' : `×${num(n)}` })}`, 'ouro')}
+      ${dlgFrase('', escapar(t(n === 1 ? 'casa.guardarAvisoUm' : 'casa.guardarAviso', { n: num(n) })))}`,
+    aoConfirmar: pedir,
+  });
+}
+
 function cliqueNaCasa(ev) {
   const aba = ev.target.closest('.csm-aba');
   if (aba) {
@@ -20332,11 +22225,7 @@ function cliqueNaCasa(ev) {
     const pedir = () => enviar({ t: 'casa.usar', casaId: casa.id, usar: false });
     // Casa vazia guarda direto; com gente nos postos, confirma — eles saem do XP Share.
     if (!ocupados) return pedir();
-    return confirmar({
-      titulo: t('casa.guardarTitulo', { numero: numeroDaCasa(casa.id) }),
-      texto: escapar(t(ocupados === 1 ? 'casa.guardarAvisoUm' : 'casa.guardarAviso', { n: num(ocupados) })),
-      aoConfirmar: pedir,
-    });
+    return confirmarGuardarCasa(casa, pedir);
   }
   const entrar = ev.target.closest('[data-entrar]');
   if (entrar) {
@@ -21215,23 +23104,39 @@ function pintarNameTagNome(corpo, fechar, pk) {
   ok.onclick = () => {
     const v = validarApelido(campo.value);
     if (!v.ok) return toast(t(v.erro, { min: APELIDO_MIN, max: APELIDO_MAX }));
-    confirmar({
-      titulo: t('nametag.confirmarTitulo'),
-      // O aviso de conduta é REPETIDO aqui. É a última tela antes de a etiqueta sumir, e é a
-      // única que o jogador não pode passar sem ler — na folha ele pode ter rolado direto
-      // para o campo.
-      texto: `<p>${t('nametag.confirmarTexto', {
-        especie: `<b>${escapar(pk.nome ?? '')}</b>`,
-        nome: `<b>${escapar(v.apelido)}</b>`,
-      })}</p>
-        <p class="confirmar-nota">${escapar(t('nametag.confirmarCosmetico'))}</p>
-        <p class="confirmar-perigo">${escapar(t('nametag.avisoTexto'))}</p>`,
-      aoConfirmar: () => {
-        enviar({ t: 'nametag.usar', pokemonId: pk.id, apelido: v.apelido });
-        fechar();
-      },
+    confirmarNameTag(pk, v.apelido, () => {
+      enviar({ t: 'nametag.usar', pokemonId: pk.id, apelido: v.apelido });
+      fechar();
     });
   };
+}
+
+/**
+ * O bicho com o nome de hoje, a etiqueta em cima da seta, e ele de novo com o nome novo numa
+ * plaquinha — a troca inteira cabe num olhar. O aviso de conduta é REPETIDO aqui: é a última tela
+ * antes de a etiqueta sumir, e é a única que o jogador não pode passar sem ler — na folha ele pode
+ * ter rolado direto para o campo.
+ */
+function confirmarNameTag(pk, apelido, aoConfirmar) {
+  confirmar({
+    titulo: t('nametag.confirmarTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArtePk(pk, 64), nome: nomePkHtml(pk), sub: apelidoDe(pk) ? escapar(pk.nome ?? '') : '' })}
+        ${dlgSeta({ item: NAME_TAG_ID, qtd: '×1' })}
+        ${dlgAtor({
+          arte: dlgArtePk(pk, 64),
+          nome: `<span class="dlg-etiqueta">${escapar(apelido)}</span>`,
+          sub: escapar(pk.nome ?? ''),
+          classe: 'novo',
+        })}`)}
+      ${dlgFrase('', `${t('nametag.confirmarTexto', {
+        especie: `<b>${escapar(pk.nome ?? '')}</b>`,
+        nome: `<b>${escapar(apelido)}</b>`,
+      })} ${escapar(t('nametag.confirmarCosmetico'))}`)}
+      ${dlgAviso(escapar(t('nametag.avisoTexto')))}`,
+    aoConfirmar,
+  });
 }
 
 /**
@@ -21265,9 +23170,26 @@ function abrirEscolhaDeTreino(casaId, slot) {
 
   const pct = Math.round((metaRaridade(casa.rar)?.xpShare ?? 0) * 100);
   const { corpo, fechar } = folhaMercado(escapar(t('casa.escolherTituloNum', { numero: numeroDaCasa(casa.id) })));
-  corpo.innerHTML = `<p class="cm-passo-txt">${t('casa.escolherEquipe', { pct })}</p>`
-    + (ocultosHeld ? `<p class="cm-nota dim">${escapar(t('casa.ocultosHeld', { n: ocultosHeld }))}</p>` : '')
-    + `<div class="mk-grade" id="aca-mk-grade"></div>`;
+  // A conta da casa desenhada: o XP do pokémon de BATALHA → a fatia da casa → quem for escolhido
+  // aqui embaixo. O "?" é o lugar que a grade vai preencher.
+  const ativo = (estado.eu?.pokemons ?? []).find((p) => p.id === estado.eu?.activeId);
+  corpo.innerHTML = `
+    ${dlgPalco(`
+      ${dlgAtor({
+        arte: ativo ? dlgArtePk(ativo, 56) : dlgArteTreinador(null, null, 56),
+        nome: ativo ? nomePkHtml(ativo) : escapar(estado.eu?.nick ?? ''),
+        sub: escapar(t('casa.xpDaBatalha')),
+      })}
+      ${dlgSeta({ rotulo: escapar(t('casa.pctDoXp', { pct })) })}
+      ${dlgAtor({
+        arte: dlgArteHtml(dlgMedalha({ icone: 'interrogacao', tom: 'ouro', px: 34 })),
+        nome: escapar(t('casa.quemEscolher')),
+        classe: 'novo',
+      })}`, 'ouro')}
+    ${dlgAviso(escapar(t('casa.escolherEquipeDica')), { icone: 'pessoa', tom: 'info' })}
+    ${ocultosHeld ? dlgAviso(escapar(t('casa.ocultosHeld', { n: ocultosHeld })), { icone: 'alerta', tom: 'ouro' }) : ''}
+    <div class="mk-grade" id="aca-mk-grade"></div>`;
+  hidratarDialogo(corpo);
   const grade = corpo.querySelector('#aca-mk-grade');
 
   for (const p of lista) {
@@ -21636,20 +23558,65 @@ const pctMistico = (ch) => `${(Number(ch) * 100).toLocaleString('pt-BR', { maxim
 const nomeDaBola = (id) => estado.catalogoBolas?.find((b) => b.id === Number(id))?.nome ?? `Ball ${id}`;
 
 /**
+ * Quem a Arena Mística pode sortear. É daqui que sai o "1 em N" da ficha da Pokédex: a chance
+ * de o ticket trazer justamente ESTE lendário.
+ *
+ * A lista vem do SERVIDOR (`misticoPool`, no welcome), que é quem sorteia. Rodar
+ * `poolLendariosMisticos` sobre o catálogo desta aba parece a mesma conta — o cliente monta o
+ * catálogo dos mesmos JSONs —, mas não é: o caminho é outro, e as duas contas divergiam em
+ * duas espécies. Um "1 em 61" numa arena de 59 é a ficha mentindo em número redondo. A conta
+ * local fica só de reserva, para o servidor que ainda não manda o campo.
+ *
+ * Memoizado porque a ficha é remontada a cada abertura e nada disso muda depois do welcome.
+ */
+let poolMisticoCache = null;
+function poolMistico() {
+  const doServidor = estado.misticoPool;
+  const chave = doServidor ? `s${doServidor.size}` : `c${estado.especies.size}`;
+  if (poolMisticoCache?.chave !== chave) {
+    const ids = doServidor ?? new Set(poolLendariosMisticos(estado.especies).map((e) => e.pokeId));
+    poolMisticoCache = { chave, ids, n: ids.size };
+  }
+  return poolMisticoCache;
+}
+
+/** Esta espécie pode sair da Arena Mística? */
+const noSorteioMistico = (pokeId) => poolMistico().ids.has(Number(pokeId));
+
+/**
  * Usar o ticket: a confirmação diz tudo o que está em jogo ANTES do clique — o ticket some na
  * entrada, a tentativa é uma só, e perder a luta ou sair é perder o ticket. Sem bola na bolsa, o
  * servidor recusa; a caixa já avisa para o jogador não descobrir isso depois de abrir.
  */
 function abrirUsoTicketMistico() {
   const temBola = BOLAS_MISTICAS_DA_MELHOR.some((id) => (estado.eu?.balls?.[id] ?? 0) > 0);
+  // O ticket vira a sala roxa (o "?" é o lendário que o sorteio ainda não disse), e a chance de
+  // cada bola sai da frase para uma fileira: as cinco bolas com o número embaixo, a que a pessoa
+  // não tem apagada. É a tabela que ela ia montar de cabeça antes de entrar.
+  const bolas = [...BOLAS_MISTICAS_DA_MELHOR].reverse().map((id) => `
+    <span class="dlg-bola${(estado.eu?.balls?.[id] ?? 0) > 0 ? '' : ' sem'}">
+      <span data-dlg-arquivo="${SPRITE_BOLA[id]}" data-dlg-px="28"></span>
+      <b>${pctMistico(CAPTURA_MISTICA_POR_BOLA[id])}</b>
+    </span>`).join('');
   confirmar({
     titulo: t('mistico.usarTitulo'),
-    texto: t('mistico.usarTexto', {
-      nivel: NIVEL_LENDARIO_MISTICO,
-      poke: pctMistico(CAPTURA_MISTICA_POR_BOLA[1]),
-      beast: pctMistico(CAPTURA_MISTICA_POR_BOLA[5]),
-      boost: pctMistico(chanceCapturaMistica(5, 2)),
-    }) + (temBola ? '' : `<p class="mst-alerta">${t('mistico.semBola')}</p>`),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteItem(MYSTIC_TICKET_ID, 64), nome: 'MysticTicket', classe: 'sai' })}
+        ${dlgSeta()}
+        ${dlgAtor({
+          arte: dlgArteHtml(dlgMedalha({ icone: 'interrogacao', tom: 'mega', px: 40 })),
+          nome: escapar(t('mistico.lendarioNv', { nivel: NIVEL_LENDARIO_MISTICO })),
+          classe: 'novo',
+        })}`, 'mega')}
+      ${dlgFrase('', t('mistico.usarLead'))}
+      <div class="dlg-bolas">${bolas}</div>
+      <p class="dlg-bolas-nota">${t('mistico.usarBoost', { boost: pctMistico(chanceCapturaMistica(5, 2)) })}</p>
+      ${dlgSelos(
+        dlgSelo('cadeado', escapar(t('mistico.seloTicket')), 'perigo'),
+        dlgSelo('alerta', escapar(t('mistico.seloUmaBola')), 'ouro'),
+      )}
+      ${temBola ? '' : dlgAviso(t('mistico.semBola'))}`,
     rotuloSim: t('mistico.entrar'),
     aoConfirmar: () => enviar({ t: 'mistico.entrar' }),
   });
@@ -21806,9 +23773,21 @@ function abrirChocadeiraComOvo(ovoId) {
 function comprarChocadeira() {
   const total = chocadeiraDe(estado.eu).total;
   if (total >= CHOCADEIRAS_MAX) return toast(t('chocadeira.limite'));
+  // As vagas da conta como fileira de luzes: as que já são suas acesas, a que está sendo
+  // liberada piscando, o resto apagado. "3 de 6" vira desenho.
+  const vagas = Array.from({ length: CHOCADEIRAS_MAX }, (_, i) =>
+    `<i class="${i < total ? 'tem' : i === total ? 'nova' : ''}"></i>`).join('');
   confirmar({
     titulo: t('chocadeira.liberarTitulo'),
-    texto: t('chocadeira.liberarTexto', { preco: PRECO_CHOCADEIRA_DIAMANTES, n: total + 1, max: CHOCADEIRAS_MAX }),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteArquivo('/img/itens/chocadeira.png', 64),
+        nome: escapar(t('chocadeira.nomeN', { n: total + 1, max: CHOCADEIRAS_MAX })),
+        sub: `<span class="dlg-vagas">${vagas}</span>`,
+        classe: 'novo',
+      }), 'ouro')}
+      ${dlgCusto({ moeda: 'diamante', valor: PRECO_CHOCADEIRA_DIAMANTES, saldo: Number(estado.eu?.diamonds ?? 0) })}
+      ${dlgSelos(dlgSelo('check', escapar(t('chocadeira.seloSempre')), 'bom'))}`,
     rotuloSim: t('chocadeira.liberarSim', { preco: PRECO_CHOCADEIRA_DIAMANTES }),
     aoConfirmar: () => enviar({ t: 'loja.comprar', id: 'chocadeira' }),
   });
@@ -21836,16 +23815,24 @@ const PCT_BULBO = Math.round((1 - BULBO_FATOR) * 100);
  */
 function aquecerOvo(slot, def) {
   const horas = def ? Math.round(def.horas * BULBO_FATOR) : 0;
+  // O ovo frio, a lamparina em cima da seta com o "−25%", e o ovo aquecido do outro lado: o
+  // relógio de cada um é o que muda, então é ele que vai embaixo de cada ovo.
+  const ovo = (h, classe) => dlgAtor({
+    arte: def?.itemId ? dlgArteItem(def.itemId, 56) : dlgArteArquivo('/img/itens/mystery-egg.png', 56),
+    nome: `${num(h)}h`,
+    sub: escapar(nomeItem(def?.itemId ?? 0, def?.nome ?? '')),
+    classe,
+  });
   confirmar({
     titulo: t('chocadeira.acenderTitulo'),
-    texto: t('chocadeira.acenderTexto', {
-      preco: PRECO_BULBO_DIAMANTES,
-      n: slot + 1,
-      pct: PCT_BULBO,
-      ovo: escapar(nomeItem(def?.itemId ?? 0, def?.nome ?? '')),
-      de: def?.horas ?? 0,
-      para: horas,
-    }),
+    texto: `
+      ${dlgPalco(`
+        ${ovo(def?.horas ?? 0, '')}
+        ${dlgSeta({ arquivo: '/img/itens/absorb-bulb.png', qtd: '×1', rotulo: `−${PCT_BULBO}%` })}
+        ${ovo(horas, 'novo')}`, 'ouro')}
+      ${dlgCusto({ moeda: 'diamante', valor: PRECO_BULBO_DIAMANTES, saldo: Number(estado.eu?.diamonds ?? 0) })}
+      ${dlgFrase('', t('chocadeira.acenderLead', { n: slot + 1, pct: PCT_BULBO }))}
+      ${dlgSelos(dlgSelo('alerta', escapar(t('chocadeira.seloQuebra')), 'perigo'))}`,
     rotuloSim: t('chocadeira.acenderSim', { preco: PRECO_BULBO_DIAMANTES }),
     aoConfirmar: () => {
       estado.chcAcendendo = slot;
@@ -22115,11 +24102,28 @@ function montarTwitch() {
   canais.sort((a, b) => Number(b.aoVivo) - Number(a.aoVivo) || b.espectadores - a.espectadores);
   // O comando que liga o bônus na live de um streamer: o faasii como moderador do canal dele.
   const comandoMod = `/mod ${tw.canal ?? 'faasii'}`;
-  const linhaCanal = (c) => `
-        <a class="tw-canal${c.aoVivo ? ' ao-vivo' : ''}${c.bonus ? ' com-bonus' : ''}" href="${escapar(linkDe(c.login))}" target="_blank" rel="noopener noreferrer">
+  // EM QUAL DELAS ELE JÁ ESTÁ. O servidor manda os logins (`assistindoEm`), e todos eles são de
+  // canal com bônus — o vigia só consegue detectar alguém no chat que ele lê. Então a linha tem
+  // três leituras, e nenhuma repete a outra:
+  //
+  //   já está lá   → o selo verde no lugar do dourado. O dourado existe para ele ESCOLHER uma live;
+  //                  nesta ele já escolheu, e repeti-lo só tiraria espaço do que falta decidir.
+  //   falta ele    → o ponto vermelho na frente da linha. É o convite do +1%.
+  //   sem bônus    → nada de novo: continua o "Falta a ativação", que é problema do streamer.
+  const jaEstouEm = new Set((tw.assistindoEm ?? []).map((x) => String(x).toLowerCase()));
+  const linhaCanal = (c) => {
+    const jaEstou = jaEstouEm.has(String(c.login).toLowerCase());
+    const faltaEle = !!tw.login && c.aoVivo && c.bonus === true && !jaEstou;
+    return `
+        <a class="tw-canal${c.aoVivo ? ' ao-vivo' : ''}${c.bonus ? ' com-bonus' : ''}${jaEstou ? ' tw-aqui' : ''}${faltaEle ? ' tw-falta-eu' : ''}"
+           href="${escapar(linkDe(c.login))}" target="_blank" rel="noopener noreferrer"
+           ${faltaEle ? `title="${escapar(t('twitch.vaAte', { extra }))}"` : ''}>
+          ${faltaEle ? '<i class="tw-ponto" aria-hidden="true"></i>' : ''}
           ${GLIFO_TWITCH}
           <span class="tw-canal-nome">${escapar(c.nome || c.login)}</span>
-          ${c.bonus === true
+          ${jaEstou
+            ? `<span class="tw-canal-aqui" title="${escapar(t('twitch.jaEstaLaDica'))}">✓ <b class="tw-aqui-longo">${t('twitch.jaEstaLa')}</b><b class="tw-aqui-curto">${t('twitch.jaEstaLaCurto')}</b></span>`
+            : c.bonus === true
             // O SELO do bônus: só nos canais em que assistir dá o bônus de verdade (o faasii é
             // moderador lá). Sem o "+15%": as lives se somam (15 + 1 + 1...), e um "+15%" em cada
             // canal leria como 15 por live. No celular o "BÔNUS ATIVADO" encurta para "BÔNUS".
@@ -22137,6 +24141,7 @@ function montarTwitch() {
             ? `<i class="tw-verde" aria-hidden="true"></i>${t('twitch.aoVivo')}`
             : t('twitch.valorOffline')}</span>
         </a>`;
+  };
 
   // OS OFFLINE FICAM DOBRADOS, e fechados por padrão.
   //
@@ -22289,12 +24294,26 @@ function montarTwitch() {
       .then(() => toast(t('twitch.copiado', { cmd: comandoMod })))
       .catch(() => toast(comandoMod));
   });
-  $('#tw-desvincular')?.addEventListener('click', () => confirmar({
+  $('#tw-desvincular')?.addEventListener('click', () => confirmarDesvincularTwitch(login));
+}
+
+/** A corrente partida entre o seu boneco e a conta da Twitch: é isto que o botão desfaz. */
+function confirmarDesvincularTwitch(login) {
+  confirmar({
     titulo: t('twitch.desvincularTitulo'),
-    texto: t('twitch.desvincularTexto', { login }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? '') })}
+        <span class="dlg-elo" aria-hidden="true">${dlgIcone('corrente', 30)}</span>
+        ${dlgAtor({
+          arte: dlgArteHtml(dlgMedalha({ arte: `<span class="dlg-twitch">${GLIFO_TWITCH}</span>`, tom: 'mega' })),
+          nome: escapar(login ?? ''),
+          classe: 'sai',
+        })}`, 'mega')}
+      ${dlgFrase('', t('twitch.desvincularTexto', { login: `<b>${escapar(login ?? '')}</b>` }))}`,
     rotuloSim: t('twitch.desvincular'),
     aoConfirmar: desvincularTwitch,
-  }));
+  });
 }
 
 /**
@@ -22331,6 +24350,452 @@ function avisarRetornoTwitch(resultado) {
   const chave = `twitch.retorno.${resultado}`;
   toast(temChave(chave) ? t(chave) : t('twitch.retorno.erro'));
   if (resultado === 'ok') abrirModal('twitch');
+}
+
+// ------------------------------------------------------------- bônus na Kick
+//
+// Horas de bônus compradas com os PONTOS DO CANAL de um streamer oficial na Kick: cada resgate vale
+// 1 hora de +15% (XP, Capture Boost ou Secret Lure), e as horas se somam. Quem credita é o vigia do
+// servidor, que lê os resgates na Kick. Esta tela explica, leva à Kick para o vínculo (que é PARA
+// SEMPRE — uma conta da Kick por treinador) e mostra as horas que ele tem. Quem vinculou a conta de
+// um streamer oficial vê também a caixa do canal dele.
+
+/** O que a tela desenhou por último — o snapshot só a remonta quando o bloco `kick` muda. */
+let ultimaAssinaturaKick = '';
+
+function renderKick() {
+  return `<div class="vt-modal kk-modal" id="kk-corpo"></div>`;
+}
+
+function montarKick() {
+  const host = $('#kk-corpo');
+  if (!host) return;
+  const kk = estado.eu?.kick ?? null;
+  ultimaAssinaturaKick = JSON.stringify(kk);
+  if (!kk) {
+    host.innerHTML = `<div class="vt-desligado">${t('kick.desligado')}</div>`;
+    return;
+  }
+  const pct = Number(kk.pct) || 0;
+  const minutos = Number(kk.minutos) || 60;
+  // '1h': o tempo de UM resgate, escrito como a ficha escreve os prazos.
+  const tempoResgate = tempoCurto(minutos * 60_000);
+  const agora = agoraDoServidor();
+  const recompensas = Array.isArray(kk.recompensas) ? kk.recompensas : [];
+  const oficiais = Array.isArray(kk.oficiais) ? kk.oficiais : [];
+  const nomeBonus = (tp) => escapar(t(`kick.bonus.${tp}`, { pct }));
+  const linkDe = (slug) => `https://kick.com/${encodeURIComponent(String(slug ?? ''))}`;
+
+  // AS TRÊS RECOMPENSAS: o ícone do boost da Loja de mesmo nome, quanto custa na Kick e, se ele
+  // tem horas valendo, a contagem regressiva (anda no `tiqueModalKick`).
+  const cartao = (r) => {
+    const ate = Number(kk.bonus?.[r.tipo]) || 0;
+    const ativo = ate > agora;
+    return `
+      <div class="kk-rec${ativo ? ' ativo' : ''}">
+        <span class="kk-rec-ico" data-kk-ico="${escapar(r.tipo)}"></span>
+        <b class="kk-rec-nome">${nomeBonus(r.tipo)}</b>
+        <span class="kk-rec-custo">${num(r.custo)} <small>${t('kick.pontos')}</small></span>
+        <span class="kk-rec-estado">${ativo
+          ? `${dlgIcone('relogio', 13)}<span class="kk-tempo" data-ate="${ate}">${tempoCurto(ate - agora)}</span>`
+          : escapar(t('kick.porResgate', { tempo: tempoResgate }))}</span>
+      </div>`;
+  };
+  const topo = `
+    <div class="vt-premio kk-premio">
+      <div class="kk-premio-linha">
+        <span class="vt-premio-qtd kk-premio-qtd">${GLIFO_KICK} +${pct}%</span>
+        <span class="vt-premio-txt">${t('kick.intro', { pct, tempo: tempoResgate })}</span>
+      </div>
+      <div class="kk-recs">${recompensas.map(cartao).join('')}</div>
+      <div class="kk-acumula">${dlgIcone('relogio', 14)}<span>${t('kick.acumula', { pct })}</span></div>
+    </div>`;
+
+  // O VÍNCULO. Sem ele, o botão e o aviso de que é para sempre — antes do clique, e não só na
+  // confirmação; com ele, a conta, sem "desvincular": não existe.
+  const vinculo = !(kk.vinculado ?? !!kk.login)
+    ? `
+      <button type="button" class="kk-botao" id="kk-vincular">${GLIFO_KICK}<span>${t('kick.vincular')}</span></button>
+      <div class="kk-permanente">${dlgIcone('cadeado', 16)}<span>${t('kick.permanenteAviso')}</span></div>`
+    : `
+      <div class="kk-conta">${dlgIcone('cadeado', 14)}<span>${kk.login
+        ? t('kick.vinculada', { login: `<b>${escapar(kk.login)}</b>` })
+        : t('kick.vinculadaSemNome')}</span></div>`;
+
+  // O CANAL DELE, para quem vinculou a conta de um streamer oficial: diz se as recompensas estão de
+  // pé lá e, se não estiverem (autorização caiu, ou ele cancelou na hora do vínculo), o botão.
+  const st = kk.streamer;
+  const canalSt = st ? `<b>${escapar(st.nome || st.slug)}</b>` : '';
+  const streamer = st ? `
+    <div class="kk-streamer${st.ativo ? ' ok' : ''}">
+      ${GLIFO_KICK}
+      <span>${st.ativo ? t('kick.streamerOk', { canal: canalSt }) : t('kick.streamerFalta', { canal: canalSt })}</span>
+      ${st.ativo ? '' : `<button type="button" class="kk-botao-mini" id="kk-conectar-canal">${t('kick.conectarCanal')}</button>`}
+    </div>` : '';
+
+  // OS CANAIS OFICIAIS: ao vivo em cima (os mais assistidos primeiro), offline dobrados — a mesma
+  // gramática da lista da Twitch. O selo verde é "o resgate funciona aqui".
+  const canais = [...oficiais].sort((a, b) => Number(b.aoVivo) - Number(a.aoVivo) || b.espectadores - a.espectadores);
+  const linhaCanal = (c) => `
+      <a class="kk-canal${c.aoVivo ? ' ao-vivo' : ''}${c.ativo ? ' com-pontos' : ''}"
+         href="${escapar(linkDe(c.slug))}" target="_blank" rel="noopener noreferrer">
+        ${GLIFO_KICK}
+        <span class="kk-canal-nome">${escapar(c.nome || c.slug)}</span>
+        ${c.ativo
+          ? `<span class="kk-canal-pontos" title="${escapar(t('kick.pontosAtivosDica'))}">${t('kick.pontosAtivos')}</span>`
+          : `<span class="kk-canal-falta">${t('kick.aguardandoStreamer')}</span>`}
+        ${c.aoVivo
+          ? `<span class="tw-canal-espect" title="${escapar(t('twitch.espectadores', { n: num(c.espectadores) }))}">${GLIFO_ESPECTADOR}${num(c.espectadores)}</span>`
+          : ''}
+        <span class="kk-canal-selo">${c.aoVivo ? `<i class="kk-verde" aria-hidden="true"></i>${t('twitch.aoVivo')}` : t('twitch.valorOffline')}</span>
+      </a>`;
+  const aoVivo = canais.filter((c) => c.aoVivo);
+  const offline = canais.filter((c) => !c.aoVivo);
+  const offlineAberto = !!estado.kkOfflineAberto;
+  const listaCanais = `
+    <div class="kk-canais">
+      <div class="af-secao-titulo">${t('kick.oficiais')}</div>
+      ${aoVivo.map(linhaCanal).join('')}
+      ${!aoVivo.length ? `<div class="tw-ninguem">${t(canais.length ? 'kick.ninguemAoVivo' : 'kick.semCanais')}</div>` : ''}
+      ${offline.length ? `
+        <button type="button" class="tw-offline-btn kk-offline-btn${offlineAberto ? ' aberto' : ''}" id="kk-offline-btn"
+                aria-expanded="${offlineAberto}" aria-controls="kk-offline-lista">
+          <span>${t('twitch.offlineDobra', { n: num(offline.length) })}</span>
+          <i class="tw-seta" aria-hidden="true">▾</i>
+        </button>
+        <div class="tw-offline-lista${offlineAberto ? ' aberto' : ''}" id="kk-offline-lista">
+          <div class="tw-offline-dentro">${offline.map(linhaCanal).join('')}</div>
+        </div>` : ''}
+    </div>`;
+
+  // O convite para virar Streamer Parceiro Oficial na Kick, logo abaixo da lista — é "entrar NESTA
+  // lista". O MESMO anúncio da Twitch (moldura correndo, a caixa respirando, a faixa de luz, o ícone
+  // quicando com faíscas, o botão que chacoalha), com o K no lugar do glifo e o verde da Kick no
+  // lugar do roxo (`.kk-tom`): quem faz live está justamente lendo esta tela.
+  const parceiro = `
+    <div class="tw-parceiro kk-tom">
+      <span class="tw-parceiro-brilho" aria-hidden="true"></span>
+      <div class="tw-parceiro-ico" aria-hidden="true">
+        ${GLIFO_KICK}
+        <i class="tw-faisca f1">✦</i><i class="tw-faisca f2">✦</i><i class="tw-faisca f3">✦</i>
+      </div>
+      <div class="tw-parceiro-txt">
+        <span class="tw-parceiro-selo">★ ${t('kick.parceiroSelo')}</span>
+        <b>${t('kick.parceiroTitulo')}</b>
+        <span>${t('kick.parceiroTexto', { pct })}</span>
+      </div>
+      <a class="tw-parceiro-btn" href="${escapar(DISCORD_URL)}" target="_blank" rel="noopener noreferrer">
+        <img src="/img/social-discord.svg" width="20" height="20" alt="">
+        <span>Discord</span>
+      </a>
+    </div>`;
+
+  const passos = `
+    <div>
+      <div class="af-secao-titulo">${t('kick.comoTitulo')}</div>
+      <ol class="vt-passos">
+        <li>${t('kick.passo1')}</li>
+        <li>${t('kick.passo2')}</li>
+        <li>${t('kick.passo3', { lista: recompensas.map((r) => `<b>${nomeBonus(r.tipo)}</b> (${num(r.custo)})`).join(' · ') })}</li>
+        <li>${t('kick.passo4', { tempo: tempoResgate })}</li>
+      </ol>
+    </div>
+    <div class="af-aviso-pequeno">${t('kick.rodape')}</div>`;
+
+  host.innerHTML = topo + vinculo + streamer + listaCanais + parceiro + passos;
+  for (const el of host.querySelectorAll('[data-kk-ico]')) {
+    el.replaceChildren(iconeArquivo(tipoDeBoost(el.dataset.kkIco)?.icone ?? ICONE_DIAMANTE, 28));
+  }
+  $('#kk-vincular')?.addEventListener('click', (ev) => irParaKick(ev.currentTarget));
+  $('#kk-conectar-canal')?.addEventListener('click', (ev) => irParaKick(ev.currentTarget, { canal: true }));
+  // Abrir e fechar os offline sem remontar — o mesmo cuidado do modal da Twitch.
+  $('#kk-offline-btn')?.addEventListener('click', (ev) => {
+    const aberto = !estado.kkOfflineAberto;
+    estado.kkOfflineAberto = aberto;
+    ev.currentTarget.classList.toggle('aberto', aberto);
+    ev.currentTarget.setAttribute('aria-expanded', String(aberto));
+    $('#kk-offline-lista')?.classList.toggle('aberto', aberto);
+  });
+}
+
+/**
+ * A contagem regressiva das horas no modal, no relógio do `tiqueAtivos`. Uma hora que acaba remonta
+ * a tela (o cartão volta a dizer "1 h por resgate").
+ */
+function tiqueModalKick() {
+  if (estado.modalAberto !== 'kick') return;
+  const host = $('#kk-corpo');
+  if (!host) return;
+  const agora = agoraDoServidor();
+  let venceu = false;
+  for (const el of host.querySelectorAll('.kk-tempo[data-ate]')) {
+    const resta = Number(el.dataset.ate) - agora;
+    if (resta <= 0) venceu = true;
+    else el.textContent = tempoCurto(resta);
+  }
+  if (venceu) montarKick();
+}
+
+/**
+ * Pede ao servidor o endereço da Kick e troca de página, na MESMA aba (o motivo da Twitch).
+ * `canal: true` é o "Conectar canal" do streamer oficial que já vinculou.
+ */
+async function irParaKick(botao, { canal = false } = {}) {
+  botao.disabled = true;
+  try {
+    const r = await pedirAuth('kick/iniciar', { token: sessaoSalva()?.token, canal });
+    location.href = r.url;
+  } catch (err) {
+    toast(err.message);
+    botao.disabled = false;
+  }
+}
+
+/**
+ * A volta do OAuth da Kick. Sai depois do `welcome`, pelo motivo da Twitch. Primeiro o que
+ * aconteceu com o CANAL (só para streamer oficial), depois o vínculo: `confirmar` abre a caixa que
+ * mostra QUAL conta da Kick vai ficar presa a este treinador.
+ */
+function avisarRetornoKick({ resultado, kv, canal }) {
+  if (canal) {
+    const chaveCanal = `kick.canal.${canal}`;
+    toast(temChave(chaveCanal) ? t(chaveCanal) : t('kick.canal.erro'));
+  }
+  if (resultado === 'confirmar' && kv) {
+    confirmarVinculoKick(kv);
+    return;
+  }
+  // O "Conectar canal" do modal: o aviso já saiu acima; a tela volta para o modal.
+  if (resultado === 'canal') {
+    abrirModal('kick');
+    return;
+  }
+  const chave = `kick.retorno.${resultado}`;
+  toast(temChave(chave) ? t(chave) : t('kick.retorno.erro'));
+  if (resultado === 'ok') abrirModal('kick');
+}
+
+/**
+ * O nome da conta da Kick que veio no vínculo pendente, para a caixa de confirmação. Só para
+ * MOSTRAR: o pendente é assinado, e quem confere é `/auth/kick/confirmar`.
+ */
+function loginDoPendente(kv) {
+  try {
+    const corpo = String(kv).split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(corpo + '='.repeat((4 - (corpo.length % 4)) % 4));
+    const json = new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    return String(JSON.parse(json)?.login ?? '');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A confirmação do vínculo — o passo que não tem volta. O seu boneco preso pela corrente à conta
+ * da Kick que voltou do OAuth, o aviso de que é para sempre e os selos.
+ */
+function confirmarVinculoKick(kv) {
+  const login = loginDoPendente(kv);
+  const nick = estado.eu?.nick ?? '';
+  confirmar({
+    titulo: t('kick.confirmarTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(nick) })}
+        <span class="dlg-elo" aria-hidden="true">${dlgIcone('corrente', 30)}</span>
+        ${dlgAtor({
+          arte: dlgArteHtml(dlgMedalha({ arte: `<span class="dlg-kick">${GLIFO_KICK}</span>`, tom: 'verde' })),
+          nome: escapar(login),
+          classe: 'novo',
+        })}`, 'verde')}
+      ${dlgFrase(t('kick.confirmarFrase', { login: `<b>${escapar(login)}</b>`, nick: `<b>${escapar(nick)}</b>` }))}
+      ${dlgAviso(t('kick.confirmarAviso'), { icone: 'cadeado' })}
+      ${dlgSelos(dlgSelo('cadeado', t('kick.seloPermanente'), 'perigo'), dlgSelo('pessoa', t('kick.seloUmaConta'), 'info'))}`,
+    rotuloSim: t('kick.confirmarSim'),
+    aoConfirmar: () => confirmarKickNoServidor(kv),
+  });
+}
+
+async function confirmarKickNoServidor(kv) {
+  try {
+    const r = await pedirAuth('kick/confirmar', { token: sessaoSalva()?.token, kv });
+    toast(t('kick.retorno.ok', { login: r.login ?? '' }));
+    abrirModal('kick');
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+// ------------------------------------------------------------- o holofote
+//
+// O PEDESTAL COM HOLOFOTE da Calculadora, do Comparar e das duas fichas: o vão escuro, o feixe
+// caindo de cima, o pedestal aceso e o pokémon em pé nele. A luz tem a COR DA NOTA — a mesma
+// paleta das dez faixas (`--calc-cor`, ver `.calc-nota` no estilo) — e o quanto ela FAZ sobe com
+// a nota pela escada de raridade do DESIGN.md §1: nas faixas de baixo é só a cor; Bom e Forte
+// ganham o halo; Poderoso e Mítico, os raios girando; Lendário e Divino, raios mais depressa e
+// faíscas. Se o Fraco brilhasse, o Divino não teria para onde subir. Tudo para em
+// `prefers-reduced-motion` (no CSS).
+
+/** De 0 a 4: o degrau da escada em que cada faixa da nota acende o holofote. */
+const NIVEL_HOLOFOTE = {
+  'extremamente-fraco': 0,
+  fraco: 0,
+  mediano: 1,
+  razoavel: 1,
+  bom: 2,
+  forte: 2,
+  poderoso: 3,
+  mitico: 3,
+  legendario: 4,
+  divino: 4,
+};
+
+/** As classes do holofote para uma faixa da nota — ou para um `tom` fixo quando não há nota. */
+function classesHolofote(faixa, tom = null) {
+  if (faixa && NIVEL_HOLOFOTE[faixa] != null) return `hf hf-n${NIVEL_HOLOFOTE[faixa]} ${faixa}`;
+  return `hf hf-n1 hf-tom-${tom ?? 'vazio'}`;
+}
+
+/**
+ * O palco. `arte` é marcação `data-dlg-*` (o `hidratarDialogo` desenha) ou um nó posto depois
+ * em `.hf-arte`; `rodape` vai embaixo do pedestal (a placa da nota, o nome). As três camadas de
+ * luz são `span` vazios de propósito: o CSS liga cada uma conforme o degrau (`hf-n0`…`hf-n4`).
+ */
+function holofoteHtml({ id = '', faixa = null, tom = null, classe = '', arte = '', rodape = '' } = {}) {
+  return `
+    <div class="${classesHolofote(faixa, tom)}${classe ? ` ${classe}` : ''}"${id ? ` id="${id}"` : ''}${faixa ? ` data-faixa="${faixa}"` : ''}>
+      <div class="hf-cena">
+        <span class="hf-feixe" aria-hidden="true"></span>
+        <span class="hf-raios" aria-hidden="true"></span>
+        <span class="hf-faiscas" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="hf-pedestal" aria-hidden="true"></span>
+        <span class="hf-arte">${arte}</span>
+      </div>
+      ${rodape}
+    </div>`;
+}
+
+/**
+ * Troca a faixa de um holofote já na tela, sem refazer o palco — o sprite fica onde está (refazer
+ * o canvas a cada tecla recomeçaria a animação dele). Devolve `+1`/`-1`/`0`: se a nota subiu,
+ * desceu ou ficou na mesma faixa, para quem quiser comemorar a subida.
+ */
+function pintarFaixaHolofote(el, faixa, tom = null) {
+  if (!el) return 0;
+  const ordem = FAIXAS_NOTA.map((f) => f.id);
+  const antes = ordem.indexOf(el.dataset.faixa ?? '');
+  const depois = ordem.indexOf(faixa ?? '');
+  const extras = [...el.classList].filter((c) => !/^(hf|hf-n\d|hf-tom-.+|hf-sobe|hf-desce)$/.test(c) && !ordem.includes(c));
+  el.className = `${classesHolofote(faixa, tom)}${extras.length ? ` ${extras.join(' ')}` : ''}`;
+  el.dataset.faixa = faixa ?? '';
+  if (antes < 0 || depois < 0 || antes === depois) return 0;
+  const sentido = depois > antes ? 1 : -1;
+  // A subida de faixa ganha o estalo; a descida, só um afundar curto. A classe sai sozinha no fim
+  // da animação, e recolocá-la exige um reflow para o navegador recomeçar o desenho.
+  el.classList.remove('hf-sobe', 'hf-desce');
+  void el.offsetWidth;
+  el.classList.add(sentido > 0 ? 'hf-sobe' : 'hf-desce');
+  return sentido;
+}
+
+/** O sprite do pedestal: encaixado (o bicho enche a caixa, como no ator do diálogo) e animado. */
+function spritePedestal(looktype, px, comum = null) {
+  const reserva = comum ?? looktype;
+  return spriteAnimado(looktype, px, 3, () => iconeEspecie(reserva, px), null, { encaixar: true });
+}
+
+/**
+ * Põe o sprite no pedestal só quando ele MUDA. A chave (`looktype:px`) fica no próprio nó: a
+ * Calculadora repinta o palco a cada dígito, e um canvas novo por tecla reiniciaria a animação e
+ * piscaria o bicho.
+ */
+function porNoPedestal(alvo, looktype, px, comum = null) {
+  if (!alvo) return;
+  const chave = `${Number(looktype) || 0}:${px}`;
+  if (alvo.dataset.sprite === chave) return;
+  alvo.dataset.sprite = chave;
+  alvo.replaceChildren(looktype ? spritePedestal(looktype, px, comum) : silhuetaPedestal());
+}
+
+/** O "?" do pedestal vazio: ainda não há quem pôr em cima. */
+const silhuetaPedestal = () => {
+  const el = document.createElement('span');
+  el.className = 'hf-silhueta';
+  el.textContent = '?';
+  return el;
+};
+
+/**
+ * A ESCADA DAS DEZ FAIXAS, embaixo do número: os degraus até a faixa atual acesos, cada um na
+ * cor dele, e a marca no ponto exato da nota (6,482 cai a 64,8% da régua). É o que transforma
+ * "6,482" em "falta pouco para o Mítico".
+ */
+function escadaDaNota(nota) {
+  const n = Number(nota);
+  const idx = Number.isFinite(n) ? FAIXAS_NOTA.findIndex((f) => n <= f.ate) : -1;
+  const atual = idx < 0 ? (Number.isFinite(n) ? FAIXAS_NOTA.length - 1 : -1) : idx;
+  const pos = Number.isFinite(n) ? Math.max(0, Math.min(100, n * 10)) : null;
+  return `
+    <div class="calc-escada" aria-hidden="true">
+      ${FAIXAS_NOTA.map((f, i) => `<i class="nota-tinta ${f.id}${i <= atual ? ' on' : ''}${i === atual ? ' aqui' : ''}"></i>`).join('')}
+      ${pos != null ? `<b class="calc-escada-marca" style="left:${pos.toFixed(1)}%"></b>` : ''}
+    </div>`;
+}
+
+/**
+ * Repinta a escada no lugar quando ela já está na tela: os degraus trocam de classe e a marca
+ * DESLIZA até a nota nova (o `transition` do `left`). Refeita por `innerHTML`, a marca pularia.
+ */
+function pintarEscadaDaNota(host, nota) {
+  if (!host) return;
+  const escada = host.querySelector('.calc-escada');
+  const marca = escada?.querySelector('.calc-escada-marca');
+  const n = Number(nota);
+  if (!escada || !marca || !Number.isFinite(n)) {
+    host.innerHTML = escadaDaNota(nota);
+    return;
+  }
+  const idx = FAIXAS_NOTA.findIndex((f) => n <= f.ate);
+  const atual = idx < 0 ? FAIXAS_NOTA.length - 1 : idx;
+  [...escada.querySelectorAll('i')].forEach((el, i) => {
+    el.classList.toggle('on', i <= atual);
+    el.classList.toggle('aqui', i === atual);
+  });
+  marca.style.left = `${Math.max(0, Math.min(100, n * 10)).toFixed(1)}%`;
+}
+
+/** Quem pediu menos movimento não vê o número correndo — ele só troca. */
+const menosMovimento = () => matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+
+/**
+ * Anima o número da nota até `para`, com três casas e vírgula. Uma animação por elemento: o
+ * dígito seguinte cancela a anterior e parte do número que está NA TELA, então digitar rápido
+ * não empilha nada nem faz o número voltar.
+ */
+function animarNota(el, para, ms = 420) {
+  if (!el) return;
+  const de = Number(el.dataset.valor);
+  el.dataset.valor = String(para);
+  cancelAnimationFrame(el._raf ?? 0);
+  if (!Number.isFinite(de) || de === para || menosMovimento()) {
+    el.textContent = notaEmTexto(para);
+    return;
+  }
+  const t0 = performance.now();
+  const passo = (agora) => {
+    const p = Math.min(1, (agora - t0) / ms);
+    const e = 1 - (1 - p) ** 3;
+    el.textContent = notaEmTexto(de + (para - de) * e);
+    if (p < 1) el._raf = requestAnimationFrame(passo);
+  };
+  el._raf = requestAnimationFrame(passo);
+}
+
+/** A nota de um pokémon (ou `null`) e a faixa dela — a conta da Calculadora, para as fichas. */
+function notaEFaixa(pk) {
+  const nota = notaDoPokemon(pk);
+  if (nota == null || !Number.isFinite(Number(nota))) return null;
+  return { nota: Number(nota), faixa: faixaDaNota(nota) };
 }
 
 // ---------------------------------------------------- calculadora pokémon
@@ -22403,10 +24868,33 @@ function especieCalcAtual() {
   return calc.speciesId ? estado.especies.get(calc.speciesId) ?? null : null;
 }
 
+/**
+ * Os IVs da Calculadora. A ENTRADA é só a grade "IV por stat" — a soma deixou de ser digitada —,
+ * então o que vale é o que está nela (`calc.ivs`); antes da primeira mexida, a grade nasce com a
+ * soma padrão repartida pelos seis stats.
+ */
 function ivsDaCalculadora() {
-  if (calc.ivManual && calc.ivs) return calc.ivs;
-  return ivsDeSoma(calc.iv);
+  return calc.ivs ?? ivsDeSoma(calc.iv);
 }
+
+/**
+ * Uma grade "IV por stat" como está na TELA: os seis valores (cada um preso entre 1 e 32) e se
+ * todos ali são de fato inteiros dessa faixa — o que estiver fora vira o aviso de sempre, e a
+ * nota espera o número ficar certo em vez de ser calculada com um valor que a tela não mostra.
+ */
+function ivsDaGrade(grade) {
+  const ivs = {};
+  let valido = true;
+  for (const el of grade?.querySelectorAll('[data-iv-stat]') ?? []) {
+    const n = Number(el.value);
+    if (!Number.isInteger(n) || n < IV_POR_STAT.min || n > IV_POR_STAT.max) valido = false;
+    ivs[el.dataset.ivStat] = Math.min(IV_POR_STAT.max, Math.max(IV_POR_STAT.min, Math.round(n) || IV_POR_STAT.min));
+  }
+  return { ivs, valido };
+}
+
+/** A soma, só para ler: fica ao lado do título da grade e anda junto com ela. */
+const textoSomaIv = (ivs) => t('calc.ivSoma', { n: num(somaIv(ivs)) });
 
 function sincronizarIvSomaCalc() {
   const soma = CALC_IV_KEYS.reduce((s, k) => s + (Number(calc.ivs?.[k]) || 0), 0);
@@ -22434,10 +24922,10 @@ function especieLadoComp(lado) {
   return id ? estado.especies.get(id) ?? null : null;
 }
 
+/** Os IVs de um lado do Comparar — a mesma regra de `ivsDaCalculadora`: a grade é a entrada. */
 function ivsLadoComp(lado) {
   const cfg = cfgComp(lado);
-  if (cfg.ivManual && cfg.ivs) return cfg.ivs;
-  return ivsDeSoma(cfg.iv);
+  return cfg.ivs ?? ivsDeSoma(cfg.iv);
 }
 
 function sincronizarIvSomaComp(lado) {
@@ -22486,23 +24974,81 @@ function chipsTmComp(lado) {
   return botao(null, t('calc.tmNenhum')) + tipos.map((tp) => botao(tp, `TM ${tp}`)).join('');
 }
 
+/** Quanto da barrinha de um IV está cheia (1 a 32 → 3% a 100%). */
+const pctIvCalc = (v) =>
+  Math.round((Math.min(IV_POR_STAT.max, Math.max(0, Number(v) || 0)) / IV_POR_STAT.max) * 100);
+
+/**
+ * Uma célula da grade "IV por stat": o rótulo, o campo e uma barrinha que enche de 1 a 32 na cor
+ * da ficha (vermelho → verde, `classeIvStat`). A barra é o que deixa ler a grade de relance — seis
+ * números iguais na largura escondem que o ATK está em 4 e o resto em 30.
+ */
+function celulaIvCalc(k, valor) {
+  const v = Number(valor) || 1;
+  return `<label class="calc-iv-stat">
+    <span class="calc-iv-stat-nome">${rotuloStat(k)}</span>
+    <input class="calc-iv-inp" type="number" inputmode="numeric" min="1" max="32" step="1"
+           data-iv-stat="${k}" value="${v}">
+    <span class="calc-iv-barra ${classeIvStat(v)}" aria-hidden="true"><i style="width:${pctIvCalc(v)}%"></i></span>
+  </label>`;
+}
+
+/** As barrinhas andam junto com o dígito, sem refazer a grade (o foco ficaria no caminho). */
+function pintarBarrasIv(grade) {
+  for (const inp of grade?.querySelectorAll('[data-iv-stat]') ?? []) {
+    const barra = inp.parentElement?.querySelector('.calc-iv-barra');
+    if (!barra) continue;
+    const v = Number(inp.value);
+    barra.className = `calc-iv-barra ${classeIvStat(v)}`;
+    barra.firstElementChild.style.width = `${pctIvCalc(v)}%`;
+  }
+}
+
+/**
+ * A QUALIDADE: o campo de sempre (é nele que se cola "1,37" lido de um anúncio) e, ao lado, a
+ * régua de 0,80 a 1,80 para quem quer ARRASTAR e ver o holofote mudar de cor. Os dois andam
+ * juntos — quem digita move a régua, quem arrasta reescreve o campo.
+ */
+function campoQualidadeCalc(id, valor, desligado) {
+  const v = Number(valor) || 1;
+  return `<div class="calc-campo calc-campo-q">
+    <span class="calc-campo-topo">
+      <span>${t('calc.qualidade')}</span>
+      <em>${virgula(QUALIDADE_MIN.toFixed(2))}–${virgula(QUALIDADE_MAX.toFixed(2))}</em>
+    </span>
+    <div class="calc-q-linha">
+      <input id="${id}" class="calc-q-num" type="text" inputmode="decimal" value="${virgula(v)}"${desligado ? ' disabled' : ''}>
+      <input id="${id}-range" class="calc-q-range" type="range" min="${QUALIDADE_MIN}" max="${QUALIDADE_MAX}" step="0.01"
+             value="${v}" aria-label="${escapar(t('calc.qualidade'))}"${desligado ? ' disabled' : ''}>
+    </div>
+  </div>`;
+}
+
+/** Liga o par campo ↔ régua da qualidade. `aoMudar` é quem repinta a tela. */
+function ligarQualidadeCalc(id, aoMudar) {
+  const campo = $(`#${id}`);
+  const regua = $(`#${id}-range`);
+  if (!campo || !regua) return;
+  regua.oninput = () => {
+    campo.value = virgula(Number(regua.value).toFixed(2));
+    aoMudar();
+  };
+  campo.addEventListener('input', () => {
+    const n = Number(String(campo.value).replace(',', '.'));
+    if (Number.isFinite(n) && n >= QUALIDADE_MIN && n <= QUALIDADE_MAX) regua.value = String(n);
+    aoMudar();
+  });
+}
+
 function htmlIvGridComp(lado) {
-  const cfg = cfgComp(lado);
   const ivs = ivsLadoComp(lado);
   return `<div class="calc-campo">
     <span class="calc-campo-topo">
       <span>${t('calc.ivPorStat')}</span>
-      <em id="calc-comp-${lado}-ivmodo">${cfg.ivManual ? t('calc.ivManual') : t('calc.ivAuto')}</em>
+      <em id="calc-comp-${lado}-ivsoma">${textoSomaIv(ivs)}</em>
     </span>
     <div class="calc-iv-grid calc-iv-grid-comp" id="calc-comp-${lado}-iv-grid">
-      ${CALC_IV_KEYS.map((k) => {
-        const rot = rotuloStat(k);
-        return `<label class="calc-iv-stat">
-          <span class="calc-iv-stat-nome">${rot}</span>
-          <input class="calc-iv-inp" type="number" inputmode="numeric" min="1" max="32" step="1"
-                 data-iv-stat="${k}" value="${Number(ivs[k]) || 1}">
-        </label>`;
-      }).join('')}
+      ${CALC_IV_KEYS.map((k) => celulaIvCalc(k, ivs[k])).join('')}
     </div>
   </div>`;
 }
@@ -22511,8 +25057,8 @@ function renderLadoComp(lado, rotulo) {
   const cfg = cfgComp(lado);
   const esp = especieLadoComp(lado);
   return `
-    <div class="calc-comp-lado" data-comp-lado="${lado}">
-      <p class="calc-comp-lado-titulo">${rotulo}</p>
+    <div class="calc-comp-lado lado-${lado}" data-comp-lado="${lado}">
+      <p class="calc-comp-lado-titulo"><span class="calc-comp-letra">${lado.toUpperCase()}</span>${rotulo}</p>
       <div class="calc-campos calc-comp-campos">
         <div class="calc-campo">
           <span class="calc-campo-topo"><span>${t('calc.especie')}</span></span>
@@ -22530,20 +25076,8 @@ function renderLadoComp(lado, rotulo) {
           </span>
           <input id="calc-comp-${lado}-nivel" type="number" inputmode="numeric" min="1" max="999999" step="1" value="${cfg.level}"${esp ? '' : ' disabled'}>
         </label>
-        <label class="calc-campo">
-          <span class="calc-campo-topo">
-            <span>${t('calc.iv')}</span><em>${IV_MIN}–${IV_MAX}</em>
-          </span>
-          <input id="calc-comp-${lado}-iv" type="number" inputmode="numeric" min="${IV_MIN}" max="${IV_MAX}" step="1" value="${cfg.iv}"${esp ? '' : ' disabled'}>
-        </label>
         ${esp ? htmlIvGridComp(lado) : ''}
-        <label class="calc-campo">
-          <span class="calc-campo-topo">
-            <span>${t('calc.qualidade')}</span>
-            <em>${virgula(QUALIDADE_MIN.toFixed(2))}–${virgula(QUALIDADE_MAX.toFixed(2))}</em>
-          </span>
-          <input id="calc-comp-${lado}-q" type="text" inputmode="decimal" value="${virgula(cfg.qualidade)}"${esp ? '' : ' disabled'}>
-        </label>
+        ${campoQualidadeCalc(`calc-comp-${lado}-q`, cfg.qualidade, !esp)}
         <div class="calc-campo">
           <span class="calc-campo-topo"><span>${t('calc.potencia')}</span><em>I–V</em></span>
           <div class="calc-pots" id="calc-comp-${lado}-pots">${chipsPotComp(lado)}</div>
@@ -22564,15 +25098,33 @@ function renderLadoComp(lado, rotulo) {
     </div>`;
 }
 
+/**
+ * A aba Comparar: a ARENA em cima (os dois no pedestal, cada holofote na cor da nota DELE, e o VS
+ * no meio), o resultado logo abaixo — o cabo de guerra das chances — e os campos dos dois lados
+ * embaixo. A ordem é a da pergunta: "quem ganha?" primeiro, "com que números?" depois.
+ */
 function renderCalculadoraComparar() {
+  const palco = (lado) => holofoteHtml({
+    id: `calc-comp-${lado}-palco`,
+    tom: 'vazio',
+    classe: `calc-comp-palco lado-${lado}`,
+    // A coroa mora no palco desde o começo e só aparece no `.vence` — pendurá-la na hora do
+    // resultado faria o palco do vencedor mudar de altura a cada dígito.
+    rodape: `<span class="calc-comp-coroa" aria-hidden="true">${dlgIcone('coroa', 22)}</span>
+      <div class="calc-comp-placa" id="calc-comp-${lado}-placa"></div>`,
+  });
   return `
-    <p class="calc-ajuda">${t('calc.compIntro')}</p>
-    <div class="calc-comp-grid">
-      ${renderLadoComp('a', t('calc.compLadoA'))}
-      <div class="calc-comp-vs" aria-hidden="true">${t('calc.compVs')}</div>
-      ${renderLadoComp('b', t('calc.compLadoB'))}
+    <p class="calc-ajuda calc-intro">${t('calc.compIntro')}</p>
+    <div class="calc-comp-arena">
+      ${palco('a')}
+      <div class="calc-comp-vs" aria-hidden="true"><span>${t('calc.compVs')}</span></div>
+      ${palco('b')}
     </div>
     <div class="calc-comp-resultado" id="calc-comp-resultado"></div>
+    <div class="calc-comp-grid">
+      ${renderLadoComp('a', t('calc.compLadoA'))}
+      ${renderLadoComp('b', t('calc.compLadoB'))}
+    </div>
     <div class="calc-rodape">
       <button type="button" class="calc-limpar" id="calc-comp-limpar">${t('calc.compLimpar')}</button>
       <span class="calc-erro" id="calc-comp-erro"></span>
@@ -22596,128 +25148,272 @@ function renderCalculadora() {
 
 function renderCalculadoraNota() {
   const chips = ROTULO_POTENCIA_CALC
-    .map((r, i) => `<button type="button" class="calc-pot${calc.potencia === i + 1 ? ' on' : ''}" data-pot="${i + 1}">${r}</button>`)
+    .map((r, i) => `<button type="button" class="calc-pot p${i + 1}${calc.potencia === i + 1 ? ' on' : ''}" data-pot="${i + 1}">${r}</button>`)
     .join('');
   const o = calc.origem;
   const origem = o
-    ? `<p class="calc-origem">${t('calc.daFicha', {
+    ? `<p class="calc-origem">${dlgIcone('copia', 14)}<span>${t('calc.daFicha', {
         nome: `${o.shiny ? prefixoShiny() : ''}${escapar(o.nome)}${o.nivel ? ` ${t('painel.nivelCurto')}${num(o.nivel)}` : ''}`,
-      })}${o.dono ? ` · ${escapar(o.dono)}` : ''}</p>`
+      })}${o.dono ? ` · ${escapar(o.dono)}` : ''}</span></p>`
     : '';
   const esp = especieCalcAtual();
   const ivs = ivsDaCalculadora();
+  // `calc-campo-largo`: ocupa a linha inteira da bancada (ver `.calc-campos` no estilo). A grade
+  // de IV é a única entrada de IV — a soma só aparece para ler, ao lado do título.
   const ivGrid = esp
-    // `calc-campo-largo`: na aba Nota, a grade de IV é uma grade DENTRO da grade de campos e
-    // ocupa a linha inteira das duas colunas (ver `.calc-campos` no estilo). Sem a marca ela
-    // cairia numa coluna só e os seis stats voltariam a ficar espremidos.
     ? `<div class="calc-campo calc-campo-largo">
         <span class="calc-campo-topo">
           <span>${t('calc.ivPorStat')}</span>
-          <em>${calc.ivManual ? t('calc.ivManual') : t('calc.ivAuto')}</em>
+          <em id="calc-iv-soma">${textoSomaIv(ivs)}</em>
         </span>
         <div class="calc-iv-grid" id="calc-iv-grid">
-          ${CALC_IV_KEYS.map((k) => {
-            const rot = rotuloStat(k);
-            return `<label class="calc-iv-stat">
-              <span class="calc-iv-stat-nome">${rot}</span>
-              <input class="calc-iv-inp" type="number" inputmode="numeric" min="1" max="32" step="1"
-                     data-iv-stat="${k}" value="${Number(ivs[k]) || 1}">
-            </label>`;
-          }).join('')}
+          ${CALC_IV_KEYS.map((k) => celulaIvCalc(k, ivs[k])).join('')}
         </div>
       </div>`
     : '';
   const statsCaixa = esp
-    ? `<div class="calc-stats-caixa" id="calc-stats">
-        <p class="calc-stats-titulo">${t('calc.statsTitulo')}</p>
-        <p class="calc-stats-ivmodo" id="calc-stats-ivmodo"></p>
+    ? `<section class="calc-cartao calc-stats-caixa" id="calc-stats">
+        <h4 class="calc-cartao-tit">${dlgIcone('estrela', 14)}${t('calc.statsTitulo')}</h4>
         <p class="calc-stats-lider" id="calc-stats-lider"></p>
         <div class="calc-stats-lista" id="calc-stats-lista"></div>
         <p class="calc-stats-rodape">${t('calc.statsRodape')}</p>
-      </div>`
+      </section>`
     : '';
+  // O PALCO: o holofote com o bicho no pedestal e, embaixo dele, a placa da nota, a escada das
+  // dez faixas, quanto falta para a próxima e se ele passa no Mercado. Nasce apagado ("?"); quem
+  // acende é `pintarCalculadora`, que só troca o sprite quando a espécie ou o shiny mudam.
+  const palco = holofoteHtml({
+    id: 'calc-palco',
+    tom: 'vazio',
+    classe: 'calc-palco',
+    rodape: `
+      <div class="calc-placa">
+        <div class="calc-nota calc-nota-vazia extremamente-fraco" id="calc-nota">
+          <span class="calc-nota-valor"><b id="calc-valor">${esp ? '—' : t('calc.semEspecie')}</b><span class="calc-nota-de">${t('calc.de10')}</span></span>
+          <span class="calc-nota-rotulo" id="calc-rotulo"></span>
+        </div>
+        <div class="calc-escada-host" id="calc-escada">${escadaDaNota(null)}</div>
+        <p class="calc-prox" id="calc-prox"></p>
+        <p class="calc-mercado" id="calc-mercado"></p>
+      </div>`,
+  });
   return `
-      <p class="calc-ajuda">${t('calc.intro')}</p>
+      <p class="calc-ajuda calc-intro">${t('calc.intro')}</p>
       ${origem}
-      <div class="calc-campos">
-        <div class="calc-campo">
-          <span class="calc-campo-topo"><span>${t('calc.especie')}</span></span>
-          <div class="calc-especie-caixa" id="calc-especie-caixa">
-            ${htmlEspecieAtualCalc()}
-            <input id="calc-especie-busca" class="calc-especie-busca" type="search"
-              placeholder="${t('calc.especieBuscar')}" autocomplete="off"
-              value="${escapar(calc.especieBusca)}"${esp ? ' hidden' : ''}>
-            <div class="calc-especie-lista hidden" id="calc-especie-lista"></div>
+      <div class="calc-estudio">
+        <div class="calc-bancada">
+          <div class="calc-campos">
+            <div class="calc-campo calc-campo-largo">
+              <span class="calc-campo-topo"><span>${t('calc.especie')}</span></span>
+              <div class="calc-especie-caixa" id="calc-especie-caixa">
+                ${htmlEspecieAtualCalc()}
+                <input id="calc-especie-busca" class="calc-especie-busca" type="search"
+                  placeholder="${t('calc.especieBuscar')}" autocomplete="off"
+                  value="${escapar(calc.especieBusca)}"${esp ? ' hidden' : ''}>
+                <div class="calc-especie-lista hidden" id="calc-especie-lista"></div>
+              </div>
+            </div>
+            ${ivGrid}
+            ${campoQualidadeCalc('calc-q', calc.qualidade, !esp)}
+            <div class="calc-campo">
+              <span class="calc-campo-topo"><span>${t('calc.potencia')}</span><em>I–V</em></span>
+              <div class="calc-pots" id="calc-pots">${chips}</div>
+            </div>
+            <div class="calc-campo calc-campo-largo">
+              <span class="calc-campo-topo">
+                <span>${t('calc.shiny')}</span><em>${t('calc.shinyHint')}</em>
+              </span>
+              <button type="button" id="calc-shiny" class="calc-shiny${calc.shiny ? ' on' : ''}" aria-pressed="${calc.shiny}"${esp ? '' : ' disabled'}>✨ ${t('calc.shiny')}</button>
+            </div>
+          </div>
+          <div class="calc-rodape">
+            <button type="button" class="calc-limpar" id="calc-limpar">${t('calc.limpar')}</button>
+            <span class="calc-erro" id="calc-erro"></span>
           </div>
         </div>
-        <label class="calc-campo">
-          <span class="calc-campo-topo">
-            <span>${t('calc.iv')}</span><em>${IV_MIN}–${IV_MAX}</em>
-          </span>
-          <input id="calc-iv" type="number" inputmode="numeric" min="${IV_MIN}" max="${IV_MAX}" step="1" value="${calc.iv}"${esp ? '' : ' disabled'}>
-        </label>
-        ${ivGrid}
-        <label class="calc-campo">
-          <span class="calc-campo-topo">
-            <span>${t('calc.qualidade')}</span>
-            <em>${virgula(QUALIDADE_MIN.toFixed(2))}–${virgula(QUALIDADE_MAX.toFixed(2))}</em>
-          </span>
-          <input id="calc-q" type="text" inputmode="decimal" value="${virgula(calc.qualidade)}"${esp ? '' : ' disabled'}>
-        </label>
-        <div class="calc-campo">
-          <span class="calc-campo-topo"><span>${t('calc.potencia')}</span><em>I–V</em></span>
-          <div class="calc-pots" id="calc-pots">${chips}</div>
-        </div>
-        <div class="calc-campo">
-          <span class="calc-campo-topo">
-            <span>${t('calc.shiny')}</span><em>${t('calc.shinyHint')}</em>
-          </span>
-          <button type="button" id="calc-shiny" class="calc-shiny${calc.shiny ? ' on' : ''}" aria-pressed="${calc.shiny}"${esp ? '' : ' disabled'}>✨ ${t('calc.shiny')}</button>
-        </div>
+        <div class="calc-palco-col">${palco}</div>
       </div>
 
-      <div class="calc-nota calc-nota-vazia extremamente-fraco" id="calc-nota">
-        <span class="calc-nota-valor"><b id="calc-valor">${t('calc.semEspecie')}</b><span class="calc-nota-de">${t('calc.de10')}</span></span>
-        <span class="calc-nota-rotulo" id="calc-rotulo"></span>
-      </div>
-      <div class="calc-potencial hidden" id="calc-potencial"></div>
-
-      <div class="calc-eixos" id="calc-eixos"></div>
-      ${statsCaixa}
-      <div class="calc-combate" id="calc-combate"></div>
-
-      <div class="calc-rodape">
-        <button type="button" class="calc-limpar" id="calc-limpar">${t('calc.limpar')}</button>
-        <span class="calc-erro" id="calc-erro"></span>
+      <div class="calc-res" id="calc-res">
+        <div class="calc-potenciais">
+          <section class="calc-cartao calc-potencial hidden" id="calc-potencial"></section>
+          <section class="calc-cartao calc-potencial calc-potencial-mega hidden" id="calc-potencial-mega"></section>
+        </div>
+        ${esp ? `<div class="calc-dupla">
+          <section class="calc-cartao calc-cartao-eixos">
+            <h4 class="calc-cartao-tit">${dlgIcone('soma', 14)}${t('calc.eixosTitulo')}</h4>
+            <div class="calc-eixos" id="calc-eixos"></div>
+          </section>
+          ${statsCaixa}
+        </div>
+        <section class="calc-cartao calc-combate" id="calc-combate"></section>` : `<div id="calc-eixos" hidden></div>
+        <div id="calc-combate" hidden></div>`}
       </div>
       <p class="calc-ajuda">${esp ? t('calc.rodapeEspecie', { nome: esp.name }) : t('calc.rodape')}</p>`;
 }
 
-/** Lê os campos, pinta o placar e as barras. */
+/** "faltam 0,883 para Mediano" — a próxima faixa, na cor dela. No Divino, o topo da escada. */
+function pintarProximaFaixa(el, nota) {
+  if (!el) return;
+  const i = FAIXAS_NOTA.findIndex((f) => nota <= f.ate);
+  const prox = i >= 0 ? FAIXAS_NOTA[i + 1] : null;
+  if (!prox) {
+    el.innerHTML = `${dlgIcone('coroa', 12)}<span>${t('calc.topoEscada')}</span>`;
+    return;
+  }
+  // A faixa é "até" inclusive: para entrar na próxima, a nota tem de passar do teto desta — na
+  // resolução de três casas em que ela é mostrada, um milésimo acima.
+  const falta = Math.max(0.001, FAIXAS_NOTA[i].ate - nota + 0.001);
+  el.innerHTML = `${dlgIcone('subir', 12)}<span>${t('calc.faltaFaixa', {
+    n: notaEmTexto(falta),
+    faixa: `<b class="nota-tinta ${prox.id}">${escapar(t(`calc.faixa.${prox.id}`))}</b>`,
+  })}</span>`;
+}
+
+/** O selo do Mercado embaixo da nota: passa (✓) ou fica de fora (✗) — shiny e P5 passam sempre. */
+function pintarMercadoCalc(el, nota, usado) {
+  if (!el) return;
+  const ok = usado.shiny || usado.potencia >= POTENCIA_MAX || atendeNotaMercado(nota);
+  el.className = `calc-mercado${ok ? ' ok' : ''}`;
+  el.innerHTML = `${dlgIcone(ok ? 'check' : 'xis', 12)}<span>${escapar(t(
+    ok ? 'calc.potencialMercadoOk' : 'calc.potencialMercadoNao',
+    { min: virgula(String(MERCADO_POKEMON_MIN.nota)) },
+  ))}</span>`;
+}
+
+/**
+ * As caixas de POTENCIAL (evolução final e mega): um cartão por destino, com o sprite, a nota que
+ * este MESMO nascimento teria lá e se ela passa no Mercado. A conta é a de sempre — o mesmo
+ * nascimento medido na régua de outra espécie, com o piso DELA (`notaAncestrais`).
+ *
+ * O cartão é botão: leva a Calculadora para aquele destino com os mesmos números, que é a pergunta
+ * seguinte de quem leu "Venusaur 4,2". E os cartões só são REFEITOS quando a espécie ou o shiny
+ * mudam — cada um tem um sprite animado, e refazê-los a cada dígito recriaria os canvas. No resto
+ * das vezes só a nota, a faixa e o selo de cada um trocam.
+ *
+ * A MEGA não sai de `evolucoesFinais`: o elo "espécie → mega" mora fora do `evolvesToId` de
+ * propósito (ver `shared/megas.mjs`). Ela é procurada na espécie escolhida E em cada forma final —
+ * um Larvitar lê a Mega Tyranitar, uma Kirlia lê as do Gardevoir e do Gallade.
+ */
+function pintarPotenciais(esp, usado, ivs, refino) {
+  const finais = evolucoesFinais(esp, (id) => estado.especies.get(id));
+  const megas = [];
+  for (const base of [esp, ...finais]) {
+    const info = megaDaFicha(base);
+    const mega = info ? estado.especies.get(info.pokeId) : null;
+    if (mega && !megas.some((m) => m.pokeId === mega.pokeId)) megas.push(mega);
+  }
+  const projetar = (alvo) => {
+    const basesAlvo = basesDaEspecie(alvo);
+    const basesRef = refino ? basesComRefino(alvo, refino) : basesAlvo;
+    return notaPokemon({
+      ...usado,
+      ivs,
+      bases: basesRef,
+      basesLimites: basesAlvo,
+      basesAncestrais: alvo?.notaAncestrais ?? null,
+    });
+  };
+  const caixas = [
+    ['#calc-potencial', 'calc.potencialTitulo', 'subir', finais],
+    ['#calc-potencial-mega', 'calc.potencialMegaTitulo', 'raio', megas],
+  ];
+  for (const [sel, titulo, icone, alvos] of caixas) {
+    const el = $(sel);
+    if (!el) continue;
+    if (!alvos.length) {
+      el.innerHTML = '';
+      el.classList.add('hidden');
+      delete el.dataset.chave;
+      continue;
+    }
+    const ordenados = [...alvos].sort((a, b) => a.name.localeCompare(b.name));
+    const chave = `${esp.pokeId}:${calc.shiny ? 1 : 0}`;
+    if (el.dataset.chave !== chave) {
+      el.dataset.chave = chave;
+      el.innerHTML = `
+        <h4 class="calc-cartao-tit">${dlgIcone(icone, 14)}${t(titulo)}</h4>
+        <div class="calc-pot-cards">${ordenados.map((alvo) => `
+          <button type="button" class="calc-pot-card" data-calc-ir="${alvo.pokeId}"
+                  title="${escapar(t('calc.potencialVer', { nome: alvo.name }))}">
+            <span class="calc-pot-card-arte">${dlgArteLt(calc.shiny ? (lookShinyFicha(alvo) ?? alvo.looktype) : alvo.looktype, 46, alvo.looktype)}</span>
+            <span class="calc-pot-card-txt">
+              <b class="calc-pot-card-nome">${escapar(alvo.name)}</b>
+              <span class="calc-pot-card-nota"></span>
+              <em class="calc-potencial-mercado"></em>
+            </span>
+          </button>`).join('')}</div>`;
+      hidratarDialogo(el);
+      for (const b of el.querySelectorAll('[data-calc-ir]')) b.onclick = () => irParaEspecieCalc(Number(b.dataset.calcIr));
+    }
+    el.classList.remove('hidden');
+    for (const alvo of ordenados) {
+      const card = el.querySelector(`[data-calc-ir="${alvo.pokeId}"]`);
+      if (!card) continue;
+      const proj = projetar(alvo);
+      const mercadoOk = usado.shiny || usado.potencia >= POTENCIA_MAX || atendeNotaMercado(proj.nota);
+      card.className = `calc-pot-card nota-tinta ${proj.faixa}`;
+      card.querySelector('.calc-pot-card-nota').innerHTML =
+        `N= <b>${notaEmTexto(proj.nota)}</b> <em>${escapar(t(`calc.faixa.${proj.faixa}`))}</em>`;
+      const m = card.querySelector('.calc-potencial-mercado');
+      m.className = `calc-potencial-mercado${mercadoOk ? ' ok' : ''}`;
+      m.textContent = t(mercadoOk ? 'calc.potencialMercadoOk' : 'calc.potencialMercadoNao', {
+        min: virgula(String(MERCADO_POKEMON_MIN.nota)),
+      });
+    }
+  }
+}
+
+/** O cartão de potencial leva a Calculadora para o destino, com o MESMO nascimento da grade. */
+function irParaEspecieCalc(pokeId) {
+  if (!estado.especies.get(pokeId)) return;
+  calc.ivs = ivsDaCalculadora();
+  calc.ivManual = true;
+  // Os números deixam de ser "os da ficha": agora são uma projeção noutra espécie.
+  calc.origem = null;
+  calc.speciesId = pokeId;
+  calc.especieBusca = '';
+  montarCalculadora(hostCalculadora());
+}
+
+/** Lê os campos e pinta o palco, a placa da nota e os cartões. */
 function pintarCalculadora() {
   const erro = $('#calc-erro');
   if (!erro) return;
 
   const esp = especieCalcAtual();
   const icoAtual = $('#calc-especie-ico-atual');
-  if (icoAtual && esp?.looktype) {
-    icoAtual.innerHTML = '';
+  if (icoAtual && esp?.looktype && !icoAtual.firstChild) {
     icoAtual.appendChild(spriteAnimado(esp.looktype, 30));
   }
+  const palco = $('#calc-palco');
+  const arte = palco?.querySelector('.hf-arte');
 
   if (!esp) {
     erro.textContent = t('calc.avisoEspecie');
+    pintarFaixaHolofote(palco, null, 'vazio');
+    porNoPedestal(arte, 0, 96);
     const caixa = $('#calc-nota');
     if (caixa) {
       caixa.className = 'calc-nota calc-nota-vazia extremamente-fraco';
-      $('#calc-valor').textContent = t('calc.semEspecie');
+      const valor = $('#calc-valor');
+      valor.textContent = t('calc.semEspecie');
+      delete valor.dataset.valor;
       $('#calc-rotulo').textContent = '';
     }
+    const escada = $('#calc-escada');
+    if (escada) escada.innerHTML = escadaDaNota(null);
+    for (const id of ['#calc-prox', '#calc-mercado']) {
+      const el = $(id);
+      if (el) el.innerHTML = '';
+    }
     $('#calc-eixos').innerHTML = '';
-    const potencial = $('#calc-potencial');
-    if (potencial) {
+    for (const id of ['#calc-potencial', '#calc-potencial-mega']) {
+      const potencial = $(id);
+      if (!potencial) continue;
       potencial.innerHTML = '';
       potencial.classList.add('hidden');
+      delete potencial.dataset.chave;
     }
     const combate = $('#calc-combate');
     if (combate) combate.innerHTML = '';
@@ -22725,13 +25421,19 @@ function pintarCalculadora() {
     return;
   }
 
-  const ivBruto = Number($('#calc-iv')?.value);
+  // O bicho no pedestal: a forma shiny quando o interruptor está ligado (e ela existe).
+  porNoPedestal(arte, calc.shiny ? (lookShinyFicha(esp) ?? esp.looktype) : esp.looktype, 96, esp.looktype);
+  palco?.classList.toggle('hf-shiny', !!calc.shiny);
+
+  // A soma que a nota usa é a da GRADE — é a única entrada de IV (ver `ivsDaGrade`).
+  const gradeEl = $('#calc-iv-grid');
+  const grade = ivsDaGrade(gradeEl);
+  pintarBarrasIv(gradeEl);
+  const ivBruto = somaIv(grade.ivs);
   const qBruto = Number(String($('#calc-q')?.value ?? '').replace(',', '.'));
 
   const avisos = [];
-  if (!Number.isFinite(ivBruto) || ivBruto < IV_MIN || ivBruto > IV_MAX) {
-    avisos.push(t('calc.avisoIv', { min: IV_MIN, max: IV_MAX }));
-  }
+  if (!grade.valido) avisos.push(t('calc.avisoIv', { min: IV_POR_STAT.min, max: IV_POR_STAT.max }));
   if (!Number.isFinite(qBruto) || qBruto < QUALIDADE_MIN || qBruto > QUALIDADE_MAX) {
     avisos.push(t('calc.avisoQualidade', {
       min: virgula(QUALIDADE_MIN.toFixed(2)),
@@ -22752,11 +25454,6 @@ function pintarCalculadora() {
   }
 
   const ivs = ivsDaCalculadora();
-  if (!calc.ivManual) {
-    for (const inp of $('#calc-iv-grid')?.querySelectorAll('[data-iv-stat]') ?? []) {
-      inp.value = String(ivs[inp.dataset.ivStat] ?? 1);
-    }
-  }
 
   const pkOrigem = calc.origem && fichaPokemonAberto?.speciesId === calc.speciesId
     ? fichaPokemonAberto
@@ -22777,44 +25474,16 @@ function pintarCalculadora() {
   });
   const caixa = $('#calc-nota');
   caixa.className = `calc-nota ${r.faixa}`;
-  $('#calc-valor').textContent = notaEmTexto(r.nota);
+  animarNota($('#calc-valor'), r.nota);
   $('#calc-rotulo').textContent = t(`calc.faixa.${r.faixa}`);
-
-  const potencialEl = $('#calc-potencial');
-  if (potencialEl) {
-    const refino = pkOrigem?.refino ?? null;
-    const finais = evolucoesFinais(esp, (id) => estado.especies.get(id));
-    if (!finais.length) {
-      potencialEl.innerHTML = '';
-      potencialEl.classList.add('hidden');
-    } else {
-      const linhas = finais.sort((a, b) => a.name.localeCompare(b.name)).map((alvo) => {
-        const basesAlvo = basesDaEspecie(alvo);
-        const basesRef = refino ? basesComRefino(alvo, refino) : basesAlvo;
-        const proj = notaPokemon({
-          ...usado,
-          ivs,
-          bases: basesRef,
-          basesLimites: basesAlvo,
-          // A projeção mede o MESMO nascimento na forma final, então ela precisa do piso DELA —
-          // sem isto a linha "potencial na evolução final" continuaria mostrando a queda que a
-          // ficha do bicho evoluído já não tem.
-          basesAncestrais: alvo?.notaAncestrais ?? null,
-        });
-        const mercadoOk = usado.shiny || usado.potencia >= POTENCIA_MAX || atendeNotaMercado(proj.nota);
-        const mercado = mercadoOk
-          ? t('calc.potencialMercadoOk', { min: MERCADO_POKEMON_MIN.nota })
-          : t('calc.potencialMercadoNao', { min: MERCADO_POKEMON_MIN.nota });
-        const notaHtml = `<span class="calc-nota calc-potencial-nota ${proj.faixa}"><span class="calc-nota-valor"><b>N= ${notaEmTexto(proj.nota)}</b></span></span>`;
-        return `<li class="calc-potencial-linha">
-          ${t('calc.potencialLinha', { nome: escapar(alvo.name), nota: notaHtml })}
-          <em class="calc-potencial-mercado${mercadoOk ? ' ok' : ''}">${escapar(mercado)}</em>
-        </li>`;
-      }).join('');
-      potencialEl.innerHTML = `<p class="calc-potencial-titulo">${t('calc.potencialTitulo')}</p><ul class="calc-potencial-lista">${linhas}</ul>`;
-      potencialEl.classList.remove('hidden');
-    }
-  }
+  // O palco e os cartões de baixo ficam na cor da faixa: a tela inteira responde ao número.
+  pintarFaixaHolofote(palco, r.faixa);
+  const res = $('#calc-res');
+  if (res) res.className = `calc-res nota-tinta ${r.faixa}`;
+  pintarEscadaDaNota($('#calc-escada'), r.nota);
+  pintarProximaFaixa($('#calc-prox'), r.nota);
+  pintarMercadoCalc($('#calc-mercado'), r.nota, usado);
+  pintarPotenciais(esp, usado, ivs, pkOrigem?.refino ?? null);
 
   const barra = (rotulo, v) => `
     <div class="calc-eixo">
@@ -22839,10 +25508,6 @@ function pintarCalculadora() {
   const liderEl = $('#calc-stats-lider');
   if (liderEl && lider) {
     liderEl.innerHTML = t('calc.statsLider', { stat: rotuloStat(lider.key), pct: Math.round(lider.pct * 100) });
-  }
-  const ivModo = $('#calc-stats-ivmodo');
-  if (ivModo) {
-    ivModo.textContent = calc.ivManual ? t('calc.ivManual') : t('calc.ivAuto');
   }
   const statsLista = $('#calc-stats-lista');
   if (statsLista) {
@@ -22879,19 +25544,32 @@ function pintarCalculadora() {
       level: nivelEst,
       refino: pkOrigem?.refino,
     }, esp);
-    let html = `<p class="calc-combate-linha"><b>${t('calc.multCombate')}</b> ×${virgula(multTotal.toFixed(2))} <span class="calc-combate-det">(${t('calc.potencia')} ×${virgula(multPot.toFixed(2))}${calc.shiny ? ` · ${t('calc.shiny')} ×${estado.multShinyStats}` : ''})</span></p>`;
-    html += `<p class="calc-combate-linha"><b>${t('calc.poderEstimado')}</b> ⚔ ${num(poderEst)} · ${t('painel.nivelCurto')}${num(nivelEst)}</p>`;
-    // Sem o "150 <s>300</s>": o ginásio deixou de ter teto, e o nível medido é sempre o real.
-    // As duas linhas ficam com o MESMO nível de propósito — o que as separa agora é só a
-    // métrica (⚔ do ranking × ⚔ de batalha), que é o que elas sempre quiseram comparar.
-    html += `<p class="calc-combate-linha"><b>${t('calc.poderGinasio')}</b> ⚔ ${num(poderGin)} · ${t('painel.nivelCurto')}${num(nivelEst)}</p>`;
+    // O HP de combate só existe quando os números vieram de um bicho de verdade (a ficha traz o
+    // `maxHp` dele); o shiny ligado/desligado aqui escala a partir do que ele é.
+    let hpEst = null;
     if (o?.maxHp != null) {
       const baseSh = o.shiny ? estado.multShinyStats : 1;
-      const hpEst = Math.round(Number(o.maxHp) * (multShCombate / baseSh));
-      html += `<p class="calc-combate-linha"><b>${t('calc.hpCombate')}</b> ${num(hpEst)}</p>`;
+      hpEst = Math.round(Number(o.maxHp) * (multShCombate / baseSh));
     }
-    html += `<p class="calc-ajuda">${t('calc.combateNota')}</p>`;
-    combate.innerHTML = html;
+    // Sem o "150 <s>300</s>": o ginásio deixou de ter teto, e o nível medido é sempre o real.
+    // As duas placas de poder ficam com o MESMO nível de propósito — o que as separa é só a
+    // métrica (⚔ do ranking × ⚔ de batalha), que é o que elas sempre quiseram comparar.
+    const placa = (rot, valor, sub = '') => `
+      <div class="calc-tile">
+        <small>${rot}</small>
+        <b>${valor}</b>
+        ${sub ? `<em>${sub}</em>` : ''}
+      </div>`;
+    combate.innerHTML = `
+      <h4 class="calc-cartao-tit">${dlgIcone('espadas', 14)}${t('calc.combateTitulo')}</h4>
+      <div class="calc-tiles">
+        ${placa(t('calc.multCombate'), `×${virgula(multTotal.toFixed(2))}`,
+          `${t('calc.potencia')} ×${virgula(multPot.toFixed(2))}${calc.shiny ? ` · ${t('calc.shiny')} ×${estado.multShinyStats}` : ''}`)}
+        ${placa(t('calc.poderEstimado'), `⚔ ${num(poderEst)}`, `${t('painel.nivelCurto')}${num(nivelEst)}`)}
+        ${placa(t('calc.poderGinasio'), `⚔ ${num(poderGin)}`, `${t('painel.nivelCurto')}${num(nivelEst)}`)}
+        ${hpEst != null ? placa(t('calc.hpCombate'), num(hpEst)) : ''}
+      </div>
+      <p class="calc-ajuda">${t('calc.combateNota')}</p>`;
   }
 
   pintarListaEspeciesCalc();
@@ -22943,10 +25621,8 @@ function pkDeLadoComp(lado) {
   const esp = especieLadoComp(lado);
   if (!esp) return null;
   const nivel = Math.max(1, Math.floor(Number($(`#calc-comp-${lado}-nivel`)?.value) || cfg.level || 1));
-  const ivBruto = Number($(`#calc-comp-${lado}-iv`)?.value);
   const qBruto = Number(String($(`#calc-comp-${lado}-q`)?.value ?? '').replace(',', '.'));
   cfg.level = nivel;
-  if (Number.isFinite(ivBruto)) cfg.iv = ivBruto;
   if (Number.isFinite(qBruto)) cfg.qualidade = qBruto;
   return {
     speciesId: cfg.speciesId,
@@ -23001,6 +25677,60 @@ function pintarListaEspeciesComp(lado) {
   }
 }
 
+/**
+ * A nota de um lado do Comparar — a MESMA conta da aba Nota, com a grade e a qualidade que estão
+ * na tela. `null` sem espécie ou com campo inválido (aí o holofote fica apagado, em vez de mostrar
+ * a cor de um número que a tela não mostra).
+ */
+function notaLadoComp(lado) {
+  const esp = especieLadoComp(lado);
+  if (!esp) return null;
+  const grade = ivsDaGrade($(`#calc-comp-${lado}-iv-grid`));
+  const q = Number(String($(`#calc-comp-${lado}-q`)?.value ?? '').replace(',', '.'));
+  if (!grade.valido || !Number.isFinite(q) || q < QUALIDADE_MIN || q > QUALIDADE_MAX) return null;
+  const cfg = cfgComp(lado);
+  const bases = basesDaEspecie(esp);
+  return notaPokemon({
+    iv: somaIv(grade.ivs),
+    ivs: grade.ivs,
+    qualidade: q,
+    potencia: cfg.potencia,
+    shiny: cfg.shiny,
+    bases,
+    basesLimites: bases,
+    basesAncestrais: esp.notaAncestrais ?? null,
+  });
+}
+
+/** O pedestal de um lado: o bicho (a forma shiny quando ligada), a cor da nota DELE e a placa. */
+function pintarPalcoComp(lado) {
+  const palco = $(`#calc-comp-${lado}-palco`);
+  if (!palco) return;
+  const esp = especieLadoComp(lado);
+  const cfg = cfgComp(lado);
+  const placa = $(`#calc-comp-${lado}-placa`);
+  const arte = palco.querySelector('.hf-arte');
+  if (!esp) {
+    pintarFaixaHolofote(palco, null, 'vazio');
+    porNoPedestal(arte, 0, 80);
+    palco.classList.remove('hf-shiny');
+    if (placa) placa.innerHTML = `<span class="calc-comp-placa-vazia">${t(lado === 'a' ? 'calc.compEscolhaA' : 'calc.compEscolhaB')}</span>`;
+    return;
+  }
+  porNoPedestal(arte, cfg.shiny ? (lookShinyFicha(esp) ?? esp.looktype) : esp.looktype, 80, esp.looktype);
+  palco.classList.toggle('hf-shiny', !!cfg.shiny);
+  const r = notaLadoComp(lado);
+  pintarFaixaHolofote(palco, r?.faixa ?? null, r ? null : 'vazio');
+  if (!placa) return;
+  const nivel = Math.max(1, Math.floor(Number($(`#calc-comp-${lado}-nivel`)?.value) || cfg.level || 1));
+  placa.innerHTML = `
+    <b class="calc-comp-placa-nome">${cfg.shiny ? prefixoShiny() : ''}${escapar(esp.name)}</b>
+    <span class="calc-comp-placa-linha">
+      <em class="calc-comp-placa-nv">${t('painel.nivelCurto')}${num(nivel)}</em>
+      ${r ? `<span class="calc-comp-placa-nota nota-tinta ${r.faixa}">N= ${notaEmTexto(r.nota)}</span>` : ''}
+    </span>`;
+}
+
 function pintarCompararCalc() {
   const erro = $('#calc-comp-erro');
   const host = $('#calc-comp-resultado');
@@ -23009,38 +25739,26 @@ function pintarCompararCalc() {
   for (const lado of ['a', 'b']) {
     const esp = especieLadoComp(lado);
     const ico = $(`#calc-comp-${lado}-especie-ico`);
-    if (ico && esp?.looktype) {
-      ico.innerHTML = '';
-      ico.appendChild(spriteAnimado(esp.looktype, 30));
-    }
+    if (ico && esp?.looktype && !ico.firstChild) ico.appendChild(spriteAnimado(esp.looktype, 30));
+    pintarBarrasIv($(`#calc-comp-${lado}-iv-grid`));
+    pintarPalcoComp(lado);
+    $(`#calc-comp-${lado}-palco`)?.classList.remove('vence', 'perde');
     pintarListaEspeciesComp(lado);
-    const cfg = cfgComp(lado);
-    if (especieLadoComp(lado)) {
-      const ivModo = $(`#calc-comp-${lado}-ivmodo`);
-      if (ivModo) ivModo.textContent = cfg.ivManual ? t('calc.ivManual') : t('calc.ivAuto');
-      if (!cfg.ivManual) {
-        const ivs = ivsLadoComp(lado);
-        for (const inp of $(`#calc-comp-${lado}-iv-grid`)?.querySelectorAll('[data-iv-stat]') ?? []) {
-          inp.value = String(ivs[inp.dataset.ivStat] ?? 1);
-        }
-      }
-    }
   }
 
   const espA = especieLadoComp('a');
   const espB = especieLadoComp('b');
   if (!espA || !espB) {
     erro.textContent = t('calc.compSemLado');
-    host.innerHTML = `<p class="calc-comp-vazio">${t('calc.compSemLado')}</p>`;
+    host.innerHTML = `<p class="calc-comp-vazio">${dlgIcone('espadas', 16)}<span>${t('calc.compSemLado')}</span></p>`;
     return;
   }
 
   const avisos = [];
   for (const lado of ['a', 'b']) {
-    const ivBruto = Number($(`#calc-comp-${lado}-iv`)?.value);
     const qBruto = Number(String($(`#calc-comp-${lado}-q`)?.value ?? '').replace(',', '.'));
-    if (!Number.isFinite(ivBruto) || ivBruto < IV_MIN || ivBruto > IV_MAX) {
-      avisos.push(t('calc.avisoIv', { min: IV_MIN, max: IV_MAX }));
+    if (!ivsDaGrade($(`#calc-comp-${lado}-iv-grid`)).valido) {
+      avisos.push(t('calc.avisoIv', { min: IV_POR_STAT.min, max: IV_POR_STAT.max }));
     }
     if (!Number.isFinite(qBruto) || qBruto < QUALIDADE_MIN || qBruto > QUALIDADE_MAX) {
       avisos.push(t('calc.avisoQualidade', {
@@ -23072,8 +25790,14 @@ function pintarCompararCalc() {
   const vencedor = cmp.empate ? null : (cmp.pctA > cmp.pctB ? 'a' : 'b');
   const nomeV = vencedor === 'a' ? nomeA : vencedor === 'b' ? nomeB : '';
   const pctV = vencedor === 'a' ? pctA : vencedor === 'b' ? pctB : 50;
+  // Quem vence ganha a coroa e flutua; quem perde perde a cor. É o palco do diálogo de evolução
+  // (`novo`/`sai`) aplicado ao duelo — o olho lê o resultado antes do número.
+  if (vencedor) {
+    $(`#calc-comp-${vencedor}-palco`)?.classList.add('vence');
+    $(`#calc-comp-${vencedor === 'a' ? 'b' : 'a'}-palco`)?.classList.add('perde');
+  }
 
-  const barra = (nome, pct, lado, pk, poder, met) => {
+  const detalhe = (lado, nome, pk, poder, met) => {
     // O nível sai inteiro: o duelo do ginásio deixou de ter teto, então não há mais o
     // "150 <s>300</s>" — o número mostrado é o mesmo que entrou na conta.
     const nvTxt = `${t('painel.nivelCurto')}${num(Math.max(1, Math.floor(Number(pk.level) || 1)))}`;
@@ -23087,18 +25811,16 @@ function pintarCompararCalc() {
         ? t('calc.compGolpeTm', { tipo: escapar(met.tm ?? g.type ?? ''), power: num(g.power ?? 0) })
         : t('calc.compGolpe', { golpe: escapar(g.name ?? '—'), power: num(g.power ?? 0) });
     return `
-    <div class="calc-comp-barra${vencedor && lado === vencedor ? ' vence' : ''}">
-      <span class="calc-comp-barra-topo"><b>${escapar(nome)}</b><em>${pct}%</em></span>
-      <span class="calc-comp-barra-trilho"><i style="width:${pct}%"></i></span>
-      <span class="calc-comp-barra-poder">⚔ ${num(poder)} · ${nvTxt}</span>
-      ${golpeTxt ? `<span class="calc-comp-barra-golpe${met.golpeDaTm ? ' tm' : ''}">${golpeTxt}</span>` : ''}
-    </div>`;
+      <div class="calc-comp-det lado-${lado}${vencedor === lado ? ' vence' : ''}">
+        <span class="calc-comp-det-topo"><span class="calc-comp-letra">${lado.toUpperCase()}</span><b>${escapar(nome)}</b></span>
+        <span class="calc-comp-barra-poder">⚔ ${num(poder)} · ${nvTxt}</span>
+        ${golpeTxt ? `<span class="calc-comp-barra-golpe${met.golpeDaTm ? ' tm' : ''}">${golpeTxt}</span>` : ''}
+      </div>`;
   };
 
   let titulo = cmp.empate
     ? t('calc.compEmpate')
     : t('calc.compVence', { nome: nomeV, pct: pctV });
-
   if (pctMinA !== pctMaxA) {
     titulo += `<span class="calc-comp-faixa">${t('calc.compFaixa', {
       nome: nomeA,
@@ -23107,11 +25829,33 @@ function pintarCompararCalc() {
     })}</span>`;
   }
 
-  host.innerHTML = `
-    <p class="calc-comp-resultado-titulo">${titulo}</p>
-    ${barra(nomeA, pctA, 'a', pkA, cmp.poderA, cmp.a)}
-    ${barra(nomeB, pctB, 'b', pkB, cmp.poderB, cmp.b)}
-    <p class="calc-comp-base">${t('calc.compBase')}</p>`;
+  // O CABO DE GUERRA é montado uma vez e depois só anda: refazer o HTML a cada dígito faria a
+  // barra pular em vez de deslizar até o número novo.
+  let cabo = host.querySelector('.calc-cabo');
+  if (!cabo) {
+    host.innerHTML = `
+      <p class="calc-comp-resultado-titulo"></p>
+      <div class="calc-cabo" role="img">
+        <span class="calc-cabo-a" style="width:50%"></span>
+        <span class="calc-cabo-b"></span>
+        <b class="calc-cabo-pa"></b>
+        <b class="calc-cabo-pb"></b>
+      </div>
+      <div class="calc-comp-dets"></div>
+      <p class="calc-comp-base">${t('calc.compBase')}</p>`;
+    cabo = host.querySelector('.calc-cabo');
+  }
+  host.querySelector('.calc-comp-resultado-titulo').innerHTML = `${vencedor ? dlgIcone('coroa', 16) : dlgIcone('espadas', 16)}<span>${titulo}</span>`;
+  cabo.classList.toggle('empate', !!cmp.empate);
+  cabo.classList.toggle('vence-a', vencedor === 'a');
+  cabo.classList.toggle('vence-b', vencedor === 'b');
+  cabo.setAttribute('aria-label', `${nomeA} ${pctA}% × ${nomeB} ${pctB}%`);
+  cabo.querySelector('.calc-cabo-pa').textContent = `${pctA}%`;
+  cabo.querySelector('.calc-cabo-pb').textContent = `${pctB}%`;
+  const meta = cabo.querySelector('.calc-cabo-a');
+  requestAnimationFrame(() => { meta.style.width = `${Math.max(4, Math.min(96, pctA))}%`; });
+  host.querySelector('.calc-comp-dets').innerHTML =
+    detalhe('a', nomeA, pkA, cmp.poderA, cmp.a) + detalhe('b', nomeB, pkB, cmp.poderB, cmp.b);
 }
 
 function selecionarEspecieComp(lado, pokeId) {
@@ -23215,28 +25959,18 @@ function ligarCompararCalc() {
     }
 
     $(`#calc-comp-${lado}-nivel`)?.addEventListener('input', pintarCompararCalc);
-    $(`#calc-comp-${lado}-iv`)?.addEventListener('input', () => {
-      cfgComp(lado).ivManual = false;
-      cfgComp(lado).ivs = null;
-      pintarCompararCalc();
-    });
     for (const inp of $(`#calc-comp-${lado}-iv-grid`)?.querySelectorAll('[data-iv-stat]') ?? []) {
       inp.addEventListener('input', () => {
         const cfg = cfgComp(lado);
         cfg.ivManual = true;
-        cfg.ivs = Object.fromEntries(
-          [...$(`#calc-comp-${lado}-iv-grid`).querySelectorAll('[data-iv-stat]')].map((el) => [
-            el.dataset.ivStat,
-            Math.min(32, Math.max(1, Math.round(Number(el.value)) || 1)),
-          ]),
-        );
+        cfg.ivs = ivsDaGrade($(`#calc-comp-${lado}-iv-grid`)).ivs;
         sincronizarIvSomaComp(lado);
-        const soma = $(`#calc-comp-${lado}-iv`);
-        if (soma) soma.value = String(cfg.iv);
+        const soma = $(`#calc-comp-${lado}-ivsoma`);
+        if (soma) soma.textContent = textoSomaIv(cfg.ivs);
         pintarCompararCalc();
       });
     }
-    $(`#calc-comp-${lado}-q`)?.addEventListener('input', pintarCompararCalc);
+    ligarQualidadeCalc(`calc-comp-${lado}-q`, pintarCompararCalc);
 
     $(`#calc-comp-${lado}-pots`)?.addEventListener('click', (ev) => {
       const b = ev.target.closest('.calc-pot');
@@ -23323,13 +26057,7 @@ function ligarCalculadoraNota() {
   }
   $('#calc-especie-limpar')?.addEventListener('click', limparEspecieCalc);
 
-  $('#calc-iv')?.addEventListener('input', () => {
-    desligarOrigem();
-    calc.ivManual = false;
-    calc.ivs = null;
-    pintarCalculadora();
-  });
-  $('#calc-q')?.addEventListener('input', () => {
+  ligarQualidadeCalc('calc-q', () => {
     desligarOrigem();
     pintarCalculadora();
   });
@@ -23337,15 +26065,10 @@ function ligarCalculadoraNota() {
     inp.addEventListener('input', () => {
       desligarOrigem();
       calc.ivManual = true;
-      calc.ivs = Object.fromEntries(
-        [...$('#calc-iv-grid').querySelectorAll('[data-iv-stat]')].map((el) => [
-          el.dataset.ivStat,
-          Math.min(32, Math.max(1, Math.round(Number(el.value)) || 1)),
-        ]),
-      );
+      calc.ivs = ivsDaGrade($('#calc-iv-grid')).ivs;
       sincronizarIvSomaCalc();
-      const soma = $('#calc-iv');
-      if (soma) soma.value = String(calc.iv);
+      const soma = $('#calc-iv-soma');
+      if (soma) soma.textContent = textoSomaIv(calc.ivs);
       pintarCalculadora();
     });
   }
@@ -24398,6 +27121,31 @@ function atualizarPerfil(e, anterior) {
 }
 
 /**
+ * Excluir a conta, primeiro degrau (o segundo é digitar o nick no formulário). O boneco sem cor com
+ * a lixeira no canto, e cada perda numa linha vermelha com o seu desenho — é a única caixa do jogo
+ * em que TUDO o que ela lista some.
+ */
+function confirmarExcluirConta(nickCru, aoConfirmar) {
+  const nick = escapar(nickCru ?? '');
+  confirmar({
+    titulo: t('pf.excluirContaTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({ arte: dlgArteTreinador(null, null, 72), nome: nick, classe: 'sai', marca: dlgIcone('lixeira', 14) }), 'perigo')}
+      <p class="dlg-lead dlg-perigo-lead">${escapar(t('pf.excluirAtencao'))}</p>
+      ${dlgLista([
+        { icone: 'pessoaMenos', html: t('pf.excluirPerdaPersonagem', { nick }), perigo: true },
+        { icone: 'lixeira', html: t('pf.excluirPerdaProgresso'), perigo: true },
+        { icone: 'moedas', html: t('pf.excluirPerdaGemas'), perigo: true },
+        { icone: 'relogio', html: t('pf.excluirReembolso') },
+      ])}
+      ${dlgFrase('', t('pf.excluirContinue'))}`,
+    rotuloSim: t('pf.excluirContaConfirmar'),
+    tom: 'perigo',
+    aoConfirmar,
+  });
+}
+
+/**
  * A parte de CONTA do modal, que chega depois do resto.
  *
  * O botão de trocar senha só existe para conta com senha: quem entra pelo Google não tem uma
@@ -24592,18 +27340,11 @@ async function montarContaDoPerfil() {
   const botaoExcluir = $('#pf-excluir-conta');
   const formExcluir = $('#pf-excluir-form');
   if (botaoExcluir && formExcluir) {
-    botaoExcluir.onclick = () => {
-      confirmar({
-        titulo: t('pf.excluirContaTitulo'),
-        texto: t('pf.excluirContaTexto', { nick: escapar(nickJogador || conta.nick) }),
-        rotuloSim: t('pf.excluirContaConfirmar'),
-        aoConfirmar: () => {
-          formExcluir.classList.remove('hidden');
-          botaoExcluir.classList.add('hidden');
-          $('#pf-excluir-nick')?.focus();
-        },
-      });
-    };
+    botaoExcluir.onclick = () => confirmarExcluirConta(nickJogador || conta.nick, () => {
+      formExcluir.classList.remove('hidden');
+      botaoExcluir.classList.add('hidden');
+      $('#pf-excluir-nick')?.focus();
+    });
     formExcluir.onsubmit = async (ev) => {
       ev.preventDefault();
       const final = $('#pf-excluir-final');
@@ -25289,58 +28030,68 @@ function pedirAnunciosItem() {
   enviar({ t: 'market.item', itemId: estado.cmItemSel, moeda: estado.cmItemMoeda });
 }
 
-/** A comissão que o servidor cobra em ORB. Só para MOSTRAR — quem desconta é `market-db.mjs`. */
-const TAXA_ORB_PADRAO = 0.15;
 /** A comissão que o servidor cobra em Coins. Só para MOSTRAR — quem desconta é `market-db.mjs`. */
-const TAXA_GOLD_PADRAO = 0.10;
-/**
- * A comissão em ORB que o resumo da venda mostra.
- *
- * Prefere o número que o servidor mandou no welcome (`economia.taxaMercadoOrbPct`), porque
- * essa constante já ficou defasada uma vez: o servidor mudou de 30% para 15% e a tela
- * continuaria prometendo um líquido menor do que o jogador de fato receberia. O valor fixo
- * abaixo é só a rede de baixo, para antes de o welcome chegar.
- */
-const taxaOrbCliente = () => {
-  const pct = estado.economia?.taxaMercadoOrbPct ?? estado.mercado?.taxaOrbPct;
-  return Number.isFinite(pct) ? pct / 100 : TAXA_ORB_PADRAO;
-};
+const TAXA_GOLD_PADRAO = TAXA_GOLD;
 
-/** Comissão em Coins — mesma lógica de `taxaOrbCliente`. */
+/**
+ * Comissão em Coins.
+ *
+ * Prefere o número que o servidor mandou no welcome (`economia.taxaMercadoGoldPct`), porque a
+ * constante já ficou defasada uma vez: o servidor mudou de 30% para 15% na gema e a tela
+ * continuaria prometendo um líquido menor do que o jogador de fato receberia. O valor fixo
+ * acima é só a rede de baixo, para antes de o welcome chegar.
+ *
+ * A GEMA não passa por aqui: a taxa dela é por faixa e a conta vem de
+ * `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa para cobrar — ali a defasagem
+ * não tem como acontecer.
+ */
 const taxaGoldCliente = () => {
   const pct = estado.economia?.taxaMercadoGoldPct ?? estado.mercado?.taxaGoldPct;
   return Number.isFinite(pct) ? pct / 100 : TAXA_GOLD_PADRAO;
 };
 
-const precoMinOrb = () => estado.mercado?.precoMinOrb ?? 2;
-const precoMinGold = () => estado.mercado?.precoMinGold ?? 2;
+const precoMinOrb = () => estado.mercado?.precoMinOrb ?? PRECO_MIN_ORB;
+const precoMinGold = () => estado.mercado?.precoMinGold ?? PRECO_MIN_GOLD;
 
-const taxaMercadoCliente = (moeda) => (moeda === 'orb' ? taxaOrbCliente() : taxaGoldCliente());
 const precoMinMercado = (moeda) => (moeda === 'orb' ? precoMinOrb() : precoMinGold());
-const totalLiquidoMercado = (preco, qtd, moeda) =>
-  Math.floor(qtd * preco * (1 - taxaMercadoCliente(moeda)));
+const totalLiquidoMercado = (preco, qtd, moeda, tipo) =>
+  moeda === 'orb'
+    ? liquidoOrbDaVenda(qtd * preco, tipo)
+    : Math.floor(qtd * preco * (1 - taxaGoldCliente()));
 
-const ajudaPrecoMercado = (moeda, npc) => {
+/** "13", "7,5", "11,5" — inteiro sem `.0`, fração com vírgula. */
+const pctTaxa = (n) => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+
+/**
+ * "7,5–13" — o intervalo da comissão da gema, do topo à entrada. O painel do caixa mostra um
+ * número só, e com faixa marginal o número único honesto é o intervalo.
+ */
+const intervaloFaixasOrb = (faixas) => {
+  const pcts = (faixas?.length ? faixas : faixasOrbParaTela()).map((f) => f.pct);
+  const min = Math.min(...pcts);
+  const max = Math.max(...pcts);
+  return min === max ? pctTaxa(max) : `${pctTaxa(min)}–${pctTaxa(max)}`;
+};
+
+/** A tabela da gema em uma linha: "13% até 500 · 10% até 5.000 · 7,5% acima". */
+const faixasOrbEmTexto = () =>
+  faixasOrbParaTela()
+    .map((f) => (f.ate
+      ? t('cm.faixaAte', { pct: pctTaxa(f.pct), ate: num(f.ate) })
+      : t('cm.faixaAcima', { pct: pctTaxa(f.pct) })))
+    .join(' · ');
+
+const ajudaPrecoMercado = (moeda, npc, tipo) => {
   if (moeda === 'orb') {
-    return t('cm.precoMinOrbAjuda', { min: num(precoMinOrb()), taxa: Math.round(taxaOrbCliente() * 100) });
+    // Só o pokémon vê a tabela de faixas; item e diamante veem a alíquota única que pagam.
+    return temFaixaOrb(tipo)
+      ? t('cm.precoMinOrbAjuda', { min: num(precoMinOrb()), faixas: faixasOrbEmTexto() })
+      : t('cm.precoMinOrbAjudaPlana', { min: num(precoMinOrb()), taxa: pctTaxa(TAXA_ORB_PLANA * 100) });
   }
   if (moeda === 'gold') {
     return t('cm.precoMinGoldAjuda', { min: num(precoMinGold()), taxa: Math.round(taxaGoldCliente() * 100) });
   }
   return npc ? t('cm.npcPaga', { v: num(npc) }) : t('cm.precoUnitAjuda');
-};
-
-/** Referência de preço ao anunciar item — menor anúncio aberto na moeda escolhida. */
-const htmlReferenciaPrecoItem = (itemId, moeda) => {
-  if (!itemId) return '';
-  const r = estado.cmItens?.[itemId];
-  if (!r?.anuncios) return t('cm.semAnunciosReferencia');
-  const v = moeda === 'orb' ? r.minOrb : r.minGold;
-  if (v == null) {
-    return t(moeda === 'orb' ? 'cm.semAnunciosMoedaOrb' : 'cm.semAnunciosMoedaGold');
-  }
-  const chave = moeda === 'orb' ? 'cm.menorAnunciadoOrb' : 'cm.menorAnunciadoGold';
-  return t(chave, { preco: precoComMoeda(v, moeda) });
 };
 
 /**
@@ -25369,29 +28120,40 @@ const mediaDoItem = (itemId) => (estado.cmMedias === undefined ? undefined : est
 
 let cmPassoPrecoAtualizar = null;
 
-/** Resumo de taxa/líquido ao anunciar ou editar — moeda gold vs orb. */
-function resumoPrecoMercado({ moeda, preco, qtd = 1, emLote = false }) {
-  const total = qtd * preco;
-  const cabeca = emLote
-    ? `${t('cm.resumoLote', { qtd: num(qtd), unit: num(preco) })}<br>`
-    : '';
-  const taxa = taxaMercadoCliente(moeda);
-  const liq = Math.floor(total * (1 - taxa));
-  const min = precoMinMercado(moeda);
-  const chaveResumo = moeda === 'orb' ? 'cm.resumoOrb' : 'cm.resumoGold';
-  const chaveBaixo = moeda === 'orb' ? 'cm.resumoOrbBaixo' : 'cm.resumoGoldBaixo';
-  if (liq < 1) {
-    return cabeca + t(chaveBaixo, { min: num(min), taxa: Math.round(taxa * 100) });
-  }
-  return cabeca + t(chaveResumo, {
-    total: num(total), taxa: Math.round(taxa * 100), liquido: num(liq),
-  });
+/**
+ * O número CURTO dos cards: "220M", "1,5B", "12,5K" — o K/M/B/T dos jogos grandes.
+ *
+ * O card do Mercado tem a largura de um sprite, e "1.500.000.000" ao lado do "A partir de:"
+ * estoura a coluna. Abaixo de 10.000 o número sai inteiro (cabe, e é exato); dali para cima,
+ * três dígitos significativos e a letra. O arredondamento vem ANTES de escolher a letra, senão
+ * 999.999 viraria "1.000K" em vez de "1M". O valor exato não some: fica no balão do preço, e a
+ * folha de compra — que é onde o jogador decide — mostra o número inteiro.
+ */
+const UNIDADES_CURTAS = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+let fmtNumAbrev = null;
+function numAbrev(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) < 10_000) return num(v);
+  const r = Number(v.toPrecision(3));
+  const [base, letra] = UNIDADES_CURTAS.find(([b]) => Math.abs(r) >= b);
+  const loc = localeData();
+  if (fmtNumAbrev?.loc !== loc) fmtNumAbrev = { loc, f: new Intl.NumberFormat(loc, { maximumFractionDigits: 2 }) };
+  return `${fmtNumAbrev.f.format(r / base)}${letra}`;
 }
 
-const precoComMoeda = (v, moedaId) =>
-  moedaId === 'orb'
-    ? `<span class="cm-preco orb"><img src="${ICONE_GEMA}" alt="${t('moeda.gemas')}">${num(v)}</span>`
-    : `<span class="cm-preco">${moeda(v)}</span>`;
+/**
+ * O preço com a moeda. `curto` é o dos CARDS (ver `numAbrev`): o número abreviado, com o valor
+ * inteiro no balão — que só aparece quando a abreviação escondeu alguma coisa.
+ */
+const precoComMoeda = (v, moedaId, { curto = false } = {}) => {
+  const exato = num(v);
+  const txt = curto ? numAbrev(v) : exato;
+  const dica = txt !== exato ? ` title="${exato}"` : '';
+  if (moedaId === 'orb') return `<span class="cm-preco orb"${dica}><img src="${ICONE_GEMA}" alt="${t('moeda.gemas')}">${txt}</span>`;
+  return `<span class="cm-preco"${dica}>${curto
+    ? `<span class="mk-moeda"><img src="${srcIcone(ICONE_OURO)}" alt="ouro">${txt}</span>`
+    : moeda(v)}</span>`;
+};
 
 /** O bônus de uma potência, para o rótulo do selo ("+25%"). A tabela vem do servidor. */
 const bonusDaPotencia = (n) =>
@@ -25612,6 +28374,9 @@ function contarFiltrosDoMercado(f) {
     // vitrine recortada a Coins (ou a gemas) é o que precisa se explicar no celular, onde a
     // chave mora dentro da folha que fecha.
     f.moeda !== MOEDA_TODAS ? f.moeda : '',
+    // O agrupamento DESLIGADO conta pela mesma razão: no celular ele mora dentro da folha, e
+    // uma vitrine que de repente tem onze páginas do mesmo Scizor precisa dizer por quê.
+    !f.agregarEspecies ? 'lista' : '',
   ].filter((v) => v !== '' && v != null && v !== false).length
     // Uma faixa conta UMA vez, com piso, teto ou os dois: na tela ela é um filtro só.
     + FAIXAS_MERCADO.filter(({ campos }) => campos.some((c) => String(f[c] ?? '') !== '')).length
@@ -25621,7 +28386,13 @@ function contarFiltrosDoMercado(f) {
     + criteriosDoMercado().length;
 }
 
-/** Zera tudo que `contarFiltrosDoMercado` conta, sem mexer na aba nem na busca. */
+/**
+ * Zera tudo que `contarFiltrosDoMercado` conta, sem mexer na aba nem na busca.
+ *
+ * `agregarEspecies` fica DE FORA de propósito, mesmo contando no número: ele não é um recorte da
+ * vitrine, é o formato dela. Quem desligou o agrupamento e clica em "Limpar filtros" quer tirar o
+ * "só shiny acima de IV 150" — não quer a tela inteira trocando de forma debaixo dele.
+ */
 function limparFiltrosDoMercado() {
   Object.assign(estado.cmFiltro, {
     moeda: MOEDA_TODAS, elemento: '', categoria: '', soShiny: false, soP5: false,
@@ -25882,10 +28653,13 @@ function renderComunidade() {
              <button class="cm-filtro ${f.soP5 ? 'on' : ''}" id="cm-p5">${seloPotencia(5)} ${t('cm.soP5')}</button>
              <button class="cm-filtro ${f.soTmElemental ? 'on' : ''}" id="cm-tm-elemental"><span class="tm-selo">TM</span> ${t('cm.soTmElemental')}</button>
              <button class="cm-filtro ${f.soTmAoe ? 'on' : ''}" id="cm-tm-aoe"><span class="tm-selo aoe">AoE</span> ${t('cm.soTmAoe')}</button>
-             <!-- ESPÉCIE: um interruptor só, o de tirar as variantes de Outland (#2001+). A busca
-                  por texto casa "pupitar" com "Ancient Pupitar", e quem quer o Pupitar para
-                  evoluir em Tyranitar tem de rolar por cima de todos eles. -->
+             <!-- ESPÉCIE: dois interruptores. O primeiro decide o FORMATO da vitrine (uma linha
+                  por espécie, ou a lista de anúncios de sempre) e o segundo tira as variantes de
+                  Outland (#2001+) — a busca por texto casa "pupitar" com "Ancient Pupitar", e
+                  quem quer o Pupitar para evoluir em Tyranitar rolaria por cima de todos eles. -->
              <div class="cm-fgrupo">${t('cm.especie')}</div>
+             <button class="cm-filtro ${f.agregarEspecies ? 'on' : ''}" id="cm-agregar" aria-pressed="${f.agregarEspecies ? 'true' : 'false'}"
+                     title="${escapar(t('cm.agregarDica'))}"><span class="cm-fico cm-agregar-ico" aria-hidden="true">▦</span>${t('cm.agregar')}</button>
              <button class="cm-filtro ${f.semOutland ? 'on' : ''}" id="cm-sem-outland" aria-pressed="${f.semOutland ? 'true' : 'false'}"
                      title="${escapar(t('cm.semOutlandDica'))}"><span class="tm-selo outland">#2001+</span> ${t('cm.semOutland')}</button>
              <div class="cm-fgrupo">${t('cm.faixas')}</div>
@@ -26064,6 +28838,23 @@ function receberMercado(m) {
   if (estado.modalAberto === 'community') pintarMercado();
 }
 
+/**
+ * A última resposta, se ela for do FORMATO que a tela desenha agora — senão, "carregando".
+ *
+ * As duas vitrines de pokémon dividem `cmDados` e `#cm-lista`, e as linhas de uma não servem na
+ * outra: um grupo de espécie não tem `ficha`, e desenhá-lo como card de anúncio estoura no
+ * `a.ficha.shiny`. Isso acontece na janela entre o clique que troca o formato e a resposta nova
+ * — a tela repinta na hora, com o que tem na memória. Aqui o descompasso vira a espera que ele
+ * de fato é.
+ */
+function dadosDaGradeCerta() {
+  const d = estado.cmDados;
+  if (!d) return { linhas: [] };
+  // `aba` só falta em `{ linhas: [], carregando: true }`, que já é a espera.
+  if (d.aba && (d.aba === 'especies') !== vitrineDeEspecies()) return { linhas: [], carregando: true };
+  return d;
+}
+
 /** Qual das grades o `#cm-lista` está mostrando agora — o crachá que as respostas têm de trazer. */
 function gradeEsperadaDoMercado() {
   if (estado.cmAba === 'favoritos') return 'favoritos';
@@ -26083,9 +28874,16 @@ const vitrineDeItens = () => estado.cmFiltro.tipo === 'item' && estado.cmAba ===
  *
  * "Meus anúncios" e os Favoritos ficam de fora: lá a lista é curta e é do jogador — agrupar as
  * suas três vendas por espécie esconderia cada uma atrás de um clique sem economizar nada.
+ *
+ * E o jogador pode desligar (`agregarEspecies`, na barra lateral). Quando a vitrine agrupada
+ * entrou, metade dos jogadores gostou e a outra metade quis a lista de volta — e as duas razões
+ * são boas: quem procura UMA espécie economiza dez páginas de rolagem, e quem gosta de varrer a
+ * feira inteira atrás de uma pechincha perdeu justamente a tela que servia para isso. Desligado,
+ * a aba volta a ser a lista de anúncios de sempre, com os mesmos filtros e a mesma ordenação.
  */
 const vitrineDeEspecies = () =>
-  estado.cmFiltro.tipo === 'pokemon' && estado.cmAba === 'vitrine' && !estado.cmEspecieSel;
+  estado.cmFiltro.tipo === 'pokemon' && estado.cmFiltro.agregarEspecies
+  && estado.cmAba === 'vitrine' && !estado.cmEspecieSel;
 
 /** A ESPÉCIE de um card da grade agrupada, do catálogo do cliente — nome, tipos e arte. */
 const especieDoCard = (e) => estado.especies?.get(Number(e?.speciesId)) ?? null;
@@ -26161,8 +28959,11 @@ function faixaDaEspecieAberta(dados) {
   const conta = Number.isFinite(total) && !dados?.carregando
     ? `<em>${t(total === 1 ? 'cm.especieOferta' : 'cm.especieOfertas', { n: num(total) })}</em>`
     : '';
+  // Com o agrupamento DESLIGADO (o jogador chegou aqui pela estrela de uma espécie favorita), o
+  // botão não volta para grade nenhuma — volta para a lista. O rótulo diz o que ele faz.
+  const voltar = estado.cmFiltro.agregarEspecies ? t('cm.voltarEspecies') : t('cm.voltarVitrine');
   el.innerHTML = `
-    <button type="button" class="cm-esp-voltar">‹ ${t('cm.voltarEspecies')}</button>
+    <button type="button" class="cm-esp-voltar">‹ ${voltar}</button>
     <b>${escapar(sel?.nome ?? '')}</b>${conta}`;
   el.querySelector('.cm-esp-voltar').onclick = voltarParaEspecies;
   el.appendChild(botaoFavoritoEspecieMercado(sel?.id));
@@ -26182,7 +28983,7 @@ function precosDaEspecie(resumo, { moedas = ['gold', 'orb'] } = {}) {
     const ico = moedaId === 'orb' ? ICONE_GEMA : srcIcone(ICONE_OURO);
     const valor = v == null
       ? `<span class="cm-preco${moedaId === 'orb' ? ' orb' : ''}"><img src="${ico}" alt="">—</span>`
-      : precoComMoeda(v, moedaId);
+      : precoComMoeda(v, moedaId, { curto: true });
     return `<div class="cm-fav-item-preco${v == null ? ' nada' : ''}"><i>${t('cm.apartirDe')}</i>${valor}</div>`;
   }).join('');
 }
@@ -26404,11 +29205,7 @@ function pintarVitrineDiamantes() {
     b.onclick = () => {
       const a = linhas.find((x) => x.id === Number(b.dataset.remover));
       if (!a) return;
-      confirmar({
-        titulo: t('cm.removerTitulo'),
-        texto: t('cm.removerDiamanteTexto', { n: num(a.qtd) }),
-        aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
-      });
+      confirmarRemoverDiamantes(a);
     };
   }
 }
@@ -26439,7 +29236,7 @@ function pintarVitrineDoMercado() {
     pintarPaginas();
     return;
   }
-  const dados = estado.cmDados ?? { linhas: [] };
+  const dados = dadosDaGradeCerta();
   const meus = estado.cmAba === 'meus';
   const favoritos = estado.cmAba === 'favoritos';
   const especies = vitrineDeEspecies();
@@ -26608,6 +29405,93 @@ function cardPokemonCm(pk, {
 }
 
 /**
+ * Tirar um anúncio do Mercado: a mercadoria faz a viagem de volta — ela à esquerda, a seta, e o
+ * inventário do outro lado. Uma caixa só para pokémon e item (eram duas cópias da mesma frase).
+ *
+ * O nome é ESCAPADO: desde a Name Tag ele pode ser texto de outro jogador (o apelido viaja com o
+ * anúncio). `validarApelido` já barra `<`, `>`, `&` e as aspas — o escape é o que impede que
+ * afrouxar aquele alfabeto um dia abra um buraco aqui, em silêncio.
+ */
+function confirmarRemoverAnuncio(a) {
+  const pokemon = a.tipo === 'pokemon';
+  const nome = pokemon ? nomeNoAnuncio(a.ficha) : nomeAnuncioItem(a);
+  const destino = pokemon
+    ? `<span data-dlg-arquivo="${SPRITE_BOLA[1]}" data-dlg-px="36"></span>`
+    : `<span data-dlg-arquivo="${ICONE_ITEM_GENERICO}" data-dlg-px="36"></span>`;
+  confirmar({
+    titulo: t('cm.removerTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: pokemon ? dlgArtePk(a.ficha, 64) : '<span class="dlg-ator-fig" data-dlg-anuncio></span>',
+          nome: escapar(nome || '—'),
+          sub: pokemon ? dlgSeloShiny(a.ficha?.shiny) + dlgNivel(a.ficha?.level ?? 1) : '',
+          qtd: !pokemon && a.qtd > 1 ? `×${num(a.qtd)}` : '',
+        })}
+        ${dlgSeta()}
+        ${dlgAtor({
+          arte: dlgArteHtml(dlgMedalha({ arte: destino, tom: 'verde' })),
+          nome: escapar(t('cm.removerDestino')),
+          classe: 'novo',
+        })}`, 'verde')}
+      ${dlgFrase('', t('cm.removerTexto', { nome: escapar(nome || '—') }))}`,
+    aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
+    // A arte do item é a mesma do card (casa, bicicleta e caixa têm desenho próprio) — e ela é
+    // um NÓ, por isso entra depois do template.
+    montar: pokemon ? null : (corpo) => penduraArteDoAnuncio(corpo, a),
+  });
+}
+
+/**
+ * Tirar um anúncio de DIAMANTES: o que volta é saldo, então a etiqueta é a de quem RECEBE — o
+ * número sobe em verde. Numa compra parcial volta só o que sobrou; `a.qtd` já é isso.
+ */
+function confirmarRemoverDiamantes(a) {
+  confirmar({
+    titulo: t('cm.removerTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArteArquivo(ICONE_DIAMANTE, 64),
+        nome: `${num(a.qtd)} ${escapar(t('moeda.diamantes'))}`,
+        classe: 'novo',
+        marca: dlgIcone('volta', 14),
+      }), 'azul')}
+      ${dlgCusto({ moeda: 'diamante', valor: a.qtd, saldo: Number(estado.eu?.diamonds ?? 0), ganha: true, rotulo: t('cm.removerVolta') })}
+      ${dlgFrase('', t('cm.removerDiamanteTexto', { n: num(a.qtd) }))}`,
+    aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
+  });
+}
+
+/**
+ * Comprar o pokémon de outro jogador (a vitrine, os Shinys e os P5 do servidor). O bicho no palco
+ * dourado com os selos que o card mostrava, a etiqueta na moeda do anúncio com o saldo que fica,
+ * e de quem se compra. Nome e vendedor são texto de outra pessoa — vão escapados.
+ */
+function confirmarCompraAnuncio({ pk, nome, preco, moeda, vendedor = null, aoConfirmar }) {
+  const gema = moeda === 'orb';
+  const pot = Number(pk?.potencia) || 0;
+  confirmar({
+    titulo: t('cm.comprarTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({
+        arte: dlgArtePk(pk, 72),
+        nome: escapar(nome || '—'),
+        sub: dlgSeloShiny(pk?.shiny) + dlgNivel(pk?.level ?? 1) + (pot >= 2 ? ` ${seloPotencia(pot)}` : ''),
+        classe: 'novo',
+      }), 'ouro')}
+      ${dlgCusto({
+        moeda: gema ? 'gema' : 'ouro',
+        valor: preco,
+        saldo: Math.floor(gema ? estado.eu?.orbs ?? 0 : estado.eu?.gold ?? 0),
+        rotulo: t('cm.precoDoPokemon'),
+      })}
+      ${vendedor ? dlgFrase('', t('cm.comprarDe', { nick: `<b>${escapar(vendedor)}</b>` })) : ''}`,
+    rotuloSim: t('cm.comprar'),
+    aoConfirmar,
+  });
+}
+
+/**
  * O card de um anúncio de DIAMANTES.
  *
  * ### Por que ele é o único card com preço em dois tamanhos
@@ -26636,9 +29520,9 @@ function cardAnuncioDiamante(a, meus) {
       <div class="cm-sub">${t('cm.emEstoque', { n: num(a.qtd) })}</div>
     </div>
     <div class="cm-rodape">
-      ${precoComMoeda(a.preco, a.moeda)}
+      ${precoComMoeda(a.preco, a.moeda, { curto: true })}
       <div class="cm-unit">${t('cm.porDiamante')}</div>
-      <div class="cm-dia-total"><span>${t('cm.loteTotal')}</span>${precoComMoeda(total, a.moeda)}</div>
+      <div class="cm-dia-total"><span>${t('cm.loteTotal')}</span>${precoComMoeda(total, a.moeda, { curto: true })}</div>
       <div class="cm-vend">${meus ? t('cm.seuAnuncio') : `${t('cm.de')} <b>${escapar(a.vendedor)}</b>`}</div>
     </div>
     <div class="cm-botoes"></div>`;
@@ -26661,13 +29545,8 @@ function cardAnuncioDiamante(a, meus) {
     const rm = document.createElement('button');
     rm.className = 'cm-btn perigo';
     rm.textContent = t('cm.remover');
-    rm.onclick = () =>
-      confirmar({
-        titulo: t('cm.removerTitulo'),
-        // Cancelar devolve o que SOBROU: numa compra parcial o comprador já levou a fatia dele.
-        texto: t('cm.removerDiamanteTexto', { n: num(a.qtd) }),
-        aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
-      });
+    // Cancelar devolve o que SOBROU: numa compra parcial o comprador já levou a fatia dele.
+    rm.onclick = () => confirmarRemoverDiamantes(a);
     botoes.appendChild(rm);
   } else {
     const bt = document.createElement('button');
@@ -26693,7 +29572,7 @@ function cardAnuncio(a, meus) {
         selosExtra: anuncioEmRetencao(a) ? `<span class="cm-retencao"${attrRetencao(a)}>${rotuloRetencao(a)}</span>` : '',
         duracaoHtml: duracaoSelo(a),
         atributosHtml: selosAtributos({ ...a.ficha, nota: notaDoFicha(a.ficha) }),
-        rodapeHtml: `${precoComMoeda(a.preco, a.moeda)}<div class="cm-vend">${meus ? t('cm.seuAnuncio') : `${t('cm.de')} <b>${escapar(a.vendedor)}</b>`}</div>`,
+        rodapeHtml: `${precoComMoeda(a.preco, a.moeda, { curto: true })}<div class="cm-vend">${meus ? t('cm.seuAnuncio') : `${t('cm.de')} <b>${escapar(a.vendedor)}</b>`}</div>`,
         aoVerFicha: () => abrirFichaDoPokemon({ ...a.ficha, id: a.ficha.id ?? a.pokemonId }),
       },
     );
@@ -26739,33 +29618,20 @@ function cardAnuncio(a, meus) {
       const rm = document.createElement('button');
       rm.className = 'cm-btn perigo';
       rm.textContent = t('cm.remover');
-      rm.onclick = () =>
-        confirmar({
-          // ESCAPADO: `confirmar` põe o `texto` com `innerHTML`, e desde a Name Tag este nome
-          // pode ser texto de OUTRO JOGADOR (o anúncio é dele). `validarApelido` já barra
-          // `<`, `>`, `&` e as aspas, então não há buraco hoje — o escape é o que impede que
-          // afrouxar aquele alfabeto um dia abra um, em silêncio, aqui.
-          titulo: t('cm.removerTitulo'),
-          texto: t('cm.removerTexto', { nome: escapar(nomeNoAnuncio(a.ficha)) }),
-          aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
-        });
+      rm.onclick = () => confirmarRemoverAnuncio(a);
       botoes.appendChild(rm);
     } else {
       const bt = document.createElement('button');
       bt.className = 'cm-btn comprar';
       bt.textContent = t('cm.comprar');
-      aplicarRetencaoCompra(bt, a, () =>
-        confirmar({
-          titulo: t('cm.comprarTitulo'),
-          // ESCAPADO pelo mesmo motivo do "remover" logo acima: este é o nome que o VENDEDOR
-          // escolheu, lido na tela de quem vai pagar.
-          texto: t('cm.comprarTexto', {
-            nome: escapar(nomeNoAnuncio(a.ficha)),
-            valor: precoComMoeda(a.preco * a.qtd, a.moeda),
-          }),
-          aoConfirmar: () => enviar({ t: 'market.comprar', id: a.id, qtd: a.qtd, preco: a.preco, moeda: a.moeda }),
-        }),
-      );
+      aplicarRetencaoCompra(bt, a, () => confirmarCompraAnuncio({
+        pk: a.ficha,
+        nome: nomeNoAnuncio(a.ficha),
+        preco: a.preco * a.qtd,
+        moeda: a.moeda,
+        vendedor: a.vendedor,
+        aoConfirmar: () => enviar({ t: 'market.comprar', id: a.id, qtd: a.qtd, preco: a.preco, moeda: a.moeda }),
+      }));
       botoes.appendChild(bt);
       // O "Enviar DM", embaixo do Comprar — a conversa com o vendedor sobre ESTE pokémon.
       if (!ehMeuAnuncio(a)) el.appendChild(linhaDmDoCard(a));
@@ -26811,7 +29677,7 @@ function cardAnuncio(a, meus) {
       <div class="cm-sub">${sub}</div>
     </div>
     <div class="cm-rodape">
-      ${precoComMoeda(a.preco, a.moeda)}
+      ${precoComMoeda(a.preco, a.moeda, { curto: true })}
       ${a.qtd > 1 ? `<div class="cm-unit">${t('cm.porUnidade')}</div>` : ''}
       <div class="cm-vend">${meus ? t('cm.seuAnuncio') : `${t('cm.de')} <b>${escapar(a.vendedor)}</b>`}</div>
     </div>
@@ -26835,12 +29701,7 @@ function cardAnuncio(a, meus) {
     const rm = document.createElement('button');
     rm.className = 'cm-btn perigo';
     rm.textContent = t('cm.remover');
-    rm.onclick = () =>
-      confirmar({
-        titulo: t('cm.removerTitulo'),
-        texto: t('cm.removerTexto', { nome: escapar(nomeAnuncioItem(a)) }),
-        aoConfirmar: () => enviar({ t: 'market.cancelar', id: a.id }),
-      });
+    rm.onclick = () => confirmarRemoverAnuncio(a);
     botoes.appendChild(rm);
   } else {
     const bt = document.createElement('button');
@@ -27122,47 +29983,44 @@ function pintarPassoDiamantes(corpo, fechar, cota) {
   const vendavel = Math.max(0, Math.floor(Number(cota?.vendavel) || 0));
   const saldo = Math.max(0, Math.floor(Number(cota?.saldo) || 0));
 
-  // A decomposição só aparece quando explica alguma coisa. Para quem comprou e não ganhou
-  // nada de indicação nem tem anúncio aberto, ela repetiria o mesmo número três vezes.
-  const parcelas = [
-    // O BRINDE vem primeiro, e só aparece quando existe: é ele que explica por que o número
-    // vendável é menor que a carteira. Sem esta linha o jogador lê "você tem 4, pode vender 1"
-    // e conclui que a tela está quebrada — foi exatamente o que aconteceu no relato.
-    cota?.brindes > 0 ? t('cm.diamanteBrindes', { n: num(cota.brindes) }) : '',
-    cota?.deCompra > 0 ? t('cm.diamanteDeCompra', { n: num(cota.deCompra) }) : '',
-    cota?.deAfiliado > 0 ? t('cm.diamanteDeAfiliado', { n: num(cota.deAfiliado) }) : '',
-    cota?.emAnuncios > 0 ? t('cm.diamanteEmAnuncios', { n: num(cota.emAnuncios) }) : '',
-  ].filter(Boolean);
-
-  // A regra vai por extenso e em destaque, e não como nota de rodapé: ela é a única coisa
-  // desta tela que o jogador não descobriria sozinho, e é a que produz o "por que só 40?".
+  // A decomposição (os selos de baixo da barra) só mostra a parcela que existe: para quem comprou
+  // e não ganhou nada de indicação nem tem anúncio aberto, ela repetiria o mesmo número. O BRINDE,
+  // quando há, é o que explica por que o vendável é menor que a carteira — sem ele o jogador lê
+  // "você tem 4, pode vender 1" e conclui que a tela está quebrada (foi exatamente o relato).
+  //
+  // A regra é a única coisa desta tela que o jogador não descobriria sozinho, e é a que produz o
+  // "por que só 40?". Ela vinha em dois parágrafos; agora é uma linha por ORIGEM do diamante, com
+  // a marca de "vende" ou "não vende" — o olho acha a dele sem ler as outras. A cota vira uma
+  // barra: quanto do saldo pode ir ao Mercado, e as parcelas como selos logo embaixo.
+  const pct = saldo ? Math.max(0, Math.min(100, (vendavel / saldo) * 100)) : 0;
   corpo.innerHTML = `
-    <div class="cm-dia-topo">
-      <div class="cm-dia-arte" id="cm-dia-arte"></div>
-      <div>
-        <div class="cm-nome">${t('cm.diamantes')}</div>
-        <div class="cm-sub">${t('cm.diamanteSaldo', { n: num(saldo) })}</div>
-      </div>
+    <div class="dlg-cota${vendavel ? '' : ' vazia'}">
+      <span class="dlg-cota-arte">${dlgArteArquivo(ICONE_DIAMANTE, 48)}</span>
+      <span class="dlg-cota-rot">${t('cm.diamanteVendaveis')}</span>
+      <b class="dlg-cota-num">${num(vendavel)}</b>
+      <span class="dlg-cota-barra" title="${escapar(t('cm.diamanteDeSaldo', { v: num(vendavel), s: num(saldo) }))}"><i style="width:${pct.toFixed(1)}%"></i></span>
+      <span class="dlg-cota-legenda">${escapar(t('cm.diamanteDeSaldo', { v: num(vendavel), s: num(saldo) }))}</span>
     </div>
-    <div class="cm-dia-regra">
-      <b>${t('cm.diamanteRegraTitulo')}</b>
-      <p>${t('cm.diamanteRegraTexto')}</p>
-      <p>${t('cm.diamanteUmaRodada')}</p>
-    </div>
-    <div class="cm-dia-cota ${vendavel ? '' : 'vazia'}">
-      <span class="cm-dia-cota-rot">${t('cm.diamanteVendaveis')}</span>
-      <b class="cm-dia-cota-num">${num(vendavel)}</b>
-      ${parcelas.length ? `<span class="cm-dia-cota-sub">${parcelas.join(' · ')}</span>` : ''}
-    </div>
+    ${dlgSelos(
+      cota?.deCompra > 0 ? dlgSelo('moedas', escapar(t('cm.diamanteDeCompra', { n: num(cota.deCompra) })), 'bom') : '',
+      cota?.deAfiliado > 0 ? dlgSelo('pessoaMais', escapar(t('cm.diamanteDeAfiliado', { n: num(cota.deAfiliado) })), 'bom') : '',
+      cota?.emAnuncios > 0 ? dlgSelo('megafone', escapar(t('cm.diamanteEmAnuncios', { n: num(cota.emAnuncios) })), 'info') : '',
+      cota?.brindes > 0 ? dlgSelo('xis', escapar(t('cm.diamanteBrindesCurto', { n: num(cota.brindes) })), 'perigo') : '',
+    )}
+    ${dlgLista([
+      { icone: 'check', html: t('cm.diaRegraCompra') },
+      { icone: 'check', html: t('cm.diaRegraIndicacao') },
+      { icone: 'xis', html: t('cm.diaRegraBrinde'), perigo: true },
+      { icone: 'volta', html: t('cm.diaRegraUmaVolta') },
+    ])}
     ${vendavel
       ? `<div class="cm-form">
            <div id="cm-qtd-host"></div>
            <button class="cm-publicar" id="cm-dia-seguir">${t('cm.diamanteSeguir')}</button>
          </div>`
-      : `<p class="cm-passo-txt">${t('cm.diamanteSemCota')}</p>
+      : `${dlgAviso(t('cm.diamanteSemCota'), { tom: 'ouro' })}
          <button class="cm-publicar" id="cm-dia-comprar">${t('diamantes.comprar')}</button>`}`;
-
-  corpo.querySelector('#cm-dia-arte').appendChild(iconeArquivo(ICONE_DIAMANTE, 44));
+  hidratarDialogo(corpo);
 
   if (!vendavel) {
     // Sem cota o caminho não é um botão morto: é a porta de comprar diamante, que é o que ele
@@ -27286,7 +30144,7 @@ const rotuloRetencao = (a) => {
   return t('cm.retencaoBadge', { m: h ? `${h}:${String(m).padStart(2, '0')}` : m, s: String(r).padStart(2, '0') });
 };
 const avisoRetencaoAnuncio = () =>
-  `<p class="cm-nota cm-retencao-aviso">${t('cm.retencaoAviso', { tempo: tempoRetencao() })}</p>`;
+  `<p class="cm-nota cm-retencao-aviso">${dlgIcone('ampulheta', 16)}<span>${t('cm.retencaoAviso', { tempo: tempoRetencao() })}</span></p>`;
 
 /**
  * Desabilita o botão de compra enquanto o anúncio está em retenção (servidor também bloqueia). O
@@ -27575,7 +30433,7 @@ function cardItemFavorito(itemId) {
     const ico = moedaId === 'orb' ? ICONE_GEMA : srcIcone(ICONE_OURO);
     const valor = v == null
       ? `<span class="cm-preco${moedaId === 'orb' ? ' orb' : ''}"><img src="${ico}" alt="">—</span>`
-      : precoComMoeda(v, moedaId);
+      : precoComMoeda(v, moedaId, { curto: true });
     return `<div class="cm-fav-item-preco${v == null ? ' nada' : ''}"><i>${t('cm.apartirDe')}</i>${valor}</div>`;
   };
   const categoria = (() => { const k = `cm.cat.${item.categoria}`; const tr = t(k); return tr !== k ? tr : item.categoria; })();
@@ -27835,6 +30693,8 @@ function passoEscolherItem(corpo, fechar) {
       passoPreco(corpo, fechar, {
         tipo: 'item',
         caixaId: caixa.id,
+        // Só para o DESENHO da barraca (a arte da caixa é por tipo); o servidor não lê.
+        caixaTipo: caixa.tipo,
         // O nome que a tela de preço mostra traz o número: é a peça que está sendo posta à
         // venda, e sem ele o vendedor não sabe qual das caixas dele escolheu.
         nome: `${t(`caixas.nome.${caixa.tipo}`)} ${serieDaCaixa(caixa.tipo, caixa.serie)}`,
@@ -27938,6 +30798,8 @@ function passoEscolherPokemon(corpo, fechar) {
           // vender Dragonite?" depois de escolher um card escrito "Trovão" faz duvidar se o
           // clique pegou o bicho certo, na única tela do jogo em que isso custa caro.
           tipo: 'pokemon', pokemonId: k.id, nome: `${nomeNoAnuncio(k)} Nv ${k.level}`, maximo: 1,
+          // O bicho em si, para a folha dos dias desenhá-lo na barraca da feira.
+          pk: k,
         }),
       }));
     }
@@ -27994,22 +30856,36 @@ function passoPreco(corpo, fechar, alvo) {
   // dizer que ele ia anunciar um diamante só.
   const emLote = alvo.maximo > 1 || (alvo.qtdFixa ?? 1) > 1;
   const temSeletor = alvo.qtdFixa == null && alvo.maximo > 1;
+  // A mercadoria vai para a BARRACA da feira, e a placa do preço pendurada nela anda com o que
+  // se digita — o vendedor vê o anúncio como o comprador vai ver. A pergunta "por quanto vender
+  // X?" virou isso: o X está ali em pé, com o preço no pescoço.
+  const pk = alvo.tipo === 'pokemon' ? alvo.pk : null;
   corpo.innerHTML = `
-    <p class="cm-passo-txt">${t(alvo.tipo === 'diamante' ? 'cm.porQuantoDiamante' : 'cm.porQuanto', { nome: escapar(alvo.nome) })}</p>
+    ${barraca({
+      ator: dlgAtor({
+        arte: arteDoAlvoAnuncio(alvo),
+        nome: pk ? nomePkHtml(pk) : escapar(alvo.nome),
+        sub: pk ? dlgSeloShiny(pk.shiny) + dlgNivel(pk.level) : '',
+        classe: 'novo',
+      }),
+      idPlaca: 'cm-placa',
+      idSelo: 'cm-placa-qtd',
+      compacta: true,
+    })}
     ${alvo.nota ? `<p class="cm-nota cm-nota-alerta">${escapar(alvo.nota)}</p>` : ''}
     <div class="cm-form">
       <label>${t(alvo.tipo === 'diamante' ? 'cm.precoPorDiamante' : 'cm.precoUnit')}
         <input id="cm-preco" type="number" value="${alvo.npc || 1}" min="1" inputmode="numeric">
         <em id="cm-preco-ajuda">${alvo.npc ? t('cm.npcPaga', { v: num(alvo.npc) }) : t('cm.precoUnitAjuda')}</em>
       </label>
-      ${alvo.itemId ? '<p class="cm-nota" id="cm-preco-ref"></p>' : ''}
-      ${alvo.itemId || alvo.tipo === 'diamante' ? '<p class="cm-nota cm-nota-media" id="cm-preco-media"></p>' : ''}
+      ${alvo.itemId || alvo.tipo === 'diamante' ? '<div class="dlg-refs" id="cm-preco-refs"></div>' : ''}
       ${htmlMoedasAnuncio('gold')}
       <div id="cm-qtd-host"></div>
-      <p class="cm-resumo" id="cm-resumo"></p>
+      <div id="cm-resumo"></div>
       ${avisoRetencaoAnuncio()}
       <button class="cm-publicar" id="cm-publicar">${t('cm.publicar')}</button>
     </div>`;
+  hidratarDialogo(corpo);
 
   let moedaEscolhida = 'gold';
   const resumo = corpo.querySelector('#cm-resumo');
@@ -28034,18 +30910,23 @@ function passoPreco(corpo, fechar, alvo) {
     const qtd = alvo.qtdFixa ?? seletor?.ler() ?? 1;
     inpPreco.min = String(minMoeda());
     const ajuda = corpo.querySelector('#cm-preco-ajuda');
-    if (ajuda) ajuda.textContent = ajudaPrecoMercado(moedaEscolhida, alvo.npc);
-    const ref = corpo.querySelector('#cm-preco-ref');
-    if (ref) ref.innerHTML = htmlReferenciaPrecoItem(alvo.itemId, moedaEscolhida);
-    const media = corpo.querySelector('#cm-preco-media');
-    if (media) {
-      media.innerHTML = alvo.tipo === 'diamante'
-        ? htmlMediaDeVenda(estado.cmMediaDiamante, moedaEscolhida, { diamante: true })
-        : htmlMediaDeVenda(mediaDoItem(alvo.itemId), moedaEscolhida);
-    }
-    resumo.innerHTML = resumoPrecoMercado({ moeda: moedaEscolhida, preco, qtd, emLote });
-    corpo.querySelector('#cm-publicar').disabled = totalLiquidoMercado(preco, qtd, moedaEscolhida) < 1;
+    if (ajuda) ajuda.textContent = ajudaPrecoMercado(moedaEscolhida, alvo.npc, alvo.tipo);
+    const refs = corpo.querySelector('#cm-preco-refs');
+    if (refs) refs.innerHTML = refsDePrecoHtml({ itemId: alvo.itemId, diamante: alvo.tipo === 'diamante' }, moedaEscolhida);
+    corpo.querySelector('#cm-placa').innerHTML = placaDePreco(preco, moedaEscolhida, { porUn: emLote });
+    corpo.querySelector('#cm-placa-qtd').textContent = emLote ? `×${num(qtd)}` : '';
+    resumo.innerHTML = reciboAnuncioHtml({ moeda: moedaEscolhida, preco, qtd, tipo: alvo.tipo });
+    corpo.querySelector('#cm-publicar').disabled =
+      totalLiquidoMercado(preco, qtd, moedaEscolhida, alvo.tipo) < 1;
   };
+  // A régua de preço é um BOTÃO: um toque copia o menor anúncio (ou a média vendida) para o
+  // campo, e daí o vendedor só ajusta.
+  corpo.querySelector('#cm-preco-refs')?.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-usar-preco]');
+    if (!b) return;
+    inpPreco.value = String(Math.max(minMoeda(), Math.round(Number(b.dataset.usarPreco) || 0)));
+    atualizar();
+  });
 
   // Só existe seletor quando há mais de uma unidade A ESCOLHER — para um pokémon (ou um item
   // único) uma barra travada em 1 é ruído, e no diamante a escolha já aconteceu.
@@ -28101,7 +30982,7 @@ function passoPreco(corpo, fechar, alvo) {
     // Perguntar os dias depois do preço é de propósito — é aí que o custo aparece, e decidir
     // o prazo antes de saber quanto vai pedir pelo bicho é decidir no escuro.
     const seguir = () => {
-      if (alvo.tipo === 'pokemon') abrirDiasAnuncio(publicar);
+      if (alvo.tipo === 'pokemon') abrirDiasAnuncio(publicar, { pk: alvo.pk, preco: preco * qtd, moeda: moedaEscolhida });
       else publicar(null);
     };
 
@@ -28168,46 +31049,239 @@ function avisarAnuncioEmCoins({ nome, preco, qtd = 1, aoSeguir }) {
 }
 
 /**
+ * A BARRACA da feira: o toldo listrado, quem está à venda e as duas plaquinhas — o preço
+ * pendurado à direita e o selo à esquerda (os dias da pensão, o tamanho do lote, o estoque).
+ *
+ * É o MESMO desenho em toda folha do Mercado (anunciar, editar, comprar, os dias da feira): a feira
+ * é uma só, e quem já viu o bicho debaixo do toldo entende de relance que está numa venda. Nasceu
+ * como o desenho da pensão ("não fica numa prateleira: fica na feira, e os tratadores cuidam
+ * dele"). `idPlaca`/`idSelo` deixam a folha repintar as plaquinhas enquanto o jogador mexe.
+ */
+function barraca({ ator, placa = '', selo = '', idPlaca = '', idSelo = '', compacta = false }) {
+  return `
+    <div class="dlg-palco tom-ouro dlg-feira${compacta ? ' compacta' : ''}">
+      <span class="dlg-toldo" aria-hidden="true"></span>
+      ${ator}
+      <span class="dlg-placa"${idPlaca ? ` id="${idPlaca}"` : ''}>${placa}</span>
+      <span class="dlg-placa-dias"${idSelo ? ` id="${idSelo}"` : ''}>${selo}</span>
+    </div>`;
+}
+
+/**
+ * A plaquinha do PREÇO: a moeda e o número, "/un." quando é preço de lote — e, na edição, o preço
+ * de antes riscado em cima, enquanto ele for diferente do novo.
+ */
+const placaDePreco = (preco, moeda, { porUn = false, era = null } = {}) => `
+  ${era != null && era !== preco ? `<s>${num(era)}</s>` : ''}
+  <img src="${moeda === 'orb' ? ICONE_GEMA : srcIcone(ICONE_OURO)}" alt="">${num(preco)}${porUn ? `<small>${escapar(t('cm.porUnCurto'))}</small>` : ''}`;
+
+/** A barraca da folha dos DIAS (a pensão do pokémon anunciado). */
+function barracaDaFeira({ pk = null, preco = null, moeda = 'gold', dias = null }) {
+  return barraca({
+    ator: pk
+      ? dlgAtor({
+        arte: dlgArtePk(pk, 64),
+        nome: nomePkHtml(pk),
+        sub: dlgSeloShiny(pk.shiny) + dlgNivel(pk.level),
+        classe: 'novo',
+      })
+      : dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'moedas', tom: 'ouro' })), classe: 'novo' }),
+    placa: preco != null ? placaDePreco(preco, moeda) : '',
+    selo: dias != null ? diasNaFeira(dias) : '',
+    idSelo: 'cm-dias-selo',
+  });
+}
+
+/**
+ * A arte de quem vai à feira num anúncio NOVO (o `alvo` do passo do preço): o pokémon animado, o
+ * diamante, a caixa, ou o ícone do item — casa e bicicleta numeradas são itens com desenho próprio.
+ */
+function arteDoAlvoAnuncio(alvo) {
+  if (alvo.tipo === 'pokemon' && alvo.pk) return dlgArtePk(alvo.pk, 52);
+  if (alvo.tipo === 'diamante') return dlgArteArquivo(ICONE_DIAMANTE, 44);
+  if (alvo.caixaId) return dlgArteArquivo(`/img/itens/caixa-${alvo.caixaTipo ?? 'fundador'}.png`, 52, true);
+  if (alvo.itemId) return dlgArteItem(alvo.itemId, 44);
+  return dlgArteArquivo(ICONE_ITEM_GENERICO, 40);
+}
+
+/**
+ * O ator da barraca para um anúncio que JÁ existe (editar, comprar): a ficha congelada nele. A arte
+ * do item é a do card (`arteItemAnuncio`) e é um NÓ — entra por `penduraArteDoAnuncio`.
+ */
+function atorDoAnuncio(a, { sub = '' } = {}) {
+  const pokemon = a.tipo === 'pokemon';
+  const nome = pokemon ? nomeNoAnuncio(a.ficha) : ehAnuncioDiamante(a) ? t('cm.diamantes') : nomeAnuncioItem(a);
+  return dlgAtor({
+    arte: pokemon ? dlgArtePk(a.ficha, 52) : '<span class="dlg-ator-fig" data-dlg-anuncio></span>',
+    nome: escapar(nome || '—'),
+    sub: (pokemon ? dlgSeloShiny(a.ficha?.shiny) + dlgNivel(a.ficha?.level ?? 1) : '') + sub,
+    classe: 'novo',
+  });
+}
+const penduraArteDoAnuncio = (raiz, a, px = 56) => raiz?.querySelector('[data-dlg-anuncio]')?.appendChild(arteItemAnuncio(a, px));
+
+/**
+ * O RECIBO do anúncio: o total do lote, a mordida da taxa e o que cai na sua mão — uma conta por
+ * linha, a última grande e verde. Era uma frase ("Total: 104 Coins · taxa de 15% · você recebe
+ * 88"), e a frase escondia justamente o número que decide o preço.
+ *
+ * No POKÉMON em gema a alíquota depende do TOTAL (faixa marginal), então a linha mostra a efetiva
+ * daquele total; item e diamante têm alíquota única. Preço que não deixa nem 1 de líquido vira o
+ * aviso do mínimo, e o Publicar desliga (quem faz isso é o passo do preço).
+ */
+function reciboAnuncioHtml({ moeda, preco, qtd = 1, tipo }) {
+  const orb = moeda === 'orb';
+  const total = qtd * preco;
+  const taxaPct = orb ? pctEfetivoOrb(total, tipo) : taxaGoldCliente() * 100;
+  const liq = totalLiquidoMercado(preco, qtd, moeda, tipo);
+  if (liq < 1) {
+    return dlgAviso(t(orb ? 'cm.resumoOrbBaixo' : 'cm.resumoGoldBaixo', {
+      min: num(precoMinMercado(moeda)), taxa: pctTaxa(taxaPct),
+    }), { tom: 'ouro' });
+  }
+  const ico = `<img src="${orb ? ICONE_GEMA : srcIcone(ICONE_OURO)}" alt="">`;
+  return `
+    <div class="dlg-recibo">
+      <div class="dlg-recibo-linha">
+        <span>${escapar(t('cm.reciboTotal'))}${qtd > 1 ? `<small>${num(qtd)} × ${num(preco)}</small>` : ''}</span>
+        <b>${ico}${num(total)}</b>
+      </div>
+      <div class="dlg-recibo-linha menos">
+        <span>${escapar(t('cm.reciboTaxa', { pct: pctTaxa(taxaPct) }))}<small>${escapar(t('cm.reciboTaxaSub'))}</small></span>
+        <b>−${num(total - liq)}</b>
+      </div>
+      <div class="dlg-recibo-linha fim">
+        <span>${escapar(t('cm.reciboRecebe'))}</span>
+        <b>${ico}${num(liq)}</b>
+      </div>
+    </div>`;
+}
+
+/**
+ * As RÉGUAS DE PREÇO como botões: o menor anúncio aberto e a média vendida nos últimos 7 dias, na
+ * moeda escolhida. Um toque copia o número para o campo — é a conta que todo vendedor faz de
+ * cabeça ("vou pôr um pouco abaixo do menor"), sem precisar redigitar 109.000.
+ *
+ * `estado.cmItens` (o menor anúncio) e a média chegam depois da folha abrir; quem repinta quando
+ * eles chegam é o `cmPassoPrecoAtualizar`.
+ */
+function refsDePrecoHtml({ itemId = null, diamante = false }, moeda) {
+  const orb = moeda === 'orb';
+  const icone = `<img src="${orb ? ICONE_GEMA : srcIcone(ICONE_OURO)}" alt="">`;
+  const chip = (rotulo, valor, sub = '') => `
+    <button type="button" class="dlg-ref" data-usar-preco="${Math.round(valor)}">
+      <span class="dlg-ref-rot">${escapar(rotulo)}${sub ? `<small>${escapar(sub)}</small>` : ''}</span>
+      <span class="dlg-ref-v">${icone}${num(Math.round(valor))}</span>
+      <span class="dlg-ref-usar">${escapar(t('cm.refUsar'))}</span>
+    </button>`;
+  const vazio = (texto) => `<span class="dlg-ref vazio">${escapar(texto)}</span>`;
+  // Com o resumo a caminho (`cmMedias` zerado no pedido), afirmar "ninguém anuncia" seria mentir
+  // por meio segundo: os dois lugares esperam com reticências.
+  if (itemId && estado.cmMedias === undefined) return vazio('…') + vazio('…');
+  const chips = [];
+  if (itemId) {
+    const r = estado.cmItens?.[itemId];
+    const v = r?.anuncios ? (orb ? r.minOrb : r.minGold) : null;
+    if (v != null) chips.push(chip(t('cm.refMenor'), v));
+    else if (!r?.anuncios) chips.push(vazio(t('cm.semAnunciosReferencia')));
+    else chips.push(vazio(t(orb ? 'cm.semAnunciosMoedaOrb' : 'cm.semAnunciosMoedaGold')));
+  }
+  const media = diamante ? estado.cmMediaDiamante : itemId ? mediaDoItem(itemId) : undefined;
+  if (media !== undefined) {
+    const m = orb ? media?.orb : media?.gold;
+    if (m) chips.push(chip(t('cm.refMedia'), m.media, t(diamante ? 'cm.refMediaSubDiamante' : 'cm.refMediaSub', { u: num(m.unidades) })));
+    else chips.push(vazio(t(orb ? 'cm.semVendas7dOrb' : 'cm.semVendas7dGold')));
+  }
+  return chips.join('');
+}
+
+/** "1 dia" / "7 dias" — o `t()` não tem plural automático. */
+const diasNaFeira = (n) => t(n === 1 ? 'cm.diaN' : 'cm.diasN', { n: num(n) });
+
+/**
  * Por quantos dias o anúncio fica de pé — e quanto isso custa.
  *
  * A diária é sempre em Coins, mesmo quando o anúncio cobra em gema (ver `TAXA_DIARIA` no
  * servidor). O total anda junto com o cursor e o botão morre se o saldo não cobre: descobrir
  * que faltava ouro só depois de confirmar seria descobrir tarde.
+ *
+ * O prazo se escolhe de três jeitos, e cada um serve a um jogador: o − e o + para o ajuste fino,
+ * os atalhos para quem pensa em "uma semana", e a barra para arrastar. Os três mexem no MESMO
+ * `input[type=range]`, que continua sendo o valor de verdade.
  */
-function abrirDiasAnuncio(aoConfirmar) {
+function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold' } = {}) {
   const reg = estado.mercado ?? {};
   const diaria = reg.taxaDiaria ?? 100000;
   const dMin = reg.diasMin ?? 1;
   const dMax = reg.diasMax ?? 30;
   const saldo = Math.floor(estado.eu?.gold ?? 0);
+  // Os prazos em que se pensa: um dia, um fim de semana, uma semana, quinze dias, o mês — só os
+  // que cabem na faixa que o servidor aceita.
+  const atalhos = [...new Set([dMin, 3, 7, 15, dMax])]
+    .filter((d) => d >= dMin && d <= dMax)
+    .sort((a, b) => a - b);
+  const custo = (dias) => dlgCusto({
+    moeda: 'ouro',
+    valor: diaria * dias,
+    saldo,
+    rotulo: t('cm.diasPensao'),
+    extra: `${num(diaria)} × ${num(dias)}`,
+  });
+  // As duas regras que o prazo decide, em selo: o que se perde se vender cedo, e o que acontece
+  // se ninguém levar. São as mesmas da confirmação que vem depois — lidas aqui, onde se escolhe.
+  const regras = (dias) => dlgSelos(
+    dlgSelo('moedas', escapar(t('cm.diasSeloPago')), 'perigo'),
+    dlgSelo('volta', escapar(t('cm.diasSeloVolta', { dias: diasNaFeira(dias) })), 'bom'),
+  );
 
   const { corpo, fechar } = folhaMercado(t('cm.diasTitulo'));
   corpo.innerHTML = `
-    <p class="cm-nota">${t('cm.diasExplica', { diaria: num(diaria) })}</p>
-    <label class="cm-campo">
-      <span>${t('cm.diasQuantos')} <b id="cm-dias-v">${dMin}</b></span>
-      <input type="range" id="cm-dias" min="${dMin}" max="${dMax}" step="1" value="${dMin}">
-    </label>
-    <div class="cm-resumo" id="cm-dias-resumo"></div>
+    ${barracaDaFeira({ pk, preco, moeda, dias: dMin })}
+    <p class="dlg-sub">${t('cm.diasLead')}</p>
+    <div class="dlg-dias">
+      <span class="dlg-dias-rot">${dlgIcone('calendario', 15)}${t('cm.diasQuantos')}</span>
+      <div class="dlg-dias-linha">
+        <button type="button" class="mk-passo" data-passo="-1" aria-label="−1">−</button>
+        <span class="dlg-dias-num"><b id="cm-dias-v">${dMin}</b><small id="cm-dias-un"></small></span>
+        <button type="button" class="mk-passo" data-passo="1" aria-label="+1">+</button>
+      </div>
+      <input type="range" class="qtd-barra" id="cm-dias" min="${dMin}" max="${dMax}" step="1" value="${dMin}"
+             aria-label="${escapar(t('cm.diasQuantos'))}">
+      <div class="qtd-atalhos">${atalhos.map((d) =>
+        `<button type="button" class="qtd-atalho" data-dias="${d}">${diasNaFeira(d)}</button>`).join('')}</div>
+    </div>
+    <div id="cm-dias-resumo"></div>
+    <div id="cm-dias-regras"></div>
     ${avisoRetencaoAnuncio()}
-    <div class="cm-botoes">
-      <button class="cm-acao" id="cm-dias-cancelar">${t('cm.cancelar')}</button>
-      <button class="cm-acao destaque" id="cm-dias-ok">${t('cm.publicar')}</button>
+    <div class="confirmar-botoes dlg-botoes">
+      <button type="button" class="btn-apagado" id="cm-dias-cancelar">${t('cm.cancelar')}</button>
+      <button type="button" id="cm-dias-ok">${t('cm.publicar')}</button>
     </div>`;
+  hidratarDialogo(corpo);
 
   const faixa = corpo.querySelector('#cm-dias');
   const ok = corpo.querySelector('#cm-dias-ok');
   const pintar = () => {
     const dias = Number(faixa.value);
-    const total = diaria * dias;
-    const cabe = total <= saldo;
-    corpo.querySelector('#cm-dias-v').textContent = dias;
-    corpo.querySelector('#cm-dias-resumo').innerHTML = t('cm.diasResumo', {
-      dias, total: num(total), saldo: num(saldo),
-    }) + (cabe ? '' : `<br><span class="cm-erro">${t('cm.diasSemSaldo')}</span>`);
+    const cabe = diaria * dias <= saldo;
+    corpo.querySelector('#cm-dias-v').textContent = num(dias);
+    corpo.querySelector('#cm-dias-un').textContent = t(dias === 1 ? 'cm.diaUm' : 'cm.diasVarios');
+    corpo.querySelector('#cm-dias-selo').textContent = diasNaFeira(dias);
+    corpo.querySelector('#cm-dias-resumo').innerHTML = custo(dias)
+      + (cabe ? '' : `<p class="cm-erro dlg-erro">${t('cm.diasSemSaldo')}</p>`);
+    corpo.querySelector('#cm-dias-regras').innerHTML = regras(dias);
+    for (const b of corpo.querySelectorAll('[data-dias]')) b.classList.toggle('on', Number(b.dataset.dias) === dias);
     ok.disabled = !cabe;
   };
   faixa.oninput = pintar;
+  corpo.querySelector('.dlg-dias').onclick = (ev) => {
+    const passo = ev.target.closest('[data-passo]');
+    const atalho = ev.target.closest('[data-dias]');
+    if (!passo && !atalho) return;
+    const alvo = atalho ? Number(atalho.dataset.dias) : Number(faixa.value) + Number(passo.dataset.passo);
+    faixa.value = String(Math.min(dMax, Math.max(dMin, alvo)));
+    pintar();
+  };
   pintar();
 
   corpo.querySelector('#cm-dias-cancelar').onclick = fechar;
@@ -28218,11 +31292,13 @@ function abrirDiasAnuncio(aoConfirmar) {
   // e vender em duas horas seria descobrir tarde.
   ok.onclick = () => {
     const dias = Number(faixa.value);
-    const total = diaria * dias;
     fechar();
     confirmar({
-      titulo: t('cm.confirmaTitulo', { dias }),
-      texto: t('cm.confirmaTextoPokemon', { dias, total: num(total) }),
+      titulo: t('cm.confirmaTitulo', { dias: diasNaFeira(dias) }),
+      texto: `
+        ${barracaDaFeira({ pk, preco, moeda, dias })}
+        ${custo(dias)}
+        ${regras(dias)}`,
       rotuloSim: t('cm.publicar'),
       aoConfirmar: () => aoConfirmar(dias),
     });
@@ -28251,23 +31327,27 @@ function abrirCompra(a) {
   // A bicicleta também: peça única com número.
   const ehBike = !!a.ficha?.bicicletaId;
 
+  // A barraca de quem vende: a mercadoria debaixo do toldo, o preço da unidade pendurado e o
+  // estoque no selo do outro lado. A peça numerada (caixa, casa, bicicleta) leva o número como sub.
+  const unica = caixaTipo || ehCasa || ehBike;
   corpo.innerHTML = `
-    <div class="cm-compra-topo">
-      <div class="cm-arte" id="cm-compra-arte"></div>
-      <div>
-        <div class="cm-nome">${escapar(
+    ${barraca({
+      ator: dlgAtor({
+        arte: a.tipo === 'pokemon' ? dlgArtePk(a.ficha, 52) : '<span class="dlg-ator-fig" data-dlg-anuncio></span>',
+        nome: escapar(
           caixaTipo ? t(`caixas.nome.${caixaTipo}`)
             : ehCasa ? nomeCasaRaridade(a.ficha.casaRaridade)
             : ehBike ? nomeBicicletaRaridade(a.ficha.bicicletaRaridade)
               : ehAnuncioDiamante(a) ? t('cm.diamantes')
                 : nomeNoAnuncio(a.ficha),
-        )}${numeroDoAnuncio(a) ? ` ${plaquinhaDoAnuncio(a)}` : ''}</div>
-        <div class="cm-sub">${t('cm.unidadePor', { v: precoComMoeda(a.preco, a.moeda) })}</div>
-        <div class="cm-vend">${t('cm.de')} <b>${escapar(a.vendedor)}</b>${
-          caixaTipo || ehCasa || ehBike ? '' : ` · ${t('cm.emEstoque', { n: num(a.qtd) })}`
-        }</div>
-      </div>
-    </div>
+        ),
+        sub: `${numeroDoAnuncio(a) ? plaquinhaDoAnuncio(a) : ''}<span class="dlg-vendedor">${t('cm.de')} <b>${escapar(a.vendedor)}</b></span>`,
+        classe: 'novo',
+      }),
+      placa: placaDePreco(a.preco, a.moeda, { porUn: !unica }),
+      selo: unica ? '' : t('cm.emEstoque', { n: num(a.qtd) }),
+      compacta: true,
+    })}
     ${caixaTipo
       ? `<p class="cm-passo-txt">${escapar(t('caixas.vemDentro'))}</p>
          ${conteudoDaCaixaHtml(caixaTipo, { serie: a.ficha.serie })}
@@ -28275,21 +31355,28 @@ function abrirCompra(a) {
       : ehCasa ? `<p class="cm-nota">${escapar(t('casa.compraVazia'))}</p>` : ''}
     <div class="cm-form">
       <div id="cm-qtd-host"></div>
-      <p class="cm-resumo" id="cm-resumo"></p>
+      <div id="cm-resumo"></div>
       <button class="cm-publicar" id="cm-confirmar">${t('cm.comprar')}</button>
     </div>`;
-  corpo.querySelector('#cm-compra-arte').appendChild(arteItemAnuncio(a, 44));
+  hidratarDialogo(corpo);
+  penduraArteDoAnuncio(corpo, a, 44);
   if (caixaTipo) pintarConteudoDaCaixa(corpo);
 
   const resumo = corpo.querySelector('#cm-resumo');
   const botao = corpo.querySelector('#cm-confirmar');
+  // A etiqueta de preço do diálogo de jogo: o total da compra e o saldo antes → depois, vermelha
+  // quando não cobre — e a conta "3 × 120.000" embaixo do número, que era a frase de antes.
+  const etiqueta = (n) => dlgCusto({
+    moeda: a.moeda === 'orb' ? 'gema' : 'ouro',
+    valor: n * a.preco,
+    saldo: Math.floor(saldo),
+    extra: n > 1 ? `${num(n)} × ${num(a.preco)}` : '',
+  });
 
   // Caixa e casa são peça única: sem seletor de quantidade ("até 1" é só ruído), compra de uma.
-  if (caixaTipo || ehCasa || ehBike) {
+  if (unica) {
     const falta = a.preco > saldo;
-    resumo.innerHTML = t('cm.resumoCompra', {
-      qtd: 1, unit: precoComMoeda(a.preco, a.moeda), total: precoComMoeda(a.preco, a.moeda),
-    }) + (falta ? `<br><b class="cm-falta">${t('cm.saldoCurto')}</b>` : '');
+    resumo.innerHTML = etiqueta(1);
     botao.disabled = falta;
     botao.onclick = () => {
       enviar({ t: 'market.comprar', id: a.id, qtd: 1, preco: a.preco, moeda: a.moeda });
@@ -28306,9 +31393,7 @@ function abrirCompra(a) {
     aoMudar: (n) => {
       const total = n * a.preco;
       const falta = total > saldo || maxCompra < 1;
-      resumo.innerHTML = t('cm.resumoCompra', {
-        qtd: num(n), unit: precoComMoeda(a.preco, a.moeda), total: precoComMoeda(total, a.moeda),
-      }) + (falta ? `<br><b class="cm-falta">${t('cm.saldoCurto')}</b>` : '');
+      resumo.innerHTML = etiqueta(n);
       // Desabilitar em vez de deixar o servidor recusar: o "não" fica visível ANTES do clique.
       botao.disabled = falta;
     },
@@ -28327,33 +31412,55 @@ function abrirEdicao(a) {
     return;
   }
   const { corpo, fechar } = folhaMercado(t('cm.editarTitulo'));
+  // A mesma barraca do anúncio novo, com o preço de HOJE riscado na placa enquanto o novo for
+  // diferente: editar é comparar os dois, e a placa é onde o comprador vai ler.
+  const lote = (a.qtd ?? 1) > 1;
   corpo.innerHTML = `
-    <p class="cm-passo-txt">${escapar(nomeNoAnuncio(a.ficha))}</p>
+    ${barraca({ ator: atorDoAnuncio(a), idPlaca: 'cm-placa', selo: lote ? `×${num(a.qtd)}` : '', compacta: true })}
     <div class="cm-form">
       <label>${t('cm.precoUnit')}
         <input id="cm-preco" type="number" value="${a.preco}" min="1" inputmode="numeric">
         <em></em>
       </label>
+      ${a.itemId || ehAnuncioDiamante(a) ? '<div class="dlg-refs" id="cm-preco-refs"></div>' : ''}
       ${htmlMoedasAnuncio(a.moeda)}
-      <p class="cm-resumo" id="cm-resumo"></p>
+      <div id="cm-resumo"></div>
       ${avisoRetencaoAnuncio()}
       <button class="cm-publicar" id="cm-salvar">${t('cm.salvar')}</button>
     </div>`;
+  hidratarDialogo(corpo);
+  penduraArteDoAnuncio(corpo, a, 44);
   let moedaEscolhida = a.moeda;
   const inpPreco = corpo.querySelector('#cm-preco');
   const minMoeda = () => precoMinMercado(moedaEscolhida);
   const precoDe = () => Math.max(minMoeda(), Math.floor(Number(inpPreco?.value)) || 1);
   const atualizar = () => {
+    if (!corpo.isConnected) {
+      cmPassoPrecoAtualizar = null;
+      return;
+    }
     const preco = precoDe();
     inpPreco.min = String(minMoeda());
     const ajuda = corpo.querySelector('label em');
-    if (ajuda) ajuda.textContent = ajudaPrecoMercado(moedaEscolhida);
-    corpo.querySelector('#cm-resumo').innerHTML = resumoPrecoMercado({
-      moeda: moedaEscolhida, preco, qtd: a.qtd ?? 1, emLote: (a.qtd ?? 1) > 1,
+    if (ajuda) ajuda.textContent = ajudaPrecoMercado(moedaEscolhida, null, a.tipo);
+    const refs = corpo.querySelector('#cm-preco-refs');
+    if (refs) refs.innerHTML = refsDePrecoHtml({ itemId: a.itemId, diamante: ehAnuncioDiamante(a) }, moedaEscolhida);
+    // O "era" só faz sentido na MESMA moeda: trocar de Coins para Gemas não é baixar o preço.
+    corpo.querySelector('#cm-placa').innerHTML = placaDePreco(preco, moedaEscolhida, {
+      porUn: lote, era: moedaEscolhida === a.moeda ? a.preco : null,
+    });
+    corpo.querySelector('#cm-resumo').innerHTML = reciboAnuncioHtml({
+      moeda: moedaEscolhida, preco, qtd: a.qtd ?? 1, tipo: a.tipo,
     });
     corpo.querySelector('#cm-salvar').disabled =
-      totalLiquidoMercado(preco, a.qtd ?? 1, moedaEscolhida) < 1;
+      totalLiquidoMercado(preco, a.qtd ?? 1, moedaEscolhida, a.tipo) < 1;
   };
+  corpo.querySelector('#cm-preco-refs')?.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-usar-preco]');
+    if (!b) return;
+    inpPreco.value = String(Math.max(minMoeda(), Math.round(Number(b.dataset.usarPreco) || 0)));
+    atualizar();
+  });
   corpo.querySelector('.cm-moedas').onclick = (ev) => {
     const b = ev.target.closest('.cm-moeda');
     if (!b) return;
@@ -28365,6 +31472,13 @@ function abrirEdicao(a) {
   };
   inpPreco.oninput = atualizar;
   atualizar();
+  // As réguas (menor anúncio, média vendida) vêm do resumo do catálogo — o mesmo pedido do
+  // anúncio novo. A resposta repinta esta folha pelo `cmPassoPrecoAtualizar`.
+  if (a.itemId) {
+    cmPassoPrecoAtualizar = atualizar;
+    estado.cmMedias = undefined;
+    enviar({ t: 'market.itens' });
+  }
   corpo.querySelector('#cm-salvar').onclick = () => {
     const salvar = () => {
       enviar({ t: 'market.editar', id: a.id, preco: precoDe(), moeda: moedaEscolhida });
@@ -28446,7 +31560,9 @@ function irParaPaginaDoMercado(passo) {
 function pintarPaginas() {
   const host = $('#cm-paginas');
   if (!host) return;
-  const d = estado.cmDados ?? {};
+  // Pela mesma porta da grade: a contagem de páginas de uma vitrine não vale na outra, e
+  // enquanto a resposta nova não chega é melhor não desenhar paginação nenhuma.
+  const d = dadosDaGradeCerta();
   if (estado.cmAba !== 'vitrine' || !d.total || d.total <= (d.porPagina ?? 24)) {
     host.innerHTML = '';
     return;
@@ -30218,18 +33334,35 @@ function aoReceberCampeonato(m) {
 }
 
 /**
+ * Quem da equipe anunciada pelo servidor REALMENTE entra em campo.
+ *
+ * Duas peneiras, e as duas valem para o congelamento também: quem já não está na coleção (foi
+ * vendido ou anunciado depois da escolha) e quem a restrição do campeonato barra. A segunda é a
+ * que faltava: a equipe de reserva é a do PvP Ranqueado, que nunca passou por conferência
+ * nenhuma, e num Amador o congelamento deixa o shiny e o P5 dela de fora
+ * (`equipesDaPartida`). Sem ela a faixa mostrava cinco casas cheias para quem vai lutar com
+ * três — e mentia justamente no número que ela existe para dizer. A regra é a MESMA do
+ * servidor, de `shared/campeonato.mjs`.
+ */
+function equipeQueVaiLutar(eu) {
+  const porId = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
+  const regras = campAtual();
+  const ids = eu?.equipe?.ids ?? [];
+  const naColecao = ids.map((id) => porId.get(id)).filter(Boolean);
+  const vivos = naColecao.filter((pk) => !porQueNaoPodeLutar(pk, regras));
+  return { vivos, barrados: naColecao.length - vivos.length, sumiram: ids.length - naColecao.length };
+}
+
+/**
  * A equipe que vai lutar, na faixa abaixo do cabeçalho — só para o inscrito, e só até o prazo.
  *
  * Cinco casas na ordem de luta, a FONTE ("escolhida para o campeonato" ou "a do PvP") e o botão
  * que abre a escolha. Os ids vêm do servidor e o desenho sai da coleção desta tela: quem foi
- * vendido ou anunciado depois da escolha some da casa e ganha o aviso — o congelamento também o
- * deixaria de fora. Os sprites entram depois do HTML, em `pintarCasasDaEquipe`.
+ * vendido, anunciado ou barrado pela restrição some da casa e ganha o aviso — o congelamento
+ * também o deixaria de fora. Os sprites entram depois do HTML, em `pintarCasasDaEquipe`.
  */
 function htmlEquipeDoCampeonato(eu) {
-  const porId = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
-  const ids = eu.equipe?.ids ?? [];
-  const vivos = ids.map((id) => porId.get(id)).filter(Boolean);
-  const sumiram = ids.length - vivos.length;
+  const { vivos, barrados, sumiram } = equipeQueVaiLutar(eu);
   const casas = Array.from({ length: PVP_TIME_MAX }, (_, i) => {
     const pk = vivos[i];
     return pk
@@ -30237,17 +33370,24 @@ function htmlEquipeDoCampeonato(eu) {
                title="${escapar(`${pk.shiny ? '✨ ' : ''}${pk.nome} · ${t('painel.nivelCurto')}${pk.level}`)}"></span>`
       : '<span class="camp-eq-casa"></span>';
   }).join('');
-  const fonte = !vivos.length ? 'vazia' : eu.equipe?.fonte === 'campeonato' ? 'camp' : 'pvp';
+  // Barrado todo mundo, a faixa não diz "você não tem equipe" (ele tem, e cheia): diz que ela
+  // não serve para ESTE campeonato, que é a frase que leva ao botão de escolher outra.
+  const fonte = vivos.length
+    ? (eu.equipe?.fonte === 'campeonato' ? 'camp' : 'pvp')
+    : (barrados ? 'barrada' : 'vazia');
   const nota = {
     camp: t('camp.equipeFonteCamp', PRAZO_EQUIPE()),
     pvp: t('camp.equipeFontePvp'),
     vazia: t('camp.equipeVazia'),
+    barrada: t('camp.equipeBarradaToda'),
   }[fonte];
+  const alerta = fonte === 'vazia' || fonte === 'barrada';
   return `
     <div class="camp-eq">
       <span class="camp-eq-titulo">${t('camp.equipeTitulo')}</span>
       <div class="camp-eq-casas">${casas}</div>
-      <span class="camp-eq-nota${fonte === 'vazia' ? ' alerta' : ''}">${fonte === 'vazia' ? '⚠ ' : ''}${nota}${
+      <span class="camp-eq-nota${alerta ? ' alerta' : ''}">${alerta ? '⚠ ' : ''}${nota}${
+        barrados && vivos.length ? ` <b>${t('camp.equipeBarrados', { n: barrados })}</b>` : ''}${
         sumiram ? ` <b>${t('camp.equipeSumiu', { n: sumiram })}</b>` : ''}</span>
     </div>
     <button type="button" class="camp-btn camp-btn-mini" id="camp-equipe-abrir">${t('camp.equipeSelecionar')}</button>`;
@@ -30294,10 +33434,11 @@ function abrirEquipeDoCampeonato() {
   const { corpo, fechar } = folhaMercado(t('camp.equipeFolhaTitulo'));
   corpo.classList.add('dmpk', 'campeq');
   corpo.innerHTML = `
-    <p class="cm-nota campeq-nota">${t('camp.equipeFolhaNota', { max: PVP_TIME_MAX, ...PRAZO_EQUIPE() })}</p>
+    <p class="dlg-aviso info campeq-nota">${dlgIcone('trofeu', 18)}<span>${t('camp.equipeFolhaNota', { max: PVP_TIME_MAX, ...PRAZO_EQUIPE() })}</span></p>
     ${temRestricao(regras)
-      ? `<p class="cm-nota campeq-nota campeq-restr">🚫 ${t('camp.equipeFolhaRestricao')}</p>`
+      ? `<p class="dlg-aviso campeq-restr">${dlgIcone('xis', 18)}<span>${t('camp.equipeFolhaRestricao')}</span></p>`
       : ''}
+    <div class="campeq-forms" id="campeq-forms" hidden></div>
     <div class="dmpk-topo">
       <span class="cm-busca-caixa">${lupa()}<input id="campeq-busca" class="cm-busca" autocomplete="off"
              maxlength="32" placeholder="${escapar(t('camp.equipeBusca'))}" value="${escapar(campEqFiltro.busca)}"></span>
@@ -30316,8 +33457,46 @@ function abrirEquipeDoCampeonato() {
   const conta = corpo.querySelector('#campeq-conta');
   const btSalvar = corpo.querySelector('#campeq-salvar');
   const btPvp = corpo.querySelector('#campeq-pvp');
+  const forms = corpo.querySelector('#campeq-forms');
+  // O armário de formações do PvP vem com a aba PvP; quem abre esta folha sem ter passado por lá
+  // pede só a lista. A resposta repinta a folha (ver `aoReceberPvp`).
+  if (estado.pvpFormacoes == null) enviar({ t: 'pvp.formacoes' });
+
+  /**
+   * As FORMAÇÕES salvas, uma por botão: o clique preenche a seleção com a escalação (na ordem),
+   * sem gravar — o "Salvar equipe" continua sendo o único que grava, como no resto da folha. Quem
+   * não pode lutar aqui (restrição do Amador) ou saiu da coleção fica de fora, com aviso.
+   */
+  function pintarFormacoes() {
+    const lista = estado.pvpFormacoes ?? [];
+    forms.hidden = !lista.length;
+    if (!lista.length) return;
+    const sel = estado.campEquipeSel ?? [];
+    forms.innerHTML = `<span class="campeq-forms-rot">${t('camp.equipeFormacoes')}</span>${lista.map((f) => {
+      const taxa = taxaDaFormacao(f);
+      return `<button type="button" class="camp-btn sec camp-btn-mini campeq-form${mesmaEscalacao(f.ids, sel) ? ' on' : ''}" data-slot="${f.slot}"
+                title="${escapar(t('camp.equipeFormacaoDica'))}">
+                <b>${escapar(f.nome)}</b>${taxa != null ? `<span class="pvp-form-pct ${classeDaTaxa(taxa)}">${taxa}%</span>` : ''}
+              </button>`;
+    }).join('')}`;
+    for (const bt of forms.querySelectorAll('[data-slot]')) {
+      bt.onclick = () => {
+        if (estado.campSalvandoEquipe) return;
+        const f = lista.find((x) => x.slot === Number(bt.dataset.slot));
+        if (!f) return;
+        const ids = f.ids
+          .filter((id) => porId.has(id) && !porQueNaoPodeLutar(porId.get(id), regras))
+          .slice(0, PVP_TIME_MAX);
+        if (!ids.length) return toast(t('camp.equipeFormacaoNada'));
+        estado.campEquipeSel = ids;
+        if (ids.length < f.ids.length) toast(t('camp.equipeFormacaoFora', { n: f.ids.length - ids.length }));
+        pintar();
+      };
+    }
+  }
 
   function pintar() {
+    pintarFormacoes();
     const sel = estado.campEquipeSel ?? [];
     const busca = campEqFiltro.busca.trim().toLowerCase();
     const piso = ivMinDoFiltro(campEqFiltro.ivMin);
@@ -30340,7 +33519,11 @@ function abrirEquipeDoCampeonato() {
     btSalvar.textContent = estado.campSalvandoEquipe ? t('camp.enviando') : t('camp.equipeSalvar');
     grade.innerHTML = '';
     if (!lista.length) {
-      grade.innerHTML = `<div class="cm-vazio">${t('amigos.anexarVazio')}</div>`;
+      // Grade vazia tem duas causas bem diferentes, e dizer a errada manda o jogador procurar
+      // o filtro que não é: a coleção INTEIRA barrada pela restrição, ou só o filtro apertado.
+      grade.innerHTML = `<div class="cm-vazio">${
+        fora && !podem.length ? t('camp.equipeTodosBarrados') : t('amigos.anexarVazio')
+      }</div>`;
       return;
     }
     for (const k of lista) {
@@ -30651,7 +33834,9 @@ function pintarCabecalhoCampeonato() {
     let tipo = 'aviso';
     if (abre && eu.inscrito) {
       html = htmlEquipeDoCampeonato(eu);
-      tipo = (eu.equipe?.ids ?? []).length ? 'equipe' : 'aviso';
+      // Pela equipe que de fato LUTA, e não pelos ids anunciados: quem só tem shiny e P5 num
+      // Amador vai a W.O., e a faixa verde de "equipe pronta" diria o contrário.
+      tipo = equipeQueVaiLutar(eu).vivos.length ? 'equipe' : 'aviso';
     } else if (!abre && eu.inscrito && eu.timeCongelado === 0) {
       html = `<span>⚠ ${t('camp.semEquipeWo')}</span>`;
     } else if (!abre && eu.inscrito && eu.timeCongelado > 0) {
@@ -30748,41 +33933,61 @@ function htmlAcaoCampeonato(d, fase) {
     ${contagem}`;
 }
 
+/** O emblema do torneio, como arte de ator do palco. */
+const dlgArteCampeonato = (C) =>
+  `<span class="dlg-ator-fig"><img class="dlg-camp-logo" src="${escapar(C?.logo ?? '/img/campeonato-logo.png')}" alt=""></span>`;
+
+/**
+ * Inscrever-se: o emblema do torneio no palco dourado, e cada regra numa linha com o seu desenho
+ * — a restrição (quando há) em vermelho e primeiro, porque é a única que pode barrar a equipe.
+ */
+function confirmarInscricaoCampeonato(C, aoConfirmar) {
+  confirmar({
+    titulo: t('camp.confirmarTitulo'),
+    texto: `
+      ${dlgPalco(dlgAtor({ arte: dlgArteCampeonato(C), classe: 'novo' }), 'ouro')}
+      ${dlgFrase(t('camp.confirmarTexto', {
+        nome: escapar(nomeDoCampeonato(C)),
+        dia: escapar(dataDaNovidade(C.dia)),
+      }))}
+      ${dlgLista([
+        temRestricao(C) ? { icone: 'alerta', html: `<b>${t('camp.confirmarRestricao')}</b>`, perigo: true } : null,
+        { icone: 'espadas', html: t('camp.confirmarEquipe', PRAZO_EQUIPE()) },
+        { icone: 'trofeu', html: t('camp.confirmarSeed') },
+        { icone: 'calendario', html: t('camp.confirmarPrazo', { dia: escapar(dataDaNovidade(C.ultimoDiaInscricao)) }) },
+      ])}`,
+    rotuloSim: t('camp.registrar'),
+    aoConfirmar,
+  });
+}
+
+/** Sair da lista: o torneio de um lado, você saindo pela porta do outro. */
+function confirmarCancelarCampeonato(C, aoConfirmar) {
+  confirmar({
+    titulo: t('camp.cancelarTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteCampeonato(C) })}
+        ${dlgSeta()}
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? ''), marca: dlgIcone('porta', 14) })}`, 'perigo')}
+      ${dlgFrase('', t('camp.cancelarTexto', { dia: escapar(dataDaNovidade(C.ultimoDiaInscricao)) }))}`,
+    rotuloSim: t('camp.cancelarSim'),
+    tom: 'perigo',
+    aoConfirmar,
+  });
+}
+
 function ligarAcaoCampeonato() {
-  $('#camp-registrar')?.addEventListener('click', () => {
-    confirmar({
-      titulo: t('camp.confirmarTitulo'),
-      texto: `
-        <p>${t('camp.confirmarTexto', {
-          nome: escapar(nomeDoCampeonato(campAtual())),
-          dia: escapar(dataDaNovidade(campAtual().dia)),
-        })}</p>
-        <ul class="camp-confirmar-lista">
-          ${temRestricao(campAtual()) ? `<li><b>${t('camp.confirmarRestricao')}</b></li>` : ''}
-          <li>${t('camp.confirmarEquipe', PRAZO_EQUIPE())}</li>
-          <li>${t('camp.confirmarSeed')}</li>
-          <li>${t('camp.confirmarPrazo', { dia: escapar(dataDaNovidade(campAtual().ultimoDiaInscricao)) })}</li>
-        </ul>`,
-      rotuloSim: t('camp.registrar'),
-      aoConfirmar: () => {
-        estado.campEnviando = true;
-        pintarCabecalhoCampeonato();
-        enviar({ t: 'campeonato.inscrever', id: idDoCampAberto() });
-      },
-    });
-  });
-  $('#camp-cancelar')?.addEventListener('click', () => {
-    confirmar({
-      titulo: t('camp.cancelarTitulo'),
-      texto: t('camp.cancelarTexto', { dia: escapar(dataDaNovidade(campAtual().ultimoDiaInscricao)) }),
-      rotuloSim: t('camp.cancelarSim'),
-      aoConfirmar: () => {
-        estado.campEnviando = true;
-        pintarCabecalhoCampeonato();
-        enviar({ t: 'campeonato.cancelar', id: idDoCampAberto() });
-      },
-    });
-  });
+  $('#camp-registrar')?.addEventListener('click', () => confirmarInscricaoCampeonato(campAtual(), () => {
+    estado.campEnviando = true;
+    pintarCabecalhoCampeonato();
+    enviar({ t: 'campeonato.inscrever', id: idDoCampAberto() });
+  }));
+  $('#camp-cancelar')?.addEventListener('click', () => confirmarCancelarCampeonato(campAtual(), () => {
+    estado.campEnviando = true;
+    pintarCabecalhoCampeonato();
+    enviar({ t: 'campeonato.cancelar', id: idDoCampAberto() });
+  }));
   $('#camp-voltar')?.addEventListener('click', voltarParaListaDeCampeonatos);
   $('#camp-equipe-abrir')?.addEventListener('click', abrirEquipeDoCampeonato);
   $('#camp-ver-minha')?.addEventListener('click', () => {
@@ -32837,7 +36042,7 @@ function cardShiny(s) {
       <button class="cm-ficha" type="button">${t('cm.verFicha')}</button>
     </div>
     <div class="cm-rodape">
-      ${aVenda ? precoComMoeda(s.anuncio.preco, s.anuncio.moeda) : `<div class="shl-nao-venda">${t('shl.naoEstaVenda')}</div>`}
+      ${aVenda ? precoComMoeda(s.anuncio.preco, s.anuncio.moeda, { curto: true }) : `<div class="shl-nao-venda">${t('shl.naoEstaVenda')}</div>`}
       <!-- "seu anúncio" só serviria para o que está à venda; a maior parte dos shinys da lista
            está no depot de alguém, e dizer "é seu" é o que responde à pergunta de quem procura
            os próprios no meio de centenas. -->
@@ -32862,25 +36067,23 @@ function cardShiny(s) {
     const bt = document.createElement('button');
     bt.className = 'cm-btn comprar';
     bt.textContent = t('cm.comprar');
-    aplicarRetencaoCompra(bt, s.anuncio, () =>
-      confirmar({
-        titulo: t('cm.comprarTitulo'),
-        texto: t('cm.comprarTexto', {
-          nome: s.nome ?? '',
-          valor: precoComMoeda(s.anuncio.preco, s.anuncio.moeda),
-        }),
-        aoConfirmar: () => {
-          enviar({
-            t: 'market.comprar',
-            id: s.anuncio.id,
-            qtd: 1,
-            preco: s.anuncio.preco,
-            moeda: s.anuncio.moeda,
-          });
-          setTimeout(pedirShinys, 1000);
-        },
-      }),
-    );
+    aplicarRetencaoCompra(bt, s.anuncio, () => confirmarCompraAnuncio({
+      pk: { ...s, shiny: true },
+      nome: s.nome ?? '',
+      preco: s.anuncio.preco,
+      moeda: s.anuncio.moeda,
+      vendedor: s.dono,
+      aoConfirmar: () => {
+        enviar({
+          t: 'market.comprar',
+          id: s.anuncio.id,
+          qtd: 1,
+          preco: s.anuncio.preco,
+          moeda: s.anuncio.moeda,
+        });
+        setTimeout(pedirShinys, 1000);
+      },
+    }));
     el.querySelector('.cm-botoes').appendChild(bt);
   }
   return el;
@@ -33033,7 +36236,7 @@ function cardP5(s) {
       <button class="cm-ficha" type="button">${t('cm.verFicha')}</button>
     </div>
     <div class="cm-rodape">
-      ${aVenda ? precoComMoeda(s.anuncio.preco, s.anuncio.moeda) : `<div class="shl-nao-venda">${t('p5l.naoEstaVenda')}</div>`}
+      ${aVenda ? precoComMoeda(s.anuncio.preco, s.anuncio.moeda, { curto: true }) : `<div class="shl-nao-venda">${t('p5l.naoEstaVenda')}</div>`}
       <div class="cm-vend">${s.meu ? t('p5l.seu') : `${t('p5l.de')} <b>${escapar(s.dono)}</b>`}</div>
     </div>
     <div class="cm-botoes"></div>`;
@@ -33051,25 +36254,23 @@ function cardP5(s) {
     const bt = document.createElement('button');
     bt.className = 'cm-btn comprar';
     bt.textContent = t('cm.comprar');
-    aplicarRetencaoCompra(bt, s.anuncio, () =>
-      confirmar({
-        titulo: t('cm.comprarTitulo'),
-        texto: t('cm.comprarTexto', {
-          nome: s.nome ?? '',
-          valor: precoComMoeda(s.anuncio.preco, s.anuncio.moeda),
-        }),
-        aoConfirmar: () => {
-          enviar({
-            t: 'market.comprar',
-            id: s.anuncio.id,
-            qtd: 1,
-            preco: s.anuncio.preco,
-            moeda: s.anuncio.moeda,
-          });
-          setTimeout(pedirP5s, 1000);
-        },
-      }),
-    );
+    aplicarRetencaoCompra(bt, s.anuncio, () => confirmarCompraAnuncio({
+      pk: { potencia: 5, ...s },
+      nome: s.nome ?? '',
+      preco: s.anuncio.preco,
+      moeda: s.anuncio.moeda,
+      vendedor: s.dono,
+      aoConfirmar: () => {
+        enviar({
+          t: 'market.comprar',
+          id: s.anuncio.id,
+          qtd: 1,
+          preco: s.anuncio.preco,
+          moeda: s.anuncio.moeda,
+        });
+        setTimeout(pedirP5s, 1000);
+      },
+    }));
     el.querySelector('.cm-botoes').appendChild(bt);
   }
   return el;
@@ -33282,6 +36483,190 @@ function tabelaDeCapturaShiny(especie, chanceCaptura) {
     <p class="fi-nota">${t('dex.notaShiny')}</p>`;
 }
 
+// ------------------------------------------------------------ peças das fichas
+//
+// As duas fichas (a da ESPÉCIE e a de um BICHO) são montadas com as mesmas peças: o HERÓI no topo
+// (quem é, à esquerda; o pedestal com holofote, à direita — o mesmo da Calculadora), PLACAS para
+// os números, CARTÕES para os assuntos, o HEXÁGONO dos stats, a CADEIA de evolução em cartões e a
+// ESCADA das cinco potências. As tabelas que são mesmo tabela (captura, drops, golpes) continuam.
+
+/** Uma PLACA de número: o rótulo miúdo em cima, o valor grande, o detalhe embaixo. */
+const fiPlaca = (rotulo, valor, { sub = '', icone = '', classe = '', titulo = '' } = {}) => `
+  <div class="fi-placa${classe ? ` ${classe}` : ''}"${titulo ? ` title="${escapar(titulo)}"` : ''}>
+    <small>${icone ? dlgIcone(icone, 12) : ''}<span>${rotulo}</span></small>
+    <b>${valor}</b>
+    ${sub ? `<em>${sub}</em>` : ''}
+  </div>`;
+
+/** Um CARTÃO da ficha: o vão escuro com o título (e o ícone dele) em cima. */
+const fiCartao = (titulo, corpo, { icone = '', extra = '', classe = '' } = {}) => `
+  <section class="fi-cartao${classe ? ` ${classe}` : ''}">
+    <h3 class="fi-cartao-tit">${icone ? dlgIcone(icone, 14) : ''}<span>${titulo}</span>${extra ? `<em>${extra}</em>` : ''}</h3>
+    ${corpo}
+  </section>`;
+
+/** A ordem do HEXÁGONO, no sentido do relógio a partir do topo — a mesma dos jogos de pokémon. */
+const ORDEM_RADAR = ['hp', 'atk', 'def', 'speed', 'spDef', 'spAtk'];
+
+/**
+ * O HEXÁGONO dos stats: um polígono por série, sobre os anéis de 25/50/75/100%. `series` é
+ * `[{ valores: { hp, atk, … } de 0 a 1, classe }]`. É SVG puro e as cores moram no CSS — a forma
+ * se lê de relance ("bate forte e é lento") onde seis barras pedem leitura linha a linha.
+ */
+function radarStats(series) {
+  const R = 84;
+  const ponto = (i, v) => {
+    const ang = ((-90 + i * 60) * Math.PI) / 180;
+    return [Math.cos(ang) * R * v, Math.sin(ang) * R * v];
+  };
+  const poligono = (f) => ORDEM_RADAR
+    .map((k, i) => ponto(i, f(k)).map((n) => n.toFixed(1)).join(','))
+    .join(' ');
+  const aneis = [0.25, 0.5, 0.75, 1].map((v) => `<polygon class="fi-radar-anel" points="${poligono(() => v)}"/>`).join('');
+  const eixos = ORDEM_RADAR.map((_, i) => {
+    const [x, y] = ponto(i, 1);
+    return `<line class="fi-radar-eixo" x1="0" y1="0" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
+  }).join('');
+  const rotulos = ORDEM_RADAR.map((k, i) => {
+    const [x, y] = ponto(i, 1.22);
+    return `<text class="fi-radar-rot" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${rotuloStat(k)}</text>`;
+  }).join('');
+  const formas = series.map((s) => `<polygon class="fi-radar-forma ${s.classe ?? ''}" points="${poligono(
+    (k) => Math.max(0.04, Math.min(1, Number(s.valores?.[k]) || 0)),
+  )}"/>`).join('');
+  return `<svg class="fi-radar" viewBox="-124 -116 248 232" role="img" aria-label="${escapar(t('dex.radarAria'))}">
+    ${aneis}${eixos}<g class="fi-radar-formas">${formas}</g>${rotulos}</svg>`;
+}
+
+/**
+ * A espécie que EVOLUI PARA esta, quando há — a ficha da Ivysaur mostra a Bulbasaur antes dela.
+ * Entre clones do catálogo (Orre, espelho) fica a de menor pokeId com arte: é a nacional.
+ */
+function antecessorDe(especie) {
+  if (!especie) return null;
+  let melhor = null;
+  for (const x of estado.especies.values()) {
+    if (x.pokeId === especie.pokeId || (melhor && x.pokeId >= melhor.pokeId)) continue;
+    if (!temSpriteJogo(x)) continue;
+    if (destinosDeEvolucao(x, (id) => estado.especies.get(id)).some((d) => d.pokeId === especie.pokeId)) melhor = x;
+  }
+  return melhor;
+}
+
+/**
+ * A CADEIA DE EVOLUÇÃO em cartões: quem vem antes, a espécie desta ficha (acesa) e para onde ela
+ * vai — cada destino com o nível e, quando é por destino, a pedra. A pedra única da família vai na
+ * seta. Os cartões das outras espécies são `fi-evo-link`: o mesmo clique da linha antiga, que troca
+ * a ficha pela daquela espécie. Destino sem arte aparece apagado, com o porquê.
+ *
+ * `destinos`: `[{ pokeId, nome, nivel, temArte, looktype, pedra }]`; `mega`: `{ pokeId, nome, pedra }`.
+ */
+function cadeiaEvolucaoHtml({ antes = null, atual, destinos = [], pedraUnica = null, mega = null }) {
+  const arte = (lt, comum, px = 46) => (lt ? dlgArteLt(lt, px, comum) : `<span class="fi-cadeia-vazio">?</span>`);
+  const no = ({ pokeId, nome, lt, comum, sub = '', classe = '', link = true }) => {
+    const miolo = `
+      <span class="fi-cadeia-arte">${arte(lt, comum)}</span>
+      <b class="fi-cadeia-nome">${escapar(nome)}</b>
+      ${sub ? `<em class="fi-cadeia-sub">${sub}</em>` : ''}`;
+    return link
+      ? `<button type="button" class="fi-evo-link fi-cadeia-no${classe ? ` ${classe}` : ''}" data-especie="${pokeId}" title="${escapar(t('dex.verFichaDe', { nome }))}">${miolo}</button>`
+      : `<div class="fi-cadeia-no${classe ? ` ${classe}` : ''}">${miolo}</div>`;
+  };
+  const seta = (rotulo = '') => `
+    <span class="fi-cadeia-seta" aria-hidden="true">
+      <span class="dlg-seta-divisas"><i></i><i></i><i></i></span>
+      ${rotulo ? `<span class="fi-cadeia-seta-rot">${rotulo}</span>` : ''}
+    </span>`;
+  const partes = [];
+  if (antes) {
+    partes.push(no({ pokeId: antes.pokeId, nome: antes.name, lt: antes.looktype, comum: antes.looktype, sub: `#${num(dexExibicao(antes.pokeId))}`, classe: 'antes' }));
+    partes.push(seta());
+  }
+  partes.push(no({ ...atual, classe: 'atual', link: false }));
+  if (destinos.length) {
+    partes.push(seta(pedraUnica ? htmlPedraEvolucao(pedraUnica) : ''));
+    partes.push(`<div class="fi-cadeia-destinos${destinos.length > 2 ? ' muitos' : ''}">${destinos.map((d) => no({
+      pokeId: d.pokeId,
+      nome: d.nome,
+      lt: d.temArte ? d.looktype : null,
+      comum: d.looktype,
+      sub: d.temArte
+        ? `${escapar(t('dex.nvArea', { n: num(d.nivel) }))}${d.pedra ? ` · ${htmlPedraEvolucao(d.pedra)}` : ''}`
+        : escapar(t('dex.semSprite')),
+      classe: d.temArte ? 'destino' : 'destino sem-arte',
+      link: d.temArte,
+    })).join('')}</div>`);
+  }
+  const linhaMega = mega
+    ? `<div class="fi-cadeia-mega">
+        <span class="fi-cadeia-mega-rot">${dlgIcone('raio', 14)}${escapar(t('dex.megaEvolucao'))}</span>
+        ${no({
+          pokeId: mega.pokeId,
+          nome: mega.nome,
+          lt: estado.especies.get(mega.pokeId)?.looktype ?? null,
+          comum: estado.especies.get(mega.pokeId)?.looktype ?? null,
+          sub: htmlPedraEvolucao(mega.pedra),
+          classe: 'mega',
+        })}
+      </div>`
+    : '';
+  // Com mais de dois destinos (a Eevee tem oito) a cadeia vira COLUNA, com a seta apontando para
+  // baixo: em linha, a seta apontava para a direita e os destinos caíam na fileira de baixo.
+  return `<div class="fi-cadeia${destinos.length > 2 ? ' vertical' : ''}">${partes.join('')}</div>${linhaMega}`;
+}
+
+/**
+ * A ESCADA DAS CINCO POTÊNCIAS em degraus: a chance de nascer em cada uma, o bônus e o ⚔ que ela
+ * daria — na ficha do bicho com a DELE acesa ("que sorte ele deu"), na da espécie com a coluna do
+ * shiny quando há forma shiny. Os degraus crescem com a potência, na cor da escada de raridade.
+ */
+function escadaPotenciasHtml({ especie, nivel, aqui = null, shiny = false, comShiny = false }) {
+  const mults = estado.potencias.map((p) => 1 + p.bonus);
+  const maior = Math.max(...mults, 1);
+  return `<ol class="fi-potescada">${estado.potencias.map((p, i) => {
+    const mult = (1 + p.bonus) * (shiny ? estado.multShinyStats : 1);
+    const poder = especie ? num(poderDeReferencia(especie, nivel, mult)) : '—';
+    const poderSh = comShiny && especie ? num(poderDeReferencia(especie, nivel, mult * estado.multShinyStats)) : null;
+    const alt = 34 + Math.round((mults[i] / maior) * 46);
+    return `
+      <li class="fi-potdegrau p${p.n}${aqui === p.n ? ' aqui' : ''}">
+        ${aqui === p.n ? `<span class="fi-potdegrau-selo">${escapar(t('dex.potenciaAqui'))}</span>` : ''}
+        <span class="fi-potdegrau-barra" style="height:${alt}px"><b>P${p.n}</b></span>
+        <span class="fi-potdegrau-chance">${pct(p.chance / 100)}</span>
+        <span class="fi-potdegrau-bonus">${p.bonus ? `+${Math.round(p.bonus * 100)}%` : '—'}</span>
+        <span class="fi-potdegrau-poder">⚔ ${poder}</span>
+        ${poderSh ? `<span class="fi-potdegrau-poder sh">✨ ⚔ ${poderSh}</span>` : ''}
+      </li>`;
+  }).join('')}</ol>`;
+}
+
+/** A placa da nota embaixo do pedestal da ficha: o número (que conta até ele ao abrir) e a escada. */
+function placaNotaFicha(nf) {
+  if (!nf) return '';
+  return `
+    <div class="fi-palco-placa">
+      <div class="calc-nota ${nf.faixa}">
+        <span class="calc-nota-valor"><b class="fi-nota-num" data-nota="${nf.nota}">${notaEmTexto(nf.nota)}</b><span class="calc-nota-de">${t('calc.de10')}</span></span>
+        <span class="calc-nota-rotulo">${escapar(t(`calc.faixa.${nf.faixa}`))}</span>
+      </div>
+      <div class="calc-escada-host">${escadaDaNota(nf.nota)}</div>
+    </div>`;
+}
+
+/**
+ * Liga o que a ficha nova tem de vivo: os sprites de marcação (cadeia, pedestal), a nota contando
+ * de zero até a dela e o hexágono abrindo. Chamado pelo `aoMontar` das duas fichas.
+ */
+function ligarFichaNova(corpo) {
+  hidratarDialogo(corpo);
+  const elNota = corpo.querySelector('.fi-nota-num[data-nota]');
+  if (elNota) {
+    elNota.dataset.valor = '0';
+    elNota.textContent = notaEmTexto(0);
+    requestAnimationFrame(() => animarNota(elNota, Number(elNota.dataset.nota), 900));
+  }
+}
+
 // ------------------------------------------------------------ ficha da ESPÉCIE
 
 /**
@@ -33331,6 +36716,67 @@ function avisoBossDeEvento() {
     </section>`;
 }
 
+/**
+ * O painel ROXO do MysticTicket — o que substituiu o "em breve" na ficha de todo boss.
+ *
+ * Até o ticket existir, a ficha de um boss era um beco: nem hunt, nem bola, nem drop, e o
+ * painel amarelo dizia com todas as letras que ele "não tem chance de captura". Hoje tem — a
+ * mesma para os dois lados do catálogo, o boss que já tem arena e o que ainda vai ter —, e o
+ * que falta na ficha é justamente o número que decide se o jogador guarda ou vende o ticket:
+ * a chance de sair ESTE lendário entre os do sorteio, e a chance de a bola segurar.
+ *
+ * Roxo porque é a cor da Arena Mística (`rc-mistico`): a ficha e a sala têm de ler como a
+ * mesma coisa. Os números saem todos de `shared/mistico.mjs`, que o servidor também importa.
+ *
+ * @param bossCat     a entrada do catálogo de bosses, quando ele já tem arena
+ * @param bossEvento  `true` para o boss cuja arena ainda não abriu
+ */
+function secaoMisticaDaFicha(bossCat, bossEvento) {
+  const { n } = poolMistico();
+  const chanceSorteio = n > 0 ? 1 / n : 0;
+  const tickets = estado.eu?.items?.[MYSTIC_TICKET_ID] ?? 0;
+
+  // De onde vem o ticket. Com arena, a ficha diz a chance DESTE boss (é a mesma linha que a
+  // tabela de drops logo abaixo mostra); sem arena, a regra geral — qualquer boss, e a chance
+  // sobe com o nível dele.
+  const chanceTicket = bossCat?.dropsDetalhe?.find((d) => d.itemId === MYSTIC_TICKET_ID)?.chance ?? null;
+  // "0,0005%", e não "0,000500%": nessa faixa o `pct` geral abre seis casas, e os três zeros à
+  // direita fazem o número parecer outro na leitura rápida. Mesmo corte da aba Bosses.
+  const pctEnxuto = (v) => pct(v).replace(/(,\d*?)0+%$/, '$1%').replace(/,%$/, '%');
+  const comoObter = chanceTicket != null
+    ? t('dex.mstDesteBoss', { pct: pctEnxuto(chanceTicket) })
+    : t('dex.mstDeQualquerBoss');
+
+  const linhasBola = BOLAS_MISTICAS_DA_MELHOR.slice().reverse().map((id) => `
+    <tr>
+      <td class="fi-bola"><span class="fi-bola-ico" data-bola="${id}"></span>${escapar(nomeDaBola(id))}</td>
+      <td class="destaque">${pct(chanceCapturaMistica(id))}</td>
+      <td>${pct(chanceCapturaMistica(id, 2))}</td>
+    </tr>`).join('');
+
+  return `
+    <section class="fi-secao fi-mistico">
+      <h3>${escapar(t('dex.mstTitulo'))}</h3>
+      <p class="fi-mistico-txt">${t('dex.mstTexto', { nivel: num(NIVEL_LENDARIO_MISTICO) })}</p>
+      ${bossEvento ? `<p class="fi-mistico-txt">${t('dex.mstSemArena')}</p>` : ''}
+      <div class="fi-linhas">
+        ${fichaLinha(t('dex.mstComoObter'), comoObter)}
+        ${fichaLinha(t('dex.mstSorteio'), `${umEm(chanceSorteio)} · ${pct(chanceSorteio)} <em class="fi-mistico-pool">${t('dex.mstPool', { n: num(n) })}</em>`)}
+        ${fichaLinha(t('dex.mstNivel'), num(NIVEL_LENDARIO_MISTICO))}
+        ${fichaLinha(t('dex.mstTentativas'), t('dex.mstUmaBola'))}
+        ${fichaLinha(t('dex.mstVoceTem'), `<span class="fi-mistico-tem"><span class="fi-drop-ico" data-item="${MYSTIC_TICKET_ID}"></span>${num(tickets)}</span>`)}
+      </div>
+      <table class="fi-tabela">
+        <thead><tr>
+          <th>${t('dex.bola')}</th><th>${t('dex.chanceCaptura')}</th><th>${t('dex.mstComBoost')}</th>
+        </tr></thead>
+        <tbody>${linhasBola}</tbody>
+      </table>
+      <p class="fi-nota">${t('dex.mstNota')}</p>
+      ${tickets > 0 ? `<button type="button" class="fi-hunt fi-mistico-cta">${escapar(t('mistico.usar'))}</button>` : ''}
+    </section>`;
+}
+
 function corpoDaEspecie(especie) {
   const pokeId = especie.pokeId;
   const bossCat = bossDaEspecie(pokeId);
@@ -33339,12 +36785,20 @@ function corpoDaEspecie(especie) {
   // porque não há para onde ir. `ehBoss` é o que apaga as seções nos dois casos.
   const bossEvento = ehBossDeEvento(pokeId);
   const ehBoss = !!bossCat || bossEvento;
+  // O MYSTICTICKET é o que tirou o boss do beco. Ele não aparece em hunt nenhuma e continua
+  // sem tabela de pokébola — a da hunt sai do preço da espécie e aqui não vale —, mas a Arena
+  // Mística o sorteia como qualquer outro Lendário ou Mítico, e isso faz dele um pokémon
+  // CAPTURÁVEL: o contador de capturados, o shiny e o painel roxo voltam para a ficha.
+  const noMistico = ehBoss && noSorteioMistico(pokeId);
   // A MEGA não se captura — ela se fabrica com a Mega Stone. Tudo o que só faz sentido para
   // quem leva pokébola (as duas tabelas de chance, o "onde encontrar") sai da ficha, como já
   // sai na do boss. Mostrar "Beast Ball 2,77%" num Mega Gengar é convidar o jogador a gastar
   // bola num bicho que nunca vai aparecer numa hunt. Ver `shared/megas.mjs`.
   const ehMega = isMegaPokeId(pokeId);
   const semCaptura = ehBoss || ehMega;
+  // Quem tem contador de capturados e seção de shiny: todo mundo menos o boss que a arena não
+  // sorteia (o sem sprite) e a mega, que se fabrica.
+  const capturavel = !ehBoss || noMistico;
   const dexN = dexExibicao(pokeId);
   const dex = entradaPokedex(pokeId);
   const hunts = huntsComEspecie(pokeId);
@@ -33353,24 +36807,6 @@ function corpoDaEspecie(especie) {
   const outlandVariante = isOutlandPokeId(pokeId);
   const temShiny = !outlandVariante && temFormaShinyFicha(especie);
   const chanceShiny = temShiny ? Number(estado.chanceShiny) : 0;
-
-  // ---- potência: o que cada uma das cinco faria com esta espécie
-  //
-  // A coluna do poder SHINY só existe para as 64 espécies que têm forma shiny. Nas outras
-  // 379 ela era uma promessa falsa: mostrava o dobro do poder para um brilho que não existe.
-  const linhasPot = estado.potencias
-    .map((p) => {
-      const mult = 1 + p.bonus;
-      return `
-        <tr>
-          <td class="fi-pot p${p.n}">P${p.n}</td>
-          <td class="fi-num">${pct(p.chance / 100)}</td>
-          <td class="fi-num">${p.bonus ? `+${Math.round(p.bonus * 100)}%` : '—'}</td>
-          <td class="fi-num destaque">${num(poderDeReferencia(especie, nivelRef, mult))}</td>
-          ${temShiny ? `<td class="fi-num">${num(poderDeReferencia(especie, nivelRef, mult * estado.multShinyStats))}</td>` : ''}
-        </tr>`;
-    })
-    .join('');
 
   // ---- stats-base, com barra proporcional ao maior stat do catálogo (255)
   const barras = STATS_ORDEM.map(
@@ -33501,27 +36937,6 @@ function corpoDaEspecie(especie) {
   // nível que a dispare, e o que a dispara (a Venusaurite) não aparece em lugar nenhum da
   // linha de evolução comum.
   const megaFicha = megaDaFicha(especie);
-  const evolucao = destinosDex.length
-    ? destinosDex
-        .map((d, i) => {
-          const nome = escapar(d.especie.name);
-          const alvo = d.temArte
-            ? `<button class="fi-evo-link" data-especie="${d.pokeId}">${nome}</button>`
-            : `<span class="fi-evo-sem">${nome} <em>${escapar(t('dex.semSprite'))}</em></span>`;
-          const comPedra = pedraPorDestino && pedrasDex[i]
-            ? ` · ${htmlPedraEvolucao(pedrasDex[i])}`
-            : '';
-          return `<span class="fi-evo-linha">${t('dex.evoluiPara', { nome: alvo, nv: num(d.nivel) })}${comPedra}</span>`;
-        })
-        .join('')
-    // "não evolui" ao lado de uma linha dizendo que ele vira Mega Venusaur é a ficha se
-    // contradizendo — foi o que o jogador viu e reportou. Quando a única saída da espécie é a
-    // mega, a linha da mega é a resposta inteira e esta some.
-    : (megaFicha ? '' : t('dex.naoEvolui'));
-  const linhaPedra = pedra && !pedraPorDestino
-    ? fichaLinha(t('dex.pedraEvolucao'), htmlPedraEvolucao(pedra))
-    : '';
-
   const tiposEspecie = [especie.type1, especie.type2].filter(Boolean);
   const { fracos: fracoContra } = tiposEspecie.length
     ? matchupDefensivo(tiposEspecie, estado.tabelaTipos)
@@ -33530,13 +36945,72 @@ function corpoDaEspecie(especie) {
     ? matchupTiposHunt(tiposEspecie, estado.tabelaTipos)
     : { fortes: [] };
 
-  return `
-    <div class="fi-topo">
-      <div class="fi-arte" id="fi-arte"></div>
-      <div class="fi-cabeca">
-        <div class="fi-nome">${escapar(especie.name)}${ehBoss ? ` <span class="fi-tag-boss">BOSS</span>` : ''}${bossEvento ? ` <span class="fi-tag-evento">${escapar(t('dex.bossEventoTag'))}</span>` : ''} <span class="fi-num-dex">#${dexN}</span></div>
-        <div class="fi-tipos">${selosDeTipo(tiposEspecie)}</div>
-        ${botaoIrBoss ? `<div class="fi-boss-topo">${botaoIrBoss}</div>` : ''}
+  // ---- o HERÓI: quem é (à esquerda) e a arte nos pedestais (à direita). O holofote da forma
+  // comum fica DOURADO quando a espécie já foi capturada — o ouro do jogo é "o que já é seu"
+  // (DESIGN.md §1) —, e o da forma shiny acende em ouro com as faíscas.
+  const capturado = capturavel && (dex.c ?? 0) > 0;
+  const comPalcoShiny = temShiny && capturavel;
+  const tags = `${ehBoss ? ` <span class="fi-tag-boss">BOSS</span>` : ''}${
+    // O selo ao lado do BOSS diz como se chega nele. Era um "EM BREVE" dourado, de quando
+    // a única resposta possível era "espere o evento"; hoje a resposta é o MysticTicket, e
+    // ela vale para TODO boss — o que já tem arena também só se captura por ele. O dourado
+    // fica de reserva para o boss que a arena não sorteia (o que ainda não tem sprite).
+    noMistico
+      ? ` <span class="fi-tag-mistico" title="${escapar(t('dex.mstTitulo'))}">${escapar(t('dex.mstTag'))}</span>`
+      : bossEvento
+        ? ` <span class="fi-tag-evento">${escapar(t('dex.bossEventoTag'))}</span>`
+        : ''
+  }`;
+  const contadores = `
+    <div class="fi-placas fi-placas-dex">
+      ${fiPlaca(t('dex.derrotados'), num(dex.k ?? 0), { icone: 'espadas' })}
+      ${capturavel ? fiPlaca(t('dex.capturados'), num(dex.c ?? 0), { icone: 'check', classe: capturado ? 'ouro' : '' }) : ''}
+      ${comPalcoShiny
+        ? fiPlaca(t('dex.shinysVistos'), num(dex.sv ?? 0), { classe: 'shiny' })
+          + fiPlaca(t('dex.shinysCapturados'), num(dex.sc ?? 0), { classe: 'shiny' })
+        : ''}
+    </div>`;
+
+  // ---- o RESUMO em placas — as linhas de "coisa: valor" de antes. A MEGA não aparece em hunt
+  // nem sai de pokébola: ela se FABRICA, e as duas placas que só fazem sentido para quem é caçado
+  // dão lugar a uma que diz de onde ela vem. O XP e o valor de NPC ficam: os dois valem.
+  const resumo = bossCat
+    ? fiPlaca(t('dex.nivelBossFight'), num(bossCat.level ?? 0), { icone: 'coroa' })
+    : bossEvento
+      ? fiPlaca(t('dex.nivelBossFight'), `<span class="fi-a-definir">${escapar(t('dex.aDefinir'))}</span>`, { icone: 'coroa' })
+      : ehMega
+        ? `${fiPlaca(t('dex.comoObter'), t('dex.megaComoObter'), { icone: 'raio', classe: 'largo texto' })}
+           ${fiPlaca(t('dex.xpPorDerrota'), num(xpDoNivel(nivelRef)), { icone: 'estrela' })}
+           ${fiPlaca(t('dex.valorNpc'), moeda(especie.sellValue ?? 0), { icone: 'moedas' })}`
+        : `${fiPlaca(t('dex.nivelHunt'), num(nivelRef), { icone: 'bandeira' })}
+           ${fiPlaca(t('dex.nivelCaptura'), textoNivelCaptura(especie, nivelRef), { icone: 'subir' })}
+           ${fiPlaca(t('dex.xpPorDerrota'), num(xpDoNivel(nivelRef)), { icone: 'estrela' })}
+           ${fiPlaca(t('dex.valorNpc'), moeda(especie.sellValue ?? 0), { icone: 'moedas' })}`;
+
+  // ---- a CADEIA DE EVOLUÇÃO em cartões. "Não evolui" ao lado de uma mega seria a ficha se
+  // contradizendo — foi o que um jogador viu e reportou —, então ele só aparece sem as duas.
+  const antes = antecessorDe(especie);
+  const cadeia = destinosDex.length || megaFicha || antes
+    ? fiCartao(t('dex.evolucao'), `
+        ${cadeiaEvolucaoHtml({
+          antes,
+          atual: { pokeId, nome: especie.name, lt: especie.looktype, comum: especie.looktype, sub: `#${num(dexN)}` },
+          destinos: destinosDex.map((d, i) => ({
+            pokeId: d.pokeId,
+            nome: d.especie.name,
+            nivel: d.nivel,
+            temArte: d.temArte,
+            looktype: d.especie.looktype,
+            pedra: pedraPorDestino ? pedrasDex[i] : null,
+          })),
+          pedraUnica: pedraPorDestino ? null : pedra,
+          mega: megaFicha,
+        })}
+        ${!destinosDex.length && !megaFicha ? `<p class="fi-nota">${t('dex.naoEvolui')}</p>` : ''}`, { icone: 'subir' })
+    : '';
+
+  const matchup = tiposEspecie.length
+    ? fiCartao(t('dex.matchupTitulo'), `
         <div class="fi-matchup">
           <div class="fi-matchup-linha">
             <b>${t('dex.forteContra')}</b>
@@ -33546,45 +37020,54 @@ function corpoDaEspecie(especie) {
             <b>${t('dex.fracoContra')}</b>
             ${fracoContra.length ? blocoTiposAnalyser(fracoContra, true) : `<span class="fi-vazio">${t('dex.semMatchup')}</span>`}
           </div>
-        </div>
-        <div class="fi-linhas">
-          ${bossCat
-            ? fichaLinha(t('dex.nivelBossFight'), num(bossCat.level ?? 0))
-            : bossEvento
-              ? fichaLinha(t('dex.nivelBossFight'), `<span class="fi-a-definir">${escapar(t('dex.aDefinir'))}</span>`)
-              // A MEGA não aparece em hunt nem sai de pokébola: ela se FABRICA. As duas linhas
-              // que só fazem sentido para quem é caçado dão lugar a uma que diz de onde ela vem —
-              // mostrar "Nível na hunt 100" num Mega Gengar é mandar o jogador procurar numa hunt
-              // onde ele nunca vai estar. O XP e o valor de NPC ficam: os dois valem (ela dá XP
-              // ao morrer numa arena e se vende como qualquer pokémon).
-              : isMegaPokeId(especie.pokeId)
-                ? `${fichaLinha(t('dex.comoObter'), t('dex.megaComoObter'))}
-                 ${fichaLinha(t('dex.xpPorDerrota'), num(xpDoNivel(nivelRef)))}
-                 ${fichaLinha(t('dex.valorNpc'), moeda(especie.sellValue ?? 0))}`
-                : `${fichaLinha(t('dex.nivelHunt'), num(nivelRef))}
-                 ${fichaLinha(t('dex.nivelCaptura'), textoNivelCaptura(especie, nivelRef))}
-                 ${fichaLinha(t('dex.xpPorDerrota'), num(xpDoNivel(nivelRef)))}
-                 ${fichaLinha(t('dex.valorNpc'), moeda(especie.sellValue ?? 0))}`}
-          ${evolucao ? fichaLinha(t('dex.evolucao'), evolucao) : ''}
-          ${linhaMegaDaFicha(megaFicha)}
-          ${linhaPedra}
-        </div>
-        <div class="fi-dexcont">
-          <span>${t('dex.derrotados')} <b>${num(dex.k ?? 0)}</b></span>
-          ${ehBoss ? '' : `<span>${t('dex.capturados')} <b>${num(dex.c ?? 0)}</b></span>`}
-          ${temShiny && !ehBoss ? `
-          <span class="fi-dexcont-shiny">${t('dex.shinysVistos')} <b>${num(dex.sv ?? 0)}</b></span>
-          <span class="fi-dexcont-shiny">${t('dex.shinysCapturados')} <b>${num(dex.sc ?? 0)}</b></span>` : ''}
-        </div>
+        </div>`, { icone: 'escudo' })
+    : '';
+
+  // O hexágono da base, na régua de 200 das barras (o maior stat do catálogo passa disso, e
+  // encosta no anel de fora).
+  const radarBase = radarStats([{
+    valores: Object.fromEntries(STATS_ORDEM.map(([k, , campo]) => [k, (Number(especie[campo]) || 0) / 200])),
+    classe: 'base',
+  }]);
+
+  return `
+    <div class="fi-heroi">
+      <div class="fi-heroi-info">
+        <span class="fi-dex-num">#${num(dexN)}</span>
+        <div class="fi-nome">${escapar(especie.name)}${tags}</div>
+        <div class="fi-tipos">${selosDeTipo(tiposEspecie)}</div>
+        ${botaoIrBoss ? `<div class="fi-boss-topo">${botaoIrBoss}</div>` : ''}
+        ${contadores}
       </div>
-      ${temShiny && !ehBoss ? `<div class="fi-arte shiny" id="fi-arte-shiny"><span class="fi-shiny-tag">✨ ${t('dex.formaShiny')}</span></div>` : ''}
+      <div class="fi-heroi-palcos${comPalcoShiny ? ' duplo' : ''}">
+        ${holofoteHtml({
+          id: 'fi-palco',
+          tom: capturado ? 'ouro' : 'rx',
+          classe: 'fi-palco',
+          rodape: `<span class="fi-palco-rot">${escapar(t(comPalcoShiny ? 'dex.formaNormal' : 'dex.especie'))}</span>`,
+        })}
+        ${comPalcoShiny ? holofoteHtml({
+          id: 'fi-palco-shiny',
+          tom: 'shiny',
+          classe: 'fi-palco hf-shiny',
+          rodape: `<span class="fi-palco-rot sh">✨ ${escapar(t('dex.formaShinyRot'))}</span>`,
+        }) : ''}
+      </div>
     </div>
 
-    ${bossEvento ? avisoBossDeEvento() : ''}
+    <div class="fi-placas fi-resumo">${resumo}</div>
 
-    ${fichaSecao(t('dex.statsBase'), `<div class="fi-stats">${barras}</div>`, t('dex.statsNota'))}
+    ${noMistico ? secaoMisticaDaFicha(bossCat, bossEvento) : bossEvento ? avisoBossDeEvento() : ''}
 
-    ${fichaSecao(
+    ${cadeia}
+
+    <div class="fi-grade-2">
+      ${fiCartao(t('dex.statsBase'), `<div class="fi-stats-duo">${radarBase}<div class="fi-stats">${barras}</div></div>
+        <p class="fi-nota">${t('dex.statsNota')}</p>`, { icone: 'estrela' })}
+      ${matchup}
+    </div>
+
+    ${fiCartao(
       t('dex.golpes'),
       golpes.length
         ? `<table class="fi-tabela">
@@ -33603,38 +37086,39 @@ function corpoDaEspecie(especie) {
            </table>
            <p class="fi-nota">${t('dex.notaGolpes')}</p>`
         : `<p class="fi-vazio">${t('dex.semGolpes')}</p>`,
+      { icone: 'espadas' },
     )}
 
-    ${!ehBoss ? fichaSecao(
+    ${!ehBoss ? fiCartao(
       t('dex.potencia'),
-      `<table class="fi-tabela">
-         <thead><tr>
-           <th>${t('dex.pot')}</th><th>${t('dex.chance')}</th><th>${t('dex.bonus')}</th>
-           <th>${t('dex.poderRef')}</th>${temShiny ? `<th>${t('dex.poderShiny')}</th>` : ''}
-         </tr></thead>
-         <tbody>${linhasPot}</tbody>
-       </table>
+      // A coluna do poder SHINY só existe para as espécies que têm forma shiny. Nas outras ela
+      // era uma promessa falsa: mostrava o triplo do poder para um brilho que não existe.
+      `${escadaPotenciasHtml({ especie, nivel: nivelRef, comShiny: temShiny })}
        <p class="fi-nota">${t('dex.notaPotencia')}</p>`,
-      t('dex.refNivel', { nv: num(nivelRef) }),
+      { icone: 'raio', extra: t('dex.refNivel', { nv: num(nivelRef) }) },
     ) : ''}
 
-    ${!ehBoss && !outlandVariante ? fichaSecao(
+    ${capturavel && !outlandVariante ? fiCartao(
       t('dex.shiny'),
       // A MEGA tem forma shiny, mas ela não vem de sorteio no encontro: vem do pokémon que
       // JÁ era shiny antes de megaevoluir, com a Shiny Mega Stone. As duas linhas de chance
       // são de captura e sairiam mentindo aqui; o bônus de stats fica, porque esse vale.
+      //
+      // O BOSS entrou aqui com o MysticTicket: o brilho dele rola no arremesso da arena, com a
+      // chance cheia do jogo e o Shiny Secret Lure dobrando — os mesmos dois números abaixo.
       !temShiny
         ? `<p class="fi-vazio">${t('dex.semShiny')}</p>`
-        : `<div class="fi-linhas">
+        : `<div class="fi-placas">
              ${ehMega
-               ? fichaLinha(t('dex.comoObter'), t('dex.megaShinyComoObter'))
-               : `${fichaLinha(t('dex.chanceEncontro'), `${umEm(chanceShiny)} · ${pct(chanceShiny)}`)}
-                ${fichaLinha(t('dex.comIsca'), `${umEm(chanceShiny * 2)} · ${pct(chanceShiny * 2)}`)}`}
-             ${fichaLinha(t('dex.bonusShiny'), `×${estado.multShinyStats} ${t('dex.emTodosStats')}`)}
+               ? fiPlaca(t('dex.comoObter'), t('dex.megaShinyComoObter'), { icone: 'brilho', classe: 'largo texto shiny' })
+               : `${fiPlaca(t('dex.chanceEncontro'), umEm(chanceShiny), { icone: 'olho', sub: pct(chanceShiny), classe: 'shiny' })}
+                  ${fiPlaca(t('dex.comIsca'), umEm(chanceShiny * 2), { icone: 'brilho', sub: pct(chanceShiny * 2), classe: 'shiny' })}`}
+             ${fiPlaca(t('dex.bonusShiny'), `×${estado.multShinyStats}`, { icone: 'subir', sub: t('dex.emTodosStats'), classe: 'shiny' })}
            </div>`,
+      { icone: 'brilho', classe: 'fi-cartao-shiny' },
     ) : ''}
 
-    ${bossEvento ? '' : fichaSecao(
+    ${bossEvento ? '' : fiCartao(
       t('dex.drops'),
       `<table class="fi-tabela">
          <thead><tr>
@@ -33644,13 +37128,14 @@ function corpoDaEspecie(especie) {
          <tbody>${corpoDrops}</tbody>
        </table>
        <p class="fi-nota">${bossCat ? t('dex.notaDropsBoss') : emOutland ? t('dex.notaDropsOutland') : t('dex.notaDrops')}</p>`,
+      { icone: 'bolsa' },
     )}
 
-    ${semCaptura ? '' : fichaSecao(t('dex.captura'), tabelaDeCaptura(especie))}
+    ${semCaptura ? '' : fiCartao(t('dex.captura'), tabelaDeCaptura(especie), { icone: 'check' })}
 
-    ${!semCaptura && temShiny && !outlandVariante ? fichaSecao(`✨ ${t('dex.capturaShiny')}`, tabelaDeCapturaShiny(especie, chanceShiny)) : ''}
+    ${!semCaptura && temShiny && !outlandVariante ? fiCartao(t('dex.capturaShiny'), tabelaDeCapturaShiny(especie, chanceShiny), { icone: 'brilho', classe: 'fi-cartao-shiny' }) : ''}
 
-    ${semCaptura ? '' : fichaSecao(t('dex.ondeAchar'), `<div class="fi-hunts">${ondeAchar}</div>`)}`;
+    ${semCaptura ? '' : fiCartao(t('dex.ondeAchar'), `<div class="fi-hunts">${ondeAchar}</div>`, { icone: 'bandeira' })}`;
 }
 
 // ----------------------------------------------------------- ficha de um BICHO
@@ -33668,37 +37153,34 @@ function corpoDoPokemon(pk) {
   const nivel = pk.level ?? 1;
   const potencia = Number(pk.potencia) || 1;
   const multProprio = multDaPotencia(potencia) * (pk.shiny ? estado.multShinyStats : 1);
+  // A NOTA dele — a mesma conta da Calculadora — pinta o holofote do pedestal. `null` num
+  // anúncio velho sem IV: aí a luz fica no roxo da casa, em vez de inventar uma faixa.
+  const nf = notaEFaixa(pk);
 
-  // ---- a escada das cinco potências, com a DELE acesa. É a leitura de "que sorte ele deu".
-  const linhasPot = estado.potencias
-    .map((p) => {
-      const mult = (1 + p.bonus) * (pk.shiny ? estado.multShinyStats : 1);
-      const aqui = p.n === potencia;
-      return `
-        <tr class="${aqui ? 'fi-aqui' : ''}">
-          <td class="fi-pot p${p.n}">P${p.n}${aqui ? ' ◄' : ''}</td>
-          <td class="fi-num">${pct(p.chance / 100)}</td>
-          <td class="fi-num">${p.bonus ? `+${Math.round(p.bonus * 100)}%` : '—'}</td>
-          <td class="fi-num ${aqui ? 'destaque' : ''}">${especie ? num(poderDeReferencia(especie, nivel, mult)) : '—'}</td>
-        </tr>`;
-    })
-    .join('');
-
-  // ---- stats de verdade, quando o anúncio (ou o snapshot) os traz
+  // ---- stats de verdade, quando o anúncio (ou o snapshot) os traz: o hexágono (a forma dos
+  // stats e, por cima, a dos IVs) e as barras com o IV de cada um ao lado.
   const stats = pk.stats ?? null;
+  const maiorStat = stats ? Math.max(1, ...Object.values(stats).map(Number).filter(Number.isFinite)) : 1;
   const blocoStats = stats
-    ? `<div class="fi-stats">
-         ${STATS_ORDEM.map(
-           ([chave, rotulo]) => `
-             <div class="fi-stat">
-               <span class="fi-stat-nome">${rotulo}</span>
-               <span class="fi-stat-barra"><i style="width:${Math.min(100, (stats[chave] / Math.max(1, Math.max(...Object.values(stats)))) * 100)}%"></i></span>
-               <b class="fi-stat-num">${num(stats[chave])}</b>
-               ${pk.ivs ? `<em class="fi-iv ${classeIvStat(pk.ivs[chave])}" title="${t('dex.ivStatTitle')}">IV ${num(pk.ivs[chave])}</em>` : ''}
-             </div>`,
-         ).join('')}
+    ? `<div class="fi-stats-duo">
+         ${radarStats([
+           { valores: Object.fromEntries(STATS_ORDEM.map(([k]) => [k, (Number(stats[k]) || 0) / maiorStat])), classe: 'stats' },
+           ...(pk.ivs ? [{ valores: Object.fromEntries(STATS_ORDEM.map(([k]) => [k, (Number(pk.ivs[k]) || 0) / IV_POR_STAT.max])), classe: 'iv' }] : []),
+         ])}
+         <div class="fi-stats">
+           ${STATS_ORDEM.map(
+             ([chave, rotulo]) => `
+               <div class="fi-stat">
+                 <span class="fi-stat-nome">${rotulo}</span>
+                 <span class="fi-stat-barra"><i style="width:${Math.min(100, ((Number(stats[chave]) || 0) / maiorStat) * 100)}%"></i></span>
+                 <b class="fi-stat-num">${num(stats[chave])}</b>
+                 ${pk.ivs ? `<em class="fi-iv ${classeIvStat(pk.ivs[chave])}" title="${t('dex.ivStatTitle')}">IV ${num(pk.ivs[chave])}</em>` : ''}
+               </div>`,
+           ).join('')}
+         </div>
        </div>
-       ${pk.ivs ? `<p class="fi-nota">${t('dex.notaIvPorStat')}</p>` : ''}`
+       ${pk.ivs ? `<p class="fi-radar-legenda"><i class="stats"></i>${t('dex.legendaStats')}<i class="iv"></i>${t('dex.legendaIv')}</p>
+       <p class="fi-nota">${t('dex.notaIvPorStat')}</p>` : ''}`
     : `<p class="fi-vazio">${t('dex.semStatsAnuncio')}</p>`;
 
   // ---- XP: quanto falta para o próximo nível
@@ -33719,15 +37201,16 @@ function corpoDoPokemon(pk) {
       ? `<p class="fi-vazio">${t('dex.semXpAnuncio')}</p>`
       : `<div class="barra xp fi-xp"><div class="fill" style="width:${Math.min(100, (naFaixa / faixa) * 100)}%"></div>
            <span>${num(naFaixa)} / ${num(faixa)} xp</span></div>
-         <div class="fi-linhas">
-           ${fichaLinha(t('dex.xpTotal'), num(pk.xp ?? 0))}
-           ${fichaLinha(t('dex.faltamXp'), num(Math.max(0, faixa - dentro)))}
-           ${fichaLinha(t('dex.proximoNivel'), num(nivel + 1))}
+         <div class="fi-placas">
+           ${fiPlaca(t('dex.xpTotal'), num(pk.xp ?? 0), { icone: 'estrela' })}
+           ${fiPlaca(t('dex.faltamXp'), num(Math.max(0, faixa - dentro)), { icone: 'ampulheta' })}
+           ${fiPlaca(t('dex.proximoNivel'), num(nivel + 1), { icone: 'subir' })}
          </div>`;
 
   const ivTotal = pk.ivs
     ? Object.values(pk.ivs).reduce((s, v) => s + v, 0)
     : (pk.ivTotal ?? null);
+  const qualidade = Number(pk.quality ?? pk.qualidade);
 
   // ---- stats-BASE da espécie, com o refino deste bicho ao lado
   //
@@ -33737,7 +37220,7 @@ function corpoDoPokemon(pk) {
   // só para chegar na bancada (ver o cabeçalho do bloco de refino).
   const infoRf = infoRefino(pk);
   const blocoRefino = infoRf
-    ? fichaSecao(
+    ? fiCartao(
         t('dex.statsBase'),
         `${infoRf.meu ? chipPedra(infoRf) : ''}
          <div class="fi-stats fi-stats-refino">
@@ -33750,7 +37233,7 @@ function corpoDoPokemon(pk) {
            ${linhaBaseSpeed(infoRf.especie)}
          </div>
          <p class="fi-nota">${infoRf.meu ? t('refino.nota', { base: num(cfgRefino().custoBase) }) : t('refino.notaAlheio')}</p>`,
-        t('dex.statsNota'),
+        { icone: 'subir', extra: t('dex.statsNota') },
       )
     : '';
 
@@ -33765,81 +37248,122 @@ function corpoDoPokemon(pk) {
   const capturador = capturadorDoPokemon(pk);
   const megaFicha = megaDaFicha(especie);
   const evo = infoEvolucao(pk);
-  const linhaEvo = evo
-    ? fichaLinha(
-        t('dex.evolucao'),
-        `${evo.opcoes
-          .map((o) => {
-            const nome = escapar(o.nome);
-            const alvo = o.temArte ? nome : `<span class="fi-evo-sem">${nome} <em>${escapar(t('dex.semSprite'))}</em></span>`;
-            const comPedra = evo.pedraPorDestino
-              ? ` · ${htmlPedraEvolucao({ itemId: o.itemId, nome: o.pedra })}`
-              : '';
-            return `<span class="fi-evo-linha">${t('dex.evoluiPara', { nome: alvo, nv: num(o.nivel) })}${comPedra}</span>`;
-          })
-          .join('')}${evo.pedraPorDestino ? '' : ` · ${htmlPedraEvolucao({ itemId: evo.itemId, nome: evo.pedra })}`}`,
-      )
+  const poder = pk.poder ?? (especie ? poderDeReferencia(especie, nivel, multProprio) : 0);
+
+  // ---- a IDENTIDADE em placas: o código, quando e por quem foi capturado, as medalhas e os
+  // troféus que ele carrega, e a espécie.
+  const identidade = [
+    codigoPokemon(pk.id) ? fiPlaca(t('dex.identidade'), `<span class="txt-num">${codigoPokemon(pk.id)}</span>`, { icone: 'copia' }) : '',
+    codigoPokemon(pk.id) && caughtAtDoPokemon(pk)
+      ? fiPlaca(t('dex.capturadoEm'), `<span class="txt-num">${formatarDataCaptura(caughtAtDoPokemon(pk))}</span>`, { icone: 'calendario' })
+      : '',
+    capturador ? fiPlaca(t('dex.capturadoPor'), `<span class="txt-num">${escapar(capturador)}</span>`, { icone: 'pessoa' }) : '',
+    medalhasDe(pk) > 0
+      ? fiPlaca(t('medalha.ficha'), `<span class="txt-num fi-medalha">🎖️ ${escapar(vezesMedalha(medalhasDe(pk)))}</span>`, { classe: 'ouro' })
+      : '',
+    ...trofeusDe(pk).map((tr) => fiPlaca(
+      t(`trofeu.${tr.tipo}`),
+      `<span class="txt-num fi-trofeu">${imgTrofeu(tr)} ${escapar(vezesMedalha(tr.n))}</span>`,
+      { classe: 'ouro' },
+    )),
+    especie ? fiPlaca(t('dex.especie'), `#${num(dexExibicao(especie.pokeId))} ${escapar(especie.name)}`, { icone: 'olho' }) : '',
+  ].filter(Boolean).join('');
+
+  // ---- a CADEIA de evolução (o destino e a mega levam à ficha DA ESPÉCIE deles, como o "Ver
+  // espécie"). Para um shiny, os destinos já vêm na forma shiny (`infoEvolucao`).
+  const cadeia = evo || megaFicha
+    ? fiCartao(t('dex.evolucao'), cadeiaEvolucaoHtml({
+        atual: {
+          pokeId: especie?.pokeId ?? pk.speciesId,
+          nome: nomeExibidoPokemon(pk) || pk.nome || '—',
+          lt: looktypeDe(pk),
+          comum: especie?.looktype ?? pk.looktype,
+          sub: dlgNivel(nivel),
+        },
+        destinos: (evo?.opcoes ?? []).map((o) => ({
+          pokeId: o.pokeId,
+          nome: o.nome,
+          nivel: o.nivel,
+          temArte: o.temArte,
+          looktype: o.looktype,
+          pedra: evo.pedraPorDestino ? { itemId: o.itemId, nome: o.pedra } : null,
+        })),
+        pedraUnica: evo && !evo.pedraPorDestino ? { itemId: evo.itemId, nome: evo.pedra } : null,
+        mega: megaFicha,
+      }), { icone: 'subir' })
     : '';
 
+  // ---- as AÇÕES, todas juntas embaixo do nome: as que só leem (Calcular, Comparar, Ver
+  // espécie) e a única que mexe no bicho (Reduzir o nível), em âmbar.
+  const acoes = [
+    podeCalcular ? `<button type="button" class="fi-calc fi-acao" id="fi-calc">${dlgIcone('soma', 14)}<span>${t('dex.calcular')}</span></button>` : '',
+    podeCalcular ? `<button type="button" class="fi-calc fi-calc-comp-bt fi-acao" id="fi-comp-a">${t('dex.compararA')}</button>` : '',
+    podeCalcular ? `<button type="button" class="fi-calc fi-calc-comp-bt fi-acao" id="fi-comp-b">${t('dex.compararB')}</button>` : '',
+    infoRed ? `<button type="button" class="fi-calc fi-calc-comp-bt fi-baixar-nv fi-acao" id="fi-baixar-nv"
+      title="${escapar(t('dex.reduzirNivelAjuda', { piso: num(infoRed.piso) }))}">${t('dex.reduzirNivel')}</button>` : '',
+    especie ? `<button class="fi-verdex fi-acao" id="fi-verdex" type="button">${dlgIcone('olho', 14)}<span>${t('dex.verEspecie')}</span></button>` : '',
+  ].filter(Boolean).join('');
+
   return `
-    <div class="fi-topo">
-      <div class="fi-arte-col">
-        <div class="fi-arte" id="fi-arte"></div>
-        ${podeCalcular ? `<button type="button" class="fi-calc" id="fi-calc">${t('dex.calcular')}</button>
-        <div class="fi-calc-comp">
-          <button type="button" class="fi-calc fi-calc-comp-bt" id="fi-comp-a">${t('dex.compararA')}</button>
-          <button type="button" class="fi-calc fi-calc-comp-bt" id="fi-comp-b">${t('dex.compararB')}</button>
-        </div>` : ''}
-        ${infoRed ? `<button type="button" class="fi-calc fi-calc-comp-bt fi-baixar-nv" id="fi-baixar-nv"
-          title="${escapar(t('dex.reduzirNivelAjuda', { piso: num(infoRed.piso) }))}">${t('dex.reduzirNivel')}</button>` : ''}
-      </div>
-      <div class="fi-cabeca">
-        <div class="fi-nome">${pk.shiny ? prefixoShiny() : ''}${escapar(nomeExibidoPokemon(pk) || '—')}${seloRefino(pk)}
-          <span class="fi-num-dex">${t('cm.nivel')} ${num(nivel)}</span></div>
-        ${apelidoDe(pk) ? `<div class="fi-apelido">${t('nametag.fichaEspecie', { especie: escapar(pk.nome ?? '—') })}</div>` : ''}
+    <div class="fi-heroi">
+      <div class="fi-heroi-info">
+        <div class="fi-nome">${pk.shiny ? prefixoShiny() : ''}${escapar(nomeExibidoPokemon(pk) || '—')}${seloRefino(pk)}</div>
+        <div class="fi-heroi-sub">
+          <span class="fi-nivel-chip">${t('cm.nivel')} ${num(nivel)}</span>
+          ${apelidoDe(pk) ? `<span class="fi-apelido">${t('nametag.fichaEspecie', { especie: escapar(pk.nome ?? '—') })}</span>` : ''}
+        </div>
         <div class="fi-tipos">${selosDeTipo(pk.tipos?.length ? pk.tipos : especie ? [especie.type1, especie.type2].filter(Boolean) : [])}</div>
-        <div class="fi-selos-linha">
-          ${pk.shiny ? seloShiny() : ''}
-          ${selosTm(pk)}
-          ${selosAtributos(pk)}
+        ${pk.shiny || selosTm(pk) || pokemonTemXpShareHeld(pk)
+          ? `<div class="fi-selos-linha">${pk.shiny ? seloShiny() : ''}${selosTm(pk)}${pokemonTemXpShareHeld(pk) ? seloXpShareHeld() : ''}</div>`
+          : ''}
+        <!-- Duas fileiras: as placas de METAL juntas (Potência, Qualidade, IV — a mesma escada de
+             cor do card, lida de uma vez) e, embaixo, Poder e HP de combate lado a lado. -->
+        <div class="fi-placas-heroi">
+          <div class="fi-placas-linha">
+            ${fiPlaca(t('dex.potencia'), `P${potencia}`, {
+              classe: `pk-selo pk-selo-pot t${potencia}`,
+              titulo: potencia === 1 ? t('cm.potenciaP1') : t('cm.potenciaAjuda', { n: potencia, b: bonusDaPotencia(potencia) }),
+            })}
+            ${Number.isFinite(qualidade) && qualidade > 0 ? fiPlaca(t('dex.qualidade'), virgula(qualidade.toFixed(3)), {
+              classe: `pk-selo pk-selo-q t${degrauPorCortes(percentilQualidade(qualidade), CORTES_QUALIDADE_PCT)}`,
+              titulo: t('selo.qualidadeAjuda', { v: virgula(qualidade.toFixed(3)), pct: Math.max(1, Math.round((1 - percentilQualidade(qualidade)) * 100)) }),
+            }) : ''}
+            ${ivTotal != null ? fiPlaca(t('dex.ivTotal'), `${num(ivTotal)}<small>/192</small>`, {
+              classe: `pk-selo pk-selo-iv t${degrauPorCortes((ivTotal - IV_MIN) / (IV_MAX - IV_MIN), CORTES_IV_PCT)}`,
+              titulo: t('selo.ivAjuda', { v: num(ivTotal), max: num(IV_MAX), pct: Math.round(((ivTotal - IV_MIN) / (IV_MAX - IV_MIN)) * 100) }),
+            }) : ''}
+          </div>
+          <div class="fi-placas-linha">
+            ${fiPlaca(t('dex.poder'), `⚔ ${num(poder)}`, { classe: 'destaque' })}
+            ${pk.maxHp ? fiPlaca(t('dex.hpCombate'), num(pk.maxHp), { icone: 'cura' }) : ''}
+          </div>
         </div>
-        <div class="fi-linhas">
-          ${fichaLinha(t('dex.poder'), `<b class="txt-num">${num(pk.poder ?? (especie ? poderDeReferencia(especie, nivel, multProprio) : 0))}</b>`)}
-          ${ivTotal != null ? fichaLinha(t('dex.ivTotal'), `${num(ivTotal)} / 192`) : ''}
-          ${fichaLinha(t('dex.potencia'), rotuloPotencia(potencia))}
-          ${pk.maxHp ? fichaLinha(t('dex.hpCombate'), num(pk.maxHp)) : ''}
-          ${codigoPokemon(pk.id) ? fichaLinha(t('dex.identidade'), `<b class="txt-num">${codigoPokemon(pk.id)}</b>`) : ''}
-          ${codigoPokemon(pk.id) && caughtAtDoPokemon(pk) ? fichaLinha(t('dex.capturadoEm'), `<b class="txt-num">${formatarDataCaptura(caughtAtDoPokemon(pk))}</b>`) : ''}
-          ${capturador ? fichaLinha(t('dex.capturadoPor'), `<b class="txt-num">${escapar(capturador)}</b>`) : ''}
-          ${medalhasDe(pk) > 0 ? fichaLinha(
-            t('medalha.ficha'),
-            `<b class="txt-num fi-medalha">🎖️ ${escapar(vezesMedalha(medalhasDe(pk)))}</b>`,
-          ) : ''}
-          ${trofeusDe(pk).map((tr) => fichaLinha(
-            t(`trofeu.${tr.tipo}`),
-            `<b class="txt-num fi-trofeu">${imgTrofeu(tr)} ${escapar(vezesMedalha(tr.n))}</b>`,
-          )).join('')}
-          ${especie ? fichaLinha(t('dex.especie'), `#${dexExibicao(especie.pokeId)} ${escapar(especie.name)}`) : ''}
-          ${linhaEvo}
-          ${linhaMegaDaFicha(megaFicha)}
-        </div>
+        ${acoes ? `<div class="fi-acoes">${acoes}</div>` : ''}
+      </div>
+      <div class="fi-heroi-palcos">
+        ${holofoteHtml({
+          id: 'fi-palco',
+          faixa: nf?.faixa ?? null,
+          tom: nf ? null : 'rx',
+          classe: `fi-palco${pk.shiny ? ' hf-shiny' : ''}`,
+          rodape: placaNotaFicha(nf),
+        })}
       </div>
     </div>
 
-    ${fichaSecao(t('dex.statsAtuais'), blocoStats)}
+    ${fiCartao(t('dex.statsAtuais'), blocoStats, { icone: 'estrela', classe: nf ? `nota-tinta ${nf.faixa}` : '' })}
     ${blocoRefino}
-    ${fichaSecao(t('dex.experiencia'), blocoXp)}
-    ${fichaSecao(
+    ${cadeia}
+    <div class="fi-grade-2">
+      ${fiCartao(t('dex.experiencia'), blocoXp, { icone: 'subir' })}
+      ${identidade ? fiCartao(t('dex.identidadeTitulo'), `<div class="fi-placas">${identidade}</div>`, { icone: 'pessoa' }) : ''}
+    </div>
+    ${fiCartao(
       t('dex.potenciaDele'),
-      `<table class="fi-tabela">
-         <thead><tr>
-           <th>${t('dex.pot')}</th><th>${t('dex.chance')}</th><th>${t('dex.bonus')}</th><th>${t('dex.poderNoNivel')}</th>
-         </tr></thead>
-         <tbody>${linhasPot}</tbody>
-       </table>
+      `${escadaPotenciasHtml({ especie, nivel, aqui: potencia, shiny: !!pk.shiny })}
        <p class="fi-nota">${t('dex.notaPotenciaDele')}</p>`,
-    )}
-    ${especie ? `<button class="fi-verdex" id="fi-verdex" type="button">${t('dex.verEspecie')}</button>` : ''}`;
+      { icone: 'raio' },
+    )}`;
 }
 
 /** A curva de XP do jogo — a mesma de `xpTotalParaNivel` no servidor. */
@@ -33861,12 +37385,27 @@ function confirmarDesistenciaCombate() {
   const e = estado.eu;
   if (!e?.huntSlug || e.noCentro || e.boss?.arena || e.mistico) return;
   const { xp, pct } = xpPerdaDesistenciaPrevista(e);
-  const xpHtml = xp > 0
-    ? `<p class="confirmar-desistir-xp">${t('cena.desistirXpPerda', { xp: num(xp), pct })}</p>`
-    : `<p class="confirmar-desistir-xp">${t('cena.desistirXpZero')}</p>`;
+  const ativo = e.pokemons?.find((p) => p.id === e.activeId) ?? e.pokemons?.[0] ?? null;
+  // A bandeira branca: o pokémon que está lutando, sem cor, e a seta para o Centro. O preço da
+  // desistência (o XP) é o aviso em caixa — é o número que a pessoa precisa ler antes do clique.
   confirmar({
     titulo: t('cena.desistirTitulo'),
-    texto: `<p>${escapar(t('cena.desistirTexto'))}</p>${xpHtml}<p class="confirmar-desistir-nota">${t('cena.desistirAutoHunt')}</p>`,
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: ativo ? dlgArtePk(ativo, 64) : dlgArteTreinador(null, null, 64),
+          nome: ativo ? nomePkHtml(ativo) : escapar(e.nick ?? ''),
+          classe: 'sai',
+          marca: dlgIcone('bandeira', 15),
+        })}
+        ${dlgSeta()}
+        ${dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'cura', tom: 'verde' })), nome: escapar(t('dlg.centro')) })}`, 'perigo')}
+      ${dlgFrase('', escapar(t('cena.desistirTexto')))}
+      ${xp > 0
+        ? dlgAviso(t('cena.desistirXpPerda', { xp: num(xp), pct }))
+        : dlgAviso(t('cena.desistirXpZero'), { icone: 'check', tom: 'info' })}
+      <p class="confirmar-desistir-nota">${t('cena.desistirAutoHunt')}</p>`,
+    tom: 'perigo',
     aoConfirmar: () => enviar({ t: 'centro.desistir' }),
   });
 }
@@ -33926,9 +37465,20 @@ function pedirReducaoNivel(pk) {
   const meuNv = estado.eu?.level ?? 0;
   let alvo = nivelSugeridoReducao(info.nivel, info.piso, meuNv);
 
+  // O mesmo bicho dos dois lados da seta: o nível de hoje à esquerda e, à direita, o que está
+  // no campo — ele anda junto com a digitação (`#rnv-para`), e o boneco apaga quando o número
+  // não vale.
   confirmar({
-    titulo: t('dex.reduzirNivelTitulo', { nome }),
+    titulo: t('dex.reduzirNivelTitulo', { nome: info.pk.nome ?? '—' }),
     texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArtePk(info.pk, 64), nome: nomePkHtml(info.pk), sub: dlgNivel(info.nivel) })}
+        ${dlgSeta({ rotulo: '−XP' })}
+        <div class="dlg-ator novo" id="rnv-ator">
+          <span class="dlg-ator-arte">${dlgArtePk(info.pk, 64)}</span>
+          <span class="dlg-ator-nome">${nomePkHtml(info.pk)}</span>
+          <span class="dlg-ator-sub" id="rnv-para">${dlgNivel(alvo)}</span>
+        </div>`)}
       <label class="qtd-bloco reduzir-nv-bloco">
         <span class="qtd-topo">${t('dex.reduzirNivelCampo')}<em>${t('dex.reduzirNivelFaixa', { min: num(min), max: num(max) })}</em></span>
         <span class="qtd-linha">
@@ -33955,13 +37505,17 @@ function pedirReducaoNivel(pk) {
     const digitado = campo.value.trim() === '' ? Number.NaN : Number(campo.value);
     const r = validarNivelAlvo(info.nivel, info.piso, digitado);
     sim.disabled = !r.ok;
+    $('#rnv-ator')?.classList.toggle('travado', !r.ok);
+    $('#rnv-ator')?.classList.toggle('novo', r.ok);
     if (!r.ok) {
       alvo = null;
       resumo.innerHTML = t('dex.reduzirNivelInvalido', { min: num(min), max: num(max) });
+      $('#rnv-para').textContent = '—';
       destrava.hidden = true;
       return;
     }
     alvo = r.novo;
+    $('#rnv-para').textContent = dlgNivel(alvo);
     resumo.innerHTML = t('dex.reduzirNivelTexto', {
       nome,
       de: num(info.nivel),
@@ -33992,7 +37546,10 @@ const fecharFicha = () => {
 /** Põe a ficha na tela e liga o que dentro dela precisa de JS (sprites, ícones, botões). */
 function mostrarFicha(titulo, html, aoMontar) {
   $('#ficha-titulo').textContent = titulo;
-  $('#ficha-corpo').innerHTML = html;
+  // O invólucro `.fi-corpo` é o container das `@container` da ficha. Fica DENTRO do elemento que
+  // rola, e não nele: contenção no próprio rolador atrapalhava a conta da rolagem, e o fim da
+  // ficha ficava cortado.
+  $('#ficha-corpo').innerHTML = `<div class="fi-corpo">${html}</div>`;
   // Os ícones marcados no HTML viram desenho aqui: `data-bola` nas linhas de captura e
   // `data-item` nas de drop. Fazer isto por marcação (em vez de montar cada `<td>` no DOM)
   // é o que deixa as tabelas serem template de string, que é como o resto da tela é escrito.
@@ -34027,9 +37584,10 @@ function abrirFichaDaEspecie(pokeId) {
   fichaPokemonAberto = null;
   fichaCompartilharPkId = null;
   mostrarFicha(especie.name, corpoDaEspecie(especie), () => {
-    $('#fi-arte').appendChild(spriteAnimado(especie.looktype, 96));
-    const shiny = $('#fi-arte-shiny');
-    if (shiny) shiny.appendChild(spriteAnimado(lookShinyFicha(especie), 96));
+    porNoPedestal($('#fi-palco .hf-arte'), especie.looktype, 104);
+    const palcoShiny = $('#fi-palco-shiny .hf-arte');
+    if (palcoShiny) porNoPedestal(palcoShiny, lookShinyFicha(especie), 104, especie.looktype);
+    ligarFichaNova($('#ficha-corpo'));
 
     // Clicar na evolução TROCA a ficha pela dela — mesma janela, sem perder o lugar.
     for (const b of $('#ficha-corpo').querySelectorAll('.fi-evo-link')) {
@@ -34040,6 +37598,14 @@ function abrirFichaDaEspecie(pokeId) {
     for (const b of $('#ficha-corpo').querySelectorAll('.fi-hunt')) {
       b.onclick = () => {
         if (b.classList.contains('fi-boss-cta')) return abrirBossDaPokedex(b.dataset.boss);
+        // O ticket na mão, a ficha aberta: a confirmação da arena abre daqui mesmo. A ficha
+        // fecha antes porque a entrada troca a cena — voltar dela para uma ficha esquecida
+        // por cima do campo é o tipo de janela que ninguém sabe de onde veio.
+        if (b.classList.contains('fi-mistico-cta')) {
+          fecharFicha();
+          fecharModal();
+          return abrirUsoTicketMistico();
+        }
         if (b.classList.contains('travada')) return toast(t('dex.areaTravada'));
         if (avisoTrocaDeHuntBloqueada()) return;
         enviar({ t: 'hunt.select', slug: b.dataset.hunt });
@@ -34064,9 +37630,14 @@ function abrirFichaDoPokemon(pk) {
   const titulo = pk.dono ? `${nomeTit} · ${pk.dono}` : nomeTit;
   mostrarFicha(titulo, corpoDoPokemon(pk), () => {
     pintarBotaoCompartilharFicha();
-    $('#fi-arte').appendChild(spritePokemon(pk, 96));
+    porNoPedestal($('#fi-palco .hf-arte'), looktypeDe(pk), 104, especieDe(pk)?.looktype ?? pk.looktype);
+    ligarFichaNova($('#ficha-corpo'));
     const verDex = $('#fi-verdex');
     if (verDex) verDex.onclick = () => abrirFichaDaEspecie(pk.speciesId);
+    // O destino da evolução e a mega levam à ficha DA ESPÉCIE deles, como o "Ver espécie".
+    for (const b of $('#ficha-corpo').querySelectorAll('.fi-evo-link')) {
+      b.onclick = () => abrirFichaDaEspecie(Number(b.dataset.especie));
+    }
     const calcular = $('#fi-calc');
     if (calcular) calcular.onclick = () => calcularEstePokemon(pk);
     const compA = $('#fi-comp-a');
@@ -34505,11 +38076,31 @@ function pedirEquiparBicicleta(bici) {
   const falta = (info.trocaLiberaEm ?? 0) - Date.now();
   if (falta > 0) return toast(t('bicicleta.trocaEspera', { tempo: tempoDeEspera(falta) }));
   const min = Math.round((info.intervaloTrocaMs ?? 300_000) / 60_000);
+  // Equipar: a bicicleta chega (luz, flutuação). Guardar: ela sai, sem cor, e você segue a pé.
+  // A trava de 5 minutos é o selo — é a parte que pega quem troca por impulso.
+  const rarEquipada = info.equipadaRar ?? null;
+  const arteBici = (rar) => dlgArteArquivo(arteDaBicicleta(rar), 64, true);
   confirmar({
     titulo: t(bici ? 'bicicleta.trocarTitulo' : 'bicicleta.guardarTitulo'),
-    texto: escapar(bici
-      ? t('bicicleta.trocarTexto', { nome: `${nomeBicicletaRaridade(bici.rar)} ${numeroDaBicicleta(bici.id)}`, min })
-      : t('bicicleta.guardarTexto', { min })),
+    texto: `
+      ${dlgPalco(bici
+        ? dlgAtor({
+          arte: arteBici(bici.rar),
+          nome: escapar(`${nomeBicicletaRaridade(bici.rar)} ${numeroDaBicicleta(bici.id)}`),
+          classe: 'novo',
+        })
+        : `
+          ${dlgAtor({
+            arte: arteBici(rarEquipada),
+            nome: escapar(rarEquipada ? `${nomeBicicletaRaridade(rarEquipada)} ${numeroDaBicicleta(info.equipada)}` : ''),
+            classe: 'sai',
+          })}
+          ${dlgSeta()}
+          ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(t('bicicleta.aPe')) })}`, 'ouro')}
+      ${dlgFrase('', escapar(bici
+        ? t('bicicleta.trocarTexto', { nome: `${nomeBicicletaRaridade(bici.rar)} ${numeroDaBicicleta(bici.id)}`, min })
+        : t('bicicleta.guardarTexto', { min })))}
+      ${dlgSelos(dlgSelo('relogio', escapar(t('bicicleta.seloTrava', { min })), 'info'))}`,
     rotuloSim: t(bici ? 'bicicleta.trocarSim' : 'bicicleta.guardarSim'),
     aoConfirmar: () => enviar({ t: 'bicicleta.equipar', bicicletaId: bici ? bici.id : null }),
   });
@@ -34816,19 +38407,21 @@ function barraDaLixeira() {
  */
 function abrirLixeira({ tipo, id, nome, q }) {
   const { corpo, fechar } = folhaMercado(escapar(t('bolsa.lixeira.titulo')));
+  // O palco do diálogo de jogo, no tom vermelho: o item → a quantidade → a lixeira. O saldo da
+  // bolsa ("12 → 11") mora embaixo do item e anda junto com o contador.
   corpo.innerHTML = `
-    <div class="lix-alvo">
-      <span class="lix-ico"></span>
-      <span class="lix-nome">${escapar(nome)}</span>
-      <b class="lix-tem">${escapar(t('bolsa.lixeira.voceTem', { n: num(q) }))}</b>
-    </div>
-    <p class="cm-nota lix-aviso">${escapar(t('bolsa.lixeira.aviso'))}</p>
+    ${dlgPalco(`
+      ${dlgAtor({ arte: '<span class="dlg-ator-fig" data-lix-arte></span>', nome: escapar(nome), sub: '<span id="lix-sobra"></span>' })}
+      ${dlgSeta({ rotulo: '<b class="lix-n" id="lix-n"></b>' })}
+      ${dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'lixeira', tom: 'perigo' })), nome: escapar(t('bolsa.lixeira.destino')), classe: 'lix-destino' })}`, 'perigo')}
+    ${dlgAviso(escapar(t('bolsa.lixeira.aviso')))}
     <div class="lix-qtd"></div>
     <div class="cm-botoes">
       <button type="button" class="cm-acao sec" id="lix-nao">${escapar(t('confirmar.nao'))}</button>
       <button type="button" class="cm-acao lix-sim" id="lix-sim"></button>
     </div>`;
-  corpo.querySelector('.lix-ico').appendChild(tipo === 'bola' ? iconeBola(id, 40) : imgItem(id, 40));
+  // A arte é um NÓ (bola vem de outro atlas que o item), por isso entra depois do template.
+  corpo.querySelector('[data-lix-arte]').appendChild(tipo === 'bola' ? iconeBola(id, 48) : imgItem(id, 48));
 
   const ctd = contador(q);
   const tudo = document.createElement('button');
@@ -34844,7 +38437,10 @@ function abrirLixeira({ tipo, id, nome, q }) {
 
   const sim = corpo.querySelector('#lix-sim');
   const repintar = () => {
-    sim.textContent = t('bolsa.lixeira.jogarFora', { n: num(ctd.ler()), nome });
+    const n = ctd.ler();
+    sim.textContent = t('bolsa.lixeira.jogarFora', { n: num(n), nome });
+    corpo.querySelector('#lix-n').textContent = `×${num(n)}`;
+    corpo.querySelector('#lix-sobra').innerHTML = t('bolsa.lixeira.naBolsa', { de: num(q), para: num(Math.max(0, q - n)) });
   };
   ctd.campo.addEventListener('input', repintar);
   repintar();
@@ -35521,10 +39117,27 @@ function confirmarOferenda({ rapida = false } = {}) {
   // e a oferenda recusa trancado), mas destravar acontece noutra tela e noutro momento — a
   // última chance de ler "3 shinys" antes de eles sumirem tem de ser aqui.
   const shinys = ofrEscolhidos().filter((pk) => pk.shiny).length;
-  const texto = [
-    escapar(t('oferenda.confirmarTexto', { n: roleta.oferecidos, pct })),
-    shinys ? `<b class="ofr-aviso-shiny">${escapar(t('oferenda.confirmarShiny', { n: shinys }))}</b>` : '',
-  ].filter(Boolean).join('<br>');
+  // Os que vão, sem cor, de um lado; a chance de pedra do outro. Embaixo, a roleta em fileira:
+  // cada pedra possível com a fatia dela, e o "nada" da casa vazia — a mesma conta da roda.
+  const chances = roleta.fatias.map((f) => (f.vazio
+    ? `<span class="dlg-bola vazio" title="${escapar(t('oferenda.fatiaVazia'))}">${dlgIcone('xis', 22)}<b>${Math.round(f.pct * 100)}%</b></span>`
+    : `<span class="dlg-bola${f.shiny ? ' shiny' : ''}" title="${escapar(nomeItem(f.itemId ?? 0, f.nome ?? ''))}">
+        <span data-dlg-item="${Number(f.itemId) || 0}" data-dlg-px="32"></span><b>${Math.round(f.pct * 100)}%</b>
+      </span>`)).join('');
+  const texto = `
+    ${dlgPalco(`
+      ${dlgAtor({ arte: dlgFila(ofrEscolhidos(), 34, 5), nome: escapar(t('oferenda.nPokemon', { n: roleta.oferecidos })), classe: 'sai' })}
+      ${dlgSeta()}
+      ${dlgAtor({
+        arte: dlgArteHtml(dlgMedalha({ icone: 'interrogacao', tom: 'mega', px: 40 })),
+        nome: `${pct}%`,
+        sub: escapar(t('oferenda.chancePedra')),
+        classe: 'novo',
+      })}`, 'mega')}
+    <div class="dlg-bolas">${chances}</div>
+    ${dlgFrase('', escapar(t('oferenda.confirmarTexto', { n: roleta.oferecidos, pct })))}
+    ${shinys ? dlgAviso(escapar(t('oferenda.confirmarShiny', { n: shinys })), { icone: 'brilho', classe: 'ofr-aviso-shiny' }) : ''}
+    ${dlgSelos(dlgSelo('cadeado', escapar(t('dlg.semVolta')), 'perigo'))}`;
   confirmar({
     titulo: t('oferenda.confirmarTitulo'),
     texto,
@@ -35618,23 +39231,39 @@ function ofrLoteForaEmTexto(fora) {
  * depois seria descobrir tarde.
  */
 function confirmarLoteDaOferenda(previa, fora, restantes) {
-  const linhas = [escapar(t('oferenda.loteResumo', { n: previa.oferecidos, giros: previa.giros }))];
-  if (previa.parcial) {
-    linhas.push(`<b class="ofr-aviso-shiny">${escapar(t('oferenda.loteParcial', {
-      n: previa.parcial.pokemons, pct: Math.round(previa.parcial.chance * 100),
-    }))}</b>`);
-  }
-  const pedras = previa.pedras.map((x) => `<li>${escapar(t('oferenda.loteLinhaPedra', {
-    nome: nomeItem(x.itemId, x.nome), n: virgula(x.esperado.toFixed(1)),
-  }))}</li>`).join('');
-  if (pedras) linhas.push(`<ul class="ofr-lote-pedras">${pedras}</ul>`);
+  // O Depot sem cor de um lado, as pedras do outro — e embaixo cada pedra com o quanto se ESPERA
+  // dela ("≈ 3,2"). É esperança, não promessa (ver `previaDoLote`), e o "≈" diz isso no número.
+  const pedras = previa.pedras.map((x) => `
+    <span class="dlg-bola" title="${escapar(nomeItem(x.itemId, x.nome))}">
+      <span data-dlg-item="${Number(x.itemId) || 0}" data-dlg-px="32"></span><b>≈${escapar(virgula(x.esperado.toFixed(1)))}</b>
+    </span>`).join('');
   const foraTxt = ofrLoteForaEmTexto(fora);
-  if (foraTxt) linhas.push(`<span class="dim">${escapar(foraTxt)}</span>`);
-  if (restantes > 0) linhas.push(`<span class="dim">${escapar(t('oferenda.loteRestantes', { n: restantes }))}</span>`);
+  const texto = `
+    ${dlgPalco(`
+      ${dlgAtor({
+        arte: dlgArteHtml(dlgMedalha({ arte: '<span data-dlg-arquivo="site/assets/ui/menu-depot.png" data-dlg-px="40"></span>', tom: 'perigo' })),
+        nome: escapar(t('oferenda.nPokemon', { n: previa.oferecidos })),
+        sub: escapar(t('oferenda.nGiros', { n: previa.giros })),
+        classe: 'sai',
+      })}
+      ${dlgSeta()}
+      ${dlgAtor({
+        arte: dlgArteHtml(dlgMedalha({ icone: 'interrogacao', tom: 'mega', px: 40 })),
+        nome: escapar(t('oferenda.pedrasEsperadas')),
+        classe: 'novo',
+      })}`, 'mega')}
+    ${pedras ? `<div class="dlg-bolas">${pedras}</div>` : ''}
+    ${dlgFrase('', escapar(t('oferenda.loteResumo', { n: previa.oferecidos, giros: previa.giros })))}
+    ${previa.parcial ? dlgAviso(escapar(t('oferenda.loteParcial', {
+      n: previa.parcial.pokemons, pct: Math.round(previa.parcial.chance * 100),
+    }))) : ''}
+    ${foraTxt ? `<p class="dlg-nota">${escapar(foraTxt)}</p>` : ''}
+    ${restantes > 0 ? `<p class="dlg-nota">${escapar(t('oferenda.loteRestantes', { n: restantes }))}</p>` : ''}
+    ${dlgSelos(dlgSelo('cadeado', escapar(t('dlg.semVolta')), 'perigo'))}`;
 
   confirmar({
     titulo: t('oferenda.loteTitulo'),
-    texto: linhas.join('<br>'),
+    texto,
     rotuloSim: t('oferenda.loteSim'),
     aoConfirmar: () => {
       estado.ofrGirando = true;
@@ -36624,23 +40253,25 @@ function pintarMarket() {
     const travadosDepot = noDepot.length - noDepotLivre.length;
     const { tipo, ordem, ivMin } = estado.mkPokemonFiltro;
     const pisoIv = ivMinDoFiltro(ivMin);
+    const filtrando = !!tipo || pisoIv != null;
     const lote = ordenarMarketPokemon(
       noDepotLivre.filter((p) => depotPassaFiltros(p, '', tipo, pisoIv)),
       ordem,
     );
+    const venda = vendaDepotDaTela(filtrando ? lote : noDepotLivre, filtrando ? { tipo: tipo || null, ivMin: pisoIv } : null);
 
     const faixa = barraVenderTudo(
-      t('mk.venderTodoDepot'),
-      noDepotLivre.length,
-      noDepotLivre.reduce((s, p) => s + precoDoPokemon(p), 0),
-      () => enviar({ t: 'shop.sellAllPokemons' }),
+      t(filtrando ? 'mk.venderTodoDepotFiltrado' : 'mk.venderTodoDepot'),
+      venda.lote.length,
+      venda.lote.reduce((s, p) => s + precoDoPokemon(p), 0),
+      () => enviar(venda.pedido),
       travadosDepot,
       {
         autoVenda: false,
         autoLockShiny: true,
         autoLockNota9: true,
         autoLockP5: true,
-        lotePokemon: noDepotLivre,
+        lotePokemon: venda.lote,
         colecao: true,
       },
     );
@@ -36692,7 +40323,6 @@ function pintarMarket() {
       grade.appendChild(card);
     }
     if (!lote.length) {
-      const filtrando = !!tipo || pisoIv != null;
       const msg = noDepotLivre.length && filtrando
         ? t('depot.nenhumResultado')
         : travadosDepot && !noDepotLivre.length ? t('colecao.tudoNaColecao') : t('mk.semPokemon');
@@ -36823,20 +40453,47 @@ function avisoDepotValiosos(lote) {
 
   const max = 8;
   const mostrar = valiosos.slice(0, max);
-  const linhas = mostrar
+  // Cada um como fichinha com o sprite: na pressa de "vender tudo", o olho reconhece o shiny pelo
+  // desenho antes de ler o nome. O selo dourado (✨ / P5) é o motivo de ele estar na lista.
+  const fichas = mostrar
     .map((p) => {
       const selos = [];
-      if (p.shiny) selos.push(prefixoShiny().trimEnd());
+      if (p.shiny) selos.push(dlgIcone('brilho', 11));
       if (Number(p.potencia) === POTENCIA_MAX) selos.push('P5');
-      return `• ${escapar(p.nome)} <span style="opacity:.85">(${selos.join(' · ')})</span>`;
+      return `<span class="dlg-ficha-pk">
+        <span data-dlg-lt="${Number(looktypeDe(p)) || 0}" data-dlg-px="26" data-dlg-comum="${Number(especieDe(p)?.looktype ?? p.looktype) || 0}"></span>
+        ${nomePkHtml(p)}<em>${selos.join(' ')}</em>
+      </span>`;
     })
-    .join('<br>');
+    .join('');
   const resto = valiosos.length - mostrar.length;
-  const extra = resto > 0 ? `<br>${t('mk.confirmaDepotValiososMais', { n: num(resto) })}` : '';
-  return `<br><br><b style="color:#ffb020">${t('mk.confirmaDepotValiososIntro')}</b><br>${linhas}${extra}`;
+  const extra = resto > 0 ? `<small>${t('mk.confirmaDepotValiososMais', { n: num(resto) })}</small>` : '';
+  return `
+    <div class="dlg-aviso ouro dlg-valiosos">${dlgIcone('alerta', 18)}<span>
+      ${t('mk.confirmaDepotValiososIntro')}
+      <span class="dlg-fichas-pk">${fichas}</span>${extra}
+    </span></div>`;
 }
 
 /** Faixa de "vender todos" no topo das abas de venda. Sempre pede confirmação. */
+/**
+ * O "Vender todo o Depot" — inteiro, ou só o que o FILTRO deixa na tela.
+ *
+ * `lote` é o que a confirmação mostra e é exatamente o que o servidor vai vender: fora quem segura
+ * a Exp. Share (o servidor também deixa de fora, e ela some com o pokémon), e o pedido leva o
+ * maior id da lista (`ateId`) — o pokémon capturado DEPOIS de a caixa abrir não entra numa venda
+ * que o jogador não viu. Com filtro, vai o FILTRO e não a lista de ids: num depot de milhares de
+ * pokémon a lista passaria do teto de 16 KB por mensagem do socket, e o servidor refaz a mesma
+ * conta com a mesma função (`shared/filtro-depot.mjs`).
+ */
+function vendaDepotDaTela(pokemons, filtro = null) {
+  const lote = pokemons.filter((p) => !pokemonTemXpShareHeld(p));
+  const ateId = lote.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
+  const pedido = { t: 'shop.sellAllPokemons', ateId };
+  if (filtro) pedido.filtro = filtro;
+  return { lote, pedido };
+}
+
 function barraVenderTudo(rotulo, quantos, total, aoConfirmar, travados = 0, opcoes = {}) {
   const {
     autoVenda = true,
@@ -36898,10 +40555,27 @@ function barraVenderTudo(rotulo, quantos, total, aoConfirmar, travados = 0, opco
       ${toggles}
       <button type="button" class="mk-acao" ${quantos ? '' : 'disabled'}>${rotulo}</button>
     </div>`;
+  // A venda em lote como troca: o que sai (sem cor) de um lado, as Coins do outro, e a etiqueta
+  // do que ENTRA com o saldo subindo. O que fica de fora (trancados, Coleção) é aviso dourado; o
+  // shiny e o P5 que vão junto, o aviso com as fichinhas.
   el.querySelector('.mk-acao').onclick = () =>
     confirmar({
       titulo: rotulo,
-      texto: `${t('mk.confirmaVenderTudo', { n: num(quantos), v: moeda(total) })}${travados ? `<br>${t(colecao ? 'colecao.confirmaFora' : 'mk.confirmaTravadosFora', { n: num(travados) })}` : ''}${lotePokemon ? avisoDepotValiosos(lotePokemon) : ''}`,
+      texto: `
+        ${dlgPalco(`
+          ${dlgAtor({
+            arte: lotePokemon?.length
+              ? dlgFila(lotePokemon, 30, 6)
+              : dlgArteHtml(dlgMedalha({ arte: `<span data-dlg-arquivo="${ICONE_ITEM_GENERICO}" data-dlg-px="40"></span>`, tom: 'ouro' })),
+            nome: escapar(t('mk.nParaVender', { n: num(quantos) })),
+            classe: 'sai',
+          })}
+          ${dlgSeta()}
+          ${dlgAtor({ arte: dlgArteArquivo(ICONE_OURO, 48), nome: `+${num(total)}`, classe: 'novo' })}`, 'ouro')}
+        ${dlgCusto({ moeda: 'ouro', valor: total, saldo: Math.floor(estado.eu?.gold ?? 0), ganha: true })}
+        ${travados ? dlgAviso(t(colecao ? 'colecao.confirmaFora' : 'mk.confirmaTravadosFora', { n: num(travados) }), { icone: 'cadeado', tom: 'info' }) : ''}
+        ${lotePokemon ? avisoDepotValiosos(lotePokemon) : ''}
+        ${dlgSelos(dlgSelo('cadeado', escapar(t('mk.seloSemDesfazer')), 'perigo'))}`,
       aoConfirmar,
     });
   el.querySelector('.mk-ver-colecao')?.addEventListener('click', () => abrirColecao());
@@ -36946,9 +40620,28 @@ function alternarVendaAutomatica(ligar, interruptor = null) {
   if (ligar) {
     if (!estado.eu?.automation?.autoVendaLootAvisoVisto) {
       if (interruptor) interruptor.checked = false;
+      // O exemplo de sempre (o Bee Sting) desenhado: o drop de um lado, as Coins do outro, a
+      // seta dizendo "na hora". As regras viram linhas — a do cuidado em vermelho, por último,
+      // que é a que precisa ficar na cabeça.
+      const exemplo = itemPorNome('Bee Sting');
       confirmar({
         titulo: t('mk.vendaAutomatica'),
-        texto: t('mk.vendaAutomaticaAviso'),
+        texto: `
+          ${dlgPalco(`
+            ${dlgAtor({
+              arte: exemplo ? dlgArteItem(exemplo.id, 48) : dlgArteArquivo(ICONE_ITEM_GENERICO, 48),
+              nome: escapar(exemplo?.name ?? 'Loot'),
+              sub: escapar(t('mk.vaSemCadeado')),
+              classe: 'sai',
+            })}
+            ${dlgSeta({ rotulo: escapar(t('mk.vaNaHora')) })}
+            ${dlgAtor({ arte: dlgArteArquivo(ICONE_OURO, 48), nome: 'Coins', classe: 'novo' })}`, 'ouro')}
+          ${dlgLista([
+            { icone: 'raio', html: t('mk.vaRegraHora') },
+            { icone: 'cadeado', html: t('mk.vaRegraCadeado') },
+            { icone: 'check', html: t('mk.vaRegraPedras') },
+            { icone: 'alerta', html: t('mk.vaRegraCuidado'), perigo: true },
+          ])}`,
         rotuloSim: t('mk.vendaAutomaticaLigar'),
         aoConfirmar: () => {
           aplicar(true, true);
@@ -36993,15 +40686,18 @@ const notaAutoLockDoJogador = () =>
  * aberto. Devolve quantos são; com `soContar` não tranca nada (é a conta da caixa).
  */
 function trancarPorNotaLocal(limiar, { soContar = false } = {}) {
-  const arr = (estado.eu.automation.pokemonTravado ??= []);
-  let n = 0;
-  for (const pk of estado.eu.pokemons ?? []) {
+  const lista = pokemonsQueANotaTranca(limiar);
+  if (!soContar) (estado.eu.automation.pokemonTravado ??= []).push(...lista.map((pk) => pk.id));
+  return lista.length;
+}
+
+/** Os pokémon que a nota `limiar` mandaria para a Coleção agora — os que ainda estão soltos. */
+function pokemonsQueANotaTranca(limiar) {
+  const arr = estado.eu.automation.pokemonTravado ?? [];
+  return (estado.eu.pokemons ?? []).filter((pk) => {
     const nota = notaDoPokemon(pk);
-    if (nota == null || nota < limiar || arr.includes(pk.id)) continue;
-    n++;
-    if (!soContar) arr.push(pk.id);
-  }
-  return n;
+    return nota != null && nota >= limiar && !arr.includes(pk.id);
+  });
 }
 
 /** Liga/desliga trava automática de pokémon com nota ≥ a escolhida (aba Venda Pokémons do Market). */
@@ -37063,9 +40759,20 @@ function mudarNotaAutoLock(campo) {
   // Até o jogador confirmar, o campo mostra a nota que ESTÁ valendo. Confirmou, o `aplicar`
   // redesenha a faixa já com a nova; cancelou (Não, Esc, clique fora), fica a de antes.
   voltar();
+  // Os que vão para a Coleção AGORA, em fila, a seta, e a estrela dourada da Coleção. A nota é o
+  // rótulo da seta: é ela que decide quem passa.
+  const indo = pokemonsQueANotaTranca(nota);
   confirmar({
     titulo: t('mk.autoLockNotaTitulo', { nota: notaTxt }),
-    texto: t('mk.autoLockNotaConfirma', { nota: notaTxt, n: num(novos) }),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: indo.length ? dlgFila(indo, 30, 6) : dlgArteHtml(dlgMedalha({ icone: 'pessoa', tom: 'ouro' })),
+          nome: escapar(t('oferenda.nPokemon', { n: num(novos) })),
+        })}
+        ${dlgSeta({ rotulo: escapar(t('mk.autoLockNotaSeta', { nota: notaTxt })) })}
+        ${dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'estrela', tom: 'ouro', px: 36 })), nome: escapar(t('colecao.titulo')), classe: 'novo' })}`, 'ouro')}
+      ${dlgFrase('', t('mk.autoLockNotaConfirma', { nota: notaTxt, n: num(novos) }))}`,
     rotuloSim: t('mk.autoLockNotaTrancar', { n: num(novos) }),
     aoConfirmar: aplicar,
   });
@@ -37401,6 +41108,7 @@ function abrirModal(nome) {
   if (nome === 'afiliados') montarAfiliados();
   if (nome === 'votar') montarVotar();
   if (nome === 'twitch') montarTwitch();
+  if (nome === 'kick') montarKick();
   if (nome === 'calculadora') ligarCalculadora();
   if (nome === 'configuracoes') ligarConfiguracoes();
   if (nome === 'amigos') {
@@ -37471,6 +41179,17 @@ function abrirModal(nome) {
         else if (b.id === 'cm-tm-elemental') estado.cmFiltro.soTmElemental = !estado.cmFiltro.soTmElemental;
         else if (b.id === 'cm-tm-aoe') estado.cmFiltro.soTmAoe = !estado.cmFiltro.soTmAoe;
         else if (b.id === 'cm-sem-outland') estado.cmFiltro.semOutland = !estado.cmFiltro.semOutland;
+        else if (b.id === 'cm-agregar') {
+          estado.cmFiltro.agregarEspecies = !estado.cmFiltro.agregarEspecies;
+          // Desligar DENTRO de uma espécie aberta volta para a lista inteira — é o que o botão
+          // promete. Sem isto, a faixa "‹ Todas as espécies · Dragonite" continuaria de pé numa
+          // vitrine que acabou de deixar de ter espécies.
+          estado.cmEspecieSel = null;
+          // E a lista em memória é de OUTRO formato (grupos de espécie não têm `ficha`): a
+          // pintura acontece antes de a resposta nova chegar, e sem zerar aqui ela desenharia
+          // card de anúncio com linha de espécie. Ver `dadosDaGradeCerta`.
+          estado.cmDados = { linhas: [], carregando: true };
+        }
         else if (b.id === 'cm-so-estoque') estado.cmFiltro.soComEstoque = !estado.cmFiltro.soComEstoque;
         else if ('tipo' in b.dataset) {
           estado.cmFiltro.tipo = b.dataset.tipo;
@@ -38153,52 +41872,62 @@ if (['localhost', '127.0.0.1'].includes(location.hostname)) {
 
 // ---------------------------------------------------------------- boss loot
 
+/**
+ * O resumo da vitória, no vocabulário do diálogo de jogo: o seu boneco aceso no pedestal e o
+ * boss nocauteado (sem cor) do outro lado do troféu; o que a luta rendeu em placas com ícone; e
+ * os itens que caíram como cartas que entram uma depois da outra. É tela de PRÊMIO — mais festa
+ * que uma confirmação, menos que a revelação da peça de TM, que passa antes dela quando cai
+ * (ver `revelarDropsDoBoss`).
+ */
 function abrirModalBossLoot(e) {
-  $('#boss-loot-nome').textContent = e.nome ?? '';
+  // A arte mora no catálogo da galeria (`bossesCatalogo`), não na ficha de quem tem arena.
+  const lt = estado.bossesCatalogo?.find((b) => b.key === e.key)?.looktype ?? null;
+  $('#boss-loot-palco').innerHTML = dlgPalco(`
+    ${dlgAtor({
+      arte: dlgArteTreinador(null, null, 64),
+      nome: escapar(estado.eu?.nick ?? ''),
+      sub: escapar(t('bossLoot.vitoria')),
+      classe: 'novo',
+    })}
+    <span class="bl-trofeu" aria-hidden="true">${dlgIcone('trofeu', 30)}</span>
+    ${dlgAtor({
+      arte: lt ? dlgArteLt(lt, 72) : dlgArteHtml(dlgMedalha({ icone: 'coroa', tom: 'ouro' })),
+      nome: escapar(e.nome ?? ''),
+      sub: escapar(t('bossLoot.derrotado')),
+      classe: 'sai',
+    })}`, 'ouro');
+
+  const placa = (ico, rotulo, valor) => `
+    <div class="boss-loot-stat">
+      <span class="bl-ico">${ico}</span>
+      <span class="bl-txt"><small>${rotulo}</small><b>${valor}</b></span>
+    </div>`;
   const stats = [
-    `<div class="boss-loot-stat">${t('bossLoot.xpTreinador')}<b>+${num(e.xpTreinador ?? e.xp ?? 0)}</b></div>`,
-    `<div class="boss-loot-stat">${t('bossLoot.xpPokemon')}<b>+${num(e.xpPokemon ?? e.xp ?? 0)}</b></div>`,
-    `<div class="boss-loot-stat">${t('bossLoot.pontos')}<b>+${num(e.pontos ?? 1)}</b></div>`,
+    placa(dlgIcone('pessoa', 18), t('bossLoot.xpTreinador'), `+${num(e.xpTreinador ?? e.xp ?? 0)}`),
+    placa(`<span data-dlg-arquivo="${SPRITE_BOLA[1]}" data-dlg-px="22"></span>`, t('bossLoot.xpPokemon'), `+${num(e.xpPokemon ?? e.xp ?? 0)}`),
+    placa(dlgIcone('coroa', 18), t('bossLoot.pontos'), `+${num(e.pontos ?? 1)}`),
   ];
-  if (e.valor) stats.push(`<div class="boss-loot-stat">${t('bossLoot.valorNpc')}<b>${moeda(e.valor)}</b></div>`);
+  if (e.valor) stats.push(placa(`<img src="${srcIcone(ICONE_OURO)}" alt="">`, t('bossLoot.valorNpc'), num(e.valor)));
   $('#boss-loot-stats').innerHTML = stats.join('');
-  let host = $('#boss-loot-drops');
-  if (host.tagName !== 'DIV') {
-    const div = document.createElement('div');
-    div.className = 'boss-loot-drops';
-    div.id = 'boss-loot-drops';
-    host.replaceWith(div);
-    host = div;
-  }
-  host.className = 'boss-loot-drops';
-  host.replaceChildren();
-  if (!e.drops?.length) {
-    const vazio = document.createElement('p');
-    vazio.className = 'boss-loot-vazio';
-    vazio.textContent = t('bossLoot.vazio');
-    host.replaceWith(vazio);
-    vazio.id = 'boss-loot-drops';
-  } else {
-    for (const d of e.drops) {
-      const el = document.createElement('span');
-      el.className = 'boss-loot-drop';
-      el.appendChild(imgItem(d.itemId, 22));
-      el.insertAdjacentHTML('beforeend', `<b>${escapar(d.nome)}</b> ×${num(d.qtd)}`);
-      host.appendChild(el);
-    }
-  }
+
+  // Cada carta entra com um atraso a mais (`--i`): o loot "cai" um item de cada vez.
+  $('#boss-loot-drops').innerHTML = e.drops?.length
+    ? e.drops.map((d, i) => `
+      <span class="boss-loot-drop" style="--i:${i}">
+        <span class="bl-drop-arte" data-dlg-item="${Number(d.itemId) || 0}" data-dlg-px="34"></span>
+        <b>${escapar(d.nome)}</b>
+        <span class="bl-drop-qtd">×${num(d.qtd)}</span>
+      </span>`).join('')
+    : `<p class="boss-loot-vazio">${escapar(t('bossLoot.vazio'))}</p>`;
+
+  hidratarDialogo($('#boss-loot .modal-corpo'));
   $('#boss-loot').classList.remove('hidden');
 }
 
+// Fechado, o palco se esvazia: os sprites animados param de girar o relógio deles.
 const fecharBossLoot = () => {
   $('#boss-loot').classList.add('hidden');
-  let host = $('#boss-loot-drops');
-  if (host.tagName !== 'DIV' || !host.classList.contains('boss-loot-drops')) {
-    const div = document.createElement('div');
-    div.className = 'boss-loot-drops';
-    div.id = 'boss-loot-drops';
-    host.replaceWith(div);
-  }
+  $('#boss-loot-palco').replaceChildren();
 };
 
 $('#boss-loot-ok').onclick = fecharBossLoot;
@@ -38245,27 +41974,42 @@ function htmlTmInfo() {
     return `${num(chances.length)} bosses (${min === max ? pct(min) : `${pct(min)}–${pct(max)}`})`;
   };
 
+  // O disco de exemplo é o de FIRE — o mesmo do texto ("TM FIRE"), para a arte e a frase
+  // contarem a mesma história.
+  const discoFire = (cfg.discos ?? []).find((d) => d.tipo === 'FIRE')?.itemId ?? null;
   const pecas = [
     {
       nome: t('tm.pecasElemental'),
       origem: origemDaPeca(cfg.pieceElemental),
       vira: t('tm.infoViraElemental'),
+      viraSub: t('tm.infoViraElementalSub'),
       itemId: cfg.pieceElemental,
+      disco: discoFire,
+      custo,
     },
     {
       nome: t('tm.pecasAoe'),
       origem: origemDaPeca(cfg.pieceAoe),
       vira: t('tm.trocarAoe'),
+      viraSub: t('tm.infoViraAoeSub'),
       itemId: cfg.pieceAoe,
+      disco: cfg.diskAoe,
+      custo: cfg.custoAoe ?? custo,
     },
   ];
 
-  const linhasPecas = pecas
-    .map(
-      (p) =>
-        `<tr><td>${p.itemId ? imgItem(p.itemId, 18).outerHTML : ''} ${escapar(p.nome)}</td><td>${p.origem}</td><td>${escapar(p.vira)}</td></tr>`,
-    )
-    .join('');
+  // Cada troca é um palco do diálogo de jogo — as peças → a seta → o disco —, no lugar da
+  // tabela de três colunas: é uma TROCA, e troca se desenha.
+  const trocas = pecas.map((p) => dlgPalco(`
+    ${dlgAtor({
+      arte: p.itemId ? dlgArteItem(p.itemId, 40) : '',
+      nome: escapar(p.nome),
+      sub: escapar(p.origem),
+      qtd: `×${num(p.custo)}`,
+    })}
+    ${dlgSeta()}
+    ${dlgAtor({ arte: p.disco ? dlgArteItem(p.disco, 44) : '', nome: escapar(p.vira), sub: escapar(p.viraSub), classe: 'novo' })}`, 'rx')).join('');
+  const artePequena = (itemId) => (itemId ? `<span data-dlg-item="${Number(itemId)}" data-dlg-px="24"></span>` : null);
 
   const pkExtra = tiposPk.length
     ? `<p class="tm-info-nota">${t('tm.infoTiposPk', { tipos: tiposHtml })}</p>`
@@ -38275,20 +42019,17 @@ function htmlTmInfo() {
     <p>${t('tm.infoIntro')}</p>
 
     <h3>${t('tm.infoSecAplicado')}</h3>
-    <ul>
-      <li>${t('tm.infoElemental', { tipo: 'FIRE' })}</li>
-      <li>${t('tm.infoAoe')}</li>
-    </ul>
+    ${dlgLista([
+      { arte: artePequena(discoFire), icone: 'raio', html: t('tm.infoElemental', { tipo: 'FIRE' }) },
+      { arte: artePequena(cfg.diskAoe), icone: 'raio', html: t('tm.infoAoe') },
+    ])}
 
     <h3>${t('tm.infoSecTokens')}</h3>
-    <p>${t('tm.infoTokens', { pct: pct(chanceBoss), media: mediaBoss })}</p>
+    ${dlgLista([{ arte: artePequena(BOSS_TOKEN_ID), html: t('tm.infoTokens', { pct: pct(chanceBoss), media: mediaBoss }) }])}
 
     <h3>${t('tm.infoSecPecas')}</h3>
     <p>${t('tm.infoPecasIntro', { n: num(custo) })}</p>
-    <table class="wk-tabela">
-      <thead><tr><th>${t('tm.infoColPeca')}</th><th>${t('tm.infoColBoss')}</th><th>${t('tm.infoColVira')}</th></tr></thead>
-      <tbody>${linhasPecas}</tbody>
-    </table>
+    <div class="tmi-trocas">${trocas}</div>
 
     <h3>${t('tm.infoSecTipos')}</h3>
     <p>${t('tm.infoTipos')}</p>
@@ -38411,6 +42152,7 @@ function htmlInfoMega() {
 
 function abrirTmInfo() {
   $('#tm-info-corpo').innerHTML = htmlTmInfo();
+  hidratarDialogo($('#tm-info-corpo'));
   $('#tm-info').classList.remove('hidden');
 }
 
@@ -38565,7 +42307,7 @@ function confirmarGasto({ titulo, gasta, ganha, pergunta, aviso = '', rotuloSim,
           nome: gasta.nome,
           sub: escapar(t('fab.saldo', { tem: num(tem), depois: num(Math.max(0, tem - gasta.qtd)) })),
         })}
-        <svg class="fab-seta" viewBox="0 0 16 16" aria-hidden="true"><path d="M1 5.5h7.5v-4L15 8l-6.5 6.5v-4H1z" fill="currentColor"/></svg>
+        ${dlgSeta()}
         ${lado({ classe: 'entra', ...ganha })}
       </div>
       <p class="fab-pergunta">${pergunta}</p>
@@ -39382,7 +43124,28 @@ function montarTmAplicar(host, cfg) {
   const discos = discosTmNoInventario(cfg);
   const sub = t('tm.introAplicar');
   if (!equipe.length) return void (host.innerHTML = bancadaVazia('aplicar', t('tm.abaAplicar'), sub, 'tm.semEquipe'));
-  if (!discos.length) return void (host.innerHTML = bancadaVazia('aplicar', t('tm.abaAplicar'), sub, 'tm.semDiscos'));
+  if (!discos.length) {
+    // Sem disco, a bancada ENSINA de onde ele vem — as peças → o disco, no palco do diálogo de
+    // jogo — e leva à aba que resolve, em vez de parar num "você não tem" sem saída.
+    const disco = (cfg.discos ?? []).find((d) => d.tipo === 'FIRE')?.itemId ?? cfg.diskAoe;
+    host.innerHTML = bancadaHtml({
+      aba: 'aplicar',
+      titulo: t('tm.abaAplicar'),
+      sub,
+      corpo: `
+        <div class="tm-vazio tm-vazio-cta">
+          ${dlgPalco(`
+            ${dlgAtor({ arte: dlgArteItem(cfg.pieceElemental, 40), nome: escapar(t('tm.pecasElemental')), qtd: `×${num(cfg.custoElemental ?? 10)}` })}
+            ${dlgSeta()}
+            ${dlgAtor({ arte: dlgArteItem(disco, 40), nome: escapar(t('tm.infoViraElemental')), classe: 'novo' })}`, 'rx')}
+          <p>${escapar(t('tm.semDiscos'))}</p>
+          <button type="button" class="camp-btn" id="tm-ir-trocar">${escapar(t('tm.abaTrocar'))}</button>
+        </div>`,
+    });
+    hidratarDialogo(host);
+    host.querySelector('#tm-ir-trocar').onclick = () => document.querySelector('#tm-abas [data-aba="trocar"]')?.click();
+    return;
+  }
   if (estado.tmPkSel != null && !equipe.some((p) => p.id === estado.tmPkSel)) estado.tmPkSel = null;
   if (estado.tmDiscoSel != null && !discos.some((d) => d.itemId === estado.tmDiscoSel)) estado.tmDiscoSel = null;
 
@@ -39475,6 +43238,275 @@ function montarTmAplicar(host, cfg) {
   };
 }
 
+// ------------------------------------------------------- o diálogo de jogo (dlg-)
+//
+// As peças que fazem da caixa de confirmação uma CENA: o palco com os bonecos, a seta que anda,
+// os requisitos com a marca de ok/falta, o preço com o saldo antes → depois e os selos do que
+// não tem volta. O porquê de cada uma está no cabeçalho do bloco `dlg-` em `estilo.css`; aqui é
+// só a montagem.
+//
+// Tudo é TEMPLATE DE TEXTO, como o resto das telas, e a arte entra por marcação: `data-dlg-lt`
+// (sprite animado de um looktype), `data-dlg-item` (ícone de item), `data-dlg-arquivo` (ícone do
+// espelho ou nosso) e `data-dlg-treinador` (um boneco, com as cores dele). Quem troca a
+// marcação pelo desenho é `hidratarDialogo`, que o `confirmar` chama logo depois do `innerHTML` —
+// nenhuma caixa precisa lembrar de fazer isso, e nenhuma consegue esquecer.
+//
+// As peças recebem HTML PRONTO nos campos de texto: quem chama escapa o que veio de fora (o nome
+// com apelido, o nick, o endereço da carteira), exatamente como já fazia com o `texto` cru.
+
+/** Os pictogramas dos diálogos: caixa 20×20, cor em `currentColor` — herdam o tom de quem os usa. */
+const DLG_ICONES = {
+  cadeado: '<path fill="currentColor" fill-rule="evenodd" d="M6 8.2V6.4a4 4 0 0 1 8 0v1.8h1.2c.9 0 1.6.7 1.6 1.6v7.4c0 .9-.7 1.6-1.6 1.6H4.8c-.9 0-1.6-.7-1.6-1.6V9.8c0-.9.7-1.6 1.6-1.6zm2.2 0h3.6V6.4a1.8 1.8 0 0 0-3.6 0zM9 11.4v3.4h2v-3.4z"/>',
+  estrela: '<path fill="currentColor" d="M10 1.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L10 14.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
+  relogio: '<circle cx="10" cy="10" r="7.6" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M10 5.4V10l3.2 2.1" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+  ampulheta: '<path d="M4.5 2h11M4.5 18h11M6 2c0 4.2 4 5.4 4 8s-4 3.8-4 8M14 2c0 4.2-4 5.4-4 8s4 3.8 4 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path fill="currentColor" d="M7.4 16.6h5.2L10 13.4z"/>',
+  porta: '<path d="M11 3.2V2.5H3.5v15H11v-.7" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/><path d="M7.5 10h10M14.2 6.5l3.5 3.5-3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>',
+  lixeira: '<path d="M2.8 5h14.4M7.6 5V2.8h4.8V5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path fill="currentColor" fill-rule="evenodd" d="M4.6 6.6h10.8l-.9 10.8c-.1.9-.8 1.6-1.7 1.6H7.2c-.9 0-1.6-.7-1.7-1.6zM8 9v7h1.4V9zm2.6 0v7H12V9z"/>',
+  coroa: '<path fill="currentColor" d="M2.2 6.2l4.4 3.6L10 3.4l3.4 6.4 4.4-3.6-1.7 9.4H3.9zM3.9 17h12.2v1.8H3.9z"/>',
+  escudo: '<path fill="currentColor" d="M10 1.6l7.2 2.8v5.2c0 4.4-3 7.6-7.2 8.9-4.2-1.3-7.2-4.5-7.2-8.9V4.4z"/>',
+  espadas: '<path d="M3.2 3.2l9.6 9.6M16.8 3.2l-9.6 9.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M10.7 15l4.3-4.3M5 10.7L9.3 15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M14.4 15.6l2.4 2.4M5.6 15.6L3.2 18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>',
+  megafone: '<path fill="currentColor" d="M2.4 7.6v4.8h3l7.6 4.6V3L5.4 7.6zM5.6 13.4l1.4 4.4h2.4l-1.2-4z"/><path d="M15.2 7.4a3.7 3.7 0 0 1 0 5.2M17.3 5.3a6.8 6.8 0 0 1 0 9.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  volta: '<path d="M7.8 4.4L3.4 8.8l4.4 4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 8.8h8.2a4.6 4.6 0 0 1 0 9.2H8.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+  alerta: '<path fill="currentColor" fill-rule="evenodd" d="M10 1.8l8.8 15.6H1.2zM9 7.2v5.6h2V7.2zm0 7.2v2h2v-2z"/>',
+  check: '<path d="M4 10.6l3.9 3.9L16 5.6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
+  xis: '<path d="M5.2 5.2l9.6 9.6M14.8 5.2l-9.6 9.6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>',
+  brilho: '<path fill="currentColor" d="M10 1.4l2 6.6 6.6 2-6.6 2-2 6.6-2-6.6-6.6-2 6.6-2z"/>',
+  pessoaMenos: '<circle cx="7.6" cy="6" r="3.6" fill="currentColor"/><path fill="currentColor" d="M1.2 18.2c0-3.7 2.9-6.2 6.4-6.2s6.4 2.5 6.4 6.2z"/><path d="M13.4 8.6h5.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+  pessoaMais: '<circle cx="7.6" cy="6" r="3.6" fill="currentColor"/><path fill="currentColor" d="M1.2 18.2c0-3.7 2.9-6.2 6.4-6.2s6.4 2.5 6.4 6.2z"/><path d="M13.4 8.6h5.4M16.1 5.9v5.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+  corrente: '<path d="M7.6 6.2H5.4a3.8 3.8 0 0 0 0 7.6h2.2M12.4 6.2h2.2a3.8 3.8 0 0 1 0 7.6h-2.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M10 2.2v2.4M10 15.4v2.4M7.4 3.2l.9 1.6M12.6 16.8l-.9-1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+  calendario: '<rect x="2.6" y="4" width="14.8" height="13.6" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2.6 8.4h14.8" stroke="currentColor" stroke-width="2"/><path d="M6.6 2v4M13.4 2v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path fill="currentColor" d="M6 11h2.4v2.4H6zm4 0h2.4v2.4H10z"/>',
+  bandeira: '<path d="M4.4 18.6V2.4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path fill="currentColor" d="M5.4 3.2c3-1.6 5 1.4 8 0 1.6-.8 2.6-.9 3.6-.9v8.2c-1 0-2 .1-3.6.9-3 1.4-5-1.6-8 0z"/>',
+  raio: '<path fill="currentColor" d="M11.6 1.4L3.8 11.2h5.1l-1.4 7.4 8.7-10.2h-5.2z"/>',
+  pessoa: '<circle cx="10" cy="5.8" r="4" fill="currentColor"/><path fill="currentColor" d="M2.4 18.6c0-4.2 3.4-7 7.6-7s7.6 2.8 7.6 7z"/>',
+  moedas: '<ellipse cx="8" cy="6" rx="5.6" ry="3" fill="currentColor"/><path d="M2.4 6v4c0 1.7 2.5 3 5.6 3s5.6-1.3 5.6-3V6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 13.2v1.6c0 1.7 2.5 3 5.6 3s5.6-1.3 5.6-3v-4c0-1.6-2.2-2.9-5.1-3" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  bolsa: '<path d="M6.6 6.4V5a3.4 3.4 0 0 1 6.8 0v1.4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M3.4 6.4h13.2l-1 11.6H4.4z"/>',
+  olho: '<path fill="currentColor" fill-rule="evenodd" d="M10 4c4.6 0 7.8 3.6 8.8 6-1 2.4-4.2 6-8.8 6s-7.8-3.6-8.8-6C2.2 7.6 5.4 4 10 4zm0 2.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z"/>',
+  chama: '<path fill="currentColor" d="M10.4 1.2c.6 3.4 5.6 5.6 5.6 10.6a6 6 0 0 1-12 0c0-2.8 1.6-4.6 2.8-5.6.2 1.8 1 3 2.2 3.4-.4-3.4.6-6.4 1.4-8.4z"/>',
+  subir: '<path fill="currentColor" d="M10 2.2l7 7.4h-4.2v8.2H7.2V9.6H3z"/>',
+  cura: '<path fill="currentColor" d="M7.4 2.2h5.2v5.2h5.2v5.2h-5.2v5.2H7.4v-5.2H2.2V7.4h5.2z"/>',
+  copia: '<rect x="6.6" y="6.6" width="10.8" height="10.8" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13.4 3.4H4.6c-.7 0-1.2.5-1.2 1.2v8.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  lapis: '<path fill="currentColor" d="M3 13.4L12.8 3.6a1.7 1.7 0 0 1 2.4 0l1.2 1.2a1.7 1.7 0 0 1 0 2.4L6.6 17H3z"/><path d="M11 5.4l3.6 3.6" fill="none" stroke="#00000066" stroke-width="1.4"/>',
+  soma: '<path d="M15.2 3.6H4.8l5.6 6.4-5.6 6.4h10.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  interrogacao: '<path d="M6.6 7.2a3.4 3.4 0 1 1 5 3c-1.1.6-1.6 1.3-1.6 2.6v.6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><circle cx="10" cy="16.8" r="1.6" fill="currentColor"/>',
+  trofeu: '<path fill="currentColor" d="M5.4 2.2h9.2v5a4.6 4.6 0 0 1-9.2 0zM9 12.8h2v2.8h3v2.6H6v-2.6h3z"/><path d="M5.4 4.2H2.6c0 2.6 1.2 4 3.2 4.2M14.6 4.2h2.8c0 2.6-1.2 4-3.2 4.2" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+};
+const dlgIcone = (nome, px = 16) =>
+  `<svg class="dlg-svg" viewBox="0 0 20 20" width="${px}" height="${px}" aria-hidden="true">${DLG_ICONES[nome] ?? ''}</svg>`;
+
+/** As três moedas, para a etiqueta de preço. O texto alternativo é o nome da moeda. */
+const DLG_MOEDAS = {
+  ouro: () => ({ src: srcIcone(ICONE_OURO), nome: 'Coins' }),
+  gema: () => ({ src: ICONE_GEMA, nome: t('moeda.gemas') }),
+  diamante: () => ({ src: ICONE_DIAMANTE, nome: t('moeda.diamantes') }),
+};
+
+/**
+ * A marcação de ARTE que `hidratarDialogo` desenha. Cada uma vira um `.dlg-ator-fig`, que é o
+ * elemento que flutua (no ator que chega) ou perde a cor (no que sai) — a plaquinha de canto e o
+ * selo de quantidade ficam de fora dele, e por isso não balançam nem desbotam junto.
+ */
+const dlgArteLt = (lt, px = 64, comum = null) =>
+  `<span class="dlg-ator-fig" data-dlg-lt="${Number(lt) || 0}" data-dlg-px="${px}"${comum ? ` data-dlg-comum="${Number(comum)}"` : ''}></span>`;
+const dlgArteItem = (itemId, px = 40) =>
+  `<span class="dlg-ator-fig" data-dlg-item="${Number(itemId) || 0}" data-dlg-px="${px}"></span>`;
+const dlgArteArquivo = (rel, px = 48, liso = false) =>
+  `<span class="dlg-ator-fig" data-dlg-arquivo="${escapar(rel)}" data-dlg-px="${px}"${liso ? ' data-dlg-liso="1"' : ''}></span>`;
+/** Um POKÉMON: a forma que se vê no jogo (shiny, skin), com a comum de reserva se a arte faltar. */
+const dlgArtePk = (pk, px = 64) => dlgArteLt(looktypeDe(pk), px, especieDe(pk)?.looktype ?? pk?.looktype);
+/** Arte que já vem pronta como HTML (o brasão da guild, a medalha) — sem hidratação. */
+const dlgArteHtml = (html) => `<span class="dlg-ator-fig">${html}</span>`;
+/**
+ * Um TREINADOR, animado e com as cores dele. `vs` são as cores já empacotadas (o `visual` do
+ * membro de guild, o `vs` do ranking) e viajam como JSON no atributo. Sem `lt`, é o próprio
+ * jogador — `spriteDeMim`, a mesma régua do retrato do painel.
+ */
+const dlgArteTreinador = (lt = null, vs = null, px = 64) =>
+  `<span class="dlg-ator-fig" data-dlg-treinador="${lt == null ? 'eu' : Number(lt) || LOOKTYPE_TREINADOR}" data-dlg-px="${px}"${vs ? ` data-dlg-vs="${escapar(JSON.stringify(vs))}"` : ''}></span>`;
+
+/**
+ * Um ATOR do palco. `classe` diz o papel: `novo` (quem chega: luz, halo e flutuação), `sai` (quem
+ * vai embora: sem cor) ou `travado` (o destino que ainda não abriu). `marca` é o ícone do canto,
+ * `qtd` o selo de quantidade sobre a arte.
+ */
+const dlgAtor = ({ arte, nome = '', sub = '', classe = '', marca = '', qtd = '' }) => `
+  <div class="dlg-ator ${classe}">
+    <span class="dlg-ator-arte">${arte}${marca ? `<span class="dlg-marca">${marca}</span>` : ''}${qtd ? `<span class="dlg-qtd">${qtd}</span>` : ''}</span>
+    ${nome ? `<span class="dlg-ator-nome">${nome}</span>` : ''}
+    ${sub ? `<span class="dlg-ator-sub">${sub}</span>` : ''}
+  </div>`;
+
+/**
+ * A SETA entre dois atores. Em cima, o que a troca consome (`item` da bolsa ou `arquivo`), com o
+ * selo `qtd`; embaixo, um `rotulo` curto ("Nv 36", "−25%"). `travada` apaga e para a seta.
+ */
+const dlgSeta = ({ item = null, arquivo = null, icone = null, qtd = '', rotulo = '', travada = false } = {}) => {
+  const cat = item != null
+    ? `<span data-dlg-item="${Number(item)}" data-dlg-px="32"></span>`
+    : arquivo ? `<span data-dlg-arquivo="${escapar(arquivo)}" data-dlg-px="32"></span>`
+      : icone ? `<span class="dlg-seta-ico">${dlgIcone(icone, 24)}</span>` : '';
+  return `
+    <div class="dlg-seta${travada ? ' travada' : ''}">
+      ${cat ? `<span class="dlg-seta-cat">${cat}${qtd ? `<span class="dlg-qtd">${qtd}</span>` : ''}</span>` : ''}
+      <span class="dlg-seta-divisas" aria-hidden="true"><i></i><i></i><i></i></span>
+      ${rotulo ? `<span class="dlg-seta-rot">${rotulo}</span>` : ''}
+    </div>`;
+};
+
+/** O PALCO, com o `tom` que pinta a luz: rx (padrão), mega, ouro, perigo, verde, azul. */
+const dlgPalco = (miolo, tom = 'rx') => `<div class="dlg-palco tom-${tom}">${miolo}</div>`;
+
+/**
+ * Uma linha de REQUISITO: a arte, o nome (com um `sub` miúdo), quanto se `tem` contra quanto se
+ * `precisa`, e a marca redonda — ✓ verde ou ✗ vermelho. `valor` substitui o "tem/precisa" quando
+ * a exigência não é contável ("Nv 36"). Sem `ok` definido, a linha é só informativa (`neutro`).
+ */
+function dlgReq({ arte = '', nome, sub = '', tem = null, precisa = null, valor = '', ok = null }) {
+  const estado = ok == null ? 'neutro' : ok ? 'ok' : 'falta';
+  const qtd = valor || (tem != null
+    ? `<span class="tem">${num(tem)}</span>${precisa != null ? `<small>/${num(precisa)}</small>` : ''}`
+    : '');
+  return `
+    <li class="dlg-req ${estado}">
+      <span class="dlg-req-ico">${arte}</span>
+      <span class="dlg-req-nome">${nome}${sub ? `<small>${sub}</small>` : ''}</span>
+      <span class="dlg-req-qtd">${qtd}</span>
+      ${ok == null ? '' : `<span class="dlg-req-marca">${dlgIcone(ok ? 'check' : 'xis', 12)}</span>`}
+    </li>`;
+}
+const dlgReqs = (...linhas) => `<ul class="dlg-reqs">${linhas.filter(Boolean).join('')}</ul>`;
+/** A arte de um requisito: o ícone do item (hidratado) ou um pictograma. */
+const dlgReqItem = (itemId) => `<span data-dlg-item="${Number(itemId) || 0}" data-dlg-px="32"></span>`;
+
+/**
+ * O selo SHINY de um ator do palco: a faísca dourada antes dos tipos. Pequeno de propósito — o
+ * sprite já é o shiny; isto só tira a dúvida de "é a cor normal ou não?".
+ */
+const dlgSeloShiny = (shiny) => (shiny ? `<span class="dlg-shiny" title="Shiny">${dlgIcone('brilho', 12)}</span>` : '');
+
+/** "Nv 36" — o nível como os cards do jogo escrevem. */
+const dlgNivel = (n) => `${t('painel.nivelCurto')} ${num(n)}`;
+
+/**
+ * Uma FILA de pokémon pequenos, para quando o ator é um grupo (os que saem da casa, os que vão
+ * para a Oferenda). Seis no máximo — o resto vira "+N", que diz o tamanho sem virar mosaico.
+ */
+function dlgFila(pks, px = 34, max = 6) {
+  const lista = (pks ?? []).slice(0, max);
+  const resto = (pks?.length ?? 0) - lista.length;
+  const um = (pk) => `<span class="dlg-fila-pk" data-dlg-lt="${Number(looktypeDe(pk)) || 0}" data-dlg-px="${px}"`
+    + ` data-dlg-comum="${Number(especieDe(pk)?.looktype ?? pk?.looktype) || 0}"></span>`;
+  return `<span class="dlg-ator-fig dlg-fila">${lista.map(um).join('')}${resto > 0 ? `<b class="dlg-fila-mais">+${num(resto)}</b>` : ''}</span>`;
+}
+
+/**
+ * A ETIQUETA DE PREÇO: a moeda grande, o valor e — com `saldo` — quanto se tem e quanto fica.
+ * O saldo que não cobre pinta a etiqueta de vermelho (`falta`); `ganha` é o caso inverso (o que
+ * ENTRA: a venda, o diamante devolvido), em verde e com o saldo subindo.
+ *
+ * O saldo vem EMBAIXO, como as linhas de um cupom — o preço, "Seu saldo" e, depois do fio
+ * tracejado, "Saldo após" —, e não ao lado do preço: lado a lado, um preço de dez dígitos e um
+ * saldo de onze ("36.558.784.586 → 35.058.784.586") passavam um por cima do outro. Empilhado,
+ * cada número tem a largura inteira da etiqueta.
+ */
+function dlgCusto({ moeda = 'ouro', valor, saldo = null, rotulo = null, ganha = false, extra = '' }) {
+  const m = (DLG_MOEDAS[moeda] ?? DLG_MOEDAS.ouro)();
+  const classeMoeda = DLG_MOEDAS[moeda] ? moeda : 'ouro';
+  const depois = saldo == null ? null : ganha ? saldo + valor : saldo - valor;
+  const falta = !ganha && saldo != null && depois < 0;
+  const mini = `<img class="dlg-custo-mini ${classeMoeda}" src="${m.src}" alt="">`;
+  return `
+    <div class="dlg-custo${ganha ? ' ganha' : ''}${falta ? ' falta' : ''}">
+      <img class="dlg-custo-moeda ${classeMoeda}" src="${m.src}" alt="${escapar(m.nome)}">
+      <span class="dlg-custo-valor">
+        <small>${escapar(rotulo ?? t(ganha ? 'dlg.recebe' : 'dlg.custa'))}</small>
+        ${extra ? `<span class="dlg-custo-extra">${extra}</span>` : ''}
+      </span>
+      <span class="dlg-custo-num">${ganha ? '+' : ''}${num(valor)}</span>
+      ${saldo == null ? '' : `
+        <span class="dlg-custo-linha saldo">
+          <small>${escapar(t('dlg.seuSaldo'))}</small>
+          <span>${mini}${num(saldo)}</span>
+        </span>
+        <span class="dlg-custo-linha fim">
+          <small>${escapar(t('dlg.saldoApos'))}</small>
+          <b>${falta ? escapar(t('dlg.faltamN', { n: num(-depois) })) : `${mini}${num(depois)}`}</b>
+        </span>`}
+    </div>`;
+}
+
+/** As consequências em pílulas. `tom`: perigo, ouro, bom, info, rx (ou nada, neutro). */
+const dlgSelo = (icone, texto, tom = '') => `<span class="dlg-selo ${tom}">${dlgIcone(icone, 14)}<span>${texto}</span></span>`;
+const dlgSelos = (...selos) => {
+  const lista = selos.filter(Boolean);
+  return lista.length ? `<div class="dlg-selos">${lista.join('')}</div>` : '';
+};
+
+/** A MEDALHA: um pictograma (`icone`) ou uma arte pronta (`arte`) num anel da cor do `tom`. */
+const dlgMedalha = ({ icone = null, arte = '', tom = 'rx', px = 38 }) =>
+  `<span class="dlg-medalha tom-${tom}">${icone ? dlgIcone(icone, px) : arte}</span>`;
+
+/** A frase de destaque e a explicação menor, centradas embaixo do palco. */
+const dlgFrase = (lead, sub = '') =>
+  `${lead ? `<p class="dlg-lead">${lead}</p>` : ''}${sub ? `<p class="dlg-sub">${sub}</p>` : ''}`;
+
+/**
+ * O aviso em caixa, com o pictograma ao lado. `tom`: '' (vermelho), ouro ou info. `classe` é o
+ * gancho de quem precisa achá-lo depois (o aviso de shiny da Oferenda, que o teste de UI lê).
+ */
+const dlgAviso = (texto, { icone = 'alerta', tom = '', classe = '' } = {}) =>
+  `<p class="dlg-aviso ${tom} ${classe}">${dlgIcone(icone, 18)}<span>${texto}</span></p>`;
+
+/** Uma lista de regras com ícone: `[{ icone | arte, html, perigo }]`. */
+const dlgLista = (itens) => `
+  <ul class="dlg-lista">${itens.filter(Boolean).map((i) => `
+    <li${i.perigo ? ' class="perigo"' : ''}>
+      <span class="dlg-lista-ico">${i.arte ?? dlgIcone(i.icone ?? 'estrela', 16)}</span>
+      <span>${i.html}</span>
+    </li>`).join('')}
+  </ul>`;
+
+/**
+ * Troca a marcação `data-dlg-*` pelo desenho. Chamada pelo `confirmar` (e por quem monta uma
+ * folha com as mesmas peças). A arte de reserva do sprite é o retrato do atlas pelo looktype
+ * COMUM: o atlas não tem célula para formas shiny, e o bicho certo na cor errada é melhor do que
+ * uma pokébola genérica.
+ */
+function hidratarDialogo(raiz) {
+  if (!raiz) return;
+  for (const el of raiz.querySelectorAll('[data-dlg-lt]')) {
+    const px = Number(el.dataset.dlgPx) || 64;
+    const lt = Number(el.dataset.dlgLt) || 0;
+    const comum = Number(el.dataset.dlgComum) || lt;
+    // Encaixado: o recorte é a união dos quadros com pixel, e a escala enche a caixa. Sem isto o
+    // tamanho dependia da célula do sprite (32, 64 ou 96 px) e a Mega Charizard Y saía menor que o
+    // Charizard de onde ela vem.
+    el.replaceChildren(spriteAnimado(lt, px, 3, () => iconeEspecie(comum, px), null, { encaixar: true }));
+  }
+  for (const el of raiz.querySelectorAll('[data-dlg-item]')) {
+    el.replaceChildren(imgItem(Number(el.dataset.dlgItem), Number(el.dataset.dlgPx) || 30));
+  }
+  for (const el of raiz.querySelectorAll('[data-dlg-arquivo]')) {
+    const ico = iconeArquivo(el.dataset.dlgArquivo, Number(el.dataset.dlgPx) || 40);
+    if (el.dataset.dlgLiso) ico.classList.add('liso');
+    el.replaceChildren(ico);
+  }
+  // O treinador vai ENCAIXADO como o pokémon: a escala sai da união dos quadros, então o boneco
+  // enche o pedestal sem pulsar de tamanho a cada passo (o `treinador: true` do ranking mede
+  // quadro a quadro, e numa caixa deste tamanho o tremor aparece).
+  for (const el of raiz.querySelectorAll('[data-dlg-treinador]')) {
+    const px = Number(el.dataset.dlgPx) || 64;
+    const eu = el.dataset.dlgTreinador === 'eu';
+    let vs = null;
+    if (eu) vs = empacotarVisual(estado.eu?.loja?.visual);
+    else {
+      try { vs = el.dataset.dlgVs ? JSON.parse(el.dataset.dlgVs) : null; } catch { vs = null; }
+    }
+    const lt = eu ? (estado.eu?.loja?.looktype ?? LOOKTYPE_TREINADOR) : Number(el.dataset.dlgTreinador) || LOOKTYPE_TREINADOR;
+    // Outfit que não carrega (looktype que o espelho não tem) cai no boneco padrão, e não num vazio.
+    el.replaceChildren(spriteAnimado(lt, px, 3, () => spriteAnimado(LOOKTYPE_TREINADOR, px, 3, null, vs, { encaixar: true }), vs, { encaixar: true }));
+  }
+}
+
 let confirmarAcao = null;
 
 /**
@@ -39492,8 +43524,12 @@ let confirmarAcao = null;
  * voltar atrás. O botão é reposto no começo de toda chamada, e não no fechamento: assim a
  * próxima confirmação nasce completa mesmo que a anterior tenha sido fechada pelo Esc ou por
  * um clique no fundo.
+ *
+ * `tom: 'perigo'` pinta o Confirmar de VERMELHO — só para o que destrói alguma coisa (apagar a
+ * guild, excluir a conta, expulsar). `montar(corpo)` roda depois que a arte `data-dlg-*` já foi
+ * desenhada, para o que não sai de template (o card do anúncio, um campo com ouvinte).
  */
-function confirmar({ titulo, texto, aoConfirmar, rotuloSim = null, largura = null, soOk = false }) {
+function confirmar({ titulo, texto, aoConfirmar, rotuloSim = null, largura = null, soOk = false, tom = null, montar = null }) {
   confirmarAcao = aoConfirmar;
   $('#confirmar-titulo').textContent = titulo;
   $('#confirmar-texto').innerHTML = texto;
@@ -39503,7 +43539,7 @@ function confirmar({ titulo, texto, aoConfirmar, rotuloSim = null, largura = nul
   // escrito uma variável de cor. Zerar aqui, e não no fechamento, cobre também a caixa fechada
   // pelo Esc ou por um clique no fundo.
   $('#confirmar-sim').disabled = false;
-  $('#confirmar-sim').className = '';
+  $('#confirmar-sim').className = tom === 'perigo' ? 'perigo' : '';
   $('#confirmar-sim').removeAttribute('style');
   $('#confirmar-sim').textContent = rotuloSim ?? t('confirmar.sim');
   // A caixa é estreita por padrão (430 px) porque quase toda confirmação é uma frase. A tela de
@@ -39511,11 +43547,20 @@ function confirmar({ titulo, texto, aoConfirmar, rotuloSim = null, largura = nul
   // explícita é o que garante que a próxima confirmação volte a ser estreita.
   $('#confirmar .caixa-confirmar')?.classList.toggle('caixa-larga', largura === 'larga');
   $('#confirmar').classList.remove('hidden');
+  // A arte das peças `dlg-` (sprites, ícones de item) entra agora, por cima da marcação.
+  hidratarDialogo($('#confirmar-texto'));
+  montar?.($('#confirmar-texto'));
 }
 
 const fecharConfirmar = () => {
   $('#confirmar').classList.add('hidden');
   confirmarAcao = null;
+  // Os sprites do palco animam num `setInterval` que só para quando o canvas sai do documento, e
+  // a caixa fechada continua no documento (só escondida). Esvaziar o corpo solta esses laços —
+  // DEPOIS da ação, que pode ler o que a caixa mostrava ou abrir outra confirmação por cima.
+  setTimeout(() => {
+    if ($('#confirmar').classList.contains('hidden')) $('#confirmar-texto').replaceChildren();
+  }, 0);
 };
 
 $('#confirmar-nao').onclick = fecharConfirmar;
@@ -39763,25 +43808,34 @@ function montarBotaoSair(caixa) {
       <line x1="17" y1="10" x2="8.5" y2="10" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
     </svg>`;
 
-  b.onclick = () =>
-    confirmar({
-      titulo: t('sair.titulo'),
-      texto: t('sair.texto'),
-      aoConfirmar: () => {
-        limparSessao();
-        // Recarregar, e não desmontar à mão: sair precisa fechar o socket (que se
-        // RECONECTA sozinho no `onclose`), largar o campo, o timer do chat e o modal aberto.
-        // Refazer isso peça por peça é uma lista que envelhece mal a cada tela nova; a página
-        // limpa tudo de uma vez, e os assets já estão em cache — a barra passa voando.
-        //
-        // Vai para a landing (`/`), não fica em `/app`: quem saiu precisa clicar em "Jogar
-        // grátis" de novo — a raiz virou página de venda, e `/app` sem sessão é só o login.
-        location.replace('/');
-      },
-    });
+  b.onclick = () => confirmarSairDaConta();
 
   caixa.prepend(b);
   caixa.insertBefore(Object.assign(document.createElement('span'), { className: 'sair-sep' }), b.nextSibling);
+}
+
+/** Sair da conta: o seu boneco, a seta e a porta. */
+function confirmarSairDaConta() {
+  confirmar({
+    titulo: t('sair.titulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({ arte: dlgArteTreinador(null, null, 64), nome: escapar(estado.eu?.nick ?? '') })}
+        ${dlgSeta()}
+        ${dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'porta', tom: 'rx', px: 36 })) })}`)}
+      ${dlgFrase('', t('sair.texto'))}`,
+    aoConfirmar: () => {
+      limparSessao();
+      // Recarregar, e não desmontar à mão: sair precisa fechar o socket (que se
+      // RECONECTA sozinho no `onclose`), largar o campo, o timer do chat e o modal aberto.
+      // Refazer isso peça por peça é uma lista que envelhece mal a cada tela nova; a página
+      // limpa tudo de uma vez, e os assets já estão em cache — a barra passa voando.
+      //
+      // Vai para a landing (`/`), não fica em `/app`: quem saiu precisa clicar em "Jogar
+      // grátis" de novo — a raiz virou página de venda, e `/app` sem sessão é só o login.
+      location.replace('/');
+    },
+  });
 }
 
 /**
