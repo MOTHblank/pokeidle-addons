@@ -3,8 +3,9 @@
  *
  * Dual-type aceita pedra de qualquer um dos tipos elementares do bicho (Fire Stone OU Feather
  * Stone num Charizard). Os custos somam entre elas: 300 Feather + 200 Fire fecham um degrau de
- * 500. A ordem de consumo é determinística (maior pilha primeiro) — o jogador não precisa
- * escolher a mistura na tela.
+ * 500. Na tela o jogador ESCOLHE quanto sai de cada uma (`validarUsoPedrasRefino`, conferida de
+ * novo no servidor); sem escolha — aba antiga, espécie de uma pedra só — a ordem é a
+ * determinística de sempre (maior pilha primeiro, `consumirPedrasRefino`).
  */
 import { tipoDaPedraDeEvolucao } from './evolucoes-ramificadas.mjs';
 import { PEDRA_POR_TIPO } from './pedras-evolucao.mjs';
@@ -82,6 +83,68 @@ export function consumirPedrasRefino(items, pedras, custo) {
   }
 
   return falta <= 0 ? consumido : null;
+}
+
+/**
+ * Confere a MISTURA que o jogador escolheu: `uso` = `{ [itemId]: qtd }`. Só passa com as pedras que
+ * refinam esta espécie, quantidades inteiras ≥ 0 (número de verdade — nem texto, nem fração, nem
+ * lista), nenhuma acima do saldo, e a soma EXATAMENTE igual ao custo do degrau. O servidor chama com
+ * o inventário e o custo DELE, nunca com o que a tela diz que eles são.
+ * @returns {{ ok: true, plano: { itemId, nome, qtd }[] } | { ok: false, erro: string }}
+ */
+export function validarUsoPedrasRefino(items, pedras, custo, uso) {
+  if (!uso || typeof uso !== 'object' || Array.isArray(uso)) return { ok: false, erro: 'mistura de pedras inválida' };
+  const validas = new Map((pedras ?? []).map((p) => [String(p.itemId), p]));
+  const total = Math.floor(Number(custo) || 0);
+  let soma = 0;
+  const plano = [];
+  for (const [chave, qtd] of Object.entries(uso)) {
+    const p = validas.get(chave);
+    if (!p) return { ok: false, erro: 'essa pedra não refina este pokémon' };
+    if (typeof qtd !== 'number' || !Number.isInteger(qtd) || qtd < 0) return { ok: false, erro: 'quantidade de pedra inválida' };
+    const tem = Math.max(0, Math.floor(Number(items?.[p.itemId]) || 0));
+    if (qtd > tem) return { ok: false, erro: `você só tem ${tem}× ${p.nome}` };
+    if (qtd > 0) plano.push({ itemId: p.itemId, nome: p.nome, qtd });
+    soma += qtd;
+  }
+  if (total <= 0 || soma !== total) return { ok: false, erro: `a mistura soma ${soma}, e o degrau custa ${total}` };
+  return { ok: true, plano };
+}
+
+/** Gasta um plano JÁ validado por `validarUsoPedrasRefino`. Mutates `items`. */
+export function gastarPlanoPedrasRefino(items, plano) {
+  for (const { itemId, qtd } of plano) {
+    const resta = Math.max(0, Math.floor(Number(items[itemId]) || 0)) - qtd;
+    if (resta > 0) items[itemId] = resta;
+    else delete items[itemId];
+  }
+  return plano.map((x) => ({ ...x }));
+}
+
+/**
+ * A mistura que a TELA propõe quando o jogador mexe numa pedra: ela fica com `qtd` (cortada no saldo
+ * dela e no custo) e o resto do custo sai das OUTRAS, maior pilha primeiro. Sem `itemIdFixo`, é a
+ * mistura padrão (a mesma de `consumirPedrasRefino`). Devolve `{ [itemId]: qtd }` — que pode não
+ * fechar o custo, se as outras não tiverem o bastante (a tela mostra quanto falta).
+ */
+export function completarUsoPedrasRefino(items, pedras, custo, itemIdFixo = null, qtdFixa = 0) {
+  const saldo = (p) => Math.max(0, Math.floor(Number(items?.[p.itemId]) || 0));
+  const total = Math.max(0, Math.floor(Number(custo) || 0));
+  const uso = {};
+  let falta = total;
+  const fixa = itemIdFixo == null ? null : (pedras ?? []).find((p) => String(p.itemId) === String(itemIdFixo));
+  if (fixa) {
+    const q = Math.max(0, Math.min(saldo(fixa), total, Math.floor(Number(qtdFixa) || 0)));
+    uso[fixa.itemId] = q;
+    falta -= q;
+  }
+  const outras = (pedras ?? []).filter((p) => p !== fixa).sort((a, b) => saldo(b) - saldo(a));
+  for (const p of outras) {
+    const q = Math.min(saldo(p), falta);
+    uso[p.itemId] = q;
+    falta -= q;
+  }
+  return uso;
 }
 
 /** Prévia do consumo — não altera o inventário real. */

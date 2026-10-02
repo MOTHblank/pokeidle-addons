@@ -34,6 +34,8 @@
  * por VAGA (`vagas`, logo abaixo) em vez de por número: contra inflação, um teto de posição é
  * a única defesa que não envelhece.
  */
+import { FUSO_BRASILIA_MS } from './fuso-brasilia.mjs';
+
 export const PVP_PONTOS_INICIAIS = 0;
 
 /**
@@ -308,12 +310,11 @@ export function premioDaPosicao(posicao) {
 /**
  * Quanto Brasília está ATRÁS do UTC. A virada é segunda-feira, 00:00 de Brasília = 03:00 UTC.
  *
- * Fixo, e não `America/Sao_Paulo` pelo Intl: o Brasil não tem horário de verão desde 2019, e um
- * deslocamento escrito aqui dá a mesma resposta no servidor, na tela e no teste — sem depender da
- * base de fusos do Node nem da do navegador de cada jogador. Se o horário de verão voltar, é
- * aqui que se mexe (o `CAMPEONATO` também escreve as datas dele em UTC−3).
+ * O número mudou de casa (`shared/fuso-brasilia.mjs`) quando o fechamento mensal das guilds
+ * passou a usar o mesmo relógio: três viradas dependiam dele e cada uma o escrevia por conta.
+ * O nome daqui fica por quem já o importa, e porque é nesta seção que a semana é explicada.
  */
-export const PVP_FUSO_VIRADA_MS = 3 * 60 * 60_000;
+export const PVP_FUSO_VIRADA_MS = FUSO_BRASILIA_MS;
 
 const SEMANA_MS = 7 * 24 * 60 * 60_000;
 

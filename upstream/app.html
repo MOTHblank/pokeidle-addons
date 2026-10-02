@@ -6,7 +6,7 @@
      Discord traz `?sessao=` (o token de 30 dias) e os e-mails trazem `?redefinir=` e
      `?autorizarTrocaEmail=`; o GTM e o Pixel logo abaixo registram a URL da página. O app.js
      pega os valores de `window.__parametrosSensiveis`. -->
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==">
 (function () {
   try {
     var q = new URLSearchParams(location.search);
@@ -26,14 +26,14 @@
 })();
 </script>
 <!-- Google Tag Manager — GTM-NZLNR5N8. Logo após charset (charset nos primeiros 1024 bytes). -->
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-NZLNR5N8');</script>
 <!-- End Google Tag Manager -->
 <!-- Facebook Pixel Code — 941286091638419 (Meta Ads). -->
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==">
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -52,8 +52,8 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <!-- Cloudflare Turnstile — captcha do login/cadastro. Some sozinho (o app.js nem desenha o
      widget) quando o servidor não tem TURNSTILE_SITE_KEY configurada. `onload` avisa o app.js
      quando a API já existe, porque o fetch de /auth/provedores às vezes volta primeiro. -->
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==">
   try {
     if (localStorage.getItem('cfg-night') === '1') document.documentElement.classList.add('night-mode');
     if (localStorage.getItem('cfg-imersivo') === '1') document.documentElement.classList.add('modo-imersivo');
@@ -96,7 +96,7 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <meta name="twitter:description" content="Caçe, capture, evolua sua equipe, guilds e PvP — MMO Pokémon idle grátis no navegador.">
 <meta name="twitter:image" content="https://pokeidle.io/midia/og-card.png">
 <meta name="twitter:image:alt" content="Cartão do pokeidle.io: “Seu pokémon caça sozinho”, com um Charizard shiny e o botão Jogar agora.">
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" type="application/ld+json">
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==" type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "VideoGame",
@@ -112,10 +112,10 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 </script>
 <!-- A logo do jogo como ícone da aba. Três tamanhos porque o navegador escolhe o mais próximo
      do que precisa: 32 para a aba comum, 64 para telas HiDPI e 180 para o atalho de iOS. -->
-<link rel="stylesheet" href="estilo.css?v=1.188.0">
+<link rel="stylesheet" href="estilo.css?v=1.216.2">
 <!-- A montagem de CELULAR. Tudo lá dentro pende de `html.mobile`, classe que só o mobile.mjs
      acende — no desktop o arquivo é regra que não casa com nada. -->
-<link rel="stylesheet" href="mobile.css?v=1.188.0">
+<link rel="stylesheet" href="mobile.css?v=1.216.2">
 </head>
 <body>
 <!-- Google Tag Manager (noscript) -->
@@ -189,6 +189,9 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
       <!-- ---- login ---- -->
       <div id="login" class="login hidden">
+        <!-- O VIP de boas-vindas do Referral Especial: só aparece quando o `?ref=` é o link de um
+             streamer com acordo (a resposta de `/affiliate/visita` diz, ver `anunciarVipDoLink`). -->
+        <p class="login-vip-ref hidden" id="login-vip-ref" role="status"></p>
         <div class="login-abas" id="login-abas">
           <button class="login-aba on" data-aba="entrar" data-i18n="login.abaEntrar">Entrar</button>
           <button class="login-aba" data-aba="criar" data-i18n="login.abaCriar">Criar conta</button>
@@ -708,6 +711,23 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
              uma custa 3 s de espera, a outra custa uma Escape Rope. Lado a lado, a escolha
              se lê de uma vez; em cantos diferentes da tela, viraria duas mecânicas. -->
         <div class="hunt-saida hidden" id="hunt-saida">
+          <!-- MODO ECONOMIA — o atalho. O interruptor de sempre mora nas Configurações, três
+               toques longe; a bateria acabando é justamente a hora em que ninguém quer
+               procurar um menu. Uma BATERIA, e não um raio ou uma folha: o que o modo poupa
+               é bateria e calor do aparelho, e é esse o nome que o jogador dá para o que está
+               sentindo quando procura por ele.
+
+               Só LIGA — não é um interruptor de duas mãos. Ligado, a cena inteira sai do ar,
+               e este botão vai junto com ela (`html.modo-economia .palco > :not(.eco-painel)`);
+               quem desliga é o "Ligar a cena" do próprio painel de Economia, que é o único
+               botão que continua na tela. Quem liga de verdade é `definirEconomia`, no app.js. -->
+          <button class="hunt-eco" id="hunt-eco" type="button"
+            data-i18n-attr="title:eco.atalho" title="Modo Economia — desliga a cena e poupa bateria">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 7h11a2 2 0 0 1 2 2v1h1.4a.6.6 0 0 1 .6.6v2.8a.6.6 0 0 1-.6.6H18v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zm0 2v6h11V9H5z" fill="currentColor"/>
+              <path d="M6.5 10.5h5.5v3H6.5z" fill="currentColor"/>
+            </svg>
+          </button>
           <!-- MODO POP-UP — destaca a cena e os contadores da sessão numa janelinha flutuante
                (Document Picture-in-Picture no Chrome/Edge; um cartão arrastável no resto), sempre
                em primeiro plano, para acompanhar a hunt com o jogo minimizado. Só o ícone: fica
@@ -897,15 +917,22 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
            só faz sentido ancorada no rodapé DELA, não do painel. -->
       <div class="chat-vao">
         <div class="chat-msgs" id="chat-msgs"></div>
+        <!-- A MENSAGEM FIXADA por um admin: o cartão por cima da conversa, no topo do vidro, como o
+             "pinned" da Twitch. Montada por `pintarChatFixada`; a lista rola por baixo dela. -->
+        <div id="chat-fixada" class="chat-fixada hidden" aria-live="polite"></div>
         <button type="button" id="chat-novas" class="chat-novas hidden"></button>
         <!-- O painel que abre ao clicar numa mensagem: ignorar, ver perfil; moderador muta/exclui. -->
         <div id="chat-mod-panel" class="chat-mod-panel hidden" role="dialog" aria-hidden="true">
           <div id="chat-mod-view-acoes">
             <div class="chat-mod-titulo" id="chat-mod-titulo">Moderar</div>
+            <!-- O "Responder" do dedo: no computador a setinha aparece no hover da linha; no toque, mora aqui. -->
+            <button type="button" id="chat-responder" class="chat-mod-acao chat-mod-responder hidden" data-i18n="chat.responder">Responder</button>
             <button type="button" id="chat-mod-mute" class="chat-mod-mute hidden" data-i18n="chat.modMute">Mutar</button>
             <button type="button" id="chat-ignorar" class="chat-mod-acao hidden" data-i18n="chat.ignorar">Ignorar</button>
             <button type="button" id="chat-ver-perfil" class="chat-mod-acao hidden" data-i18n="chat.verPerfil">Ver perfil</button>
             <button type="button" id="chat-adicionar-amigo" class="chat-mod-acao chat-mod-cta hidden" data-i18n="chat.adicionarAmigo">Adicionar amigo</button>
+            <!-- Só admin, nos canais abertos. Na linha que já é a fixada, o texto vira "Desafixar". -->
+            <button type="button" id="chat-mod-fixar" class="chat-mod-acao chat-mod-fixar hidden" data-i18n="chat.fixar">Fixar mensagem</button>
             <button type="button" id="chat-mod-excluir" class="chat-mod-excluir hidden" data-i18n="chat.modExcluir">Excluir mensagem</button>
           </div>
           <div id="chat-mod-view-mute" class="hidden">
@@ -1182,7 +1209,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <div class="modal-caixa caixa-boss-loot">
     <div class="modal-topo"><h2 id="boss-loot-titulo" data-i18n="bossLoot.titulo">Boss derrotado!</h2></div>
     <div class="modal-corpo">
-      <p class="boss-loot-nome" id="boss-loot-nome"></p>
+      <div id="boss-loot-palco"></div>
       <div class="boss-loot-stats" id="boss-loot-stats"></div>
       <div class="boss-loot-secao">
         <b data-i18n="bossLoot.recompensas">Recompensas</b>
@@ -1356,6 +1383,11 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <div class="modal-caixa caixa-confirmar">
     <div class="modal-topo"><h2 id="sessao-tomada-titulo" data-i18n="sessaoTomada.titulo">Conta aberta em outro lugar</h2></div>
     <div class="modal-corpo">
+      <!-- As duas telas, a de trás pausada: o desenho da frase de baixo, na medalha do diálogo
+           de jogo (ver `dlg-` no estilo.css). SVG aqui mesmo porque esta caixa é estática. -->
+      <span class="dlg-medalha tom-azul" aria-hidden="true">
+        <svg class="dlg-svg" viewBox="0 0 20 20" width="38" height="38"><rect x="1.6" y="3" width="11.4" height="8.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="7" y="8.2" width="11.4" height="8.4" rx="1.4" fill="currentColor"/><path d="M11.6 10.6v3.6M14 10.6v3.6" style="stroke: var(--vao)" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </span>
       <div id="sessao-tomada-texto" class="confirmar-texto" data-i18n="sessaoTomada.texto"></div>
       <div class="confirmar-botoes">
         <button type="button" id="sessao-tomada-jogar" data-i18n="sessaoTomada.botao">Jogar aqui</button>
@@ -1496,7 +1528,164 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
            ele abre (a bola ÚNICA é a regra que mais surpreende), e os preços e as horas dos ovos. O
            resto da leva (Tag IDLE com os botões novos do #reedem-codes, troféus de campeonato,
            contador de favoritos e o Mismagius) vai no "Também nesta atualização". -->
-      <section class="novidade" data-aviso="20">
+      <!-- v22 · O BÔNUS NA KICK (v1.204.0). A festa da 18 (o Bônus Twitch), no verde da Kick: o K
+           da marca no alto e, no lugar da fileira de itens, as TRÊS recompensas que o jogo cria no
+           canal de cada Streamer Oficial, na escada de raridade — azul 300, roxo 500, ouro 1.000
+           pontos —, cada uma com o ícone do boost da Loja de mesmo nome. A faixa dourada diz a regra
+           que mais importa (cada resgate é 1 h, e as horas se somam), o "Como ativar" diz que o
+           vínculo é PARA SEMPRE antes de a pessoa clicar, e o convite de Streamer Parceiro vem no
+           meio do slide, em verde (`.kk-tom`), como o da Twitch veio na 18. -->
+      <section class="novidade" data-aviso="22">
+        <section class="aviso-bikes aviso-kick">
+          <div class="ab-raios" aria-hidden="true"></div>
+          <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <span class="avk-logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="44" height="44"><path fill="currentColor" d="M1.5 0h8v5.3h2.7V2.7h2.6V0h8v8h-2.6v2.7h-2.7v2.6h2.7V16h2.6v8h-8v-2.7h-2.6v-2.6H9.5V24h-8z"/></svg></span>
+          <span class="ab-fita" data-i18n="aviso.v22Fita">Streamers Oficiais na Kick</span>
+          <h3 class="ab-titulo" data-i18n="aviso.v22Titulo">BÔNUS NA KICK</h3>
+          <div class="ab-bikes ab-tres avk-recs">
+            <div class="ab-bike rar-rara">
+              <img src="/assets/site/assets/loja/exp.png" alt="">
+              <b data-i18n="aviso.v22N1">+15% XP</b><span data-i18n="aviso.v22N1S">300 pontos</span>
+            </div>
+            <div class="ab-bike rar-mitica">
+              <img src="/assets/site/assets/loja/catch.png" alt="">
+              <b data-i18n="aviso.v22N2">+15% Capture Boost</b><span data-i18n="aviso.v22N2S">500 pontos</span>
+            </div>
+            <div class="ab-bike rar-lendaria">
+              <img src="/assets/site/assets/loja/shinysecretlure.png" alt="">
+              <b data-i18n="aviso.v22N3">+15% Secret Lure</b><span data-i18n="aviso.v22N3S">1.000 pontos</span>
+            </div>
+          </div>
+          <p class="ab-sub" data-i18n-html="aviso.v22Sub"></p>
+        </section>
+
+        <p class="aviso-lendaria" data-i18n-html="aviso.v22Lendaria"></p>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v22ComoTitulo">Como ativar</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v22Como1"></li>
+            <li data-i18n-html="aviso.v22Como2"></li>
+            <li data-i18n-html="aviso.v22Como3"></li>
+            <li data-i18n-html="aviso.v22Como4"></li>
+          </ul>
+        </section>
+
+        <div class="tw-parceiro kk-tom">
+          <span class="tw-parceiro-brilho" aria-hidden="true"></span>
+          <div class="tw-parceiro-ico" aria-hidden="true">
+            <svg class="kk-glifo" viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M1.5 0h8v5.3h2.7V2.7h2.6V0h8v8h-2.6v2.7h-2.7v2.6h2.7V16h2.6v8h-8v-2.7h-2.6v-2.6H9.5V24h-8z"/></svg>
+            <i class="tw-faisca f1">✦</i><i class="tw-faisca f2">✦</i><i class="tw-faisca f3">✦</i>
+          </div>
+          <div class="tw-parceiro-txt">
+            <span class="tw-parceiro-selo">★ <span data-i18n="kick.parceiroSelo">Vagas abertas</span></span>
+            <b data-i18n="kick.parceiroTitulo">Gostaria de ser Streamer Parceiro Oficial do PokeIdle na Kick?</b>
+            <span data-i18n-html="aviso.v22Parceiro"></span>
+          </div>
+          <a class="tw-parceiro-btn" href="https://discord.gg/pokeidle" target="_blank" rel="noopener noreferrer">
+            <img src="/img/social-discord.svg" width="20" height="20" alt="">
+            <span>Discord</span>
+          </a>
+        </div>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.tambemTitulo">Também nesta atualização</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v22Dialogos"></li>
+            <li data-i18n-html="aviso.v22Mercado"></li>
+            <li data-i18n-html="aviso.v22Shiny"></li>
+            <li data-i18n-html="aviso.v22Fixada"></li>
+            <li data-i18n-html="aviso.v22Mimikyu"></li>
+            <li data-i18n-html="aviso.v22Ficha"></li>
+          </ul>
+        </section>
+      </section>
+
+      <!-- v21 · A COMISSÃO DO MERCADO DA COMUNIDADE, que caiu e virou FAIXA no pokémon
+           (v1.195.0 e v1.196.0).
+
+           O herói são os três degraus da faixa, nas molduras de raridade que o jogador já lê em
+           tudo: 13% em azul, 10% em roxo e 7,5% em dourado — quanto maior a venda, mais alto o
+           degrau e menor a taxa. É a leitura inteira da mudança numa olhada.
+
+           O primeiro bloco explica a palavra que decide tudo: MARGINAL. Cada faixa vale só
+           sobre a sua fatia, e é por isso que cobrar 1 gema a mais nunca pode render menos —
+           era o degrau que faria a vitrine inteira encostar em 501 e 5.001. O segundo bloco diz,
+           sem rodeio, o que SUBIU (Coins de 10% para 15%) e por quê: enquanto o Mercado cobrava
+           menos que a transferência entre amigos, ele era um atalho de transferência, não uma
+           feira. Dizer isso aqui é mais barato do que deixar o jogador descobrir na venda. -->
+      <section class="novidade" data-aviso="21" hidden>
+        <section class="aviso-bikes">
+          <div class="ab-raios" aria-hidden="true"></div>
+          <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <span class="ab-fita" data-i18n="aviso.v21Fita">Mercado da Comunidade</span>
+          <h3 class="ab-titulo" data-i18n="aviso.v21Titulo">A COMISSÃO DO POKÉMON CAIU</h3>
+          <div class="ab-bikes ab-tres">
+            <div class="ab-bike rar-rara">
+              <img src="/img/moeda-gema.png" alt="">
+              <b data-i18n="aviso.v21N1">13%</b><span data-i18n="aviso.v21N1S">até 500 gemas</span>
+            </div>
+            <div class="ab-bike rar-mitica">
+              <img src="/img/moeda-gema.png" alt="">
+              <b data-i18n="aviso.v21N2">10%</b><span data-i18n="aviso.v21N2S">de 501 a 5.000</span>
+            </div>
+            <div class="ab-bike rar-lendaria">
+              <img src="/img/moeda-gema.png" alt="">
+              <b data-i18n="aviso.v21N3">7,5%</b><span data-i18n="aviso.v21N3S">acima de 5.000</span>
+            </div>
+          </div>
+          <p class="ab-sub" data-i18n-html="aviso.v21Sub"></p>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v21FaixaTitulo">Como a faixa funciona</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v21Faixa1"></li>
+            <li data-i18n-html="aviso.v21Faixa2"></li>
+            <li data-i18n-html="aviso.v21Faixa3"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v21CoinsTitulo">E o que subiu: Coins, de 10% para 15%</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v21Coins1"></li>
+            <li data-i18n-html="aviso.v21Coins2"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v21BossTitulo">A Pokédex do Boss diz como capturar</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v21Boss1"></li>
+            <li data-i18n-html="aviso.v21Boss2"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v21CdTitulo">A recarga dos golpes agora é do pokémon</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v21Cd1"></li>
+            <li data-i18n-html="aviso.v21Cd2"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.tambemTitulo">Também nesta atualização</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v21Amigos"></li>
+            <li data-i18n-html="aviso.v21Fila"></li>
+            <li data-i18n-html="aviso.v21Vitrine"></li>
+            <li data-i18n-html="aviso.v21Guild"></li>
+            <li data-i18n-html="aviso.v21Selos"></li>
+            <li data-i18n-html="aviso.v21Calc"></li>
+            <li data-i18n-html="aviso.v21Twitch"></li>
+            <li data-i18n-html="aviso.v21Revive"></li>
+          </ul>
+        </section>
+      </section>
+
+      <section class="novidade" data-aviso="20" hidden>
         <section class="aviso-bikes">
           <div class="ab-raios" aria-hidden="true"></div>
           <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -2683,7 +2872,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
 
 <!-- Erros de módulo ES são silenciosos na tela; jogar na UI evita depurar no escuro. -->
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==">
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==">
   window.addEventListener('error', (e) => {
     const el = document.getElementById('login-erro');
     if (el) el.textContent = `erro: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`;
@@ -2693,6 +2882,6 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     if (el) el.textContent = `falha: ${e.reason?.message ?? e.reason}`;
   });
 </script>
-<script nonce="+UE5KEKpT9sy0m/8XxOqaw==" type="module" src="app.js?v=1.188.0"></script>
+<script nonce="GJMvisI5wDOFjKY/0ecbuw==" type="module" src="app.js?v=1.216.2"></script>
 </body>
 </html>

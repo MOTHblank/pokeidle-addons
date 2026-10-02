@@ -61,6 +61,7 @@ import { FAIXAS_NOTA, AUTO_LOCK_NOTA_MIN } from '../shared/nota-pokemon.mjs';
 // as casas da roleta, as datas, o requisito e o prêmio do campeonato, e o degrau fixo dos oito
 // destinos do Eevee saem daqui, e não de um número copiado no texto.
 import { OFERENDA_CASAS } from '../shared/oferenda.mjs';
+import { faixasOrbParaTela, liquidoOrbDaVenda, TAXA_ORB_PLANA } from '../shared/taxa-mercado.mjs';
 // A ÁREA DE TREINAMENTO e as CAIXAS DO MARKET, pela mesma razão: os limites da bancada (casas
 // por lado, espera entre batalhas) e as tabelas das caixas (preço, diamante, multiplicador e as
 // chances de cada prêmio) moram em `shared/`. O capítulo monta a tabela a partir delas, então
@@ -985,13 +986,38 @@ const ULTIMA_REGIAO = REGIOES_MAPA_DOC.at(-1);
 /** A hunt de nível mais alto que o servidor mandou — 0 antes do welcome. */
 const huntMaisAlta = (c) => (c.d.hunts ?? []).reduce((m, h) => Math.max(m, Number(h.nivel) || 0), 0);
 
+/**
+ * A tabela da gema escrita em uma linha, no idioma do capítulo — "13% até 500 · 10% até 5.000
+ * · 7,5% acima". A comissão da gema é por faixa e marginal (ver `shared/taxa-mercado.mjs`), e
+ * um número só ali seria mentira em qualquer preço que não fosse o da primeira faixa.
+ */
+const pctTx = (n) => Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+const faixasOrbTexto = (lang = 'pt') => {
+  const ate = { pt: 'até', en: 'up to', es: 'hasta' }[lang] ?? 'até';
+  const acima = { pt: 'acima', en: 'above that', es: 'por encima' }[lang] ?? 'acima';
+  return faixasOrbParaTela()
+    .map((f) => (f.ate ? `${pctTx(f.pct)}% ${ate} ${f.ate.toLocaleString('pt-BR')}` : `${pctTx(f.pct)}% ${acima}`))
+    .join(' · ');
+};
+
+/** As mesmas faixas como linhas de tabela, para o capítulo do Mercado. */
+const linhasFaixasOrb = (rotulo, lang = 'pt') => {
+  const ate = { pt: 'até', en: 'up to', es: 'hasta' }[lang] ?? 'até';
+  const acima = { pt: 'acima disso', en: 'above that', es: 'por encima' }[lang] ?? 'acima disso';
+  return faixasOrbParaTela()
+    .map((f) => `<tr><td>${rotulo} — ${f.ate ? `${ate} ${f.ate.toLocaleString('pt-BR')}` : acima}</td>`
+      + `<td class="wk-num destaque">${pctTx(f.pct)}%</td></tr>`)
+    .join('');
+};
+
 /** O quadro de TAXAS: tudo que o jogo desconta, num lugar só. */
 function tabelaDeTaxas(c) {
   const e = c.d.economia ?? {};
   const L = {
     pt: [
-      ['Mercado da Comunidade — anúncio em Gema', `${e.taxaMercadoOrbPct}% sobre a venda`, 'o VENDEDOR'],
-      ['Mercado da Comunidade — anúncio em Ouro', `${e.taxaMercadoGoldPct ?? 10}% sobre a venda`, 'o VENDEDOR'],
+      ['Mercado da Comunidade — POKÉMON em Gema', `${faixasOrbTexto('pt')} (por faixa, sobre a venda)`, 'o VENDEDOR'],
+      ['Mercado da Comunidade — item ou diamante em Gema', `${pctTx(TAXA_ORB_PLANA * 100)}% sobre a venda`, 'o VENDEDOR'],
+      ['Mercado da Comunidade — anúncio em Ouro', `${e.taxaMercadoGoldPct ?? 15}% sobre a venda`, 'o VENDEDOR'],
       ['Mercado da Comunidade — pensão do pokémon', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("pt-BR")} Coins por dia (só pokémon)`, 'o VENDEDOR'],
       ['Market (NPC) — comprar', 'nenhuma', '—'],
       ['Market (NPC) — vender', 'nenhuma (paga o valor cheio do catálogo)', '—'],
@@ -1002,8 +1028,9 @@ function tabelaDeTaxas(c) {
       ['Nocaute — o time inteiro cai (hunt ou boss)', `${e.xpPerdidoPct ?? 10}% do XP do nível atual (a Bless reduz ou zera)`, 'quem cai'],
     ],
     en: [
-      ['Community Market — Gem listing', `${e.taxaMercadoOrbPct}% of the sale`, 'the SELLER'],
-      ['Community Market — Gold listing', `${e.taxaMercadoGoldPct ?? 10}% of the sale`, 'the SELLER'],
+      ['Community Market — POKÉMON in Gems', `${faixasOrbTexto('en')} (tiered, on the sale)`, 'the SELLER'],
+      ['Community Market — item or diamond in Gems', `${pctTx(TAXA_ORB_PLANA * 100)}% of the sale`, 'the SELLER'],
+      ['Community Market — Gold listing', `${e.taxaMercadoGoldPct ?? 15}% of the sale`, 'the SELLER'],
       ['Community Market — pokémon boarding', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("en-US")} Coins a day (pokémon only)`, 'the SELLER'],
       ['Market (NPC) — buying', 'none', '—'],
       ['Market (NPC) — selling', 'none (pays the full catalogue value)', '—'],
@@ -1014,8 +1041,9 @@ function tabelaDeTaxas(c) {
       ['Knockout — the whole team falls (hunt or boss)', `${e.xpPerdidoPct ?? 10}% of the current level's XP (Bless reduces or cancels it)`, 'whoever falls'],
     ],
     es: [
-      ['Mercado de la Comunidad — anuncio en Gemas', `${e.taxaMercadoOrbPct}% sobre la venta`, 'el VENDEDOR'],
-      ['Mercado de la Comunidad — anuncio en Oro', `${e.taxaMercadoGoldPct ?? 10}% sobre la venta`, 'el VENDEDOR'],
+      ['Mercado de la Comunidad — POKÉMON en Gemas', `${faixasOrbTexto('es')} (por tramos, sobre la venta)`, 'el VENDEDOR'],
+      ['Mercado de la Comunidad — objeto o diamante en Gemas', `${pctTx(TAXA_ORB_PLANA * 100)}% sobre la venta`, 'el VENDEDOR'],
+      ['Mercado de la Comunidad — anuncio en Oro', `${e.taxaMercadoGoldPct ?? 15}% sobre la venta`, 'el VENDEDOR'],
       ['Mercado de la Comunidad — pensión del pokémon', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("es-ES")} Coins por día (solo pokémon)`, 'el VENDEDOR'],
       ['Market (NPC) — comprar', 'ninguna', '—'],
       ['Market (NPC) — vender', 'ninguna (paga el valor completo del catálogo)', '—'],
@@ -3785,8 +3813,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           posição nele decide o bônus de <b>XP do treinador, XP do pokémon e loot</b> dos
           <b>escalados</b> até a guerra seguinte. Com 0 GP não há bônus.</li>
           <li><b>Guild Global</b> — a <b>Temporada Global</b>: soma o GP de todas as guerras do mês.
-          No dia 1º, às 00:00 UTC, as <b>${N(PREMIADOS_GLOBAL, c.lang)} primeiras</b> levam
-          <b>diamantes para cada escalado</b> e o placar recomeça do zero.</li>
+          No dia 1º, às <b>00:00 (horário de Brasília)</b>, as <b>${N(PREMIADOS_GLOBAL, c.lang)} primeiras</b>
+          levam <b>diamantes para cada escalado</b> e o placar recomeça do zero.</li>
         </ul>
         <p>O <b>diário</b> não tem teto de posição: qualquer guild com GP levanta pelo menos o
         piso de +${BONUS_RANKING_GP.resto}%. O <b>mensal</b> tem — fora das
@@ -3899,8 +3927,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           place on it sets the <b>trainer XP, pokémon XP and loot</b> bonus for the <b>rostered
           players</b> until the next war. With 0 GP there is no bonus.</li>
           <li><b>Guild Global</b> — the <b>Global Season</b>: it adds up the GP of every war in the
-          month. On the 1st, at 00:00 UTC, the <b>top ${N(PREMIADOS_GLOBAL, c.lang)}</b> get
-          <b>diamonds for each rostered player</b> and the board starts over.</li>
+          month. On the 1st, at <b>00:00 (Brasília time)</b>, the <b>top ${N(PREMIADOS_GLOBAL, c.lang)}</b>
+          get <b>diamonds for each rostered player</b> and the board starts over.</li>
         </ul>
         <p>The <b>daily</b> board has no cutoff: any guild with GP takes at least the
         +${BONUS_RANKING_GP.resto}% floor. The <b>monthly</b> one does — below the top
@@ -4014,8 +4042,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           el puesto en ella decide el bonus de <b>XP del entrenador, XP del pokémon y loot</b> de
           los <b>convocados</b> hasta la guerra siguiente. Con 0 GP no hay bonus.</li>
           <li><b>Guild Global</b> — la <b>Temporada Global</b>: suma el GP de todas las guerras del
-          mes. El día 1, a las 00:00 UTC, las <b>${N(PREMIADOS_GLOBAL, c.lang)} primeras</b> se
-          llevan <b>diamantes para cada convocado</b> y el marcador vuelve a cero.</li>
+          mes. El día 1, a las <b>00:00 (hora de Brasilia)</b>, las <b>${N(PREMIADOS_GLOBAL, c.lang)} primeras</b>
+          se llevan <b>diamantes para cada convocado</b> y el marcador vuelve a cero.</li>
         </ul>
         <p>La <b>diaria</b> no tiene tope de puesto: cualquier guild con GP se lleva al menos el
         piso de +${BONUS_RANKING_GP.resto}%. La <b>mensual</b> sí — fuera de las
@@ -6892,13 +6920,26 @@ poder = redond( nivel × 10 × score )</pre>
         <h4>A comissão</h4>
         ${tabela(
           [c.r.regra, c.r.taxa],
-          `<tr><td>Anúncio cobrado em <b>Ouro</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 10}%</td></tr>
-           <tr><td>Anúncio cobrado em <b>Gema</b></td><td class="wk-num destaque">${e.taxaMercadoOrbPct ?? 15}%</td></tr>`,
+          `<tr><td>Anúncio cobrado em <b>Ouro</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 15}%</td></tr>
+           <tr><td>Item ou diamante em <b>Gema</b></td><td class="wk-num destaque">${pctTx(TAXA_ORB_PLANA * 100)}%</td></tr>
+           ${linhasFaixasOrb('<b>Pokémon</b> em Gema', 'pt')}`,
         )}
         <p>A comissão sai do <b>vendedor</b>: quem anuncia por 100 Coins recebe
-        <b>${100 - (e.taxaMercadoGoldPct ?? 10)}</b>; por 100 Gemas recebe
-        <b>${100 - (e.taxaMercadoOrbPct ?? 15)}</b>. O comprador paga exatamente o que está na
+        <b>${100 - (e.taxaMercadoGoldPct ?? 15)}</b>; por 100 Gemas recebe
+        <b>${liquidoOrbDaVenda(100, 'item')}</b>. O comprador paga exatamente o que está na
         vitrine.</p>
+        <p>No <b>pokémon</b> cobrado em Gema a taxa é <b>por faixa</b>, como imposto de renda: cada
+        pedaço do preço paga a alíquota da faixa dele, e não a maior de todas. Num pokémon de
+        10.000 Gemas,
+        os primeiros 500 pagam ${pctTx(faixasOrbParaTela()[0].pct)}%, o trecho seguinte paga
+        ${pctTx(faixasOrbParaTela()[1].pct)}% e só o que passa de 5.000 paga
+        ${pctTx(faixasOrbParaTela()[2].pct)}% — o vendedor recebe
+        <b>${liquidoOrbDaVenda(10000, 'pokemon').toLocaleString('pt-BR')}</b>. Quanto maior a venda,
+        menor a taxa efetiva, e aumentar o preço nunca diminui o que você recebe.</p>
+        <p>Item e diamante em Gema pagam ${pctTx(TAXA_ORB_PLANA * 100)}% em qualquer valor. A faixa
+        é só do pokémon porque só ele não pode ser comprado em pedaços: cada bicho é peça única e
+        a venda é o anúncio inteiro. Num lote de itens, quem escolhe o tamanho da compra é o
+        comprador, e a faixa viraria sorteio.</p>
 
         <h4>Você recebe quando entrar</h4>
         <p>A venda cai numa <b>caixa postal</b>. Da próxima vez que você abrir o jogo (ou dentro de
@@ -7022,12 +7063,23 @@ poder = redond( nivel × 10 × score )</pre>
         <h4>The commission</h4>
         ${tabela(
           [c.r.regra, c.r.taxa],
-          `<tr><td>Listing priced in <b>Gold</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 10}%</td></tr>
-           <tr><td>Listing priced in <b>Gems</b></td><td class="wk-num destaque">${e.taxaMercadoOrbPct ?? 15}%</td></tr>`,
+          `<tr><td>Listing priced in <b>Gold</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 15}%</td></tr>
+           <tr><td>Item or diamond in <b>Gems</b></td><td class="wk-num destaque">${pctTx(TAXA_ORB_PLANA * 100)}%</td></tr>
+           ${linhasFaixasOrb('<b>Pokémon</b> in Gems', 'en')}`,
         )}
         <p>The commission comes out of the <b>seller</b>: listing for 100 Gold pays you
-        <b>${100 - (e.taxaMercadoGoldPct ?? 10)}</b>; for 100 Gems pays you
-        <b>${100 - (e.taxaMercadoOrbPct ?? 15)}</b>. The buyer pays exactly what is on the shelf.</p>
+        <b>${100 - (e.taxaMercadoGoldPct ?? 15)}</b>; for 100 Gems pays you
+        <b>${liquidoOrbDaVenda(100, 'item')}</b>. The buyer pays exactly what is on the shelf.</p>
+        <p>For a <b>pokémon</b> priced in Gems the fee is <b>tiered</b>, like income tax: each slice
+        of the price pays its own rate, not the highest one. On a 10,000 Gem pokémon the first 500 pay
+        ${pctTx(faixasOrbParaTela()[0].pct)}%, the next slice pays
+        ${pctTx(faixasOrbParaTela()[1].pct)}% and only what goes past 5,000 pays
+        ${pctTx(faixasOrbParaTela()[2].pct)}% — the seller gets
+        <b>${liquidoOrbDaVenda(10000, 'pokemon').toLocaleString('pt-BR')}</b>. The bigger the sale,
+        the lower the effective fee, and raising the price never lowers what you receive.</p>
+        <p>Items and diamonds in Gems pay ${pctTx(TAXA_ORB_PLANA * 100)}% at any value. Only the
+        pokémon is tiered, because only it cannot be bought in pieces: each one is a unique item and
+        the sale is the whole listing. In a stack, the buyer picks the size of the purchase.</p>
 
         <h4>You get paid when you log in</h4>
         <p>The sale lands in a <b>mailbox</b>. Next time you open the game (or within a minute, if
@@ -7155,12 +7207,19 @@ poder = redond( nivel × 10 × score )</pre>
         <h4>La comisión</h4>
         ${tabela(
           [c.r.regra, c.r.taxa],
-          `<tr><td>Anuncio cobrado en <b>Oro</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 10}%</td></tr>
-           <tr><td>Anuncio cobrado en <b>Gemas</b></td><td class="wk-num destaque">${e.taxaMercadoOrbPct ?? 15}%</td></tr>`,
+          `<tr><td>Anuncio cobrado en <b>Oro</b></td><td class="wk-num destaque">${e.taxaMercadoGoldPct ?? 15}%</td></tr>
+           <tr><td>Objeto o diamante en <b>Gemas</b></td><td class="wk-num destaque">${pctTx(TAXA_ORB_PLANA * 100)}%</td></tr>
+           ${linhasFaixasOrb('<b>Pokémon</b> en Gemas', 'es')}`,
         )}
+        <p>En el <b>pokémon</b> cobrado en Gemas la comisión es <b>por tramos</b>, como el impuesto a
+        la renta: cada parte del precio paga su propia tasa, no la más alta. En un pokémon de 10.000
+        Gemas el vendedor recibe <b>${liquidoOrbDaVenda(10000, 'pokemon').toLocaleString('pt-BR')}</b>,
+        y subir el precio nunca baja lo que recibes. Objetos y diamantes en Gemas pagan
+        ${pctTx(TAXA_ORB_PLANA * 100)}% en cualquier valor: solo el pokémon va por tramos, porque
+        solo él no se puede comprar en partes.</p>
         <p>La comisión sale del <b>vendedor</b>: quien anuncia por 100 Coins recibe
-        <b>${100 - (e.taxaMercadoGoldPct ?? 10)}</b>; por 100 Gemas recibe
-        <b>${100 - (e.taxaMercadoOrbPct ?? 15)}</b>. El comprador paga exactamente lo que está en la
+        <b>${100 - (e.taxaMercadoGoldPct ?? 15)}</b>; por 100 Gemas recibe
+        <b>${liquidoOrbDaVenda(100, 'item')}</b>. El comprador paga exactamente lo que está en la
         vitrina.</p>
 
         <h4>Cobras al entrar</h4>
@@ -7591,9 +7650,10 @@ poder = redond( nivel × 10 × score )</pre>
         ${nota(`<b>O <a data-cap="market">Market</a> do NPC não cobra nada</b>: compra e venda pelo
         valor de catálogo. As comissões moram no <a data-cap="comunidade">Mercado da
         Comunidade</a> e saem do VENDEDOR, só quando a venda acontece:
-        ${c.d.economia?.taxaMercadoGoldPct ?? 10}% nos anúncios em ouro e
-        ${c.d.economia?.taxaMercadoOrbPct ?? 15}% nos anúncios em Gema — a de Gema é maior porque
-        Gema é dinheiro de verdade circulando entre jogadores. A pensão vale só para pokémon
+        ${c.d.economia?.taxaMercadoGoldPct ?? 15}% nos anúncios em ouro, ${pctTx(TAXA_ORB_PLANA * 100)}% nos de item
+        e diamante em Gema, e ${faixasOrbTexto('pt')} no POKÉMON em Gema — por faixa, como imposto
+        de renda, e quanto maior a venda menor a taxa efetiva. A de ouro é a mesma da transferência de Coins entre amigos, de propósito:
+        assim o Mercado não vira um caminho mais barato para passar ouro. A pensão vale só para pokémon
         anunciado e é paga à vista, na hora de publicar.`)}`,
       en: `
         <p>Everything the game deducts, in a single table. If it is not here, it is not charged.</p>
@@ -7601,9 +7661,10 @@ poder = redond( nivel × 10 × score )</pre>
         ${nota(`<b>The NPC <a data-cap="market">Market</a> charges nothing</b>: buying and selling
         are at catalogue value. The commissions live on the
         <a data-cap="comunidade">Community Market</a> and come out of the SELLER, only when the
-        sale happens: ${c.d.economia?.taxaMercadoGoldPct ?? 10}% on gold listings and
-        ${c.d.economia?.taxaMercadoOrbPct ?? 15}% on Gem listings — the Gem one is higher because
-        Gems are real money moving between players. Boarding applies only to listed pokémon and
+        sale happens: ${c.d.economia?.taxaMercadoGoldPct ?? 15}% on gold listings, ${pctTx(TAXA_ORB_PLANA * 100)}% on items and
+        diamonds in Gems, and ${faixasOrbTexto('en')} on a POKÉMON in Gems — tiered like income
+        tax, so the bigger the sale the lower the effective fee. The gold one matches the Coins transfer between friends on
+        purpose, so the Market is not a cheaper way to move gold. Boarding applies only to listed pokémon and
         is paid up front, when you publish.`)}`,
       es: `
         <p>Todo lo que el juego descuenta, en un solo cuadro. Si no está aquí, no se cobra.</p>
@@ -7611,9 +7672,10 @@ poder = redond( nivel × 10 × score )</pre>
         ${nota(`<b>El <a data-cap="market">Market</a> del NPC no cobra nada</b>: compra y venta al
         valor de catálogo. Las comisiones viven en el <a data-cap="comunidade">Mercado de la
         Comunidad</a> y salen del VENDEDOR, solo cuando la venta ocurre:
-        ${c.d.economia?.taxaMercadoGoldPct ?? 10}% en los anuncios en oro y
-        ${c.d.economia?.taxaMercadoOrbPct ?? 15}% en los anuncios en Gema — la de Gema es mayor
-        porque la Gema es dinero real circulando entre jugadores. La pensión vale solo para
+        ${c.d.economia?.taxaMercadoGoldPct ?? 15}% en los anuncios en oro, ${pctTx(TAXA_ORB_PLANA * 100)}% en objetos y
+        diamantes en Gemas, y ${faixasOrbTexto('es')} en el POKÉMON en Gemas — por tramos, como el
+        impuesto a la renta: cuanto mayor la venta, menor la tasa efectiva. La de oro es la misma de la transferencia de Coins entre
+        amigos, a propósito. La pensión vale solo para
         pokémon anunciados y se paga por adelantado, al publicar.`)}`,
     }),
   },

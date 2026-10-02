@@ -30,6 +30,7 @@
  * mesmo. O Capture Boost dobra, como em toda captura do jogo.
  */
 import { LENDARIO_DEX, MITICO_DEX } from './spawns-filtro.mjs';
+import { temSpriteJogo } from './sprite-jogo.mjs';
 
 /** O item. Faixa 70000–70099 dos itens nossos (ver `game/itens-nossos.mjs`). */
 export const MYSTIC_TICKET_ID = 70090;
@@ -48,6 +49,26 @@ export function chanceTicketDoPar(par) {
 
 /** O nível do lendário da arena. O capturado nasce nele (o teto de captura é 100 — ver `teto-captura`). */
 export const NIVEL_LENDARIO_MISTICO = 100;
+
+/**
+ * O PISO do lendário capturado. O ticket custa umas cem tentativas, e o lendário que saía com o
+ * sorteio livre de qualquer captura podia nascer Qualidade 0,8, P1 e IVs no chão — o prêmio do
+ * jogo virando lixo na mão (02/10/2026). Ele nasce acima do shiny, que só pede a soma dos IVs
+ * acima de 110:
+ *
+ *   · qualidade ≥ 1,50: rerola até passar, então o que sai é a escada natural acima do piso
+ *     (1,5–1,6, 1,7–1,8 ou 1,8), e não um monte de 1,500 cravado;
+ *   · IV somado ≥ 150 (de 192): rerola também, cada IV de 1 a 32 como em toda captura;
+ *   · potência ≥ 3: a roleta gira normal e o que sair abaixo de 3 vira 3 — P4 e P5 ficam com a
+ *     chance de sempre (0,5% e 0,005%).
+ *
+ * O shiny segue com a chance cheia do jogo (`rolarShinyForaDeHunt` no sim). O sorteio mora no
+ * `content.mjs` (`rolarLendarioMistico`), ao lado do `rolarStarter`, porque as bandas de
+ * qualidade vêm do `formulas.json`.
+ */
+export const MISTICO_QUALIDADE_MIN = 1.5;
+export const MISTICO_IV_SOMA_MIN = 150;
+export const MISTICO_POTENCIA_MIN = 3;
 
 /**
  * A chance de captura por BOLA, na arena. 0,1% na Poké Ball e 0,5% na Beast Ball, subindo um
@@ -91,21 +112,38 @@ export const LENDARIOS_KANTO_JOHTO = Object.freeze([144, 145, 146, 150, 243, 244
 /** Os Míticos de Kanto e Johto, pelo mesmo motivo. */
 export const MITICOS_KANTO_JOHTO = Object.freeze([151, 251]);
 
+/**
+ * Míticos que faltam em `MITICO_DEX` — ela é a lista do EDITOR DE SPAWNS, e responde outra
+ * pergunta ("quem pode ser posto num spawn?"). O Victini nunca precisou entrar lá, e por tabela
+ * ficava de fora do sorteio: era o único dos dezoito bosses que a Pokédex anuncia que a arena
+ * jamais sortearia, com a ficha prometendo um encontro que não existia.
+ */
+export const MITICOS_FORA_DO_FILTRO = Object.freeze([494]); // Victini
+
 /** Todo dex lendário ou mítico, de Kanto a Paldea. */
 export const DEX_LENDARIO_OU_MITICO = new Set([
-  ...LENDARIOS_KANTO_JOHTO, ...MITICOS_KANTO_JOHTO, ...LENDARIO_DEX, ...MITICO_DEX,
+  ...LENDARIOS_KANTO_JOHTO, ...MITICOS_KANTO_JOHTO, ...MITICOS_FORA_DO_FILTRO,
+  ...LENDARIO_DEX, ...MITICO_DEX,
 ]);
 
 /** Só os MÍTICOS — o anúncio da captura diz "Mítico" em vez de "Lendário" para eles. */
-export const DEX_MITICO = new Set([...MITICOS_KANTO_JOHTO, ...MITICO_DEX]);
+export const DEX_MITICO = new Set([
+  ...MITICOS_KANTO_JOHTO, ...MITICOS_FORA_DO_FILTRO, ...MITICO_DEX,
+]);
 
 /**
  * O sorteio da arena: as espécies Lendárias e Míticas que o jogo sabe desenhar.
  *
  * Só a espécie BASE: o `pokeId` tem de ser o próprio número da Pokédex (abaixo de 2000). Isso
  * deixa de fora as variantes Outland (#2001+), as Megas (#3000+) e as cópias de Orre (#13000+,
- * cujo dex é `% 1000` e daria um "Lugia" de Orre no lugar do Lugia). E só quem tem sprite
- * (`looktype > 1`): um lendário invisível na arena seria um ticket jogado fora.
+ * cujo dex é `% 1000` e daria um "Lugia" de Orre no lugar do Lugia). E só quem tem a PRÓPRIA
+ * arte (`temSpriteJogo`): um lendário invisível — ou com a arte de outro — seria um ticket
+ * jogado fora.
+ *
+ * `looktype > 1` não basta. Os de Paldea (#1001–#1025) vieram com o looktype da Gen 1
+ * reciclado (60000 + dex % 1000): o Walking Wake (#1009) tem 60009, que é o Blastoise, e saiu
+ * assim de um ticket em 02/10/2026. Eram 18 no sorteio, de Wo-Chien (Bulbasaur) a Pecharunt
+ * (Pikachu); `temSpriteJogo` exige 60000 + o próprio número de quem passa de #1000.
  *
  * `especies` é o Map do catálogo (`content.mjs`); a lista sai ordenada pelo dex, para o sorteio
  * ser reproduzível num teste com o mesmo `aleatorio`.
@@ -116,7 +154,7 @@ export function poolLendariosMisticos(especies) {
     const id = Number(e?.pokeId);
     if (!Number.isInteger(id) || id < 1 || id >= 2000) continue;
     if (!DEX_LENDARIO_OU_MITICO.has(id)) continue;
-    if (!((e.looktype ?? 1) > 1)) continue;
+    if (!temSpriteJogo(e)) continue;
     lista.push(e);
   }
   return lista.sort((a, b) => a.pokeId - b.pokeId);

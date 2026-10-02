@@ -97,8 +97,8 @@ const ROTULOS = {
     semHunt: 'não aparece em hunt nenhuma (boss, evolução ou só por troca)',
     boss: 'BOSS',
     bossEvento: 'BOSS de evento — ainda não disponível',
-    ondeBoss: 'arena de boss (nível de equipe {nv}) — não se captura, não aparece em hunt',
-    ondeBossEvento: 'boss de evento ainda sem arena — não aparece em hunt, não se captura e não solta loot',
+    ondeBoss: 'arena de boss (nível de equipe {nv}) — não aparece em hunt; só se captura na Arena Mística, com o MysticTicket',
+    ondeBossEvento: 'boss de evento ainda sem arena — não aparece em hunt e não solta loot; só se captura na Arena Mística, com o MysticTicket',
     mega: 'MEGA',
     ondeMega: 'forma Mega — não se captura nem aparece em hunt; sai de um pokémon da espécie base '
       + 'gastando a Mega Stone dela (10 Fragmentos de Mega Stone, que caem em boss, no Professor Carvalho)',
@@ -108,7 +108,7 @@ const ROTULOS = {
       '`Nv ao capturar` é o nível com que ela sai da pokébola: o teto de captura corta em 20/40/100 conforme o estágio evolutivo, então ele já vem aplicado (não refaça a conta).',
       '`Preço NPC` é o que o NPC paga por ela. `0` quer dizer "não está à venda" — e é justamente isso que a torna mais difícil de capturar, porque a raridade da fórmula sai do preço.',
       '`Você (abates/capturas)` é o progresso da conta que exportou este arquivo.',
-      'Linha marcada com `BOSS` é um boss de arena: não se captura. `Nv hunt`, `Nv ao capturar`, `Preço NPC`, `Shiny?` e as colunas de bola vêm como `—` porque nenhuma delas existe para ele — o nível da arena está em "Onde encontrar". `BOSS de evento` é boss cuja arena ainda não foi feita.',
+      'Linha marcada com `BOSS` é um boss de arena: ele não entra em hunt, e por isso `Nv hunt`, `Nv ao capturar`, `Preço NPC`, `Shiny?` e as colunas de bola vêm como `—` — nenhuma delas existe para ele, e o nível da arena está em "Onde encontrar". `BOSS de evento` é boss cuja arena ainda não foi feita. Capturar um boss é possível por UM caminho só: o MysticTicket (drop raríssimo da vitória de boss, ou compra no Mercado da Comunidade) abre a Arena Mística com um Lendário ou Mítico sorteado de nível 100, e dá UMA bola — 0,1% na Poké Ball, 0,5% na Beast Ball, o dobro com Capture Boost, igual para todo lendário.',
       'A linha marcada com `MEGA` é uma Mega Evolução (`#3000+`): ela também não se captura — é FABRICADA a partir de um pokémon da espécie base com a Mega Stone daquela espécie. As bases e os tipos dela já são os da mega.',
       'Os golpes vêm em colunas separadas por `|`, nesta ordem: `nome|nível em que aprende|power|cooldown em segundos|categoria|tipo`. `F` é físico e `E` é especial; `power 0` é golpe de status.',
     ],
@@ -144,8 +144,8 @@ const ROTULOS = {
     semHunt: 'appears in no hunt (boss, evolution or trade only)',
     boss: 'BOSS',
     bossEvento: 'event BOSS — not available yet',
-    ondeBoss: 'boss arena (team level {nv}) — cannot be caught, appears in no hunt',
-    ondeBossEvento: 'event boss with no arena yet — appears in no hunt, cannot be caught and drops no loot',
+    ondeBoss: 'boss arena (team level {nv}) — appears in no hunt; the only way to catch it is the Mystic Arena, with the MysticTicket',
+    ondeBossEvento: 'event boss with no arena yet — appears in no hunt and drops no loot; the only way to catch it is the Mystic Arena, with the MysticTicket',
     mega: 'MEGA',
     ondeMega: 'Mega form — cannot be caught and appears in no hunt; it comes from a base-species pokémon '
       + 'spending its Mega Stone (10 Mega Stone Fragments, which drop from bosses, at Professor Oak)',
@@ -155,7 +155,7 @@ const ROTULOS = {
       '`Lv on catch` is the level it comes out of the ball at: the catch cap trims to 20/40/100 by evolution stage, so it is already applied (do not redo the maths).',
       '`NPC price` is what the NPC pays for it. `0` means "not for sale" — and that is exactly what makes it harder to catch, because the rarity term comes from the price.',
       '`You (knockouts/catches)` is the progress of the account that exported this file.',
-      'A row marked `BOSS` is an arena boss: it cannot be caught. `Hunt lv`, `Lv on catch`, `NPC price`, `Shiny?` and the ball columns come as `—` because none of them exist for it — the arena level is under "Where to find". `event BOSS` is a boss whose arena has not been built yet.',
+      'A row marked `BOSS` is an arena boss: it never enters a hunt, so `Hunt lv`, `Lv on catch`, `NPC price`, `Shiny?` and the ball columns come as `—` — none of them exist for it, and the arena level is under "Where to find". `event BOSS` is a boss whose arena has not been built yet. There is exactly ONE way to catch a boss: the MysticTicket (an extremely rare drop from a boss win, or bought on the Community Market) opens the Mystic Arena with one random level-100 Legendary or Mythical and gives you ONE ball — 0.1% on the Poké Ball, 0.5% on the Beast Ball, doubled with Capture Boost, the same for every legendary.',
       'A row marked `MEGA` is a Mega Evolution (`#3000+`): it is not caught either — it is CRAFTED from a pokémon of the base species with that species\' Mega Stone. Its base stats and types are the mega ones, already swapped in.',
       'Moves come as `|`-separated columns, in this order: `name|level learned|power|cooldown in seconds|category|type`. `F` is physical and `E` is special; `power 0` is a status move.',
     ],
@@ -192,8 +192,8 @@ const ROTULOS = {
     semHunt: 'no aparece en ninguna hunt (boss, evolución o solo por intercambio)',
     boss: 'BOSS',
     bossEvento: 'BOSS de evento — todavía no disponible',
-    ondeBoss: 'arena de boss (nivel de equipo {nv}) — no se captura, no aparece en ninguna hunt',
-    ondeBossEvento: 'boss de evento aún sin arena — no aparece en hunt, no se captura y no suelta loot',
+    ondeBoss: 'arena de boss (nivel de equipo {nv}) — no aparece en ninguna hunt; solo se captura en la Arena Mística, con el MysticTicket',
+    ondeBossEvento: 'boss de evento aún sin arena — no aparece en hunt y no suelta loot; solo se captura en la Arena Mística, con el MysticTicket',
     mega: 'MEGA',
     ondeMega: 'forma Mega — no se captura ni aparece en hunt; sale de un pokémon de la especie base '
       + 'gastando su Mega Stone (10 Fragmentos de Mega Stone, que caen en boss, con el Profesor Oak)',
@@ -203,7 +203,7 @@ const ROTULOS = {
       '`Nv al capturar` es el nivel con el que sale de la pokébola: el tope de captura corta en 20/40/100 según la etapa evolutiva, así que ya viene aplicado (no rehagas la cuenta).',
       '`Precio NPC` es lo que el NPC paga por ella. `0` significa "no está a la venta" — y es justo eso lo que la hace más difícil de capturar, porque la rareza de la fórmula sale del precio.',
       '`Tú (derrotas/capturas)` es el progreso de la cuenta que exportó este archivo.',
-      'Una fila marcada con `BOSS` es un boss de arena: no se captura. `Nv hunt`, `Nv al capturar`, `Precio NPC`, `¿Shiny?` y las columnas de bola vienen como `—` porque ninguna existe para él — el nivel de la arena está en "Dónde encontrar". `BOSS de evento` es un boss cuya arena todavía no se hizo.',
+      'Una fila marcada con `BOSS` es un boss de arena: nunca entra en una hunt, y por eso `Nv hunt`, `Nv al capturar`, `Precio NPC`, `¿Shiny?` y las columnas de bola vienen como `—` — ninguna existe para él, y el nivel de la arena está en "Dónde encontrar". `BOSS de evento` es un boss cuya arena todavía no se hizo. Capturar un boss es posible por UN solo camino: el MysticTicket (drop rarísimo de la victoria de boss, o compra en el Mercado de la Comunidad) abre la Arena Mística con un Legendario o Mítico sorteado de nivel 100 y da UNA bola — 0,1% en la Poké Ball, 0,5% en la Beast Ball, el doble con Capture Boost, igual para todo legendario.',
       'La fila marcada con `MEGA` es una Mega Evolución (`#3000+`): tampoco se captura — se FABRICA a partir de un pokémon de la especie base con la Mega Stone de esa especie. Sus bases y tipos ya son los de la mega.',
       'Los movimientos vienen en columnas separadas por `|`, en este orden: `nombre|nivel en que se aprende|power|cooldown en segundos|categoría|tipo`. `F` es físico y `E` es especial; `power 0` es movimiento de estado.',
     ],
@@ -334,10 +334,11 @@ export function pokedexEmTexto({
     const total = ['baseHp', 'baseAtk', 'baseDef', 'baseSpAtk', 'baseSpDef', 'baseSpeed']
       .reduce((s, k) => s + (Number(esp[k]) || 0), 0);
     const boss = bossDe(esp);
-    // Boss não se captura — nem o que já tem arena, nem o de evento. Todas as células que só
-    // fazem sentido para quem entra numa pokébola saem como `—`: o modelo que recebe este
+    // Boss não entra em hunt — nem o que já tem arena, nem o de evento. Todas as células que
+    // só fazem sentido para quem é caçado numa área saem como `—`: o modelo que recebe este
     // arquivo é exatamente quem, vendo "Beast Ball 2,55%" na linha do Kyogre, montaria um
-    // plano de farm para uma jogada que o jogo não tem.
+    // plano de farm para uma jogada que o jogo não tem. (Capturar, dá: pelo MysticTicket, com
+    // uma tabela própria — a legenda abaixo conta isso, que é onde a informação cabe.)
     const bossEvento = !boss && !!bossEventoDe(esp);
     const ehBoss = !!boss || bossEvento;
     // A MEGA não se captura também — ela se FABRICA. Sem esta marca, o arquivo entregava ao

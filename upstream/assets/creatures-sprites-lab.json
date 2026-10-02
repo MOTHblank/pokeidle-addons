@@ -3568,6 +3568,11 @@
       "name": "Togedemaru"
     },
     {
+      "pokeId": 778,
+      "looktype": 60778,
+      "name": "Mimikyu"
+    },
+    {
       "pokeId": 779,
       "looktype": 60779,
       "name": "Bruxish"
