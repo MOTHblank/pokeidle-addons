@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.4.0
+// @version      1.4.1
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -2819,6 +2819,299 @@
         return value;
     }
 
+    function normalizedTypes(
+        values
+    ) {
+        return [
+            ...new Set(
+                (
+                    Array.isArray(values)
+                        ? values
+                        : []
+                )
+                    .map(
+                        type =>
+                            String(
+                                type || ''
+                            ).toUpperCase()
+                    )
+                    .filter(
+                        type =>
+                            STANDARD_TYPES.includes(
+                                type
+                            )
+                    )
+            )
+        ];
+    }
+
+    function leadDefenderTypes() {
+        const lead =
+            leadPokemon();
+
+        if (!lead) {
+            return [];
+        }
+
+        const direct =
+            normalizedTypes(
+                lead.tipos
+            );
+
+        if (direct.length) {
+            return direct;
+        }
+
+        return normalizedTypes(
+            state.typesBySpecies.get(
+                Number(
+                    lead.speciesId
+                )
+            )
+        );
+    }
+
+    function leadAttackTypesForMatchup() {
+        const observed =
+            normalizedTypes(
+                attackerTypes()
+            );
+
+        if (observed.length) {
+            return observed;
+        }
+
+        return leadDefenderTypes();
+    }
+
+    function bestEffectivenessAgainst(
+        attackTypes,
+        defenderTypes
+    ) {
+        const attacks =
+            normalizedTypes(
+                attackTypes
+            );
+
+        const defenders =
+            normalizedTypes(
+                defenderTypes
+            );
+
+        if (
+            !attacks.length ||
+            !defenders.length
+        ) {
+            return null;
+        }
+
+        let best = null;
+
+        for (const attackType of attacks) {
+            const multiplier =
+                exactEffectiveness(
+                    attackType,
+                    defenders
+                );
+
+            if (
+                !best ||
+                multiplier >
+                    best.multiplier
+            ) {
+                best = {
+                    attackType,
+                    multiplier
+                };
+            }
+        }
+
+        return best;
+    }
+
+    function matchupRelation(
+        multiplier
+    ) {
+        if (
+            multiplier === null ||
+            multiplier === undefined ||
+            !Number.isFinite(
+                Number(
+                    multiplier
+                )
+            )
+        ) {
+            return {
+                key: 'unknown',
+                label: '?'
+            };
+        }
+
+        const value =
+            Number(
+                multiplier
+            );
+
+        if (value === 0) {
+            return {
+                key: 'immune',
+                label: 'immune'
+            };
+        }
+
+        if (value > 1) {
+            return {
+                key: 'weak',
+                label: 'weak'
+            };
+        }
+
+        if (value < 1) {
+            return {
+                key: 'resist',
+                label: 'resists'
+            };
+        }
+
+        return {
+            key: 'neutral',
+            label: 'neutral'
+        };
+    }
+
+    function formatMultiplier(
+        value
+    ) {
+        const number =
+            Number(
+                value
+            );
+
+        if (!Number.isFinite(number)) {
+            return '×?';
+        }
+
+        return (
+            '×' +
+            (
+                Number.isInteger(number)
+                    ? String(number)
+                    : String(
+                        Math.round(
+                            number * 100
+                        ) / 100
+                    )
+            )
+        );
+    }
+
+    function speciesMatchup(
+        species
+    ) {
+        const lead =
+            leadPokemon();
+
+        if (!lead) {
+            return null;
+        }
+
+        const targetTypes =
+            normalizedTypes(
+                species?.types
+            );
+
+        const leadDefense =
+            leadDefenderTypes();
+
+        if (
+            !targetTypes.length ||
+            !leadDefense.length
+        ) {
+            return null;
+        }
+
+        const leadAttackTypes =
+            leadAttackTypesForMatchup();
+
+        const offense =
+            bestEffectivenessAgainst(
+                leadAttackTypes,
+                targetTypes
+            );
+
+        /*
+         * PokéIdle's own Hunt Analyser treats a wild Pokémon's own types as
+         * its STAB attack types for matchup analysis. Mirror that rule here.
+         */
+        const defense =
+            bestEffectivenessAgainst(
+                targetTypes,
+                leadDefense
+            );
+
+        return {
+            lead,
+            targetTypes,
+            leadDefense,
+            offense,
+            defense
+        };
+    }
+
+    function matchupBadgeMarkup(
+        direction,
+        result,
+        leadName,
+        speciesName
+    ) {
+        if (!result) {
+            return '';
+        }
+
+        const relation =
+            matchupRelation(
+                result.multiplier
+            );
+
+        const multiplier =
+            formatMultiplier(
+                result.multiplier
+            );
+
+        const isDeal =
+            direction === 'deal';
+
+        const label =
+            isDeal
+                ? `Deal ${multiplier} · ${relation.label}`
+                : `Take ${multiplier} · ${relation.label}`;
+
+        const title =
+            isDeal
+                ? `${leadName}'s best known attack type (${result.attackType}) vs ${speciesName}: ${multiplier}.`
+                : `${speciesName}'s best STAB type (${result.attackType}) vs ${leadName}: ${multiplier}.`;
+
+        const favorability =
+            isDeal
+                ? result.multiplier > 1
+                    ? 'good'
+                    : result.multiplier < 1
+                        ? 'bad'
+                        : 'neutral'
+                : result.multiplier > 1
+                    ? 'bad'
+                    : result.multiplier < 1
+                        ? 'good'
+                        : 'neutral';
+
+        return `
+            <span
+                class="mha-matchup ${favorability} ${relation.key}"
+                title="${escapeHtml(title)}"
+            >${escapeHtml(label)}</span>
+        `;
+    }
+
     function huntEffectiveness(
         attackType,
         defenderTypes
@@ -5047,8 +5340,9 @@
             .mha-species-head {
                 display: flex;
                 align-items: center;
-                gap: 7px;
+                gap: 6px;
                 margin-bottom: 6px;
+                flex-wrap: wrap;
             }
 
             .mha-species-name {
@@ -5077,6 +5371,38 @@
                 color: #ffd27d;
                 font-size: 9px;
                 white-space: nowrap;
+            }
+
+            .mha-matchups {
+                display: inline-flex;
+                gap: 3px;
+                flex-wrap: wrap;
+            }
+
+            .mha-matchup {
+                padding: 2px 5px;
+                border: 1px solid rgba(255,255,255,.08);
+                border-radius: 999px;
+                background: rgba(255,255,255,.05);
+                color: #b8adb2;
+                font-size: 8px;
+                white-space: nowrap;
+            }
+
+            .mha-matchup.good {
+                border-color: rgba(91,190,119,.22);
+                background: rgba(91,190,119,.10);
+                color: #9be3ae;
+            }
+
+            .mha-matchup.bad {
+                border-color: rgba(225,102,102,.22);
+                background: rgba(225,102,102,.09);
+                color: #f0a0a0;
+            }
+
+            .mha-matchup.immune {
+                font-weight: 750;
             }
 
             .mha-types {
@@ -5738,6 +6064,35 @@
                 ? `<span class="mha-types">${species.types.map(type => `<span class="mha-type">${escapeHtml(type)}</span>`).join('')}</span>`
                 : '<span class="mha-types"><span class="mha-type">type ?</span></span>';
 
+        const matchup =
+            speciesMatchup(
+                species
+            );
+
+        const leadName =
+            matchup?.lead?.nome ||
+            'Lead';
+
+        const matchupMarkup =
+            matchup
+                ? `
+                    <span class="mha-matchups">
+                        ${matchupBadgeMarkup(
+                            'deal',
+                            matchup.offense,
+                            leadName,
+                            species.name
+                        )}
+                        ${matchupBadgeMarkup(
+                            'take',
+                            matchup.defense,
+                            leadName,
+                            species.name
+                        )}
+                    </span>
+                `
+                : '';
+
         const huntsMarkup =
             species.hunts
                 .map(
@@ -5837,6 +6192,7 @@
             <section class="mha-species">
                 <div class="mha-species-head">
                     <span class="mha-species-name">${escapeHtml(species.name)}</span>
+                    ${matchupMarkup}
                     ${typeMarkup}
                     ${capturedMarkup}
                 </div>
@@ -6291,7 +6647,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.4 loaded'
+            '[PokéIdle Hunt Atlas] v1.4.1 loaded'
         );
     }
 
