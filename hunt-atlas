@@ -6,10 +6,9 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.7.2
+// @version      1.7.4
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
-// @match        https://pokeidle.io/*
-// @match        https://www.pokeidle.io/*
+// @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @connect      pokeapi.co
@@ -53,6 +52,16 @@
 
     const MARKET_LISTING_MAX_PAGES =
         50;
+
+    /*
+     * Aerodactyl's upstream creature catalog exposes priceNpc=6,500,000,000,
+     * but the species is not sellable to the NPC. Treat that catalog value as
+     * non-payable metadata instead of feeding it into the normal sell formula.
+     */
+    const NPC_UNSELLABLE_SPECIES_IDS =
+        new Set([
+            142
+        ]);
 
     const BUTTON_ID =
         'moth-hunt-atlas-button';
@@ -307,6 +316,7 @@
             'price.playersMissing': 'RMT —',
             'price.npcTip': 'MKT: NPC sale reference at the visible hunt level{plural} and quality 1.0{range} · actual captured Pokémon vary with quality; shiny ×10',
             'price.npcMissingTip': 'MKT: NPC sell value is not available for this species yet.',
+            'price.npcUnsellableTip': 'MKT: this species cannot be sold to the NPC.',
             'price.playerTip': 'RMT: recent non-shiny completed player Market sales · {count} {sample} · range {min}–{max}',
             'price.playerListingTip': 'RMT: lowest current gold listing in the player Market. Completed-sale averages are preferred when available.',
             'price.playerMissingTip': 'RMT: no recent completed sale or current gold listing was found.',
@@ -459,6 +469,7 @@
             'price.playersMissing': 'RMT —',
             'price.npcTip': 'MKT: referência de venda ao NPC no{plural} nível{plural} de hunt visível{plural} e qualidade 1,0{range} · o valor real varia com a qualidade; shiny ×10',
             'price.npcMissingTip': 'MKT: o valor de venda ao NPC ainda não está disponível para esta espécie.',
+            'price.npcUnsellableTip': 'MKT: esta espécie não pode ser vendida ao NPC.',
             'price.playerTip': 'RMT: vendas recentes concluídas de Pokémon não shiny no Mercado de jogadores · {count} {sample} · faixa {min}–{max}',
             'price.playerListingTip': 'RMT: menor anúncio atual em ouro no Mercado de jogadores. A média de vendas concluídas tem prioridade quando disponível.',
             'price.playerMissingTip': 'RMT: nenhuma venda concluída recente nem anúncio atual em ouro foi encontrado.',
@@ -5925,9 +5936,33 @@
         );
     }
 
+    function npcSellIsBlockedForSpecies(
+        species
+    ) {
+        const id =
+            Number(
+                species?.id
+            );
+
+        return (
+            Number.isFinite(id) &&
+            NPC_UNSELLABLE_SPECIES_IDS.has(
+                id
+            )
+        );
+    }
+
     function npcBaseSellValueForSpecies(
         species
     ) {
+        if (
+            npcSellIsBlockedForSpecies(
+                species
+            )
+        ) {
+            return 0;
+        }
+
         return Number(
             speciesCombatMeta(
                 species?.id
@@ -8244,6 +8279,11 @@
                 'common.lead'
             );
 
+        const npcSellBlocked =
+            npcSellIsBlockedForSpecies(
+                species
+            );
+
         const npcStats =
             npcSellStatsForSpecies(
                 species
@@ -8290,7 +8330,9 @@
                                 }
                             )
                             : tr(
-                                'price.npcMissingTip'
+                                npcSellBlocked
+                                    ? 'price.npcUnsellableTip'
+                                    : 'price.npcMissingTip'
                             )
                     )}"
                 >${escapeHtml(
