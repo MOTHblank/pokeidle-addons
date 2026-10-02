@@ -2,6 +2,10 @@
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
 // @author       MOTHblank
+// @homepageURL  https://github.com/MOTHblank/pokeidle-huntatlas
+// @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @version      1.5.0
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
@@ -2109,6 +2113,13 @@
             );
 
             saveCache();
+
+            if (
+                state.drawerOpen
+            ) {
+                ensureMarketValues();
+            }
+
             queueRender();
 
             return;
@@ -5501,28 +5512,40 @@
                     sort ===
                         'level_desc'
                 ) {
-                    const aLevel =
-                        Math.min(
-                            ...a.hunts.map(
-                                item =>
-                                    Number(
-                                        item.hunt
-                                            .nivel ||
-                                        Infinity
+                    const levelValue =
+                        species =>
+                            sort ===
+                                'level_desc'
+                                ? Math.max(
+                                    ...species.hunts.map(
+                                        item =>
+                                            Number(
+                                                item.hunt
+                                                    .nivel ||
+                                                0
+                                            )
+                                    ),
+                                    0
+                                )
+                                : Math.min(
+                                    ...species.hunts.map(
+                                        item =>
+                                            Number(
+                                                item.hunt
+                                                    .nivel ||
+                                                Infinity
+                                            )
                                     )
-                            )
+                                );
+
+                    const aLevel =
+                        levelValue(
+                            a
                         );
 
                     const bLevel =
-                        Math.min(
-                            ...b.hunts.map(
-                                item =>
-                                    Number(
-                                        item.hunt
-                                            .nivel ||
-                                        Infinity
-                                    )
-                            )
+                        levelValue(
+                            b
                         );
 
                     if (aLevel !== bLevel) {
