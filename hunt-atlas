@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
-// @version      1.3.1
+// @version      1.4.0
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -263,6 +263,8 @@
         lockOverrides: new Map(),
 
         drawerOpen: false,
+        resultLimit: 120,
+        xpDetailsOpen: false,
         websocketHookInstalled: false,
         sockets: 0,
         activeSocket: null,
@@ -293,8 +295,8 @@
             .replaceAll("'", '&#039;');
     }
 
-    function loadFilters() {
-        const defaults = {
+    function defaultFilters() {
+        return {
             search: '',
             region: 'all',
             minLevel: '',
@@ -305,6 +307,11 @@
             captured: 'all',
             sort: 'xp'
         };
+    }
+
+    function loadFilters() {
+        const defaults =
+            defaultFilters();
 
         try {
             return {
@@ -318,6 +325,26 @@
         } catch {
             return defaults;
         }
+    }
+
+    function activeFilterCount() {
+        const defaults =
+            defaultFilters();
+
+        return Object.keys(
+            defaults
+        ).filter(
+            key =>
+                key !== 'sort' &&
+                String(
+                    state.filters[key] ??
+                    ''
+                ) !==
+                String(
+                    defaults[key] ??
+                    ''
+                )
+        ).length;
     }
 
     function saveFilters() {
@@ -4034,8 +4061,28 @@
         });
     }
 
-    function rankedUnlockedHunts() {
-        return state.hunts
+    function rankedUnlockedHunts(
+        speciesResults = null
+    ) {
+        const sourceHunts =
+            speciesResults
+                ? [
+                    ...new Map(
+                        speciesResults
+                            .flatMap(
+                                species =>
+                                    species.hunts.map(
+                                        item => [
+                                            item.hunt.slug,
+                                            item.hunt
+                                        ]
+                                    )
+                            )
+                    ).values()
+                ]
+                : state.hunts;
+
+        return sourceHunts
             .filter(
                 isUnlocked
             )
@@ -4241,6 +4288,83 @@
         );
     }
 
+    function huntMatchesScope(
+        hunt
+    ) {
+        const regionFilter =
+            state.filters.region;
+
+        if (
+            regionFilter !== 'all' &&
+            String(
+                hunt?.area || ''
+            ) !== regionFilter
+        ) {
+            return false;
+        }
+
+        const huntLevel =
+            Number(
+                hunt?.nivel ||
+                0
+            );
+
+        const minLevelFilter =
+            Number.parseInt(
+                state.filters.minLevel,
+                10
+            );
+
+        if (
+            Number.isFinite(
+                minLevelFilter
+            ) &&
+            huntLevel <
+                minLevelFilter
+        ) {
+            return false;
+        }
+
+        const maxLevelFilter =
+            Number.parseInt(
+                state.filters.maxLevel,
+                10
+            );
+
+        if (
+            Number.isFinite(
+                maxLevelFilter
+            ) &&
+            huntLevel >
+                maxLevelFilter
+        ) {
+            return false;
+        }
+
+        const unlocked =
+            isUnlocked(
+                hunt
+            );
+
+        if (
+            state.filters.availability ===
+                'unlocked' &&
+            !unlocked
+        ) {
+            return false;
+        }
+
+        if (
+            state.filters.availability ===
+                'locked' &&
+            unlocked
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
     function filteredSpecies() {
         const search =
             normalize(
@@ -4252,24 +4376,6 @@
 
         const weaknessFilter =
             state.filters.weakness;
-
-        const regionFilter =
-            state.filters.region;
-
-        const minLevelFilter =
-            Number.parseInt(
-                state.filters.minLevel,
-                10
-            );
-
-        const maxLevelFilter =
-            Number.parseInt(
-                state.filters.maxLevel,
-                10
-            );
-
-        const availabilityFilter =
-            state.filters.availability;
 
         const captureFilter =
             state.filters.captured;
@@ -4341,59 +4447,9 @@
                                 item.hunt;
 
                             if (
-                                regionFilter !==
-                                    'all' &&
-                                String(
-                                    hunt.area
-                                ) !==
-                                    regionFilter
-                            ) {
-                                return false;
-                            }
-
-                            const huntLevel =
-                                Number(
-                                    hunt.nivel ||
-                                    0
-                                );
-
-                            if (
-                                Number.isFinite(
-                                    minLevelFilter
-                                ) &&
-                                huntLevel <
-                                    minLevelFilter
-                            ) {
-                                return false;
-                            }
-
-                            if (
-                                Number.isFinite(
-                                    maxLevelFilter
-                                ) &&
-                                huntLevel >
-                                    maxLevelFilter
-                            ) {
-                                return false;
-                            }
-
-                            const unlocked =
-                                isUnlocked(
+                                !huntMatchesScope(
                                     hunt
-                                );
-
-                            if (
-                                availabilityFilter ===
-                                    'unlocked' &&
-                                !unlocked
-                            ) {
-                                return false;
-                            }
-
-                            if (
-                                availabilityFilter ===
-                                    'locked' &&
-                                unlocked
+                                )
                             ) {
                                 return false;
                             }
@@ -4790,16 +4846,31 @@
             .mha-filters {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
-                gap: 5px;
-                padding: 7px;
+                gap: 7px;
+                padding: 8px;
                 border-bottom: 1px solid rgba(255,255,255,.07);
             }
 
+            .mha-field {
+                display: grid;
+                gap: 3px;
+                min-width: 0;
+                color: #8f858a;
+                font-size: 8px;
+                font-weight: 700;
+                letter-spacing: .02em;
+            }
+
+            .mha-field > span {
+                padding-left: 1px;
+            }
+
             .mha-filters input,
-            .mha-filters select {
+            .mha-filters select,
+            .mha-filter-actions button {
                 width: 100%;
                 min-width: 0;
-                height: 29px;
+                height: 30px;
                 padding: 4px 6px;
                 border: 1px solid rgba(255,255,255,.12);
                 border-radius: 5px;
@@ -4812,32 +4883,91 @@
                 grid-column: 1 / -1;
             }
 
+            .mha-level-inputs {
+                display: grid;
+                grid-template-columns: 1fr auto 1fr;
+                align-items: center;
+                gap: 4px;
+            }
+
+            .mha-level-inputs > span {
+                color: #71686c;
+                font-size: 10px;
+            }
+
+            .mha-filter-actions {
+                grid-column: span 2;
+                display: grid;
+                grid-template-columns: minmax(0,1fr) auto;
+                align-items: end;
+                gap: 6px;
+            }
+
+            .mha-filter-state {
+                align-self: center;
+                min-width: 0;
+                overflow: hidden;
+                color: #93898e;
+                font-size: 9px;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mha-filter-actions button {
+                width: auto;
+                padding-inline: 9px;
+                cursor: pointer;
+            }
+
             .mha-xp-summary {
                 padding: 7px 8px;
                 border-bottom: 1px solid rgba(255,255,255,.07);
                 background: rgba(102,176,255,.055);
             }
 
-            .mha-xp-top {
-                display: flex;
+            .mha-xp-primary {
+                display: grid;
+                grid-template-columns: minmax(0,1fr) auto auto;
+                gap: 6px;
                 align-items: center;
-                gap: 7px;
-                margin-bottom: 5px;
             }
 
-            .mha-xp-top strong {
-                flex: 1;
+            .mha-xp-primary-main {
+                min-width: 0;
+            }
+
+            .mha-xp-primary-main strong {
+                display: block;
+                overflow: hidden;
+                color: #e8e1e4;
                 font-size: 10px;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
-            .mha-xp-top span {
-                color: #a9d2ff;
-                font-weight: 750;
-            }
-
+            .mha-xp-primary-main span,
             .mha-xp-note {
                 color: #9e9398;
                 font-size: 8px;
+            }
+
+            .mha-xp-toggle {
+                border: 0;
+                background: transparent;
+                color: #a9d2ff;
+                cursor: pointer;
+                font: inherit;
+                font-size: 9px;
+            }
+
+            .mha-xp-details {
+                margin-top: 6px;
+                padding-top: 6px;
+                border-top: 1px solid rgba(255,255,255,.07);
+            }
+
+            .mha-xp-details[hidden] {
+                display: none;
             }
 
             .mha-best-list {
@@ -4974,6 +5104,15 @@
                 background: rgba(0,0,0,.18);
             }
 
+            .mha-hunt.current {
+                outline: 1px solid rgba(100,210,130,.24);
+                background: rgba(88,190,112,.08);
+            }
+
+            .mha-hunt.locked {
+                opacity: .72;
+            }
+
             .mha-hunt-main {
                 min-width: 0;
             }
@@ -5017,9 +5156,39 @@
                 text-align: center;
             }
 
+            .mha-show-more {
+                width: 100%;
+                margin-top: 2px;
+                padding: 8px;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 6px;
+                background: rgba(255,255,255,.05);
+                color: #d9d0d4;
+                cursor: pointer;
+                font: inherit;
+            }
+
+            .mha-show-more:hover {
+                background: rgba(255,255,255,.09);
+            }
+
             @media (max-width: 620px) {
                 .mha-filters {
                     grid-template-columns: 1fr 1fr;
+                }
+
+                .mha-filter-actions {
+                    grid-column: 1 / -1;
+                }
+
+                .mha-xp-primary {
+                    grid-template-columns: minmax(0,1fr) auto;
+                }
+
+                .mha-xp-toggle {
+                    grid-column: 1 / -1;
+                    justify-self: start;
+                    padding: 0;
                 }
             }
         `;
@@ -5084,6 +5253,18 @@
                 ensureTypeData();
                 ensureCombatCatalog();
                 queueRender();
+
+                if (
+                    state.drawerOpen
+                ) {
+                    queueMicrotask(
+                        () =>
+                            q(
+                                '[data-mha-filter="search"]',
+                                ensureDrawer()
+                            )?.focus()
+                    );
+                }
             }
         );
 
@@ -5135,34 +5316,65 @@
             </div>
 
             <div class="mha-filters">
-                <input class="mha-search" data-mha-filter="search" type="search" placeholder="Search Pokémon, hunt or region…">
+                <label class="mha-field mha-search">
+                    <span>Search</span>
+                    <input data-mha-filter="search" type="search" placeholder="Pokémon, hunt or region…">
+                </label>
 
-                <select data-mha-filter="region"></select>
+                <label class="mha-field">
+                    <span>Region</span>
+                    <select data-mha-filter="region"></select>
+                </label>
 
-                <input data-mha-filter="minLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Min level">
+                <div class="mha-field">
+                    <span>Level</span>
+                    <div class="mha-level-inputs">
+                        <input data-mha-filter="minLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Min" aria-label="Minimum hunt level">
+                        <span>–</span>
+                        <input data-mha-filter="maxLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Max" aria-label="Maximum hunt level">
+                    </div>
+                </div>
 
-                <input data-mha-filter="maxLevel" type="number" min="1" step="1" inputmode="numeric" placeholder="Max level">
+                <label class="mha-field">
+                    <span>Availability</span>
+                    <select data-mha-filter="availability">
+                        <option value="all">All</option>
+                        <option value="unlocked">Unlocked</option>
+                        <option value="locked">Locked</option>
+                    </select>
+                </label>
 
-                <select data-mha-filter="type"></select>
+                <label class="mha-field">
+                    <span>Type</span>
+                    <select data-mha-filter="type"></select>
+                </label>
 
-                <select data-mha-filter="weakness"></select>
+                <label class="mha-field">
+                    <span>Weak to</span>
+                    <select data-mha-filter="weakness"></select>
+                </label>
 
-                <select data-mha-filter="availability">
-                    <option value="all">All regions</option>
-                    <option value="unlocked">Unlocked only</option>
-                    <option value="locked">Locked only</option>
-                </select>
+                <label class="mha-field">
+                    <span>Collection</span>
+                    <select data-mha-filter="captured">
+                        <option value="all">Caught + uncaught</option>
+                        <option value="uncaught">Uncaught only</option>
+                        <option value="captured">Caught only</option>
+                    </select>
+                </label>
 
-                <select data-mha-filter="captured">
-                    <option value="all">Caught + uncaught</option>
-                    <option value="uncaught">Uncaught only</option>
-                    <option value="captured">Caught only</option>
-                </select>
+                <label class="mha-field">
+                    <span>Sort</span>
+                    <select data-mha-filter="sort">
+                        <option value="xp">Best XP/hour</option>
+                        <option value="default">Pokédex order</option>
+                    </select>
+                </label>
 
-                <select data-mha-filter="sort">
-                    <option value="xp">Best XP/hour</option>
-                    <option value="default">Pokédex order</option>
-                </select>
+                <div class="mha-filter-actions">
+                    <span class="mha-filter-state"></span>
+                    <button type="button" data-mha-clear>Clear filters</button>
+                </div>
             </div>
 
             <div class="mha-xp-summary"></div>
@@ -5189,6 +5401,66 @@
                     false;
 
                 queueRender();
+            }
+        );
+
+        q(
+            '[data-mha-clear]',
+            drawer
+        ).addEventListener(
+            'click',
+            () => {
+                state.filters =
+                    defaultFilters();
+                state.resultLimit =
+                    120;
+                saveFilters();
+                renderDrawer();
+
+                q(
+                    '[data-mha-filter="search"]',
+                    drawer
+                )?.focus();
+            }
+        );
+
+        document.addEventListener(
+            'keydown',
+            event => {
+                if (
+                    !state.drawerOpen
+                ) {
+                    return;
+                }
+
+                if (
+                    event.key ===
+                    'Escape'
+                ) {
+                    state.drawerOpen =
+                        false;
+                    queueRender();
+                    return;
+                }
+
+                if (
+                    event.key === '/' &&
+                    ![
+                        'INPUT',
+                        'SELECT',
+                        'TEXTAREA'
+                    ].includes(
+                        document.activeElement
+                            ?.tagName
+                    )
+                ) {
+                    event.preventDefault();
+
+                    q(
+                        '[data-mha-filter="search"]',
+                        drawer
+                    )?.focus();
+                }
             }
         );
 
@@ -5219,6 +5491,9 @@
                         key
                     ] =
                         control.value;
+
+                    state.resultLimit =
+                        120;
 
                     saveFilters();
                     renderDrawer();
@@ -5387,6 +5662,33 @@
                     state.filters[key];
             }
         }
+
+        const activeCount =
+            activeFilterCount();
+
+        const filterState =
+            q(
+                '.mha-filter-state',
+                drawer
+            );
+
+        if (filterState) {
+            filterState.textContent =
+                activeCount
+                    ? `${activeCount} filter${activeCount === 1 ? '' : 's'} changed from default`
+                    : 'Default filters';
+        }
+
+        const clearButton =
+            q(
+                '[data-mha-clear]',
+                drawer
+            );
+
+        if (clearButton) {
+            clearButton.disabled =
+                activeCount === 0;
+        }
     }
 
     function huntSpawnPercent(
@@ -5502,7 +5804,7 @@
                                     : 'Locked';
 
                         return `
-                            <div class="mha-hunt">
+                            <div class="mha-hunt ${current ? 'current' : ''} ${!unlocked ? 'locked' : ''}">
                                 <div class="mha-hunt-main">
                                     <div class="mha-hunt-title">${escapeHtml(hunt.nome || hunt.slug)}</div>
                                     <div class="mha-hunt-sub">${escapeHtml(sub)}</div>
@@ -5537,7 +5839,8 @@
     }
 
     function renderXpSummary(
-        drawer
+        drawer,
+        results
     ) {
         const host =
             q(
@@ -5560,7 +5863,9 @@
         }
 
         const ranked =
-            rankedUnlockedHunts();
+            rankedUnlockedHunts(
+                results
+            );
 
         const usable =
             ranked.filter(
@@ -5656,22 +5961,66 @@
                 )
                 .join('');
 
+        const bestHere =
+            best?.hunt?.slug ===
+            state.currentHuntSlug;
+
         host.innerHTML = `
-            <div class="mha-xp-top">
-                <strong>${escapeHtml(leadText)}</strong>
-                <span>${best ? 'Best trainer XP: ' + escapeHtml(formatRate(best.xp.value)) + '/h' : 'Trainer XP/h learning…'}</span>
+            <div class="mha-xp-primary">
+                <div class="mha-xp-primary-main">
+                    <strong>${best ? escapeHtml(best.hunt.nome || best.hunt.slug) + ' · Lv ' + Number(best.hunt.nivel || 0) : 'Best XP in current filters'}</strong>
+                    <span>${best ? (best.xp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(best.xp.value)) + ' trainer XP/h' : 'No unlocked XP estimate matches the current filters.'}</span>
+                </div>
+
+                ${best ? `
+                    <button
+                        type="button"
+                        class="mha-go ${bestHere ? 'current' : ''}"
+                        data-mha-best-go="${escapeHtml(best.hunt.slug)}"
+                        ${bestHere ? 'disabled' : ''}
+                    >${bestHere ? 'Here' : 'Go'}</button>
+                ` : ''}
+
+                <button type="button" class="mha-xp-toggle" data-mha-xp-toggle>
+                    ${state.xpDetailsOpen ? 'Hide details' : 'Details'}
+                </button>
             </div>
 
             <div class="mha-xp-note">
-                ${escapeHtml(calibrationText)}
-                ${currentXp?.value ? ' · current ' + (currentXp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(currentXp.value)) + ' trainer XP/h' : ''}
-                · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon's real combat.
+                ${escapeHtml(leadText)} · recommendations respect the current Atlas filters.
             </div>
 
-            <div class="mha-best-list">
-                ${bestRows}
+            <div class="mha-xp-details" ${state.xpDetailsOpen ? '' : 'hidden'}>
+                <div class="mha-xp-note">
+                    ${escapeHtml(calibrationText)}
+                    ${currentXp?.value ? ' · current ' + (currentXp.observed ? 'measured ' : 'modeled ') + escapeHtml(formatRate(currentXp.value)) + ' trainer XP/h' : ''}
+                    · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon's real combat.
+                </div>
+
+                <div class="mha-best-list">
+                    ${bestRows}
+                </div>
             </div>
         `;
+
+        const detailsToggle =
+            q(
+                '[data-mha-xp-toggle]',
+                host
+            );
+
+        detailsToggle?.addEventListener(
+            'click',
+            () => {
+                state.xpDetailsOpen =
+                    !state.xpDetailsOpen;
+
+                renderXpSummary(
+                    drawer,
+                    results
+                );
+            }
+        );
 
         for (
             const button of
@@ -5720,12 +6069,13 @@
             drawer
         );
 
-        renderXpSummary(
-            drawer
-        );
-
         const results =
             filteredSpecies();
+
+        renderXpSummary(
+            drawer,
+            results
+        );
 
         const body =
             q(
@@ -5734,7 +6084,13 @@
             );
 
         const limit =
-            120;
+            Math.max(
+                120,
+                Number(
+                    state.resultLimit ||
+                    120
+                )
+            );
 
         const visibleResults =
             results.slice(
@@ -5742,17 +6098,30 @@
                 limit
             );
 
+        const hasMore =
+            results.length >
+            visibleResults.length;
+
         const html =
             visibleResults.length
                 ? visibleResults
                     .map(
                         speciesMarkup
                     )
-                    .join('')
+                    .join('') +
+                  (
+                      hasMore
+                          ? `
+                              <button type="button" class="mha-show-more" data-mha-show-more>
+                                  Show more · ${results.length - visibleResults.length} Pokémon remaining
+                              </button>
+                          `
+                          : ''
+                  )
                 : `
                     <div class="mha-empty">
                         ${state.hunts.length
-                            ? 'No Pokémon match these filters.'
+                            ? 'No Pokémon match these filters. Use Clear filters to reset the Atlas.'
                             : 'Waiting for PokéIdle hunt data. Reload the page once after installing Hunt Atlas if this remains empty.'}
                     </div>
                 `;
@@ -5793,6 +6162,19 @@
                     }
                 );
             }
+
+            q(
+                '[data-mha-show-more]',
+                body
+            )?.addEventListener(
+                'click',
+                () => {
+                    state.resultLimit =
+                        limit + 120;
+
+                    renderDrawer();
+                }
+            );
         }
 
         const status =
@@ -5828,11 +6210,21 @@
                 drawer
             );
 
+        const huntCount =
+            new Set(
+                results.flatMap(
+                    species =>
+                        species.hunts.map(
+                            item =>
+                                item.hunt.slug
+                        )
+                )
+            ).size;
+
         const countText =
-            results.length >
-                limit
-                ? `${limit}/${results.length} shown`
-                : `${results.length} Pokémon`;
+            hasMore
+                ? `${visibleResults.length}/${results.length} Pokémon · ${huntCount} hunts`
+                : `${results.length} Pokémon · ${huntCount} hunts`;
 
         if (
             count.textContent !==
@@ -5889,7 +6281,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.3 loaded'
+            '[PokéIdle Hunt Atlas] v1.4 loaded'
         );
     }
 
