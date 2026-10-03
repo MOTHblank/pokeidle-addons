@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.0
+// @version      0.1.1
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -195,7 +195,7 @@
 
     function send(payload) {
         const socket = state.socket;
-        if (!socket || socket.readyState !== page.WebSocket.OPEN) return false;
+        if (!socket || socket.readyState !== 1) return false;
         try {
             socket.send(JSON.stringify(payload));
             return true;
@@ -307,7 +307,7 @@
 
     function pumpItemDetails() {
         if (!state.detailQueue.length) return;
-        if (!state.socket || state.socket.readyState !== page.WebSocket.OPEN) return;
+        if (!state.socket || state.socket.readyState !== 1) return;
 
         const job = state.detailQueue.shift();
         state.detailQueued.delete(job.key);
@@ -329,7 +329,6 @@
             if (!r || !r.anuncios) continue;
 
             for (const currency of ['gold', 'orb']) {
-                if (currency === 'gold' && !config.buyCoins && !config.watchPercent) continue;
                 const ref = base && base[currency];
                 if (!ref || !(Number(ref.average) > 0)) continue;
                 const min = currency === 'orb' ? Number(r.minOrb) : Number(r.minGold);
@@ -855,9 +854,34 @@
     }
 
     function finishPendingBuy(reason) {
-        if (!state.pendingBuy) return;
+        const pending = state.pendingBuy;
+        if (!pending) return;
+
+        const confirmed =
+            reason === 'server-confirmed' ||
+            reason === 'state-confirmed';
+
         state.pendingBuy = null;
-        addLog('Market refresh · ' + reason);
+
+        if (confirmed) {
+            /*
+             * Do not hit the same partially-filled listing again just because
+             * it survives our purchase. This also makes max-per-buy a real
+             * cap instead of something the next scan silently circumvents.
+             */
+            state.attemptedListings.set(
+                pending.listingId,
+                Date.now() + 30 * 60 * 1000
+            );
+            state.candidates.delete(pending.candidateKey);
+            addLog('Purchase confirmed · listing #' + pending.listingId);
+        } else if (reason === 'refused') {
+            state.attemptedListings.set(
+                pending.listingId,
+                Date.now() + 5000
+            );
+        }
+
         requestItemSummary();
         setTimeout(startPokemonScan, 250);
         queueRender();
@@ -879,7 +903,7 @@
 
     function runScan(force) {
         if (!config.enabled) return;
-        if (!state.socket || state.socket.readyState !== page.WebSocket.OPEN) return;
+        if (!state.socket || state.socket.readyState !== 1) return;
 
         const now = Date.now();
         const interval = Math.max(1, Number(config.scanSeconds || 5)) * 1000;
@@ -946,8 +970,23 @@
         if (message.t === 'erro') {
             if (state.pendingBuy) {
                 addLog('Purchase refused: ' + String(message.chave || message.msg || 'server error'));
-                state.pendingBuy = null;
-                queueRender();
+                finishPendingBuy('refused');
+            }
+            return;
+        }
+
+        /*
+         * marketComprado is the buyer-side authoritative acknowledgement.
+         * It is stronger than guessing from a balance delta, and upstream
+         * itself uses this event to refresh the Community Market after a
+         * partial or complete purchase.
+         */
+        if (message.t === 'batalha') {
+            for (const event of message.ev || []) {
+                if (event && event.k === 'marketComprado' && state.pendingBuy) {
+                    finishPendingBuy('server-confirmed');
+                    break;
+                }
             }
             return;
         }
@@ -1307,8 +1346,14 @@
             button = document.createElement('button');
             button.id = 'moth-market-watch-tab';
             button.type = 'button';
-            button.className = 'cm-acao';
-            button.textContent = 'Moth Watch';
+            const shortcutHost = q('.cm-atalhos', top);
+            if (shortcutHost) {
+                button.className = 'cm-acao cm-atalho';
+                button.innerHTML = '<i aria-hidden="true">M</i><span>Moth Watch</span>';
+            } else {
+                button.className = 'cm-acao';
+                button.textContent = 'Moth Watch';
+            }
             button.title = 'Underpriced listings and market sniper settings';
             button.addEventListener('click', event => {
                 event.preventDefault();
@@ -1317,8 +1362,7 @@
                 else openWatch();
             });
 
-            const shortcutHost = q('.cm-atalhos', top);
-            (shortcutHost || top).appendChild(button);
+            (q('.cm-atalhos', top) || top).appendChild(button);
         }
 
         let panel = q('#moth-market-watch-panel');
@@ -1362,7 +1406,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.0 loaded');
+        console.info('[Moth Watch] v0.1.1 loaded');
     }
 
     bootstrap();
