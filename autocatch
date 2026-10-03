@@ -311,22 +311,50 @@
         }[key] ?? 99;
     }
 
+    function ballMetaForButton(button) {
+        const label = normalize(ballLabel(button));
+        if (!label) return null;
+
+        return [...ballCatalog.values()]
+            .find(meta => normalize(meta.nome || '') === label) ||
+            null;
+    }
+
     function getEligibleBalls() {
         return getBallButtons()
-            .map((button, index) => ({
-                button,
-                key: classifyBall(button),
-                index,
-                count: ballCount(button),
-                rank: rankFor(classifyBall(button))
-            }))
+            .map((button, index) => {
+                const meta = ballMetaForButton(button);
+                const key = meta?.key || classifyBall(button);
+                const catchRate = Number(meta?.catchRate);
+
+                return {
+                    button,
+                    key,
+                    index,
+                    count: ballCount(button),
+                    rank: rankFor(key),
+                    catchRate:
+                        Number.isFinite(catchRate) && catchRate > 0
+                            ? catchRate
+                            : null
+                };
+            })
             .filter(({ button, key, count }) => {
                 if (button.disabled || !visible(button) || !settings.use[key]) return false;
 
                 const reserve = Number(settings.reserve[key] || 0);
                 return count === null || count > reserve;
             })
-            .sort((a, b) => a.rank - b.rank || a.index - b.index);
+            .sort((a, b) => {
+                if (a.catchRate !== null && b.catchRate !== null) {
+                    return a.catchRate - b.catchRate || a.index - b.index;
+                }
+
+                if (a.catchRate !== null) return -1;
+                if (b.catchRate !== null) return 1;
+
+                return a.rank - b.rank || a.index - b.index;
+            });
     }
 
     function chooseBall() {
@@ -2020,10 +2048,22 @@
     function ballPickerEntries() {
         return [...ballCatalog.values()]
             .filter(meta => settings.use[meta.key] !== undefined)
-            .sort((a, b) =>
-                rankFor(a.key) - rankFor(b.key) ||
-                Number(a.id) - Number(b.id)
-            );
+            .sort((a, b) => {
+                const aRate = Number(a.catchRate);
+                const bRate = Number(b.catchRate);
+                const aKnown = Number.isFinite(aRate) && aRate > 0;
+                const bKnown = Number.isFinite(bRate) && bRate > 0;
+
+                if (aKnown && bKnown) {
+                    return aRate - bRate || Number(a.id) - Number(b.id);
+                }
+
+                if (aKnown) return -1;
+                if (bKnown) return 1;
+
+                return rankFor(a.key) - rankFor(b.key) ||
+                    Number(a.id) - Number(b.id);
+            });
     }
 
     function syncBallPicker() {
