@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.7
+// @version      0.1.8;
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -16,7 +16,7 @@
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
-    const BACKGROUND_MIN_GAP_MS = 550;
+    const BACKGROUND_MIN_GAP_MS = 3000;
     const RATE_LIMIT_BACKOFF_MS = 15000;
 
     /*
@@ -1657,7 +1657,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.7 loaded');
+        console.info('[Moth Watch] v0.1.8 loaded');
     }
 
     bootstrap();
