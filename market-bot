@@ -1225,7 +1225,7 @@
     function renderCandidate(candidate) {
         const discount = Math.max(0, 1 - candidate.ratio);
         const retainedSeconds = candidate.retainedUntil > serverNow()
-            ? Math.ceil((candidate.retainedUntil - Date.now()) / 1000)
+            ? Math.ceil((candidate.retainedUntil - serverNow()) / 1000)
             : 0;
         const canBuy = !state.pendingBuy && !retainedSeconds && purchaseQuantity(candidate) > 0;
         const auto = candidateCanAutoBuy(candidate);
