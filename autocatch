@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.2.0
+// @version      6.3.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -23,6 +23,18 @@
         smallPotion: { id: 200, name: 'Small Potion' },
         greatPotion: { id: 201, name: 'Great Potion' },
         revive: { id: 205, name: 'Revive' }
+    });
+
+    /*
+     * Reuse PokéIdle's own ball artwork. Unknown/future catalog entries fall
+     * back to the icon currently rendered by the native automation/capture UI.
+     */
+    const BALL_ASSET_BY_ID = Object.freeze({
+        1: '/assets/site/assets/ui/ball-poke.png',
+        2: '/assets/site/assets/ui/ball-great.png',
+        3: '/img/ball-super.png',
+        4: '/assets/site/assets/ui/ball-ultra.png',
+        5: '/img/ball-beast.png'
     });
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -1735,27 +1747,161 @@
 
             .moth-ac-grid input[type="number"] { width: 72px; }
 
+            .moth-ac-ball-intro {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 8px;
+                margin: 8px 0 5px;
+            }
+
+            .moth-ac-ball-intro b {
+                color: var(--sobre-mad, #f4edf0);
+                font-size: 11px;
+            }
+
+            .moth-ac-ball-intro span {
+                color: var(--sobre-mad-dim, #aaa0a4);
+                font-size: 9px;
+                text-align: right;
+            }
+
             .moth-ac-balls {
                 display: grid;
-                grid-template-columns: repeat(2,minmax(0,1fr));
-                gap: 4px 8px;
-                margin-top: 7px;
+                grid-template-columns: repeat(auto-fit,minmax(132px,1fr));
+                gap: 6px;
             }
 
             .moth-ac-ball {
+                min-width: 0;
+                overflow: hidden;
+                border-radius: 6px;
+                background: var(--vao, rgba(255,255,255,.045));
+                box-shadow: inset 0 0 0 2px var(--mad-linha, rgba(255,255,255,.12));
+                opacity: .78;
+                transition: filter .1s, opacity .1s, box-shadow .1s;
+            }
+
+            .moth-ac-ball.on {
+                opacity: 1;
+                background: linear-gradient(180deg,
+                    var(--rx-esc, #5f2748) 0 5px,
+                    var(--rx, #8b3568) 5px calc(100% - 5px),
+                    var(--rx-rosa, #b04a86) calc(100% - 5px) 100%);
+                box-shadow:
+                    inset 0 0 0 2px var(--mad-linha, rgba(255,255,255,.16)),
+                    inset 0 0 0 4px var(--mad-luz2, rgba(255,255,255,.08));
+            }
+
+            .moth-ac-ball:hover { filter: brightness(1.08); }
+
+            .moth-ac-ball.vazio .moth-ac-ball-stock {
+                color: var(--vermelho, #ff776e);
+            }
+
+            .moth-ac-ball.reserved .moth-ac-ball-stock {
+                color: var(--seta, #efc66b);
+            }
+
+            .moth-ac-ball-select {
                 display: grid;
-                grid-template-columns: auto 1fr 54px;
+                grid-template-columns: 28px minmax(0,1fr) auto;
                 align-items: center;
-                gap: 4px;
+                gap: 7px;
+                width: 100%;
+                min-height: 42px;
+                padding: 5px 7px;
+                border: 0;
+                color: inherit;
+                background: transparent;
+                text-align: left;
+                cursor: pointer;
+            }
+
+            .moth-ac-ball-select img {
+                width: 26px;
+                height: 26px;
+                object-fit: contain;
+                image-rendering: pixelated;
+            }
+
+            .moth-ac-ball-fallback {
+                display: grid;
+                place-items: center;
+                width: 26px;
+                height: 26px;
+                border-radius: 50%;
+                background: var(--mad, #6c493f);
+                box-shadow: inset 0 0 0 2px var(--mad-linha, #3f2925);
+                font-weight: 800;
+            }
+
+            .moth-ac-ball-copy {
                 min-width: 0;
             }
 
-            .moth-ac-ball span {
+            .moth-ac-ball-copy b,
+            .moth-ac-ball-copy small {
+                display: block;
                 overflow: hidden;
                 text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
-            .moth-ac-ball input[type="number"] { width: 54px; }
+            .moth-ac-ball-copy b {
+                font-size: 10.5px;
+            }
+
+            .moth-ac-ball-copy small {
+                margin-top: 1px;
+                color: var(--sobre-mad-dim, #aaa0a4);
+                font-size: 8.5px;
+            }
+
+            .moth-ac-ball.on .moth-ac-ball-copy small {
+                color: rgba(255,255,255,.72);
+            }
+
+            .moth-ac-ball-check {
+                min-width: 18px;
+                color: rgba(255,255,255,.35);
+                font-size: 15px;
+                text-align: center;
+            }
+
+            .moth-ac-ball.on .moth-ac-ball-check {
+                color: #fff;
+            }
+
+            .moth-ac-ball-reserve {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+                padding: 4px 7px 6px;
+                border-top: 1px solid rgba(255,255,255,.08);
+                color: var(--sobre-mad-dim, #aaa0a4);
+                font-size: 8.5px;
+            }
+
+            .moth-ac-ball-reserve input[type="number"] {
+                width: 50px;
+                padding: 2px 4px;
+                border-radius: 4px;
+                border: 1px solid rgba(255,255,255,.14);
+                color: white;
+                background: rgba(0,0,0,.22);
+                text-align: right;
+            }
+
+            .moth-ac-ball-empty {
+                grid-column: 1 / -1;
+                padding: 7px;
+                border-radius: 5px;
+                color: var(--sobre-mad-dim, #aaa0a4);
+                background: var(--vao, rgba(255,255,255,.045));
+                font-size: 9.5px;
+            }
 
             .moth-ac-restock {
                 margin-top: 8px;
@@ -1848,14 +1994,199 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function ballControl(key, label) {
-        return `
-            <label class="moth-ac-ball" title="Enable this ball type and keep this reserve.">
-                <input type="checkbox" data-moth-use="${key}">
-                <span>${label}</span>
-                <input type="number" min="0" step="1" data-moth-reserve="${key}" title="Reserve">
-            </label>
-        `;
+    function nativeBallImageSrc(meta) {
+        const wanted = normalize(meta?.nome || '');
+
+        for (const button of [
+            ...getBallButtons(),
+            ...qa('#auto-ball-opts button.auto-chip')
+        ]) {
+            const title = normalize(button?.title || '');
+            if (wanted && !title.includes(wanted)) continue;
+
+            const img = button?.querySelector?.('img');
+            if (img?.src) return img.src;
+        }
+
+        return null;
+    }
+
+    function ballImageSrc(meta) {
+        return BALL_ASSET_BY_ID[Number(meta?.id)] ||
+            nativeBallImageSrc(meta) ||
+            null;
+    }
+
+    function ballPickerEntries() {
+        return [...ballCatalog.values()]
+            .filter(meta => settings.use[meta.key] !== undefined)
+            .sort((a, b) =>
+                rankFor(a.key) - rankFor(b.key) ||
+                Number(a.id) - Number(b.id)
+            );
+    }
+
+    function syncBallPicker() {
+        const host = q('#moth-ac-balls');
+        if (!host) return;
+
+        const entries = ballPickerEntries();
+        const signature = entries
+            .map(meta => [
+                meta.id,
+                meta.key,
+                meta.nome,
+                meta.catchRate,
+                ballImageSrc(meta) || ''
+            ].join(':'))
+            .join('|');
+
+        if (host.dataset.signature !== signature) {
+            host.dataset.signature = signature;
+            host.replaceChildren();
+
+            if (!entries.length) {
+                const empty = document.createElement('div');
+                empty.className = 'moth-ac-ball-empty';
+                empty.textContent = 'Waiting for PokéIdle ball catalog…';
+                host.appendChild(empty);
+            }
+
+            for (const meta of entries) {
+                const card = document.createElement('div');
+                card.className = 'moth-ac-ball';
+                card.dataset.mothBallCard = meta.key;
+                card.dataset.mothBallId = String(meta.id);
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'moth-ac-ball-select';
+
+                const src = ballImageSrc(meta);
+                if (src) {
+                    const img = document.createElement('img');
+                    img.src = src;
+                    img.alt = '';
+                    button.appendChild(img);
+                } else {
+                    const fallback = document.createElement('span');
+                    fallback.className = 'moth-ac-ball-fallback';
+                    fallback.textContent = '●';
+                    button.appendChild(fallback);
+                }
+
+                const copy = document.createElement('span');
+                copy.className = 'moth-ac-ball-copy';
+
+                const name = document.createElement('b');
+                name.textContent = meta.nome || 'Ball';
+
+                const detail = document.createElement('small');
+                const stock = document.createElement('span');
+                stock.className = 'moth-ac-ball-stock';
+                stock.textContent = '—';
+                detail.append(stock);
+                detail.append(
+                    document.createTextNode(
+                        ' in bag' +
+                        (
+                            Number(meta.catchRate) > 0
+                                ? ' · ×' + Number(meta.catchRate) + ' catch'
+                                : ''
+                        )
+                    )
+                );
+
+                copy.append(name, detail);
+
+                const check = document.createElement('span');
+                check.className = 'moth-ac-ball-check';
+                check.textContent = '✓';
+
+                button.append(copy, check);
+                button.addEventListener('click', () => {
+                    settings.use[meta.key] = !settings.use[meta.key];
+                    saveSettings();
+                    updateUI();
+                });
+
+                const reserve = document.createElement('label');
+                reserve.className = 'moth-ac-ball-reserve';
+                reserve.append(document.createTextNode('Keep in reserve'));
+
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '0';
+                input.step = '1';
+                input.dataset.mothReserve = meta.key;
+                input.value = String(Number(settings.reserve[meta.key] || 0));
+                input.title = 'Auto Catch will not use this reserved amount';
+                input.addEventListener('change', () => {
+                    settings.reserve[meta.key] = Math.max(
+                        0,
+                        Number(input.value) || 0
+                    );
+                    input.value = String(settings.reserve[meta.key]);
+                    saveSettings();
+                    updateUI();
+                });
+
+                reserve.appendChild(input);
+                card.append(button, reserve);
+                host.appendChild(card);
+            }
+        }
+
+        for (const card of qa('[data-moth-ball-card]', host)) {
+            const key = card.dataset.mothBallCard;
+            const id = Number(card.dataset.mothBallId);
+            const count = protocolBalls.has(id)
+                ? Number(protocolBalls.get(id))
+                : null;
+            const reserve = Math.max(
+                0,
+                Number(settings.reserve[key] || 0)
+            );
+            const enabled = Boolean(settings.use[key]);
+
+            setClass(card, 'on', enabled);
+            setClass(card, 'vazio', count === 0);
+            setClass(
+                card,
+                'reserved',
+                count !== null &&
+                count > 0 &&
+                count <= reserve
+            );
+
+            const button = q('.moth-ac-ball-select', card);
+            if (button) {
+                button.setAttribute(
+                    'aria-pressed',
+                    enabled ? 'true' : 'false'
+                );
+                button.title =
+                    (enabled ? 'Enabled' : 'Disabled') +
+                    ' · Auto Catch uses the weakest enabled ball first';
+            }
+
+            const stock = q('.moth-ac-ball-stock', card);
+            if (stock) {
+                stock.textContent =
+                    count === null
+                        ? '—'
+                        : String(count);
+            }
+
+            const input = q('[data-moth-reserve]', card);
+            if (
+                input &&
+                document.activeElement !== input &&
+                Number(input.value) !== reserve
+            ) {
+                input.value = String(reserve);
+            }
+        }
     }
 
     function restockControl(
@@ -1890,13 +2221,11 @@
                 <input id="moth-ac-interval" type="number" min="100" max="5000" step="25">
             </div>
 
-            <div class="moth-ac-balls">
-                ${ballControl('poke', 'Poké')}
-                ${ballControl('great', 'Great')}
-                ${ballControl('super', 'Super')}
-                ${ballControl('ultra', 'Ultra')}
-                ${ballControl('master', 'Master')}
+            <div class="moth-ac-ball-intro">
+                <b>Capture balls</b>
+                <span>weakest enabled first · reserve is never spent</span>
             </div>
+            <div class="moth-ac-balls" id="moth-ac-balls"></div>
 
             <div class="moth-ac-restock">
                 <div class="moth-ac-restock-head">
@@ -1963,27 +2292,7 @@
             if (settings.enabled) schedule();
         });
 
-        for (const checkbox of qa('[data-moth-use]', panel)) {
-            const key = checkbox.dataset.mothUse;
-            checkbox.checked = Boolean(settings.use[key]);
-
-            checkbox.addEventListener('change', () => {
-                settings.use[key] = checkbox.checked;
-                saveSettings();
-                updateUI();
-            });
-        }
-
-        for (const input of qa('[data-moth-reserve]', panel)) {
-            const key = input.dataset.mothReserve;
-            input.value = Number(settings.reserve[key] || 0);
-
-            input.addEventListener('change', () => {
-                settings.reserve[key] = Math.max(0, Number(input.value) || 0);
-                input.value = settings.reserve[key];
-                saveSettings();
-            });
-        }
+        syncBallPicker();
 
         const restockEnabled =
             q(
@@ -2220,6 +2529,7 @@
         setText('#moth-ac-balls-used', used);
         setText('#moth-ac-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
         setText('#moth-ac-protocol', protocolText);
+        syncBallPicker();
 
         setText(
             '#moth-ac-restock-status',
@@ -2259,7 +2569,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.2.0 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.3.0 loaded');
     }
 
     if (document.readyState === 'loading') {
