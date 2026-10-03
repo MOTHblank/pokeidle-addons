@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.10
+// @version      0.1.11
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -18,6 +18,7 @@
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
     const BACKGROUND_MIN_GAP_MS = 3000;
     const RATE_LIMIT_BACKOFF_MS = 15000;
+    const ITEM_MARKET_CAP_TTL_MS = 10 * 60 * 1000;
 
     /*
      * Source-ready price table.
@@ -60,7 +61,8 @@
         pokemonHistoryPages: 12,
         pokemonHistoryRefreshMinutes: 60,
         viewCurrency: 'all',
-        viewKind: 'all'
+        viewKind: 'all',
+        viewSort: 'discount'
     });
 
     const state = {
@@ -72,6 +74,7 @@
         catalog: new Map(),
         itemSummary: {},
         liveItemAverages: {},
+        itemMarketCaps: new Map(),
         candidates: new Map(),
         detailQueue: [],
         detailQueued: new Set(),
@@ -380,10 +383,15 @@
 
     function itemReference(itemId, currency) {
         /*
-         * Prefer the current server-calculated 7-day weighted unit average.
-         * The frozen baseline is only a startup/failure fallback now. A stale
-         * localStorage snapshot must not keep driving item valuation forever.
+         * The server's 7-day weighted mean is useful, but a single extreme
+         * trade can distort a mean. Once we have at least three current
+         * listings for this item/currency, cap that historical reference at
+         * the median active unit price. This is deliberately conservative:
+         * Moth Watch may miss a deal, but it will not call a normal 70k
+         * market a 99% discount because one historical mean says 6M.
          */
+        let historical = null;
+
         const liveRow = itemMediaFor(itemId);
         const live = liveRow ? liveRow[currency] : null;
         if (
@@ -391,7 +399,7 @@
             Number.isFinite(Number(live.media)) &&
             Number(live.media) > 0
         ) {
-            return {
+            historical = {
                 average: Number(live.media),
                 units: Number(live.unidades || 0),
                 name: catalogName(itemId),
@@ -399,17 +407,44 @@
             };
         }
 
-        const row = state.baseline && state.baseline.items
-            ? state.baseline.items[itemId] || state.baseline.items[String(itemId)]
-            : null;
-        const ref = row ? row[currency] : null;
-        if (!ref || !Number.isFinite(Number(ref.average)) || Number(ref.average) <= 0) return null;
-        return {
-            average: Number(ref.average),
-            units: Number(ref.units || 0),
-            name: row.name || catalogName(itemId),
-            source: 'frozen-fallback'
-        };
+        if (!historical) {
+            const row = state.baseline && state.baseline.items
+                ? state.baseline.items[itemId] || state.baseline.items[String(itemId)]
+                : null;
+            const ref = row ? row[currency] : null;
+            if (ref && Number.isFinite(Number(ref.average)) && Number(ref.average) > 0) {
+                historical = {
+                    average: Number(ref.average),
+                    units: Number(ref.units || 0),
+                    name: row.name || catalogName(itemId),
+                    source: 'frozen-fallback'
+                };
+            }
+        }
+
+        if (!historical) return null;
+
+        const capKey = String(itemId) + ':' + currency;
+        const cap = state.itemMarketCaps.get(capKey);
+        if (
+            cap &&
+            Date.now() - Number(cap.updatedAt || 0) <= ITEM_MARKET_CAP_TTL_MS &&
+            Number(cap.count) >= 3 &&
+            Number.isFinite(Number(cap.median)) &&
+            Number(cap.median) > 0 &&
+            Number(cap.median) < historical.average
+        ) {
+            return {
+                average: Number(cap.median),
+                units: historical.units,
+                name: historical.name,
+                source: 'active-median',
+                activeListings: Number(cap.count),
+                serverAverage: historical.average
+            };
+        }
+
+        return historical;
     }
 
     function queueItemDetail(itemId, currency) {
@@ -582,6 +617,23 @@
     function handleItemListings(message) {
         const itemId = Number(message.itemId);
         const currency = message.moeda === 'orb' ? 'orb' : 'gold';
+        const lines = Array.isArray(message.linhas) ? message.linhas : [];
+
+        const activePrices = lines
+            .map(listing => Number(listing && listing.preco))
+            .filter(price => Number.isFinite(price) && price > 0);
+
+        const capKey = String(itemId) + ':' + currency;
+        if (activePrices.length >= 3) {
+            state.itemMarketCaps.set(capKey, {
+                median: median(activePrices),
+                count: activePrices.length,
+                updatedAt: Date.now()
+            });
+        } else {
+            state.itemMarketCaps.delete(capKey);
+        }
+
         const ref = itemReference(itemId, currency);
         if (!ref) return;
 
@@ -589,7 +641,7 @@
         removeCandidateGroup(group);
 
         const scanRatio = discoveryRatio();
-        for (const listing of message.linhas || []) {
+        for (const listing of lines) {
             if (!listing || isOwnListing(listing)) continue;
             const price = Number(listing.preco);
             const qty = Math.max(1, Number(listing.qtd || 1));
@@ -608,6 +660,8 @@
                 average: ref.average,
                 samples: ref.units,
                 referenceSource: ref.source,
+                activeReferenceListings: Number(ref.activeListings || 0),
+                serverAverage: Number(ref.serverAverage || 0),
                 ratio: ratio,
                 qty: qty,
                 seller: String(listing.vendedor || '—'),
@@ -1371,6 +1425,8 @@
             '.moth-mw-filter{display:inline-flex;align-items:center;gap:4px;min-height:28px}',
             '.moth-mw-filter img{width:16px;height:16px;object-fit:contain}',
             '.moth-mw-filter.on{filter:brightness(1.18);box-shadow:inset 0 0 0 2px var(--rx,#84325f)}',
+            '.moth-mw-sort{display:flex;align-items:center;gap:5px;margin-left:auto}',
+            '.moth-mw-sort select{min-height:28px;padding:3px 7px;border:1px solid var(--mad-linha,#555);border-radius:5px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:10px}',
             '.moth-mw-list{display:grid;gap:5px}',
             '.moth-mw-row{display:grid;grid-template-columns:minmax(170px,1.4fr) 120px 110px 90px minmax(110px,.8fr) auto;gap:7px;align-items:center;padding:7px;border-radius:6px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
             '.moth-mw-row.deep{box-shadow:inset 0 0 0 2px var(--rx,#84325f),inset 0 0 0 4px var(--rx-esc,#5d2345)}',
@@ -1466,8 +1522,13 @@
             ? candidate.price * candidate.qty
             : candidate.price;
         const referenceLabel = candidate.kind === 'item'
-            ? (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
-                ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
+            ? candidate.referenceSource === 'active-median'
+                ? 'current market median · ' + num(candidate.activeReferenceListings) + ' listings' +
+                    (candidate.serverAverage > candidate.average
+                        ? ' · server 7d avg ' + num(Math.round(candidate.serverAverage)) + ' ignored'
+                        : '')
+                : (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
+                    ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
             : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
 
         return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
@@ -1503,6 +1564,78 @@
         return true;
     }
 
+    function candidateSort(a, b) {
+        const mode = [
+            'discount',
+            'newest',
+            'price-asc',
+            'price-desc',
+            'reference-desc',
+            'quantity-desc',
+            'name'
+        ].includes(config.viewSort)
+            ? config.viewSort
+            : 'discount';
+
+        /*
+         * Raw Coin and Gem amounts are not comparable. For value-based sorts
+         * with both currencies visible, keep currencies grouped first.
+         */
+        const currencyGroup = a.currency === b.currency
+            ? 0
+            : a.currency === 'gold' ? -1 : 1;
+
+        if (mode === 'newest') {
+            return Number(b.firstSeenAt || b.seenAt || 0) - Number(a.firstSeenAt || a.seenAt || 0) ||
+                a.name.localeCompare(b.name);
+        }
+        if (mode === 'price-asc') {
+            return currencyGroup || Number(a.price || 0) - Number(b.price || 0) ||
+                a.name.localeCompare(b.name);
+        }
+        if (mode === 'price-desc') {
+            return currencyGroup || Number(b.price || 0) - Number(a.price || 0) ||
+                a.name.localeCompare(b.name);
+        }
+        if (mode === 'reference-desc') {
+            return currencyGroup || Number(b.average || 0) - Number(a.average || 0) ||
+                a.name.localeCompare(b.name);
+        }
+        if (mode === 'quantity-desc') {
+            return Number(b.qty || 0) - Number(a.qty || 0) ||
+                a.ratio - b.ratio ||
+                a.name.localeCompare(b.name);
+        }
+        if (mode === 'name') {
+            return a.name.localeCompare(b.name) ||
+                a.ratio - b.ratio;
+        }
+
+        return a.ratio - b.ratio ||
+            Number(b.qty || 0) - Number(a.qty || 0) ||
+            a.name.localeCompare(b.name);
+    }
+
+    function sortSelect() {
+        const options = [
+            ['discount', 'Biggest discount'],
+            ['newest', 'Newest detected'],
+            ['price-asc', 'Price: low → high'],
+            ['price-desc', 'Price: high → low'],
+            ['reference-desc', 'Reference: high → low'],
+            ['quantity-desc', 'Quantity: high → low'],
+            ['name', 'Name: A → Z']
+        ];
+
+        return '<label class="moth-mw-sort"><span class="moth-mw-filter-label">Sort</span>' +
+            '<select id="moth-mw-sort">' +
+            options.map(([value, label]) =>
+                '<option value="' + value + '"' + (config.viewSort === value ? ' selected' : '') + '>' +
+                escapeHtml(label) + '</option>'
+            ).join('') +
+            '</select></label>';
+    }
+
     function filterButton(label, group, value, active, icon) {
         const nativeClass = group === 'currency' ? 'cm-moeda' : 'cm-filtro';
         return '<button type="button" class="' + nativeClass + ' moth-mw-filter' + (active ? ' on' : '') + '"' +
@@ -1526,7 +1659,7 @@
                 c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100) &&
                 candidateVisible(c)
             )
-            .sort((a, b) => a.ratio - b.ratio || b.qty - a.qty || a.name.localeCompare(b.name));
+            .sort(candidateSort);
 
         const captured = state.baseline.capturedAt
             ? new Date(state.baseline.capturedAt).toLocaleString()
@@ -1584,6 +1717,7 @@
             filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
             filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
             '</div>' +
+            sortSelect() +
             '</div>' +
             '<div class="moth-mw-list">' +
             (candidates.length
@@ -1625,6 +1759,15 @@
                     return;
                 }
 
+                saveConfig();
+                queueRender();
+            });
+        }
+
+        const sort = q('#moth-mw-sort', panel);
+        if (sort) {
+            sort.addEventListener('change', () => {
+                config.viewSort = sort.value;
                 saveConfig();
                 queueRender();
             });
@@ -1756,7 +1899,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.10 loaded');
+        console.info('[Moth Watch] v0.1.11 loaded');
     }
 
     bootstrap();
