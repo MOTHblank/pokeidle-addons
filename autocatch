@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.1.6
+// @version      6.2.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
-// @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
 // @run-at       document-start
 // ==/UserScript==
@@ -15,7 +14,9 @@
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
     const RESULT_TIMEOUT_MS = 1000;
-    const RESTOCK_RETRY_MS = 5000;
+    const RESTOCK_ACK_TIMEOUT_MS = 10000;
+    const RESTOCK_SETTLE_MS = 2000;
+    const RESTOCK_RETRY_DELAY_MS = 2000;
     const RESTOCK_BACKOFF_MS = 30000;
     const RESTOCK_MAX_QTY = 5000;
     const RESTOCK_ITEM_DEFS = Object.freeze({
@@ -130,12 +131,12 @@
     const protocolBalls = new Map();
     const protocolItems = new Map();
     const restockPending = new Map();
+    const restockHealth = new Map();
+    const restockSettledUntil = new Map();
     let itemCatalogLoadPromise = null;
 
     let protocolGold = null;
     let activeProtocolSocket = null;
-    let restockBlockedUntil = 0;
-    let restockFailures = 0;
     let restockLastAction = 'off';
 
     /*
@@ -669,6 +670,60 @@
         return kind + ':' + id;
     }
 
+    function restockInventoryForKind(kind) {
+        return kind === 'ball'
+            ? protocolBalls
+            : kind === 'item'
+                ? protocolItems
+                : null;
+    }
+
+    function markRestockTimedOut(pendingKey, now) {
+        const previous = restockHealth.get(pendingKey);
+        const failures = Number(previous?.failures || 0) + 1;
+        const delay = failures >= 3
+            ? RESTOCK_BACKOFF_MS
+            : RESTOCK_RETRY_DELAY_MS * failures;
+
+        restockHealth.set(pendingKey, {
+            failures,
+            blockedUntil: now + delay
+        });
+
+        return { failures, delay };
+    }
+
+    function confirmRestock(pendingKey, pending, bought = null) {
+        if (!pending || restockPending.get(pendingKey) !== pending) {
+            return false;
+        }
+
+        const confirmedQty = Math.max(
+            0,
+            Number.isFinite(Number(bought))
+                ? Number(bought)
+                : Number(pending.qty || 0)
+        );
+
+        restockPending.delete(pendingKey);
+        restockHealth.delete(pendingKey);
+        restockSettledUntil.set(
+            pendingKey,
+            Date.now() + RESTOCK_SETTLE_MS
+        );
+
+        stats.restockBought += confirmedQty;
+        restockLastAction =
+            (pending.name || pending.kind + ' ' + pending.id) +
+            ' +' +
+            confirmedQty;
+        stats.status =
+            'Restock · ' +
+            restockLastAction;
+
+        return true;
+    }
+
     function mergeItemCatalog(catalog) {
         const list = Array.isArray(catalog)
             ? catalog
@@ -744,37 +799,58 @@
     }
 
     function mergeProtocolInventory(kind, rawInventory, inventory) {
-        if (!rawInventory || typeof rawInventory !== 'object') return;
+        if (
+            !rawInventory ||
+            typeof rawInventory !== 'object' ||
+            Array.isArray(rawInventory)
+        ) {
+            return;
+        }
+
+        /*
+         * Upstream delta state is shallow at the top level. When "items" or
+         * "balls" is present, that object is the COMPLETE current inventory;
+         * an absent id means zero. Merging entries into the previous Map left
+         * stale counts behind when a consumable reached zero — especially
+         * potions, which can be consumed several times between snapshots.
+         */
+        const previous = new Map(inventory);
+        const next = new Map();
 
         for (const [rawId, rawCount] of Object.entries(rawInventory)) {
             const id = Number(rawId);
             const count = Number(rawCount);
 
             if (!Number.isFinite(id) || !Number.isFinite(count)) continue;
+            next.set(id, count);
+        }
 
-            const previous = inventory.get(id);
+        inventory.clear();
+        for (const [id, count] of next) {
             inventory.set(id, count);
+        }
 
-            const key = restockPendingKey(kind, id);
-            const pending = restockPending.get(key);
+        /*
+         * Inventory growth is a useful secondary acknowledgement. The
+         * authoritative "compra" event is still preferred because an item can
+         * be bought and consumed before the next state snapshot, making the
+         * net count stay flat or even fall.
+         */
+        for (const [pendingKey, pending] of restockPending) {
+            if (pending.kind !== kind) continue;
+
+            const count = next.get(pending.id) ?? 0;
+            const oldCount = previous.get(pending.id) ?? 0;
 
             if (
-                pending &&
-                (
-                    count > pending.before ||
-                    previous !== undefined &&
-                    count > previous
-                )
+                count > pending.before ||
+                count > oldCount
             ) {
-                const bought = Math.max(0, count - pending.before);
-                stats.restockBought += bought;
-                restockPending.delete(key);
-                restockFailures = 0;
-                restockBlockedUntil = 0;
-                restockLastAction =
-                    (pending.name || kind + ' ' + id) +
-                    ' +' +
-                    bought;
+                confirmRestock(
+                    pendingKey,
+                    pending,
+                    pending.qty
+                );
             }
         }
     }
@@ -853,6 +929,16 @@
         const pendingKey = restockPendingKey(kind, meta.id);
         if (restockPending.has(pendingKey)) return false;
 
+        const settledUntil = Number(
+            restockSettledUntil.get(pendingKey) || 0
+        );
+
+        if (settledUntil > now) return false;
+        if (settledUntil) restockSettledUntil.delete(pendingKey);
+
+        const health = restockHealth.get(pendingKey);
+        if (Number(health?.blockedUntil || 0) > now) return false;
+
         const at = Math.max(
             0,
             Number(settings.restock.at?.[key] || 0)
@@ -917,6 +1003,7 @@
             before: count,
             qty,
             price,
+            goldBefore: protocolGold,
             sentAt: now
         });
 
@@ -942,8 +1029,6 @@
             return false;
         }
 
-        if (Date.now() < restockBlockedUntil) return false;
-
         if (
             !socketReady() ||
             (!ballCatalog.size && !itemCatalog.size) ||
@@ -958,21 +1043,34 @@
         }
 
         const now = Date.now();
+        let timedOut = null;
 
+        /*
+         * Only one purchase is allowed in flight. That makes purchase events
+         * unambiguous and prevents several orders from being priced against
+         * the same not-yet-updated gold snapshot.
+         */
         for (const [pendingKey, pending] of restockPending) {
-            if (now - pending.sentAt < RESTOCK_RETRY_MS) continue;
+            if (now - pending.sentAt < RESTOCK_ACK_TIMEOUT_MS) continue;
 
             restockPending.delete(pendingKey);
-            restockFailures++;
+            const health = markRestockTimedOut(
+                pendingKey,
+                now
+            );
+            timedOut = {
+                pending,
+                health
+            };
+        }
 
-            if (restockFailures >= 3) {
-                restockBlockedUntil =
-                    now +
-                    RESTOCK_BACKOFF_MS;
-                restockLastAction =
-                    'backoff after rejected/late purchases';
-                return false;
-            }
+        if (restockPending.size) {
+            const pending = restockPending.values().next().value;
+            restockLastAction =
+                'waiting · ' +
+                (pending?.name || 'purchase') +
+                ' confirmation';
+            return false;
         }
 
         for (const key of ['poke', 'great', 'super', 'ultra']) {
@@ -1011,7 +1109,20 @@
             }
         }
 
-        restockLastAction = 'stock OK';
+        if (timedOut) {
+            const failures = timedOut.health.failures;
+            restockLastAction =
+                (timedOut.pending.name || 'Purchase') +
+                ' confirmation timeout · ' +
+                (
+                    failures >= 3
+                        ? '30s cooldown'
+                        : 'retry queued'
+                );
+        } else {
+            restockLastAction = 'stock OK';
+        }
+
         return false;
     }
 
@@ -1101,9 +1212,33 @@
         const eventName = normalize(event.nome || '');
         const eventQty = Number(event.qtd);
         const eventSpend = Number(event.gasto);
+        const eventId = Number(
+            event.id ??
+            event.itemId ??
+            event.ballId
+        );
+        const eventKind = normalize(event.kind || '');
 
         const candidates = [...restockPending.entries()]
             .map(([key, pending]) => {
+                if (
+                    Number.isFinite(eventId) &&
+                    eventId !== Number(pending.id)
+                ) {
+                    return null;
+                }
+
+                if (
+                    eventKind &&
+                    eventKind !== normalize(pending.kind)
+                ) {
+                    return null;
+                }
+
+                const idMatches =
+                    Number.isFinite(eventId) &&
+                    eventId === Number(pending.id);
+
                 const nameMatches =
                     eventName &&
                     normalize(pending.name || '') === eventName;
@@ -1122,12 +1257,21 @@
                     key,
                     pending,
                     score:
+                        (idMatches ? 8 : 0) +
                         (nameMatches ? 4 : 0) +
                         (qtyMatches ? 2 : 0) +
-                        (spendMatches ? 1 : 0)
+                        (spendMatches ? 1 : 0),
+                    acceptable:
+                        idMatches ||
+                        nameMatches ||
+                        (
+                            restockPending.size === 1 &&
+                            qtyMatches &&
+                            spendMatches
+                        )
                 };
             })
-            .filter(candidate => candidate.score >= 4 || candidate.score === 3)
+            .filter(candidate => candidate?.acceptable)
             .sort((a, b) =>
                 b.score - a.score ||
                 a.pending.sentAt - b.pending.sentAt
@@ -1136,23 +1280,22 @@
         const match = candidates[0];
         if (!match) return;
 
-        restockPending.delete(match.key);
-        restockFailures = 0;
-        restockBlockedUntil = 0;
-
         const bought =
             Number.isFinite(eventQty) && eventQty > 0
                 ? eventQty
                 : Number(match.pending.qty || 0);
 
-        stats.restockBought += bought;
-        restockLastAction =
-            (match.pending.name || 'Purchase') +
-            ' +' +
-            bought;
-        stats.status =
-            'Restock · ' +
-            restockLastAction;
+        /*
+         * The purchase event can arrive before the state snapshot containing
+         * the new inventory. A short settlement window prevents the next
+         * 100 ms tick from seeing the old low count and buying the same stock
+         * twice.
+         */
+        confirmRestock(
+            match.key,
+            match.pending,
+            bought
+        );
 
         updateUI();
     }
@@ -1455,9 +1598,11 @@
         inventoryBaseline.clear();
         targetStates.clear();
         pendingBySlot.clear();
-        restockPending.clear();
-        restockFailures = 0;
-        restockBlockedUntil = 0;
+        /*
+         * Do not clear transactional restock state here. Resetting counters
+         * while a purchase is in flight must not make the same order eligible
+         * a second time.
+         */
 
         syncInventoryUsage();
         updateUI();
@@ -1913,11 +2058,10 @@
                 settings.restock.enabled =
                     restockEnabled.checked;
 
-                restockFailures =
-                    0;
-
-                restockBlockedUntil =
-                    0;
+                if (restockEnabled.checked) {
+                    restockHealth.clear();
+                    restockSettledUntil.clear();
+                }
 
                 saveSettings();
                 maybeRestock();
@@ -2268,7 +2412,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.1.6 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.2.0 loaded');
     }
 
     if (document.readyState === 'loading') {
