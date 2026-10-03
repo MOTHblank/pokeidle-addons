@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.1
+// @version      0.1.2
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -86,7 +86,9 @@
         pokemonScan: null,
         protocolMessages: 0,
         itemStatus: 'waiting',
-        pokemonStatus: 'waiting'
+        pokemonStatus: 'waiting',
+        serverClockOffset: 0,
+        releaseTimers: new Map()
     };
 
     let config = loadConfig();
@@ -204,11 +206,19 @@
         }
     }
 
+    function serverNow() {
+        return Date.now() - Number(state.serverClockOffset || 0);
+    }
+
     function mergePlayer(snapshot, full) {
         if (!snapshot || typeof snapshot !== 'object') return;
 
         const previousGold = state.gold;
         const previousOrbs = state.orbs;
+
+        if (Number(snapshot.servidorAgora) > 0) {
+            state.serverClockOffset = Date.now() - Number(snapshot.servidorAgora);
+        }
 
         if (full || Object.prototype.hasOwnProperty.call(snapshot, 'nick')) {
             if (snapshot.nick) state.nick = String(snapshot.nick);
@@ -220,13 +230,8 @@
             if (Number.isFinite(Number(snapshot.orbs))) state.orbs = Number(snapshot.orbs);
         }
 
-        if (state.pendingBuy) {
-            const p = state.pendingBuy;
-            const before = p.currency === 'orb' ? p.balanceBefore : p.balanceBefore;
-            const after = p.currency === 'orb' ? state.orbs : state.gold;
-            if (after < before || Date.now() - p.sentAt > 4500) {
-                finishPendingBuy(after < before ? 'state-confirmed' : 'timeout');
-            }
+        if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 4500) {
+            finishPendingBuy('timeout');
         }
 
         if (state.watchOpen && (previousGold !== state.gold || previousOrbs !== state.orbs)) {
@@ -319,9 +324,17 @@
         }
     }
 
+    function discoveryRatio() {
+        const watch = Math.max(0.01, Number(config.watchPercent) / 100);
+        const auto = config.autoBuy
+            ? Math.max(0.01, Number(config.autoBuyPercent) / 100)
+            : 0;
+        return Math.max(watch, auto);
+    }
+
     function scanSuspiciousItemSummaries() {
         const summary = state.itemSummary || {};
-        const watchRatio = Math.max(0.01, Number(config.watchPercent) / 100);
+        const scanRatio = discoveryRatio();
 
         for (const [rawId, base] of Object.entries(state.baseline.items || {})) {
             const id = Number(rawId);
@@ -333,7 +346,7 @@
                 if (!ref || !(Number(ref.average) > 0)) continue;
                 const min = currency === 'orb' ? Number(r.minOrb) : Number(r.minGold);
                 if (!Number.isFinite(min) || min <= 0) continue;
-                if (min <= Number(ref.average) * watchRatio) {
+                if (min <= Number(ref.average) * scanRatio) {
                     queueItemDetail(id, currency);
                 }
             }
@@ -341,14 +354,48 @@
     }
 
     function removeCandidateGroup(prefix) {
-        for (const key of Array.from(state.candidates.keys())) {
-            if (key.startsWith(prefix)) state.candidates.delete(key);
+        const now = serverNow();
+        for (const [key, candidate] of Array.from(state.candidates.entries())) {
+            if (!key.startsWith(prefix)) continue;
+            /*
+             * A recent-list page can move a new listing off page 0 long
+             * before its market retention expires. Keep it locally until
+             * unlock; the purchase request itself is still validated by the
+             * server if the seller cancels or somebody else wins it.
+             */
+            if (candidate.retainedUntil && candidate.retainedUntil > now) continue;
+            state.candidates.delete(key);
         }
     }
 
     function retentionUntil(listing) {
         const t = Number(listing && listing.compravelEm);
-        return Number.isFinite(t) && t > Date.now() ? t : 0;
+        return Number.isFinite(t) && t > serverNow() ? t : 0;
+    }
+
+    function scheduleCandidateRelease(candidate) {
+        if (!candidate || !candidate.retainedUntil) return;
+        if (candidate.retainedUntil <= serverNow()) return;
+        if (state.releaseTimers.has(candidate.listingId)) return;
+
+        const delay = Math.max(
+            0,
+            Math.min(
+                2_147_000_000,
+                candidate.retainedUntil - serverNow() + 40
+            )
+        );
+
+        const timer = setTimeout(() => {
+            state.releaseTimers.delete(candidate.listingId);
+            const current = state.candidates.get(candidate.key);
+            if (!current) return;
+            current.retainedUntil = 0;
+            maybeAutoBuy(current);
+            queueRender();
+        }, delay);
+
+        state.releaseTimers.set(candidate.listingId, timer);
     }
 
     function isOwnListing(listing) {
@@ -358,6 +405,7 @@
 
     function addCandidate(candidate) {
         state.candidates.set(candidate.key, candidate);
+        scheduleCandidateRelease(candidate);
         maybeAutoBuy(candidate);
         queueRender();
     }
@@ -371,14 +419,14 @@
         const group = 'item:' + itemId + ':' + currency + ':';
         removeCandidateGroup(group);
 
-        const watchRatio = Math.max(0.01, Number(config.watchPercent) / 100);
+        const scanRatio = discoveryRatio();
         for (const listing of message.linhas || []) {
             if (!listing || isOwnListing(listing)) continue;
             const price = Number(listing.preco);
             const qty = Math.max(1, Number(listing.qtd || 1));
             if (!Number.isFinite(price) || price <= 0) continue;
             const ratio = price / ref.average;
-            if (ratio > watchRatio) continue;
+            if (ratio > scanRatio) continue;
 
             addCandidate({
                 key: group + listing.id,
@@ -443,8 +491,7 @@
 
         return [
             root + '|p:' + power + '|lv:' + band,
-            root + '|p:' + power,
-            root
+            root + '|p:' + power
         ];
     }
 
@@ -679,7 +726,7 @@
 
         const group = 'pokemon:' + currency + ':';
         removeCandidateGroup(group);
-        const watchRatio = Math.max(0.01, Number(config.watchPercent) / 100);
+        const scanRatio = discoveryRatio();
 
         for (const listing of lines) {
             if (!listing || !listing.ficha || isOwnListing(listing)) continue;
@@ -690,7 +737,7 @@
             if (!ref || !(ref.value > 0)) continue;
 
             const ratio = price / ref.value;
-            if (ratio > watchRatio) continue;
+            if (ratio > scanRatio) continue;
 
             const species = String(
                 listing.ficha.nome ||
@@ -750,7 +797,7 @@
     function candidateCanAutoBuy(candidate) {
         if (!config.autoBuy || !candidate) return false;
         if (!currencyAllowed(candidate.currency)) return false;
-        if (candidate.retainedUntil && candidate.retainedUntil > Date.now()) return false;
+        if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
         if (candidate.ratio > autoThresholdFor(candidate)) return false;
         if (candidate.kind === 'item') {
             if (!config.autoBuyItems) return false;
@@ -787,7 +834,7 @@
     function tryBuy(candidate, manual) {
         if (!candidate || state.pendingBuy) return false;
         if (!manual && !candidateCanAutoBuy(candidate)) return false;
-        if (candidate.retainedUntil && candidate.retainedUntil > Date.now()) return false;
+        if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
 
         const now = Date.now();
         const blockedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
@@ -857,9 +904,7 @@
         const pending = state.pendingBuy;
         if (!pending) return;
 
-        const confirmed =
-            reason === 'server-confirmed' ||
-            reason === 'state-confirmed';
+        const confirmed = reason === 'server-confirmed';
 
         state.pendingBuy = null;
 
@@ -922,7 +967,9 @@
 
     function pruneCandidates() {
         const cutoff = Date.now() - Math.max(30000, Number(config.scanSeconds || 5) * 6000);
+        const nowServer = serverNow();
         for (const [key, candidate] of state.candidates) {
+            if (candidate.retainedUntil && candidate.retainedUntil > nowServer) continue;
             if (candidate.seenAt < cutoff) state.candidates.delete(key);
         }
         for (const [id, until] of state.attemptedListings) {
@@ -1033,6 +1080,9 @@
                 state.pokemonStatus = 'disconnected';
                 state.pendingBuy = null;
                 state.pokemonScan = null;
+                state.historyFetch = null;
+                for (const timer of state.releaseTimers.values()) clearTimeout(timer);
+                state.releaseTimers.clear();
                 queueRender();
             }
         });
@@ -1174,7 +1224,7 @@
 
     function renderCandidate(candidate) {
         const discount = Math.max(0, 1 - candidate.ratio);
-        const retainedSeconds = candidate.retainedUntil > Date.now()
+        const retainedSeconds = candidate.retainedUntil > serverNow()
             ? Math.ceil((candidate.retainedUntil - Date.now()) / 1000)
             : 0;
         const canBuy = !state.pendingBuy && !retainedSeconds && purchaseQuantity(candidate) > 0;
@@ -1406,7 +1456,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.1 loaded');
+        console.info('[Moth Watch] v0.1.2 loaded');
     }
 
     bootstrap();
