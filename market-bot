@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.8;
+// @version      0.1.9
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -58,7 +58,9 @@
         minItemUnits: 5,
         minPokemonSamples: 3,
         pokemonHistoryPages: 12,
-        pokemonHistoryRefreshMinutes: 60
+        pokemonHistoryRefreshMinutes: 60,
+        viewCurrency: 'all',
+        viewKind: 'all'
     });
 
     const state = {
@@ -1335,6 +1337,12 @@
             '.moth-mw-config input[type=number]{width:76px;padding:3px 5px;border:1px solid var(--mad-linha,#555);border-radius:4px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff)}',
             '.moth-mw-config input[type=checkbox]{flex:none}',
             '.moth-mw-baseline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px;font-size:9px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:7px 8px;border-radius:7px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
+            '.moth-mw-filter-group{display:flex;align-items:center;gap:4px;flex-wrap:wrap}',
+            '.moth-mw-filter-label{font-size:9px;font-weight:700;color:var(--sobre-mad-dim,#aaa);margin-right:2px}',
+            '.moth-mw-filter{display:inline-flex;align-items:center;gap:4px;min-height:28px}',
+            '.moth-mw-filter img{width:16px;height:16px;object-fit:contain}',
+            '.moth-mw-filter.on{filter:brightness(1.18);box-shadow:inset 0 0 0 2px var(--rx,#84325f)}',
             '.moth-mw-list{display:grid;gap:5px}',
             '.moth-mw-row{display:grid;grid-template-columns:minmax(170px,1.4fr) 120px 110px 90px minmax(110px,.8fr) auto;gap:7px;align-items:center;padding:7px;border-radius:6px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
             '.moth-mw-row.deep{box-shadow:inset 0 0 0 2px var(--rx,#84325f),inset 0 0 0 4px var(--rx-esc,#5d2345)}',
@@ -1449,14 +1457,43 @@
             '</div>';
     }
 
+    function candidateVisible(candidate) {
+        if (!candidate) return false;
+
+        const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency)
+            ? config.viewCurrency
+            : 'all';
+        const kindFilter = ['item', 'pokemon'].includes(config.viewKind)
+            ? config.viewKind
+            : 'all';
+
+        if (currencyFilter !== 'all' && candidate.currency !== currencyFilter) return false;
+        if (kindFilter !== 'all' && candidate.kind !== kindFilter) return false;
+        return true;
+    }
+
+    function filterButton(label, group, value, active, icon) {
+        return '<button type="button" class="cm-filtro moth-mw-filter' + (active ? ' on' : '') + '"' +
+            ' data-moth-filter="' + escapeHtml(group) + '" data-moth-value="' + escapeHtml(value) + '"' +
+            ' aria-pressed="' + (active ? 'true' : 'false') + '">' +
+            (icon ? '<img src="' + escapeHtml(icon) + '" alt="">' : '') +
+            escapeHtml(label) +
+            '</button>';
+    }
+
     function renderWatch() {
         const panel = q('#moth-market-watch-panel');
         if (!panel || !state.watchOpen) return;
         if (panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
 
         const baseline = baselineStats();
+        const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency) ? config.viewCurrency : 'all';
+        const kindFilter = ['item', 'pokemon'].includes(config.viewKind) ? config.viewKind : 'all';
         const candidates = Array.from(state.candidates.values())
-            .filter(c => c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100))
+            .filter(c =>
+                c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100) &&
+                candidateVisible(c)
+            )
             .sort((a, b) => a.ratio - b.ratio || b.qty - a.qty || a.name.localeCompare(b.name));
 
         const captured = state.baseline.capturedAt
@@ -1504,6 +1541,18 @@
             '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">Freeze current 7d averages</button>' +
             '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">Export baseline JSON</button>' +
             '</div>' +
+            '<div class="moth-mw-filters">' +
+            '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Currency</span>' +
+            filterButton('All', 'currency', 'all', currencyFilter === 'all', '') +
+            filterButton('Coins', 'currency', 'gold', currencyFilter === 'gold', '/assets/site/assets/ui/moeda-ouro.png') +
+            filterButton('Gems', 'currency', 'orb', currencyFilter === 'orb', '/img/moeda-gema.png') +
+            '</div>' +
+            '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Type</span>' +
+            filterButton('All', 'kind', 'all', kindFilter === 'all', '') +
+            filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
+            filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
+            '</div>' +
+            '</div>' +
             '<div class="moth-mw-list">' +
             (candidates.length
                 ? candidates.map(renderCandidate).join('')
@@ -1527,6 +1576,24 @@
                     ensurePokemonHistory(true);
                 }
                 runScan(true);
+                queueRender();
+            });
+        }
+
+        for (const button of qa('[data-moth-filter]', panel)) {
+            button.addEventListener('click', () => {
+                const group = button.dataset.mothFilter;
+                const value = button.dataset.mothValue;
+
+                if (group === 'currency' && ['all', 'gold', 'orb'].includes(value)) {
+                    config.viewCurrency = value;
+                } else if (group === 'kind' && ['all', 'item', 'pokemon'].includes(value)) {
+                    config.viewKind = value;
+                } else {
+                    return;
+                }
+
+                saveConfig();
                 queueRender();
             });
         }
@@ -1657,7 +1724,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.8 loaded');
+        console.info('[Moth Watch] v0.1.9 loaded');
     }
 
     bootstrap();
