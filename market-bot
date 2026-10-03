@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.9
+// @version      0.1.10
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -379,6 +379,26 @@
     }
 
     function itemReference(itemId, currency) {
+        /*
+         * Prefer the current server-calculated 7-day weighted unit average.
+         * The frozen baseline is only a startup/failure fallback now. A stale
+         * localStorage snapshot must not keep driving item valuation forever.
+         */
+        const liveRow = itemMediaFor(itemId);
+        const live = liveRow ? liveRow[currency] : null;
+        if (
+            live &&
+            Number.isFinite(Number(live.media)) &&
+            Number(live.media) > 0
+        ) {
+            return {
+                average: Number(live.media),
+                units: Number(live.unidades || 0),
+                name: catalogName(itemId),
+                source: 'live-7d'
+            };
+        }
+
         const row = state.baseline && state.baseline.items
             ? state.baseline.items[itemId] || state.baseline.items[String(itemId)]
             : null;
@@ -387,7 +407,8 @@
         return {
             average: Number(ref.average),
             units: Number(ref.units || 0),
-            name: row.name || catalogName(itemId)
+            name: row.name || catalogName(itemId),
+            source: 'frozen-fallback'
         };
     }
 
@@ -451,14 +472,20 @@
             goldSuspicious: 0,
             orbSuspicious: 0
         };
+        const ids = new Set([
+            ...Object.keys(state.liveItemAverages || {}),
+            ...Object.keys(state.baseline.items || {})
+        ]);
 
-        for (const [rawId, base] of Object.entries(state.baseline.items || {})) {
+        for (const rawId of ids) {
             const id = Number(rawId);
+            if (!Number.isFinite(id) || id <= 0) continue;
+
             const r = summary[id] || summary[rawId];
             if (!r || !r.anuncios) continue;
 
             for (const currency of ['gold', 'orb']) {
-                const ref = base && base[currency];
+                const ref = itemReference(id, currency);
                 if (!ref || !(Number(ref.average) > 0)) continue;
 
                 const checkedKey = currency === 'orb' ? 'orbChecked' : 'goldChecked';
@@ -580,6 +607,7 @@
                 price: price,
                 average: ref.average,
                 samples: ref.units,
+                referenceSource: ref.source,
                 ratio: ratio,
                 qty: qty,
                 seller: String(listing.vendedor || '—'),
@@ -1437,6 +1465,9 @@
         const total = candidate.kind === 'item'
             ? candidate.price * candidate.qty
             : candidate.price;
+        const referenceLabel = candidate.kind === 'item'
+            ? '7d avg / unit · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
+            : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
 
         return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
             '<div class="moth-mw-name"><b><span class="moth-mw-kind">' + escapeHtml(candidate.kind) + '</span>' +
@@ -1446,11 +1477,10 @@
             '<div><div>' + money(candidate.price, candidate.currency) + '</div><div class="moth-mw-meta">listed' +
             (candidate.kind === 'item' && candidate.qty > 1 ? ' / unit' : '') + '</div></div>' +
             '<div class="moth-mw-ref"><div>' + money(Math.round(candidate.average), candidate.currency) +
-            '</div><div class="moth-mw-meta">reference · ' + num(candidate.samples) + ' sample' +
-            (candidate.samples === 1 ? '' : 's') + '</div></div>' +
+            '</div><div class="moth-mw-meta">' + escapeHtml(referenceLabel) + '</div></div>' +
             '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' +
             (auto ? 'auto-buy range' : 'watch range') + '</div></div>' +
-            '<div class="moth-mw-seller"><b>' + escapeHtml(candidate.seller) + '</b><div class="moth-mw-meta">' +
+            '<div class="moth-mw-seller"><b>Seller: ' + escapeHtml(candidate.seller) + '</b><div class="moth-mw-meta">' +
             (retainedSeconds ? 'retained · ' + retainedSeconds + 's' : 'available') + '</div></div>' +
             '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' +
             (canBuy ? '' : ' disabled') + '>' + (retainedSeconds ? 'Wait' : 'Buy') + '</button>' +
@@ -1531,7 +1561,7 @@
             configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') +
             '</div>' +
             '<div class="moth-mw-baseline">' +
-            '<b>Frozen item baseline:</b> ' + escapeHtml(captured) +
+            '<b>Item references:</b> live server 7d averages · frozen fallback ' + escapeHtml(captured) +
             ' · ' + num(baseline.items) + ' items · ' + num(baseline.gold) + ' Coin references · ' +
             num(baseline.orb) + ' Gem references' +
             ' · current irregular: ' + num(state.itemScanStats.goldSuspicious) + '/' +
@@ -1725,7 +1755,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.9 loaded');
+        console.info('[Moth Watch] v0.1.10 loaded');
     }
 
     bootstrap();
