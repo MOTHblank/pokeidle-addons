@@ -32,7 +32,6 @@
     const DEFAULTS = {
         enabled: false,
         intervalMs: 100,
-        showHud: true,
         use: {
             poke: true,
             great: true,
@@ -90,6 +89,9 @@
             if (Number(saved.intervalMs) === 650) {
                 saved.intervalMs = 100;
             }
+
+            // v6.3 removes the redundant floating capture HUD.
+            delete saved.showHud;
 
             return {
                 ...DEFAULTS,
@@ -1486,7 +1488,6 @@
         if (!settings.enabled) return;
 
         installPanel();
-        installHud();
         syncInventoryUsage();
         maybeRestock();
 
@@ -1842,75 +1843,6 @@
                 cursor: pointer;
             }
 
-            #moth-capture-hud {
-                position: absolute;
-                top: 42px;
-                right: 8px;
-                z-index: 45;
-                min-width: 174px;
-                max-width: 245px;
-                padding: 7px 8px;
-                border: 1px solid rgba(255,255,255,.18);
-                border-radius: 7px;
-                background: rgba(18,16,20,.82);
-                color: white;
-                font: 11px/1.25 system-ui,sans-serif;
-                pointer-events: none;
-                backdrop-filter: blur(3px);
-            }
-
-            .moth-hud-head {
-                display: flex;
-                justify-content: space-between;
-                gap: 8px;
-                margin-bottom: 5px;
-                font-weight: 700;
-            }
-
-            .moth-hud-state {
-                color: #aab0b4;
-                font-weight: 500;
-            }
-
-            .moth-hud-row {
-                display: grid;
-                grid-template-columns: repeat(3,1fr);
-                gap: 4px;
-            }
-
-            .moth-hud-cell {
-                padding: 4px;
-                border-radius: 4px;
-                background: rgba(255,255,255,.07);
-                text-align: center;
-            }
-
-            .moth-hud-cell b {
-                display: block;
-                font-size: 13px;
-            }
-
-            .moth-hud-cell span {
-                color: #aaa0a4;
-                font-size: 9px;
-            }
-
-            .moth-hud-target {
-                margin-top: 5px;
-                overflow: hidden;
-                white-space: nowrap;
-                text-overflow: ellipsis;
-                color: #ded4d8;
-                font-size: 10px;
-            }
-
-            .moth-hud-balls,
-            .moth-hud-protocol {
-                margin-top: 4px;
-                color: #a99fa3;
-                text-align: center;
-                font-size: 9px;
-            }
         `;
 
         (document.head || document.documentElement).appendChild(style);
@@ -1993,7 +1925,6 @@
             </div>
 
             <div class="moth-ac-foot">
-                <label><input id="moth-ac-hud-check" type="checkbox"> HUD</label>
                 <span id="moth-ac-protocol">Protocol: loading</span>
                 <button type="button" class="moth-ac-reset" id="moth-ac-reset">Reset stats</button>
             </div>
@@ -2213,73 +2144,10 @@
             }
         );
 
-        const hudCheck = q('#moth-ac-hud-check', panel);
-        hudCheck.checked = settings.showHud;
-
-        hudCheck.addEventListener('change', () => {
-            settings.showHud = hudCheck.checked;
-            saveSettings();
-            updateUI();
-        });
-
         q('#moth-ac-reset', panel).addEventListener('click', resetStats);
 
         updateUI();
         return true;
-    }
-
-    function installHud() {
-        injectStyle();
-
-        if (q('#moth-capture-hud')) return true;
-
-        const palco = q('#palco');
-        if (!palco) return false;
-
-        if (getComputedStyle(palco).position === 'static') {
-            palco.style.position = 'relative';
-        }
-
-        const hud = document.createElement('div');
-        hud.id = 'moth-capture-hud';
-        hud.innerHTML = `
-            <div class="moth-hud-head">
-                <span>Capture HUD</span>
-                <span class="moth-hud-state" id="moth-hud-status">Idle</span>
-            </div>
-
-            <div class="moth-hud-row">
-                <div class="moth-hud-cell"><b id="moth-hud-captures">0</b><span>captures</span></div>
-                <div class="moth-hud-cell"><b id="moth-hud-used">0</b><span>balls</span></div>
-                <div class="moth-hud-cell"><b id="moth-hud-rate">0%</b><span>rate</span></div>
-            </div>
-
-            <div class="moth-hud-target" id="moth-hud-target">No target</div>
-            <div class="moth-hud-balls" id="moth-hud-balls"></div>
-            <div class="moth-hud-protocol" id="moth-hud-protocol"></div>
-        `;
-
-        palco.appendChild(hud);
-        updateUI();
-
-        return true;
-    }
-
-    function formatDuration(ms) {
-        const total = Math.max(0, Math.floor(ms / 1000));
-        const hours = Math.floor(total / 3600);
-        const minutes = Math.floor((total % 3600) / 60);
-        const seconds = total % 60;
-
-        if (hours) {
-            return [
-                hours,
-                String(minutes).padStart(2, '0'),
-                String(seconds).padStart(2, '0')
-            ].join(':');
-        }
-
-        return `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
     function setText(selector, value) {
@@ -2367,40 +2235,6 @@
                 : 'off'
         );
 
-        const hud = q('#moth-capture-hud');
-
-        if (hud) {
-            const display =
-                settings.showHud
-                    ? 'block'
-                    : 'none';
-
-            if (
-                hud.style.display !==
-                display
-            ) {
-                hud.style.display =
-                    display;
-            }
-        }
-
-        setText('#moth-hud-status', settings.enabled ? stats.status : 'Paused');
-        setText('#moth-hud-captures', stats.captures);
-        setText('#moth-hud-used', used);
-        setText('#moth-hud-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
-        setText('#moth-hud-target', targetText);
-        setText(
-            '#moth-hud-balls',
-            [
-                `P ${stats.used.poke}`,
-                `G ${stats.used.great}`,
-                `S ${stats.used.super}`,
-                `U ${stats.used.ultra}`,
-                stats.used.master ? `M ${stats.used.master}` : null,
-                `· ${formatDuration(Date.now() - stats.startedAt)}`
-            ].filter(Boolean).join('  ')
-        );
-        setText('#moth-hud-protocol', protocolText);
     }
 
     // ---------------------------------------------------------------------
@@ -2411,7 +2245,6 @@
         installProtocolHook();
         ensureRestockItemCatalog();
         installPanel();
-        installHud();
 
         scanTargets();
         syncInventoryUsage();
@@ -2419,8 +2252,7 @@
 
         setInterval(() => {
             installPanel();
-            installHud();
-            scanTargets();
+                scanTargets();
             syncInventoryUsage();
             updateUI();
         }, 1000);
