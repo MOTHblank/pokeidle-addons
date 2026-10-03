@@ -137,6 +137,7 @@
 
     let protocolGold = null;
     let activeProtocolSocket = null;
+    let restockSettleUntil = 0;
     let restockLastAction = 'off';
 
     /*
@@ -707,9 +708,17 @@
 
         restockPending.delete(pendingKey);
         restockHealth.delete(pendingKey);
+        const settleUntil =
+            Date.now() +
+            RESTOCK_SETTLE_MS;
+
         restockSettledUntil.set(
             pendingKey,
-            Date.now() + RESTOCK_SETTLE_MS
+            settleUntil
+        );
+        restockSettleUntil = Math.max(
+            restockSettleUntil,
+            settleUntil
         );
 
         stats.restockBought += confirmedQty;
@@ -1070,6 +1079,11 @@
                 'waiting · ' +
                 (pending?.name || 'purchase') +
                 ' confirmation';
+            return false;
+        }
+
+        if (now < restockSettleUntil) {
+            restockLastAction = 'syncing server inventory';
             return false;
         }
 
@@ -2061,6 +2075,7 @@
                 if (restockEnabled.checked) {
                     restockHealth.clear();
                     restockSettledUntil.clear();
+                    restockSettleUntil = 0;
                 }
 
                 saveSettings();
