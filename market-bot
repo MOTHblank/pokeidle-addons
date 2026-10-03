@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.5
+// @version      0.1.6
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -53,7 +53,7 @@
         gemReserve: 0,
         maxCoinsPerBuy: 0,
         maxGemsPerBuy: 0,
-        minItemUnits: 1,
+        minItemUnits: 5,
         minPokemonSamples: 3,
         pokemonHistoryPages: 12,
         pokemonHistoryRefreshMinutes: 60
@@ -1486,7 +1486,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.5 loaded');
+        console.info('[Moth Watch] v0.1.6 loaded');
     }
 
     bootstrap();
