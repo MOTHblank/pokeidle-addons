@@ -1473,7 +1473,8 @@
     }
 
     function filterButton(label, group, value, active, icon) {
-        return '<button type="button" class="cm-filtro moth-mw-filter' + (active ? ' on' : '') + '"' +
+        const nativeClass = group === 'currency' ? 'cm-moeda' : 'cm-filtro';
+        return '<button type="button" class="' + nativeClass + ' moth-mw-filter' + (active ? ' on' : '') + '"' +
             ' data-moth-filter="' + escapeHtml(group) + '" data-moth-value="' + escapeHtml(value) + '"' +
             ' aria-pressed="' + (active ? 'true' : 'false') + '">' +
             (icon ? '<img src="' + escapeHtml(icon) + '" alt="">' : '') +
