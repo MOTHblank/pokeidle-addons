@@ -1466,7 +1466,8 @@
             ? candidate.price * candidate.qty
             : candidate.price;
         const referenceLabel = candidate.kind === 'item'
-            ? '7d avg / unit · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
+            ? (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
+                ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
             : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
 
         return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
