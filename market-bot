@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.6
+// @version      0.1.7
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -16,6 +16,8 @@
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
+    const BACKGROUND_MIN_GAP_MS = 550;
+    const RATE_LIMIT_BACKOFF_MS = 15000;
 
     /*
      * Source-ready price table.
@@ -88,6 +90,16 @@
         itemStatus: 'waiting',
         pokemonStatus: 'waiting',
         serverClockOffset: 0,
+        lastBotSendAt: 0,
+        rateLimitedUntil: 0,
+        itemSummaryRetryTimer: null,
+        detailPumpTimer: null,
+        itemScanStats: {
+            goldChecked: 0,
+            orbChecked: 0,
+            goldSuspicious: 0,
+            orbSuspicious: 0
+        },
         releaseTimers: new Map()
     };
 
@@ -195,15 +207,55 @@
         } catch {}
     }
 
+    function backgroundDelayMs() {
+        const now = Date.now();
+        return Math.max(
+            0,
+            Number(state.rateLimitedUntil || 0) - now,
+            Number(state.lastBotSendAt || 0) + BACKGROUND_MIN_GAP_MS - now
+        );
+    }
+
     function send(payload) {
         const socket = state.socket;
         if (!socket || socket.readyState !== 1) return false;
         try {
             socket.send(JSON.stringify(payload));
+            state.lastBotSendAt = Date.now();
             return true;
         } catch {
             return false;
         }
+    }
+
+    function sendBackground(payload) {
+        if (backgroundDelayMs() > 0) return false;
+        return send(payload);
+    }
+
+    function isRateLimitError(message) {
+        const text = normalize([
+            message && message.chave,
+            message && message.msg,
+            message && message.message
+        ].filter(Boolean).join(' '));
+
+        return (
+            text.includes('muitas mensagens') ||
+            text.includes('too many messages') ||
+            text.includes('rate limit')
+        );
+    }
+
+    function enterRateLimitBackoff() {
+        state.rateLimitedUntil = Math.max(
+            Number(state.rateLimitedUntil || 0),
+            Date.now() + RATE_LIMIT_BACKOFF_MS
+        );
+        state.itemStatus = 'rate-limit backoff';
+        state.pokemonStatus = 'rate-limit backoff';
+        addLog('Server rate limit · background scans paused for 15s');
+        queueRender();
     }
 
     function serverNow() {
@@ -287,6 +339,43 @@
         return true;
     }
 
+    function supplementItemBaseline(medias) {
+        if (!state.baseline?.capturedAt || !medias || typeof medias !== 'object') return false;
+
+        let added = 0;
+        const items = state.baseline.items || (state.baseline.items = {});
+
+        for (const [rawId, m] of Object.entries(medias)) {
+            const id = Number(rawId);
+            if (!Number.isFinite(id) || id <= 0 || !m) continue;
+
+            const row = items[id] || items[String(id)] || {
+                name: catalogName(id),
+                gold: null,
+                orb: null
+            };
+
+            for (const currency of ['gold', 'orb']) {
+                if (row[currency] && Number(row[currency].average) > 0) continue;
+                const src = m[currency];
+                if (!src || !(Number(src.media) > 0)) continue;
+                row[currency] = {
+                    average: Number(src.media),
+                    units: Number(src.unidades || 0)
+                };
+                added++;
+            }
+
+            items[id] = row;
+        }
+
+        if (!added) return false;
+
+        saveBaseline();
+        addLog('Baseline expanded with ' + added + ' missing Coin/Gem reference' + (added === 1 ? '' : 's'));
+        return true;
+    }
+
     function itemReference(itemId, currency) {
         const row = state.baseline && state.baseline.items
             ? state.baseline.items[itemId] || state.baseline.items[String(itemId)]
@@ -307,20 +396,39 @@
         if (now - Number(state.lastDetailRequest.get(key) || 0) < Math.max(1000, config.scanSeconds * 800)) return;
         state.detailQueued.add(key);
         state.detailQueue.push({ itemId: Number(itemId), currency: currency, key: key });
-        pumpItemDetails();
+        scheduleItemDetailPump(0);
+    }
+
+    function scheduleItemDetailPump(delay) {
+        if (state.detailPumpTimer) return;
+        state.detailPumpTimer = setTimeout(() => {
+            state.detailPumpTimer = null;
+            pumpItemDetails();
+        }, Math.max(0, Number(delay) || 0));
     }
 
     function pumpItemDetails() {
         if (!state.detailQueue.length) return;
         if (!state.socket || state.socket.readyState !== 1) return;
 
-        const job = state.detailQueue.shift();
+        const delay = backgroundDelayMs();
+        if (delay > 0) {
+            scheduleItemDetailPump(delay + 25);
+            return;
+        }
+
+        const job = state.detailQueue[0];
+        if (!sendBackground({ t: 'market.item', itemId: job.itemId, moeda: job.currency })) {
+            scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
+            return;
+        }
+
+        state.detailQueue.shift();
         state.detailQueued.delete(job.key);
         state.lastDetailRequest.set(job.key, Date.now());
-        send({ t: 'market.item', itemId: job.itemId, moeda: job.currency });
 
         if (state.detailQueue.length) {
-            setTimeout(pumpItemDetails, 120);
+            scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
         }
     }
 
@@ -335,6 +443,12 @@
     function scanSuspiciousItemSummaries() {
         const summary = state.itemSummary || {};
         const scanRatio = discoveryRatio();
+        const stats = {
+            goldChecked: 0,
+            orbChecked: 0,
+            goldSuspicious: 0,
+            orbSuspicious: 0
+        };
 
         for (const [rawId, base] of Object.entries(state.baseline.items || {})) {
             const id = Number(rawId);
@@ -344,13 +458,21 @@
             for (const currency of ['gold', 'orb']) {
                 const ref = base && base[currency];
                 if (!ref || !(Number(ref.average) > 0)) continue;
+
+                const checkedKey = currency === 'orb' ? 'orbChecked' : 'goldChecked';
+                const suspiciousKey = currency === 'orb' ? 'orbSuspicious' : 'goldSuspicious';
+                stats[checkedKey]++;
+
                 const min = currency === 'orb' ? Number(r.minOrb) : Number(r.minGold);
                 if (!Number.isFinite(min) || min <= 0) continue;
                 if (min <= Number(ref.average) * scanRatio) {
+                    stats[suspiciousKey]++;
                     queueItemDetail(id, currency);
                 }
             }
         }
+
+        state.itemScanStats = stats;
     }
 
     function removeCandidateGroup(prefix) {
@@ -477,6 +599,8 @@
 
         if (!state.baseline.capturedAt || state.forceBaselineNext) {
             freezeItemBaseline(state.liveItemAverages, true);
+        } else {
+            supplementItemBaseline(state.liveItemAverages);
         }
 
         scanSuspiciousItemSummaries();
@@ -596,14 +720,24 @@
             setTimeout(requestHistoryPage, 1500);
             return;
         }
+
+        const delay = backgroundDelayMs();
+        if (delay > 0) {
+            setTimeout(requestHistoryPage, delay + 25);
+            return;
+        }
+
         const currency = fetch.currencies[fetch.currencyIndex];
-        fetch.waitingSince = Date.now();
-        send({
+        if (!sendBackground({
             t: 'market.historicoGlobal',
             pagina: fetch.page,
             tipo: 'pokemon',
             moeda: currency
-        });
+        })) {
+            setTimeout(requestHistoryPage, BACKGROUND_MIN_GAP_MS);
+            return;
+        }
+        fetch.waitingSince = Date.now();
     }
 
     function ensurePokemonHistory(force) {
@@ -722,17 +856,29 @@
     function pumpPokemonScan() {
         const scan = state.pokemonScan;
         if (!scan || scan.waiting) return;
-        const currency = scan.queue.shift();
+        const currency = scan.queue[0];
         if (!currency) {
             state.pokemonScan = null;
             state.pokemonStatus = 'watching';
             queueRender();
             return;
         }
+
+        const delay = backgroundDelayMs();
+        if (delay > 0) {
+            setTimeout(pumpPokemonScan, delay + 25);
+            return;
+        }
+
+        if (!sendBackground(recentPokemonRequest(currency))) {
+            setTimeout(pumpPokemonScan, BACKGROUND_MIN_GAP_MS);
+            return;
+        }
+
+        scan.queue.shift();
         scan.waiting = currency;
         scan.sentAt = Date.now();
         state.pokemonStatus = 'scanning ' + (currency === 'orb' ? 'gems' : 'coins');
-        send(recentPokemonRequest(currency));
         setTimeout(() => {
             if (state.pokemonScan === scan && scan.waiting === currency && Date.now() - scan.sentAt >= 2500) {
                 scan.waiting = null;
@@ -972,8 +1118,21 @@
 
     function requestItemSummary() {
         if (!config.enabled || !config.scanItems) return false;
+
+        const delay = backgroundDelayMs();
+        if (delay > 0) {
+            state.itemStatus = 'queued';
+            if (!state.itemSummaryRetryTimer) {
+                state.itemSummaryRetryTimer = setTimeout(() => {
+                    state.itemSummaryRetryTimer = null;
+                    requestItemSummary();
+                }, delay + 25);
+            }
+            return true;
+        }
+
         state.itemStatus = 'scanning';
-        return send({ t: 'market.itens' });
+        return sendBackground({ t: 'market.itens' });
     }
 
     function runScan(force) {
@@ -1045,6 +1204,10 @@
         }
 
         if (message.t === 'erro') {
+            if (isRateLimitError(message)) {
+                enterRateLimitBackoff();
+                return;
+            }
             if (state.pendingBuy) {
                 addLog('Purchase refused: ' + String(message.chave || message.msg || 'server error'));
                 finishPendingBuy('refused');
@@ -1111,6 +1274,10 @@
                 state.pendingBuy = null;
                 state.pokemonScan = null;
                 state.historyFetch = null;
+                if (state.itemSummaryRetryTimer) clearTimeout(state.itemSummaryRetryTimer);
+                if (state.detailPumpTimer) clearTimeout(state.detailPumpTimer);
+                state.itemSummaryRetryTimer = null;
+                state.detailPumpTimer = null;
                 for (const entry of state.releaseTimers.values()) clearTimeout(entry.timer);
                 state.releaseTimers.clear();
                 queueRender();
@@ -1329,6 +1496,10 @@
             '<b>Frozen item baseline:</b> ' + escapeHtml(captured) +
             ' · ' + num(baseline.items) + ' items · ' + num(baseline.gold) + ' Coin references · ' +
             num(baseline.orb) + ' Gem references' +
+            ' · current irregular: ' + num(state.itemScanStats.goldSuspicious) + '/' +
+            num(state.itemScanStats.goldChecked) + ' Coin · ' +
+            num(state.itemScanStats.orbSuspicious) + '/' +
+            num(state.itemScanStats.orbChecked) + ' Gem' +
             '<span class="moth-mw-spacer"></span>' +
             '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">Freeze current 7d averages</button>' +
             '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">Export baseline JSON</button>' +
@@ -1486,7 +1657,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.6 loaded');
+        console.info('[Moth Watch] v0.1.7 loaded');
     }
 
     bootstrap();
