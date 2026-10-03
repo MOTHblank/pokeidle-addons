@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.4
+// @version      0.1.5
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -695,6 +695,18 @@
 
     function startPokemonScan() {
         if (!config.scanPokemon || state.pokemonScan) return;
+
+        /*
+         * Bot requests share the game's WebSocket. A background market.listar
+         * response is also seen by PokéIdle's own handler and can redraw the
+         * normal Pokémon market. Moth Watch may scan while its own panel hides
+         * that view, but otherwise leave interactive browsing alone.
+         */
+        if (q('.cm-topo') && !state.watchOpen) {
+            state.pokemonStatus = 'paused while browsing';
+            return;
+        }
+
         if (!state.pokemonReference.capturedAt) {
             ensurePokemonHistory(false);
             return;
@@ -1474,7 +1486,7 @@
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
 
-        console.info('[Moth Watch] v0.1.4 loaded');
+        console.info('[Moth Watch] v0.1.5 loaded');
     }
 
     bootstrap();
