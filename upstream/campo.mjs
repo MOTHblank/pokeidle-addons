@@ -7,7 +7,8 @@
 //
 // Ordem de desenho: o canvas de chão do mapa entra inteiro, e aí a banda de itens (árvores,
 // pedras) é intercalada com os pokémon por profundidade — por isso um Abra passa ATRÁS da
-// árvore que está na frente dele e NA FRENTE da que está atrás.
+// árvore que está na frente dele e NA FRENTE da que está atrás. Os andares de cima (telhados,
+// alto do morro) vêm por último, assados pelo `teto` do mapa.
 
 import {
   carregarOutfit,
@@ -1225,6 +1226,11 @@ export class Campo {
    * lista a ordenar tem o tamanho da TELA e não o do mapa — e aí basta andar nas duas ao
    * mesmo tempo.
    *
+   * Só a banda de itens do andar da hunt (`ops[0..nBanda)`) se intercala: os andares de cima
+   * ficam por cima de todo mundo e o `teto` do mapa os desenha assados, depois das criaturas.
+   * A exceção é a casa com escada (`andarFixo`) — lá o pokémon anda no andar de cima, e a
+   * lista inteira volta a ser intercalada como sempre foi.
+   *
    * O recorte das criaturas é novo. A linha que estava aqui dizia "as criaturas são poucas",
    * e era verdade quando uma hunt tinha meia dúzia de mobs em volta do herói. O replay da
    * Guerra de Guilds põe 500 entidades no mesmo mapa (2.000 numa guerra de 200 guilds), e
@@ -1262,9 +1268,13 @@ export class Campo {
     const x1 = camX + largVista + 64;
     const y1 = camY + altVista + 64;
 
+    const ops = this.mapa.ops;
+    const teto = this.andarFixo == null ? this.mapa.teto : null;
+    const fim = teto ? this.mapa.nBanda : ops.length;
     let i = 0;
     let alfa = 1;
-    for (const o of this.mapa.ops) {
+    for (let k = 0; k < fim; k++) {
+      const o = ops[k];
       while (i < criaturas.length && criaturas[i].prof <= o.prof) this.desenharCriatura(criaturas[i++]);
       if (o.x > x1 || o.y > y1 || o.x + o.w < x0 || o.y + o.h < y0) continue;
       // andar apagado (o herói está debaixo dele): pula ou desenha translúcido no meio do fade
@@ -1275,6 +1285,7 @@ export class Campo {
     }
     if (alfa !== 1) ctx.globalAlpha = 1;
     while (i < criaturas.length) this.desenharCriatura(criaturas[i++]);
+    teto?.desenhar(ctx, x0, y0, x1, y1, this.alfaAndar);
 
     this.desenharEfeitos();
     this.desenharBolas();
