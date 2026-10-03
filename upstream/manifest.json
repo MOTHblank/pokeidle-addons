@@ -1,24 +1,24 @@
 {
-  "generatedAt": "2026-10-02T19:20:06.044Z",
+  "generatedAt": "2026-10-03T16:58:25.999Z",
   "source": "https://pokeidle.io",
   "page": "/app",
-  "version": "1.216.2",
-  "fileCount": 118,
-  "totalBytes": 12687091,
+  "version": "1.217.0",
+  "fileCount": 138,
+  "totalBytes": 14806575,
   "files": [
     {
       "path": "upstream/app.html",
       "url": "https://pokeidle.io/app",
       "contentType": "text/html",
-      "bytes": 177484,
-      "sha256": "6c2b7f9f2ec7f2c5d5ffa93f4655a0787f52fcf832bf06845e20f52fa424fa62"
+      "bytes": 178782,
+      "sha256": "dbf720b08fa2ddb895fb5f66c48e08ea7a98f8ca77d28827d2e0e26b54737cd1"
     },
     {
       "path": "upstream/app.js",
-      "url": "https://pokeidle.io/app.js?v=1.216.2",
+      "url": "https://pokeidle.io/app.js?v=1.217.0",
       "contentType": "text/javascript",
-      "bytes": 2002319,
-      "sha256": "a8d49f89707620af02aacd2d3920dd0fc002174723c9fdd1f18e64636f0f73be"
+      "bytes": 2009132,
+      "sha256": "a3dabe80b0d7f333b9e06c47ce86605ad851d2649a364ea277236932392c910b"
     },
     {
       "path": "upstream/assets/asset-packs/categories/outfits-female-160-46af3d4f3721.json",
@@ -26,6 +26,13 @@
       "contentType": "application/json",
       "bytes": 8093,
       "sha256": "b9e67ef9c0dd749ae9719eee983c08f82d0e86a8d8046e2fcb0d52c75a6455c9"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-1309-2373765d2d48.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-1309-2373765d2d48.json",
+      "contentType": "application/json",
+      "bytes": 3662,
+      "sha256": "bc77bfe737288e98dccf4103bb32210f842627e17052a35f0d989fc7b46b7db2"
     },
     {
       "path": "upstream/assets/asset-packs/categories/outfits-male-159-6827f9854c07.json",
@@ -42,11 +49,32 @@
       "sha256": "b943b210ccc6e80f3a3856b08c43d18eef63ee465e455433ae1f21b59e18f7c0"
     },
     {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-41868-e07d5ee49753.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-41868-e07d5ee49753.json",
+      "contentType": "application/json",
+      "bytes": 11487,
+      "sha256": "c9a053d4b608bafcea8c5fa7ee2246678487967c082b3d264d35205720f334ab"
+    },
+    {
       "path": "upstream/assets/asset-packs/categories/outfits-male-59-c424b3d8e2fa.json",
       "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-59-c424b3d8e2fa.json",
       "contentType": "application/json",
       "bytes": 6495,
       "sha256": "dc87aca45187af829cfb9d1328dc1a1ccc8aa2e6f418eac50691a9c124ada384"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60001-75cce73fd093.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60001-75cce73fd093.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "f611d928ee02adbac1ec1e713d91049bfcfd0d47505106b761f153cda04cae89"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60002-bbbee96875f3.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60002-bbbee96875f3.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "dcd7fa3862df5445bd54c8889f4674fc0184a7737184ccfc546b04072e267f28"
     },
     {
       "path": "upstream/assets/asset-packs/categories/outfits-male-60003-c3bece471f28.json",
@@ -56,6 +84,76 @@
       "sha256": "89cf6d602dd606985c1509456b8bacf89ebc6b1dd268573d38fa6515aa9f5078"
     },
     {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60004-ce5a969fa890.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60004-ce5a969fa890.json",
+      "contentType": "application/json",
+      "bytes": 6687,
+      "sha256": "bce622b647d3620f6e50ecc6e2f1ab398ade8bd1fd167fb5dbc9e1100b79fbb8"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60005-298a5374dd77.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60005-298a5374dd77.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "940e355fa2097726a74c960fbfaffb70adf6c349763e79edff66f40d95d92f82"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60006-b99e539d9d78.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60006-b99e539d9d78.json",
+      "contentType": "application/json",
+      "bytes": 4291,
+      "sha256": "2d3a096fb16dbded053edb59a0e95b112fa5c347f5c8e2460b9ec48dedce2eea"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60007-adf58f089a97.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60007-adf58f089a97.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "8b5c0466b48b9afde16a8975c13f67d023ad05092e9dcf8515f58356555579f4"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60009-30e8a458116e.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60009-30e8a458116e.json",
+      "contentType": "application/json",
+      "bytes": 4292,
+      "sha256": "5d1c5c3a0529884f10807aef1c795be37e9b18d53a6bda3dc37c4004ecd7ea46"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60010-39f6a07b16a8.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60010-39f6a07b16a8.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "abd5f23e6b1df0b3702293675704dca2fa8d26a4e0016318bbc5a7f4097aeebd"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60011-325fc580012e.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60011-325fc580012e.json",
+      "contentType": "application/json",
+      "bytes": 6682,
+      "sha256": "f573cdb30b046cd1e82bbaab16033e6be4646425c8d27e4448fa925db77f861d"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60013-2fc936b6ac63.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60013-2fc936b6ac63.json",
+      "contentType": "application/json",
+      "bytes": 4289,
+      "sha256": "b56960ca30e23a707d393bbd925746e7ac73fed5f269cbf22c658184e8b3057c"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60014-d744239cdbab.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60014-d744239cdbab.json",
+      "contentType": "application/json",
+      "bytes": 4290,
+      "sha256": "e515c7579e6da18fa9da5e1d5aa5f1c53967c9a95eb65a8e676a3f6faaf6bde6"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60015-b99343bca524.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60015-b99343bca524.json",
+      "contentType": "application/json",
+      "bytes": 5487,
+      "sha256": "90a2d934079de35c53a405298c10cd48eeb8dff9f31031e31513220a83b86f16"
+    },
+    {
       "path": "upstream/assets/asset-packs/categories/outfits-male-60075-5d1a9c488b6d.json",
       "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60075-5d1a9c488b6d.json",
       "contentType": "application/json",
@@ -63,11 +161,25 @@
       "sha256": "96301344979e36a03b9775604ed244c2d2cfa6609b9cc3dc40f758bcddffd011"
     },
     {
-      "path": "upstream/assets/asset-packs/categories/outfits-male-60122-997eecc4d240.json",
-      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60122-997eecc4d240.json",
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60095-ad6de2266114.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60095-ad6de2266114.json",
       "contentType": "application/json",
-      "bytes": 4291,
-      "sha256": "60e6462346a04ad892de637736a0b3b8426dfbc7432e954ce6ac236eb412dd0c"
+      "bytes": 4293,
+      "sha256": "b934b59a047419689b3601c1ace5b558e0cc7bea0ab65a80e7216f1897baa0d3"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60113-f2ca09128758.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60113-f2ca09128758.json",
+      "contentType": "application/json",
+      "bytes": 6687,
+      "sha256": "51ef7fd6eb602e021e0c2994efbd2af59c9077c2dcc1bf4ca4e7c68efda5703d"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-60154-dde633699f3a.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-60154-dde633699f3a.json",
+      "contentType": "application/json",
+      "bytes": 11488,
+      "sha256": "2414db3647d2212ed961e88266be105d4711055b437f95ced355c92b19368771"
     },
     {
       "path": "upstream/assets/asset-packs/categories/outfits-male-60179-bd890eb9530d.json",
@@ -82,6 +194,27 @@
       "contentType": "application/json",
       "bytes": 4292,
       "sha256": "87df1b2ca9240d750bbc5bd0fcf38991f44a8efaa1d2a81a3a2068db8bd4e2c8"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-male-70006-b95ab01e8019.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-male-70006-b95ab01e8019.json",
+      "contentType": "application/json",
+      "bytes": 4291,
+      "sha256": "79d34ab7af0a89eda09d6631f4234c0c133f71dca68e68744b084c69aeaa13f0"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-premium-20028-20ab93f8397c.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-premium-20028-20ab93f8397c.json",
+      "contentType": "application/json",
+      "bytes": 4411,
+      "sha256": "3c601c2ee243703df396ce2f47fd7bea1d6db0c23e43f31c847cf5e63f1751fa"
+    },
+    {
+      "path": "upstream/assets/asset-packs/categories/outfits-premium-20029-59684aa61e2a.json",
+      "url": "https://pokeidle.io/assets/asset-packs/categories/outfits-premium-20029-59684aa61e2a.json",
+      "contentType": "application/json",
+      "bytes": 4411,
+      "sha256": "c97bbe567ebcea9b6e0e7bed1c8e2a04f3b4854626c09b02b8f9e0dc36c5d8a5"
     },
     {
       "path": "upstream/assets/asset-packs/index.e4d80719e349.json",
@@ -175,11 +308,18 @@
       "sha256": "471aba908caa04e73d42010f398d3ae6cda73666c1d6c774b0a73be7270523a9"
     },
     {
-      "path": "upstream/assets/world/maps/mr_mime.json",
-      "url": "https://pokeidle.io/assets/world/maps/mr_mime.json",
+      "path": "upstream/assets/world/map-markers.json",
+      "url": "https://pokeidle.io/assets/world/map-markers.json",
       "contentType": "application/json",
-      "bytes": 616540,
-      "sha256": "d40a3d7a46e03beec1fe23a04da769051a466ab77f4af74466506180b036f799"
+      "bytes": 74451,
+      "sha256": "25f95bea8abebc660d16b2e05b383000ee6b1a554086de81435cade99f9b66e9"
+    },
+    {
+      "path": "upstream/assets/world/maps/cerulean.json",
+      "url": "https://pokeidle.io/assets/world/maps/cerulean.json",
+      "contentType": "application/json",
+      "bytes": 2532583,
+      "sha256": "f9036ecdd90fd1ab52b22bc5709a3f663beebe4f63a467553bae4638d742a28a"
     },
     {
       "path": "upstream/assets/world/offsets.json",
@@ -192,8 +332,8 @@
       "path": "upstream/campo.mjs",
       "url": "https://pokeidle.io/campo.mjs",
       "contentType": "text/javascript",
-      "bytes": 69839,
-      "sha256": "87f9908b7c91093121c14647ec1c83ca928ff9e2997da888b4c3210d28896e54"
+      "bytes": 70517,
+      "sha256": "ab4f65e9e5fc80e76772608aea3f5287c2f1ecefe387331392b61c90ec701ec1"
     },
     {
       "path": "upstream/cores-outfit.mjs",
@@ -204,10 +344,10 @@
     },
     {
       "path": "upstream/estilo.css",
-      "url": "https://pokeidle.io/estilo.css?v=1.216.2",
+      "url": "https://pokeidle.io/estilo.css?v=1.217.0",
       "contentType": "text/css",
-      "bytes": 970503,
-      "sha256": "22a62c73cfea42442752946461557506ddee403aa6bf7480ab86310f4d30a7f9"
+      "bytes": 973434,
+      "sha256": "71034b6c720cff4ad3ac2ca1bf8961d244e92150497a4385a16ce79be6421a58"
     },
     {
       "path": "upstream/guild-crest.mjs",
@@ -227,22 +367,22 @@
       "path": "upstream/i18n.mjs",
       "url": "https://pokeidle.io/i18n.mjs",
       "contentType": "text/javascript",
-      "bytes": 942330,
-      "sha256": "8b48e8f5dd83674a07841a62294ac723361eacdca2aa43ada8da74f46f234436"
+      "bytes": 943385,
+      "sha256": "08f801eb33e8cbdcfc0aa3139843c7981b839417a9263efc2c829365bf739c3c"
     },
     {
       "path": "upstream/mapa.mjs",
       "url": "https://pokeidle.io/mapa.mjs",
       "contentType": "text/javascript",
-      "bytes": 14609,
-      "sha256": "2a42985eb5108fb513ddd665914f852d58c419901335267822190f70a4403ca3"
+      "bytes": 26582,
+      "sha256": "cfdd01a809b43d64793a7839eec68a762accb0b121d9d3498cfa32fe49b4bc7c"
     },
     {
       "path": "upstream/mobile.css",
-      "url": "https://pokeidle.io/mobile.css?v=1.216.2",
+      "url": "https://pokeidle.io/mobile.css?v=1.217.0",
       "contentType": "text/css",
-      "bytes": 203606,
-      "sha256": "f4f07866f811f670a3e68399e8e0fb53526e40e63fd97e588f0bdcee1cff47b9"
+      "bytes": 203941,
+      "sha256": "713640fbf466d1598ab86c5ee22370110a661a62c1eb778eb62250ed60e24d42"
     },
     {
       "path": "upstream/mobile.mjs",

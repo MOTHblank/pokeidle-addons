@@ -9733,7 +9733,7 @@ function abrirReplayGuerra(pacote) {
   // construtor, e num elemento escondido isso dá zero.
   const player = new ReplayGuerra($('#gwr-campo'), rep, { aoAtualizar: pintarReplay });
   replayGuerra = player;
-  montarControlesReplay(player);
+  montarControlesReplay(player, { busca: !!pacote.busca });
   // O play espera o cenário: começar a fita com o mapa ainda baixando gastaria a abertura da
   // guerra numa tela preta. O `replayGuerra ===` é para o caso de fecharem o modal no meio.
   // `aoPronto` roda uma vez, entre o mapa carregar e a fita começar. É por onde a partida
@@ -9746,7 +9746,7 @@ function abrirReplayGuerra(pacote) {
   });
 }
 
-function montarControlesReplay(player) {
+function montarControlesReplay(player, { busca = false } = {}) {
   $('#gwr-vels').innerHTML = VELOCIDADES
     .map((v) => `<button type="button" class="gwr-vel${v === 1 ? ' on' : ''}" data-vel="${v}">${v}×</button>`)
     .join('');
@@ -9822,7 +9822,7 @@ function montarControlesReplay(player) {
       const membros = porGuilda.get(i) ?? [];
       if (!membros.length) return '';
       return `
-        <div class="gwr-lat-guild" style="--gw-cor:${corDaGuilda(i)}">
+        <div class="gwr-lat-guild" data-gi="${i}" style="--gw-cor:${corDaGuilda(i)}">
           <div class="gwr-lat-guild-tit">
             <span class="gwr-lat-guild-nome">${escapar(g.nome ?? '')}</span>
             <span class="gwr-lat-guild-vivos" data-guildvivos="${i}"></span>
@@ -9844,8 +9844,171 @@ function montarControlesReplay(player) {
     const b = ev.target.closest('.gwr-lat-jog');
     if (b) player.seguir(Number(b.dataset.slot), true);
   };
+  montarBuscaReplay(player, busca ? guilds.map((g, i) => ({ i, nome: g.nome ?? '', membros: porGuilda.get(i) ?? [] })) : null);
 
   replayPintado = { t: -1, feed: -1, foco: null, vivos: '', camLivre: false, auto: null };
+}
+
+/**
+ * O que a busca do painel lateral sabe: uma entrada por guilda, com o cartão e os botões dela —
+ * ver `montarBuscaReplay`. Vazio fora da Guerra de Guilds.
+ */
+let buscaReplay = [];
+
+/** Uma letra em minúscula e sem acento. Letra a letra para a marca saber onde cair — ver `marcarBusca`. */
+const dobrarLetra = (ch) => ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+/** O texto como a busca o compara: "dragoes" acha a "Dragões", "FASI" acha o "fasi". */
+const dobrarBusca = (s) => Array.from(String(s ?? ''), dobrarLetra).join('');
+
+/**
+ * `texto` escapado, com o trecho que bateu com `q` (já dobrado) dentro de um `<mark>`.
+ *
+ * O índice achado é o da versão DOBRADA, e ela nem sempre tem o tamanho da original (um acento
+ * já decomposto some ao dobrar). Por isso a dobra é feita letra a letra, guardando de onde cada
+ * caractere dobrado veio — é o que põe a marca em cima do "õe" de "Dragões", e não um ao lado.
+ */
+function marcarBusca(texto, q) {
+  const s = String(texto ?? '');
+  const de = [];
+  const ate = [];
+  let dobrado = '';
+  let i = 0;
+  for (const ch of s) {
+    const d = dobrarLetra(ch);
+    for (let k = 0; k < d.length; k++) {
+      de.push(i);
+      ate.push(i + ch.length);
+    }
+    dobrado += d;
+    i += ch.length;
+  }
+  const at = q ? dobrado.indexOf(q) : -1;
+  if (at < 0) return escapar(s);
+  const a = de[at];
+  const b = ate[at + q.length - 1];
+  return `${escapar(s.slice(0, a))}<mark class="gwr-marca">${escapar(s.slice(a, b))}</mark>${escapar(s.slice(b))}`;
+}
+
+/**
+ * A BUSCA por nick ou guild, em cima do painel lateral — só na Guerra de Guilds (`grupos`
+ * nulo esconde o campo). É a única fita com dezenas, às vezes centenas, de lutadores; num duelo
+ * de dois lados ela seria um campo a mais para nada.
+ *
+ * A busca ESCONDE o que não bateu em vez de remontar o painel: cada botão carrega o `.on` da
+ * câmera e o `.gwr-caido` de quem já tombou, e o `pintarReplay` só repinta os dois quando algo
+ * muda — refazer o HTML a cada letra apagaria os dois até o próximo abate.
+ */
+function montarBuscaReplay(player, grupos) {
+  const caixa = $('#gwr-busca');
+  const campo = $('#gwr-busca-input');
+  const limpar = $('#gwr-busca-limpar');
+  campo.value = '';
+  caixa.classList.toggle('hidden', !grupos);
+  limpar.classList.add('hidden');
+  $('#gwr-busca-conta').classList.add('hidden');
+  buscaReplay = [];
+  if (!grupos) return;
+
+  const lateral = $('#gwr-lateral');
+  for (const g of grupos) {
+    const card = lateral.querySelector(`.gwr-lat-guild[data-gi="${g.i}"]`);
+    if (!card) continue;
+    buscaReplay.push({
+      card,
+      nomeEl: card.querySelector('.gwr-lat-guild-nome'),
+      nome: g.nome,
+      chave: dobrarBusca(g.nome),
+      html: escapar(g.nome),
+      jogadores: g.membros.flatMap((l) => {
+        const btn = card.querySelector(`.gwr-lat-jog[data-slot="${l.slot}"]`);
+        if (!btn) return [];
+        const nick = l.nick ?? '—';
+        return [{ btn, nickEl: btn.querySelector('b'), nick, chave: dobrarBusca(nick), html: escapar(nick) }];
+      }),
+    });
+  }
+  lateral.insertAdjacentHTML('beforeend', '<p class="gwr-busca-vazio hidden" id="gwr-busca-vazio"></p>');
+
+  campo.placeholder = t('guild.pvpReplayBuscaPh');
+  campo.setAttribute('aria-label', t('guild.pvpReplayBuscaPh'));
+  campo.title = t('guild.pvpReplayBuscaDica');
+  limpar.title = t('guild.pvpReplayBuscaLimpar');
+  limpar.setAttribute('aria-label', t('guild.pvpReplayBuscaLimpar'));
+
+  campo.oninput = () => aplicarBuscaReplay(campo.value);
+  campo.onkeydown = (ev) => {
+    if (ev.key === 'Escape' && campo.value) {
+      // O primeiro Esc limpa a busca; só o segundo fecha a guerra. Sem o `stopPropagation`, o
+      // atalho global de Esc fecharia o replay inteiro junto com o texto.
+      ev.preventDefault();
+      ev.stopPropagation();
+      campo.value = '';
+      aplicarBuscaReplay('');
+      return;
+    }
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    // Enter leva a câmera ao primeiro da lista — de pé, se houver: "digitei o nick, me mostra ele".
+    const visiveis = buscaReplay.flatMap((g) => g.jogadores).filter((j) => !j.btn.classList.contains('hidden'));
+    const alvo = visiveis.find((j) => !j.btn.classList.contains('gwr-caido')) ?? visiveis[0];
+    if (alvo) player.seguir(Number(alvo.btn.dataset.slot), true);
+    // No celular o teclado cobre metade da tela: quem deu Enter quer ver a briga, não o teclado.
+    if (montagemMovel()) campo.blur();
+  };
+  limpar.onclick = () => {
+    campo.value = '';
+    aplicarBuscaReplay('');
+    campo.focus();
+  };
+}
+
+/**
+ * Mostra só quem bate com o que foi digitado, e marca o trecho que bateu.
+ *
+ * O nome da GUILD bater mostra a guilda inteira — quem procura "Fenix" quer ver o time todo. O
+ * NICK bater mostra só aquele jogador, debaixo do cartão da guilda dele. Texto vazio devolve o
+ * painel como era, com quem a câmera acompanha à vista (e não o topo da lista).
+ */
+function aplicarBuscaReplay(bruto) {
+  const texto = String(bruto ?? '').trim().replace(/\s+/g, ' ');
+  const q = dobrarBusca(texto);
+  let achados = 0;
+  let total = 0;
+  for (const g of buscaReplay) {
+    const guildBate = !!q && g.chave.includes(q);
+    let visiveis = 0;
+    for (const j of g.jogadores) {
+      total++;
+      const nickBate = !!q && j.chave.includes(q);
+      const mostra = !q || guildBate || nickBate;
+      j.btn.classList.toggle('hidden', !mostra);
+      if (mostra) visiveis++;
+      const html = nickBate ? marcarBusca(j.nick, q) : escapar(j.nick);
+      if (html !== j.html) {
+        j.nickEl.innerHTML = html;
+        j.html = html;
+      }
+    }
+    achados += visiveis;
+    g.card.classList.toggle('hidden', !visiveis);
+    const html = guildBate ? marcarBusca(g.nome, q) : escapar(g.nome);
+    if (html !== g.html) {
+      g.nomeEl.innerHTML = html;
+      g.html = html;
+    }
+  }
+
+  $('#gwr-busca-limpar').classList.toggle('hidden', !bruto);
+  const conta = $('#gwr-busca-conta');
+  conta.classList.toggle('hidden', !q || !achados);
+  if (q && achados) conta.textContent = t('guild.pvpReplayBuscaConta', { n: num(achados), total: num(total) });
+  const vazio = $('#gwr-busca-vazio');
+  vazio?.classList.toggle('hidden', !q || achados > 0);
+  if (vazio && q && !achados) vazio.textContent = t('guild.pvpReplayBuscaNada', { q: texto });
+
+  const lateral = $('#gwr-lateral');
+  if (q) lateral.scrollTop = 0;
+  else lateral.querySelector('.gwr-lat-jog.on')?.scrollIntoView({ block: 'nearest' });
 }
 
 /** O que já foi desenhado, para não reescrever o DOM 60 vezes por segundo à toa. */
@@ -11446,7 +11609,8 @@ function aoReceberGuild(m) {
       pintarPaneGuild();
     }
   }
-  if (m.replay) abrirReplayGuerra(m.replay);
+  // `busca`: a Guerra de Guilds é a única fita com lutadores demais para achar alguém de olho.
+  if (m.replay) abrirReplayGuerra({ ...m.replay, busca: true });
   if (m.analise) receberAnaliseGuerra(m.analise);
   if (m.detalhe) mostrarDetalheGuild(m.detalhe);
   if (m.ranking) {

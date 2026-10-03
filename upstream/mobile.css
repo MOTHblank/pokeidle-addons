@@ -3257,6 +3257,10 @@ html.mobile .pvp-lad-wl { display: none; }
 /* O resultado da partida: no desktop ele fica na lateral do player; num celular não há
    lateral, então ele vira uma faixa acima do campo, ainda fora da briga. */
 html.mobile .gwr-pvp-resultado { margin-bottom: 6px; }
+/* A busca da Guerra de Guilds: 16 px para o iOS não dar zoom ao focar o campo, e o × com alvo
+   de dedo — 24 px dá para o mouse, não para o polegar. */
+html.mobile .gwr-busca-input { height: 44px; font-size: 16px; padding-right: 46px; }
+html.mobile .gwr-busca-limpar { width: 36px; height: 36px; right: 4px; font-size: 20px; }
 html.mobile .pvp-res { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 8px; }
 html.mobile .pvp-res .pvp-barra { order: 9; }
 html.mobile .pvp-emblema-res { width: 46px; height: 46px; }

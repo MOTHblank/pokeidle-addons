@@ -2037,12 +2037,58 @@ input[type="checkbox"]:active::before { top: 5px; }
 .gwr-zoom { display: flex; gap: 4px; margin-left: auto; }
 .gwr-zoom-bt { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; }
 
+/* A coluna da direita: a busca por cima (só na Guerra de Guilds) e o painel que rola embaixo. */
+.gwr-coluna { flex: none; width: 250px; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+
+/* A BUSCA da Guerra de Guilds — ver `montarBuscaReplay`. Um campo que se enxerga de longe: vão
+   escuro de 40 px, lupa por dentro à esquerda, o × à direita assim que há texto, e o anel roxo
+   de foco de todo campo do jogo (`.cm-busca`). */
+.gwr-busca { flex: none; display: flex; flex-direction: column; gap: 5px; }
+.gwr-busca-campo { position: relative; display: flex; }
+/* A lupa é rosa desde o começo, e não só no foco: é a cor de "isto responde" do jogo, e é ela
+   que faz o vão escuro ser lido como campo — e não como mais um cartão de guilda. */
+.gwr-busca-lupa {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--rx-rosa); pointer-events: none;
+}
+.gwr-busca-input {
+  flex: 1; min-width: 0; height: 40px; padding: 0 36px 0 37px;
+  border: 0; border-radius: 6px; background: var(--vao); color: #fff;
+  font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-weight: 700; font-size: 13px;
+  box-shadow: inset 0 0 0 2px var(--mad-linha), 0 1px 0 var(--mad-luz2);
+  transition: box-shadow .12s;
+}
+.gwr-busca-input::placeholder { color: var(--vao-dim); font-weight: 400; opacity: 1; }
+.gwr-busca-input:hover { box-shadow: inset 0 0 0 2px var(--mad-linha), inset 0 0 0 4px var(--vao-luz), 0 1px 0 var(--mad-luz2); }
+.gwr-busca-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--mad-linha), inset 0 0 0 4px var(--rx), 0 1px 0 var(--mad-luz2);
+}
+.gwr-busca-limpar {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  font: 700 16px/1 Tahoma, Verdana, "Segoe UI", sans-serif;
+  color: var(--sobre-mad); background: var(--vao2); box-shadow: inset 0 0 0 1px var(--mad-linha);
+}
+.gwr-busca-limpar:hover { color: #fff; background: var(--vao-luz); }
+.gwr-busca-limpar:focus-visible { outline: 2px solid var(--rx-clr); outline-offset: 1px; }
+/* "5 de 70 jogadores" — direto na madeira, então com o contorno escuro do texto do jogo. */
+.gwr-busca-conta {
+  margin: 0; padding: 0 3px; font-size: 10.5px; font-weight: 700; color: var(--sobre-mad-dim);
+  text-shadow: -1px -1px 0 var(--mad-base), 1px -1px 0 var(--mad-base), -1px 1px 0 var(--mad-base), 1px 1px 0 var(--mad-base);
+}
+/* O trecho do nick ou da guild que bateu com o que foi digitado. */
+.gwr-marca { color: #ffe08a; background: #ffd16633; border-radius: 2px; box-shadow: 0 0 0 1px #ffd16659; }
+/* Ninguém bateu: o painel diz isso em vez de ficar vazio, parecendo quebrado. */
+.gwr-busca-vazio { margin: 0; padding: 26px 10px; text-align: center; font-size: 12px; font-weight: 700; line-height: 1.5; color: var(--sobre-mad-dim); }
+
 /* O painel lateral: uma guilda por cartão, os jogadores dela por baixo — cada um clicável para
    prender a câmera. Substitui a tira horizontal de nomes (ver a nota no HTML): com setenta
    lutadores, uma coluna que rola verticalmente lê muito melhor do que uma fileira que exige
    arrastar para o lado sem parar. */
 .gwr-lateral {
-  flex: none; width: 250px; min-height: 0; display: flex; flex-direction: column; gap: 8px;
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px;
   padding: 8px; border-radius: 6px; overflow-y: auto;
   background: var(--vao); box-shadow: inset 0 0 0 2px var(--mad-linha), 0 1px 0 var(--mad-luz2);
   scrollbar-width: thin;
@@ -2075,7 +2121,8 @@ input[type="checkbox"]:active::before { top: 5px; }
      efetivamente trocar a altura, e não só empatar e perder por especificidade menor. */
   .modal-caixa.caixa-gwr { height: min(94vh, 760px); }
   .caixa-gwr .modal-corpo { flex-direction: column; }
-  .gwr-lateral { width: 100%; max-height: 34vh; }
+  .gwr-coluna { width: 100%; }
+  .gwr-lateral { max-height: 34vh; }
 }
 @media (max-width: 700px) {
   .gwr-guilds, .gwr-feed { max-width: 55%; font-size: 10px; }
