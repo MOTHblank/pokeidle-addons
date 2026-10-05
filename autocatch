@@ -1113,11 +1113,6 @@
                 Number(item.priceGold || 0) > 0
             )
             .sort((a, b) =>
-                String(a.name || '').localeCompare(
-                    String(b.name || ''),
-                    undefined,
-                    { sensitivity: 'base' }
-                ) ||
                 Number(a.id) - Number(b.id)
             );
     }
