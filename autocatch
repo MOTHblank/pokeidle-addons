@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.3.0
+// @version      6.4.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -19,11 +19,6 @@
     const RESTOCK_RETRY_DELAY_MS = 2000;
     const RESTOCK_BACKOFF_MS = 30000;
     const RESTOCK_MAX_QTY = 5000;
-    const RESTOCK_ITEM_DEFS = Object.freeze({
-        smallPotion: { id: 200, name: 'Small Potion' },
-        greatPotion: { id: 201, name: 'Great Potion' },
-        revive: { id: 205, name: 'Revive' }
-    });
 
     /*
      * Reuse PokéIdle's own ball artwork. Unknown/future catalog entries fall
@@ -63,28 +58,12 @@
         restock: {
             enabled: false,
             goldReserve: 0,
-            at: {
-                poke: 50,
-                great: 25,
-                super: 15,
-                ultra: 10,
-                master: 0,
-                other: 0,
-                smallPotion: 10,
-                greatPotion: 5,
-                revive: 3
-            },
-            to: {
-                poke: 500,
-                great: 250,
-                super: 150,
-                ultra: 100,
-                master: 0,
-                other: 0,
-                smallPotion: 50,
-                greatPotion: 25,
-                revive: 10
-            }
+            selectedBallId: 1,
+            selectedPotionId: 200,
+            ballAt: 50,
+            ballTo: 500,
+            potionAt: 10,
+            potionTo: 50
         }
     };
 
@@ -105,6 +84,160 @@
             // v6.3 removes the redundant floating capture HUD.
             delete saved.showHud;
 
+            /*
+             * v6.4 changes restock from many independent item thresholds to
+             * one selected ball and one selected potion. Preserve the most
+             * relevant legacy choice when possible.
+             */
+            const savedRestock =
+                saved.restock && typeof saved.restock === 'object'
+                    ? { ...saved.restock }
+                    : {};
+
+            if (
+                savedRestock.selectedBallId === undefined ||
+                savedRestock.selectedBallId === null
+            ) {
+                const legacyBallIds = {
+                    poke: 1,
+                    great: 2,
+                    super: 3,
+                    ultra: 4,
+                    master: 5
+                };
+
+                const legacyBallKey = [
+                    'poke',
+                    'great',
+                    'super',
+                    'ultra',
+                    'master'
+                ].find(key => {
+                    const threshold =
+                        Number(
+                            savedRestock.to?.[key] ??
+                            savedRestock.at?.[key] ??
+                            0
+                        );
+
+                    return threshold > 0 &&
+                        (saved.use?.[key] ?? DEFAULTS.use[key]);
+                });
+
+                savedRestock.selectedBallId =
+                    legacyBallIds[legacyBallKey] ??
+                    DEFAULTS.restock.selectedBallId;
+            }
+
+            if (
+                savedRestock.selectedPotionId === undefined ||
+                savedRestock.selectedPotionId === null
+            ) {
+                const legacyPotionIds = {
+                    smallPotion: 200,
+                    greatPotion: 201
+                };
+
+                const legacyPotionKey = [
+                    'smallPotion',
+                    'greatPotion'
+                ].find(key =>
+                    Number(
+                        savedRestock.to?.[key] ??
+                        savedRestock.at?.[key] ??
+                        0
+                    ) > 0
+                );
+
+                savedRestock.selectedPotionId =
+                    legacyPotionIds[legacyPotionKey] ??
+                    DEFAULTS.restock.selectedPotionId;
+            }
+
+            if (savedRestock.ballAt === undefined) {
+                const legacyBallKey =
+                    ['poke', 'great', 'super', 'ultra', 'master']
+                        .find(key =>
+                            Number(
+                                savedRestock.to?.[key] ??
+                                savedRestock.at?.[key] ??
+                                0
+                            ) > 0
+                        );
+
+                savedRestock.ballAt = Math.max(
+                    0,
+                    Number(
+                        savedRestock.at?.[legacyBallKey] ??
+                        DEFAULTS.restock.ballAt
+                    ) || 0
+                );
+            }
+
+            if (savedRestock.ballTo === undefined) {
+                const legacyBallKey =
+                    ['poke', 'great', 'super', 'ultra', 'master']
+                        .find(key =>
+                            Number(
+                                savedRestock.to?.[key] ??
+                                savedRestock.at?.[key] ??
+                                0
+                            ) > 0
+                        );
+
+                savedRestock.ballTo = Math.max(
+                    0,
+                    Number(
+                        savedRestock.to?.[legacyBallKey] ??
+                        DEFAULTS.restock.ballTo
+                    ) || 0
+                );
+            }
+
+            if (savedRestock.potionAt === undefined) {
+                const legacyPotionKey =
+                    ['smallPotion', 'greatPotion']
+                        .find(key =>
+                            Number(
+                                savedRestock.to?.[key] ??
+                                savedRestock.at?.[key] ??
+                                0
+                            ) > 0
+                        );
+
+                savedRestock.potionAt = Math.max(
+                    0,
+                    Number(
+                        savedRestock.at?.[legacyPotionKey] ??
+                        DEFAULTS.restock.potionAt
+                    ) || 0
+                );
+            }
+
+            if (savedRestock.potionTo === undefined) {
+                const legacyPotionKey =
+                    ['smallPotion', 'greatPotion']
+                        .find(key =>
+                            Number(
+                                savedRestock.to?.[key] ??
+                                savedRestock.at?.[key] ??
+                                0
+                            ) > 0
+                        );
+
+                savedRestock.potionTo = Math.max(
+                    0,
+                    Number(
+                        savedRestock.to?.[legacyPotionKey] ??
+                        DEFAULTS.restock.potionTo
+                    ) || 0
+                );
+            }
+
+            delete savedRestock.at;
+            delete savedRestock.to;
+            saved.restock = savedRestock;
+
             return {
                 ...DEFAULTS,
                 ...saved,
@@ -118,22 +251,13 @@
                 },
                 restock: {
                     ...DEFAULTS.restock,
-                    ...(saved.restock || {}),
-                    at: {
-                        ...DEFAULTS.restock.at,
-                        ...(saved.restock?.at || {})
-                    },
-                    to: {
-                        ...DEFAULTS.restock.to,
-                        ...(saved.restock?.to || {})
-                    }
+                    ...(saved.restock || {})
                 }
             };
         } catch {
             return structuredClone(DEFAULTS);
         }
     }
-
     let settings = loadSettings();
     let timer = null;
 
@@ -775,6 +899,13 @@
         return true;
     }
 
+    function isRestockPotion(item) {
+        return Boolean(
+            item &&
+            normalize(item.name || item.nome || '').includes('potion')
+        );
+    }
+
     function mergeItemCatalog(catalog) {
         const list = Array.isArray(catalog)
             ? catalog
@@ -784,21 +915,17 @@
 
         if (!list.length) return;
 
-        const defsById = new Map(
-            Object.entries(RESTOCK_ITEM_DEFS)
-                .map(([key, def]) => [def.id, { ...def, key }])
-        );
-
         for (const item of list) {
             const id = Number(item?.itemId ?? item?.id);
-            const def = defsById.get(id);
-            if (!def) continue;
+            if (!Number.isFinite(id)) continue;
+
+            const name = item?.name || item?.nome;
+            if (!name || !isRestockPotion({ name })) continue;
 
             /*
-             * welcome.itensCompraveis only contains special Market items.
-             * Normal potions/revives come from /assets/items.json and the
-             * Market charges npcPrice for them. A server-provided preco
-             * remains authoritative when present.
+             * items.json is the authoritative complete item catalog. The
+             * welcome.itensCompraveis payload can still override the price
+             * when the server provides one.
              */
             const priceGold = Number(
                 item?.preco ??
@@ -808,7 +935,10 @@
             );
 
             itemCatalog.set(id, {
-                ...def,
+                id,
+                name,
+                nome: name,
+                icon: item?.icon || '',
                 priceGold,
                 compravel: Number.isFinite(priceGold) && priceGold > 0
             });
@@ -936,22 +1066,201 @@
         }
     }
 
-    function restockBallMetaForKey(key) {
+    function restockBallMetaForId(id) {
+        const targetId = Number(id);
+
         return [...ballCatalog.values()]
             .filter(ball =>
-                ball.key === key &&
+                Number(ball.id) === targetId &&
+                ball.compravel &&
+                Number(ball.priceGold || 0) > 0
+            )[0] || null;
+    }
+
+    function restockBallEntries() {
+        return [...ballCatalog.values()]
+            .filter(ball =>
                 ball.compravel &&
                 Number(ball.priceGold || 0) > 0
             )
-            .sort((a, b) => a.priceGold - b.priceGold)[0] || null;
+            .sort((a, b) => {
+                const aRate = Number(a.catchRate);
+                const bRate = Number(b.catchRate);
+                const aKnown = Number.isFinite(aRate) && aRate > 0;
+                const bKnown = Number.isFinite(bRate) && bRate > 0;
+
+                if (aKnown && bKnown) {
+                    return aRate - bRate || Number(a.id) - Number(b.id);
+                }
+
+                if (aKnown) return -1;
+                if (bKnown) return 1;
+
+                return Number(a.id) - Number(b.id);
+            });
     }
 
-    function restockItemMetaForKey(key) {
-        const def = RESTOCK_ITEM_DEFS[key];
-        if (!def) return null;
+    function restockPotionMetaForId(id) {
+        const item = itemCatalog.get(Number(id));
+        return isRestockPotion(item) && item?.compravel ? item : null;
+    }
 
-        const item = itemCatalog.get(def.id);
-        return item?.compravel ? item : null;
+    function restockPotionEntries() {
+        return [...itemCatalog.values()]
+            .filter(item =>
+                isRestockPotion(item) &&
+                item.compravel &&
+                Number(item.priceGold || 0) > 0
+            )
+            .sort((a, b) =>
+                String(a.name || '').localeCompare(
+                    String(b.name || ''),
+                    undefined,
+                    { sensitivity: 'base' }
+                ) ||
+                Number(a.id) - Number(b.id)
+            );
+    }
+
+    function restockThresholds() {
+        return {
+            ballAt: Math.max(
+                0,
+                Number(settings.restock.ballAt || 0)
+            ),
+            ballTo: Math.max(
+                0,
+                Number(settings.restock.ballTo || 0)
+            ),
+            potionAt: Math.max(
+                0,
+                Number(settings.restock.potionAt || 0)
+            ),
+            potionTo: Math.max(
+                0,
+                Number(settings.restock.potionTo || 0)
+            )
+        };
+    }
+
+    function syncRestockSelections() {
+        const ballSelect = q('#moth-ac-restock-ball');
+        const potionSelect = q('#moth-ac-restock-potion');
+        if (!ballSelect || !potionSelect) return;
+
+        const ballEntries = restockBallEntries();
+        const potionEntries = restockPotionEntries();
+
+        let selectionChanged = false;
+
+        const syncSelect = (
+            select,
+            entries,
+            selectedId,
+            emptyLabel
+        ) => {
+            const signature = entries
+                .map(entry => [
+                    entry.id,
+                    entry.nome || entry.name,
+                    entry.priceGold
+                ].join(':'))
+                .join('|');
+
+            if (select.dataset.signature !== signature) {
+                select.dataset.signature = signature;
+                select.replaceChildren();
+
+                if (!entries.length) {
+                    const empty = document.createElement('option');
+                    empty.value = '';
+                    empty.textContent = emptyLabel;
+                    select.appendChild(empty);
+                }
+
+                for (const entry of entries) {
+                    const option = document.createElement('option');
+                    option.value = String(entry.id);
+                    option.textContent =
+                        entry.nome ||
+                        entry.name ||
+                        'Item ' + entry.id;
+                    select.appendChild(option);
+                }
+            }
+
+            const hasSelected = entries.some(
+                entry => Number(entry.id) === Number(selectedId)
+            );
+
+            const nextId = hasSelected
+                ? Number(selectedId)
+                : Number(entries[0]?.id);
+
+            if (Number.isFinite(nextId)) {
+                if (Number(selectedId) !== nextId) {
+                    selectionChanged = true;
+                }
+
+                select.value = String(nextId);
+            } else {
+                select.value = '';
+            }
+
+            select.disabled = !entries.length;
+        };
+
+        const selectedBallId = Number(
+            settings.restock.selectedBallId
+        );
+        syncSelect(
+            ballSelect,
+            ballEntries,
+            selectedBallId,
+            'Waiting for ball catalog…'
+        );
+
+        if (
+            Number.isFinite(Number(settings.restock.selectedBallId)) &&
+            ballEntries.some(entry =>
+                Number(entry.id) ===
+                Number(settings.restock.selectedBallId)
+            )
+        ) {
+            // keep the configured selection
+        } else if (ballEntries.length) {
+            settings.restock.selectedBallId = Number(
+                ballEntries[0].id
+            );
+        }
+
+        const selectedPotionId = Number(
+            settings.restock.selectedPotionId
+        );
+        syncSelect(
+            potionSelect,
+            potionEntries,
+            selectedPotionId,
+            'Waiting for potion catalog…'
+        );
+
+        if (
+            Number.isFinite(Number(settings.restock.selectedPotionId)) &&
+            potionEntries.some(entry =>
+                Number(entry.id) ===
+                Number(settings.restock.selectedPotionId)
+            )
+        ) {
+            // keep the configured selection
+        } else if (potionEntries.length) {
+            settings.restock.selectedPotionId = Number(
+                potionEntries[0].id
+            );
+        }
+
+        if (selectionChanged) {
+            saveSettings();
+        }
     }
 
     function pendingRestockSpend() {
@@ -970,9 +1279,10 @@
 
     function tryRestockCandidate({
         kind,
-        key,
         meta,
         count,
+        at,
+        to,
         now
     }) {
         if (!meta) return false;
@@ -990,17 +1300,17 @@
         const health = restockHealth.get(pendingKey);
         if (Number(health?.blockedUntil || 0) > now) return false;
 
-        const at = Math.max(
+        const threshold = Math.max(
             0,
-            Number(settings.restock.at?.[key] || 0)
+            Number(at || 0)
         );
 
         const target = Math.max(
-            at,
-            Number(settings.restock.to?.[key] || 0)
+            threshold,
+            Number(to || 0)
         );
 
-        if (target <= 0 || count > at || count >= target) {
+        if (target <= 0 || count > threshold || count >= target) {
             return false;
         }
 
@@ -1129,40 +1439,42 @@
             return false;
         }
 
-        for (const key of ['poke', 'great', 'super', 'ultra']) {
-            if (!settings.use[key]) continue;
+        const thresholds = restockThresholds();
 
-            const meta = restockBallMetaForKey(key);
-            const count = Number(
-                protocolBalls.get(meta?.id) || 0
-            );
+        const ballMeta = restockBallMetaForId(
+            settings.restock.selectedBallId
+        );
+        const ballCount = Number(
+            protocolBalls.get(ballMeta?.id) || 0
+        );
 
-            if (tryRestockCandidate({
-                kind: 'ball',
-                key,
-                meta,
-                count,
-                now
-            })) {
-                return true;
-            }
+        if (tryRestockCandidate({
+            kind: 'ball',
+            meta: ballMeta,
+            count: ballCount,
+            at: thresholds.ballAt,
+            to: thresholds.ballTo,
+            now
+        })) {
+            return true;
         }
 
-        for (const key of ['smallPotion', 'greatPotion', 'revive']) {
-            const meta = restockItemMetaForKey(key);
-            const count = Number(
-                protocolItems.get(meta?.id) || 0
-            );
+        const potionMeta = restockPotionMetaForId(
+            settings.restock.selectedPotionId
+        );
+        const potionCount = Number(
+            protocolItems.get(potionMeta?.id) || 0
+        );
 
-            if (tryRestockCandidate({
-                kind: 'item',
-                key,
-                meta,
-                count,
-                now
-            })) {
-                return true;
-            }
+        if (tryRestockCandidate({
+            kind: 'item',
+            meta: potionMeta,
+            count: potionCount,
+            at: thresholds.potionAt,
+            to: thresholds.potionTo,
+            now
+        })) {
+            return true;
         }
 
         if (timedOut) {
@@ -1953,6 +2265,35 @@
                 font-weight: 700;
             }
 
+            .moth-ac-restock-picker {
+                display: grid;
+                grid-template-columns: repeat(2,minmax(0,1fr));
+                gap: 6px;
+                margin-bottom: 6px;
+            }
+
+            .moth-ac-restock-picker label {
+                display: grid;
+                gap: 3px;
+                min-width: 0;
+                color: #aaa0a4;
+                font-size: 8.5px;
+            }
+
+            .moth-ac-restock-picker select {
+                width: 100%;
+                min-width: 0;
+                padding: 4px 5px;
+                border-radius: 5px;
+                border: 1px solid rgba(255,255,255,.14);
+                color: white;
+                background: rgba(0,0,0,.22);
+            }
+
+            .moth-ac-restock-picker select:disabled {
+                opacity: .55;
+            }
+
             .moth-ac-restock-status {
                 min-width: 0;
                 margin-left: auto;
@@ -2229,6 +2570,7 @@
         }
     }
 
+
     function restockControl(
         key,
         label
@@ -2269,22 +2611,28 @@
 
             <div class="moth-ac-restock">
                 <div class="moth-ac-restock-head">
-                    <label title="Automatically buy configured balls, potions, and revives while Auto Catch is ON.">
+                    <label title="Automatically buy the selected ball and selected potion while Auto Catch is ON.">
                         <input id="moth-ac-restock-enabled" type="checkbox">
                         Auto-restock
                     </label>
                     <span class="moth-ac-restock-status" id="moth-ac-restock-status">off</span>
                 </div>
 
+                <div class="moth-ac-restock-picker">
+                    <label>
+                        <span>Ball to restock</span>
+                        <select id="moth-ac-restock-ball"></select>
+                    </label>
+                    <label>
+                        <span>Potion to restock</span>
+                        <select id="moth-ac-restock-potion"></select>
+                    </label>
+                </div>
+
                 <div class="moth-ac-restock-grid">
                     <small></small><small>at</small><small>to</small>
-                    ${restockControl('poke', 'Poké')}
-                    ${restockControl('great', 'Great')}
-                    ${restockControl('super', 'Super')}
-                    ${restockControl('ultra', 'Ultra')}
-                    ${restockControl('smallPotion', 'Small Potion')}
-                    ${restockControl('greatPotion', 'Great Potion')}
-                    ${restockControl('revive', 'Revive')}
+                    ${restockControl('ball', 'Selected Ball')}
+                    ${restockControl('potion', 'Selected Potion')}
                 </div>
 
                 <div class="moth-ac-grid moth-ac-restock-gold">
@@ -2299,7 +2647,6 @@
             </div>
         `;
     }
-
     function installPanel() {
         injectStyle();
 
@@ -2333,6 +2680,7 @@
         });
 
         syncBallPicker();
+        syncRestockSelections();
 
         const restockEnabled =
             q(
@@ -2364,6 +2712,42 @@
             }
         );
 
+        const restockBallSelect =
+            q(
+                '#moth-ac-restock-ball',
+                panel
+            );
+
+        const restockPotionSelect =
+            q(
+                '#moth-ac-restock-potion',
+                panel
+            );
+
+        restockBallSelect?.addEventListener(
+            'change',
+            () => {
+                settings.restock.selectedBallId =
+                    Number(restockBallSelect.value) || 0;
+
+                saveSettings();
+                maybeRestock();
+                updateUI();
+            }
+        );
+
+        restockPotionSelect?.addEventListener(
+            'change',
+            () => {
+                settings.restock.selectedPotionId =
+                    Number(restockPotionSelect.value) || 0;
+
+                saveSettings();
+                maybeRestock();
+                updateUI();
+            }
+        );
+
         for (
             const input of
             qa(
@@ -2371,39 +2755,25 @@
                 panel
             )
         ) {
-            const key =
-                input.dataset
-                    .mothRestockAt;
+            const key = input.dataset.mothRestockAt;
+            const field =
+                key === 'ball'
+                    ? 'ballAt'
+                    : 'potionAt';
 
             input.value =
-                Number(
-                    settings.restock
-                        .at[
-                        key
-                    ] ||
-                    0
-                );
+                Number(settings.restock[field] || 0);
 
             input.addEventListener(
                 'change',
                 () => {
-                    settings.restock
-                        .at[
-                        key
-                    ] =
-                        Math.max(
-                            0,
-                            Number(
-                                input.value
-                            ) ||
-                            0
-                        );
+                    settings.restock[field] = Math.max(
+                        0,
+                        Number(input.value) || 0
+                    );
 
                     input.value =
-                        settings.restock
-                            .at[
-                            key
-                        ];
+                        String(settings.restock[field]);
 
                     saveSettings();
                     maybeRestock();
@@ -2418,39 +2788,25 @@
                 panel
             )
         ) {
-            const key =
-                input.dataset
-                    .mothRestockTo;
+            const key = input.dataset.mothRestockTo;
+            const field =
+                key === 'ball'
+                    ? 'ballTo'
+                    : 'potionTo';
 
             input.value =
-                Number(
-                    settings.restock
-                        .to[
-                        key
-                    ] ||
-                    0
-                );
+                Number(settings.restock[field] || 0);
 
             input.addEventListener(
                 'change',
                 () => {
-                    settings.restock
-                        .to[
-                        key
-                    ] =
-                        Math.max(
-                            0,
-                            Number(
-                                input.value
-                            ) ||
-                            0
-                        );
+                    settings.restock[field] = Math.max(
+                        0,
+                        Number(input.value) || 0
+                    );
 
                     input.value =
-                        settings.restock
-                            .to[
-                            key
-                        ];
+                        String(settings.restock[field]);
 
                     saveSettings();
                     maybeRestock();
@@ -2570,6 +2926,7 @@
         setText('#moth-ac-rate', `${rate.toFixed(rate >= 10 ? 0 : 1)}%`);
         setText('#moth-ac-protocol', protocolText);
         syncBallPicker();
+        syncRestockSelections();
 
         setText(
             '#moth-ac-restock-status',
@@ -2609,7 +2966,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.3.0 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.4.0 loaded');
     }
 
     if (document.readyState === 'loading') {
