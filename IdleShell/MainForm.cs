@@ -247,7 +247,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.GameBrowserArguments,
-                    AreBrowserExtensionsEnabled = false
+                    AreBrowserExtensionsEnabled = true
                 });
 
             // All stream accounts share ONE user data folder so their profiles
