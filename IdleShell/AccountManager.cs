@@ -54,7 +54,8 @@ internal sealed class AccountManager
     public const int DefaultVisibleStreams = 2;
 
     private static readonly Regex GeneratedIdPattern =
-        new(@"^(?:Stream|Account)(\d+)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"^(?:StreamKick|Stream|Account)(\d+)$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex AlnumOnly =
         new(@"^[A-Za-z0-9]+$", RegexOptions.Compiled);
 
