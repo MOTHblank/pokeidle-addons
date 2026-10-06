@@ -9,7 +9,7 @@ persistent game accounts and optional Twitch/Kick stream panes.
 - `IdleShell/` — native .NET 10/WebView2 host.
 - `upstream/` — captured upstream PokéIdle client data.
 
-Idle Shell uses its own native userscript runner, so the shipped addons work
+Idle Shell uses a browser-native WebView2 extension userscript engine, so the shipped addons work
 without installing Tampermonkey or any browser extension. The same `*.user.js`
 files remain usable in a normal userscript manager.
 
