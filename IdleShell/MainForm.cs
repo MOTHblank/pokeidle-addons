@@ -106,7 +106,7 @@ internal sealed class MainForm : Form
         public List<StreamSlot> Slots { get; } = [];
     }
 
-    private sealed class StreamSlot(Account account, string gameProfile, int slotNumber)
+    private sealed class StreamSlot(Account account, int slotNumber)
     {
         public Account Account { get; set; } = account;
         public int SlotNumber { get; } = slotNumber;
@@ -531,7 +531,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        var slot = new StreamSlot(account, workspace.GameProfile, slotNumber);
+        var slot = new StreamSlot(account, slotNumber);
         workspace.Slots.Add(slot);
         slot.Tab.Tag = slot;
         slot.Tab.Text = StreamTabText(slot);
@@ -610,7 +610,13 @@ internal sealed class MainForm : Form
         workspace.StreamHeader.Text =
             $"{(workspace.StreamsExpanded ? "▾" : "▸")} Streams · {open} open · T {openTwitch}/{AccountManager.MaxStreamsPerService} · K {openKick}/{AccountManager.MaxStreamsPerService} · {visible} visible";
         workspace.StreamOpen.Text = "+ Open stream";
-        workspace.StreamServicePicker.SelectedIndex = workspace.ActiveStreamService == AccountService.Kick ? 1 : 0;
+        var serviceIndex = workspace.ActiveStreamService == AccountService.Kick ? 1 : 0;
+        if (workspace.StreamServicePicker.SelectedIndex != serviceIndex)
+        {
+            _suppressTabEvent = true;
+            workspace.StreamServicePicker.SelectedIndex = serviceIndex;
+            _suppressTabEvent = false;
+        }
 
         if (workspace.Index == 0 && _game1Button is not null)
             _game1Button.Text = $"Game 1: {state.ToLowerInvariant()}";
@@ -642,17 +648,18 @@ internal sealed class MainForm : Form
             }
         }
 
-        if (hit < 0 || hit >= workspace.Slots.Count)
+        if (hit < 0 || hit >= workspace.StreamTabs.TabPages.Count)
+            return;
+
+        if (workspace.StreamTabs.TabPages[hit].Tag is not StreamSlot slot)
             return;
 
         SetActiveWorkspace(workspace.Index);
         _suppressTabEvent = true;
         workspace.StreamTabs.SelectedIndex = hit;
         _suppressTabEvent = false;
-        workspace.ActiveTabIndex = hit;
+        workspace.ActiveTabIndex = workspace.Slots.IndexOf(slot);
 
-        if (workspace.StreamTabs.TabPages[hit].Tag is not StreamSlot slot)
-            return;
         var menu = new ContextMenuStrip();
 
         menu.Items.Add(new ToolStripMenuItem(
@@ -1098,22 +1105,20 @@ internal sealed class MainForm : Form
 
     private void SelectTab(GameWorkspace workspace, int index)
     {
-        if (workspace.StreamTabs.TabPages.Count == 0)
+        var target = index >= 0 && index < workspace.Slots.Count ? workspace.Slots[index] : null;
+        if (target is null)
         {
             workspace.ActiveTabIndex = -1;
             return;
         }
 
         workspace.StreamsExpanded = true;
-        var target = index >= 0 && index < workspace.Slots.Count ? workspace.Slots[index] : null;
-        if (target is not null)
-        {
-            workspace.ActiveStreamService = target.Account.Service;
-            RefreshStreamTabs(workspace);
-        }
-        var tabIndex = target is null ? -1 : workspace.StreamTabs.TabPages.IndexOf(target.Tab);
-        workspace.ActiveTabIndex = target is null ? -1 : index;
+        workspace.ActiveStreamService = target.Account.Service;
+        RefreshStreamTabs(workspace);
+        var tabIndex = workspace.StreamTabs.TabPages.IndexOf(target.Tab);
+        workspace.ActiveTabIndex = index;
         if (tabIndex < 0) return;
+
         SetActiveWorkspace(workspace.Index);
         _suppressTabEvent = true;
         workspace.StreamTabs.SelectedIndex = tabIndex;
