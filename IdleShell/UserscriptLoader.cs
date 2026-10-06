@@ -263,8 +263,10 @@ internal sealed class UserscriptLoader
 
             var entry = new Dictionary<string, object?>
             {
-                ["matches"] = script.Matches.Count > 0 ? script.Matches : ["<all_urls>"],
-                ["js"] = [$"scripts/{fileName}"],
+                ["matches"] = script.Matches.Count > 0
+                    ? (object)script.Matches
+                    : new[] { "<all_urls>" },
+                ["js"] = new[] { $"scripts/{fileName}" },
                 ["run_at"] = script.RunAt,
                 ["all_frames"] = !script.NoFrames,
                 ["world"] = script.InjectInto == "content" ? "ISOLATED" : "MAIN"
@@ -291,11 +293,11 @@ internal sealed class UserscriptLoader
             {
                 ["service_worker"] = "background.js"
             },
-            ["host_permissions"] = ["<all_urls>"],
+            ["host_permissions"] = new[] { "<all_urls>" },
             ["content_scripts"] = contentScripts
                 .Prepend(new Dictionary<string, object?>
                 {
-                    ["matches"] = ["<all_urls>"],
+                    ["matches"] = new[] { "<all_urls>" },
                     ["js"] = ["bridge.js"],
                     ["run_at"] = "document_start",
                     ["all_frames"] = true
