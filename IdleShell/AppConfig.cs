@@ -5,42 +5,28 @@ internal static class AppConfig
     public const string GameUrl = "https://pokeidle.io/app";
     public const int ToolbarHeight = 40;
 
-    public const string BrowserArguments =
+    // Game environment: never throttle, never treat covered windows as hidden.
+    public const string GameBrowserArguments =
         "--disable-background-timer-throttling " +
         "--disable-renderer-backgrounding " +
-        "--disable-backgrounding-occluded-windows";
+        "--disable-backgrounding-occluded-windows " +
+        "--disable-features=CalculateNativeWinOcclusion " +
+        "--autoplay-policy=no-user-gesture-required";
 
-    public static string UserDataFolder =>
+    // Stream environment: default Chromium throttling, autoplay allowed.
+    public const string StreamBrowserArguments = GameBrowserArguments;
+        "--autoplay-policy=no-user-gesture-required";
+
+    private static string Root =>
         Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData),
-            "Moth",
-            "IdleShell",
-            "PokeIdle");
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Moth", "IdleShell");
 
+    public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
+    public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
+    public static string SessionFile => Path.Combine(Root, "session.json");
+
+    // Put unpacked extensions (e.g. Tampermonkey) in subfolders here.
     public static string ExtensionsFolder =>
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData),
-            "Moth",
-            "IdleShell",
-            "Extensions");
-
-    public static string TampermonkeyExtensionFolder =>
-        Path.Combine(
-            ExtensionsFolder,
-            "Tampermonkey");
-
-    public static string TampermonkeyProvisioningFolder =>
-        Path.Combine(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData),
-            "Moth",
-            "IdleShell",
-            "Tampermonkey");
-
-    public static string AddonsFolder =>
-        Path.Combine(
-            AppContext.BaseDirectory,
-            "addons");
+        Path.Combine(AppContext.BaseDirectory, "extensions");
 }
