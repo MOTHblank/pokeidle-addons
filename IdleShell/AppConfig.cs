@@ -47,6 +47,8 @@ internal static class AppConfig
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Moth", "IdleShell");
 
+    public static string DataRoot => Root;
+
     public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
     public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
     public static string SessionFile => Path.Combine(Root, "session.json");
