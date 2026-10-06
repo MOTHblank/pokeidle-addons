@@ -870,38 +870,49 @@ internal sealed class MainForm : Form
     {
         try
         {
-            var workspace = WorkspaceForGroup(gameProfile);
-            if (workspace is null)
+            var service = AccountManager.ServiceForUrl(url);
+            if (service is null)
             {
-                Log($"no workspace for game profile {gameProfile}; ignored stream link {url}");
+                Log($"unsupported stream URL {url} (via {via})");
                 return;
             }
 
-            var targets = _accounts.StreamAccountsForUrl(url);
-            if (targets.Count == 0)
+            // The streamer is intentionally shared between both persistent game
+            // accounts. A click in either game therefore opens the same channel
+            // once in each game workspace.
+            var streamAccounts = _accounts.EnabledStreamAccounts
+                .Where(a => a.Service == service.Value)
+                .ToArray();
+
+            if (streamAccounts.Length == 0)
             {
-                Log($"no enabled Twitch/Kick accounts for {url} (via {via}) — ignored");
+                Log($"no enabled {service} account for {url} (via {via}) — ignored");
                 return;
             }
 
             var created = 0;
-            foreach (var account in targets)
+            var routed = 0;
+
+            for (var i = 0; i < _workspaces.Count; i++)
             {
+                var workspace = _workspaces[i];
+
+                // Prefer the stream login profile in the matching position when
+                // available; otherwise reuse the first enabled profile. This
+                // guarantees exactly one stream pane per game workspace while
+                // still working with one or many configured stream logins.
+                var account = streamAccounts[Math.Min(i, streamAccounts.Length - 1)];
                 var slot = SlotForProfile(workspace, account.Id);
                 if (slot is null) continue;
+
                 if (slot.Pane is null) created++;
                 await EnsureStreamPaneAsync(workspace, slot, url);
+                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+                routed++;
             }
 
-            var first = workspace.Slots.FirstOrDefault(s =>
-                s.Pane is not null &&
-                targets.Any(a =>
-                    string.Equals(a.Id, s.Account.Id, StringComparison.OrdinalIgnoreCase)));
-            if (first is not null)
-                SelectTab(workspace, workspace.Slots.IndexOf(first));
-
-            Log($"Routed {url} to Game {workspace.Index + 1}: {targets.Count} account(s) via {via}" +
-                (created > 0 ? $" ({created} new pane(s) created)" : ""));
+            Log($"Routed {url} to {routed}/{_workspaces.Count} game accounts via {via}" +
+                (created > 0 ? $" ({created} new pane(s))" : ""));
             SaveSession();
         }
         catch (Exception ex)
