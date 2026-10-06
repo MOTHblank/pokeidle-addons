@@ -132,11 +132,10 @@ internal sealed class AccountsDialog : Form
     private void UpdateVisibleLabel()
     {
         // The limit applies independently inside Game 1 and Game 2.
-        var enabled = Math.Max(1, _accounts.EnabledStreamAccounts.Count());
         _visibleLabel.Text =
             $"Each game: {Math.Min((int)_visibleUpDown.Value, AccountManager.MaxStreamSlots)} visible stream slots · " +
             $"capacity {AccountManager.MaxStreamsPerService} Twitch + {AccountManager.MaxStreamsPerService} Kick · " +
-            $"max {AccountManager.MaxStreamSlotsPerAccount} per login · hidden panes still run:";
+            $"up to {AccountManager.MaxStreamSlotsPerAccount} streams per login · hidden panes still run:";
     }
 
     private void AddAccount(AccountService service)
@@ -246,7 +245,7 @@ internal sealed class AccountsDialog : Form
             _list.Items[0].Selected = true;
         SyncServiceCombo();
         _refreshing = true;
-        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamAccounts);
+        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamSlots);
         _refreshing = false;
         UpdateVisibleLabel();
     }
