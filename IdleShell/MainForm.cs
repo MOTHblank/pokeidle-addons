@@ -514,6 +514,13 @@ internal sealed class MainForm : Form
                 AddStreamSlot(workspace, account, slotNumber);
             }
         }
+
+        if (workspace.Slots.All(s => s.Account.Service != workspace.ActiveStreamService) &&
+            workspace.Slots.Count > 0)
+        {
+            workspace.ActiveStreamService = workspace.Slots[0].Account.Service;
+            RefreshStreamTabs(workspace);
+        }
     }
 
     private void AddStreamSlot(GameWorkspace workspace, Account account, int slotNumber)
@@ -1341,6 +1348,7 @@ internal sealed class MainForm : Form
         if (workspace.ActiveTabIndex < 0) return result;
 
         var visibleAccounts = EnabledStreamSlots(workspace)
+            .Where(s => s.Account.Service == workspace.ActiveStreamService)
             .Take(_accounts.VisibleStreamCount)
             .ToList();
 
