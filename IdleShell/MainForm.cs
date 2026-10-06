@@ -180,6 +180,8 @@ internal sealed class MainForm : Form
             {
                 SetActiveWorkspace(workspace.Index);
                 workspace.StreamsExpanded = !workspace.StreamsExpanded;
+                if (workspace.StreamsExpanded && workspace.ActiveTabIndex < 0)
+                    SelectFirstOpenSlotForService(workspace);
                 LayoutPanes();
             };
             workspace.StreamOpen.Click += async (_, _) =>
@@ -218,6 +220,8 @@ internal sealed class MainForm : Form
                 if (e.Button == MouseButtons.Right)
                     ShowStreamContextMenu(workspace, e.Location);
             };
+
+            workspace.StreamsExpanded = false;
         }
     }
 
@@ -662,11 +666,11 @@ internal sealed class MainForm : Form
 
         var menu = new ContextMenuStrip();
 
-        menu.Items.Add(new ToolStripMenuItem(
+        menu.Items.Add(new ToolStripMenuItem
         {
             Text = $"{slot.Account.Service} {slot.SlotNumber} · {slot.Account.DisplayLabel}",
             Enabled = false
-        }));
+        });
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(
@@ -706,22 +710,38 @@ internal sealed class MainForm : Form
 
     private void CloseStream(GameWorkspace workspace, StreamSlot slot)
     {
+        var wasActive = workspace.ActiveTabIndex >= 0 &&
+                        workspace.ActiveTabIndex < workspace.Slots.Count &&
+                        ReferenceEquals(workspace.Slots[workspace.ActiveTabIndex], slot);
+
         if (slot.Pane is { } pane)
             DetachAndClose(pane);
 
         slot.Pane = null;
         slot.Url = null;
+        slot.Tab.Text = StreamTabText(slot);
 
-        if (workspace.ActiveTabIndex >= 0 &&
-            workspace.ActiveTabIndex < workspace.Slots.Count &&
-            ReferenceEquals(workspace.Slots[workspace.ActiveTabIndex], slot))
+        if (wasActive)
         {
-            var next = workspace.Slots.FindIndex(s => s.Pane is not null);
-            workspace.ActiveTabIndex = next;
+            var next = workspace.Slots.FirstOrDefault(s =>
+                s.Account.Service == workspace.ActiveStreamService &&
+                s.Pane is not null &&
+                !ReferenceEquals(s, slot))
+                ?? workspace.Slots.FirstOrDefault(s =>
+                    s.Pane is not null && !ReferenceEquals(s, slot));
 
-            _suppressTabEvent = true;
-            workspace.StreamTabs.SelectedIndex = next;
-            _suppressTabEvent = false;
+            if (next is not null)
+            {
+                SelectTab(workspace, workspace.Slots.IndexOf(next));
+            }
+            else
+            {
+                workspace.ActiveTabIndex = -1;
+                RefreshStreamTabs(workspace);
+                _suppressTabEvent = true;
+                workspace.StreamTabs.SelectedIndex = -1;
+                _suppressTabEvent = false;
+            }
         }
 
         LayoutPanes();
