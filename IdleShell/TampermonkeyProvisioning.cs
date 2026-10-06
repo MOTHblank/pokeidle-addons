@@ -28,6 +28,10 @@ internal sealed class TampermonkeyProvisioning : IDisposable
         _server = new HttpProvisioningServer(_outputPath);
     }
 
+    public string AddonsFolder => _addonsFolder;
+
+    public HttpProvisioningServer OwnedServer => _server;
+
     public string JsonPath => _outputPath;
 
     public string Url => _server.Url
@@ -35,6 +39,8 @@ internal sealed class TampermonkeyProvisioning : IDisposable
             "Tampermonkey provisioning server is not started.");
 
     public string Hash { get; private set; } = string.Empty;
+
+    public int ScriptCount { get; private set; }
 
     public void Prepare()
     {
@@ -70,6 +76,8 @@ internal sealed class TampermonkeyProvisioning : IDisposable
 
     private ProvisioningDocument BuildPayload()
     {
+        ScriptCount = 0;
+
         if (!Directory.Exists(_addonsFolder))
         {
             return new ProvisioningDocument(
@@ -87,8 +95,11 @@ internal sealed class TampermonkeyProvisioning : IDisposable
                 StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        // One bad header must not prevent the remaining addons from being
+        // provisioned ("no scripts load at all" failure mode).
         var scripts = files
-            .Select(ParseScript)
+            .Select(LoadScript)
+            .OfType<ParsedUserscript>()
             .Select(
                 (script, index) => new ProvisioningScript(
                     script.Name,
@@ -101,9 +112,27 @@ internal sealed class TampermonkeyProvisioning : IDisposable
                             script.Source))))
             .ToArray();
 
+        ScriptCount = scripts.Length;
+
         return new ProvisioningDocument(
             "1",
             scripts);
+    }
+
+    private static ParsedUserscript? LoadScript(string path)
+    {
+        try
+        {
+            return ParseScript(path);
+        }
+        catch (TampermonkeySetupException ex)
+        {
+            Console.Error.WriteLine(
+                $"[IdleShell] Userscript skipped during provisioning: " +
+                $"{ex.Message}");
+
+            return null;
+        }
     }
 
     private static ParsedUserscript ParseScript(
