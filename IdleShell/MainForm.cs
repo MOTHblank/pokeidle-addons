@@ -891,7 +891,7 @@ internal sealed class MainForm : Form
                 pane.View.Reload();
             }
 
-            Log($"userscript extension reloaded: {_userscripts.Scripts.Count} script(s) across {_games.Count} game(s) and {AllStreamSlots().Count(s => s.Pane is not null)} open stream pane(s)");
+            Log($"userscript extension reloaded: {_userscripts.ScriptNames.Count} script(s) across {_games.Count} game(s) and {AllStreamSlots().Count(s => s.Pane is not null)} open stream pane(s)");
         }
         catch (Exception ex)
         {
