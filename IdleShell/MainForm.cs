@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 
 namespace Moth.PokeIdle.IdleShell;
@@ -33,9 +32,6 @@ internal sealed class MainForm : Form
     private Button _foregroundBothButton = null!;
     private ToolStripMenuItem _visibleStreamsItem = null!;
     private int _activeWorkspaceIndex;
-    private static readonly Regex StreamUrlRegex =
-        new($@"^https?://{AppConfig.StreamHostPattern}/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     // Each game owns a completely separate stream area. A login profile can be
     // used by both games because each workspace owns its own WebView2 controller.
     private sealed class GameWorkspace(int index)
@@ -49,12 +45,6 @@ internal sealed class MainForm : Form
         public string LastProbeSummary { get; set; } = "Checking…";
         public int ActiveTabIndex { get; set; } = -1;
         public bool StreamsExpanded { get; set; }
-
-        public Panel Frame { get; } = new()
-        {
-            BorderStyle = BorderStyle.FixedSingle,
-            BackColor = SystemColors.Control
-        };
 
         public Label Header { get; } = new()
         {
@@ -111,7 +101,6 @@ internal sealed class MainForm : Form
     private sealed class StreamSlot(Account account, string gameProfile, int slotNumber)
     {
         public Account Account { get; set; } = account;
-        public string GameProfile { get; } = gameProfile;
         public int SlotNumber { get; } = slotNumber;
         public Pane? Pane;
         public string? Url;
@@ -603,26 +592,45 @@ internal sealed class MainForm : Form
 
         var slot = workspace.Slots[hit];
         var menu = new ContextMenuStrip();
+
         menu.Items.Add(
-            $"Close {slot.Account.DisplayLabel}",
+            $"{slot.Account.Service} {slot.SlotNumber} · {slot.Account.DisplayLabel}",
+            null,
+            null);
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(
+            slot.Pane is null ? "Open / log in" : "Reload stream",
+            null,
+            async (_, _) =>
+            {
+                var url = slot.Url ?? AccountManager.LoginUrl(slot.Account.Service);
+                if (slot.Pane is null)
+                    await EnsureStreamPaneAsync(workspace, slot, url);
+                else
+                    slot.Pane.View.Reload();
+                SelectTab(workspace, hit);
+            });
+
+        menu.Items.Add(
+            slot.Pane?.View.IsMuted == true ? "Unmute" : "Mute",
+            null,
+            (_, _) =>
+            {
+                if (slot.Pane is not null)
+                    slot.Pane.View.IsMuted = !slot.Pane.View.IsMuted;
+            });
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(
+            $"Close {slot.Account.Service} {slot.SlotNumber}",
             null,
             (_, _) => CloseStream(workspace, slot));
         menu.Items.Add(
             $"Close all open streams for Game {workspace.Index + 1}",
             null,
             (_, _) => CloseAllStreams(workspace));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(
-            "Open this account",
-            null,
-            async (_, _) =>
-            {
-                await EnsureStreamPaneAsync(
-                    workspace,
-                    slot,
-                    slot.Url ?? AccountManager.LoginUrl(slot.Account.Service));
-                SelectTab(workspace, hit);
-            });
+
         menu.Show(workspace.StreamTabs, location);
     }
 
