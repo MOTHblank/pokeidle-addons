@@ -24,6 +24,13 @@ $outDir  = Join-Path $PSScriptRoot "bin\$config\net10.0-windows"
 $pubDir  = Join-Path $PSScriptRoot "publish"
 
 # The shell runs the real upstream Violentmonkey extension, not a clone.
+# Remove the old pre-vendor layout so a stale unpacked extension can never be
+# picked up by a development run. The current layout is IdleShell/vendor/violentmonkey.
+$legacyVmDir = Join-Path $PSScriptRoot "violentmonkey"
+if (Test-Path $legacyVmDir) {
+    Write-Host "Removing legacy Violentmonkey directory: $legacyVmDir"
+    Remove-Item $legacyVmDir -Recurse -Force
+}
 Write-Host "Preparing official Violentmonkey 2.49.0 MV3..."
 & (Join-Path $PSScriptRoot "prepare-violentmonkey.ps1")
 if ($LASTEXITCODE) { throw "Violentmonkey preparation failed" }
