@@ -16,6 +16,9 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
   the login profile, so multiple tabs no longer alternate between account names.
 - Each slot is mapped to an enabled login profile behind the scenes. A single login
   profile may carry the full ten-slot service capacity.
+- Every opened stream slot is composited simultaneously while the dock is expanded.
+  Tabs select and manage slots; they do not replace another visible stream.
+  There is no separate "visible streams" limit.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell embeds the official upstream **Violentmonkey 2.49.0 MV3** extension
   and installs it into each WebView2 profile with
@@ -132,9 +135,11 @@ the matching enabled Twitch/Kick login profile.
 
 Use the compact **+ Open stream** button in either workspace for manual stream URLs.
 The stream dock is collapsed by default; expand it only when streams are needed.
-Choose **Twitch** or **Kick** to show that service's ten stable slots, `T1`–`T10`
-or `K1`–`K10`. Right-click a slot for login information, open/reload, mute, or
-close actions.
+Choose **Twitch** or **Kick** for the service used by manual stream opening. All
+currently opened Twitch and Kick panes remain visible together while the dock is
+expanded. The service tabs (`T1`–`T10` / `K1`–`K10`) select and manage slots;
+they do not replace one visible stream with another. Right-click a slot for login
+information, open/reload, mute, or close actions.
 ## Scope
 
 The shell uses the official Violentmonkey 2.49.0 codebase, with only the
