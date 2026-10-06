@@ -29,31 +29,34 @@ internal sealed class Pane
     private Pane(
         PaneSpec spec,
         CoreWebView2Controller controller,
-        UserscriptLoader? nativeScripts)
+        IntPtr hostWindowHandle,
+        ViolentmonkeyManager? userscripts)
     {
         Spec = spec;
         Controller = controller;
-        _nativeScripts = nativeScripts;
+        _hostWindowHandle = hostWindowHandle;
+        _userscripts = userscripts;
         if (spec.Kind == PaneKind.Stream) Mode = spec.Mode;
     }
 
     public static async Task<Pane> CreateAsync(
         CoreWebView2Environment env, IntPtr hwnd, PaneSpec spec,
-        UserscriptLoader? nativeScripts = null)
+        ViolentmonkeyManager? userscripts = null)
     {
         var options = env.CreateCoreWebView2ControllerOptions();
         options.ProfileName = spec.Profile;
         options.IsInPrivateModeEnabled = false;
 
         var controller = await env.CreateCoreWebView2ControllerAsync(hwnd, options);
-        var pane = new Pane(spec, controller, nativeScripts);
+        var pane = new Pane(spec, controller, hostWindowHandle, userscripts);
         await pane.ConfigureAsync();
 
         pane.View.Navigate(spec.Url);
         return pane;
     }
 
-    private readonly UserscriptLoader? _nativeScripts;
+    private readonly ViolentmonkeyManager? _userscripts;
+    private readonly IntPtr _hostWindowHandle;
 
     private static string BootstrapScript(PaneSpec spec)
     {
@@ -220,11 +223,11 @@ internal sealed class Pane
         if (Spec.Kind == PaneKind.Game)
             await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
 
-        // Install the browser-native userscript extension before the first
-        // navigation. The extension engine owns matching, timing and execution;
-        // this host no longer injects/evals addon source itself.
-        if (_nativeScripts is not null)
-            await _nativeScripts.InstallAsync(View.Profile);
+        // Install the real upstream Violentmonkey extension before the first
+        // navigation, and synchronize repository scripts through VM's own API.
+        if (_userscripts is not null)
+            await _userscripts.InstallForProfileAsync(
+                View.Profile, View.Environment, _hostWindowHandle);
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -260,8 +263,9 @@ internal sealed class Pane
     // Low-memory target must be set on a *visible* webview (setting it while
     // suspended/hidden is ignored per docs), so Show() applies Normal and
     // Hide()/Park() apply Low. Never mix with TrySuspend.
-    public Task AttachUserscriptAsync(UserscriptLoader loader) =>
-        loader.InstallAsync(View.Profile);
+    public Task AttachUserscriptAsync(ViolentmonkeyManager manager) =>
+        manager.InstallForProfileAsync(
+            View.Profile, View.Environment, _hostWindowHandle);
 
     public void Show(Rectangle bounds)
     {
