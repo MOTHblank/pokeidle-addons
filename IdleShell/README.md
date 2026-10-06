@@ -8,6 +8,9 @@ native userscript injection and optional persistent Twitch/Kick stream panes.
 - .NET 10 WinForms host.
 - Two persistent WebView2 game profiles: AccountA and AccountB.
 - One shared stream environment with separate named stream profiles.
+- The UI is split into two independent Game 1 / Game 2 workspaces.
+- Each workspace has its own stream tab strip and can use up to 10 stream panes
+  at once, including Twitch and Kick accounts.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell loads those scripts before each document's own scripts; no browser
   extension or CRX is required.
@@ -89,7 +92,9 @@ every 30 seconds and writes `probe.csv` under the LocalAppData root.
 
 Twitch/Kick links inside PokéIdle are intercepted by
 `addons/idleshell-link-router.user.js` and handed to the host. The host fans
-each URL out to every enabled account for the matching service.
+each URL out only inside the originating game workspace, to every enabled
+account for the matching service. Game 1 and Game 2 can therefore run different
+stream sets independently, up to 10 panes per game.
 
 Stream profiles are configured through Accounts and persisted in
 `accounts.json`. The legacy `stream-accounts.txt` file is imported on first
