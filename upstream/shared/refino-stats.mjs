@@ -23,8 +23,10 @@
  * endgame de verdade.
  *
  * **O SPD fica de fora.** Não é esquecimento: `stats.speed` não entra em combate nenhum. Quem
- * decide cadência de ataque é o **IV** de speed (`cooldownComSpeed` em `game/combate.mjs`), que
- * é fixo no nascimento. Vender "+1 SPD" seria vender um número que não faz nada.
+ * acelera os ataques é o Speed BASE DA ESPÉCIE (o potencial dos golpes, até 7% —
+ * `cooldownGolpeComSpeed` em `cooldown-golpes.mjs`) com o **IV** de speed, fixo no nascimento, que
+ * também encurta a Investida e o intervalo global (`cooldownComSpeed` em `game/combate.mjs`). O
+ * refino não toca em nenhum dos dois: vender "+1 SPD" seria vender um número que não faz nada.
  *
  * **A nota N= sobe** com refino — usa base atual (espécie + refino) na soma, como o ⚔.
  * **O ⚔ poder sobe** com refino e com evolução: mesma base na conta de força.

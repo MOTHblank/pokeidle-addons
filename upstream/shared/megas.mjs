@@ -75,6 +75,7 @@
 import { dexDe } from './escala-hunt-level.mjs';
 import { isOutlandPokeId } from './outland.mjs';
 import { COOLDOWN_MEGA_MS } from './cooldown-golpes.mjs';
+import { golpesDaPlanilhaDaMega } from './golpes-planilhas.mjs';
 
 /** Primeiro pokeId da faixa das megas — `MEGA_POKE_BASE + dex nacional`. */
 export const MEGA_POKE_BASE = 3000;
@@ -407,7 +408,9 @@ export const MEGAS = [
     nome: 'Mega Aggron',
     pedra: 'Aggronite',
     icone: 'aggronite',
-    tipos: ['STEEL'],
+    // A oficial é só STEEL. Aqui ela guarda o ROCK do Aggron (planilha "Megas 03-10", 03/10/2026):
+    // é o que deixa a mega seguir usando os TMs de ROCK que a base usava.
+    tipos: ['STEEL', 'ROCK'],
     bases: { hp: 70, atk: 140, def: 230, spAtk: 60, spDef: 80, speed: 50 },
   },
   {
@@ -693,6 +696,11 @@ export const totalBasesMega = (m) =>
  * rederivado: um Mega Venusaur bate com os mesmos golpes do Venusaur. É a regra mais simples
  * possível, e a única que não surpreende quem passou a conta de dez fragmentos de boss.
  *
+ * A exceção é a planilha: 45 megas têm moveset próprio, golpe de mega incluído, desde a "Megas
+ * 03-10" (`GOLPES_MEGAS_2026_10_03` em `golpes-planilhas.mjs`), montado de acordo com os tipos
+ * DELAS. Lá o golpe de mega também é escolha da planilha — duas fogem do primário (Mega Pidgeot e
+ * Mega Drampa). Esta regra e este golpe valem para as 14 que não estão nela.
+ *
  * A trava que sustenta isso está em `elegivelParaGolpeEspecial` (`golpes-especiais.mjs`), que
  * recusa a mega: o injetor de golpes de 600 deriva do TIPO, e os tipos da mega mudam. Sem ela,
  * Mega Gyarados (WATER/DARK contra o WATER/FLYING do Gyarados) ganhava na ficha um golpe de
@@ -814,9 +822,10 @@ export function criarEspeciesMega(lista) {
       // ainda dão `push` neles (ver `aplicarDropsNossos`). Copiar aqui é o que impede a mega
       // de escrever na ficha do Gengar de verdade.
       loot: (base.loot ?? []).map((l) => ({ ...l })),
-      // O moveset da base, CÓPIA EXATA, mais o golpe de mega — e nada mais. Ver o cabeçalho de
-      // `GOLPE_MEGA_POR_TIPO` para por que ele não é rederivado dos tipos novos.
-      attacks: [
+      // O moveset da planilha, quando a mega está nela; senão o da base, CÓPIA EXATA, mais o
+      // golpe de mega — e nada mais. Ver o cabeçalho de `GOLPE_MEGA_POR_TIPO` para por que a
+      // cópia não é rederivada dos tipos novos.
+      attacks: golpesDaPlanilhaDaMega(megaPokeId(m.dex)) ?? [
         ...(base.attacks ?? []).map((a) => ({ ...a })),
         ...(golpeMegaDe(m) ? [golpeMegaDe(m)] : []),
       ],

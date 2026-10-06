@@ -4,8 +4,8 @@
  * ### O problema que ela resolve
  *
  * Nas hunts de spawn espaçado (a Outland, sobretudo) o pokémon passa boa parte do tempo
- * ANDANDO de um selvagem ao outro. O IV de Speed não ajuda: ele encurta o cooldown do golpe,
- * não o passo. A bicicleta é a progressão de mobilidade que faltava — encurta o passo do
+ * ANDANDO de um selvagem ao outro. O Speed (o base da espécie e o IV) não ajuda: ele encurta a
+ * recarga dos golpes, não o passo. A bicicleta é a progressão de mobilidade que faltava — encurta o passo do
  * pokémon e do treinador na hunt, e só na hunt.
  *
  * ### O caminho da Casa, com uma diferença

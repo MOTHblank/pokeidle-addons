@@ -6,7 +6,7 @@
      Discord traz `?sessao=` (o token de 30 dias) e os e-mails trazem `?redefinir=` e
      `?autorizarTrocaEmail=`; o GTM e o Pixel logo abaixo registram a URL da página. O app.js
      pega os valores de `window.__parametrosSensiveis`. -->
-<script nonce="njnECFsdzv62C8BbyblmEA==">
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==">
 (function () {
   try {
     var q = new URLSearchParams(location.search);
@@ -26,14 +26,14 @@
 })();
 </script>
 <!-- Google Tag Manager — GTM-NZLNR5N8. Logo após charset (charset nos primeiros 1024 bytes). -->
-<script nonce="njnECFsdzv62C8BbyblmEA==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==">(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
 new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
 j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
 })(window,document,'script','dataLayer','GTM-NZLNR5N8');</script>
 <!-- End Google Tag Manager -->
 <!-- Facebook Pixel Code — 941286091638419 (Meta Ads). -->
-<script nonce="njnECFsdzv62C8BbyblmEA==">
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==">
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};
@@ -52,8 +52,8 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <!-- Cloudflare Turnstile — captcha do login/cadastro. Some sozinho (o app.js nem desenha o
      widget) quando o servidor não tem TURNSTILE_SITE_KEY configurada. `onload` avisa o app.js
      quando a API já existe, porque o fetch de /auth/provedores às vezes volta primeiro. -->
-<script nonce="njnECFsdzv62C8BbyblmEA==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
-<script nonce="njnECFsdzv62C8BbyblmEA==">
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstilePronto" async defer></script>
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==">
   try {
     if (localStorage.getItem('cfg-night') === '1') document.documentElement.classList.add('night-mode');
     if (localStorage.getItem('cfg-imersivo') === '1') document.documentElement.classList.add('modo-imersivo');
@@ -65,17 +65,21 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
      entalhe e da barrinha de baixo é o `env(safe-area-inset-*)` no mobile.css. Sem ele, o
      iPhone reserva as faixas sozinho e sobra uma tarja preta em volta do jogo. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Poke Idle IO — MMO Pokémon Idle Online</title>
+<title>Pokeidle</title>
 <meta name="description" content="Pokéidle.io: MMO Pokémon idle no navegador. Caçe, capture, evolua sua equipe, entre em guilds, PvP e explore o mundo — grátis, direto no browser.">
 <meta name="robots" content="index, follow">
 <meta name="theme-color" content="#2a1520">
 <link rel="canonical" href="https://pokeidle.io/app">
-<!-- Ícone na aba e no Google (precisa ser crawlável; mín. 48×48). -->
+<!-- Ícone na aba e no Google (precisa ser crawlável; mín. 48×48): só a Beast Ball da logo
+     (`divulgacao/logo-bola.png`, feita pelo `divulgacao/ferramentas/icone-aba.py`). Com o nome
+     embaixo a bola ficava com metade do quadrado e o "PokeIdle" não se lia a 16 px. Arquivos com
+     NOME NOVO de propósito: navegador e Google guardam o ícone pela URL. Os `favicon-*.png`
+     antigos continuam no logo do Tracker e no documento do MED. -->
 <link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" type="image/png" sizes="48x48" href="img/favicon-64.png">
-<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
-<link rel="icon" type="image/png" sizes="64x64" href="img/favicon-64.png">
-<link rel="apple-touch-icon" sizes="180x180" href="img/favicon-180.png">
+<link rel="icon" type="image/png" sizes="16x16" href="img/logo-bola-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="img/logo-bola-32.png">
+<link rel="icon" type="image/png" sizes="48x48" href="img/logo-bola-48.png">
+<link rel="apple-touch-icon" sizes="180x180" href="img/logo-bola-180.png">
 <!-- Open Graph / preview ao compartilhar ou no Google -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Poke Idle IO">
@@ -96,7 +100,7 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 <meta name="twitter:description" content="Caçe, capture, evolua sua equipe, guilds e PvP — MMO Pokémon idle grátis no navegador.">
 <meta name="twitter:image" content="https://pokeidle.io/midia/og-card.png">
 <meta name="twitter:image:alt" content="Cartão do pokeidle.io: “Seu pokémon caça sozinho”, com um Charizard shiny e o botão Jogar agora.">
-<script nonce="njnECFsdzv62C8BbyblmEA==" type="application/ld+json">
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==" type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "VideoGame",
@@ -112,10 +116,10 @@ src="https://www.facebook.com/tr?id=941286091638419&ev=PageView&noscript=1"
 </script>
 <!-- A logo do jogo como ícone da aba. Três tamanhos porque o navegador escolhe o mais próximo
      do que precisa: 32 para a aba comum, 64 para telas HiDPI e 180 para o atalho de iOS. -->
-<link rel="stylesheet" href="estilo.css?v=1.217.0">
+<link rel="stylesheet" href="estilo.css?v=1.240.1">
 <!-- A montagem de CELULAR. Tudo lá dentro pende de `html.mobile`, classe que só o mobile.mjs
      acende — no desktop o arquivo é regra que não casa com nada. -->
-<link rel="stylesheet" href="mobile.css?v=1.217.0">
+<link rel="stylesheet" href="mobile.css?v=1.240.1">
 </head>
 <body>
 <!-- Google Tag Manager (noscript) -->
@@ -558,14 +562,14 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
              fica o que um jogo idle de fato se acompanha: quanto está rendendo por hora e o
              que foi capturado. O farm continua igual do lado de lá — isto é tela, não jogo.
 
-             A caixa nasce VAZIA: a prancheta (`#sessao-painel`) e o histórico
-             (`#capturas-painel`) são MOVIDOS para cá pelo `montarEconomia` no app.js, os
-             mesmos nós de sempre, como o `mobile.mjs` faz com os painéis das gavetas. Uma
-             segunda cópia deles daria a mesma tela hoje e duas telas divergentes num ano.
-             Quem acende é a classe `modo-economia` no `<html>` (ver `preferencias.mjs`). -->
+             A caixa nasce VAZIA: o placar, os achados e o cofre são montados pelo app.js
+             (`montarEconomia`), e o histórico (`#capturas-painel`) é MOVIDO para cá — o mesmo nó
+             do canto da cena, como o `mobile.mjs` faz com os painéis das gavetas. Quem acende é
+             a classe `modo-economia` no `<html>` (ver `preferencias.mjs`). -->
         <div class="eco-painel" id="eco-painel" aria-hidden="true">
           <div class="eco-topo">
-            <span class="eco-selo" data-i18n="eco.titulo">Modo Economia</span>
+            <span class="eco-selo" data-i18n="eco.titulo" data-i18n-attr="title:eco.nota"
+              title="A cena está desligada. A caça continua no servidor — o que ela rende aparece aqui.">Modo Economia</span>
             <button type="button" class="eco-onde" id="eco-onde"
               data-i18n-attr="title:eco.ondeTitulo" title="Trocar de área no Mapa">—</button>
             <!-- A JANELINHA DOS NÚMEROS — o botão do Modo Pop-up mora no palco, que este modo
@@ -581,16 +585,18 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             </button>
             <button type="button" class="eco-sair" id="eco-sair" data-i18n="eco.sair">Ligar a cena</button>
           </div>
-          <p class="eco-nota" data-i18n="eco.nota">A cena está desligada. A caça continua no servidor — o que ela rende aparece aqui.</p>
+          <!-- O CORPO, numa grade que a LARGURA do painel decide (container query, ver o estilo): o
+               placar e os achados em cima, o histórico e o cofre lado a lado embaixo — ou tudo
+               numa pilha que rola, no celular. Cada número da sessão aparece num lugar só: o placar
+               é a prancheta redesenhada para esta tela (`montarPlacarEconomia`), e não a prancheta
+               movida para cá. -->
           <div class="eco-corpo" id="eco-corpo">
-            <div class="eco-lado" id="eco-lado">
-              <!-- O RITMO: as mesmas contas do cartão Pocket (`ritmoDaSessao`), na mesma ordem.
-                   É a manchete deste modo, então fica no alto e em números grandes; a prancheta
-                   entra logo abaixo (é ela que explica de onde cada ritmo saiu). -->
-              <div class="eco-ritmo" id="eco-ritmo"></div>
-              <!-- `#sessao-painel` é movido para cá -->
-            </div>
-            <!-- `#capturas-painel` é movido para cá, e ocupa a coluna inteira -->
+            <section class="eco-placar" id="eco-placar"></section>
+            <section class="eco-achados" id="eco-achados"></section>
+            <!-- `#capturas-painel` é movido para cá pelo `montarEconomia` -->
+            <div class="eco-capturas" id="eco-capturas"></div>
+            <!-- O COFRE: Itens, Depot e Coleção numa chave de três posições (`montarCofreEconomia`). -->
+            <section class="eco-cofre" id="eco-cofre"></section>
           </div>
         </div>
         <div class="hud-hunt" id="hud-hunt">escolha um mapa →</div>
@@ -887,31 +893,26 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
            de recolher segue o vocabulário do chat (vidro + dourado), não o da madeira, porque
            mora dentro da moldura dele — ver §5 do DESIGN.md. -->
       <div class="chat-abas">
-        <!-- O SELETOR DE CANAL: um botão com o canal de agora e um menu com os outros. Eram abas
-             lado a lado, e com quatro canais (Mundo, Comércio, Dúvidas, Guild) elas não cabiam
-             na coluna de 300 px sem espremer o nome até virar "Com…". As opções são montadas
-             pelo JS (`montarMenuCanais`): a Guild só aparece para quem tem guild. -->
-        <div class="chat-canal" id="chat-canal">
-          <button type="button" class="chat-canal-bt" id="chat-canal-bt" aria-haspopup="listbox" aria-expanded="false"
-                  aria-controls="chat-canal-menu" data-i18n-attr="title:chat.canalEscolher;aria-label:chat.canalEscolher" title="Escolher canal">
-            <span class="chat-canal-emoji" id="chat-canal-emoji" aria-hidden="true">🌎</span>
-            <span class="chat-canal-nome" id="chat-canal-nome">Mundo</span>
-            <span class="chat-aba-selo hidden" id="chat-canal-selo" aria-hidden="true"></span>
-            <svg class="chat-canal-seta" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
+        <!-- OS CANAIS, sempre à vista: um botão por canal, em grade de dois, cada um com o seu
+             número de mensagens novas. Até 04/10/2026 eram um seletor só (o canal de agora + um
+             menu com os outros), e o canal que não estava aberto sumia da tela — o Mundo levava
+             a conversa e a Guild ficava esquecida. Os botões são montados pelo JS
+             (`montarBotoesCanais`): a Guild só aparece para quem tem guild. -->
+        <div class="chat-canais" id="chat-canais" role="tablist" data-i18n-attr="aria-label:chat.canais"></div>
+        <!-- As ferramentas da barra, numa grade de dois à direita dos canais: as bandeirinhas de
+             idioma e o × dos ignorados (entram aqui, por montarIdiomasDoChat()) e o recolher. -->
+        <div class="chat-ferramentas">
+          <button type="button" id="btn-chat-toggle" class="chat-min-btn" aria-expanded="true"
+            data-i18n-attr="title:tip.chatRecolher;aria-label:tip.chatRecolher" title="Recolher chat">
+            <svg class="ico-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
+            <!-- No rail os canais somem, e com eles os números de não-lidas. Este é o substituto:
+                 a soma do Mundo e da Guild, para fechar o chat nunca virar ficar cego para ele. -->
+            <span class="painel-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6a2 2 0 0 1 2-2z" fill="currentColor"/><circle cx="8" cy="11" r="1.3" fill="var(--vao)"/><circle cx="12" cy="11" r="1.3" fill="var(--vao)"/><circle cx="16" cy="11" r="1.3" fill="var(--vao)"/></svg>
+            </span>
+            <b class="painel-ico-selo selo-novas hidden" id="chat-cnt-rail" aria-hidden="true"></b>
           </button>
-          <div class="chat-canal-menu hidden" id="chat-canal-menu" role="listbox" data-i18n-attr="aria-label:chat.canalEscolher"></div>
         </div>
-        <!-- as bandeirinhas de idioma entram aqui, por montarIdiomasDoChat() -->
-        <button type="button" id="btn-chat-toggle" class="chat-min-btn" aria-expanded="true"
-          data-i18n-attr="title:tip.chatRecolher;aria-label:tip.chatRecolher" title="Recolher chat">
-          <svg class="ico-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
-          <!-- No rail as abas somem, e com elas os selos de não-lidas. Este é o substituto:
-               a soma dos dois canais, para fechar o chat nunca virar ficar cego para ele. -->
-          <span class="painel-ico" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6a2 2 0 0 1 2-2z" fill="currentColor"/><circle cx="8" cy="11" r="1.3" fill="var(--vao)"/><circle cx="12" cy="11" r="1.3" fill="var(--vao)"/><circle cx="16" cy="11" r="1.3" fill="var(--vao)"/></svg>
-          </span>
-          <b class="painel-ico-selo selo-novas hidden" id="chat-cnt-rail" aria-hidden="true"></b>
-        </button>
       </div>
       <!-- O vão precisa ser posicionado: a pílula "novas mensagens" flutua sobre a lista, e
            só faz sentido ancorada no rodapé DELA, não do painel. -->
@@ -921,8 +922,11 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
              "pinned" da Twitch. Montada por `pintarChatFixada`; a lista rola por baixo dela. -->
         <div id="chat-fixada" class="chat-fixada hidden" aria-live="polite"></div>
         <button type="button" id="chat-novas" class="chat-novas hidden"></button>
-        <!-- O painel que abre ao clicar numa mensagem: ignorar, ver perfil; moderador muta/exclui. -->
+        <!-- O painel que abre ao clicar no NICK de uma mensagem: ignorar, ver perfil; moderador muta/exclui.
+             O × fica fora das duas vistas (ações e duração do mute), no canto: fecha qualquer uma. -->
         <div id="chat-mod-panel" class="chat-mod-panel hidden" role="dialog" aria-hidden="true">
+          <button type="button" id="chat-mod-fechar" class="chat-mod-fechar"
+            data-i18n-attr="title:comum.fechar;aria-label:comum.fechar" title="Fechar" aria-label="Fechar">×</button>
           <div id="chat-mod-view-acoes">
             <div class="chat-mod-titulo" id="chat-mod-titulo">Moderar</div>
             <!-- O "Responder" do dedo: no computador a setinha aparece no hover da linha; no toque, mora aqui. -->
@@ -946,24 +950,40 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         </div>
       </div>
       <div id="chat-emojis" class="chat-emojis hidden"></div>
+      <!-- O CHAT INTERROMPIDO pela moderação: a faixa entre a conversa e a linha de digitar, nos canais
+           abertos. Montada por `pintarChatInterrompido`. -->
+      <div id="chat-interrompido" class="chat-interrompido hidden" role="status"></div>
       <div class="chat-entrada">
         <!-- As OPÇÕES do chat, abertas pela setinha ao lado do emoji. Flutuam por cima da lista, ancoradas
              logo acima desta linha — não disputam altura com a conversa (o chat do computador tem 300 px).
-             Hoje com uma só: esconder os anúncios do alto-falante do Market no chat Mundo. A setinha só
-             aparece no Mundo: no Comércio o anúncio é o assunto do canal (ver `syncBotaoOpcoesChat`). -->
+             Duas, cada uma no seu canal: esconder os anúncios do alto-falante do Market (só no Mundo — no
+             Comércio o anúncio é o assunto do canal) e, para admin e moderador, INTERROMPER o chat (nos
+             três canais abertos). Quem vê o quê é de `syncBotaoOpcoesChat`. -->
         <div id="chat-opcoes" class="chat-opcoes hidden" role="dialog" aria-labelledby="chat-opcoes-titulo">
           <div class="chat-opcoes-cab">
-            <b id="chat-opcoes-titulo" data-i18n="chat.semAnunciosTitulo">Esconder anúncios da comunidade</b>
+            <b id="chat-opcoes-titulo">Esconder anúncios da comunidade</b>
             <button type="button" id="chat-opcoes-fechar" class="chat-opcoes-fechar" data-i18n-attr="aria-label:chat.opcoesFechar" aria-label="Fechar">×</button>
           </div>
-          <div class="chat-opcao">
+          <div class="chat-opcao" id="chat-opcao-anuncios">
             <span class="chat-opcao-txt">
-              <span class="chat-opcao-nome" data-i18n="chat.semAnuncios">Esconder anúncios do Market</span>
+              <span class="chat-opcao-nome" id="chat-sem-anuncios-nome" data-i18n="chat.semAnuncios">Esconder anúncios do Market</span>
               <span class="chat-opcao-desc" data-i18n="chat.semAnunciosAjuda">Os anúncios que os vendedores mandam pelo alto-falante somem do seu chat Mundo. No Comércio eles continuam. Vale só neste navegador.</span>
               <span class="chat-opcao-estado" id="chat-sem-anuncios-estado"></span>
             </span>
             <button type="button" class="cfg-toggle" id="chat-sem-anuncios" role="switch" aria-checked="false"
-                    aria-labelledby="chat-opcoes-titulo"></button>
+                    aria-labelledby="chat-sem-anuncios-nome"></button>
+          </div>
+          <!-- INTERROMPER O CHAT — só admin e moderador (a bandeira `chatInterromper` do welcome; quem
+               decide é o gateway). Vale para o servidor inteiro, então é a opção de baixo, separada por
+               um filete, e ligar pede confirmação. -->
+          <div class="chat-opcao chat-opcao-staff hidden" id="chat-opcao-interromper">
+            <span class="chat-opcao-txt">
+              <span class="chat-opcao-nome" id="chat-interromper-nome" data-i18n="chat.interromper">Interromper o chat</span>
+              <span class="chat-opcao-desc" data-i18n="chat.interromperAjuda">Mundo, Comércio e Dúvidas param para todo mundo, nos dois idiomas — só a equipe (Admin, Moderador e Helper) continua falando. O chat da guild segue normal. Fica assim até alguém da moderação reabrir.</span>
+              <span class="chat-opcao-estado chat-interromper-estado" id="chat-interromper-estado" hidden></span>
+            </span>
+            <button type="button" class="cfg-toggle" id="chat-interromper" role="switch" aria-checked="false"
+                    aria-labelledby="chat-interromper-nome"></button>
           </div>
         </div>
         <button type="button" id="chat-emoji" class="chat-emoji-btn" data-i18n-attr="title:chat.emojiBotao" title="Emojis">😊</button>
@@ -1006,14 +1026,17 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
 <div id="modal" class="modal hidden">
   <div class="modal-caixa">
-    <!-- `#modal-extra` é o botão de AÇÃO da tela aberta, ao lado do fechar. Hoje só a Pokédex
-         o usa (leva ao registro de shinys do servidor), mas ele vive aqui, no topo comum, para
-         a próxima tela que precisar de um atalho não ter de inventar outro canto. -->
+    <!-- `#modal-extra` é o botão de AÇÃO da tela aberta, ao lado do fechar (os atalhos da Pokédex,
+         o Tracker do PvP). Ele vive aqui, no topo comum, para a próxima tela que precisar de um
+         atalho não ter de inventar outro canto.
+         `#modal-voltar` é a VOLTA para a janela de onde o jogador veio, colado no fechar — só
+         aparece quando há para onde voltar (ver `pintarVoltaDoModal` no app.js). -->
     <div class="modal-topo">
       <h2 id="modal-titulo"></h2>
       <div class="modal-acoes">
         <button id="modal-extra" class="modal-extra hidden" type="button"></button>
         <button id="modal-extra-b" class="modal-extra hidden" type="button"></button>
+        <button id="modal-voltar" class="modal-extra modal-extra-ico modal-extra-voltar hidden" type="button">‹</button>
         <button id="modal-fechar">×</button>
       </div>
     </div>
@@ -1059,7 +1082,10 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
      lados, e um modal só evita duas telas que envelhecem separadas.
 
      Fica ACIMA do modal comum porque é sempre aberta de dentro de um: a Pokédex e a vitrine
-     continuam atrás, e fechar a ficha devolve o jogador exatamente onde ele estava. -->
+     continuam atrás, e fechar a ficha devolve o jogador exatamente onde ele estava.
+
+     `#ficha-voltar` é a volta para a FICHA anterior: a evolução e o "Ver espécie" trocam a ficha
+     no mesmo lugar, e sem ele o bicho de onde se partiu sumia (ver `voltarFicha` no app.js). -->
 <div id="ficha" class="modal modal-acima hidden">
   <div class="modal-caixa caixa-ficha">
     <div class="modal-topo">
@@ -1069,7 +1095,10 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           <svg class="ico-chat" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4V6a2 2 0 0 1 2-2z" fill="currentColor"/><circle cx="8" cy="11" r="1.2" fill="var(--vao)"/><circle cx="12" cy="11" r="1.2" fill="var(--vao)"/><circle cx="16" cy="11" r="1.2" fill="var(--vao)"/></svg>
         </button>
       </div>
-      <button id="ficha-fechar">×</button>
+      <div class="modal-acoes">
+        <button type="button" id="ficha-voltar" class="modal-extra modal-extra-ico modal-extra-voltar hidden">‹</button>
+        <button id="ficha-fechar">×</button>
+      </div>
     </div>
     <div class="modal-corpo" id="ficha-corpo"></div>
   </div>
@@ -1453,6 +1482,19 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   </div>
 </div>
 
+<!-- AS DOAÇÕES DA GUILD: o log completo do banco — quanto cada membro já doou na vida da guild
+     (inclusive quem saiu e quem nunca doou) e cada doação, por rodada, com o CSV. Só dono e
+     sub-dono; abre do "Ver todas as doações" da aba Boost, por cima da janela da guild. -->
+<div id="guild-doacoes-modal" class="modal modal-acima hidden">
+  <div class="modal-caixa caixa-guild-doacoes">
+    <div class="modal-topo">
+      <h2 id="guild-doacoes-titulo" data-i18n="guildBanco.logTitulo">Doações da guild</h2>
+      <button id="guild-doacoes-fechar" type="button">×</button>
+    </div>
+    <div class="modal-corpo" id="guild-doacoes-corpo"></div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <!-- AVISO DE MUDANÇA — abre UMA vez por jogador, no primeiro login depois do deploy.
@@ -1546,6 +1588,169 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
            ele abre (a bola ÚNICA é a regra que mais surpreende), e os preços e as horas dos ovos. O
            resto da leva (Tag IDLE com os botões novos do #reedem-codes, troféus de campeonato,
            contador de favoritos e o Mismagius) vai no "Também nesta atualização". -->
+      <!-- v23 · O BOOST DA GUILD pelo banco da guild (v1.223.0 e v1.226.0), com o Mercado de
+           Diamantes só de comprados (v1.224.0) e a leva de 03/10 (v1.218.0 a v1.225.1).
+
+           A festa de sempre, no VIOLETA do ícone do boost (`--gb`, o roxo das divisas) com o ouro da
+           faixa no título — roxo e dourado, as cores do brasão de guild. O ícone quica no alto, como o
+           K da Kick na 22, e a fileira são as TRÊS coisas que ele dá, na escada de raridade: o XP do
+           treinador (azul), o dos pokémon (roxo) e "a guild toda" (ouro, com o brasão dourado da 14),
+           porque o que surpreende é ser de TODOS. A faixa dourada diz as duas regras que mais importam
+           (cada um doa o que pode; encher de novo SOMA 7 dias), o "Como ativar" diz onde fica o banco
+           e o que acontece quando ele enche, e o bloco do Mercado de Diamantes vem antes do "Também":
+           ele mexe no bolso de quem vendia diamante de indicação. -->
+      <!-- v24 · A GUERRA DE GUILDS PELA NOTA — 60% de pé, 40% de briga — e a leva de 06/10 (v1.235.0).
+
+           A festa de sempre na BRASA da guerra (`--guerra-*`, o anel e a luz do herói da aba Guild do
+           PvP), com o título no ouro de sempre. As espadas cruzadas se chocam no alto, e a fileira é a
+           própria regra na escada de raridade: os 60 de ficar de pé (azul, o escudo do painel), os 40 de
+           abates (roxo, as espadas — o contador de pokémon derrubados) e a nota de 100 (ouro, com o troféu do Campeonato). A faixa
+           dourada diz o que MUDA para quem joga, com as 9 guerras recontadas: a última de pé leva, e quem
+           só se esconde não chega mais ao topo. Depois vêm a regra inteira, a aba nova,
+           e o BOOST DOS ATRASADOS com a conta aberta (a mediana dos veteranos, o preço pelo XP que falta
+           e por que é em XP) — é o bloco que diz a quem chegou agora que dá para alcançar. Os 30 dias, o
+           Prêmio do mês e o chat vêm por último. -->
+      <section class="novidade" data-aviso="24">
+        <section class="aviso-bikes aviso-gvg">
+          <div class="ab-raios" aria-hidden="true"></div>
+          <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <span class="avw-espadas" aria-hidden="true"><svg viewBox="0 0 20 20" width="46" height="46"><path d="M3.2 3.2l9.6 9.6M16.8 3.2l-9.6 9.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M10.7 15l4.3-4.3M5 10.7L9.3 15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M14.4 15.6l2.4 2.4M5.6 15.6L3.2 18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></span>
+          <span class="ab-fita" data-i18n="aviso.v24Fita">Guerra de Guilds</span>
+          <h3 class="ab-titulo" data-i18n="aviso.v24Titulo">DE PÉ E NA BRIGA</h3>
+          <div class="ab-bikes ab-tres">
+            <div class="ab-bike rar-rara">
+              <span class="avw-ico pe" aria-hidden="true"><svg viewBox="0 0 20 20" width="38" height="38"><path fill="currentColor" d="M10 1.6l7.2 2.8v5.2c0 4.4-3 7.6-7.2 8.9-4.2-1.3-7.2-4.5-7.2-8.9V4.4z"/></svg></span>
+              <b data-i18n="aviso.v24N1">60</b><span data-i18n="aviso.v24N1S">por ficar de pé</span>
+            </div>
+            <div class="ab-bike rar-mitica">
+              <span class="avw-ico abate" aria-hidden="true"><svg viewBox="0 0 20 20" width="38" height="38"><path d="M3.2 3.2l9.6 9.6M16.8 3.2l-9.6 9.6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M10.7 15l4.3-4.3M5 10.7L9.3 15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M14.4 15.6l2.4 2.4M5.6 15.6L3.2 18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></span>
+              <b data-i18n="aviso.v24N2">40</b><span data-i18n="aviso.v24N2S">por abates</span>
+            </div>
+            <div class="ab-bike rar-lendaria">
+              <img src="/assets/site/assets/ui/trofeu-1.png" alt="">
+              <b data-i18n="aviso.v24N3">100</b><span data-i18n="aviso.v24N3S">a nota da guerra</span>
+            </div>
+          </div>
+          <p class="ab-sub" data-i18n-html="aviso.v24Sub"></p>
+        </section>
+
+        <p class="aviso-lendaria" data-i18n-html="aviso.v24Lendaria"></p>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v24ComoTitulo">Como a guerra pontua</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Como1"></li>
+            <li data-i18n-html="aviso.v24Como2"></li>
+            <li data-i18n-html="aviso.v24Como3"></li>
+            <li data-i18n-html="aviso.v24Como4"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v24AbaTitulo">A aba Guild do PvP, nova</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Aba1"></li>
+            <li data-i18n-html="aviso.v24Aba2"></li>
+            <li data-i18n-html="aviso.v24Aba3"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v24AtrTitulo">Chegou depois? Boost dos Atrasados</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Atr1"></li>
+            <li data-i18n-html="aviso.v24Atr2"></li>
+            <li data-i18n-html="aviso.v24Atr3"></li>
+            <li data-i18n-html="aviso.v24Atr4"></li>
+            <li data-i18n-html="aviso.v24Atr5"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v24TrintaTitulo">Boosts e pacotes de 30 dias</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Trinta1"></li>
+            <li data-i18n-html="aviso.v24Trinta2"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v24RkTitulo">Prêmio do mês no Ranking</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Rk1"></li>
+            <li data-i18n-html="aviso.v24Rk2"></li>
+            <li data-i18n-html="aviso.v24Rk3"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.tambemTitulo">Também nesta atualização</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v24Chat"></li>
+            <li data-i18n-html="aviso.v24Analise"></li>
+          </ul>
+        </section>
+      </section>
+
+      <section class="novidade" data-aviso="23" hidden>
+        <section class="aviso-bikes aviso-gboost">
+          <div class="ab-raios" aria-hidden="true"></div>
+          <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <img class="avg-ico" src="/img/itens/boost-guild.png" width="48" height="48" alt="">
+          <span class="ab-fita" data-i18n="aviso.v23Fita">Novo na Loja de Diamantes</span>
+          <h3 class="ab-titulo" data-i18n="aviso.v23Titulo">BOOST DA GUILD</h3>
+          <div class="ab-bikes ab-tres">
+            <div class="ab-bike rar-rara">
+              <img src="/assets/site/assets/loja/exp.png" alt="">
+              <b data-i18n="aviso.v23N1">+10% XP</b><span data-i18n="aviso.v23N1S">do treinador</span>
+            </div>
+            <div class="ab-bike rar-mitica">
+              <img src="/assets/site/assets/loja/boost.png" alt="">
+              <b data-i18n="aviso.v23N2">+10% XP</b><span data-i18n="aviso.v23N2S">dos pokémon</span>
+            </div>
+            <div class="ab-bike rar-lendaria">
+              <span class="ab-brasao" data-brasao="1" data-tam="54"></span>
+              <b data-i18n="aviso.v23N3">Guild toda</b><span data-i18n="aviso.v23N3S">por 7 dias</span>
+            </div>
+          </div>
+          <p class="ab-sub" data-i18n-html="aviso.v23Sub"></p>
+        </section>
+
+        <p class="aviso-lendaria" data-i18n-html="aviso.v23Lendaria"></p>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v23ComoTitulo">Como ativar</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v23Como1"></li>
+            <li data-i18n-html="aviso.v23Como2"></li>
+            <li data-i18n-html="aviso.v23Como3"></li>
+            <li data-i18n-html="aviso.v23Como4"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.v23DiaTitulo">Mercado de Diamantes: só os comprados</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v23Dia1"></li>
+            <li data-i18n-html="aviso.v23Dia2"></li>
+          </ul>
+        </section>
+
+        <section class="aviso-bloco">
+          <h3 data-i18n="aviso.tambemTitulo">Também nesta atualização</h3>
+          <ul class="aviso-lista">
+            <li data-i18n-html="aviso.v23Megas"></li>
+            <li data-i18n-html="aviso.v23Twitch"></li>
+            <li data-i18n-html="aviso.v23Estadia"></li>
+            <li data-i18n-html="aviso.v23Voltar"></li>
+            <li data-i18n-html="aviso.v23Janela"></li>
+            <li data-i18n-html="aviso.v23Radar"></li>
+            <li data-i18n-html="aviso.v23Moderador"></li>
+            <li data-i18n-html="aviso.v23Burmy"></li>
+          </ul>
+        </section>
+      </section>
+
       <!-- v22 · O BÔNUS NA KICK (v1.204.0). A festa da 18 (o Bônus Twitch), no verde da Kick: o K
            da marca no alto e, no lugar da fileira de itens, as TRÊS recompensas que o jogo cria no
            canal de cada Streamer Oficial, na escada de raridade — azul 300, roxo 500, ouro 1.000
@@ -1553,7 +1758,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
            que mais importa (cada resgate é 1 h, e as horas se somam), o "Como ativar" diz que o
            vínculo é PARA SEMPRE antes de a pessoa clicar, e o convite de Streamer Parceiro vem no
            meio do slide, em verde (`.kk-tom`), como o da Twitch veio na 18. -->
-      <section class="novidade" data-aviso="22">
+      <section class="novidade" data-aviso="22" hidden>
         <section class="aviso-bikes aviso-kick">
           <div class="ab-raios" aria-hidden="true"></div>
           <div class="ab-confete" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -2890,7 +3095,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
 
 <!-- Erros de módulo ES são silenciosos na tela; jogar na UI evita depurar no escuro. -->
-<script nonce="njnECFsdzv62C8BbyblmEA==">
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==">
   window.addEventListener('error', (e) => {
     const el = document.getElementById('login-erro');
     if (el) el.textContent = `erro: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`;
@@ -2900,6 +3105,6 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     if (el) el.textContent = `falha: ${e.reason?.message ?? e.reason}`;
   });
 </script>
-<script nonce="njnECFsdzv62C8BbyblmEA==" type="module" src="app.js?v=1.217.0"></script>
+<script nonce="a1QF7xn6qVJMtbSuoU8z9g==" type="module" src="app.js?v=1.240.1"></script>
 </body>
 </html>

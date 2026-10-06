@@ -796,14 +796,18 @@ html.mobile .m-pane[data-aba="chat"] .painel.chat {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
 }
 html.mobile .chat { min-height: 0; }
-html.mobile .chat-canal-bt { height: 34px; }
-html.mobile .chat-canal-nome { font-size: 12px; }
-html.mobile .chat-canal-op { padding: 10px 12px; }
-html.mobile .chat-idioma { width: 34px; height: 34px; }
+/* Os canais e as ferramentas crescem para o dedo, na mesma altura de fileira (ver `.chat-abas`).
+   Sem o recolher (que não existe aqui), as ferramentas ficam bandeiras em cima e o × embaixo. */
+html.mobile .chat-abas { --chat-fileira: 38px; }
+html.mobile .chat-ferramentas { grid-template-columns: repeat(2, 38px); }
+html.mobile .chat-canal-bt { font-size: 12.5px; gap: 6px; }
+html.mobile .chat-canal-emoji { font-size: 16px; }
+html.mobile .chat-idioma svg { width: 22px; height: 15px; }
+html.mobile .chat-interrompido { font-size: 13px; }
 html.mobile .chat-vao { min-height: 90px; }
 html.mobile .chat-msg { font-size: 14px; line-height: 1.4; }
 /* No celular a setinha de responder não aparece (sem hover, ela ficaria escondida para sempre ou
-   em toda linha): o "Responder" mora no painel que abre ao tocar na mensagem. */
+   em toda linha): o "Responder" mora no painel que abre ao tocar no nick. */
 html.mobile .m-responder { display: none; }
 html.mobile .chat-entrada { gap: 6px; }
 html.mobile .chat-entrada input { height: 42px; }
@@ -834,7 +838,10 @@ html.mobile .chat-mod-panel {
   overflow-y: auto; overscroll-behavior: contain;
 }
 html.mobile .chat-mod-panel button { font-size: 12px; }
-html.mobile .chat-mod-titulo { font-size: 12px; }
+html.mobile .chat-mod-titulo { font-size: 12px; margin-bottom: 10px; padding-right: 32px; }
+/* O × com alvo de dedo, encostado no canto; a margem maior do título é o que o deixa terminar antes
+   do primeiro botão, em vez de cobrir a quina dele. */
+html.mobile .chat-mod-panel .chat-mod-fechar { top: 0; right: 0; width: 36px; height: 32px; font-size: 22px; }
 
 /* --- gaveta: menu --- */
 /* As dez telas do jogo, duas por linha. O botão continua sendo o mesmo roxo de sempre, com a
@@ -1120,7 +1127,7 @@ html.mobile .modal-topo .modal-extra.modal-extra-voltar { font-size: 24px; }
 
    22 px de desenho dentro de 42 px de botão é a mesma proporção do `×` ao lado (19 px de glifo
    em 42). Com 18 sobrava folga demais em volta e o botão lia como desligado. */
-html.mobile .modal-topo .modal-extra.modal-extra-tracker.modal-extra-ico svg { width: 22px; height: 22px; }
+html.mobile .modal-topo .modal-extra.modal-extra-rotulo.modal-extra-ico svg { width: 22px; height: 22px; }
 html.mobile .dex-stats { text-align: center; font-size: 11.5px; }
 html.mobile .dex-stats-sub { font-size: 10.5px; }
 html.mobile .dex-filtros { gap: 8px; margin-bottom: 10px; }
@@ -1292,8 +1299,7 @@ html.mobile .btn-compartilhar-pk .ico-chat,
 html.mobile .btn-refino .ico-mais { width: 21px; height: 21px; }
 
 html.mobile .mk-cadeado,
-html.mobile .mk-ficha-btn,
-html.mobile .capturas-info { min-width: 30px; min-height: 30px; }
+html.mobile .mk-ficha-btn { min-width: 30px; min-height: 30px; }
 html.mobile .tipo-btn { padding: 8px 11px; font-size: 10px; }
 html.mobile .guild-cor { width: 30px; height: 30px; }
 
@@ -1684,6 +1690,8 @@ html.mobile .cm-moedas-anuncio .cm-moeda { height: 44px; min-height: 44px; font-
    do `html.mobile .modal-topo button` — a folha abre por cima do modal, e os dois X aparecem
    juntos. */
 html.mobile .cm-fechar { width: 42px; height: 42px; font-size: 21px; }
+/* E o `‹` ao lado dele, nos mesmos 42 px — o par do canto do modal (`.modal-extra-voltar`). */
+html.mobile .cm-folha-voltar { width: 42px; height: 42px; font-size: 24px; }
 
 /* A ANÁLISE DA GUERRA no celular. A folha já sobe do rodapé (é um `.modal`); o que muda é a
    arrumação: os oito destaques em duas colunas compactas (numa coluna só eles eram uma tela
@@ -1731,13 +1739,14 @@ html.mobile .gwa-det-pk { padding: 7px 6px 6px; }
 html.mobile .gwa-g {
   grid-template-columns: 30px repeat(3, minmax(0, 1fr)) auto; gap: 4px 8px; padding: 9px 10px;
   grid-template-areas:
-    "pos nome nome nome gp"
+    "pos nome nome pts  gp"
     "pos lut  k    mo   r"
     "pos dano dano mvp  mvp";
 }
 html.mobile .gwa-g-pos { grid-area: pos; }
 html.mobile .gwa-g-nome { grid-area: nome; }
 html.mobile .gwa-g .gwa-num { text-align: left; font-size: 11px; }
+html.mobile .gwa-g .gwa-num.pts { grid-area: pts; text-align: right; }
 html.mobile .gwa-g .gwa-num.lut { grid-area: lut; }
 html.mobile .gwa-g .gwa-num.k { grid-area: k; }
 html.mobile .gwa-g .gwa-num.mo { grid-area: mo; }
@@ -2003,6 +2012,15 @@ html.mobile #mk-corpo[data-aba="venda"] .mk-card {
     "ico sub   total"
     "qtd qtd   acao";
 }
+/* A Compra ganha uma fileira para o "você tem ×N" (a Venda já diz quanto há no próprio subtítulo). */
+html.mobile #mk-corpo[data-aba="compra"] .mk-card {
+  grid-template-areas:
+    "ico nome  preco"
+    "ico sub   total"
+    "ico tem   tem"
+    "qtd qtd   acao";
+}
+html.mobile #mk-corpo[data-aba="compra"] .mk-card .mk-tem { grid-area: tem; font-size: 11px; }
 /* A aba Venda tem cadeado, e ele ganha COLUNA em vez de flutuar por cima: absoluto, ele caía
    exatamente em cima do preço, que mora no mesmo canto. */
 html.mobile #mk-corpo[data-aba="venda"] .mk-card {
@@ -2175,6 +2193,11 @@ html.mobile .rk-abas {
   mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
 }
 html.mobile .rk-aba { height: 38px; padding: 0 13px; font-size: 11.5px; }
+/* SUA POSIÇÃO no telefone: avatar, lugar e meta numa fila; o "Ver minha linha" de fora a fora. */
+html.mobile .rk-voce { grid-template-columns: 34px 48px minmax(0, 1fr); padding: 8px 10px; }
+html.mobile .rk-voce-ir { grid-column: 1 / -1; height: 38px; font-size: 11.5px; }
+html.mobile .rk-voce-meio small { white-space: normal; }
+html.mobile .rk-destaque { padding: 9px 8px; }
 
 /* --- o pódio --- */
 html.mobile .rk-podio {
@@ -2267,16 +2290,14 @@ html.mobile .gd-membros { max-height: none; }
 html.mobile .gd-membro-perfil { width: 44px; padding: 0; justify-content: center; }
 html.mobile .gd-membro-perfil .gd-membro-perfil-txt { display: none; }
 html.mobile .gd-membro-perfil svg { width: 17px; height: 17px; }
-/* Linha de guild que abre a ficha: alvo de 44 px, o mesmo mínimo do cabeçalho de membro.
-   A seta cresce junto — ela é o que diz "isto abre" quando não existe hover para contar. */
-html.mobile .guild-abre { min-height: 44px; -webkit-tap-highlight-color: transparent; }
-html.mobile .guild-abre-seta { font-size: 16px; }
-html.mobile .gw-res-linha { padding: 6px; gap: 6px; }
 html.mobile .gd-membro-cab {
   min-height: 44px; padding: 9px 10px;
   -webkit-tap-highlight-color: transparent;
 }
 html.mobile .gd-membro-poder { font-size: 10.5px; }
+html.mobile .gd-membro-poder { min-width: 54px; }
+html.mobile .gd-poder-barra { width: 48px; }
+html.mobile .gd-ordem { height: 36px; font-size: 11px; }
 html.mobile .gd-equipe {
   display: flex;
   flex-direction: column;
@@ -2357,62 +2378,93 @@ html.mobile .com-oferta-arte { width: 60px; height: 60px; }
 html.mobile .com-oferta-bt { flex: 1 1 100%; justify-content: center; min-height: 42px; }
 html.mobile .com-nota { font-size: 11px; }
 
-/* Painel da guild (ícone do treinador) — mesma lista expansível do ranking. */
-html.mobile .caixa-guild {
-  width: min(calc(100vw - 16px), 480px);
-  max-height: calc(var(--m-alt, 100dvh) - 26px);
-  display: flex;
-  flex-direction: column;
+/* O SALÃO da guild no celular (ver "o SALÃO da guild" no estilo.css). A folha tem a ALTURA da tela,
+   como um aplicativo: o herói compacto (o brasão menor, as placas numa linha própria), as duas faixas
+   de status empilhadas e a barra de abas no RODAPÉ, presa nele, à mão do polegar — o mesmo lugar da
+   barra de abas do jogo. Com pouco conteúdo ela desce até o fim da folha (`margin-top: auto`). */
+html.mobile .modal-caixa.caixa-guild {
+  width: min(calc(100vw - 12px), 520px);
+  height: calc(var(--m-alt, 100dvh) - 14px);
+  max-height: none;
 }
 html.mobile .caixa-guild .modal-corpo {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding-bottom: 0;
 }
-html.mobile .caixa-guild:has(.gd-membro.aberto) {
-  max-height: calc(var(--m-alt, 100dvh) - 16px);
+html.mobile .gh { gap: 10px; }
+html.mobile .gh-heroi { grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; padding: 12px; }
+html.mobile .gh-palco { width: 78px; height: 78px; }
+html.mobile .gh-brasao { width: 72px; height: 72px; }
+html.mobile .gh-brasao svg { width: 52px; height: 52px; }
+html.mobile .gh-raios { inset: -16px; }
+html.mobile .gh-heroi .gh-nome { font-size: 18px; white-space: normal; overflow-wrap: anywhere; }
+html.mobile .gh-chip { white-space: normal; line-height: 1.25; }
+html.mobile .gh-placas { grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+html.mobile .gh-placa { min-height: 64px; padding: 6px 3px; }
+html.mobile .gh-placa b { font-size: 15px; }
+html.mobile .gh-placa small { font-size: 8px; letter-spacing: .3px; }
+html.mobile .gh-status { grid-template-columns: 1fr; gap: 8px; }
+html.mobile .gh-st { padding: 8px 9px; gap: 9px; }
+html.mobile .gh-st-ico { width: 38px; height: 38px; }
+html.mobile .gh-st-bt { height: 40px; padding: 0 11px; }
+/* A barra de abas vai para o RODAPÉ da folha: `order` a manda para o fim da coluna, `margin-top: auto`
+   a encosta no fundo quando a aba é curta, e `sticky` a prende lá quando a aba rola. */
+html.mobile .gh-abas {
+  order: 99; position: sticky; top: auto; bottom: 0;
+  margin: auto -10px 0; padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px)); gap: 2px;
+  border-radius: 12px 12px 0 0;
+  box-shadow: inset 0 0 0 2px var(--mad-linha), 0 -8px 14px -8px var(--mad-linha);
 }
-html.mobile .guild-membros-host:has(.gd-membro.aberto) .gd-membros {
-  max-height: none;
-}
-/* O painel da Guild refeito. O que muda no celular é só medida: alvo de dedo nas abas e nas
-   placas, e o botão de convidar na altura do campo (que o `min-height: 42px` global já subiu —
-   sem isto o botão ficaria 8 px mais baixo do que o campo ao lado dele). */
-/* O chip do bônus quebra em duas linhas em vez de cortar: no desktop ele divide a faixa com o
-   brasão e cabe numa linha; em 390 px "…a guild precisa pontuar na gue…" perdia justamente a
-   palavra que explica o porquê. */
-html.mobile .gld-chip { white-space: normal; line-height: 1.3; }
-html.mobile .gld-abas { gap: 5px; }
-html.mobile .gld-aba { height: 44px; font-size: 11.5px; gap: 5px; padding: 0 4px; }
-html.mobile .gld-stat { padding: 9px 4px 10px; }
-html.mobile .gld-convite .guild-btn { height: 42px; padding: 0 14px; }
-/* O rótulo do botão sai abaixo de 380 px: o desenho sozinho já diz "adicionar alguém", e com a
-   palavra o campo do nick ficava com 120 px — menos do que um nick de 16 letras precisa. */
-@media (max-width: 380px) {
-  html.mobile .gld-convite .guild-btn { padding: 0 12px; }
-  html.mobile .gld-convite .gld-bt-ico { font-size: 0; gap: 0; }
-  html.mobile .gld-convite .gld-bt-svg svg { width: 18px; height: 18px; }
-  html.mobile .gld-aba { font-size: 11px; }
-}
-/* A equipe de guerra: casa maior, que aqui ela é alvo de toque (abre a ficha do bicho). */
-html.mobile .gld-casa { width: 46px; height: 46px; }
-
-/* ---- o RECRUTAMENTO no celular
-   A barra de 5 abas não cabe numa linha em 390 px: o `auto-fit` do desktop já quebra sozinho,
-   e aqui só se reduz a altura para duas linhas de aba não comerem 88 px antes da lista. */
-/* TRÊS colunas fixas, e não o `auto-fit` do desktop: em 390 px ele cabia quatro abas e jogava
-   a quinta sozinha numa linha inteira, que lê como "esta é diferente das outras". 3+2 divide
-   a barra em dois pedaços parecidos e ainda dá 110 px por alvo. */
-html.mobile .gld-abas-5 { grid-template-columns: repeat(3, 1fr); }
-html.mobile .gld-abas-5 .gld-aba { height: 40px; font-size: 10.5px; }
-html.mobile .gld-abas-3 { grid-template-columns: repeat(3, 1fr); }
+html.mobile .gld-aba { flex-direction: column; height: 52px; gap: 3px; padding: 0 2px; font-size: 9.5px; }
+html.mobile .gld-aba-ico svg { width: 20px; height: 20px; }
+html.mobile .gld-aba-selo { position: absolute; top: 1px; right: calc(50% - 24px); margin: 0; }
+html.mobile .gh-ferramentas .guild-btn { height: 42px; }
+html.mobile .gh-busca { height: 42px; }
+/* 16 px nos campos, sem exceção: abaixo disso o Safari dá zoom sozinho (DESIGN §8). */
+html.mobile .gh-busca input, html.mobile .gh-convite input { font-size: 16px; }
+html.mobile .gh-convite { flex-wrap: wrap; }
+html.mobile .gh-convite input { flex: 1 1 100%; height: 42px; }
+html.mobile .gh-convite .guild-btn { flex: 1 1 100%; height: 42px; }
+html.mobile .gh-ordens-linha { align-items: stretch; }
+html.mobile .gd-ordens { width: 100%; }
+html.mobile .gd-ordem { flex: 1 1 auto; height: 36px; padding: 0 8px; font-size: 11px; }
+html.mobile .gh-arena { grid-template-columns: auto minmax(0, 1fr); padding: 12px; gap: 10px 12px; }
+html.mobile .gh-arena-arte { width: 52px; height: 52px; }
+html.mobile .gh-arena-relogio { font-size: 24px; }
+html.mobile .gh-arena-acao { grid-column: 1 / -1; width: auto; }
+html.mobile .gh-arena-acao .guild-btn { height: 42px; }
+html.mobile .gh-ultima-corpo { grid-template-columns: auto minmax(0, 1fr); }
+html.mobile .gh-ultima-corpo .gwp-voce-gp { grid-column: 1 / -1; flex-direction: row; justify-content: center; gap: 6px; }
+html.mobile .gld-casas { gap: 5px; }
+html.mobile .gld-casa { min-height: 86px; padding: 9px 2px 6px; }
+html.mobile .gh-cartao .guild-btn, html.mobile .gld-bloco .guild-btn { min-height: 42px; }
+html.mobile .gh-editor { grid-template-columns: 1fr; }
+html.mobile .gh-editor-palco { height: 156px; }
+html.mobile .gh-fundar-campos { grid-template-columns: 1fr; }
+html.mobile .gh-editor .guild-cor { width: 30px; height: 30px; }
+html.mobile .gd-pos { width: 24px; height: 24px; font-size: 10.5px; }
+html.mobile .gd-ava { width: 36px; height: 36px; }
+html.mobile .gh-rosto { width: 56px; }
+html.mobile .guild-convites-lista, html.mobile .gldq-lista { grid-template-columns: 1fr; }
+/* A ficha pública: o mesmo herói em miniatura, um pouco mais apertado. */
+html.mobile .gh-heroi-mini .gh-placa small { font-size: 7.5px; }
+/* A aba Boost no celular: os atalhos repartem a linha, e o campo de valor cresce até o fim. */
+html.mobile .gbk-atalho { flex: 1 1 48px; min-width: 0; padding: 0 6px; height: 34px; }
+html.mobile .gbk-completar { flex: 1 1 100%; }
+html.mobile .gbk-passo { width: 38px; min-width: 38px; height: 38px; }
+html.mobile .gbk-campo { flex: 1 1 auto; height: 38px; }
+html.mobile .gbk-campo input { width: 100%; }
+html.mobile .gbk-previa { flex-basis: 100%; }
+html.mobile .gbk-bt { height: 44px; }
 
 /* A linha do Quadro é alvo de toque (abre a ficha da guild): 52 px, acima do mínimo de 44. O
    botão do fim não pode espremer o nome, então ele encolhe antes — o nome é o que identifica
    a guild, e o botão já se explica pela cor. */
 html.mobile .gldq-linha { min-height: 52px; -webkit-tap-highlight-color: transparent; }
-html.mobile .gldq-lista { max-height: 52vh; }
+html.mobile .gldq-lista { max-height: none; }
 /* O botão da linha é o alvo mais apertado da tela: 24 px de altura vinham do `.guild-mini-btn`,
    que nasceu para caber numa lista de desktop. "Aguardando" CANCELA a candidatura num toque, e
    errar esse toque manda o dedo na linha (que abre a ficha da guild). Os apagados sobem junto:
@@ -2424,6 +2476,8 @@ html.mobile .gldq-paginacao .guild-mini-btn { min-width: 44px; min-height: 38px;
 /* A busca e o filtro em linhas próprias: lado a lado, o campo ficava com 150 px e o rótulo do
    filtro quebrava no meio. */
 html.mobile .gldq-topo { flex-direction: column; align-items: stretch; }
+/* Em coluna, o "flex" da busca viraria ALTURA (a caixa nascia com 220 px): ela fica do tamanho dela. */
+html.mobile .gldq-topo .gh-busca { flex: none; }
 html.mobile .gldq-filtro { justify-content: center; min-height: 40px; }
 html.mobile .gldq-busca { flex: none; }
 /* Aceitar/recusar embaixo do nick, e não ao lado: em 390 px os dois botões à direita deixavam
@@ -2445,6 +2499,14 @@ html.mobile .caixa-guild-escalacao {
   max-height: calc(var(--m-alt, 100dvh) - 26px);
 }
 html.mobile .gesc-lista { max-height: none; }
+/* As DOAÇÕES da guild: o mesmo trato — a lista rola dentro do modal, e as abas e o CSV ficam à mão. */
+html.mobile .caixa-guild-doacoes {
+  width: min(calc(100vw - 16px), 520px);
+  max-height: calc(var(--m-alt, 100dvh) - 26px);
+}
+html.mobile .gdl-aba, html.mobile .gdl-csv, html.mobile .gbk-log-bt { height: 40px; }
+html.mobile .gdl-csv { flex: 1 1 100%; }
+html.mobile .gdl-membros li, html.mobile .gdl-rodada li { font-size: 12.5px; }
 html.mobile .gd-membro-acoes {
   flex-direction: row;
   flex-wrap: wrap;
@@ -2462,8 +2524,25 @@ html.mobile .gd-membro-txt .gd-online { display: block; margin-top: 1px; }
 
 /* --- bosses / pvp: as telas de duas colunas --- */
 html.mobile .boss-corpo { flex-direction: column; }
-html.mobile .boss-lista { flex: none; max-height: 190px; }
+/* A lista vira uma FITA de lado — um carrossel de retratos —, e a ficha ganha a tela: a coluna de
+   190 px empurrava o herói e as recompensas para baixo da dobra. */
+html.mobile .boss-lista {
+  flex: none; max-height: none; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+  gap: 6px; padding: 6px; scroll-snap-type: x proximity; overscroll-behavior-x: contain;
+}
+html.mobile .boss-item {
+  flex: 0 0 80px; width: 80px; flex-direction: column; justify-content: flex-start; gap: 3px;
+  padding: 7px 4px 6px; text-align: center; scroll-snap-align: center;
+}
+html.mobile .boss-item-ico, html.mobile .boss-item-ico img { width: 42px; height: 42px; }
+html.mobile .boss-item-nome { width: 100%; font-size: 10.5px; }
 html.mobile .boss-ficha { max-height: none; }
+html.mobile .bsh { grid-template-columns: 100px minmax(0, 1fr); gap: 10px; }
+html.mobile .bsh-arena { height: 100px; }
+html.mobile .bsh-info .boss-nome { font-size: 18px; }
+html.mobile .bsr-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; overflow: visible; }
+/* No celular o rodapé volta a empilhar: duas colunas de 170 px não cabem a fileira da equipe. */
+html.mobile .boss-rodape { display: flex; flex-direction: column; }
 
 /* --- Depot: duas listas, uma aba de cada vez --- */
 /*
@@ -2537,6 +2616,18 @@ html.mobile .wk-corpo { flex-direction: column; gap: 9px; }
 html.mobile .wk-menu { width: 100%; flex: none; }
 html.mobile .wk-lista { max-height: 152px; }
 html.mobile .wk-gpt { min-height: 40px; font-size: 12px; }
+/* As estatísticas do jogo: os três cofres empilham, e cada um DEITA — ícone à esquerda, números à
+   direita —, senão três cofres em pé passavam de uma tela e o terceiro só aparecia rolando. */
+html.mobile .ecj-cofres { grid-template-columns: 1fr; gap: 10px; }
+html.mobile .ecj-cofre {
+  grid-template-columns: 64px minmax(0, 1fr); justify-items: start; text-align: left;
+  column-gap: 12px; row-gap: 2px; padding: 12px 14px;
+}
+html.mobile .ecj-cofre > .ecj-ico { grid-row: 1 / span 7; align-self: center; width: 64px; height: 64px; }
+html.mobile .ecj-cofre > :not(.ecj-ico) { grid-column: 2; }
+/* Deitado, o número só tem a coluna da direita: a conta desconta o ícone, o vão e o recuo
+   (~104 px) da largura do cofre, senão os coins encostavam na borda. */
+html.mobile .ecj-total { font-size: clamp(15px, calc((100cqw - 104px) / 10), 28px); }
 html.mobile .wk-item { min-height: 38px; }
 html.mobile .wk-texto { flex: 1; min-height: 180px; }
 /* O cabeçalho da tabela pode quebrar em duas linhas no celular.
@@ -2998,6 +3089,10 @@ html.mobile .dlg-placa { right: 8px; padding: 3px 7px 3px 5px; font-size: 11.5px
 html.mobile .dlg-placa img { width: 15px; height: 15px; }
 html.mobile .dlg-placa-dias { left: 8px; font-size: 11px; }
 html.mobile .dlg-dias .qtd-atalho { height: 40px; font-size: 11.5px; padding: 0 2px; white-space: nowrap; }
+/* A estadia da folha de editar: a régua mais alta (o dedo acha a casa) e os botões no alvo de 40 px. */
+html.mobile .cm-estadia-casa { height: 22px; }
+html.mobile .cm-estadia-abrir { flex: 1 1 100%; height: 42px; }
+html.mobile .cm-estadia .cm-estadia-desistir { padding: 0 12px; }
 /* A etiqueta de preço no celular: a moeda menor e as linhas do saldo recuando junto (34 px da
    moeda + 8 de respiro), para os números continuarem alinhados à direita do rótulo. */
 html.mobile .dlg-custo { grid-template-columns: 34px minmax(0, 1fr) auto; column-gap: 8px; }
@@ -3162,15 +3257,23 @@ html.mobile.modo-imersivo .pp-flutuante {
    Num telefone os dezoito cards viram duas colunas e o texto encolhe um grau.
    O que NÃO pode encolher é o alvo do dedo: o card inteiro é o botão, e ele
    mantém a altura de sempre. */
-html.mobile .gin-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-html.mobile .gin-card { padding: 8px 7px 9px; }
-html.mobile .gin-card-ico { width: 22px; height: 22px; }
-html.mobile .gin-card-nome { font-size: 11px; }
-/* O palco encolhe no celular, mas NÃO some: o boneco é o que identifica o ginásio de relance,
-   e num telefone essa leitura de relance vale ainda mais que no monitor. */
-html.mobile .gin-card-palco { height: 44px; margin: 3px 0 1px; }
-html.mobile .gin-card-lider { font-size: 10.5px; }
-html.mobile .gin-card-poder, html.mobile .gin-card-meu { font-size: 10px; }
+html.mobile .gin-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+html.mobile .gin-card-palco { width: 40px; height: 40px; }
+html.mobile .gin-card-lider-info b { font-size: 11px; }
+html.mobile .gin-card-cta { height: 36px; }
+html.mobile .gin-chip { height: 32px; }
+html.mobile .gin-ajuda-bt, html.mobile .gin-filtro { height: 38px; font-size: 11.5px; }
+/* O herói no telefone: o voltar e o líder na fila de cima, o ícone e o nome embaixo. */
+html.mobile .gin-heroi {
+  grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "volta lider" "ico txt"; row-gap: 8px;
+}
+html.mobile .gin-heroi .gin-voltar { grid-area: volta; justify-self: start; }
+html.mobile .gin-heroi-lider { grid-area: lider; justify-self: end; }
+html.mobile .gin-heroi-ico { grid-area: ico; width: 36px; height: 36px; }
+html.mobile .gin-heroi-txt { grid-area: txt; }
+/* O cartão "Você": posição e barra em cima, os dois botões de fora a fora embaixo. */
+html.mobile .gin-voce { grid-template-columns: 54px minmax(0, 1fr); }
+html.mobile .gin-voce .gin-meu-acoes { grid-column: 1 / -1; flex-direction: row; }
 
 /* O PÓDIO no celular: os três degraus continuam lado a lado (é o desenho que conta a
    história), só que tudo um grau menor. Empilhá-los em coluna acabaria com o degrau — e o
@@ -3211,7 +3314,6 @@ html.mobile .gin-time-detalhe-equipe .gd-pk {
 }
 html.mobile .gin-time-detalhe-equipe .gd-pk-arte { width: 40px; }
 html.mobile .gin-clicavel:active { filter: brightness(1.1); }
-html.mobile .gin-desde, html.mobile .gin-falta { font-size: 11px; }
 html.mobile .gin-topo-nome { font-size: 13px; }
 html.mobile .gin-meu-acoes { display: grid; grid-template-columns: 1fr 1fr; }
 html.mobile .gin-btn { width: 100%; height: 38px; }
@@ -3227,6 +3329,13 @@ html.mobile .pvp-aba { height: 42px; font-size: 12px; }
 /* O troféu das recompensas: pequeno no desktop, mas no dedo o piso é 40 px. */
 html.mobile .pvp-premios-bt { height: 40px; padding: 0 14px; font-size: 12px; }
 html.mobile .pvpr-pos { flex-basis: 110px; }
+/* As recompensas do Ranqueado: com quatro boosts por faixa, a coluna do lado da posição empilhava um
+   boost por linha e cada faixa passava de 300 px. Aqui a posição vai em cima e os boosts numa grade
+   de dois, com o diamante na linha de baixo. */
+html.mobile .pvpr-ranqueado .pvpr-linha { flex-direction: column; align-items: stretch; gap: 8px; }
+html.mobile .pvpr-ranqueado .pvpr-pos { flex-basis: auto; }
+html.mobile .pvpr-ranqueado .pvpr-premio { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+html.mobile .pvpr-ranqueado .pvpr-item-dia { grid-column: 1 / -1; margin-left: 0; padding-left: 0; }
 /* No dedo, 28 px de botão é um alvo que erra. O piso do jogo é 34. */
 html.mobile .pvp-btn-peq { height: 34px; padding: 0 14px; font-size: 12px; }
 /* Os ícones do card de formação: quadrados de dedo e SEM o respiro de cima (que empurrava o
@@ -3240,6 +3349,62 @@ html.mobile .pvp-form-ed-campo input { height: 40px; font-size: 16px; }
 html.mobile .pvp-tela { height: auto; }
 html.mobile .pvp-painel { overflow: visible; }
 html.mobile .pvp-r-grade { grid-template-columns: 1fr; }
+/* A aba Guild (a Guerra de Guilds) numa coluna só: herói, minha guild, replay, como pontuar, o
+   pódio com o placar e as regras no fim. O herói dobra: arte e relógio em cima, os três números e
+   a inscrição embaixo, na largura toda. */
+html.mobile .gwp-heroi { grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; padding: 12px; }
+html.mobile .gwp-heroi-arte { width: 52px; height: 52px; }
+html.mobile .gwp-heroi-arte .dlg-svg { width: 32px; height: 32px; }
+html.mobile .gwp-titulo { font-size: 17px; }
+html.mobile .gwp-relogio-num { font-size: 22px; }
+html.mobile .gwp-fatos, html.mobile .gwp-heroi-acao { grid-column: 1 / -1; width: auto; }
+html.mobile .gwp-fatos { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* As duas colunas viram uma, e numa ordem de celular: o pódio sobe para logo depois do replay —
+   no desktop ele está ao lado; aqui, depois de "Como pontuar", ficaria a uma tela e meia. As
+   colunas se desfazem (`display: contents`) e cada bloco ganha o seu lugar na fila. */
+html.mobile .gwp-grade { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+html.mobile .gwp-col { display: contents; }
+html.mobile .gwp-voce { order: 1; }
+html.mobile .gwp-acoes { order: 2; }
+html.mobile .gwp-abas { order: 3; }
+html.mobile .gwp-aba-corpo { order: 4; }
+html.mobile .gwp-pontuar { order: 5; }
+html.mobile .gwp-regras { order: 6; }
+/* O placar recolhido no top 10 e na minha guild — o "⋯" marca o salto até ela. */
+html.mobile .gwp-lista:not(.inteira) .gwp-linha.alem { display: none; }
+html.mobile .gwp-lista:not(.inteira) .gwp-salto {
+  display: block; text-align: center; font-size: 16px; line-height: 1; color: var(--sobre-mad-dim);
+}
+html.mobile .gwp-ver-todas { display: inline-flex; width: 100%; }
+html.mobile .gwp-btn, html.mobile .gwp-aba { height: 42px; font-size: 13px; }
+html.mobile .gwp-registrar { height: 44px; }
+html.mobile .gwp-voce { grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
+html.mobile .gwp-voce-pos b { font-size: 22px; }
+html.mobile .gwp-regras summary { min-height: 44px; }
+html.mobile .gwp-podio .cp-palco { height: 84px; }
+html.mobile .gwp-podio .cp-lugar.ouro .cp-palco { height: 100px; }
+html.mobile .gwp-podio .cp-coroa { width: 84px; }
+html.mobile .gwp-podio .cp-lugar.ouro .cp-coroa { width: 104px; }
+html.mobile .gwp-podio .cp-nick { font-size: 12px; }
+html.mobile .gwp-podio .cp-lugar.ouro .cp-nick { font-size: 13px; }
+/* A linha do placar em duas fileiras — nome e pontos em cima, a barra e o GP embaixo. Os abates
+   saem (o cartão da minha guild os tem), e a seta cresce: sem hover, é ela que diz "isto abre". */
+html.mobile .gwp-linha {
+  grid-template-columns: 30px 24px minmax(0, 1fr) auto 12px; gap: 4px 8px; min-height: 48px; padding: 7px 10px;
+  grid-template-areas: "pos brasao nome pts seta" "pos brasao barra gp seta";
+  -webkit-tap-highlight-color: transparent;
+}
+html.mobile .gwp-linha-pos { grid-area: pos; }
+html.mobile .gwp-linha .gd-mini { grid-area: brasao; }
+html.mobile .gwp-linha-nome { grid-area: nome; }
+html.mobile .gwp-linha .gwp-barra { grid-area: barra; align-self: center; }
+html.mobile .gwp-linha-pts { grid-area: pts; }
+html.mobile .gwp-linha-kd { display: none; }
+html.mobile .gwp-linha-gp { grid-area: gp; }
+html.mobile .gwp-linha .guild-abre-seta { grid-area: seta; font-size: 16px; }
+html.mobile .gwp-insc { grid-template-columns: 1fr; }
+html.mobile .gwp-insc-card { min-height: 48px; -webkit-tap-highlight-color: transparent; }
+html.mobile .gwp-busca .gwr-busca-input { height: 44px; font-size: 16px; }
 html.mobile .pvp-cartao { gap: 10px; padding: 10px; }
 html.mobile .pvp-emblema-grande { width: 68px; height: 68px; }
 html.mobile .pvp-cartao-rank { font-size: 15px; }
@@ -3725,45 +3890,20 @@ html.mobile.modo-economia .eco-sair { order: 1; margin-left: auto; }
 html.mobile.modo-economia .eco-pip { order: 1; margin-left: auto; width: 40px; height: 40px; }
 html.mobile.modo-economia .eco-pip svg { width: 18px; height: 18px; }
 html.mobile.modo-economia .eco-pip:not(.hidden) ~ .eco-sair { margin-left: 0; }
-/* A nota explica o modo uma vez; na tela do telefone ela custa duas linhas que o histórico
-   quer. Quem ligou o modo nas Configurações acabou de ler a mesma frase lá. */
-html.mobile.modo-economia .eco-nota { display: none; }
-html.mobile.modo-economia .eco-cel { padding: 6px 2px; }
-html.mobile.modo-economia .eco-cel i { font-size: 8.5px; }
-html.mobile.modo-economia .eco-cel b { font-size: 15px; }
-
-/*
-   A PILHA, e por que ela precisa do `display: contents`.
-
-   No desktop são duas colunas: números à esquerda (ritmo + prancheta), capturas à direita.
-   Empilhadas na ordem em que estão no HTML, a prancheta ficaria ENTRE o ritmo e o histórico —
-   e o histórico, que é o que se abre o jogo para ver, começaria abaixo da dobra.
-
-   `display: contents` dissolve a caixa da coluna e entrega os dois filhos dela ao `.eco-corpo`
-   como itens irmãos do histórico. Aí `order` arruma os três: ritmo, capturas, prancheta.
-
-   Uma rolagem SÓ, a do corpo: duas caixas que rolam uma dentro da outra são o jeito mais
-   rápido de o dedo rolar a errada. Por isso as listas de dentro abrem inteiras aqui.
-*/
-html.mobile.modo-economia .eco-corpo {
-  display: flex; flex-direction: column; gap: 8px;
-  overflow-y: auto; overscroll-behavior: contain;
-}
-html.mobile.modo-economia .eco-lado { display: contents; }
-html.mobile.modo-economia .eco-ritmo { order: 1; }
-html.mobile.modo-economia .eco-corpo > #capturas-painel { order: 2; }
-html.mobile.modo-economia .eco-lado > #sessao-painel { order: 3; }
-html.mobile.modo-economia .eco-corpo > #capturas-painel,
-html.mobile.modo-economia .eco-lado > #sessao-painel { flex: 0 0 auto; }
-html.mobile.modo-economia .eco-lado > #sessao-painel { overflow: visible; }
-html.mobile.modo-economia .eco-corpo .capturas-corpo { overflow: visible; flex: 0 0 auto; }
-/* Os dois Reset e o Copiar são botões de 15 px no desktop — no dedo, não são botão nenhum. */
+/* A pilha é a do `estilo.css` (a container query do painel estreito); aqui ficam só os ALVOS DE
+   DEDO (40 px, DESIGN.md §8) e o corpo de letra de quem lê no telefone. */
+html.mobile.modo-economia .eco-aba { height: 40px; font-size: 11.5px; }
+html.mobile.modo-economia .eco-cat, html.mobile.modo-economia .eco-ordem,
+html.mobile.modo-economia .eco-sel-bts button, html.mobile.modo-economia .eco-mais { height: 40px; font-size: 11.5px; }
+html.mobile.modo-economia .eco-grade-itens { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+html.mobile.modo-economia .eco-sel { grid-template-columns: 46px minmax(0, 1fr); }
+html.mobile.modo-economia .eco-sel-bts { grid-column: 1 / -1; flex-direction: row; }
+html.mobile.modo-economia .eco-sel-bts button { flex: 1 1 0; }
+html.mobile.modo-economia .eco-slot { width: 44px; height: 44px; }
+html.mobile.modo-economia .eco-gasto { min-height: 32px; }
+/* O Copiar, os dois Reset: botões de 15 px no desktop — no dedo, não são botão nenhum. */
 html.mobile.modo-economia .eco-corpo .sessao-reset { height: 30px; min-width: 60px; font-size: 10px; }
-html.mobile.modo-economia .eco-corpo .ss-linha,
-html.mobile.modo-economia .eco-corpo .capturas-linha { font-size: 13px; }
-/* O `/h` sobe junto, mas continua um degrau abaixo do contador de que sai. */
-html.mobile.modo-economia .eco-corpo .ss-hora { font-size: 11.5px; }
-html.mobile.modo-economia .eco-corpo .capturas-info { width: 22px; height: 22px; font-size: 11px; }
+html.mobile.modo-economia .eco-corpo .capturas-linha { font-size: 13px; padding: 7px 8px; }
 
 /* O PASSE DE BATALHA no celular. Herói e VIP empilham; o botão de resgatar e o de comprar crescem
    para o polegar; a trilha continua sendo uma fita de lado (arrastar com o dedo), um pouco mais

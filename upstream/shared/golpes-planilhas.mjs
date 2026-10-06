@@ -1,16 +1,23 @@
 /**
- * Os golpes que vêm de planilha de balanceamento, espécie por espécie. Hoje são seis, mais uma
+ * Os golpes que vêm de planilha de balanceamento, espécie por espécie. Hoje são nove, mais uma
  * tabela no mesmo formato para as espécies que ganham arte depois:
  *
- *   · "Moves PokeIdle Iniciais" → `GOLPES_INICIAIS`, as últimas evoluções dos 20 iniciais;
+ *   · "Moves PokeIdle Iniciais" → `GOLPES_INICIAIS`, as últimas evoluções dos 20 iniciais, menos
+ *     Venusaur e Blastoise (refeitos na planilha de 04-10);
  *   · "Rework Moves Pseudo Lendários Revisado" → `GOLPES_PSEUDO_LENDARIOS`, os 8 pseudo-lendários;
  *   · "Moves PokeIdle (Pokemons com -10 moves)" → `GOLPES_MENOS_DE_10`, 38 espécies com poucos golpes;
  *   · "Move Rework PokeIdle 2026-09-20" (+ os dois reportados depois) → `GOLPES_REWORK_2026_09`,
- *     24 finais de Kanto, Shedinja, Mothim e Weavile;
+ *     24 finais de Kanto, Mothim e Weavile (o Shedinja, que veio nela, foi refeito em 04-10);
  *   · "Iniciais Kanto Moves Atuais" → `GOLPES_PRE_EVOLUCOES_KANTO`, os dois primeiros
  *     estágios dos três iniciais de Kanto;
  *   · "Rework Moveset 28-09" → `GOLPES_REWORK_2026_09_28`, Electivire, Lucario, Mr. Mime,
  *     Drifblim e Camerupt;
+ *   · "Eeveelutions 03-10" e as comuns da "Megas 03-10" → `GOLPES_REWORK_2026_10_03`, as oito
+ *     evoluções do Eevee e Gengar, Scizor, Skarmory, Gardevoir e Chandelure;
+ *   · "Megas 03-10" → `GOLPES_MEGAS_2026_10_03`, o moveset próprio de 45 megas — esta não entra
+ *     em `TABELAS`: quem a lê é `criarEspeciesMega` (ver o cabeçalho dela);
+ *   · "Moveset Rework 04-10 - Iniciais + buff em pokemons horríveis" → `GOLPES_REWORK_2026_10_04`,
+ *     Venusaur, Blastoise, Jynx, Shedinja e Marowak;
  *   · `GOLPES_ARTE_NOVA`, sem planilha: as espécies que estavam no catálogo com `looktype: 1`
  *     e entram no jogo quando a sprite chega ao Pokedex Backup (Mimikyu).
  *
@@ -33,26 +40,15 @@
  *
  * Linha: [nome, tipo, categoria, poder]. O cooldown não mora aqui: sai do poder pela curva de
  * `cooldown-golpes.mjs`, a mesma do resto do catálogo — mexer na curva vale para estes também.
+ * A única exceção é o golpe de mega, marcado com `MEGA` na tabela das megas.
  */
-import { cooldownDoPoder } from './cooldown-golpes.mjs';
+import { cooldownDoPoder, COOLDOWN_MEGA_MS } from './cooldown-golpes.mjs';
 
-/** As últimas evoluções dos iniciais — a planilha "Moves PokeIdle Iniciais". */
+/**
+ * As últimas evoluções dos iniciais — a planilha "Moves PokeIdle Iniciais". Venusaur e Blastoise
+ * saíram daqui para `GOLPES_REWORK_2026_10_04`, que refez o moveset dos dois.
+ */
 export const GOLPES_INICIAIS = {
-  3: [ // Venusaur — GRASS/POISON
-    ['Magical Leaf', 'GRASS',    'SPECIAL',   25],
-    ['Mega Drain',   'GRASS',    'SPECIAL',   40],
-    ['Razor Leaf',   'GRASS',    'PHYSICAL',  55],
-    ['Barb Barrage', 'POISON',   'PHYSICAL',  60],
-    ['Giga Drain',   'GRASS',    'SPECIAL',   75],
-    ['Energy Ball',  'GRASS',    'SPECIAL',   90],
-    ['Sludge Bomb',  'POISON',   'SPECIAL',   90],
-    ['Sludge Wave',  'POISON',   'SPECIAL',   95],
-    ['Petal Dance',  'GRASS',    'SPECIAL',  120],
-    ['Belch',        'POISON',   'SPECIAL',  120],
-    ['Hyper Beam',   'NORMAL',   'SPECIAL',  150],
-    ['Petal Bloom',  'GRASS',    'SPECIAL',  600],
-    ['Toxic Deluge', 'POISON',   'SPECIAL',  600],
-  ],
   6: [ // Charizard — FIRE/FLYING
     ['Aerial Ace',        'FLYING',   'PHYSICAL',  25],
     ['Ember',             'FIRE',     'SPECIAL',   40],
@@ -67,21 +63,6 @@ export const GOLPES_INICIAIS = {
     ['Eruption',          'FIRE',     'SPECIAL',  150],
     ['Ignition Point',    'FIRE',     'SPECIAL',  600],
     ['Massive Hurricane', 'FLYING',   'SPECIAL',  600],
-  ],
-  9: [ // Blastoise — WATER
-    ['Feint',          'NORMAL',   'PHYSICAL',  30],
-    ['Water Gun',      'WATER',    'SPECIAL',   40],
-    ['Chilling Water', 'WATER',    'SPECIAL',   50],
-    ['Water Pulse',    'WATER',    'SPECIAL',   60],
-    ['Razor Shell',    'WATER',    'PHYSICAL',  75],
-    ['Liquidation',    'WATER',    'PHYSICAL',  85],
-    ['Surf',           'WATER',    'SPECIAL',   90],
-    ['Swift',          'NORMAL',   'SPECIAL',  100],
-    ['Wave Crash',     'WATER',    'PHYSICAL', 120],
-    ['Skull Bash',     'NORMAL',   'PHYSICAL', 130],
-    ['Water Spout',    'WATER',    'SPECIAL',  150],
-    ['Hydro Cannon',   'WATER',    'SPECIAL',  600],
-    ['Cyclonic Tide',  'WATER',    'PHYSICAL', 600],
   ],
   154: [ // Meganium — GRASS
     ['Absorb',         'GRASS',    'SPECIAL',   25],
@@ -963,6 +944,9 @@ export const GOLPES_MENOS_DE_10 = {
  * golpes; os outros 24 têm 11). Mothim e Weavile vieram na planilha seguinte, dos dois que
  * ficaram de fora e foram reportados depois — mesmo formato, mesma leva, mesma tabela.
  *
+ * O Shedinja saiu daqui para `GOLPES_REWORK_2026_10_04`, que refez o moveset dele. As 299
+ * linhas citadas abaixo contam com as 13 dele.
+ *
  * Todas já são elegíveis ao golpe de assinatura, e a planilha já dá os DOIS de 600 que
  * `injetarGolpesEspeciais` exigiria — um por tipo nas de tipo duplo, dois do mesmo tipo nas de
  * tipo único —, então a injeção não acrescenta um terceiro.
@@ -1289,21 +1273,6 @@ export const GOLPES_REWORK_2026_09 = {
     ['Blast Burn',     'FIRE',     'PHYSICAL', 600],
     ['Ignition Point', 'FIRE',     'PHYSICAL', 600],
   ],
-  292: [ // Shedinja — BUG/GHOST
-    ['Pin Missile',      'BUG',      'PHYSICAL',  25],
-    ['Fury Cutter',      'BUG',      'PHYSICAL',  40],
-    ['Team Slice',       'BUG',      'PHYSICAL',  55],
-    ['Shadow Punch',     'GHOST',    'PHYSICAL',  55],
-    ['Bug Bite',         'BUG',      'PHYSICAL',  60],
-    ['U-turn',           'BUG',      'PHYSICAL',  70],
-    ['Phantom Force',    'GHOST',    'PHYSICAL',  90],
-    ['Night Shade',      'GHOST',    'SPECIAL',  100],
-    ['Attack Order',     'BUG',      'PHYSICAL', 120],
-    ['Shadow Force',     'GHOST',    'PHYSICAL', 120],
-    ['Bee Swarm',        'BUG',      'PHYSICAL', 140],
-    ['Hive Crush',       'BUG',      'PHYSICAL', 600],
-    ['Untold Nightmare', 'GHOST',    'PHYSICAL', 600],
-  ],
   414: [ // Mothim — BUG/FLYING
     ['Pin Missile',       'BUG',      'PHYSICAL',  25],
     ['Fury Cutter',       'BUG',      'PHYSICAL',  40],
@@ -1335,8 +1304,9 @@ export const GOLPES_REWORK_2026_09 = {
 /**
  * Os dois primeiros estágios dos iniciais de Kanto — a planilha "Iniciais Kanto Moves Atuais":
  * Bulbasaur e Ivysaur, Charmander e Charmeleon, Squirtle e Wartortle. As três últimas evoluções
- * (Venusaur, Charizard, Blastoise) já vinham na planilha dos iniciais e continuam em
- * `GOLPES_INICIAIS` — esta tabela é só o que vem antes delas.
+ * (Venusaur, Charizard, Blastoise) já vinham na planilha dos iniciais — o Charizard continua em
+ * `GOLPES_INICIAIS`, e Venusaur e Blastoise foram refeitos em `GOLPES_REWORK_2026_10_04`. Esta
+ * tabela é só o que vem antes delas.
  *
  * Nenhuma leva golpe de 600, e é de propósito: nenhuma é última evolução, então
  * `elegivelParaGolpeEspecial` recusa as seis e `injetarGolpesEspeciais` nem chega a rodar. Um
@@ -1498,6 +1468,986 @@ export const GOLPES_REWORK_2026_09_28 = {
 };
 
 /**
+ * As planilhas "Eeveelutions 03-10" e "Megas 03-10" (03/10/2026): as oito evoluções do Eevee e as
+ * cinco espécies comuns que vieram junto na planilha das megas — Gengar, Scizor, Skarmory,
+ * Gardevoir e Chandelure, refeitas junto com a mega de cada uma porque estavam fracas demais.
+ *
+ * Só golpe: nenhum tipo muda aqui (a única tipagem nova das planilhas é a da Mega Aggron, em
+ * `MEGAS`). Todas são última evolução e trazem DOIS golpes de 600 — um por tipo nas de tipo
+ * duplo, dois do mesmo tipo nas Eeveelutions —, então `injetarGolpesEspeciais` não acrescenta
+ * nada.
+ *
+ * A coluna de cooldown destas planilhas segue outra curva no trecho de baixo: começa em 25 de
+ * poder → 10 s, e a do jogo começa em 15 → 10 s — por isso 40 de poder aparece como 14 s lá e sai
+ * 15,9 s aqui. Acima de 100 as duas coincidem. Como em toda planilha, vale o PODER, e o cooldown
+ * sai de `cooldown-golpes.mjs`. Todas as linhas batem com uma das duas curvas: não há poder
+ * digitado errado.
+ *
+ * O Sylveon (#700) é um dos quatro pokeId repetidos do catálogo; `obter` devolve as duas cópias
+ * (ver `aplicarGolpesDasPlanilhas`).
+ */
+export const GOLPES_REWORK_2026_10_03 = {
+  94: [ // Gengar — GHOST/POISON
+    ['Shadow Punch',     'GHOST',    'PHYSICAL',  25],
+    ['Acid',             'POISON',   'SPECIAL',   40],
+    ['Night Shade',      'GHOST',    'SPECIAL',   55],
+    ['Hex',              'GHOST',    'SPECIAL',   65],
+    ['Bitter Malice',    'GHOST',    'SPECIAL',   75],
+    ['Shadow Ball',      'GHOST',    'SPECIAL',   80],
+    ['Sludge Wave',      'POISON',   'SPECIAL',   95],
+    ['Moongeist Beam',   'GHOST',    'SPECIAL',  120],
+    ['Belch',            'POISON',   'SPECIAL',  120],
+    ['Toxic Deluge',     'POISON',   'SPECIAL',  600],
+    ['Untold Nightmare', 'GHOST',    'SPECIAL',  600],
+  ],
+  134: [ // Vaporeon — WATER
+    ['Whirlpool',      'WATER',    'SPECIAL',   30],
+    ['Water Gun',      'WATER',    'SPECIAL',   40],
+    ['Chilling Water', 'WATER',    'SPECIAL',   55],
+    ['Bubble Beam',    'WATER',    'SPECIAL',   65],
+    ['Aqua Cutter',    'WATER',    'PHYSICAL',  70],
+    ['Hydro Steam',    'WATER',    'SPECIAL',   80],
+    ['Bouncy Bubble',  'WATER',    'SPECIAL',   90],
+    ['Origin Pulse',   'WATER',    'SPECIAL',  110],
+    ['Hydro Pump',     'WATER',    'SPECIAL',  120],
+    ['Water Spout',    'WATER',    'SPECIAL',  150],
+    ['Cyclonic Tide',  'WATER',    'SPECIAL',  600],
+    ['Hydro Cannon',   'WATER',    'SPECIAL',  600],
+  ],
+  135: [ // Jolteon — ELECTRIC
+    ['Shock Wave',       'ELECTRIC', 'SPECIAL',   25],
+    ['Thunder Shock',    'ELECTRIC', 'SPECIAL',   40],
+    ['Electro Ball',     'ELECTRIC', 'SPECIAL',   55],
+    ['Parabolic Charge', 'ELECTRIC', 'SPECIAL',   65],
+    ['Volt Switch',      'ELECTRIC', 'SPECIAL',   70],
+    ['Discharge',        'ELECTRIC', 'SPECIAL',   80],
+    ['Thunderbolt',      'ELECTRIC', 'SPECIAL',   90],
+    ['Thunder',          'ELECTRIC', 'SPECIAL',  110],
+    ['Zap Cannon',       'ELECTRIC', 'SPECIAL',  120],
+    ['Electro Shot',     'ELECTRIC', 'SPECIAL',  130],
+    ['Bolt Strike',      'ELECTRIC', 'SPECIAL',  600],
+    ['Static Overload',  'ELECTRIC', 'SPECIAL',  600],
+  ],
+  136: [ // Flareon — FIRE
+    ['Fire Spin',      'FIRE',     'SPECIAL',   30],
+    ['Ember',          'FIRE',     'SPECIAL',   45],
+    ['Flame Charge',   'FIRE',     'PHYSICAL',  55],
+    ['Fire Fang',      'FIRE',     'PHYSICAL',  65],
+    ['Temper Flare',   'FIRE',     'PHYSICAL',  75],
+    ['Fire Lash',      'FIRE',     'PHYSICAL',  80],
+    ['Heat Crash',     'FIRE',     'PHYSICAL',  90],
+    ['Fire Blast',     'FIRE',     'SPECIAL',  110],
+    ['Flare Blitz',    'FIRE',     'PHYSICAL', 120],
+    ['Mind Blown',     'FIRE',     'SPECIAL',  150],
+    ['Blast Burn',     'FIRE',     'PHYSICAL', 600],
+    ['Ignition Point', 'FIRE',     'PHYSICAL', 600],
+  ],
+  196: [ // Espeon — PSYCHIC
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Twin Beam',          'PSYCHIC',  'SPECIAL',   40],
+    ['Heart Stamp',        'PSYCHIC',  'SPECIAL',   55],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Psychic Noise',      'PSYCHIC',  'SPECIAL',   75],
+    ['Eerie Spell',        'PSYCHIC',  'SPECIAL',   80],
+    ['Mist Ball',          'PSYCHIC',  'SPECIAL',   95],
+    ['Psystrike',          'PSYCHIC',  'SPECIAL',  100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Psycho Boost',       'PSYCHIC',  'SPECIAL',  140],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+    ['Prismatic Laser',    'PSYCHIC',  'SPECIAL',  600],
+  ],
+  197: [ // Umbreon — DARK
+    ['Power Trip',          'DARK',     'PHYSICAL',  25],
+    ['Fling',               'DARK',     'PHYSICAL',  40],
+    ['Payback',             'DARK',     'PHYSICAL',  50],
+    ['Knock Off',           'DARK',     'PHYSICAL',  65],
+    ['Lash Out',            'DARK',     'PHYSICAL',  75],
+    ['False Surrender',     'DARK',     'PHYSICAL',  80],
+    ['Foul Play',           'DARK',     'PHYSICAL',  95],
+    ['Hyperspace Fury',     'DARK',     'PHYSICAL', 100],
+    ['Pursuit',             'DARK',     'PHYSICAL', 120],
+    ['Malicious Moonsault', 'DARK',     'PHYSICAL', 180],
+    ['Endless Hollow',      'DARK',     'PHYSICAL', 600],
+    ['Wicked Blow',         'DARK',     'PHYSICAL', 600],
+  ],
+  212: [ // Scizor — BUG/STEEL
+    ['Twineedle',     'BUG',      'PHYSICAL',  25],
+    ['Bullet Punch',  'STEEL',    'PHYSICAL',  40],
+    ['Revenge',       'BUG',      'PHYSICAL',  55],
+    ['Steamroller',   'BUG',      'PHYSICAL',  65],
+    ['U-turn',        'BUG',      'PHYSICAL',  70],
+    ['X-Scissor',     'BUG',      'PHYSICAL',  80],
+    ['Behemoth Bash', 'STEEL',    'PHYSICAL', 100],
+    ['Attack Order',  'BUG',      'PHYSICAL', 120],
+    ['Heavy Slam',    'STEEL',    'PHYSICAL', 120],
+    ['Bee Swarm',     'BUG',      'PHYSICAL', 140],
+    ['Alloy Breaker', 'STEEL',    'PHYSICAL', 600],
+    ['Hive Crush',    'BUG',      'PHYSICAL', 600],
+  ],
+  227: [ // Skarmory — STEEL/FLYING
+    ['Aerial Ace',        'FLYING',   'PHYSICAL',  25],
+    ['Bullet Punch',      'STEEL',    'PHYSICAL',  40],
+    ['Gyro Ball',         'STEEL',    'PHYSICAL',  55],
+    ['Sky Drop',          'FLYING',   'PHYSICAL',  60],
+    ['Steel Wing',        'STEEL',    'PHYSICAL',  70],
+    ['Metal Burst',       'STEEL',    'PHYSICAL',  80],
+    ['Meteor Mash',       'STEEL',    'PHYSICAL',  90],
+    ['Beak Blast',        'FLYING',   'PHYSICAL', 100],
+    ['Brave Bird',        'FLYING',   'PHYSICAL', 120],
+    ['Heavy Slam',        'STEEL',    'PHYSICAL', 120],
+    ['Alloy Breaker',     'STEEL',    'PHYSICAL', 600],
+    ['Massive Hurricane', 'FLYING',   'PHYSICAL', 600],
+  ],
+  282: [ // Gardevoir — PSYCHIC/FAIRY
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Fairy Wind',         'FAIRY',    'SPECIAL',   40],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Mystical Power',     'PSYCHIC',  'SPECIAL',   70],
+    ['Lumina Crash',       'PSYCHIC',  'SPECIAL',   80],
+    ['Sparkly Swirl',      'FAIRY',    'SPECIAL',   90],
+    ['Psystrike',          'PSYCHIC',  'SPECIAL',  100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Fleur Cannon',       'FAIRY',    'SPECIAL',  120],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+    ['Starlight Charm',    'FAIRY',    'SPECIAL',  600],
+  ],
+  470: [ // Leafeon — GRASS
+    ['Bullet Seed',  'GRASS',    'PHYSICAL',  25],
+    ['Leafage',      'GRASS',    'PHYSICAL',  40],
+    ['Razor Leaf',   'GRASS',    'PHYSICAL',  55],
+    ['Needle Arm',   'GRASS',    'PHYSICAL',  60],
+    ['Flower Trick', 'GRASS',    'PHYSICAL',  70],
+    ['Seed Bomb',    'GRASS',    'PHYSICAL',  80],
+    ['Leaf Blade',   'GRASS',    'PHYSICAL',  90],
+    ['Ivy Cudgel',   'GRASS',    'PHYSICAL', 100],
+    ['Power Whip',   'GRASS',    'PHYSICAL', 120],
+    ['Solar Blade',  'GRASS',    'PHYSICAL', 125],
+    ['Frenzy Plant', 'GRASS',    'PHYSICAL', 600],
+    ['Petal Bloom',  'GRASS',    'PHYSICAL', 600],
+  ],
+  471: [ // Glaceon — ICE
+    ['Ice Ball',      'ICE',      'PHYSICAL',  30],
+    ['Powder Snow',   'ICE',      'SPECIAL',   40],
+    ['Icy Wind',      'ICE',      'SPECIAL',   55],
+    ['Glaciate',      'ICE',      'SPECIAL',   65],
+    ['Freeze-Dry',    'ICE',      'SPECIAL',   70],
+    ['Icicle Crash',  'ICE',      'PHYSICAL',  85],
+    ['Freezy Frost',  'ICE',      'SPECIAL',   90],
+    ['Blizzard',      'ICE',      'SPECIAL',  110],
+    ['Freeze Shock',  'ICE',      'SPECIAL',  120],
+    ['Sheer Cold',    'ICE',      'SPECIAL',  120],
+    ['Glacial Lance', 'ICE',      'SPECIAL',  600],
+    ['Ice Time',      'ICE',      'SPECIAL',  600],
+  ],
+  609: [ // Chandelure — GHOST/FIRE
+    ['Fire Spin',        'FIRE',     'SPECIAL',   30],
+    ['Ember',            'FIRE',     'SPECIAL',   45],
+    ['Night Shade',      'GHOST',    'SPECIAL',   55],
+    ['Ominous Wind',     'GHOST',    'SPECIAL',   60],
+    ['Bitter Malice',    'GHOST',    'SPECIAL',   75],
+    ['Fiery Dance',      'FIRE',     'SPECIAL',   80],
+    ['Heat Wave',        'FIRE',     'SPECIAL',   95],
+    ['Moongeist Beam',   'GHOST',    'SPECIAL',  120],
+    ['Overheat',         'FIRE',     'SPECIAL',  120],
+    ['Ignition Point',   'FIRE',     'SPECIAL',  600],
+    ['Untold Nightmare', 'GHOST',    'SPECIAL',  600],
+  ],
+  700: [ // Sylveon — FAIRY
+    ['Disarming Voice',  'FAIRY',    'SPECIAL',   25],
+    ['Fairy Wind',       'FAIRY',    'SPECIAL',   40],
+    ['Draining Kiss',    'FAIRY',    'SPECIAL',   50],
+    ['Spirit Break',     'FAIRY',    'PHYSICAL',  75],
+    ['Alluring Voice',   'FAIRY',    'SPECIAL',   80],
+    ['Dazzling Gleam',   'FAIRY',    'SPECIAL',   80],
+    ['Moonblast',        'FAIRY',    'SPECIAL',   95],
+    ['Springtide Storm', 'FAIRY',    'SPECIAL',  100],
+    ['Misty Explosion',  'FAIRY',    'SPECIAL',  100],
+    ['Fleur Cannon',     'FAIRY',    'SPECIAL',  120],
+    ['Light of Ruin',    'FAIRY',    'SPECIAL',  600],
+    ['Starlight Charm',  'FAIRY',    'SPECIAL',  600],
+  ],
+};
+
+/**
+ * A planilha "Moveset Rework 04-10 - Iniciais + buff em pokemons horríveis" (04/10/2026): dois
+ * iniciais de Kanto refeitos — Venusaur e Blastoise, que saíram de `GOLPES_INICIAIS` — e três
+ * espécies que estavam fracas demais: Jynx, Shedinja e Marowak.
+ *
+ * Venusaur, Blastoise e Shedinja saíram das tabelas antigas em vez de ficarem lá sobrescritos,
+ * para cada espécie ter UMA lista no arquivo. O Shedinja quase não muda: a planilha copiou a ficha atual e
+ * acrescentou o Sinister Arrow Raid (GHOST, 180) — o Shadow Punch só trocou de lugar com o Team
+ * Slice. Jynx e Marowak saíam com os golpes do espelho, com nível de aprendizado até 36; agora
+ * tudo é nível 1, como em toda planilha.
+ *
+ * Todas são última evolução e trazem DOIS golpes de 600 — um por tipo nas de tipo duplo, dois do
+ * mesmo tipo em Blastoise e Marowak —, então `injetarGolpesEspeciais` não acrescenta nada. O
+ * Marowak troca o Precipice Blades (o segundo 600 que o injetor dava) pelo Land's Wrath.
+ *
+ * A planilha também traz Mega Venusaur e Mega Blastoise, e as duas são exatamente a lista da base
+ * mais o golpe de mega (Mega Bloom e Mega Maelstrom, especiais) — o que `criarEspeciesMega` já
+ * monta para quem não está em `GOLPES_MEGAS_2026_10_03`. Por isso elas não entram lá: seguem a
+ * base sozinhas. Brave Venusaur, Brave Blastoise, Psy Jynx e Ancient Marowak (Outland) herdam
+ * pelo `herdarBaseOutland`, e o Shedinja de Orre (#13292) pelo `herdarGolpesOrre`.
+ *
+ * A coluna de cooldown segue a curva de 25 → 10 s das planilhas de 03-10, menos a do Shedinja, que
+ * veio com a do jogo (15 → 10 s). Todas as linhas batem com uma das duas.
+ */
+export const GOLPES_REWORK_2026_10_04 = {
+  3: [ // Venusaur — GRASS/POISON
+    ['Absorb',       'GRASS',    'SPECIAL',   25],
+    ['Mega Drain',   'GRASS',    'SPECIAL',   40],
+    ['Clear Smog',   'POISON',   'SPECIAL',   50],
+    ['Leaf Tornado', 'GRASS',    'SPECIAL',   65],
+    ['Giga Drain',   'GRASS',    'SPECIAL',   75],
+    ['Grass Pledge', 'GRASS',    'SPECIAL',   80],
+    ['Energy Ball',  'GRASS',    'SPECIAL',   90],
+    ['Sludge Wave',  'POISON',   'SPECIAL',   95],
+    ['Grass Knot',   'GRASS',    'SPECIAL',  100],
+    ['Solar Beam',   'GRASS',    'SPECIAL',  120],
+    ['Belch',        'POISON',   'SPECIAL',  120],
+    ['Petal Bloom',  'GRASS',    'SPECIAL',  600],
+    ['Toxic Deluge', 'POISON',   'SPECIAL',  600],
+  ],
+  9: [ // Blastoise — WATER
+    ['Surging Strikes', 'WATER',    'PHYSICAL',  25],
+    ['Water Gun',       'WATER',    'SPECIAL',   40],
+    ['Yawn',            'WATER',    'PHYSICAL',  55],
+    ['Jet Punch',       'WATER',    'PHYSICAL',  60],
+    ['Aqua Cutter',     'WATER',    'PHYSICAL',  70],
+    ['Scald',           'WATER',    'SPECIAL',   80],
+    ['Aqua Tail',       'WATER',    'PHYSICAL',  90],
+    ['Crabhammer',      'WATER',    'PHYSICAL', 100],
+    ['Origin Pulse',    'WATER',    'SPECIAL',  110],
+    ['Hydro Pump',      'WATER',    'SPECIAL',  120],
+    ['Wave Crash',      'WATER',    'PHYSICAL', 120],
+    ['Cyclonic Tide',   'WATER',    'PHYSICAL', 600],
+    ['Hydro Cannon',    'WATER',    'SPECIAL',  600],
+  ],
+  105: [ // Marowak — GROUND
+    ['Bone Rush',        'GROUND',   'PHYSICAL',  25],
+    ['Sand Tomb',        'GROUND',   'PHYSICAL',  35],
+    ['Bonemerang',       'GROUND',   'PHYSICAL',  50],
+    ['Bone Club',        'GROUND',   'PHYSICAL',  65],
+    ['Stomping Tantrum', 'GROUND',   'PHYSICAL',  75],
+    ['Dig',              'GROUND',   'PHYSICAL',  80],
+    ['Earthquake',       'GROUND',   'PHYSICAL', 100],
+    ['Headlong Rush',    'GROUND',   'PHYSICAL', 120],
+    ['Fissure',          'GROUND',   'PHYSICAL', 120],
+    ['Crossing Fissure', 'GROUND',   'PHYSICAL', 600],
+    ["Land's Wrath",     'GROUND',   'PHYSICAL', 600],
+  ],
+  124: [ // Jynx — ICE/PSYCHIC
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Powder Snow',        'ICE',      'SPECIAL',   40],
+    ['Icy Wind',           'ICE',      'SPECIAL',   55],
+    ['Aurora Beam',        'ICE',      'SPECIAL',   65],
+    ['Psychic Noise',      'PSYCHIC',  'SPECIAL',   75],
+    ['Eerie Spell',        'PSYCHIC',  'SPECIAL',   80],
+    ['Ice Beam',           'ICE',      'SPECIAL',   90],
+    ['Blizzard',           'ICE',      'SPECIAL',  110],
+    ['Sheer Cold',         'ICE',      'SPECIAL',  120],
+    ['Psycho Boost',       'PSYCHIC',  'SPECIAL',  140],
+    ['Ice Time',           'ICE',      'SPECIAL',  600],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+  ],
+  292: [ // Shedinja — BUG/GHOST
+    ['Pin Missile',         'BUG',      'PHYSICAL',  25],
+    ['Fury Cutter',         'BUG',      'PHYSICAL',  40],
+    ['Shadow Punch',        'GHOST',    'PHYSICAL',  55],
+    ['Team Slice',          'BUG',      'PHYSICAL',  55],
+    ['Bug Bite',            'BUG',      'PHYSICAL',  60],
+    ['U-turn',              'BUG',      'PHYSICAL',  70],
+    ['Phantom Force',       'GHOST',    'PHYSICAL',  90],
+    ['Night Shade',         'GHOST',    'SPECIAL',  100],
+    ['Attack Order',        'BUG',      'PHYSICAL', 120],
+    ['Shadow Force',        'GHOST',    'PHYSICAL', 120],
+    ['Bee Swarm',           'BUG',      'PHYSICAL', 140],
+    ['Sinister Arrow Raid', 'GHOST',    'PHYSICAL', 180],
+    ['Hive Crush',          'BUG',      'PHYSICAL', 600],
+    ['Untold Nightmare',    'GHOST',    'PHYSICAL', 600],
+  ],
+};
+
+/** A marca do golpe de mega nas linhas de `GOLPES_MEGAS_2026_10_03` — ver o cabeçalho dela. */
+const MEGA = 'MEGA';
+
+/**
+ * A planilha "Megas 03-10" (03/10/2026): o moveset PRÓPRIO de 45 megas, montado de acordo com a
+ * tipagem DELAS — a Mega Gyarados (WATER/DARK) passa a bater de DARK, a Mega Ampharos ganha golpes
+ * de DRAGON.
+ *
+ * Até aqui toda mega era a CÓPIA EXATA dos golpes da base mais o golpe de mega (ver
+ * `criarEspeciesMega`); estas 45 trocam a cópia por esta tabela, inteira, golpe de mega incluído.
+ * As 14 que não estão na planilha — as que não precisavam mexer: Venusaur, Charizard Y,
+ * Blastoise, Dragonite, Tyranitar, Blaziken, Swampert, Medicham, Camerupt, Metagross, Garchomp,
+ * Lucario, Dragalge e Hawlucha — seguem com a cópia.
+ *
+ * O golpe de mega é a linha com a marca `MEGA`: 600 de poder e 30 s (`COOLDOWN_MEGA_MS`), com
+ * `cdFixo` e `golpeMega`, igual ao de `golpeMegaDe`. A marca é explícita, e não "começa com
+ * Mega", porque Mega Drain é golpe comum e está na Mega Victreebel e na Mega Meganium. Quase todos
+ * usam o nome e o tipo de `GOLPE_MEGA_POR_TIPO` para o primário; as duas exceções são escolha
+ * da planilha: Mega Pidgeot com Mega Massive Hurricane (FLYING) e Mega Drampa com Mega Cataclysm
+ * (DRAGON) — as duas são NORMAL de primário. A categoria de cada golpe é a da planilha.
+ *
+ * A chave é o pokeId da mega (3000 + dex). A tabela NÃO entra em `TABELAS`: quando as planilhas
+ * rodam, as megas ainda não existem, e quem a lê é `criarEspeciesMega`, por
+ * `golpesDaPlanilhaDaMega`. Mega não passa pelo injetor de golpes de 600 (`megaDeDex`), então a
+ * lista sai exatamente como está aqui. A Mega Ampharos veio com os dois 600 de ELECTRIC e ganhou
+ * o de DRAGON (Eternal Dragon, no lugar do Bolt Strike) na planilha "Ampharos Mega", no mesmo dia.
+ *
+ * Três blocos da planilha (Mega Starmie, Mega Aggron, Mega Gallade) vieram com o cooldown da
+ * curva do jogo, copiados da ficha atual. A Mega Starmie e a Mega Aggron saem com os mesmos golpes
+ * de antes; na Mega Aggron o que muda é o tipo, que passa a STEEL/ROCK.
+ */
+export const GOLPES_MEGAS_2026_10_03 = {
+  3015: [ // Mega Beedrill — BUG/POISON
+    ['Poison Sting', 'POISON',   'PHYSICAL',  25],
+    ['Fury Cutter',  'BUG',      'PHYSICAL',  40],
+    ['Fell Stinger', 'BUG',      'PHYSICAL',  50],
+    ['Bug Bite',     'BUG',      'PHYSICAL',  60],
+    ['U-turn',       'BUG',      'PHYSICAL',  70],
+    ['Poison Jab',   'POISON',   'PHYSICAL',  80],
+    ['Sludge Bomb',  'POISON',   'SPECIAL',   90],
+    ['Gunk Shot',    'POISON',   'PHYSICAL', 120],
+    ['Bee Swarm',    'BUG',      'PHYSICAL', 140],
+    ['Mega Swarm',   'BUG',      'PHYSICAL', 600, MEGA],
+    ['Hive Crush',   'BUG',      'PHYSICAL', 600],
+    ['Toxic Deluge', 'POISON',   'PHYSICAL', 600],
+  ],
+  3018: [ // Mega Pidgeot — NORMAL/FLYING · golpe de mega FLYING, escolha da planilha (o primário é NORMAL)
+    ['Aerial Ace',             'FLYING',   'PHYSICAL',  25],
+    ['Gust',                   'FLYING',   'SPECIAL',   40],
+    ['Acrobatics',             'FLYING',   'PHYSICAL',  55],
+    ['Hidden Power',           'NORMAL',   'SPECIAL',   60],
+    ['Air Slash',              'FLYING',   'SPECIAL',   75],
+    ['Drill Peck',             'FLYING',   'PHYSICAL',  80],
+    ['Aeroblast',              'FLYING',   'SPECIAL',  100],
+    ['Techno Blast',           'NORMAL',   'SPECIAL',  120],
+    ['Hurricane',              'FLYING',   'SPECIAL',  120],
+    ['Mega Massive Hurricane', 'FLYING',   'SPECIAL',  600, MEGA],
+    ['Massive Hurricane',      'FLYING',   'SPECIAL',  600],
+    ['Blood Moon',             'NORMAL',   'SPECIAL',  600],
+  ],
+  3026: [ // Mega Raichu Y — ELECTRIC
+    ['Shock Wave',        'ELECTRIC', 'SPECIAL',   25],
+    ['Thunder Shock',     'ELECTRIC', 'SPECIAL',   40],
+    ['Electro Ball',      'ELECTRIC', 'SPECIAL',   55],
+    ['Parabolic Charge',  'ELECTRIC', 'SPECIAL',   65],
+    ['Volt Switch',       'ELECTRIC', 'SPECIAL',   70],
+    ['Discharge',         'ELECTRIC', 'SPECIAL',   80],
+    ['Electro Drift',     'ELECTRIC', 'SPECIAL',  100],
+    ['Zap Cannon',        'ELECTRIC', 'SPECIAL',  120],
+    ['Electro Shot',      'ELECTRIC', 'SPECIAL',  130],
+    ['Mega Thunderstorm', 'ELECTRIC', 'SPECIAL',  600, MEGA],
+    ['Bolt Strike',       'ELECTRIC', 'SPECIAL',  600],
+    ['Static Overload',   'ELECTRIC', 'SPECIAL',  600],
+  ],
+  3036: [ // Mega Clefable — FAIRY/FLYING
+    ['Disarming Voice',   'FAIRY',    'SPECIAL',   25],
+    ['Fairy Wind',        'FAIRY',    'SPECIAL',   40],
+    ['Draining Kiss',     'FAIRY',    'SPECIAL',   50],
+    ['Chatter',           'FLYING',   'SPECIAL',   65],
+    ['Spirit Break',      'FAIRY',    'PHYSICAL',  75],
+    ['Dazzling Gleam',    'FAIRY',    'SPECIAL',   80],
+    ['Moonblast',         'FAIRY',    'SPECIAL',   95],
+    ['Hurricane',         'FLYING',   'SPECIAL',  120],
+    ['Fleur Cannon',      'FAIRY',    'SPECIAL',  120],
+    ['Mega Radiance',     'FAIRY',    'SPECIAL',  600, MEGA],
+    ['Massive Hurricane', 'FLYING',   'SPECIAL',  600],
+    ['Starlight Charm',   'FAIRY',    'SPECIAL',  600],
+  ],
+  3065: [ // Mega Alakazam — PSYCHIC
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Twin Beam',          'PSYCHIC',  'SPECIAL',   40],
+    ['Confusion',          'PSYCHIC',  'SPECIAL',   50],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Psychic Noise',      'PSYCHIC',  'SPECIAL',   75],
+    ['Zen Headbutt',       'PSYCHIC',  'SPECIAL',   80],
+    ['Photon Geyser',      'PSYCHIC',  'SPECIAL',  100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Psycho Cut',         'PSYCHIC',  'SPECIAL',  200],
+    ['Mega Mindbreak',     'PSYCHIC',  'SPECIAL',  600, MEGA],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+    ['Prismatic Laser',    'PSYCHIC',  'SPECIAL',  600],
+  ],
+  3071: [ // Mega Victreebel — GRASS/POISON
+    ['Poison Sting',   'POISON',   'PHYSICAL',  25],
+    ['Mega Drain',     'GRASS',    'SPECIAL',   40],
+    ['Razor Leaf',     'GRASS',    'PHYSICAL',  55],
+    ['Venoshock',      'POISON',   'SPECIAL',   65],
+    ['Giga Drain',     'GRASS',    'SPECIAL',   75],
+    ['Grass Pledge',   'GRASS',    'SPECIAL',   80],
+    ['Petal Blizzard', 'GRASS',    'PHYSICAL',  90],
+    ['Power Whip',     'GRASS',    'PHYSICAL', 120],
+    ['Belch',          'POISON',   'SPECIAL',  120],
+    ['Mega Bloom',     'GRASS',    'SPECIAL',  600, MEGA],
+    ['Petal Bloom',    'GRASS',    'PHYSICAL', 600],
+    ['Toxic Deluge',   'POISON',   'SPECIAL',  600],
+  ],
+  3080: [ // Mega Slowbro — WATER/PSYCHIC
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Bubble',             'WATER',    'SPECIAL',   40],
+    ['Chilling Water',     'WATER',    'SPECIAL',   55],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Psychic Noise',      'PSYCHIC',  'SPECIAL',   75],
+    ['Scald',              'WATER',    'SPECIAL',   80],
+    ['Surf',               'WATER',    'SPECIAL',  100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Hydro Pump',         'WATER',    'SPECIAL',  120],
+    ['Mega Maelstrom',     'WATER',    'SPECIAL',  600, MEGA],
+    ['Cyclonic Tide',      'WATER',    'SPECIAL',  600],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+  ],
+  3094: [ // Mega Gengar — GHOST/POISON
+    ['Shadow Punch',     'GHOST',    'PHYSICAL',  25],
+    ['Acid',             'POISON',   'SPECIAL',   40],
+    ['Night Shade',      'GHOST',    'SPECIAL',   55],
+    ['Hex',              'GHOST',    'SPECIAL',   65],
+    ['Bitter Malice',    'GHOST',    'SPECIAL',   75],
+    ['Shadow Ball',      'GHOST',    'SPECIAL',   80],
+    ['Sludge Wave',      'POISON',   'SPECIAL',   95],
+    ['Moongeist Beam',   'GHOST',    'SPECIAL',  120],
+    ['Belch',            'POISON',   'SPECIAL',  120],
+    ['Mega Eclipse',     'GHOST',    'SPECIAL',  600, MEGA],
+    ['Toxic Deluge',     'POISON',   'SPECIAL',  600],
+    ['Untold Nightmare', 'GHOST',    'SPECIAL',  600],
+  ],
+  3115: [ // Mega Kangaskhan — NORMAL
+    ['Double Slap',    'NORMAL',   'PHYSICAL',  25],
+    ['Tackle',         'NORMAL',   'PHYSICAL',  40],
+    ['Egg Bomb',       'NORMAL',   'PHYSICAL',  55],
+    ['Stomp',          'NORMAL',   'PHYSICAL',  65],
+    ['Crush Claw',     'NORMAL',   'PHYSICAL',  75],
+    ['Body Slam',      'NORMAL',   'PHYSICAL',  85],
+    ['Take Down',      'NORMAL',   'PHYSICAL',  90],
+    ['Thrash',         'NORMAL',   'PHYSICAL', 120],
+    ['Comet Punch',    'NORMAL',   'PHYSICAL', 160],
+    ['Mega Onslaught', 'NORMAL',   'PHYSICAL', 600, MEGA],
+    ['Giga Impact',    'NORMAL',   'PHYSICAL', 600],
+    ['Ultimate Force', 'NORMAL',   'PHYSICAL', 600],
+  ],
+  3121: [ // Mega Starmie — WATER/PSYCHIC
+    ['Aqua Jet',           'WATER',    'PHYSICAL',  40],
+    ['Water Gun',          'WATER',    'SPECIAL',   40],
+    ['Brine',              'WATER',    'SPECIAL',   65],
+    ['Bubble Beam',        'WATER',    'SPECIAL',   65],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Liquidation',        'WATER',    'PHYSICAL',  85],
+    ['Psychic',            'PSYCHIC',  'SPECIAL',   90],
+    ['Surf',               'WATER',    'SPECIAL',   90],
+    ['Hydro Pump',         'WATER',    'SPECIAL',  110],
+    ['Mega Maelstrom',     'WATER',    'PHYSICAL', 600, MEGA],
+    ['Cyclonic Tide',      'WATER',    'SPECIAL',  600],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+  ],
+  3127: [ // Mega Pinsir — BUG/FLYING
+    ['Pin Missile',      'BUG',      'PHYSICAL',  25],
+    ['Fury Cutter',      'BUG',      'PHYSICAL',  40],
+    ['Acrobatics',       'FLYING',   'PHYSICAL',  55],
+    ['U-turn',           'BUG',      'PHYSICAL',  70],
+    ['X-Scissor',        'BUG',      'PHYSICAL',  80],
+    ['Bounce',           'FLYING',   'PHYSICAL',  85],
+    ['First Impression', 'BUG',      'PHYSICAL',  90],
+    ['Attack Order',     'BUG',      'PHYSICAL', 120],
+    ['Brave Bird',       'FLYING',   'PHYSICAL', 120],
+    ['Mega Swarm',       'BUG',      'PHYSICAL', 600, MEGA],
+    ['Sky Attack',       'FLYING',   'PHYSICAL', 600],
+    ['Megahorn',         'BUG',      'PHYSICAL', 600],
+  ],
+  3130: [ // Mega Gyarados — WATER/DARK
+    ['Whirlpool',      'WATER',    'SPECIAL',   30],
+    ['Fling',          'DARK',     'PHYSICAL',  40],
+    ['Yawn',           'WATER',    'PHYSICAL',  55],
+    ['Bite',           'DARK',     'PHYSICAL',  60],
+    ['Aqua Cutter',    'WATER',    'PHYSICAL',  70],
+    ['Dive',           'WATER',    'PHYSICAL',  80],
+    ['Foul Play',      'DARK',     'PHYSICAL',  95],
+    ['Pursuit',        'DARK',     'PHYSICAL', 120],
+    ['Wave Crash',     'WATER',    'PHYSICAL', 120],
+    ['Mega Maelstrom', 'WATER',    'PHYSICAL', 600, MEGA],
+    ['Cyclonic Tide',  'WATER',    'PHYSICAL', 600],
+    ['Wicked Blow',    'DARK',     'PHYSICAL', 600],
+  ],
+  3142: [ // Mega Aerodactyl — ROCK/FLYING
+    ['Rock Blast',        'ROCK',     'PHYSICAL',  25],
+    ['Dual Wingbeat',     'FLYING',   'PHYSICAL',  40],
+    ['Acrobatics',        'FLYING',   'PHYSICAL',  55],
+    ['Rock Tomb',         'ROCK',     'PHYSICAL',  60],
+    ['Rock Slide',        'ROCK',     'PHYSICAL',  75],
+    ['Bounce',            'FLYING',   'PHYSICAL',  85],
+    ['Diamond Storm',     'ROCK',     'PHYSICAL', 100],
+    ['Stone Edge',        'ROCK',     'PHYSICAL', 120],
+    ['Dragon Ascent',     'FLYING',   'PHYSICAL', 120],
+    ['Mega Landslide',    'ROCK',     'PHYSICAL', 600, MEGA],
+    ['Crumbling Rain',    'ROCK',     'PHYSICAL', 600],
+    ['Massive Hurricane', 'FLYING',   'PHYSICAL', 600],
+  ],
+  3154: [ // Mega Meganium — GRASS/FAIRY
+    ['Disarming Voice',  'FAIRY',    'SPECIAL',   25],
+    ['Mega Drain',       'GRASS',    'SPECIAL',   40],
+    ['Draining Kiss',    'FAIRY',    'SPECIAL',   50],
+    ['Leaf Tornado',     'GRASS',    'SPECIAL',   65],
+    ['Giga Drain',       'GRASS',    'SPECIAL',   75],
+    ['Matcha Gotcha',    'GRASS',    'SPECIAL',   80],
+    ['Energy Ball',      'GRASS',    'SPECIAL',   90],
+    ['Springtide Storm', 'FAIRY',    'SPECIAL',  100],
+    ['Fleur Cannon',     'FAIRY',    'SPECIAL',  120],
+    ['Solar Beam',       'GRASS',    'SPECIAL',  120],
+    ['Chloroblast',      'GRASS',    'SPECIAL',  150],
+    ['Mega Bloom',       'GRASS',    'SPECIAL',  600, MEGA],
+    ['Light of Ruin',    'FAIRY',    'SPECIAL',  600],
+    ['Petal Bloom',      'GRASS',    'SPECIAL',  600],
+  ],
+  3160: [ // Mega Feraligatr — WATER/DRAGON
+    ['Triple Dive',    'WATER',    'PHYSICAL',  30],
+    ['Twister',        'DRAGON',   'SPECIAL',   40],
+    ['Yawn',           'WATER',    'PHYSICAL',  55],
+    ['Jet Punch',      'WATER',    'PHYSICAL',  60],
+    ['Aqua Cutter',    'WATER',    'PHYSICAL',  70],
+    ['Dragon Claw',    'DRAGON',   'PHYSICAL',  80],
+    ['Liquidation',    'WATER',    'PHYSICAL',  95],
+    ['Dragon Rush',    'DRAGON',   'PHYSICAL', 100],
+    ['Outrage',        'DRAGON',   'PHYSICAL', 120],
+    ['Wave Crash',     'WATER',    'PHYSICAL', 120],
+    ['Draconic Soul',  'DRAGON',   'SPECIAL',  300],
+    ['Mega Maelstrom', 'WATER',    'PHYSICAL', 600, MEGA],
+    ['Cyclonic Tide',  'WATER',    'PHYSICAL', 600],
+    ['Eternal Dragon', 'DRAGON',   'PHYSICAL', 600],
+  ],
+  3181: [ // Mega Ampharos — ELECTRIC/DRAGON · o 600 de DRAGON veio na "Ampharos Mega" (03/10)
+    ['Shock Wave',        'ELECTRIC', 'SPECIAL',   25],
+    ['Thunder Shock',     'ELECTRIC', 'SPECIAL',   40],
+    ['Electro Ball',      'ELECTRIC', 'SPECIAL',   55],
+    ['Dragon Breath',     'DRAGON',   'SPECIAL',   60],
+    ['Thunder Punch',     'ELECTRIC', 'PHYSICAL',  75],
+    ['Fickle Beam',       'DRAGON',   'SPECIAL',   80],
+    ['Wildbolt Storm',    'ELECTRIC', 'SPECIAL',  100],
+    ['Zap Cannon',        'ELECTRIC', 'SPECIAL',  120],
+    ['Draco Meteor',      'DRAGON',   'SPECIAL',  120],
+    ['Draconic Soul',     'DRAGON',   'SPECIAL',  300],
+    ['Mega Thunderstorm', 'ELECTRIC', 'SPECIAL',  600, MEGA],
+    ['Eternal Dragon',    'DRAGON',   'SPECIAL',  600],
+    ['Static Overload',   'ELECTRIC', 'SPECIAL',  600],
+  ],
+  3208: [ // Mega Steelix — STEEL/GROUND
+    ['Bone Rush',        'GROUND',   'PHYSICAL',  25],
+    ['Bullet Punch',     'STEEL',    'PHYSICAL',  40],
+    ['Metal Claw',       'STEEL',    'PHYSICAL',  50],
+    ['Bulldoze',         'GROUND',   'PHYSICAL',  60],
+    ['Smart Strike',     'STEEL',    'PHYSICAL',  70],
+    ['Iron Head',        'STEEL',    'PHYSICAL',  80],
+    ['Meteor Mash',      'STEEL',    'PHYSICAL',  90],
+    ['Earthquake',       'GROUND',   'PHYSICAL', 100],
+    ['Heavy Slam',       'STEEL',    'PHYSICAL', 120],
+    ['Headlong Rush',    'GROUND',   'PHYSICAL', 120],
+    ['Mega Forge',       'STEEL',    'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker',    'STEEL',    'PHYSICAL', 600],
+    ['Crossing Fissure', 'GROUND',   'PHYSICAL', 600],
+  ],
+  3212: [ // Mega Scizor — BUG/STEEL
+    ['Twineedle',     'BUG',      'PHYSICAL',  25],
+    ['Bullet Punch',  'STEEL',    'PHYSICAL',  40],
+    ['Revenge',       'BUG',      'PHYSICAL',  55],
+    ['Steamroller',   'BUG',      'PHYSICAL',  65],
+    ['U-turn',        'BUG',      'PHYSICAL',  70],
+    ['X-Scissor',     'BUG',      'PHYSICAL',  80],
+    ['Behemoth Bash', 'STEEL',    'PHYSICAL', 100],
+    ['Attack Order',  'BUG',      'PHYSICAL', 120],
+    ['Heavy Slam',    'STEEL',    'PHYSICAL', 120],
+    ['Bee Swarm',     'BUG',      'PHYSICAL', 140],
+    ['Mega Swarm',    'BUG',      'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker', 'STEEL',    'PHYSICAL', 600],
+    ['Hive Crush',    'BUG',      'PHYSICAL', 600],
+  ],
+  3214: [ // Mega Heracross — BUG/FIGHTING
+    ['Pin Missile',      'BUG',      'PHYSICAL',  25],
+    ['Fury Cutter',      'BUG',      'PHYSICAL',  40],
+    ['Seismic Toss',     'FIGHTING', 'PHYSICAL',  55],
+    ['Steamroller',      'BUG',      'PHYSICAL',  65],
+    ['Brick Break',      'FIGHTING', 'PHYSICAL',  75],
+    ['Lunge',            'BUG',      'PHYSICAL',  80],
+    ['Sacred Sword',     'FIGHTING', 'PHYSICAL',  90],
+    ['First Impression', 'BUG',      'PHYSICAL',  90],
+    ['Focus Blast',      'FIGHTING', 'SPECIAL',  120],
+    ['Megahorn',         'BUG',      'PHYSICAL', 120],
+    ['Mega Swarm',       'BUG',      'PHYSICAL', 600, MEGA],
+    ['Hive Crush',       'BUG',      'PHYSICAL', 600],
+    ['Meteor Fists',     'FIGHTING', 'PHYSICAL', 600],
+  ],
+  3227: [ // Mega Skarmory — STEEL/FLYING
+    ['Aerial Ace',        'FLYING',   'PHYSICAL',  25],
+    ['Bullet Punch',      'STEEL',    'PHYSICAL',  40],
+    ['Gyro Ball',         'STEEL',    'PHYSICAL',  55],
+    ['Sky Drop',          'FLYING',   'PHYSICAL',  60],
+    ['Steel Wing',        'STEEL',    'PHYSICAL',  70],
+    ['Metal Burst',       'STEEL',    'PHYSICAL',  80],
+    ['Meteor Mash',       'STEEL',    'PHYSICAL',  90],
+    ['Beak Blast',        'FLYING',   'PHYSICAL', 100],
+    ['Brave Bird',        'FLYING',   'PHYSICAL', 120],
+    ['Heavy Slam',        'STEEL',    'PHYSICAL', 120],
+    ['Mega Forge',        'STEEL',    'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker',     'STEEL',    'PHYSICAL', 600],
+    ['Massive Hurricane', 'FLYING',   'PHYSICAL', 600],
+  ],
+  3229: [ // Mega Houndoom — DARK/FIRE
+    ['Fire Spin',       'FIRE',     'SPECIAL',   30],
+    ['Ember',           'FIRE',     'SPECIAL',   45],
+    ['Snarl',           'DARK',     'SPECIAL',   55],
+    ['Fire Fang',       'FIRE',     'PHYSICAL',  65],
+    ['Lash Out',        'DARK',     'PHYSICAL',  75],
+    ['Night Daze',      'DARK',     'SPECIAL',   85],
+    ['Flamethrower',    'FIRE',     'SPECIAL',   90],
+    ['Hyperspace Fury', 'DARK',     'PHYSICAL', 100],
+    ['Overheat',        'FIRE',     'SPECIAL',  120],
+    ['Baddy Bad',       'DARK',     'SPECIAL',  120],
+    ['Mega Abyss',      'DARK',     'SPECIAL',  600, MEGA],
+    ['Endless Hollow',  'DARK',     'SPECIAL',  600],
+    ['Ignition Point',  'FIRE',     'SPECIAL',  600],
+  ],
+  3254: [ // Mega Sceptile — GRASS/DRAGON
+    ['Absorb',         'GRASS',    'SPECIAL',   25],
+    ['Twister',        'DRAGON',   'SPECIAL',   40],
+    ['Razor Leaf',     'GRASS',    'PHYSICAL',  55],
+    ['Leaf Tornado',   'GRASS',    'SPECIAL',   65],
+    ['Giga Drain',     'GRASS',    'SPECIAL',   75],
+    ['Dragon Pulse',   'DRAGON',   'SPECIAL',   85],
+    ['Energy Ball',    'GRASS',    'SPECIAL',   90],
+    ['Grass Knot',     'GRASS',    'SPECIAL',  100],
+    ['Solar Beam',     'GRASS',    'SPECIAL',  120],
+    ['Draco Meteor',   'DRAGON',   'SPECIAL',  120],
+    ['Draconic Soul',  'DRAGON',   'SPECIAL',  300],
+    ['Mega Bloom',     'GRASS',    'SPECIAL',  600, MEGA],
+    ['Eternal Dragon', 'DRAGON',   'SPECIAL',  600],
+    ['Petal Bloom',    'GRASS',    'SPECIAL',  600],
+  ],
+  3282: [ // Mega Gardevoir — PSYCHIC/FAIRY
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Fairy Wind',         'FAIRY',    'SPECIAL',   40],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Mystical Power',     'PSYCHIC',  'SPECIAL',   70],
+    ['Lumina Crash',       'PSYCHIC',  'SPECIAL',   80],
+    ['Sparkly Swirl',      'FAIRY',    'SPECIAL',   90],
+    ['Psystrike',          'PSYCHIC',  'SPECIAL',  100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Fleur Cannon',       'FAIRY',    'SPECIAL',  120],
+    ['Mega Mindbreak',     'PSYCHIC',  'SPECIAL',  600, MEGA],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+    ['Starlight Charm',    'FAIRY',    'SPECIAL',  600],
+  ],
+  3302: [ // Mega Sableye — DARK/GHOST
+    ['Power Trip',       'DARK',     'PHYSICAL',  25],
+    ['Fling',            'DARK',     'PHYSICAL',  40],
+    ['Night Shade',      'GHOST',    'SPECIAL',   55],
+    ['Hex',              'GHOST',    'SPECIAL',   65],
+    ['Sucker Punch',     'DARK',     'PHYSICAL',  70],
+    ['Night Daze',       'DARK',     'SPECIAL',   85],
+    ['Phantom Force',    'GHOST',    'PHYSICAL',  90],
+    ['Baddy Bad',        'DARK',     'SPECIAL',  120],
+    ['Shadow Force',     'GHOST',    'PHYSICAL', 120],
+    ['Mega Abyss',       'DARK',     'PHYSICAL', 600, MEGA],
+    ['Wicked Blow',      'DARK',     'SPECIAL',  600],
+    ['Untold Nightmare', 'GHOST',    'PHYSICAL', 600],
+  ],
+  3303: [ // Mega Mawile — STEEL/FAIRY
+    ['Disarming Voice', 'FAIRY',    'SPECIAL',   25],
+    ['Bullet Punch',    'STEEL',    'PHYSICAL',  40],
+    ['Metal Claw',      'STEEL',    'PHYSICAL',  50],
+    ['Hard Press',      'STEEL',    'PHYSICAL',  60],
+    ['Spirit Break',    'FAIRY',    'PHYSICAL',  75],
+    ['Metal Burst',     'STEEL',    'PHYSICAL',  80],
+    ['Behemoth Bash',   'STEEL',    'PHYSICAL', 100],
+    ['Steel Roller',    'STEEL',    'PHYSICAL', 130],
+    ['Magical Torque',  'FAIRY',    'PHYSICAL', 120],
+    ['Mega Forge',      'STEEL',    'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker',   'STEEL',    'PHYSICAL', 600],
+    ['Starlight Charm', 'FAIRY',    'PHYSICAL', 600],
+  ],
+  3306: [ // Mega Aggron — STEEL/ROCK · STEEL/ROCK desde 03/10/2026 (ver MEGAS)
+    ['Metal Claw',     'STEEL',    'PHYSICAL',  50],
+    ['Rock Tomb',      'ROCK',     'PHYSICAL',  60],
+    ['Rock Slide',     'ROCK',     'PHYSICAL',  75],
+    ['Iron Head',      'STEEL',    'PHYSICAL',  80],
+    ['Metal Burst',    'STEEL',    'PHYSICAL',  80],
+    ['Iron Tail',      'STEEL',    'PHYSICAL', 100],
+    ['Stone Edge',     'ROCK',     'PHYSICAL', 100],
+    ['Heavy Slam',     'STEEL',    'PHYSICAL', 120],
+    ['Head Smash',     'ROCK',     'PHYSICAL', 150],
+    ['Mega Forge',     'STEEL',    'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker',  'STEEL',    'PHYSICAL', 600],
+    ['Crumbling Rain', 'ROCK',     'PHYSICAL', 600],
+  ],
+  3310: [ // Mega Manectric — ELECTRIC
+    ['Nuzzle',            'ELECTRIC', 'PHYSICAL',  25],
+    ['Thunder Shock',     'ELECTRIC', 'SPECIAL',   40],
+    ['Electro Ball',      'ELECTRIC', 'SPECIAL',   55],
+    ['Parabolic Charge',  'ELECTRIC', 'SPECIAL',   65],
+    ['Rising Voltage',    'ELECTRIC', 'SPECIAL',   70],
+    ['Overdrive',         'ELECTRIC', 'SPECIAL',   80],
+    ['Thunderbolt',       'ELECTRIC', 'SPECIAL',   90],
+    ['Zap Cannon',        'ELECTRIC', 'SPECIAL',  120],
+    ['Electro Shot',      'ELECTRIC', 'SPECIAL',  130],
+    ['Mega Thunderstorm', 'ELECTRIC', 'SPECIAL',  600, MEGA],
+    ['Bolt Strike',       'ELECTRIC', 'SPECIAL',  600],
+    ['Static Overload',   'ELECTRIC', 'SPECIAL',  600],
+  ],
+  3319: [ // Mega Sharpedo — WATER/DARK
+    ['Whirlpool',      'WATER',    'SPECIAL',   30],
+    ['Aqua Jet',       'WATER',    'PHYSICAL',  45],
+    ['Beat Up',        'DARK',     'PHYSICAL',  55],
+    ['Flip Turn',      'WATER',    'PHYSICAL',  60],
+    ['Lash Out',       'DARK',     'PHYSICAL',  75],
+    ['Fishious Rend',  'WATER',    'PHYSICAL',  85],
+    ['Foul Play',      'DARK',     'PHYSICAL',  95],
+    ['Wave Crash',     'WATER',    'PHYSICAL', 120],
+    ['Pursuit',        'DARK',     'PHYSICAL', 120],
+    ['Mega Maelstrom', 'WATER',    'PHYSICAL', 600, MEGA],
+    ['Cyclonic Tide',  'WATER',    'PHYSICAL', 600],
+    ['Endless Hollow', 'DARK',     'PHYSICAL', 600],
+  ],
+  3334: [ // Mega Altaria — DRAGON/FAIRY
+    ['Scale Shot',     'DRAGON',   'PHYSICAL',  25],
+    ['Fairy Wind',     'FAIRY',    'SPECIAL',   40],
+    ['Dragon Darts',   'DRAGON',   'PHYSICAL',  50],
+    ['Dragon Breath',  'DRAGON',   'SPECIAL',   60],
+    ['Spirit Break',   'FAIRY',    'PHYSICAL',  75],
+    ['Dragon Claw',    'DRAGON',   'PHYSICAL',  80],
+    ['Outrage',        'DRAGON',   'PHYSICAL', 120],
+    ['Fleur Cannon',   'FAIRY',    'SPECIAL',  120],
+    ['Draconic Soul',  'DRAGON',   'SPECIAL',  300],
+    ['Mega Cataclysm', 'DRAGON',   'PHYSICAL', 600, MEGA],
+    ['Eternal Dragon', 'DRAGON',   'PHYSICAL', 600],
+    ['Light of Ruin',  'FAIRY',    'SPECIAL',  600],
+  ],
+  3354: [ // Mega Banette — GHOST
+    ['Lick',             'GHOST',    'PHYSICAL',  30],
+    ['Shadow Sneak',     'GHOST',    'PHYSICAL',  40],
+    ['Rage Fist',        'GHOST',    'PHYSICAL',  50],
+    ['Hex',              'GHOST',    'SPECIAL',   65],
+    ['Shadow Claw',      'GHOST',    'PHYSICAL',  70],
+    ['Shadow Bone',      'GHOST',    'PHYSICAL',  85],
+    ['Spectral Thief',   'GHOST',    'PHYSICAL',  90],
+    ['Poltergeist',      'GHOST',    'PHYSICAL', 120],
+    ['Shadow Force',     'GHOST',    'PHYSICAL', 120],
+    ['Mega Eclipse',     'GHOST',    'PHYSICAL', 600, MEGA],
+    ['Astral Barrage',   'GHOST',    'PHYSICAL', 600],
+    ['Untold Nightmare', 'GHOST',    'PHYSICAL', 600],
+  ],
+  3358: [ // Mega Chimecho — PSYCHIC/STEEL
+    ['Stored Power',       'PSYCHIC',  'SPECIAL',   25],
+    ['Twin Beam',          'PSYCHIC',  'SPECIAL',   40],
+    ['Tachyon Cutter',     'STEEL',    'SPECIAL',   50],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Psychic Noise',      'PSYCHIC',  'SPECIAL',   75],
+    ['Flash Cannon',       'STEEL',    'SPECIAL',   80],
+    ['Mist Ball',          'PSYCHIC',  'SPECIAL',   95],
+    ['Synchronoise',       'PSYCHIC',  'SPECIAL',  120],
+    ['Steel Beam',         'STEEL',    'SPECIAL',  120],
+    ['Mega Mindbreak',     'PSYCHIC',  'SPECIAL',  600, MEGA],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+    ['Alloy Breaker',      'STEEL',    'SPECIAL',  600],
+  ],
+  3359: [ // Mega Absol — DARK
+    ['Power Trip',          'DARK',     'PHYSICAL',  25],
+    ['Fling',               'DARK',     'PHYSICAL',  40],
+    ['Beat Up',             'DARK',     'PHYSICAL',  55],
+    ['Assurance',           'DARK',     'PHYSICAL',  60],
+    ['Lash Out',            'DARK',     'PHYSICAL',  75],
+    ['False Surrender',     'DARK',     'PHYSICAL',  80],
+    ['Foul Play',           'DARK',     'PHYSICAL',  95],
+    ['Pursuit',             'DARK',     'PHYSICAL', 120],
+    ['Malicious Moonsault', 'DARK',     'PHYSICAL', 180],
+    ['Mega Abyss',          'DARK',     'PHYSICAL', 600, MEGA],
+    ['Endless Hollow',      'DARK',     'PHYSICAL', 600],
+    ['Wicked Blow',         'DARK',     'PHYSICAL', 600],
+  ],
+  3362: [ // Mega Glalie — ICE
+    ['Icicle Spear',    'ICE',      'PHYSICAL',  25],
+    ['Ice Ball',        'ICE',      'PHYSICAL',  30],
+    ['Ice Shard',       'ICE',      'PHYSICAL',  40],
+    ['Glaciate',        'ICE',      'SPECIAL',   65],
+    ['Freeze-Dry',      'ICE',      'SPECIAL',   70],
+    ['Icicle Crash',    'ICE',      'PHYSICAL',  85],
+    ['Ice Beam',        'ICE',      'SPECIAL',   90],
+    ['Freeze Shock',    'ICE',      'PHYSICAL', 120],
+    ['Sheer Cold',      'ICE',      'SPECIAL',  120],
+    ['Mega Permafrost', 'ICE',      'PHYSICAL', 600, MEGA],
+    ['Glacial Lance',   'ICE',      'PHYSICAL', 600],
+    ['Ice Burn',        'ICE',      'SPECIAL',  600],
+  ],
+  3460: [ // Mega Abomasnow — GRASS/ICE
+    ['Absorb',       'GRASS',    'SPECIAL',   25],
+    ['Branch Poke',  'GRASS',    'PHYSICAL',  40],
+    ['Icy Wind',     'ICE',      'SPECIAL',   55],
+    ['Avalanche',    'ICE',      'PHYSICAL',  60],
+    ['Horn Leech',   'GRASS',    'PHYSICAL',  75],
+    ['Apple Acid',   'GRASS',    'SPECIAL',   80],
+    ['Leaf Blade',   'GRASS',    'PHYSICAL',  90],
+    ['Sheer Cold',   'ICE',      'SPECIAL',  120],
+    ['Solar Beam',   'GRASS',    'SPECIAL',  120],
+    ['Mega Bloom',   'GRASS',    'PHYSICAL', 600, MEGA],
+    ['Ice Time',     'ICE',      'PHYSICAL', 600],
+    ['Frenzy Plant', 'GRASS',    'SPECIAL',  600],
+  ],
+  3475: [ // Mega Gallade — PSYCHIC/FIGHTING
+    ['Confusion',          'PSYCHIC',  'SPECIAL',   50],
+    ['Psybeam',            'PSYCHIC',  'SPECIAL',   65],
+    ['Psycho Cut',         'PSYCHIC',  'PHYSICAL',  70],
+    ['Brick Break',        'FIGHTING', 'PHYSICAL',  75],
+    ['Psyshock',           'PSYCHIC',  'SPECIAL',   80],
+    ['Psychic',            'PSYCHIC',  'SPECIAL',   90],
+    ['Sacred Sword',       'FIGHTING', 'PHYSICAL',  90],
+    ['Close Combat',       'FIGHTING', 'PHYSICAL', 120],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Mega Mindbreak',     'PSYCHIC',  'PHYSICAL', 600, MEGA],
+    ['Mental Singularity', 'PSYCHIC',  'PHYSICAL', 600],
+    ['Meteor Fists',       'FIGHTING', 'PHYSICAL', 600],
+  ],
+  3478: [ // Mega Froslass — ICE/GHOST
+    ['Ice Ball',        'ICE',      'PHYSICAL',  30],
+    ['Powder Snow',     'ICE',      'SPECIAL',   40],
+    ['Night Shade',     'GHOST',    'SPECIAL',   55],
+    ['Aurora Beam',     'ICE',      'SPECIAL',   65],
+    ['Freeze-Dry',      'ICE',      'SPECIAL',   70],
+    ['Shadow Ball',     'GHOST',    'SPECIAL',   80],
+    ['Ice Beam',        'ICE',      'SPECIAL',   90],
+    ['Sheer Cold',      'ICE',      'SPECIAL',  120],
+    ['Moongeist Beam',  'GHOST',    'SPECIAL',  120],
+    ['Mega Permafrost', 'ICE',      'SPECIAL',  600, MEGA],
+    ['Ice Burn',        'ICE',      'SPECIAL',  600],
+    ['Astral Barrage',  'GHOST',    'SPECIAL',  600],
+  ],
+  3530: [ // Mega Excadrill — GROUND/STEEL
+    ['Bone Rush',        'GROUND',   'PHYSICAL',  25],
+    ['Bullet Punch',     'STEEL',    'PHYSICAL',  40],
+    ['Metal Claw',       'STEEL',    'PHYSICAL',  50],
+    ['Bulldoze',         'GROUND',   'PHYSICAL',  60],
+    ['Stomping Tantrum', 'GROUND',   'PHYSICAL',  75],
+    ['Drill Run',        'GROUND',   'PHYSICAL',  80],
+    ['Behemoth Bash',    'STEEL',    'PHYSICAL', 100],
+    ['Fissure',          'GROUND',   'PHYSICAL', 120],
+    ['Heavy Slam',       'STEEL',    'PHYSICAL', 120],
+    ['Mega Earthshock',  'GROUND',   'PHYSICAL', 600, MEGA],
+    ['Alloy Breaker',    'STEEL',    'PHYSICAL', 600],
+    ['Crossing Fissure', 'GROUND',   'PHYSICAL', 600],
+  ],
+  3545: [ // Mega Scolipede — BUG/POISON
+    ['Twineedle',        'BUG',      'PHYSICAL',  25],
+    ['Fury Cutter',      'BUG',      'PHYSICAL',  40],
+    ['Poison Fang',      'POISON',   'PHYSICAL',  50],
+    ['Steamroller',      'BUG',      'PHYSICAL',  65],
+    ['Cross Poison',     'POISON',   'PHYSICAL',  70],
+    ['Lunge',            'BUG',      'PHYSICAL',  80],
+    ['First Impression', 'BUG',      'PHYSICAL',  90],
+    ['Attack Order',     'BUG',      'PHYSICAL', 120],
+    ['Gunk Shot',        'POISON',   'PHYSICAL', 120],
+    ['Mega Swarm',       'BUG',      'PHYSICAL', 600, MEGA],
+    ['Hive Crush',       'BUG',      'PHYSICAL', 600],
+    ['Toxic Deluge',     'POISON',   'PHYSICAL', 600],
+  ],
+  3604: [ // Mega Eelektross — ELECTRIC
+    ['Nuzzle',            'ELECTRIC', 'PHYSICAL',  25],
+    ['Thunder Shock',     'ELECTRIC', 'SPECIAL',   40],
+    ['Electro Ball',      'ELECTRIC', 'SPECIAL',   55],
+    ['Parabolic Charge',  'ELECTRIC', 'SPECIAL',   65],
+    ['Thunder Punch',     'ELECTRIC', 'PHYSICAL',  75],
+    ['Bolt Beak',         'ELECTRIC', 'PHYSICAL',  85],
+    ['Wild Charge',       'ELECTRIC', 'PHYSICAL',  90],
+    ['Volt Tackle',       'ELECTRIC', 'PHYSICAL', 120],
+    ['Zap Cannon',        'ELECTRIC', 'SPECIAL',  120],
+    ['Mega Thunderstorm', 'ELECTRIC', 'PHYSICAL', 600, MEGA],
+    ['Bolt Strike',       'ELECTRIC', 'SPECIAL',  600],
+    ['Static Overload',   'ELECTRIC', 'PHYSICAL', 600],
+  ],
+  3609: [ // Mega Chandelure — GHOST/FIRE
+    ['Fire Spin',        'FIRE',     'SPECIAL',   30],
+    ['Ember',            'FIRE',     'SPECIAL',   45],
+    ['Night Shade',      'GHOST',    'SPECIAL',   55],
+    ['Ominous Wind',     'GHOST',    'SPECIAL',   60],
+    ['Bitter Malice',    'GHOST',    'SPECIAL',   75],
+    ['Fiery Dance',      'FIRE',     'SPECIAL',   80],
+    ['Heat Wave',        'FIRE',     'SPECIAL',   95],
+    ['Moongeist Beam',   'GHOST',    'SPECIAL',  120],
+    ['Overheat',         'FIRE',     'SPECIAL',  120],
+    ['Mega Eclipse',     'GHOST',    'SPECIAL',  600, MEGA],
+    ['Ignition Point',   'FIRE',     'SPECIAL',  600],
+    ['Untold Nightmare', 'GHOST',    'SPECIAL',  600],
+  ],
+  3658: [ // Mega Greninja — WATER/DARK
+    ['Water Shuriken', 'WATER',    'SPECIAL',   25],
+    ['Bubble',         'WATER',    'SPECIAL',   40],
+    ['Snarl',          'DARK',     'SPECIAL',   55],
+    ['Jet Punch',      'WATER',    'PHYSICAL',  60],
+    ['Aqua Cutter',    'WATER',    'PHYSICAL',  70],
+    ['Water Pledge',   'WATER',    'SPECIAL',   80],
+    ['Fiery Wrath',    'DARK',     'SPECIAL',   90],
+    ['Surf',           'WATER',    'SPECIAL',  100],
+    ['Hydro Pump',     'WATER',    'SPECIAL',  120],
+    ['Baddy Bad',      'DARK',     'SPECIAL',  120],
+    ['Water Spout',    'WATER',    'SPECIAL',  150],
+    ['Mega Maelstrom', 'WATER',    'SPECIAL',  600, MEGA],
+    ['Cyclonic Tide',  'WATER',    'SPECIAL',  600],
+    ['Endless Hollow', 'DARK',     'SPECIAL',  600],
+  ],
+  3668: [ // Mega Pyroar — FIRE/NORMAL
+    ['Fire Spin',      'FIRE',     'SPECIAL',   30],
+    ['Ember',          'FIRE',     'SPECIAL',   45],
+    ['Terrain Pulse',  'NORMAL',   'SPECIAL',   50],
+    ['Fire Fang',      'FIRE',     'PHYSICAL',  65],
+    ['Relic Song',     'NORMAL',   'SPECIAL',   75],
+    ['Lava Plume',     'FIRE',     'SPECIAL',   80],
+    ['Hyper Voice',    'NORMAL',   'SPECIAL',   90],
+    ['Overheat',       'FIRE',     'SPECIAL',  120],
+    ['Techno Blast',   'NORMAL',   'SPECIAL',  120],
+    ['Mega Inferno',   'FIRE',     'SPECIAL',  600, MEGA],
+    ['Ignition Point', 'FIRE',     'SPECIAL',  600],
+    ['Ultimate Force', 'NORMAL',   'SPECIAL',  600],
+  ],
+  3687: [ // Mega Malamar — DARK/PSYCHIC
+    ['Power Trip',         'DARK',     'PHYSICAL',  25],
+    ['Fling',              'DARK',     'PHYSICAL',  40],
+    ['Mirror Coat',        'PSYCHIC',  'SPECIAL',   55],
+    ['Feint Attack',       'DARK',     'PHYSICAL',  60],
+    ['Psycho Cut',         'PSYCHIC',  'PHYSICAL',  70],
+    ['Kowtow Cleave',      'DARK',     'PHYSICAL',  85],
+    ['Hyperspace Fury',    'DARK',     'PHYSICAL', 100],
+    ['Future Sight',       'PSYCHIC',  'SPECIAL',  120],
+    ['Pursuit',            'DARK',     'PHYSICAL', 120],
+    ['Mega Abyss',         'DARK',     'PHYSICAL', 600, MEGA],
+    ['Endless Hollow',     'DARK',     'PHYSICAL', 600],
+    ['Mental Singularity', 'PSYCHIC',  'SPECIAL',  600],
+  ],
+  3689: [ // Mega Barbaracle — ROCK/FIGHTING
+    ['Rollout',        'ROCK',     'PHYSICAL',  30],
+    ['Accelerock',     'ROCK',     'PHYSICAL',  40],
+    ['Seismic Toss',   'FIGHTING', 'PHYSICAL',  55],
+    ['Circle Throw',   'FIGHTING', 'PHYSICAL',  60],
+    ['Rock Slide',     'ROCK',     'PHYSICAL',  75],
+    ['Sky Uppercut',   'FIGHTING', 'PHYSICAL',  85],
+    ['Mighty Cleave',  'ROCK',     'PHYSICAL',  95],
+    ['Close Combat',   'FIGHTING', 'PHYSICAL', 120],
+    ['Stone Edge',     'ROCK',     'PHYSICAL', 120],
+    ['Mega Landslide', 'ROCK',     'PHYSICAL', 600, MEGA],
+    ['Crumbling Rain', 'ROCK',     'PHYSICAL', 600],
+    ['Meteor Assault', 'FIGHTING', 'PHYSICAL', 600],
+  ],
+  3780: [ // Mega Drampa — NORMAL/DRAGON · golpe de mega DRAGON, escolha da planilha (o primário é NORMAL)
+    ['Double Slap',    'NORMAL',   'PHYSICAL',  25],
+    ['Twister',        'DRAGON',   'SPECIAL',   40],
+    ['Weather Ball',   'NORMAL',   'SPECIAL',   50],
+    ['Hidden Power',   'NORMAL',   'SPECIAL',   60],
+    ['Relic Song',     'NORMAL',   'SPECIAL',   75],
+    ['Dragon Pulse',   'DRAGON',   'SPECIAL',   85],
+    ['Core Enforcer',  'DRAGON',   'SPECIAL',  100],
+    ['Draco Meteor',   'DRAGON',   'SPECIAL',  120],
+    ['Hyper Beam',     'NORMAL',   'SPECIAL',  150],
+    ['Draconic Soul',  'DRAGON',   'SPECIAL',  300],
+    ['Mega Cataclysm', 'DRAGON',   'SPECIAL',  600, MEGA],
+    ['Eternal Dragon', 'DRAGON',   'SPECIAL',  600],
+    ['Ultimate Force', 'NORMAL',   'SPECIAL',  600],
+  ],
+};
+
+/**
  * As espécies que estavam no catálogo sem sprite (`looktype: 1`) e entram no jogo quando a arte
  * chega. O gerador de `creatures-novos.json` deu a elas golpes de enchimento — quase tudo com
  * poder 56, Shadow Ball inclusive (o resto do catálogo usa 80) —, e ninguém mexeu porque a
@@ -1534,8 +2484,36 @@ const TABELAS = [
   GOLPES_REWORK_2026_09,
   GOLPES_PRE_EVOLUCOES_KANTO,
   GOLPES_REWORK_2026_09_28,
+  GOLPES_REWORK_2026_10_03,
+  GOLPES_REWORK_2026_10_04,
   GOLPES_ARTE_NOVA,
 ];
+
+/**
+ * Uma linha de planilha vira golpe: liberado desde o nível 1, cooldown da curva, e a categoria
+ * dos de 600 travada (`categoriaFixa`). A linha marcada `MEGA` é o golpe de mega — 30 s fora da
+ * curva, com as mesmas marcas de `golpeMegaDe` (`cdFixo` segura os 30 s, `golpeMega` pinta o selo).
+ */
+function golpeDaLinha([name, type, category, power, marca]) {
+  if (marca === MEGA) {
+    return { name, type, category, power, cooldownMs: COOLDOWN_MEGA_MS, learnLevel: 1, categoriaFixa: true, cdFixo: true, golpeMega: true };
+  }
+  return {
+    name,
+    type,
+    category,
+    power,
+    cooldownMs: cooldownDoPoder(power),
+    learnLevel: 1,
+    ...(power >= 600 ? { categoriaFixa: true } : {}),
+  };
+}
+
+/** Os golpes da mega na planilha "Megas 03-10", ou `null` se ela não está lá (aí vale a cópia da base). */
+export function golpesDaPlanilhaDaMega(pokeId) {
+  const linhas = GOLPES_MEGAS_2026_10_03[pokeId];
+  return linhas ? linhas.map(golpeDaLinha) : null;
+}
 
 /**
  * Troca os golpes de cada espécie das tabelas pelos da planilha — todos liberados desde o nível 1.
@@ -1549,16 +2527,6 @@ const TABELAS = [
  */
 export function aplicarGolpesDasPlanilhas(obter) {
   for (const [id, linhas] of TABELAS.flatMap((tabela) => Object.entries(tabela))) {
-    for (const esp of obter(Number(id)) ?? []) {
-      esp.attacks = linhas.map(([name, type, category, power]) => ({
-        name,
-        type,
-        category,
-        power,
-        cooldownMs: cooldownDoPoder(power),
-        learnLevel: 1,
-        ...(power >= 600 ? { categoriaFixa: true } : {}),
-      }));
-    }
+    for (const esp of obter(Number(id)) ?? []) esp.attacks = linhas.map(golpeDaLinha);
   }
 }

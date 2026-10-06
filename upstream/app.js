@@ -1,6 +1,6 @@
 // Cliente. O estado vem todo do servidor — aqui só desenhamos e mandamos comandos.
 import { Campo } from './campo.mjs';
-import { montarPopup, atualizarPopup, acertarPopupComEconomia, CELULAS_DO_RITMO } from './popup.mjs';
+import { montarPopup, atualizarPopup, acertarPopupComEconomia } from './popup.mjs';
 import { ReplayGuerra, VELOCIDADES } from './replay.mjs';
 import { t, temChave, aplicarI18n, montarSeletorDeIdioma, idioma, IDIOMAS } from './i18n.mjs';
 import { spriteAnimado, carregarIndice, carregarOutfit, quadrosDe } from './sprites.mjs';
@@ -46,6 +46,9 @@ import { pisoIvDoFiltro, passaFiltroTipoIv } from '../shared/filtro-depot.mjs';
 import { herdarLooktypeOrre } from '../shared/herdar-looktype-orre.mjs';
 import { CUSTO_ALTO_FALANTE } from '../shared/alto-falante.mjs';
 import {
+  BOOST_GUILD, BANCO_GUILD, boostGuildAtivo, fimDoBoostGuild, faltaNoBanco, saldoDoBanco,
+} from '../shared/guild-boost.mjs';
+import {
   liquidoOrbDaVenda,
   pctEfetivoOrb,
   faixasOrbParaTela,
@@ -66,6 +69,7 @@ import {
 import { herdarLooktypeOutland } from '../shared/herdar-looktype-outland.mjs';
 import { herdarBaseOutland } from '../shared/herdar-base-outland.mjs';
 import { herdarGolpesOrre } from '../shared/herdar-golpes-orre.mjs';
+import { cooldownGolpeComSpeed } from '../shared/cooldown-golpes.mjs';
 import { injetarGolpesEspeciais, golpesDaFicha } from '../shared/golpes-especiais.mjs';
 import {
   aplicarCadeiasTruncadas,
@@ -83,7 +87,7 @@ import {
 } from '../shared/evolucoes-ramificadas.mjs';
 import { aplicarDropsNossos } from '../shared/drops-nossos.mjs';
 import { pokedexEmTexto } from './pokedex-gpt.mjs';
-import { pokedexEmCsv, baixarCsv } from './pokedex-csv.mjs';
+import { pokedexEmCsv, baixarCsv, cel as celulaCsv } from './pokedex-csv.mjs';
 import {
   ARENA_NIVEL_CHEIO,
   GINASIO_BUFF_PCT,
@@ -131,6 +135,9 @@ import {
   PRIMEIRA_POS_RESTO,
   bonusPctPorPosRanking,
 } from '../shared/guild-premios.mjs';
+import {
+  PESO_SOBREVIVENCIA, PESO_COMBATE, notaSobrevivencia, notaCombate,
+} from '../shared/guild-pontos.mjs';
 import { DISCORD_POP_CAMPANHA, discordPopDeveMostrar } from '../shared/discord-pop.mjs';
 import { AVISO_VERSAO, NOVIDADES, avisoDeveMostrar } from '../shared/aviso-jogo.mjs';
 import { atrasoDeReconexao } from '../shared/reconexao.mjs';
@@ -141,6 +148,8 @@ import { criarMescladorDeEstado } from '../shared/estado-delta.mjs';
 import { aplicarTetoDeCaptura, nivelDeCaptura, TETO_CAPTURA_MAX } from '../shared/teto-captura.mjs';
 import { anotarLinhagemDaNota } from '../shared/linhagem-nota.mjs';
 import { normalizarSellValue, precoVendaPokemon, xpDoNivel } from '../shared/sell-value.mjs';
+import { ATRASADOS, precoAtrasados, xpTotalDoNivel } from '../shared/boost-atrasados.mjs';
+import { BOSS_TODOS, FAIXAS_RANKING_MENSAL, PLACARES_MENSAIS, SELOS_RANKING } from '../shared/ranking-mensal.mjs';
 import { assentarValorDasEspecies } from '../shared/valor-cadeia.mjs';
 import { chatContemNft } from '../shared/chat-filtro.mjs';
 import { emailPermitidoCadastro } from '../shared/email-cadastro.mjs';
@@ -340,6 +349,27 @@ function nomeItem(itemOrId, fallback) {
 
 const $ = (s) => document.querySelector(s);
 const num = (n) => (n ?? 0).toLocaleString('pt-BR');
+
+// ------------------------------------------------------------------ clique no fundo
+//
+// Toda janela fecha com um clique no fundo escuro em volta dela — e só com esse clique. O
+// navegador entrega o `click` ao ANCESTRAL COMUM de onde o botão desceu e de onde subiu: quem
+// aperta dentro da caixa (selecionando o texto da busca, arrastando para copiar da ficha) e solta
+// em cima do fundo gera um `click` cujo alvo é o próprio fundo, e o `ev.target === fundo` de antes
+// fechava a janela no meio do que o jogador fazia. A pergunta certa é onde o botão desceu E onde
+// subiu, anotados aqui em captura, na janela, antes que algum handler pare o evento.
+let alvoDoAperto = null;
+let alvoDaSoltura = null;
+window.addEventListener('pointerdown', (ev) => { alvoDoAperto = ev.target; }, true);
+window.addEventListener('pointerup', (ev) => { alvoDaSoltura = ev.target; }, true);
+
+/**
+ * O clique foi NO fundo: o botão desceu e subiu em cima dele, e não dentro da caixa. Toda janela
+ * que fecha pelo fundo pergunta por aqui, nunca por `ev.target === fundo`. Um `click` sintético
+ * (`el.click()`, sem ponteiro nenhum) vale como antes.
+ */
+const cliqueNoFundo = (ev, fundo) =>
+  ev.target === fundo && (!ev.isTrusted || (alvoDoAperto === fundo && alvoDaSoltura === fundo));
 
 // ------------------------------------------------------------------ ícones
 //
@@ -558,6 +588,18 @@ const iconeGrafico = () => `
     <rect x="2.5" y="11" width="3.6" height="6.5" rx=".8" fill="currentColor"/>
     <rect x="8.2" y="6.5" width="3.6" height="11" rx=".8" fill="currentColor"/>
     <rect x="13.9" y="2.5" width="3.6" height="15" rx=".8" fill="currentColor"/>
+  </svg>`;
+
+/**
+ * A pilha de moedas do botão ESTATÍSTICAS (topo da Wiki). Não é o gráfico do Tracker: aquele SAI
+ * do jogo para um site; este abre uma janela de números por cima, e os números são de dinheiro.
+ */
+const iconeMoedas = () => `
+  <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+    <ellipse cx="10" cy="4.8" rx="6.2" ry="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M3.8 4.8v3.6c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V4.8" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M3.8 8.4V12c0 1.3 2.8 2.4 6.2 2.4s6.2-1.1 6.2-2.4V8.4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M3.8 12v3.6C3.8 16.9 6.6 18 10 18s6.2-1.1 6.2-2.4V12" fill="none" stroke="currentColor" stroke-width="1.8"/>
   </svg>`;
 
 /*
@@ -848,7 +890,6 @@ function definirChatRecolhido(rec) {
   // (moderação, ignorados, emoji) ficariam pendurados sobre uma fita de 28 px.
   fecharPainelModChat();
   fecharPainelIgnorados();
-  fecharMenuCanais();
   fecharOpcoesChat();
   $('#chat-emojis')?.classList.add('hidden');
   $('#chat-emoji')?.classList.remove('on');
@@ -1018,13 +1059,18 @@ const estado = {
   mensagens: { mundo: [], comercio: [], duvidas: [], guild: [] },
   souAdmin: false, // cargo de painel (ADMIN_EMAILS ou AUDITORIA_RESOLVER_EMAILS) — vem do welcome
   chatMod: false, // admin, moderador ou helper — apagar mensagens do chat
-  // As mensagens FIXADAS por admin, uma por canal aberto e idioma: `mundo:pt` → { canal, idioma,
-  // msg, por, em }. A lista inteira chega na entrada (`chat.fixadas`); cada troca, ao vivo.
+  chatFixar: false, // admin ou moderador — fixar mensagem no topo do canal (o helper não)
+  // As mensagens FIXADAS por admin ou moderador, uma por canal aberto e idioma: `mundo:pt` →
+  // { canal, idioma, msg, por, em }. A lista inteira chega na entrada (`chat.fixadas`); cada troca, ao vivo.
   chatFixadas: {},
   chatCmd: false, // admin ou moderador — os comandos de barra (/mute, /unmute)
+  chatInterromper: false, // admin ou moderador — interromper (e reabrir) o chat
+  // O CHAT INTERROMPIDO pela moderação: `{ por, cargo, em }` enquanto Mundo, Comércio e Dúvidas só
+  // aceitam a equipe; `null` com o chat aberto. Chega no `hello` e a cada troca (`chat.interrompido`).
+  chatInterrompido: null,
   chatMutadoAte: 0, // timestamp ms — mute de moderação
   chatNovas: 0, // quantas chegaram enquanto a lista estava rolada para cima
-  /** Última vez que o jogador viu cada canal público (ms) — alimenta os selos do seletor de canal. */
+  /** Última vez que o jogador viu cada canal público (ms) — alimenta o número de cada botão de canal. */
   chatVistoEm: { mundo: Date.now(), comercio: Date.now(), duvidas: Date.now(), guild: Date.now() },
   // ---- Mercado Global ----
   cmAba: 'vitrine', // 'vitrine' | 'meus' | 'favoritos'
@@ -1187,7 +1233,14 @@ const estado = {
   campSalvandoEquipe: false,
   campPedindoFita: null, // a partida cuja fita está a caminho — segura o clique repetido
   guildPvp: null, // estado do PvP de guild (registro, horário, etc.)
-  guildPvpAba: 'registradas', // aba do painel guild: registradas | ultima
+  // A aba da direita no PvP → Guild: 'ultima' | 'registradas'. `null` = o jogador ainda não
+  // escolheu, e aí vale a da última guerra quando há uma (ver `montarGuildPvp`).
+  guildPvpAba: null,
+  gwpAnimouDia: null, // a guerra cuja entrada animada (pódio, barras, pontos) já foi mostrada
+  gwpBusca: '', // a busca das guilds inscritas — sobrevive à repintura da aba
+  gwpRegrasAbertas: false, // o "Como funciona a guerra" aberto
+  gwpListaInteira: false, // no celular, o placar aberto além do top 10
+  gwpPerguntouEm: 0, // o último `guild.pvp.info` pedido pelo relógio enquanto a guerra roda
   /** `null` = nunca salvou (guerra usa equipe de hunt); number[] = escolha explícita. */
   guildPvpEquipe: null,
   guildSalvandoTime: false, // o "Salvar" da equipe de guerra esperando a resposta
@@ -1371,6 +1424,7 @@ function conectar() {
       if (estado.modalAberto === 'ranking') pintarRanking();
     } else if (m.t === 'perfil') mostrarPerfil(m.perfil);
     else if (m.t === 'estatisticas') pintarEstatisticasDaConta(m);
+    else if (m.t === 'economia') aoReceberEconomiaDoJogo(m);
     else if (m.t === 'ranking.ficha') abrirFichaDoPokemon(m.pokemon);
     else if (m.t === 'pvp') aoReceberPvp(m);
     else if (m.t === 'passe') aoReceberPasse(m);
@@ -1397,14 +1451,17 @@ function conectar() {
     else if (m.t === 'chat.del') excluirChat(m.id);
     else if (m.t === 'chat.fixadas') receberChatFixadas(m.lista ?? []);
     else if (m.t === 'chat.fixada') receberChatFixada(m);
+    else if (m.t === 'chat.interrompido') receberChatInterrompido(m);
     else if (m.t === 'chat.mute') aplicarMuteChat(m.ate);
     // `nick` vem em avisos que precisam de placeholder (mute ok, etc.).
     else if (m.t === 'chat.aviso') {
       if (m.chave === 'chat.modMuteOk') toast(t('chat.modMuteOk', { nick: m.nick ?? '', minutos: m.minutos ?? '' }));
       // Resposta de comando vai em TOAST e não na lista: o `/mute` pode ter sido digitado no
       // painel da guild, e a linha de aviso ficaria fora de vista.
-      // As respostas de fixar/desafixar também: são confirmação de um clique no menu, e não fala.
-      else if (['chat.cmd', 'chat.fixar', 'chat.desafixar'].some((p) => String(m.chave ?? '').startsWith(p))) {
+      // As respostas de fixar/desafixar e de interromper/reabrir também: são confirmação de um
+      // clique, e não fala.
+      else if (['chat.cmd', 'chat.fixar', 'chat.desafixar', 'chat.interromper', 'chat.reabrir']
+        .some((p) => String(m.chave ?? '').startsWith(p))) {
         toast(t(m.chave, { nick: m.nick ?? '', minutos: m.minutos ?? '' }));
       }
       else mostrarAvisoChat(m.chave, { nick: m.nick ?? '', minutos: m.minutos, tempo: m.tempo ?? '' });
@@ -2227,9 +2284,23 @@ let turnstileSiteKey = null;
 let turnstileApiPronta = false;
 const turnstileIds = { entrar: null, criar: null, esqueci: null };
 
-/** Desenha o widget de um form, uma vez só — chamado de novo não faz nada. */
+/** A tela de entrada está de pé: o quadro do portal e, dentro dele, o miolo do login. */
+const loginAVista = () => !$('#portal')?.classList.contains('hidden') && !$('#login')?.classList.contains('hidden');
+
+/**
+ * Desenha o widget de um form, uma vez só — chamado de novo não faz nada.
+ *
+ * Só com o LOGIN À VISTA. `aplicarProvedores` e `onTurnstilePronto` chamam isto no carregamento
+ * de toda aba, e quem volta com a sessão salva (30 dias no `localStorage`: quase todo mundo) vai
+ * direto ao `conectar()`, sem passar por `entrarComo` — o único que destruía o widget. Ele ficava
+ * vivo atrás do jogo a sessão inteira, refazendo o desafio sozinho: no Safari, um iframe novo do
+ * Cloudflare a cada ~2 min (~700 KB de script e um worker), e no WebKit, medido com a chave de
+ * teste, cada volta deixava ~12 MB para trás. Visto no print de Rede do relato de memória de
+ * 03/10/2026. O login de verdade chega por `mostrarLogin`, que chama isto de novo já de pé.
+ */
 function turnstileDesenhar(form) {
   if (!turnstileSiteKey || !turnstileApiPronta || turnstileIds[form] != null) return;
+  if (!loginAVista()) return;
   const el = $(`#turnstile-${form}`);
   if (!el) return;
   turnstileIds[form] = window.turnstile.render(el, { sitekey: turnstileSiteKey, size: 'flexible' });
@@ -2894,6 +2965,9 @@ function aoEntrar(m) {
   // Agora sim o quadro inteiro sai — o jogo chegou.
   $('#portal').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  // E o captcha do login sai junto (ver `turnstileDesenhar`). Quem entrou pelo formulário já
+  // passou por `entrarComo`; esta é a rede para qualquer outro caminho até aqui.
+  turnstileDestruir();
   // Sound Mode só dentro do jogo: no F5 o player aparece pausado; o jogador dá play de novo.
   sincronizarSom(somLigado(), { autoplay: false });
   // Com alguém dentro, o botão de sair passa a fazer sentido.
@@ -2907,9 +2981,16 @@ function aoEntrar(m) {
   estado.souAdmin = !!m.admin;
   estado.chatMod = !!m.chatMod;
   estado.chatCmd = !!m.chatCmd;
+  estado.chatFixar = !!m.chatFixar;
+  estado.chatInterromper = !!m.chatInterromper;
   // A lista das fixadas chega ANTES do welcome (o gateway manda no `hello`), quando ainda não se
-  // sabia se este jogador é admin — e é isso que decide o × do cartão.
+  // sabia se este jogador é admin ou moderador — e é isso que decide o × do cartão.
   pintarChatFixada();
+  // Mesma ordem com o chat interrompido: o estado veio no `hello`, mas só agora se sabe se este
+  // jogador é da equipe (fala mesmo assim) e se ele é dos que podem reabrir (a setinha das opções).
+  syncChatInput();
+  syncBotaoOpcoesChat();
+  pintarChatInterrompido();
   // A volta do OAuth da Twitch: só no primeiro `welcome` desta página (o de uma reconexão não é a
   // volta de nada), e depois do `souAdmin`, que o modal consulta.
   if (retornoTwitchPendente) {
@@ -2930,7 +3011,7 @@ function aoEntrar(m) {
   estado.sessao = sessaoGuardada() ?? sessaoNova();
   estado.sessaoAberta = false;
   estado.sessaoResetLivreEm = 0;
-  estado.capturasHist = [];
+  estado.capturasHist = capturasGuardadas();
   estado.capturasHistAberta = false;
   estado.capturasHistResetLivreEm = 0;
   estado.capturasNaoVistas = 0;
@@ -3251,14 +3332,24 @@ function abrirEditorDeAvatar() {
   }
   rascunho.genero = estado.eu?.loja?.gender === 'female' ? 'female' : 'male';
   rascunho.visual = normalizarVisual(estado.eu?.loja?.visual);
+  // O editor é tela cheia e não abre por cima do modal — a Ficha do Treinador fecha. Guarda o
+  // caminho para devolvê-la ao sair: quem desiste (ou troca a roupa) volta para a ficha de onde
+  // veio, e não para o jogo com a ficha sumida.
+  editorAvatarVolta = guardarCaminho();
   fecharModal();
   $('#onboarding').classList.remove('hidden');
   passoDoGenero(null, true);
 }
 
+/** A tela de onde o editor de avatar foi aberto (ver `guardarCaminho`). */
+let editorAvatarVolta = null;
+
 function fecharEditorDeAvatar() {
   $('#onboarding').classList.add('hidden');
   repintarPassoDoOnboarding = null;
+  const volta = editorAvatarVolta;
+  editorAvatarVolta = null;
+  reabrirCaminho(volta);
 }
 
 function passoDoStarter(lista) {
@@ -3630,7 +3721,9 @@ function prepararPasso(passo) {
     // No celular o modal cobre a tela inteira: deixar a gaveta aberta atrás dele só deixaria
     // a barra de abas acesa por baixo de uma tela que já tomou conta de tudo.
     if (movelAtivo()) fecharGavetaMobile();
-    abrirModal(passo.modal);
+    // `raiz`: o guia troca de tela sozinho, e a tela do passo anterior não é "de onde o jogador
+    // veio" — um `‹` aqui levaria para fora do roteiro que o próprio guia controla.
+    abrirModal(passo.modal, { raiz: true });
     passo.depois?.();
     return;
   }
@@ -3812,6 +3905,11 @@ function aplicarEstado(e) {
   pintarAtivo(e);
   pintarTime(e);
   pintarBolsa();
+  conferirCapturasAguardando(e.pokemons);
+  if (economiaLigado()) {
+    atualizarCofreEconomia(); // o cofre do Modo Economia: drops e capturas ao vivo
+    atualizarPlacarEconomia(); // e o nível que subiu, no placar
+  }
   repintarFolhaSkin();
   pintarAutomacoes(e);
   pintarHudCena(e);
@@ -3824,6 +3922,10 @@ function aplicarEstado(e) {
   // ficha aberta também não remonta sozinha. As duas se atualizam aqui, cada uma decidindo se
   // vale remontar (ver `atualizarTelasDeRefino`).
   atualizarTelasDeRefino();
+
+  // A aba BOOST do painel da guild: o diamante de quem doou e o boost ligado chegam pelo delta (o
+  // banco anda pelo `bancoAoVivo`). Sem a aba na tela, `atualizarBancoNaTela` não faz nada.
+  if (e.diamonds !== anterior?.diamonds || e.guild?.boostAte !== anterior?.guild?.boostAte) atualizarBancoNaTela();
 
   // A tela da Casa reage ao INVENTÁRIO: vender a casa boa no Mercado ou fabricar uma nova
   // muda a Academia inteira, e as duas coisas acontecem sem passar por aqui. Redesenhar no
@@ -3944,6 +4046,10 @@ function aplicarEstado(e) {
     // Idem shinys — lista paginada do servidor (`p5.lista`).
   } else if (estado.modalAberto === 'pokepedia') {
     // Manual estático — o snapshot de combate não mexe no conteúdo.
+  } else if (estado.modalAberto === 'economia') {
+    // As estatísticas do jogo vêm do `wiki.economia` (cache de 5 min no servidor), não do
+    // snapshot. Caindo no `abrirModal` genérico lá embaixo, cada snapshot de quem caça repedia
+    // os números ao servidor e recomeçava a contagem — que nunca chegava ao fim.
   } else if (estado.modalAberto === 'bosses') {
     // A lista de 87 bosses rola na coluna esquerda; remontar a cada tick zera o scroll —
     // o mesmo problema da Shop e da Pokédex. Só a fileira da equipe (rodapé) atualiza.
@@ -3998,11 +4104,10 @@ function aplicarEstado(e) {
     // como o do voto e o da calculadora — o ⚔ de um pokémon que subiu de nível no meio da
     // escolha fica alguns segundos velho, e isso é invisível perto de perder a tela inteira.
   } else if (estado.modalAberto === 'pvp') {
-    // Mesmo caso da Lista de Amigos e dos Ginásios. O painel do PvP Guild tem uma LISTA
-    // ROLÁVEL própria (`.guild-pvp-corpo`: as guilds registradas numa aba, o placar da última
-    // guerra na outra). Caindo no `abrirModal` genérico abaixo, cada snapshot de combate
-    // (~500 ms) trocava o `#modal-corpo` inteiro — e com ele o `.guild-pvp-corpo` —, então
-    // quem tinha rolado a lista voltava ao topo sozinho a cada golpe da hunt.
+    // Mesmo caso da Lista de Amigos e dos Ginásios. O painel do PvP Guild tem um placar de cem
+    // linhas e a busca das inscritas. Caindo no `abrirModal` genérico abaixo, cada snapshot de
+    // combate (~500 ms) trocava o `#modal-corpo` inteiro, então quem tinha rolado o placar voltava
+    // ao topo sozinho a cada golpe da hunt — e quem digitava na busca perdia o campo.
     //
     // De quebra, reabrir a tela dispararia um `pvp.info` e um `guild.pvp.info` a cada snapshot:
     // dois pedidos por meio segundo para uma tela que já é alimentada por push.
@@ -4096,6 +4201,8 @@ function aplicarHeroiAtivo(e) {
     // meu apelido, o adversário vê a minha espécie.
     looktype: looktypeDe(at), nome: nomeExibidoPokemon(at), level: at.level,
     hp: at.hp, maxHp: at.maxHp, shiny: at.shiny,
+    // A COROA do Ranks na placa, quando ele é o nº 1 do "Pokémon Forte" (ver `coroaPkHtml`).
+    coroa: temCoroaPk(at),
   });
 }
 
@@ -4163,6 +4270,18 @@ function tempoCurto(ms) {
     const sec = s % 60;
     return sec ? `${m}m ${sec}s` : `${m}m`;
   }
+  return `${s}s`;
+}
+
+/**
+ * "7d", "23h", "59m", "45s" — o que sobra numa unidade só, arredondada para CIMA: quem acabou de
+ * comprar uma semana lê "7d", e não "6d". Para a linha estreita do Boost da Guild na ficha.
+ */
+function tempoUmaUnidade(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 86400) return `${Math.ceil(s / 86400)}d`;
+  if (s >= 3600) return `${Math.ceil(s / 3600)}h`;
+  if (s >= 60) return `${Math.ceil(s / 60)}m`;
   return `${s}s`;
 }
 
@@ -4239,11 +4358,21 @@ function pintarAtivosDoTreinador(e) {
   // O `livesTwitchQueFaltam` entra na assinatura, e não é detalhe: um segundo streamer entrando no
   // ar não mexe em `aoVivo`, `assistindo` nem `pctAtual` de quem já está assistindo a um. Sem ele,
   // a linha não seria redesenhada e o ponto vermelho só apareceria no próximo motivo qualquer.
-  const assinatura = `${l.vip ? l.vipAte : 0}|${passeVip ? passeVipAte : 0}|${chaves}|${e.guildBonusPct ?? 0}|${e.guildBonusRank ?? 0}|${
+  // Pelo mesmo motivo a Kick leva QUAIS canais estão no ar (`livesKickNoAr`): a live que começa não
+  // mexe em vínculo nem em bônus, e é a lista dos nomes que vai na dica da linha.
+  // O Boost da Guild entra pelo carimbo E por quem comprou: a dica da linha diz quem pagou.
+  const boostGuild = boostGuildAtivo(e.guild?.boostAte, agora) ? e.guild : null;
+  const assinatura = `${l.vip ? l.vipAte : 0}|${passeVip ? passeVipAte : 0}|${chaves}|${
+    l.atrasados ? `${l.atrasados.alvo}:${l.atrasados.mult}` : '-'}|${e.guildBonusPct ?? 0}|${e.guildBonusRank ?? 0}|${
+    boostGuild ? `${boostGuild.boostAte}:${boostGuild.boostPor ?? ''}` : '-'}|${
     tw ? `${tw.login ?? ''}:${tw.aoVivo ? 1 : 0}:${tw.assistindo ? 1 : 0}:${tw.pctAtual ?? 0}:${livesTwitchQueFaltam(tw)}` : '-'}|${
-    kk ? `${kk.vinculado ? 1 : 0}:${kk.login ?? ''}:${TIPOS_KICK_TELA.map((tp) => (Number(kk.bonus?.[tp]) > agora ? kk.bonus[tp] : 0)).join(',')}` : '-'}`;
+    kk ? `${kk.vinculado ? 1 : 0}:${kk.login ?? ''}:${TIPOS_KICK_TELA.map((tp) => (Number(kk.bonus?.[tp]) > agora ? kk.bonus[tp] : 0)).join(',')}:${
+      livesKickNoAr(kk).map((o) => `${o.slug}=${o.nome ?? ''}`).join('+')}` : '-'}`;
   if (host.dataset.assinatura === assinatura) return;
   host.dataset.assinatura = assinatura;
+
+  // O brasão da ficha acende junto com a linha do Boost da Guild: a guild inteira está com boost.
+  $('#tr-guild')?.classList.toggle('tem-boost', !!boostGuild);
 
   host.innerHTML = '';
 
@@ -4285,6 +4414,19 @@ function pintarAtivosDoTreinador(e) {
     host.appendChild(linha);
   }
 
+  // O BOOST DOS ATRASADOS logo depois dos dois VIPs: é o maior bônus de XP que a conta pode ter, e
+  // não tem relógio — quem o desliga é o nível, então a linha diz ATÉ ONDE ele vai, e não quanto falta.
+  if (l.atrasados) {
+    const linha = document.createElement('div');
+    linha.className = 'tr-ativo atrasados';
+    linha.title = t('atrasados.dica', { mult: l.atrasados.mult, alvo: num(l.atrasados.alvo) });
+    linha.appendChild(iconeArquivo('site/assets/loja/exp.png', 16));
+    linha.insertAdjacentHTML('beforeend', `
+      <span class="tr-ativo-nome">${t('atrasados.linha', { mult: l.atrasados.mult })}</span>
+      <span class="tr-ativo-valor">${t('atrasados.ateNv', { alvo: num(l.atrasados.alvo) })}</span>`);
+    host.appendChild(linha);
+  }
+
   const pctGuild = Number(e.guildBonusPct) || 0;
   const rankGuild = Number(e.guildBonusRank) || 0;
   if (pctGuild > 0 && rankGuild > 0) {
@@ -4297,6 +4439,10 @@ function pintarAtivosDoTreinador(e) {
       <span class="tr-ativo-valor">${top} — +${pctGuild}%</span>`;
     host.appendChild(linha);
   }
+
+  // O BOOST DA GUILD logo abaixo do bônus do ranking: os dois são "a guild me dando XP", e lado a
+  // lado ninguém confunde o prêmio de guerra (do time) com o boost comprado (de todo mundo).
+  if (boostGuild) host.appendChild(linhaBoostGuild(boostGuild, agora));
 
   // O BÔNUS TWITCH fica junto dos outros bônus, e aparece SEMPRE (quando o servidor tem a Twitch
   // configurada): sem vínculo ele é o convite "Conectar Twitch"; com vínculo, diz se o +15% está
@@ -4326,6 +4472,35 @@ function pintarAtivosDoTreinador(e) {
 }
 
 /**
+ * A linha do BOOST DA GUILD na ficha do treinador: "Boost Guild +10% XP · 6d 23h".
+ *
+ * É um botão, como as linhas da Twitch e da Kick, e leva à aba Boost do painel da guild — o banco,
+ * de onde qualquer membro estende. A dica diz quem bancou: o boost é o que a guild juntou, e os
+ * nomes de quem mais doou são a metade social dele. Recém-ligada (`estado.gbNovoAte`, posto pela
+ * comemoração), a linha pisca algumas vezes para o olho achar o bônus novo no meio das outras.
+ */
+function linhaBoostGuild(g, agora) {
+  const linha = document.createElement('button');
+  linha.type = 'button';
+  linha.className = `tr-ativo guild-boost${(estado.gbNovoAte ?? 0) > Date.now() ? ' gb-novo' : ''}`;
+  const quem = patrocinadoresDoBoostGuild(g, 3);
+  linha.title = t('guildBoost.tip', {
+    pct: BOOST_GUILD.pct,
+    quando: quandoDoBoostGuild(Number(g.boostAte)),
+    quem: quem || '—',
+  });
+  // O relógio vai numa unidade só ("7d", "23h"): a ficha é estreita, e com "6d 23h" ao lado o
+  // "+10% XP" — a parte que diz o que o boost DÁ — saía cortado em reticências. O prazo exato
+  // está na dica, no card da Loja e no painel da guild.
+  linha.innerHTML = `
+    <img src="${BOOST_GUILD.iconeMini}" width="16" height="16" alt="">
+    <span class="tr-ativo-nome">${escapar(t('guildBoost.linha'))} <b class="gb-pct">+${BOOST_GUILD.pct}% XP</b></span>
+    <span class="tr-ativo-tempo" data-ate="${Number(g.boostAte)}" data-curto="1">${tempoUmaUnidade(Number(g.boostAte) - agora)}</span>`;
+  linha.addEventListener('click', abrirBancoDaGuild);
+  return linha;
+}
+
+/**
  * O glifo da Twitch — o balão com os dois traços. SVG inline pelo mesmo motivo dos ícones da coluna
  * do retrato: um desenho de uma linha não vale uma requisição nem um arquivo de arte a manter.
  * Traçado do Simple Icons (CC0).
@@ -4341,10 +4516,10 @@ const GLIFO_TWITCH = `<svg class="tw-glifo" viewBox="0 0 24 24" aria-hidden="tru
  *
  * Duas exigências, e as duas evitam um ponto que mente:
  *
- *   · **vínculo** — sem conta da Twitch ligada não há "+1% a mais" a perder; o que a tela tem a
+ *   · **vínculo** — sem conta da Twitch ligada não há "+2,5% a mais" a perder; o que a tela tem a
  *     dizer a quem não vinculou é o convite, que já é o estado `conectar`.
  *   · **`bonus === true`** — só conta a live cujo chat o vigia consegue ler. Numa live sem o
- *     `/mod faasii` ninguém é detectado: mandar o jogador para lá não daria +1% nenhum, e o ponto
+ *     `/mod faasii` ninguém é detectado: mandar o jogador para lá não daria +2,5% nenhum, e o ponto
  *     seria uma promessa que o servidor não tem como cumprir.
  */
 function livesTwitchQueFaltam(tw) {
@@ -4370,9 +4545,16 @@ function livesTwitchQueFaltam(tw) {
  *
  * E, no "ativo", um PONTO VERMELHO quando sobrou live para abrir. Quem já está numa live tem a
  * linha acesa e o "+15% XP" verde — tudo diz "está tudo certo", e era justamente aí que o jogador
- * não tinha como saber que o colega do streamer estava no ar valendo mais um ponto. O ponto é o
+ * não tinha como saber que o colega do streamer estava no ar valendo mais 2,5%. O ponto é o
  * mesmo do "aovivo", e pela mesma razão: é o estado em que ele tem algo a FAZER.
  */
+/**
+ * O percentual do Bônus Twitch para a tela: "17,5" em português e espanhol, "17.5" em inglês. A live
+ * a mais vale 2,5 pontos (`TWITCH_BONUS_EXTRA_PCT`), e o `String(17.5)` do `t()` sairia com ponto.
+ */
+const pctTwitchTexto = (v) =>
+  (Number(v) || 0).toLocaleString(idioma() === 'en' ? 'en-US' : 'pt-BR', { maximumFractionDigits: 1 });
+
 function linhaTwitch(tw) {
   const situacao = !tw.login ? 'conectar' : tw.assistindo ? 'ativo' : tw.aoVivo ? 'aovivo' : 'offline';
   const faltam = situacao === 'ativo' ? livesTwitchQueFaltam(tw) : 0;
@@ -4385,13 +4567,13 @@ function linhaTwitch(tw) {
   const valor = situacao === 'aovivo'
     ? `<i class="tw-ponto" aria-hidden="true"></i>${escapar(t('twitch.valorAssista'))}`
     : situacao === 'offline' ? escapar(t('twitch.valorOffline'))
-      : `+${Number(situacao === 'ativo' && tw.pctAtual) || Number(tw.pct) || 0}% XP`;
+      : `+${pctTwitchTexto(Number(situacao === 'ativo' && tw.pctAtual) || Number(tw.pct) || 0)}% XP`;
   const linha = document.createElement('button');
   linha.type = 'button';
   linha.className = `tr-ativo twitch tw-${situacao}${faltam ? ' tw-tem-mais' : ''}`;
   linha.title = faltam
-    ? t('twitch.tipFaltam', { n: faltam, extra: Number(tw.extra) || 0 })
-    : t('twitch.tip', { pct: Number(tw.pct) || 0, extra: Number(tw.extra) || 0 });
+    ? t('twitch.tipFaltam', { n: faltam, extra: pctTwitchTexto(tw.extra) })
+    : t('twitch.tip', { pct: pctTwitchTexto(tw.pct), extra: pctTwitchTexto(tw.extra) });
   linha.innerHTML = `${faltam ? '<i class="tw-ponto" aria-hidden="true"></i>' : ''}${GLIFO_TWITCH}<span class="tr-ativo-nome">${escapar(nome)}</span><span class="tr-ativo-valor">${valor}</span>`;
   linha.addEventListener('click', () => abrirModal('twitch'));
   return linha;
@@ -4407,30 +4589,53 @@ const GLIFO_KICK = `<svg class="kk-glifo" viewBox="0 0 24 24" aria-hidden="true"
 const TIPOS_KICK_TELA = ['xp', 'captura', 'shiny'];
 
 /**
+ * As lives oficiais da Kick no ar AGORA em que o resgate funciona — o que acende o "ao vivo" da linha.
+ *
+ * Só conta canal `ativo` (o streamer autorizou e as recompensas existem): numa live sem elas não há o
+ * que resgatar, e o ponto vermelho seria uma promessa que o servidor não cumpre — a mesma regra do
+ * `bonus === true` da Twitch (`livesTwitchQueFaltam`). O `aoVivo` já chega falso quando a apuração do
+ * vigia passou do prazo (`oficiaisParaTela`, no bonus-kick.mjs).
+ */
+function livesKickNoAr(kk) {
+  return (kk?.oficiais ?? []).filter((o) => o.aoVivo && o.ativo);
+}
+
+/**
  * As linhas do BÔNUS NA KICK na ficha do treinador.
  *
- * A primeira é sempre o BOTÃO (abre o modal da Kick), em três estados:
+ * A primeira é sempre o BOTÃO (abre o modal da Kick), em quatro estados:
  *
  *   conectar   sem vínculo          "Bônus na Kick   vincular"        — o convite, com o fundo verde
  *   ativo      algum bônus valendo  "Bônus na Kick   [XP][CATCH][LURE]" — acesa, com o ícone de cada
  *                                                                       bônus que está rodando
+ *   aovivo     nenhum valendo, live "Kick ao vivo    • assista"       — o ponto vermelho da Twitch
+ *              oficial no ar
  *   vinculado  nenhum valendo       "Bônus na Kick   resgate"         — no lugar, esperando a live
+ *
+ * O "aovivo" é o aviso de que um streamer abriu a live, com o mesmo ponto vermelho piscando da linha
+ * da Twitch. Na Twitch ele apaga quando o vigia acha o jogador no chat; a Kick não diz quem assiste,
+ * e o sinal mais perto disso é o RESGATE — com um bônus valendo a linha volta aos ícones, e o ponto
+ * só volta quando as horas acabam com a live ainda no ar. Sem vínculo fica o convite, como na Twitch.
  *
  * Uma linha SÓ, com os três bônus valendo ao mesmo tempo: o tempo de cada um mora no modal (o clique
  * abre), e não numa pilha de linhas na ficha. `data-kk-fim` é o fim do que acaba primeiro — o
- * `tiqueAtivos` redesenha a linha nessa hora, para o ícone dele sair.
+ * `tiqueAtivos` redesenha a linha nessa hora, para o ícone dele sair (e o "ao vivo" entrar, se for o caso).
  */
 function linhaKick(kk, agora) {
   const ativos = TIPOS_KICK_TELA
     .map((tp) => [tp, Number(kk.bonus?.[tp]) || 0])
     .filter(([, ate]) => ate > agora);
+  const noAr = livesKickNoAr(kk);
   // Vinculado pelo id (`kk.vinculado`), não pelo nome — a Kick devolve o nome vazio para algumas contas.
-  const situacao = !(kk.vinculado ?? !!kk.login) ? 'conectar' : ativos.length ? 'ativo' : 'vinculado';
+  const situacao = !(kk.vinculado ?? !!kk.login) ? 'conectar'
+    : ativos.length ? 'ativo'
+      : noAr.length ? 'aovivo' : 'vinculado';
   const pct = Number(kk.pct) || 0;
+  const nome = t(situacao === 'aovivo' ? 'kick.linhaAoVivo' : 'kick.linha');
   const botao = document.createElement('button');
   botao.type = 'button';
   botao.className = `tr-ativo kick kk-${situacao}`;
-  botao.innerHTML = `${GLIFO_KICK}<span class="tr-ativo-nome">${escapar(t('kick.linha'))}</span>`;
+  botao.innerHTML = `${GLIFO_KICK}<span class="tr-ativo-nome">${escapar(nome)}</span>`;
   if (situacao === 'ativo') {
     const icones = document.createElement('span');
     icones.className = 'tr-ativo-valor kk-icones';
@@ -4438,12 +4643,16 @@ function linhaKick(kk, agora) {
     botao.appendChild(icones);
     botao.dataset.kkFim = String(Math.min(...ativos.map(([, ate]) => ate)));
     botao.title = t('kick.ativosDica', { lista: ativos.map(([tp]) => t(`kick.bonus.${tp}`, { pct })).join(' · ') });
+  } else if (situacao === 'aovivo') {
+    botao.insertAdjacentHTML('beforeend',
+      `<span class="tr-ativo-valor"><i class="tw-ponto" aria-hidden="true"></i>${escapar(t('kick.valorAssista'))}</span>`);
+    botao.title = t('kick.tipAoVivo', { canais: noAr.map((o) => o.nome || o.slug).join(', '), pct });
   } else {
     const valor = situacao === 'conectar' ? t('kick.valorVincular') : t('kick.valorResgate');
     botao.insertAdjacentHTML('beforeend', `<span class="tr-ativo-valor">${escapar(valor)}</span>`);
     botao.title = t('kick.tip', { pct });
   }
-  botao.setAttribute('aria-label', `${t('kick.linha')} — ${botao.title}`);
+  botao.setAttribute('aria-label', `${nome} — ${botao.title}`);
   botao.addEventListener('click', () => abrirModal('kick'));
   return botao;
 }
@@ -4477,7 +4686,7 @@ function tiqueAtivos() {
     }
     el.textContent = el.dataset.dias
       ? t('painel.dias', { n: Math.max(1, Math.ceil(resta / 86400000)) })
-      : tempoCurto(resta);
+      : el.dataset.curto ? tempoUmaUnidade(resta) : tempoCurto(resta);
   }
   // A linha da Kick não tem contador (o tempo de cada bônus está no modal), mas o ícone do bônus
   // que acabou tem de sair da ficha na hora — ver `linhaKick`.
@@ -4502,17 +4711,19 @@ function tiqueAtivos() {
 function tiqueSessao(agora) {
   if (!estado.sessao) return;
   if (estado.ws?.readyState === 1) salvarSessaoHunt(agora);
-  // O RITMO do Modo Economia anda por tempo, não por evento: o denominador é o relógio, então
-  // ele muda mesmo num minuto sem nenhum abate. Seis `textContent` por segundo.
-  if (economiaLigado()) pintarRitmoEconomia();
+  // O PLACAR do Modo Economia anda por tempo, não por evento: o denominador do "/h" é o relógio,
+  // então ele muda mesmo num minuto sem nenhum abate. Só `textContent`, uma dúzia por segundo.
+  if (ecoPlacar) pintarRelogioEconomia(agora);
+  // O Reset do histórico mora no painel de capturas, que no Modo Economia fica aberto sem a
+  // prancheta: ele não pode depender dela para sair do bloqueio.
+  const resetCap = $('#capturas-reset');
+  if (resetCap?.disabled && agora >= estado.capturasHistResetLivreEm) resetCap.disabled = false;
   if (!estado.sessaoAberta) return;
   const el = $('#sessao-tempo');
   if (el) el.textContent = tempoSessao(agora - estado.sessao.inicio);
   pintarRitmoSessao(agora);
   const reset = $('#sessao-reset');
   if (reset?.disabled && agora >= estado.sessaoResetLivreEm) reset.disabled = false;
-  const resetCap = $('#capturas-reset');
-  if (resetCap?.disabled && agora >= estado.capturasHistResetLivreEm) resetCap.disabled = false;
 }
 setInterval(tiqueAtivos, 1000);
 
@@ -5476,6 +5687,16 @@ function montarAtivosDaLoja() {
     const nome = estado.lojaProdutos.find((x) => x.id === l.bless)?.nome ?? l.bless;
     selos.push(`<span class="loja-selo bless">${escapar(nome)}</span>`);
   }
+  if (l.atrasados) {
+    selos.push(`<span class="loja-selo">${escapar(t('atrasados.linha', { mult: l.atrasados.mult }))} · ${
+      escapar(t('atrasados.ateNv', { alvo: num(l.atrasados.alvo) }))}</span>`);
+  }
+  // O Boost da Guild também é "seu" enquanto você está na guild — e é na Loja que se estende.
+  const g = estado.eu?.guild;
+  if (boostGuildAtivo(g?.boostAte, agoraDoServidor())) {
+    selos.push(`<span class="loja-selo gb-selo">${escapar(t('guildBoost.linha'))} +${BOOST_GUILD.pct}% XP · ${
+      t('loja.expiraEm', { tempo: faltaParaServidor(g.boostAte) })}</span>`);
+  }
 
   // Sem nada correndo a faixa some inteira: no topo da tela, ao lado do saldo, uma linha
   // dizendo "nenhum bônus ativo agora" só ocupa espaço com uma não-informação.
@@ -5505,6 +5726,9 @@ function montarLoja() {
   const lista = estado.lojaProdutos
     .filter((x) => !grupo || x.grupo === grupo)
     .filter((x) => !boost || x.boost === boost)
+    // O Boost dos Atrasados fica na vitrine sempre que há alvo do dia — o veterano vê sem compra,
+    // com a mediana do servidor (ver `atrasadosNaVitrine`).
+    .filter((x) => !x.atrasados || atrasadosNaVitrine(l))
     // A skin de venda limitada SAI da vitrine quando a venda acaba: depois disso ela só existe no
     // Mercado da Comunidade, e um card que não compra nada é uma promessa quebrada.
     .filter((x) => !x.skin || situacaoSkinNaLoja(x) !== 'encerrada');
@@ -5518,7 +5742,7 @@ function montarLoja() {
   $('#loja-cabeca').innerHTML = `
     <h4>${escapar(nomeGrupo)}</h4>
     <span class="loja-regra"></span>
-    <span class="loja-conta">${t('loja.nProdutos', { n: lista.length })}</span>`;
+    <span class="loja-conta">${t(lista.length === 1 ? 'loja.nProdutosUm' : 'loja.nProdutos', { n: lista.length })}</span>`;
 
   host.innerHTML = '';
   if (!lista.length) {
@@ -5553,7 +5777,11 @@ function montarLoja() {
       host.appendChild(cardPacoteDaLoja(prod, saldo));
       continue;
     }
-
+    // O Boost dos Atrasados: o preço é DESTE jogador, e o card mostra o caminho até o alvo.
+    if (prod.atrasados) {
+      host.appendChild(cardAtrasadosDaLoja(prod, saldo, l));
+      continue;
+    }
     const card = document.createElement('div');
     card.className = 'loja-card';
 
@@ -5707,6 +5935,789 @@ function confirmarCompra(prod, saldo) {
     titulo: t('loja.confirmarTitulo', { nome: nomeDoProduto(prod) }),
     texto: corpo(),
     aoConfirmar: () => enviar({ t: 'loja.comprar', id: prod.id }),
+  });
+}
+
+// ------------------------------------------------------- Boost da Guild (o banco)
+//
+// O Boost da Guild (`shared/guild-boost.mjs`) é ligado pelo BANCO DA GUILD, na aba Boost do painel da
+// guild: os membros doam diamante e, a cada 1.000 💎, a guild inteira ganha +10% de XP do treinador e
+// do pokémon por 7 dias — e o banco zera para a próxima rodada. Moram aqui a ABA (o herói do boost, o
+// cofre com a barra, a doação, quem doou neste banco e o histórico), o DIÁLOGO da doação e a
+// COMEMORAÇÃO de quem completou o banco. A linha da ficha do treinador (`linhaBoostGuild`) e a faixa
+// do painel (`htmlBoostNoPainelGuild`) leem o mesmo estado: `estado.eu.guild.boostAte` e
+// `bancoSaldo`, que o servidor mantém em todo sim.
+//
+// O que muda enquanto a aba está aberta chega por um pacote PRÓPRIO (`bancoAoVivo`), e não pelo
+// pacote da guild: aquele remonta o painel inteiro, e a doação de um colega apagaria o valor que o
+// jogador estava digitando. Aqui só as partes vivas se redesenham — a barra, os números e as listas.
+
+/** O que a aba guarda entre uma pintura e outra: quanto o jogador escolheu doar. */
+const bancoTela = { qtd: 50 };
+/** O relógio do herói (o boost ligado). Um só: cada pintura apaga o anterior. */
+let relogioBancoTimer = 0;
+
+/** Abre o painel da guild na aba Boost — o lugar do banco. Sem guild, abre o painel de quem não tem. */
+function abrirBancoDaGuild() {
+  if (estado.eu?.guild) guildAba = 'boost';
+  abrirGuild();
+}
+
+/** Troca para a aba Boost sem remontar o painel (o botão da faixa, com o painel já aberto). */
+function irParaAbaBoost() {
+  if (guildAba === 'boost') return;
+  guildAba = 'boost';
+  for (const x of $('#guild-corpo').querySelectorAll('.gld-aba')) {
+    const on = x.dataset.aba === 'boost';
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  pintarPaneGuild();
+}
+
+/** "Fulano (600), Ciclano (400) +2" — quem bancou a corrida atual do boost. Texto puro: escape quem for pôr em HTML. */
+function patrocinadoresDoBoostGuild(g, max = 2) {
+  const lista = (g?.boostPatrocinadores ?? []).filter((x) => x?.nick);
+  if (!lista.length) return g?.boostPor ?? '';
+  const nomes = lista.slice(0, max).map((x) => (Number(x.qtd) > 0 ? `${x.nick} (${num(Number(x.qtd))})` : x.nick));
+  const resto = lista.length - nomes.length;
+  return nomes.join(', ') + (resto > 0 ? ` +${resto}` : '');
+}
+
+/**
+ * "10/10, 21:30" / "Oct 10, 09:30 PM" — o fim do boost no relógio de QUEM LÊ, e não no de Brasília:
+ * é um prazo que ele vai acompanhar jogando, não a virada de um evento marcado no fuso do jogo.
+ * Em inglês o mês vai por extenso pelo motivo de `dataCurtaBr` — "10/01" se lê ao contrário.
+ */
+function quandoDoBoostGuild(ms) {
+  const lang = idioma();
+  return new Date(ms).toLocaleString(lang === 'en' ? 'en-US' : lang === 'es' ? 'es-ES' : 'pt-BR', {
+    day: '2-digit', month: lang === 'en' ? 'short' : '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/** "1 membro" / "23 membros". */
+const membrosDaGuildTexto = (n) => t(Number(n) === 1 ? 'guildBoost.nMembrosUm' : 'guildBoost.nMembros', { n: num(Number(n) || 0) });
+
+/** O nome da guild com a tag colorida na frente, como o painel e o chat a escrevem. HTML. */
+const nomeGuildComTag = (g) => `${g?.tag
+  ? `<span class="gld-tag" style="--gt:${corTagValida(g.tagCor)}">${escapar(g.tag)}</span> `
+  : ''}${escapar(g?.nome ?? '')}`;
+
+/** O banco desta guild como a aba o conhece: o que o servidor mandou, ou o mínimo do estado. */
+function bancoAtual() {
+  const g = estado.eu?.guild;
+  const b = estado.guildBanco;
+  if (g && b?.guildId === g.id) return b;
+  return {
+    guildId: g?.id ?? null,
+    saldo: saldoDoBanco(g?.bancoSaldo),
+    ciclo: null,
+    bancosCheios: null,
+    doadores: null,
+    historico: null,
+    patrocinadores: g?.boostPatrocinadores ?? [],
+  };
+}
+
+/** A aba Boost está na tela agora? */
+const bancoNaTela = () =>
+  !!$('#gbk') && !$('#guild')?.classList.contains('hidden') && guildModo === 'painel' && guildAba === 'boost';
+
+function pedirBancoDaGuild() {
+  estado.guildBancoPedidoEm = Date.now();
+  enviar({ t: 'guild.banco' });
+}
+
+/** Quanto ele pode doar agora: o saldo dele, o que falta no banco e o menor dos dois. */
+function limiteDaDoacao() {
+  const saldo = Math.max(0, Math.floor(Number(estado.eu?.diamonds) || 0));
+  const falta = faltaNoBanco(bancoAtual().saldo);
+  return { saldo, falta, max: Math.min(saldo, falta) };
+}
+
+/**
+ * A aba BOOST do painel da guild: o banco.
+ *
+ * De cima para baixo, as perguntas de quem abre: "a guild está com boost?" (o herói, com o relógio
+ * e quem bancou), "quanto falta?" (o cofre: o número grande e a barra em dez casas de 100), "quanto
+ * eu ponho?" (atalhos, o campo, a prévia na própria barra e o botão que diz o que vai acontecer) e
+ * "quem já pôs?" (os doadores deste banco e o histórico, lado a lado).
+ *
+ * A estrutura é desenhada uma vez; o que muda (números, barra, listas, botão) passa por
+ * `atualizarBancoNaTela`, que nunca recria o campo de valor — é ele que não pode perder o que o
+ * jogador digitou quando um colega doa.
+ */
+function pintarGuildBoost(host, g) {
+  const atalhos = BANCO_GUILD.atalhos
+    .map((n) => `<button type="button" class="gbk-atalho" data-qtd="${n}">${num(n)}</button>`).join('');
+  host.innerHTML = `
+    <div class="gbk" id="gbk">
+      <section class="gbk-heroi" id="gbk-heroi"></section>
+      <section class="gbk-cofre">
+        <div class="gbk-cofre-topo">
+          <span class="gbk-cofre-tit">${SVG_GLD.cofre}${escapar(t('guildBanco.titulo'))}</span>
+          <span class="gbk-cofre-num"><b id="gbk-saldo">0</b><span>/ ${num(BANCO_GUILD.meta)}</span>${seloDiamante(24)}</span>
+        </div>
+        <div class="gbk-barra" id="gbk-barra" role="progressbar" aria-valuemin="0" aria-valuemax="${BANCO_GUILD.meta}"
+             aria-label="${escapar(t('guildBanco.titulo'))}">
+          <div class="gbk-trilho">
+            <div class="gbk-barra-fill"></div>
+            <div class="gbk-barra-previa"></div>
+            <div class="gbk-barra-marcas" aria-hidden="true">${'<i></i>'.repeat(10)}</div>
+          </div>
+          <div class="gbk-flutua" id="gbk-flutua"></div>
+        </div>
+        <div class="gbk-cofre-pe">
+          <span id="gbk-falta"></span>
+          <span class="gbk-rodada" id="gbk-rodada"></span>
+        </div>
+      </section>
+      <section class="gbk-doar">
+        <div class="gbk-doar-tit">${escapar(t('guildBanco.doarTit'))}</div>
+        <div class="gbk-atalhos">
+          ${atalhos}
+          <button type="button" class="gbk-atalho gbk-completar" data-completar="1"></button>
+        </div>
+        <div class="gbk-qtd">
+          <button type="button" class="gbk-passo" data-passo="-10" aria-label="−10">−</button>
+          <label class="gbk-campo">${seloDiamante(20)}<input type="number" id="gbk-qtd" min="1" step="1"
+                 inputmode="numeric" aria-label="${escapar(t('guildBanco.qtdRotulo'))}"></label>
+          <button type="button" class="gbk-passo" data-passo="10" aria-label="+10">+</button>
+          <span class="gbk-previa" id="gbk-previa"></span>
+        </div>
+        <button type="button" class="guild-btn gbk-bt" id="gbk-doar"></button>
+        <p class="gbk-regra">${escapar(t('guildBanco.regra'))}</p>
+      </section>
+      <div class="gbk-cols">
+        <section class="gbk-bloco">
+          <h4>${escapar(t('guildBanco.doadoresTit'))}</h4>
+          <ol class="gbk-doadores" id="gbk-doadores"></ol>
+        </section>
+        <section class="gbk-bloco">
+          <h4>${escapar(t('guildBanco.historicoTit'))}</h4>
+          <ul class="gbk-hist" id="gbk-hist"></ul>
+        </section>
+      </div>
+      ${podeGerirGuild(g) ? `
+      <div class="gbk-log">
+        <span>${escapar(t('guildBanco.verTudoDica'))}</span>
+        <button type="button" class="guild-btn btn-apagado gbk-log-bt" id="gbk-log">${escapar(t('guildBanco.verTudo'))}</button>
+      </div>` : ''}
+    </div>`;
+
+  const inp = host.querySelector('#gbk-qtd');
+  inp.value = String(bancoTela.qtd);
+  inp.addEventListener('input', () => {
+    bancoTela.qtd = Math.floor(Number(inp.value) || 0);
+    atualizarDoacaoNaTela();
+  });
+  inp.addEventListener('change', () => atualizarDoacaoNaTela({ corrigir: true }));
+  inp.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    host.querySelector('#gbk-doar').click();
+  });
+  for (const bt of host.querySelectorAll('.gbk-atalho')) {
+    bt.addEventListener('click', () => {
+      bancoTela.qtd = bt.dataset.completar ? limiteDaDoacao().falta : Number(bt.dataset.qtd);
+      inp.value = String(bancoTela.qtd);
+      atualizarDoacaoNaTela({ corrigir: true });
+    });
+  }
+  for (const bt of host.querySelectorAll('.gbk-passo')) {
+    bt.addEventListener('click', () => {
+      bancoTela.qtd = Math.max(1, Math.floor(Number(inp.value) || 0) + Number(bt.dataset.passo));
+      inp.value = String(bancoTela.qtd);
+      atualizarDoacaoNaTela({ corrigir: true });
+    });
+  }
+  host.querySelector('#gbk-doar').addEventListener('click', aoClicarDoar);
+  host.querySelector('#gbk-log')?.addEventListener('click', abrirDoacoesDaGuild);
+
+  atualizarBancoNaTela();
+  // A leitura de verdade (doadores, histórico, rodada): ao abrir a aba, e de novo se a que está em
+  // mãos já tem uns segundos — o ao vivo cobre o resto.
+  const b = estado.guildBanco;
+  if (b?.guildId !== g.id || Date.now() - (b.recebidoEm ?? 0) > 20_000) pedirBancoDaGuild();
+}
+
+/** O herói: o boost ligado (relógio, até quando, quem bancou) ou desligado (o convite). HTML. */
+function htmlHeroiDoBanco(g, b, ativo, ate, agora) {
+  const quem = ativo
+    ? patrocinadoresDoBoostGuild({ ...g, boostPatrocinadores: b.patrocinadores?.length ? b.patrocinadores : g.boostPatrocinadores }, 3)
+    : '';
+  const membros = Number(g.membros) || 0;
+  return `
+    <div class="gbk-heroi-arte"><img src="${BOOST_GUILD.icone}" width="56" height="56" alt=""></div>
+    <div class="gbk-heroi-txt">
+      <div class="gbk-heroi-tit">
+        <span>${escapar(t('guildBanco.boostTit'))}</span>
+        <span class="gbk-chip ${ativo ? 'on' : 'off'}">${ativo
+          ? `${escapar(t('guildBanco.chipOn'))} · <b class="gbk-relogio">${escapar(tempoCurto(ate - agora))}</b>`
+          : escapar(t('guildBanco.chipOff'))}</span>
+      </div>
+      <div class="gbk-efeitos">
+        <span><span data-gb-ico="site/assets/loja/exp.png"></span>${escapar(t('guildBoost.efeitoTreinador', { pct: BOOST_GUILD.pct }))}</span>
+        <span><span data-gb-ico="site/assets/loja/boost.png"></span>${escapar(t('guildBoost.efeitoPokemon', { pct: BOOST_GUILD.pct }))}</span>
+        <span><span class="gbk-ico-svg">${dlgIcone('grupo', 15)}</span>${escapar(membros === 1
+          ? t('guildBanco.paraUm') : t('guildBanco.paraTodos', { n: num(membros) }))}</span>
+      </div>
+      <small class="gbk-heroi-sub">${ativo
+        ? `${escapar(t('guildBanco.heroiSubOn', { quando: quandoDoBoostGuild(ate) }))}${quem
+          ? ` · ${escapar(t('guildBanco.bancadoPor', { quem }))}` : ''}`
+        : escapar(t('guildBanco.heroiSubOff', { meta: num(BANCO_GUILD.meta), dias: BOOST_GUILD.dias }))}</small>
+    </div>`;
+}
+
+/** Repinta as partes vivas da aba Boost (herói, cofre, listas e a doação). Sem a aba na tela, nada. */
+function atualizarBancoNaTela() {
+  if (!bancoNaTela()) return;
+  const raiz = $('#gbk');
+  const g = estado.eu.guild;
+  const b = bancoAtual();
+  const noBanco = saldoDoBanco(b.saldo);
+  const agora = agoraDoServidor();
+  const ate = Number(g.boostAte) || 0;
+  const ativo = ate > agora;
+
+  const heroi = raiz.querySelector('#gbk-heroi');
+  heroi.className = `gbk-heroi${ativo ? ' on' : ''}`;
+  heroi.innerHTML = htmlHeroiDoBanco(g, b, ativo, ate, agora);
+  for (const el of heroi.querySelectorAll('[data-gb-ico]')) el.replaceWith(iconeArquivo(el.dataset.gbIco, 16));
+
+  const barra = raiz.querySelector('#gbk-barra');
+  if (!barra.classList.contains('enchendo')) barra.style.setProperty('--p', `${(100 * noBanco) / BANCO_GUILD.meta}%`);
+  barra.setAttribute('aria-valuenow', String(noBanco));
+  raiz.querySelector('#gbk-saldo').textContent = num(noBanco);
+  raiz.querySelector('#gbk-falta').innerHTML = t(ativo ? 'guildBanco.faltaOn' : 'guildBanco.falta', {
+    n: `<b>${num(faltaNoBanco(noBanco))}</b>`,
+    dias: BOOST_GUILD.dias,
+  });
+  const cheios = Number(b.bancosCheios) || 0;
+  raiz.querySelector('#gbk-rodada').textContent = b.ciclo
+    ? `${t('guildBanco.rodada', { n: num(b.ciclo) })}${cheios
+      ? ` · ${t(cheios === 1 ? 'guildBanco.cheiosUm' : 'guildBanco.cheios', { n: num(cheios) })}` : ''}`
+    : '';
+
+  pintarDoadoresDoBanco(raiz.querySelector('#gbk-doadores'), b, noBanco);
+  pintarHistoricoDoBanco(raiz.querySelector('#gbk-hist'), b);
+  atualizarDoacaoNaTela();
+
+  // O relógio do herói anda de segundo em segundo; quando o boost acaba, a aba troca sozinha para
+  // o convite.
+  clearInterval(relogioBancoTimer);
+  if (ativo) {
+    relogioBancoTimer = setInterval(() => {
+      const rel = $('#gbk-heroi .gbk-relogio');
+      if (!rel || !bancoNaTela()) return clearInterval(relogioBancoTimer);
+      const resta = ate - agoraDoServidor();
+      if (resta > 0) {
+        rel.textContent = tempoCurto(resta);
+        return;
+      }
+      clearInterval(relogioBancoTimer);
+      atualizarBancoNaTela();
+    }, 1000);
+  }
+}
+
+/**
+ * A parte da DOAÇÃO: os limites do campo, os atalhos que cabem, a prévia (na barra, listrada, e no
+ * texto) e o botão — "Doar 50", "Completar e ligar o Boost!" ou "Comprar diamantes".
+ *
+ * `corrigir` traz o valor de volta para dentro de 1…máximo (o atalho, o ±, o campo que perdeu o
+ * foco); digitando, o número fica como está e só o botão apaga.
+ */
+function atualizarDoacaoNaTela({ corrigir = false } = {}) {
+  const raiz = $('#gbk');
+  if (!raiz) return;
+  const g = estado.eu?.guild;
+  const { saldo, falta, max } = limiteDaDoacao();
+  const inp = raiz.querySelector('#gbk-qtd');
+  inp.max = String(Math.max(1, max));
+  let qtd = Math.floor(Number(bancoTela.qtd) || 0);
+  if (corrigir && max >= 1) {
+    qtd = Math.min(Math.max(1, qtd), max);
+    bancoTela.qtd = qtd;
+    inp.value = String(qtd);
+  }
+  const valido = qtd >= 1 && qtd <= max;
+  const doa = valido ? Math.min(qtd, falta) : 0;
+  const enche = valido && doa >= falta;
+  const ativo = (Number(g?.boostAte) || 0) > agoraDoServidor();
+
+  const completar = raiz.querySelector('.gbk-completar');
+  completar.innerHTML = `${escapar(t('guildBanco.completar'))} · ${num(falta)}`;
+  completar.disabled = saldo < falta;
+  completar.title = saldo < falta ? t('guildBanco.completarFalta', { n: num(falta - saldo) }) : '';
+  completar.classList.toggle('on', valido && qtd === falta);
+  for (const bt of raiz.querySelectorAll('.gbk-atalho[data-qtd]')) {
+    const n = Number(bt.dataset.qtd);
+    bt.disabled = n > max;
+    bt.classList.toggle('on', valido && n === qtd);
+  }
+
+  const noBanco = saldoDoBanco(bancoAtual().saldo);
+  const barra = raiz.querySelector('#gbk-barra');
+  barra.style.setProperty('--pv', `${(100 * Math.min(BANCO_GUILD.meta, noBanco + doa)) / BANCO_GUILD.meta}%`);
+  barra.classList.toggle('enche', enche);
+
+  const previa = raiz.querySelector('#gbk-previa');
+  previa.classList.toggle('enche', enche);
+  previa.innerHTML = saldo < 1 ? escapar(t('guildBanco.semSaldo'))
+    : !valido ? (qtd > max ? escapar(t('guildBanco.maxAgora', { n: num(max) })) : '')
+      : enche ? escapar(t(ativo ? 'guildBanco.previaEstende' : 'guildBanco.previaEnche', { dias: BOOST_GUILD.dias }))
+        : t('guildBanco.seuSaldo', { antes: num(saldo), depois: `<b>${num(saldo - doa)}</b>` });
+
+  const bt = raiz.querySelector('#gbk-doar');
+  bt.classList.toggle('gbk-bt-enche', enche);
+  bt.classList.toggle('sem-saldo', saldo < 1);
+  if (saldo < 1) {
+    bt.disabled = false;
+    bt.dataset.acao = 'comprar';
+    bt.innerHTML = `${escapar(t('guildBanco.semDiamantes'))} ${seloDiamante(20)}`;
+    return;
+  }
+  bt.dataset.acao = 'doar';
+  bt.disabled = !valido;
+  bt.innerHTML = enche
+    ? `${SVG_GLD.boost}<span>${escapar(t(ativo ? 'guildBanco.completarBtOn' : 'guildBanco.completarBt', { dias: BOOST_GUILD.dias }))}</span>`
+    : `<span>${escapar(t('guildBanco.doarBt', { n: num(valido ? doa : Math.max(qtd, 0)) }))}</span>${seloDiamante(20)}`;
+}
+
+/** O botão da doação: sem diamante, a compra de diamante; com, o diálogo. */
+function aoClicarDoar() {
+  const bt = $('#gbk-doar');
+  if (!bt || bt.disabled) return;
+  if (bt.dataset.acao === 'comprar') {
+    // A janela da guild fica POR CIMA dos modais (`.modal-acima`): aberta, ela esconderia a compra.
+    const { falta, saldo } = limiteDaDoacao();
+    fecharGuild();
+    abrirCompraDeDiamantes(Math.max(1, falta - saldo));
+    return;
+  }
+  const { max } = limiteDaDoacao();
+  const qtd = Math.floor(Number(bancoTela.qtd) || 0);
+  if (!(qtd >= 1 && qtd <= max)) return atualizarDoacaoNaTela({ corrigir: true });
+  confirmarDoacaoBanco(qtd);
+}
+
+/**
+ * O "tem certeza?" da doação. Doar não tem volta — a doação é da guild —, e o diálogo diz em
+ * desenho o que acontece: o diamante sai de você e entra no banco da guild; se ele enche, o boost
+ * liga (ou ganha mais 7 dias) para todos. Embaixo, a barra antes → depois e o saldo.
+ *
+ * A guild vai junto ao servidor (`guildId`): se ele trocou de guild com o diálogo aberto, a doação
+ * não cai calada na guild nova — o servidor recusa e a tela se acerta.
+ */
+function confirmarDoacaoBanco(qtd) {
+  const g = estado.eu?.guild;
+  if (!g?.id) return toast(t('guildBoost.semGuild'));
+  const saldo = estado.eu?.diamonds ?? 0;
+  const noBanco = saldoDoBanco(bancoAtual().saldo);
+  const falta = faltaNoBanco(noBanco);
+  const doa = Math.min(qtd, falta);
+  const enche = doa >= falta;
+  const agora = agoraDoServidor();
+  const ate = Number(g.boostAte) || 0;
+  const ativo = ate > agora;
+  const depois = fimDoBoostGuild(ate, agora);
+  const pAntes = (100 * noBanco) / BANCO_GUILD.meta;
+  const pDepois = (100 * Math.min(BANCO_GUILD.meta, noBanco + doa)) / BANCO_GUILD.meta;
+  confirmar({
+    titulo: t('guildBanco.confTitulo'),
+    texto: `
+      ${dlgPalco(`
+        ${dlgAtor({
+          arte: dlgArteArquivo(ICONE_DIAMANTE, 64),
+          nome: `${num(doa)}`,
+          sub: escapar(t('guildBanco.confVoce')),
+        })}
+        ${dlgSeta({ icone: 'grupo', rotulo: escapar(t('guildBanco.confPara')) })}
+        ${enche
+          ? dlgAtor({
+            arte: dlgArteArquivo(BOOST_GUILD.icone, 64),
+            nome: escapar(t('guildBanco.boostTit')),
+            sub: `<b class="gb-palco-pct">+${BOOST_GUILD.pct}% XP · ${BOOST_GUILD.dias}d</b>`,
+            classe: 'novo',
+          })
+          : dlgAtor({
+            arte: dlgArteBrasao(g, 64),
+            nome: nomeGuildComTag(g),
+            sub: escapar(`${num(noBanco + doa)} / ${num(BANCO_GUILD.meta)}`),
+          })}`, enche ? 'ouro' : 'mega')}
+      <div class="gbk-mini${enche ? ' enche' : ''}" style="--p:${pAntes}%;--pv:${pDepois}%" aria-hidden="true">
+        <i class="gbk-mini-fill"></i><i class="gbk-mini-previa"></i>
+      </div>
+      ${dlgCusto({ moeda: 'diamante', valor: doa, saldo })}
+      <ul class="gb-regras">
+        ${enche
+          ? `<li class="gb-regra-tempo">${dlgIcone('relogio', 14)}<span>${escapar(t(ativo ? 'guildBanco.confEstende' : 'guildBanco.confEnche', {
+            dias: BOOST_GUILD.dias, quando: quandoDoBoostGuild(depois),
+          }))}</span></li>`
+          : `<li>${dlgIcone('subir', 14)}<span>${escapar(t('guildBanco.confVai', {
+            depois: num(noBanco + doa), meta: num(BANCO_GUILD.meta), falta: num(falta - doa),
+          }))}</span></li>`}
+        ${doa < qtd ? `<li>${dlgIcone('check', 14)}<span>${escapar(t('guildBanco.confCortado', { n: num(doa) }))}</span></li>` : ''}
+        <li class="perigo">${dlgIcone('porta', 14)}<span>${escapar(t('guildBanco.confRegra'))}</span></li>
+      </ul>`,
+    rotuloSim: enche ? t('guildBanco.confSimEnche') : t('guildBanco.confSim', { n: num(doa) }),
+    montar: () => $('#confirmar-sim')?.classList.add(enche ? 'gbk-confirmar-enche' : 'gb-confirmar'),
+    aoConfirmar: () => enviar({ t: 'guild.doar', qtd: doa, guildId: g.id }),
+  });
+}
+
+/** Quem doou NESTE banco, de quem deu mais — com a fatia de cada um na barra de fundo da linha. */
+function pintarDoadoresDoBanco(el, b, noBanco) {
+  if (!el) return;
+  if (!b.doadores) {
+    el.innerHTML = `<li class="gbk-vazio">${escapar(t('guildBanco.carregando'))}</li>`;
+    return;
+  }
+  if (!b.doadores.length) {
+    el.innerHTML = `<li class="gbk-vazio">${escapar(t(noBanco > 0 ? 'guildBanco.carregando' : 'guildBanco.doadoresVazio'))}</li>`;
+    return;
+  }
+  const eu = String(estado.eu?.nick ?? '').toLowerCase();
+  el.innerHTML = b.doadores.map((d, i) => {
+    const souEu = String(d.nick ?? '').toLowerCase() === eu;
+    const fatia = Math.max(3, Math.round((100 * (Number(d.qtd) || 0)) / BANCO_GUILD.meta));
+    return `
+      <li class="${souEu ? 'eu' : ''}" style="--w:${fatia}%">
+        <span class="gbk-pos">${i === 0 ? SVG_GLD.coroa : i + 1}</span>
+        <span class="gbk-nick">${escapar(d.nick)}${souEu ? ` <small>${escapar(t('guildBanco.voce'))}</small>` : ''}</span>
+        <span class="gbk-qtd">${num(Number(d.qtd) || 0)}${seloDiamante(14)}</span>
+      </li>`;
+  }).join('');
+}
+
+/** O histórico do banco: doações e bancos cheios, os mais recentes primeiro. */
+function pintarHistoricoDoBanco(el, b) {
+  if (!el) return;
+  if (!b.historico) {
+    el.innerHTML = `<li class="gbk-vazio">${escapar(t('guildBanco.carregando'))}</li>`;
+    return;
+  }
+  if (!b.historico.length) {
+    el.innerHTML = `<li class="gbk-vazio">${escapar(t('guildBanco.historicoVazio'))}</li>`;
+    return;
+  }
+  el.innerHTML = b.historico.slice(0, BANCO_GUILD.historico).map((h) => (h.tipo === 'cheio'
+    ? `<li class="cheio"><img src="${BOOST_GUILD.iconeMini}" width="18" height="18" alt="">
+         <span>${t('guildBanco.histCheio', { nick: `<b>${escapar(h.nick)}</b>`, dias: BOOST_GUILD.dias })}</span>
+         <time>${escapar(quandoFoi(h.em))}</time></li>`
+    : `<li>${seloDiamante(16)}
+         <span>${t('guildBanco.histDoacao', { nick: `<b>${escapar(h.nick)}</b>`, qtd: num(Number(h.qtd) || 0) })}</span>
+         <time>${escapar(quandoFoi(h.em))}</time></li>`)).join('');
+}
+
+// ------------------------------------------------ as DOAÇÕES DA GUILD (o log completo do banco)
+//
+// A aba Boost mostra o banco ABERTO (quem doou nesta rodada) e as últimas linhas do histórico — o
+// bastante para quem doa, pouco para quem decide. O pedido de 04/10/2026 veio do outro lado: o líder
+// que vai tirar alguém da guild e quer saber, antes, se a pessoa já ajudou a pagar o boost; a doação
+// de duas rodadas atrás já tinha saído das duas listas. Esta janela responde isso, só para dono e
+// sub-dono: quanto cada membro doou na vida da guild — inclusive quem saiu e quem nunca doou —, cada
+// doação separada por rodada, e o CSV da lista aberta.
+//
+// O CSV é montado AQUI, a partir da resposta que já está na tela (`logBancoDaGuild` no servidor), e
+// salvo por `blob:` (`baixarCsv`): o servidor não gera arquivo nenhum, e exportar não custa uma ida a
+// mais ao banco.
+
+/** O que a janela guarda: a aba aberta e o último log que o servidor mandou. */
+const doacoesTela = { aba: 'membros', log: null };
+
+/** Abre a janela e pede o log de novo — o que já estava em mãos aparece enquanto o novo chega. */
+function abrirDoacoesDaGuild() {
+  const g = estado.eu?.guild;
+  if (!g || !podeGerirGuild(g)) return;
+  if (doacoesTela.log?.guildId !== g.id) doacoesTela.log = null;
+  $('#guild-doacoes-modal').classList.remove('hidden');
+  pintarDoacoesDaGuild();
+  enviar({ t: 'guild.bancoLog' });
+}
+
+function fecharDoacoesDaGuild() {
+  $('#guild-doacoes-modal').classList.add('hidden');
+}
+
+function receberLogDoBanco(log) {
+  if (log?.guildId !== estado.eu?.guild?.id) return;
+  doacoesTela.log = log;
+  if (!$('#guild-doacoes-modal').classList.contains('hidden')) pintarDoacoesDaGuild();
+}
+
+/**
+ * A janela: três placas (quanto a guild juntou, em quantas doações, quantos bancos encheram), as duas
+ * listas em abas e o CSV da que estiver aberta.
+ */
+function pintarDoacoesDaGuild() {
+  const corpo = $('#guild-doacoes-corpo');
+  if (!corpo) return;
+  const log = doacoesTela.log;
+  if (!log) {
+    corpo.innerHTML = `<p class="gdl-vazio">${escapar(t('guildBanco.carregando'))}</p>`;
+    return;
+  }
+  const aba = doacoesTela.aba;
+  const vazia = aba === 'doacoes' ? !(log.doacoes ?? []).length : !(log.porMembro ?? []).length;
+  const htmlAba = (id, chave) => `<button type="button" role="tab" class="gld-aba gdl-aba${aba === id ? ' on' : ''}"
+    data-aba="${id}" aria-selected="${aba === id ? 'true' : 'false'}">${escapar(t(chave))}</button>`;
+  corpo.innerHTML = `
+    <div class="gdl">
+      <div class="gdl-placas">
+        <div class="gdl-placa"><b>${num(log.total)}${seloDiamante(20)}</b><span>${escapar(t('guildBanco.logTotal'))}</span></div>
+        <div class="gdl-placa"><b>${num(log.nDoacoes)}</b><span>${escapar(t('guildBanco.logDoacoes'))}</span></div>
+        <div class="gdl-placa"><b>${num(log.rodadas?.length ?? 0)}</b><span>${escapar(t('guildBanco.logCheios'))}</span></div>
+      </div>
+      <p class="gdl-nota">${escapar(t('guildBanco.logAjuda'))}</p>
+      <div class="gdl-barra">
+        <div class="gdl-abas" role="tablist">
+          ${htmlAba('membros', 'guildBanco.logAbaMembros')}
+          ${htmlAba('doacoes', 'guildBanco.logAbaDoacoes')}
+        </div>
+        <button type="button" class="guild-btn gdl-csv" id="gdl-csv"${vazia ? ' disabled' : ''}>${escapar(t('guildBanco.logExportar'))}</button>
+      </div>
+      <div class="gdl-lista">${aba === 'doacoes' ? htmlDoacoesPorRodada(log) : htmlDoacoesPorMembro(log)}</div>
+    </div>`;
+  corpo.querySelector('.gdl-abas').addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-aba]');
+    if (!b || b.dataset.aba === doacoesTela.aba) return;
+    doacoesTela.aba = b.dataset.aba;
+    pintarDoacoesDaGuild();
+  });
+  corpo.querySelector('#gdl-csv').addEventListener('click', exportarDoacoesCsv);
+}
+
+/**
+ * Quanto cada um doou na vida da guild, de quem deu mais. Quem nunca doou vem no fim com "—" no
+ * lugar da posição, e quem saiu leva a etiqueta: as duas pontas da pergunta de quem vai expulsar.
+ */
+function htmlDoacoesPorMembro(log) {
+  const lista = log.porMembro ?? [];
+  if (!lista.length) return `<p class="gdl-vazio">${escapar(t('guildBanco.logVazio'))}</p>`;
+  const eu = String(estado.eu?.nick ?? '').toLowerCase();
+  let pos = 0;
+  return `<ol class="gdl-membros">${lista.map((m) => {
+    const doou = m.qtd > 0;
+    if (doou) pos++;
+    const etiquetas = `${m.membro ? '' : `<em class="gdl-tag saiu">${escapar(t('guildBanco.logSaiu'))}</em>`}${
+      doou ? '' : `<em class="gdl-tag zero">${escapar(t('guildBanco.logNuncaDoou'))}</em>`}`;
+    const meta = doou
+      ? `${escapar(t(m.n === 1 ? 'guildBanco.logUmaDoacao' : 'guildBanco.logNDoacoes', { n: num(m.n) }))} · ${
+        escapar(t('guildBanco.logUltima', { quando: quandoFoi(m.ultima) }))}`
+      : '';
+    const classes = [doou ? '' : 'zero', m.membro ? '' : 'saiu', String(m.nick ?? '').toLowerCase() === eu ? 'eu' : '']
+      .filter(Boolean).join(' ');
+    return `
+      <li${classes ? ` class="${classes}"` : ''}>
+        <span class="gdl-pos">${doou ? num(pos) : '—'}</span>
+        <span class="gdl-quem"><span class="gdl-nick"><b>${escapar(m.nick ?? '')}</b>${etiquetas}</span>${meta ? `<small>${meta}</small>` : ''}</span>
+        <span class="gdl-qtd">${num(m.qtd)}${seloDiamante(14)}</span>
+      </li>`;
+  }).join('')}</ol>`;
+}
+
+/**
+ * Cada doação, da mais recente para a mais antiga, em blocos por RODADA: a aberta com quanto o banco
+ * tem, as cheias com quando encheram e quem completou — é o que separa as doações de um boost das
+ * do seguinte.
+ */
+function htmlDoacoesPorRodada(log) {
+  const linhas = log.doacoes ?? [];
+  if (!linhas.length) return `<p class="gdl-vazio">${escapar(t('guildBanco.logVazio'))}</p>`;
+  const cheias = new Map((log.rodadas ?? []).map((r) => [r.ciclo, r]));
+  const grupos = [];
+  for (const [em, nick, qtd, ciclo, membro] of linhas) {
+    let grupo = grupos[grupos.length - 1];
+    if (!grupo || grupo.ciclo !== ciclo) grupos.push((grupo = { ciclo, itens: [] }));
+    grupo.itens.push({ em, nick, qtd, membro });
+  }
+  const saldo = saldoDoBanco(estado.eu?.guild?.bancoSaldo);
+  return `${grupos.map((grupo) => {
+    const cheia = cheias.get(grupo.ciclo);
+    const sub = cheia
+      ? t('guildBanco.logRodadaCheia', { quando: escapar(quandoDoBoostGuild(cheia.em)), nick: escapar(cheia.nick ?? '') })
+      : t('guildBanco.logRodadaAberta', { saldo: num(saldo), meta: num(BANCO_GUILD.meta) });
+    return `
+      <section class="gdl-rodada${cheia ? ' cheia' : ''}">
+        <h5><span>${escapar(t('guildBanco.logRodada', { n: num(grupo.ciclo) }))}</span><small>${sub}</small></h5>
+        <ul>${grupo.itens.map((x) => `
+          <li${x.membro ? '' : ' class="saiu"'}>
+            <time>${escapar(quandoDoBoostGuild(x.em))}</time>
+            <span class="gdl-nick"><b>${escapar(x.nick ?? '')}</b>${x.membro ? '' : `<em class="gdl-tag saiu">${escapar(t('guildBanco.logSaiu'))}</em>`}</span>
+            <span class="gdl-qtd">${num(x.qtd)}${seloDiamante(14)}</span>
+          </li>`).join('')}</ul>
+      </section>`;
+  }).join('')}${log.truncado ? `<p class="gdl-nota">${escapar(t('guildBanco.logTruncado', { n: num(BANCO_GUILD.logMax) }))}</p>` : ''}`;
+}
+
+/**
+ * O separador do CSV: `;` em português e espanhol — no Excel dessas línguas a vírgula é a casa
+ * decimal, e um arquivo separado por vírgula abre tudo numa coluna só — e `,` em inglês.
+ */
+const separadorCsv = () => (idioma() === 'en' ? ',' : ';');
+
+/** "2026-10-04 21:30", no relógio de quem exporta: a forma de data que planilha nenhuma lê ao contrário. */
+function dataHoraCsv(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
+/** O CSV da lista aberta — por membro ou doação a doação —, com o nome da guild no arquivo. */
+function exportarDoacoesCsv() {
+  const log = doacoesTela.log;
+  const g = estado.eu?.guild;
+  if (!log || !g) return;
+  const sep = separadorCsv();
+  const linha = (cels) => cels.map(celulaCsv).join(sep);
+  const simNao = (b) => t(b ? 'guildBanco.csvSim' : 'guildBanco.csvNao');
+  const porDoacao = doacoesTela.aba === 'doacoes';
+  const linhas = porDoacao
+    ? [
+      linha([t('guildBanco.csvData'), t('guildBanco.csvJogador'), t('guildBanco.csvDiamantes'), t('guildBanco.csvRodada'), t('guildBanco.csvNaGuild')]),
+      ...(log.doacoes ?? []).map(([em, nick, qtd, ciclo, membro]) => linha([dataHoraCsv(em), nick, qtd, ciclo, simNao(membro)])),
+    ]
+    : [
+      linha([t('guildBanco.csvJogador'), t('guildBanco.csvDiamantes'), t('guildBanco.csvDoacoes'), t('guildBanco.csvPrimeira'),
+        t('guildBanco.csvUltima'), t('guildBanco.csvNaGuild')]),
+      ...(log.porMembro ?? []).map((m) => linha([m.nick, m.qtd, m.n, dataHoraCsv(m.primeira), dataHoraCsv(m.ultima), simNao(m.membro)])),
+    ];
+  // O nome da guild vira um pedaço de nome de arquivo: sem acento, sem espaço, sem o que o sistema recusa.
+  const slug = String(g.nome ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'guild';
+  const tipo = t(porDoacao ? 'guildBanco.csvNomeDoacoes' : 'guildBanco.csvNomeMembros');
+  baixarCsv(`${slug}-${tipo}-${new Date().toISOString().slice(0, 10)}.csv`, `${linhas.join('\n')}\n`);
+  toast(t('guildBanco.csvBaixado'));
+}
+
+/**
+ * O BANCO ANDOU — uma doação de qualquer membro, em qualquer sim (`bancoAoVivo`).
+ *
+ * Copia o banco (e, se encheu, o boost) para `estado.eu.guild`, encaixa a doação nas listas que a
+ * aba já tem (sem pedir tudo de novo ao servidor), acerta a faixa do painel e, com a aba aberta,
+ * anima: o "+50 Fulano" subindo da ponta da barra e, no banco que encheu, a barra correndo até o fim
+ * e voltando a zero.
+ */
+function aplicarBancoAoVivo(v) {
+  const g = estado.eu?.guild;
+  if (!g || g.id !== Number(v.guildId)) return;
+  g.bancoSaldo = Number(v.banco) || 0;
+  if (v.cheio) {
+    g.boostAte = Number(v.boostAte) || g.boostAte;
+    g.boostPor = v.boostPor ?? g.boostPor;
+    g.boostPatrocinadores = Array.isArray(v.patrocinadores) ? v.patrocinadores : [];
+  }
+  const b = estado.guildBanco;
+  const d = v.doacao ?? null;
+  if (b?.guildId === g.id && b.ciclo != null
+      && (Number(v.ciclo) > b.ciclo || (Number(v.ciclo) === b.ciclo && Number(v.banco) > b.saldo))) {
+    if (d) {
+      b.historico = [{ tipo: 'doacao', nick: d.nick, qtd: d.qtd, em: d.em }, ...(b.historico ?? [])];
+      if (!v.cheio && b.doadores) {
+        const x = b.doadores.find((y) => y.nick === d.nick);
+        if (x) x.qtd += Number(d.qtd) || 0;
+        else b.doadores.push({ nick: d.nick, qtd: Number(d.qtd) || 0 });
+        b.doadores.sort((p, q) => q.qtd - p.qtd);
+      }
+    }
+    if (v.cheio) {
+      b.historico = [{ tipo: 'cheio', nick: d?.nick ?? v.boostPor ?? '', qtd: BANCO_GUILD.meta, em: d?.em ?? Date.now(), ate: v.boostAte },
+        ...(b.historico ?? [])];
+      b.doadores = [];
+      b.bancosCheios = (Number(b.bancosCheios) || 0) + 1;
+      b.boostAte = v.boostAte;
+      b.patrocinadores = Array.isArray(v.patrocinadores) ? v.patrocinadores : [];
+    }
+    b.historico = (b.historico ?? []).slice(0, BANCO_GUILD.historico);
+    b.saldo = Number(v.banco) || 0;
+    b.ciclo = Number(v.ciclo) || b.ciclo;
+  }
+  atualizarFaixaBoostNoPainel();
+  if (!bancoNaTela()) return;
+  // A doação foi DESTE jogador: o campo volta ao valor de partida (cortado no máximo novo), e não
+  // fica num valor que o banco ou o saldo dele já não comportam.
+  if (v.eu) {
+    bancoTela.qtd = 50;
+    const inp = $('#gbk-qtd');
+    if (inp) inp.value = String(bancoTela.qtd);
+  }
+  if (d) mostrarDoacaoFlutuante(d, !!v.eu, !!v.cheio);
+  if (v.cheio) encherBarraAnimado();
+  else atualizarBancoNaTela();
+  if (v.eu) atualizarDoacaoNaTela({ corrigir: true });
+}
+
+/** O "+50 Fulano" que sobe da ponta da barra — o que faz o banco parecer de muita gente. */
+function mostrarDoacaoFlutuante(d, eu, cheio) {
+  const host = $('#gbk-flutua');
+  if (!host) return;
+  const p = cheio ? 100 : (100 * saldoDoBanco(estado.eu?.guild?.bancoSaldo)) / BANCO_GUILD.meta;
+  const item = document.createElement('span');
+  item.className = `gbk-flutua-item${eu ? ' eu' : ''}${cheio ? ' cheio' : ''}`;
+  item.style.setProperty('--x', `${Math.min(92, Math.max(8, p))}%`);
+  item.textContent = `+${num(Number(d.qtd) || 0)} ${eu ? t('guildBanco.voce') : d.nick}`;
+  host.appendChild(item);
+  setTimeout(() => item.remove(), 1900);
+}
+
+/** O banco que encheu: a barra corre até o fim, brilha em ouro e volta a zero com a rodada nova. */
+function encherBarraAnimado() {
+  const barra = $('#gbk-barra');
+  if (!barra) return atualizarBancoNaTela();
+  barra.classList.add('enchendo');
+  barra.style.setProperty('--p', '100%');
+  setTimeout(() => {
+    barra.classList.remove('enchendo');
+    atualizarBancoNaTela();
+  }, 1100);
+}
+
+/** A faixa do boost no cabeçalho do painel, redesenhada no lugar (o banco ou o boost mudou). */
+function atualizarFaixaBoostNoPainel() {
+  const faixa = $('#gld-boost');
+  const g = estado.eu?.guild;
+  if (!faixa || !g) return;
+  faixa.outerHTML = htmlBoostNoPainelGuild(g);
+  ligarBoostNoPainelGuild();
+}
+
+/**
+ * O banco encheu e o boost ligou (ou estendeu) — chega a TODO membro online, em qualquer sim
+ * (`guildBoostAtivado`).
+ *
+ * Quem COMPLETOU o banco ganha a tela de revelação no degrau Mítico, o roxo do boost, com confete: o
+ * diamante dele foi o que virou a chave para a guild inteira. Os outros membros não são
+ * interrompidos — o aviso é o toast, a linha no chat da guild e a linha nova piscando na ficha
+ * (`estado.gbNovoAte`).
+ */
+function comemorarBoostGuild(e) {
+  estado.gbNovoAte = Date.now() + 9000;
+  const pct = BOOST_GUILD.pct;
+  const dias = BOOST_GUILD.dias;
+  if (!e.eu) {
+    const frase = t(e.estendido ? 'guildBoost.toastEstendeu' : 'guildBoost.toastAtivou', { nick: e.por ?? '', pct, dias });
+    toast(`⚡ ${frase}`);
+    logCena(frase);
+    return;
+  }
+  const quando = quandoDoBoostGuild(Number(e.ate));
+  mostrarRecompensa({
+    nivel: 3,
+    classe: 'rc-boost-guild',
+    faixa: t('guildBoost.celebraFaixa'),
+    lead: t(e.estendido ? 'guildBoost.celebraEstendeu' : 'guildBoost.celebraAtivou'),
+    nome: e.guild ?? estado.eu?.guild?.nome ?? '',
+    sub: `${escapar(Number(e.membros) === 1
+      ? t('guildBoost.celebraSubUm', { pct })
+      : t('guildBoost.celebraSub', { pct, n: num(Number(e.membros) || 0) }))}<br>`
+      + `<b class="gb-rc-ate">${escapar(t('guildBoost.celebraAte', { quando }))}</b>`,
+    arte: imagemRecompensa(BOOST_GUILD.icone, 'rc-img-pixel rc-img-gb'),
+    confete: 46,
+    rotuloOk: t('guildBoost.celebraOk'),
   });
 }
 
@@ -6027,7 +7038,7 @@ function cardPacoteDaLoja(prod, saldo) {
     </div>
     <div class="pac-economia">${t('loja.pacoteEconomia', { n: num(pk.economia) })}</div>
     ${destaque
-      ? `<div class="pac-semana">${t('loja.pacoteSemana', {
+      ? `<div class="pac-semana">${t(pk.diasSoltos === 30 ? 'loja.pacoteMes' : 'loja.pacoteSemana', {
           pct: pk.economiaSemanaPct, n: num(pk.economiaSemana),
         })}</div>`
       : ''}
@@ -6072,6 +7083,97 @@ function cardPacoteDaLoja(prod, saldo) {
     bt.onclick = () => confirmarCompra(prod, saldo);
   }
   return card;
+}
+
+// ------------------------------------------------------- Boost dos Atrasados
+//
+// Para quem chegou depois: XP ×10 no treinador e nos pokémon até o treinador alcançar o nível-alvo do
+// dia — a mediana de quem joga há mais de 30 dias. A regra e o preço moram em
+// `shared/boost-atrasados.mjs`, e a vitrine usa as MESMAS funções que o servidor cobra: o número do
+// card é o do débito. O servidor confere de novo (e recusa se o preço tiver subido desde o clique).
+
+/**
+ * O card aparece sempre que há alvo do dia (ou com o boost correndo). Quem já está no alvo ou acima
+ * dele também vê — sem botão de compra (o servidor recusa do mesmo jeito) —, com a mediana do dia:
+ * o pessoal queria ver o pacote e acompanhar a mediana do servidor (pedido do dono, 06/10/2026).
+ */
+function atrasadosNaVitrine(l) {
+  if (l?.atrasados) return true;
+  return (Number(l?.alvoAtrasados) || 0) > 0;
+}
+
+function cardAtrasadosDaLoja(prod, saldo, l) {
+  const eu = estado.eu ?? {};
+  const ativo = l.atrasados ?? null;
+  const alvo = Number(ativo?.alvo ?? l.alvoAtrasados) || 0;
+  const mult = Number(ativo?.mult) || ATRASADOS.mult;
+  const xpAlvo = xpTotalDoNivel(alvo);
+  const pctExato = xpAlvo > 0 ? Math.min(100, (Math.max(0, Number(eu.xp) || 0) / xpAlvo) * 100) : 0;
+  // A curva é cúbica: um nv 300 diante de um alvo 1.830 tem 0,4% do XP, e um "0%" na tela leria
+  // como erro. Abaixo de 1%, uma casa decimal; acima, o inteiro.
+  const pct = pctExato >= 1 || pctExato === 0
+    ? Math.floor(pctExato)
+    : pctExato.toLocaleString(idioma() === 'en' ? 'en-US' : 'pt-BR', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+  const preco = ativo ? null : precoAtrasados(eu.xp, alvo);
+  // Já no alvo (ou acima): o card fica, sem compra — a mesma recusa do servidor (`atrasados.jaChegou`).
+  const acima = !ativo && ((Number(eu.level) || 0) >= alvo || preco == null);
+  const nVeteranos = Number(l.alvoAtrasadosN) || 0;
+  const mediana = !ativo && nVeteranos
+    ? `<div class="atr-mediana">${t('atrasados.cardMediana', { alvo: num(alvo), n: num(nVeteranos) })}</div>` : '';
+
+  const card = document.createElement('div');
+  card.className = `loja-card pac-card pac-destaque atr-card${acima ? ' atr-fora' : ''}`;
+  card.innerHTML = `
+    <span class="loja-tag pac-selo">XP ×${mult}</span>
+    <div class="loja-arte pac-arte"></div>
+    <div class="loja-nome">${escapar(nomeDoProduto(prod))}</div>
+    <div class="atr-alvo">${t('atrasados.cardAlvo', { alvo: num(alvo), dias: ATRASADOS.diasConta })}</div>
+    <div class="atr-barra" role="img" aria-label="${escapar(t('atrasados.cardCaminho', { pct }))}"><span style="width:${pctExato.toFixed(2)}%"></span></div>
+    <div class="atr-sub">${acima
+      ? t('atrasados.cardAcima', { nivel: num(eu.level ?? 1) })
+      : `${t('atrasados.cardCaminho', { pct })} · ${t('atrasados.cardVoceNv', { nivel: num(eu.level ?? 1) })}`}</div>
+    ${mediana}
+    ${ativo
+      ? `<div class="atr-ativo">${t('atrasados.cardAtivo', { mult, alvo: num(alvo), n: num(Math.max(0, alvo - (Number(eu.level) || 0))) })}</div>`
+      : acima
+        ? `<div class="atr-fora-nota">${t('atrasados.cardForaNota', { mult })}</div>`
+        : `<div class="pac-precos">
+          ${preco < ATRASADOS.precoCheio ? `<s class="pac-antes">${num(ATRASADOS.precoCheio)} ${seloDiamante(16)}</s>` : ''}
+          <b class="pac-agora">${num(preco ?? 0)} ${seloDiamante(22)}</b>
+        </div>
+        <div class="pac-economia">${t('atrasados.cardRegra', { mult })}</div>
+        <button class="loja-btn pac-btn" type="button"></button>`}`;
+
+  card.querySelector('.pac-arte').appendChild(iconeArquivo(prod.icone ?? 'site/assets/loja/exp.png', 40));
+  card.title = textoDaLoja(prod.i18n?.desc, prod.i18n?.params, prod.descricao ?? '');
+
+  const bt = card.querySelector('.loja-btn');
+  if (bt && preco != null) {
+    bt.innerHTML = `${num(preco)} ${seloDiamante(22)}`;
+    if (saldo < preco) {
+      bt.classList.add('sem-saldo');
+      bt.title = t('loja.semDiamantes');
+      bt.onclick = () => abrirCompraDeDiamantes(preco - saldo);
+    } else {
+      bt.onclick = () => confirmarAtrasados(prod, preco, alvo, saldo);
+    }
+  }
+  return card;
+}
+
+/** A confirmação diz o preço DESTE jogador e até onde o boost vai — e manda o número que ele viu. */
+function confirmarAtrasados(prod, preco, alvo, saldo) {
+  const arte = dlgArteArquivo(prod.icone ?? 'site/assets/loja/exp.png', 56);
+  confirmar({
+    titulo: t('loja.confirmarTitulo', { nome: nomeDoProduto(prod) }),
+    texto: `
+      ${dlgPalco(dlgAtor({ arte, nome: escapar(nomeDoProduto(prod)), classe: 'novo' }), 'ouro')}
+      ${dlgCusto({ moeda: 'diamante', valor: preco, saldo })}
+      ${dlgFrase('', escapar(t('atrasados.confirmar', {
+        mult: ATRASADOS.mult, alvo: num(alvo), nivel: num(estado.eu?.level ?? 1),
+      })))}`,
+    aoConfirmar: () => enviar({ t: 'loja.comprar', id: prod.id, precoVisto: preco }),
+  });
 }
 
 function cardCaixaDaLoja(prod) {
@@ -7351,10 +8453,10 @@ function tempoAteViradaDoMes() {
   return tempoAte(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
 }
 
-/** A duração de um boost de prêmio: "2 dias" quando fecha em dias, "18 horas" quando não. */
-const duracaoDoPremio = (horas) => (horas % 24 === 0
-  ? t('painel.dias', { n: horas / 24 })
-  : t('pvpr.horas', { n: horas }));
+/** A duração de um boost de prêmio: "1 dia", "2 dias" quando fecha em dias, "18 horas" quando não. */
+const duracaoDoPremio = (horas) => (horas === 24 ? t('pvpr.umDia')
+  : horas % 24 === 0 ? t('painel.dias', { n: horas / 24 })
+    : t('pvpr.horas', { n: horas }));
 
 /**
  * Uma linha da folha: a posição à esquerda, o prêmio à direita. O selo "você está aqui" mora
@@ -7371,11 +8473,90 @@ const linhaDePremio = ({ rotulo, sub = '', arte = '', premio, eu = false, selo =
     <div class="pvpr-premio">${premio}</div>
   </div>`;
 
-/** "🧪 Shiny Secret Lure · 2 dias" — o boost com o ícone da Loja e a duração. */
+/** O boost com o ícone da Loja, o nome e, embaixo, a duração ("Shiny Secret Lure / 2 dias"). */
 function itemDeBoostPvp(chave, horas) {
   const tipo = tipoDeBoost(chave);
   const ico = tipo?.icone ? `<img class="pvpr-ico" src="/assets/${escapar(tipo.icone)}" alt="">` : '';
-  return `<span class="pvpr-item">${ico}<span>${escapar(nomeDoBoost(chave))}</span><b>${duracaoDoPremio(horas)}</b></span>`;
+  return `<span class="pvpr-item">${ico}<span class="pvpr-item-txt"><span>${escapar(nomeDoBoost(chave))}</span><b>${
+    duracaoDoPremio(horas)}</b></span></span>`;
+}
+
+/** Os diamantes do prêmio, no fim da linha: "💎 300 diamantes". */
+const itemDeDiamantesPvp = (qtd) =>
+  `<span class="pvpr-item pvpr-item-dia"><img class="pvpr-ico pvpr-ico-dia" src="${ICONE_DIAMANTE}" alt="">${
+    escapar(t('pvpr.diamantes', { n: num(qtd) }))}</span>`;
+
+/** "1º", "2º e 3º", "4º ao 10º" — a faixa de posições como a Tabela a escreve. */
+const rotuloDasPosicoesPvp = ({ de, ate }) => t(
+  de === ate ? 'pvpr.posicao' : ate === de + 1 ? 'pvpr.posicoesDuas' : 'pvpr.posicoes',
+  { de, ate },
+);
+
+/**
+ * O nome de cada faixa e o desenho dela. O 1º leva o troféu e o pódio as duas medalhas — os mesmos
+ * do Campeonato e da escada das guilds —; dali para baixo, o emblema do tier daquelas posições:
+ * Challenger até o 20º, Mestre até o 50º e Diamante, o tier logo abaixo, até o 100º.
+ */
+const FAIXAS_PVP_TELA = {
+  campeao: { nome: 'pvpr.campeao', nivel: 4 },
+  podio: { nome: 'pvpr.podio', nivel: 3 },
+  top10: { nome: 'pvpr.top10', nivel: 2, tier: 'challenger' },
+  challenger: { nome: 'pvp.tier.challenger', nivel: 1, tier: 'challenger' },
+  mestre: { nome: 'pvp.tier.mestre', nivel: 1, tier: 'mestre' },
+  top100: { nome: 'pvpr.top100', nivel: 0, tier: 'diamante' },
+};
+
+/** O desenho da faixa na folha: troféu, as duas medalhas ou o emblema do tier. */
+function arteDaFaixaPvp(faixa) {
+  if (faixa === 'campeao') return `<img class="pvpr-emblema pvpr-medalha" src="${ICONE_LUGAR_CAMPEONATO[1]}" alt="">`;
+  if (faixa === 'podio') {
+    return `<span class="pvpr-medalhas" aria-hidden="true"><img src="${ICONE_LUGAR_CAMPEONATO[2]}" alt=""><img src="${
+      ICONE_LUGAR_CAMPEONATO[3]}" alt=""></span>`;
+  }
+  return `<img class="pvpr-emblema" src="${iconeDoRank(FAIXAS_PVP_TELA[faixa]?.tier ?? 'challenger')}" alt="">`;
+}
+
+/**
+ * O prêmio de uma faixa em texto corrido — a legenda do Ranking e a tela de "você recebeu":
+ * "Shiny Secret Lure, Capture Boost, XP Boost e XP Boost Pokémon por 3 dias + 300 diamantes". Os
+ * boosts de mesma duração vão juntos (hoje toda faixa tem uma duração só, mas a regra não depende
+ * disso), e a lista sai na gramática do idioma (`Intl.ListFormat`).
+ */
+function textoDoPremioPvp(horas, diamantes = 0, unidadeMs = 3_600_000) {
+  const porDuracao = new Map();
+  for (const [chave, qtd] of Object.entries(horas ?? {})) {
+    const h = Math.round((Number(qtd) * unidadeMs) / 3_600_000);
+    porDuracao.set(h, [...(porDuracao.get(h) ?? []), nomeDoBoost(chave)]);
+  }
+  const lista = new Intl.ListFormat(localeData(), { style: 'long', type: 'conjunction' });
+  const partes = [...porDuracao].map(([h, nomes]) => t('pvpr.boostsPor', { boosts: lista.format(nomes), tempo: duracaoDoPremio(h) }));
+  if (diamantes > 0) partes.push(t('pvpr.diamantes', { n: num(diamantes) }));
+  return partes.join(' + ');
+}
+
+/**
+ * A tela de "você recebeu" do prêmio da semana, na escada de raridade da POSIÇÃO: o 1º abre como
+ * Lendária, o pódio como Mítica, o top 10 como Rara — a mesma régua de dopamina da Casa e da
+ * Bicicleta (ver o DESIGN.md). O título é o diamante quando houver; embaixo, os boosts, que já valem.
+ * Prêmio antigo, da era mensal, chega com `unidade: 'dias'` e com as faixas de antes; a tela lê os dois.
+ */
+function mostrarPremioPvp(e) {
+  const pos = Number(e.posicao) || 0;
+  const diamantes = Number(e.diamantes) || 0;
+  const faixa = FAIXAS_PVP_TELA[e.faixa];
+  const medalha = pos >= 1 && pos <= 3 ? ICONE_LUGAR_CAMPEONATO[pos] : null;
+  const unidadeMs = e.unidade === 'dias' ? 86_400_000 : 3_600_000;
+  const texto = textoDoPremioPvp(e.boosts, 0, unidadeMs);
+  const lugar = rotuloDasPosicoesPvp({ de: pos, ate: pos });
+  logCena(t('pvpPremio.log', { pos: lugar, premio: textoDoPremioPvp(e.boosts, diamantes, unidadeMs) }));
+  mostrarRecompensa({
+    nivel: faixa?.nivel ?? 1,
+    faixa: t('pvpPremio.faixa'),
+    lead: t('pvpPremio.lead', { pos: lugar }),
+    nome: diamantes > 0 ? t('pvpPremio.diamantes', { n: num(diamantes) }) : t('pvpPremio.boosts'),
+    sub: `${escapar(texto)}${texto ? `<br><small>${escapar(t('pvpPremio.jaValem'))}</small>` : ''}`,
+    arte: imagemRecompensa(medalha ?? iconeDoRank(faixa?.tier ?? 'challenger'), `rc-img-pvp${medalha ? ' pixel' : ''}`),
+  });
 }
 
 function abrirPremiosRanqueado() {
@@ -7386,20 +8567,18 @@ function abrirPremiosRanqueado() {
   const linhas = PVP_PREMIOS.map((f) => {
     const faixa = { de, ate: f.ate };
     de = f.ate + 1;
-    // O pódio é Challenger também (são as três primeiras das vinte vagas): o emblema é o mesmo,
-    // e quem separa as duas linhas é o nome da faixa.
-    const tier = f.faixa === 'mestre' ? 'mestre' : 'challenger';
     return linhaDePremio({
-      rotulo: t('pvpr.posicoes', faixa),
-      sub: f.faixa === 'podio' ? t('pvpr.podio') : t(`pvp.tier.${tier}`),
-      arte: `<img class="pvpr-emblema" src="${iconeDoRank(tier)}" alt="">`,
-      premio: Object.entries(f.horas).map(([chave, horas]) => itemDeBoostPvp(chave, horas)).join(''),
+      rotulo: rotuloDasPosicoesPvp(faixa),
+      sub: t(FAIXAS_PVP_TELA[f.faixa]?.nome ?? 'pvp.tier.challenger'),
+      arte: arteDaFaixaPvp(f.faixa),
+      premio: Object.entries(f.horas).map(([chave, horas]) => itemDeBoostPvp(chave, horas)).join('')
+        + (f.diamantes > 0 ? itemDeDiamantesPvp(f.diamantes) : ''),
       eu: pos >= faixa.de && pos <= faixa.ate,
       selo: t('pvpr.voce'),
     });
   }).join('');
   corpo.innerHTML = `
-    <div class="pvpr">
+    <div class="pvpr pvpr-ranqueado">
       <p class="pvpr-lead">${t('pvpr.ranqueadoLead')}</p>
       <p class="pvpr-relogio">${t('pvpr.fechaEm', { tempo: tempoAteViradaDaSemanaPvp() })}</p>
       <div class="pvpr-lista">${linhas}</div>
@@ -7443,7 +8622,7 @@ function abrirPremiosGuild() {
       <h4 class="pvpr-sec">${t('pvpr.guildDiaTitulo', { h: estado.guildPvp?.horaUtc ?? 22 })}</h4>
       <p class="pvpr-lead">${t('pvpr.guildDiaLead')}</p>
       <div class="pvpr-lista">${diario}</div>
-      <p class="pvpr-nota">${t('guild.pvpGpDetalhe')} ${t('rk.guildBonusZero')}</p>
+      <p class="pvpr-nota">${t('guild.pvpGpDetalhe', paramsDaNotaGw())} ${t('rk.guildBonusZero')}</p>
       <h4 class="pvpr-sec">${t('pvpr.guildMesTitulo')}</h4>
       <p class="pvpr-lead">${t('pvpr.guildMesLead')}</p>
       <p class="pvpr-relogio">${t('pvpr.fechaEm', { tempo: tempoAteViradaDoMes() })}</p>
@@ -8817,8 +9996,11 @@ function abrirMenuDaCasaTreino(lado, i) {
       </button>
     </div>`;
   hidratarDialogo(corpo);
-  corpo.querySelector('#trn-menu-meu').onclick = () => abrirEscolhaMeuTreino(lado, i);
-  corpo.querySelector('#trn-menu-teste').onclick = () => abrirFormDeTeste(lado, i, null);
+  // As duas escolhas abrem numa folha NOVA, que toma o lugar desta: o `‹` delas traz o menu de
+  // volta, para quem abriu o formulário de teste e queria o pokémon dele (ou o contrário).
+  const menu = () => abrirMenuDaCasaTreino(lado, i);
+  corpo.querySelector('#trn-menu-meu').onclick = () => abrirEscolhaMeuTreino(lado, i, menu);
+  corpo.querySelector('#trn-menu-teste').onclick = () => abrirFormDeTeste(lado, i, null, menu);
   return fechar;
 }
 
@@ -8832,9 +10014,12 @@ function porNaCasaTreino(lado, i, valor) {
   pintarTreino();
 }
 
-/** A folha de escolher UM pokémon meu — a mesma da equipe do PvP, com uma casa só. */
-function abrirEscolhaMeuTreino(lado, i) {
-  const { corpo, fechar } = folhaMercado(escapar(t('treino.escolherMeu')));
+/**
+ * A folha de escolher UM pokémon meu — a mesma da equipe do PvP, com uma casa só.
+ * `voltar` é o `‹` para o menu da casa, quando foi dele que se veio.
+ */
+function abrirEscolhaMeuTreino(lado, i, voltar = null) {
+  const { corpo, fechar } = folhaMercado(escapar(t('treino.escolherMeu')), { voltar });
   montarEscolhaDeEquipe(corpo, {
     max: 1,
     idsIniciais: [],
@@ -8870,10 +10055,11 @@ function abrirEscolhaMeuTreino(lado, i) {
  * O resumo recalcula a cada digitada e é o ponto do formulário — é ele que responde "o bicho que
  * eu descrevi é mais forte que o meu?" antes de a luta rodar.
  *
- * `inicial` reabre a casa para ajuste.
+ * `inicial` reabre a casa para ajuste. `voltar` é o `‹` para o menu da casa, quando foi dele que
+ * se veio (reabrir uma casa de teste vem direto do card, e aí não há menu atrás).
  */
-function abrirFormDeTeste(lado, i, inicial) {
-  const { corpo, fechar } = folhaMercado(escapar(t('treino.testeTitulo')));
+function abrirFormDeTeste(lado, i, inicial, voltar = null) {
+  const { corpo, fechar } = folhaMercado(escapar(t('treino.testeTitulo')), { voltar });
   // O formulário abre num pokémon que existe no jogo (o #1 da Pokédex), e não no primeiro do
   // catálogo — que pode ser uma forma de Outland ou uma espécie sem sprite.
   const padraoEsp = estado.especies.has(1) ? 1 : (especiesPokedex()[0]?.pokeId ?? 1);
@@ -9116,144 +10302,605 @@ function aoReceberTreino(m) {
   });
 }
 
+// --------------------------------------------- a aba Guild do PvP: a Guerra de Guilds
+//
+// Era uma tábua de parágrafos — quando é, quem entra, como pontua, se a guild está inscrita —
+// com duas listas pequenas embaixo, e o que o jogador vinha perguntar ("como a minha guild
+// foi?", "quem ganhou?", "falta quanto?") estava espalhado no meio delas. Agora a aba conta a
+// guerra como os outros eventos do jogo contam (DESIGN.md §2 — o Campeonato e o Ginásio):
+//
+//   · o HERÓI: a fase da guerra no chip "ao vivo" do Campeonato, o relógio andando até a
+//     próxima, os três números do dia e a inscrição da minha guild;
+//   · o cartão SUA GUILD: a colocação, a nota correndo até o valor (com a sobrevivência e o
+//     combate à vista), a barra contra o 1º e quanto faltou para o degrau de cima — a parte que
+//     traz o jogador de volta amanhã;
+//   · COMO PONTUAR em três placas (60 de sobrevivência, 40 de combate, a nota de 100), e não
+//     numa frase;
+//   · o PÓDIO da última guerra, o mesmo do Campeonato (o jogador já aprendeu o que o degrau
+//     quer dizer), com o brasão no lugar do boneco, e embaixo o placar com a barra da nota;
+//   · as inscritas em cartões com busca, e as regras longas recolhidas em "Como funciona".
+//
+// Nada aqui pede dado novo ao servidor: tudo sai do `guild.pvp.info` de sempre.
+
+/** A nota da guerra com uma casa ("82,4"): vírgula em português e espanhol, ponto em inglês — como o chat a escreve. */
+const notaGw = (n) => (Number(n) || 0).toLocaleString(idioma() === 'en' ? 'en-US' : 'pt-BR', {
+  minimumFractionDigits: 1, maximumFractionDigits: 1,
+});
+
 /**
- * O placar da guerra mais recente — mostrado na aba "Última guerra" do painel PvP Guild.
+ * A conta da NOTA de uma guild por extenso, para quem quiser conferir por que a do lado ficou na
+ * frente: "Sobrevivência: 2º de pé → 60 ÷ √2 = 42,4 · Combate: a que mais derrubou (219 abates) →
+ * 40,0 · Nota 82,4". Os pesos vêm de `shared/guild-pontos.mjs`, os mesmos com que o servidor colocou;
+ * as duas partes vêm prontas do placar, e a tela não refaz a conta.
  */
-function blocoUltimaGuerra(ultima) {
-  if (!ultima?.placar?.length) return `<p class="vazio-msg">${t('guild.pvpSemGuerra')}</p>`;
-  const minha = estado.eu?.guild?.id ?? null;
-  const linhas = ultima.placar
-    .map(
-      (g) => `<button type="button" class="gw-res-linha guild-abre${g.id === minha ? ' eu' : ''}${g.pos === 1 ? ' campea' : ''}"
-        data-guild="${g.id}" title="${escapar(t('guild.verFicha'))}">
-        <span class="gw-res-pos">${g.pos}º</span>
-        <span class="gd-mini" data-gid="${g.id}"></span>
-        <span class="gw-res-nome">${escapar(g.nome)}</span>
-        <span class="gw-res-kd">${num(g.abates ?? 0)}⚔ / ${num(g.mortes ?? 0)}☠</span>
-        <em class="gw-res-gp">+${num(g.gp ?? 0)} GP</em>
-        <span class="guild-abre-seta" aria-hidden="true">›</span>
-      </button>`,
-    )
-    .join('');
-  const mvp = ultima.vencedor?.mvp;
-  return `
-    <div class="gw-res-cab">
-      <span>${t('guild.pvpGuerraDe', { dia: escapar(ultima.dia ?? '—') })}</span>
-      ${ultima.motivo === 'tempo' ? `<em>${t('guild.pvpPorTempo')}</em>` : ''}
-      ${ultima.motivo === 'sozinha' ? `<em>${t('guild.pvpSozinha')}</em>` : ''}
-    </div>
-    <div class="gw-res-lista">${linhas}</div>
-    ${mvp ? `<p class="gw-res-mvp">${t('guild.pvpMvp', { nick: escapar(mvp.nick), n: num(mvp.abates) })}</p>` : ''}`;
+function contaDaNota(g) {
+  const q = Number(g.queda) || 1;
+  const sob = q === 1
+    ? t('guild.pvpNotaSobVivo', { sob: notaGw(g.sob) })
+    : t('guild.pvpNotaSob', { q: num(q), ps: num(PESO_SOBREVIVENCIA), sob: notaGw(g.sob) });
+  const k = Number(g.abates) || 0;
+  const p = Number(g.posAbates) || 0;
+  const com = !k
+    ? t('guild.pvpNotaComZero')
+    : p === 1
+      ? t('guild.pvpNotaComTopo', { k: num(k), com: notaGw(g.com) })
+      : t('guild.pvpNotaCom', { k: num(k), p: num(p), pc: num(PESO_COMBATE), com: notaGw(g.com) });
+  return `${sob} · ${com} · ${t('guild.pvpNotaTotal', { nota: notaGw(g.nota) })}`;
 }
 
+/**
+ * Quantos abates a mais teriam levado a minha guild ao degrau de cima: a primeira posição em abates
+ * cuja nota de combate cobre a diferença, e quantos abates a guild que está nela fez (empatar já dá a
+ * posição). `null` quando nem ser a que mais derrubou bastaria — aí só sobreviver mais fecharia a
+ * conta. É uma estimativa por cima: passar outras guilds em abates também derruba a nota delas.
+ */
+function abatesParaSubir(placar, minha, gap) {
+  const meus = Number(minha.abates) || 0;
+  const ks = placar.map((g) => Number(g.abates) || 0).sort((a, b) => b - a);
+  const posAgora = 1 + ks.filter((k) => k > meus).length;
+  for (let p = posAgora - 1; p >= 1; p--) {
+    const ganho = Math.round(notaCombate(p, 1) * 10) / 10 - (Number(minha.com) || 0);
+    if (ganho >= gap) return Math.max(1, ks[p - 1] - meus);
+  }
+  return null;
+}
+
+/**
+ * Em que pé está a guerra de hoje: `inscricoes` até o horário, `andamento` enquanto ela roda no
+ * servidor (a hora do evento, ou o relógio já zerado sem resultado) e `resultado` depois.
+ */
+function faseDaGuerra(info, agora = Date.now()) {
+  if (info?.encerrado) return 'resultado';
+  if (new Date(agora).getUTCHours() === (info?.horaUtc ?? 22)) return 'andamento';
+  if (info?.proximoEm && agora >= info.proximoEm) return 'andamento';
+  return 'inscricoes';
+}
+
+/** "05:11:42" — o relógio do herói, sempre com as horas: a próxima guerra está a menos de um dia. */
+function relogioDaGuerra(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const dois = (n) => String(n).padStart(2, '0');
+  return `${dois(Math.floor(s / 3600))}:${dois(Math.floor((s % 3600) / 60))}:${dois(s % 60)}`;
+}
+
+/**
+ * A inscrição da minha guild, no canto do herói: o selo de inscrita, o botão de quem manda, ou o
+ * porquê de não haver botão — quem não manda na guild nunca vê o botão, e sem a frase concluía
+ * que ele tinha sumido do jogo.
+ */
+function inscricaoDaGuerra(info) {
+  if (!estado.eu?.guild) {
+    return `
+      <p class="gwp-reg-nota">${t('gwp.semGuild')}</p>
+      <button type="button" class="gwp-btn" id="gwp-ir-guild">${dlgIcone('grupo', 14)}${t('gwp.irGuild')}</button>`;
+  }
+  // Depois da guerra do dia o botão continua, e diz para qual guerra vale: o servidor grava o
+  // registro na de amanhã (ver `guild.pvp.registrar`). Antes ele sumia até a meia-noite UTC, e o
+  // card da guild, que mandava o dono para cá, virava um beco sem saída.
+  if (podeGerirGuild() && !info.autoRegistro) {
+    return `<button type="button" class="gwp-btn gwp-registrar" id="guild-pvp-registrar">${dlgIcone('bandeira', 14)}${
+      t(info.encerrado ? 'guild.registrarAmanha' : 'guild.registrar')}</button>`;
+  }
+  if (info.autoRegistro || info.minhaRegistrada) {
+    return `<span class="gwp-reg ok">${dlgIcone('check', 14)}${t(info.autoRegistro ? 'gwp.inscritaAuto' : 'gwp.inscritaHoje')}</span>`;
+  }
+  return `<p class="gwp-reg-nota">${escapar(t('guild.registroSoDono'))}</p>`;
+}
+
+/** O herói: a fase, o relógio, os três números do dia e a inscrição. */
+function heroiDaGuerra(info, fase) {
+  const inscritas = (info.registradas ?? []).length;
+  const resta = Math.max(0, (info.proximoEm ?? 0) - Date.now());
+  // A hora no relógio de QUEM OLHA: "22h UTC" obrigava metade dos jogadores a fazer conta.
+  const hora = info.proximoEm
+    ? new Date(info.proximoEm).toLocaleTimeString(localeData(), { hour: '2-digit', minute: '2-digit' })
+    : `${info.horaUtc ?? 22}:00 UTC`;
+  // O chip é o do Campeonato: verde pulsando enquanto dá para se inscrever, vermelho "ao vivo"
+  // enquanto a guerra roda, ouro com o resultado na mesa.
+  const chip = { inscricoes: 'fase-inscricoes', andamento: 'fase-aoVivo', resultado: 'fase-concluido' }[fase];
+  return `
+    <section class="gwp-heroi fase-${fase}">
+      <span class="gwp-heroi-arte" aria-hidden="true">${dlgIcone('espadas', 40)}</span>
+      <div class="gwp-heroi-info">
+        <div class="gwp-heroi-selos">
+          <span class="camp-fase ${chip}">${t(`gwp.fase.${fase}`)}</span>
+          <span class="gwp-heroi-hora">${dlgIcone('relogio', 12)}${t('gwp.horaLocal', { hora })}</span>
+        </div>
+        <h3 class="gwp-titulo">${t('gwp.titulo')}</h3>
+        <div class="gwp-relogio" id="gwp-relogio-caixa" data-fase="${fase}">
+          <span class="gwp-relogio-rot">${t(fase === 'andamento' ? 'gwp.relogioAgora' : 'gwp.relogioProxima')}</span>
+          ${fase === 'andamento' ? '' : `<b class="gwp-relogio-num" id="gwp-relogio">${relogioDaGuerra(resta)}</b>`}
+        </div>
+      </div>
+      <div class="gwp-fatos">
+        <div class="camp-fato"><b>${num(inscritas)}</b><span>${t('gwp.fatoInscritas')}</span></div>
+        <div class="camp-fato ouro"><b>+${num(info.gpMaximo ?? inscritas)} GP</b><span>${t('gwp.fato1o')}</span></div>
+        <div class="camp-fato"><b>${num(info.maxTime ?? estado.guildMaxTime ?? 10)}</b><span>${t('gwp.fatoTime')}</span></div>
+      </div>
+      <div class="gwp-heroi-acao">${inscricaoDaGuerra(info)}</div>
+    </section>`;
+}
+
+/**
+ * O cartão SUA GUILD: como a minha guild foi na última guerra — a colocação (com o troféu ou a
+ * medalha no pódio), a nota com as duas partes (sobrevivência e combate), a barra contra a do 1º e
+ * o que faltou para o degrau de cima, dito também em abates quando abates bastariam — é a moeda
+ * que o jogador entende. Guerra de antes da nota vem sem ela, e o cartão mostra só a colocação, os
+ * abates e o GP.
+ */
+function cartaoVoceNaGuerra(info, animar) {
+  const eu = estado.eu?.guild;
+  const placar = info.ultima?.placar ?? [];
+  if (!eu || !placar.length) return '';
+  const minha = placar.find((g) => g.id === eu.id);
+  if (!minha) {
+    return `
+      <section class="gwp-voce vazio">
+        <span class="gwp-sec">${t('gwp.voceTitulo')}</span>
+        <span class="gd-mini" data-gid="${eu.id}"></span>
+        <small class="gwp-voce-falta">${t('gwp.voceNaoLutou')}</small>
+      </section>`;
+  }
+  const pos = Number(minha.pos) || placar.length;
+  const comNota = minha.nota != null;
+  const lider = placar.find((g) => g.pos === 1);
+  const acima = placar.find((g) => g.pos === pos - 1);
+  const pct = comNota && lider?.nota > 0 ? Math.max(3, Math.round((minha.nota / lider.nota) * 100)) : 0;
+  let falta = '';
+  if (pos === 1) falta = t('gwp.voceVenceu');
+  else if (comNota && acima?.nota != null) {
+    const gap = Math.max(0, Math.round((acima.nota - minha.nota) * 10) / 10);
+    // Nota igual: perdeu no desempate, que é de quem caiu por último — "a 0,0 de nota" não diria isso.
+    // Sem abates que bastem (ver `abatesParaSubir`), a frase diz que faltou ficar de pé.
+    const k = gap > 0 ? abatesParaSubir(placar, minha, gap) : null;
+    const chave = gap === 0 ? 'gwp.voceEmpate' : k ? 'gwp.voceAtras' : 'gwp.voceAtrasSemAbates';
+    falta = t(chave, { n: notaGw(gap), pos: pos - 1, guild: escapar(acima.nome), k: num(k ?? 0) });
+  }
+  // O destaque é o de mais abates da guild — a lista do placar já vem nessa ordem.
+  const mvp = (minha.membros ?? []).find((m) => m.abates > 0);
+  const icone = ICONE_LUGAR_CAMPEONATO[pos];
+  return `
+    <section class="gwp-voce${pos <= 3 ? ` podio lugar-${pos}` : ''}${animar ? ' anima' : ''}">
+      <span class="gwp-sec">${t('gwp.voceTitulo')}</span>
+      <div class="gwp-voce-pos">
+        ${icone ? `<img class="gwp-voce-icone" src="${icone}" alt="">` : ''}
+        <b>${num(pos)}º</b>
+        <small>${t('gwp.deN', { n: num(info.ultima.totalGuilds ?? placar.length) })}</small>
+      </div>
+      <div class="gwp-voce-meio">
+        <span class="gwp-voce-nome"><span class="gd-mini" data-gid="${minha.id}"></span><b>${escapar(minha.nome)}</b></span>
+        ${comNota ? `
+          <span class="gwp-voce-pts" title="${escapar(contaDaNota(minha))}">
+            <b class="gwp-conta" data-para="${minha.nota}">${notaGw(animar ? 0 : minha.nota)}</b>${t('gwp.nota')}
+          </span>
+          <span class="gwp-voce-partes">
+            <span class="gwp-parte sob">${dlgIcone('escudo', 12)}<b>${notaGw(minha.sob)}</b><small>${
+              t(Number(minha.queda) === 1 ? 'gwp.parteSobVivo' : 'gwp.parteSob', { q: num(Number(minha.queda) || 0) })}</small></span>
+            <span class="gwp-parte com">${dlgIcone('espadas', 12)}<b>${notaGw(minha.com)}</b><small>${
+              Number(minha.abates) > 0
+                ? t('gwp.parteCom', { k: num(minha.abates), p: num(Number(minha.posAbates) || 0) })
+                : t('gwp.parteComZero')}</small></span>
+          </span>
+          <span class="gwp-barra${pos === 1 ? ' ouro' : ''}" aria-hidden="true"><i style="--w:${pct}%"></i></span>` : ''}
+        ${falta ? `<small class="gwp-voce-falta">${falta}</small>` : ''}
+        <span class="gwp-voce-stats">
+          <span title="${escapar(t('guild.analise.col.abates'))}">${dlgIcone('espadas', 12)}${num(minha.abates ?? 0)}</span>
+          <span title="${escapar(t('guild.analise.col.perdidos'))}">☠ ${num(minha.mortes ?? 0)}</span>
+          ${minha.dano != null ? `<span title="${escapar(t('guild.analise.col.dano'))}">${dlgIcone('raio', 12)}${numCurto(minha.dano)}</span>` : ''}
+          ${mvp ? `<span class="gwp-voce-mvp">${dlgIcone('estrela', 12)}${t('gwp.voceDestaque', { nick: escapar(mvp.nick), n: num(mvp.abates) })}</span>` : ''}
+        </span>
+      </div>
+      <div class="gwp-voce-gp"><b>+${num(minha.gp ?? 0)}</b><span>GP</span></div>
+    </section>`;
+}
+
+/** Replay, análise e recompensas — o replay grande e roxo, os outros dois de ouro embaixo dele. */
+function acoesDaGuerra(ultima) {
+  const fita = !!ultima?.temReplay;
+  return `
+    <div class="gwp-acoes">
+      ${fita ? `<button type="button" class="gwp-replay" id="guild-pvp-replay"><span class="gwp-replay-play" aria-hidden="true">▶</span>${t('gwp.assistir')}</button>` : ''}
+      <div class="gwp-acoes-2">
+        ${fita ? `<button type="button" class="pvp-premios-bt gwa-abrir-bt" id="guild-pvp-analise" title="${escapar(t('guild.analise.dica'))}">
+            <span class="pvp-premios-ico" aria-hidden="true">📊</span>${t('gwp.analise')}</button>` : ''}
+        ${botaoPremiosPvp('pvp-premios-guild')}
+      </div>
+    </div>`;
+}
+
+/**
+ * A nota em três placas — os 60 de sobrevivência, os 40 de combate e a soma —, as duas escadas nas
+ * posições que o jogador mais pergunta e o GP que a colocação vira, com o número de hoje.
+ */
+function comoPontuarNaGuerra(guilds) {
+  const n = Math.max(2, Number(guilds) || 20);
+  const escada = (nota) => [1, 2, 3, 10, 20].map((q) => t('gwp.degrau', {
+    q: num(q), n: notaGw(Math.round(nota(q) * 10) / 10),
+  })).join(' · ');
+  return `
+    <section class="gwp-pontuar">
+      <h4 class="gwp-sec">${t('gwp.comoPontuar')}</h4>
+      <div class="gwp-pts">
+        <div class="gwp-pt pe"><span class="gwp-pt-ico">${dlgIcone('escudo', 18)}</span><b>${num(PESO_SOBREVIVENCIA)}</b><small>${t('gwp.ptSob')}</small></div>
+        <div class="gwp-pt abate"><span class="gwp-pt-ico">${dlgIcone('espadas', 18)}</span><b>${num(PESO_COMBATE)}</b><small>${t('gwp.ptCom')}</small></div>
+        <div class="gwp-pt total"><span class="gwp-pt-ico">${dlgIcone('trofeu', 18)}</span><b>${num(PESO_SOBREVIVENCIA + PESO_COMBATE)}</b><small>${t('gwp.ptNota')}</small></div>
+      </div>
+      <p class="gwp-pt-gp">${t('gwp.ptSobEscada', { ps: num(PESO_SOBREVIVENCIA), escada: escada(notaSobrevivencia) })}</p>
+      <p class="gwp-pt-gp">${t('gwp.ptComConta', { pc: num(PESO_COMBATE), escada: escada((q) => notaCombate(q, 1)) })}</p>
+      <p class="gwp-pt-gp">${t('gwp.ptGp', { n: num(n), n2: num(n - 1) })}</p>
+    </section>`;
+}
+
+/** Os números da regra para os textos que a explicam (o painel, as regras e a janela de prêmios). */
+const paramsDaNotaGw = () => ({
+  ps: num(PESO_SOBREVIVENCIA), pc: num(PESO_COMBATE),
+  s2: notaGw(Math.round(notaSobrevivencia(2) * 10) / 10), s10: notaGw(Math.round(notaSobrevivencia(10) * 10) / 10),
+  c2: notaGw(Math.round(notaCombate(2, 1) * 10) / 10), c10: notaGw(Math.round(notaCombate(10, 1) * 10) / 10),
+});
+
+/** As regras longas, recolhidas: quem já sabe não as relê a cada abertura. */
+function regrasDaGuerra(info) {
+  const max = info.maxTime ?? estado.guildMaxTime ?? 10;
+  return `
+    <details class="gwp-regras" id="gwp-regras"${estado.gwpRegrasAbertas ? ' open' : ''}>
+      <summary>${dlgIcone('interrogacao', 14)}<span>${t('gwp.comoFunciona')}</span></summary>
+      <ul>
+        <li>${t('guild.pvpIntro', { h: info.horaUtc ?? 22, max })}</li>
+        <li>${t('guild.pvpTime', { max })}</li>
+        <li>${t('guild.pvpGpDetalhe', paramsDaNotaGw())}</li>
+      </ul>
+    </details>`;
+}
+
+/**
+ * O pódio da última guerra — o MESMO do Campeonato (`camp-podio2`), na ordem 2º, 1º, 3º, com o
+ * brasão da guild no lugar do boneco. Sobe degrau por degrau só na primeira vez que se vê aquela
+ * guerra (`encerrado` liga a animação).
+ */
+function podioDaGuerra(placar, minha, animar) {
+  const degraus = [{ pos: 2, metal: 'prata' }, { pos: 1, metal: 'ouro' }, { pos: 3, metal: 'bronze' }].map(({ pos, metal }) => {
+    const g = placar.find((x) => x.pos === pos);
+    if (!g) {
+      return `
+        <div class="cp-lugar ${metal}">
+          <div class="cp-palco"><div class="cp-boneco"><span class="cp-vago" aria-hidden="true">?</span></div></div>
+          <div class="cp-degrau"><span>${pos}º</span></div>
+        </div>`;
+    }
+    return `
+      <button type="button" class="cp-lugar ${metal} com-dono${g.id === minha ? ' eu' : ''}" data-guild="${g.id}" title="${escapar(t('guild.verFicha'))}">
+        <div class="cp-palco">
+          <img class="cp-coroa" src="/assets/site/assets/ui/coroa-${pos}.png" alt="" aria-hidden="true">
+          <div class="cp-boneco"><span class="gwp-podio-brasao" data-gid="${g.id}"></span></div>
+          ${pos === 1 ? '<i class="cp-faisca f1"></i><i class="cp-faisca f2"></i><i class="cp-faisca f3"></i>' : ''}
+        </div>
+        <img class="cp-icone" src="${ICONE_LUGAR_CAMPEONATO[pos]}" alt="${pos}º">
+        <span class="cp-nick">${escapar(g.nome)}</span>
+        <span class="cp-premio"${g.nota != null ? ` title="${escapar(contaDaNota(g))}"` : ''}>${
+          g.nota != null ? t('guild.pvpNota', { n: notaGw(g.nota) }) : `${num(g.abates ?? 0)}⚔`}</span>
+        <span class="gwp-podio-gp">+${num(g.gp ?? 0)} GP</span>
+        <div class="cp-degrau"><span>${pos}º</span></div>
+      </button>`;
+  }).join('');
+  return `<div class="camp-podio2 gwp-podio${animar ? ' encerrado' : ''}">${degraus}</div>`;
+}
+
+/**
+ * No celular o placar abre recolhido no top 10 (e na minha guild, onde quer que ela esteja): cem
+ * linhas empurravam "Como pontuar" e as regras para cinco telas abaixo. O botão abre o resto.
+ */
+const TOPO_PLACAR_CELULAR = 10;
+
+/**
+ * Uma guild do 4º lugar para baixo: a barra mede a nota contra a do 1º, e o escudinho antes da nota
+ * diz em que posição ela caiu — é o que explica, sem abrir nada, a guild de menos abates na frente.
+ */
+function linhaDaGuerra(g, minha, topoNota, i) {
+  const eu = g.id === minha;
+  const temNota = g.nota != null;
+  const pct = temNota ? Math.max(2, Math.round(((Number(g.nota) || 0) / topoNota) * 100)) : 0;
+  const alem = g.pos > TOPO_PLACAR_CELULAR;
+  return `
+    ${eu && g.pos > TOPO_PLACAR_CELULAR + 1 ? '<span class="gwp-salto" aria-hidden="true">⋯</span>' : ''}
+    <button type="button" class="gwp-linha${eu ? ' eu' : ''}${alem && !eu ? ' alem' : ''}" data-guild="${g.id}"
+            title="${escapar(t('guild.verFicha'))}" style="--i:${Math.min(i, 14)}">
+      <span class="gwp-linha-pos">${num(g.pos)}º</span>
+      <span class="gd-mini" data-gid="${g.id}"></span>
+      <span class="gwp-linha-nome"><b>${escapar(g.nome)}</b>${eu ? `<em>${t('gwp.suaGuild')}</em>` : ''}</span>
+      <span class="gwp-barra" aria-hidden="true">${temNota ? `<i style="--w:${pct}%"></i>` : ''}</span>
+      <span class="gwp-linha-pts"${temNota ? ` title="${escapar(contaDaNota(g))}"` : ''}>${temNota
+        ? `<span class="gwp-linha-q">${dlgIcone('escudo', 10)}${num(Number(g.queda) || 0)}º</span>${notaGw(g.nota)}<small>${t('gwp.notaCurta')}</small>`
+        : '—'}</span>
+      <span class="gwp-linha-kd">${num(g.abates ?? 0)}<small>⚔</small> ${num(g.mortes ?? 0)}<small>☠</small></span>
+      <em class="gwp-linha-gp">+${num(g.gp ?? 0)} GP</em>
+      <span class="guild-abre-seta" aria-hidden="true">›</span>
+    </button>`;
+}
+
+/**
+ * A aba "Última guerra": o cabeçalho do dia, o pódio e o placar inteiro. A nota só existe nas
+ * guerras colocadas por ela; numa mais antiga (ou na "sozinha", sem batalha) a barra e a coluna
+ * saem vazias, e a ordem é a com que ela foi paga.
+ */
+function blocoUltimaGuerra(ultima, animar) {
+  const placar = [...(ultima?.placar ?? [])].sort((a, b) => a.pos - b.pos);
+  if (!placar.length) return `<p class="vazio-msg">${t('guild.pvpSemGuerra')}</p>`;
+  const minha = estado.eu?.guild?.id ?? null;
+  const topoNota = Math.max(1, ...placar.map((g) => Number(g.nota) || 0));
+  const minhaLinha = placar.find((g) => g.id === minha && g.pos > 3);
+  const tags = [
+    ultima.motivo === 'tempo' ? t('guild.pvpPorTempo') : '',
+    ultima.motivo === 'sozinha' ? t('guild.pvpSozinha') : '',
+  ].filter(Boolean).map((x) => `<em class="gwp-tag">${x}</em>`).join('');
+  return `
+    <div class="gwp-ult-cab">
+      <span class="gwp-ult-dia"><b>${t('guild.pvpGuerraDe', { dia: escapar(diaDaGuerra(ultima.dia)) })}</b><small>${
+        t('gwp.ultGuilds', { n: num(ultima.totalGuilds ?? placar.length) })}${
+        ultima.duracaoMs ? ` · ${t('gwp.ultDuracao', { t: tempoFita(ultima.duracaoMs) })}` : ''}</small></span>
+      ${tags}
+      ${minhaLinha ? `<button type="button" class="gwp-btn gwp-ir-minha" id="gwp-ir-minha">${dlgIcone('bandeira', 13)}${t('gwp.minhaGuild', { pos: minhaLinha.pos })}</button>` : ''}
+    </div>
+    ${podioDaGuerra(placar, minha, animar)}
+    ${placar.length > 3 ? `<div class="gwp-lista${animar ? ' anima' : ''}${estado.gwpListaInteira ? ' inteira' : ''}">${
+      placar.slice(3).map((g, i) => linhaDaGuerra(g, minha, topoNota, i)).join('')}</div>` : ''}
+    ${placar.length > TOPO_PLACAR_CELULAR && !estado.gwpListaInteira
+      ? `<button type="button" class="gwp-btn btn-apagado gwp-ver-todas" id="gwp-ver-todas">${t('gwp.verTodas', { n: num(placar.length) })}</button>`
+      : ''}`;
+}
+
+/**
+ * A aba das inscritas: cartões na ordem de FORÇA do chaveamento (GP Global, depois o GP da última
+ * guerra) — quem olha esta lista está medindo a concorrência —, a minha guild primeiro, e uma
+ * busca que filtra sem repintar (o foco fica no campo).
+ */
 function blocoRegistradas(registradas) {
   if (!registradas.length) return `<p class="vazio-msg">${t('guild.semRegistro')}</p>`;
-  return `<div class="guild-pvp-lista">${registradas
-    .map(
-      (g) => `<button type="button" class="guild-pvp-linha guild-abre" data-guild="${g.id}"
-          title="${escapar(t('guild.verFicha'))}">
-          <span class="gd-mini" data-gid="${g.id}"></span>
-          <span class="guild-pvp-nome">${escapar(g.nome)}</span>
-          <em>${num(g.gp)} GP</em>
-          <span class="guild-abre-seta" aria-hidden="true">›</span>
-        </button>`,
-    )
-    .join('')}</div>`;
+  const minha = estado.eu?.guild?.id ?? null;
+  const ordem = [...registradas].sort((a, b) =>
+    Number(b.id === minha) - Number(a.id === minha)
+    || (Number(b.gpGlobal) || 0) - (Number(a.gpGlobal) || 0)
+    || (Number(b.gp) || 0) - (Number(a.gp) || 0)
+    || String(a.nome).localeCompare(String(b.nome)));
+  // O campo é o da busca do replay da guerra (`gwr-busca-*`): a lupa rosa por dentro e o × que
+  // aparece quando há texto.
+  const busca = estado.gwpBusca ?? '';
+  return `
+    <div class="gwr-busca-campo gwp-busca" role="search">
+      <svg class="gwr-busca-lupa" viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+        <circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" stroke-width="2.2"/>
+        <line x1="13" y1="13" x2="18.5" y2="18.5" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>
+      <input id="gwp-busca" class="gwr-busca-input" type="text" maxlength="16" autocomplete="off" spellcheck="false"
+             autocapitalize="off" enterkeyhint="search" placeholder="${escapar(t('gwp.buscar'))}" value="${escapar(busca)}">
+      <button type="button" class="gwr-busca-limpar${busca ? '' : ' hidden'}" id="gwp-busca-limpar"
+              title="${escapar(t('guild.pvpReplayBuscaLimpar'))}" aria-label="${escapar(t('guild.pvpReplayBuscaLimpar'))}">×</button>
+    </div>
+    <div class="gwp-insc">${ordem.map((g) => `
+      <button type="button" class="gwp-insc-card${g.id === minha ? ' eu' : ''}" data-guild="${g.id}"
+              data-busca="${escapar(dobrarBusca(g.nome))}" title="${escapar(t('guild.verFicha'))}">
+        <span class="gd-mini" data-gid="${g.id}"></span>
+        <span class="gwp-insc-nome"><b>${escapar(g.nome)}</b><small>${
+          g.id === minha ? t('gwp.suaGuild') : t('gwp.membros', { n: num(g.membros ?? 0) })}</small></span>
+        <span class="gwp-insc-gp"><b>${num(g.gpGlobal ?? 0)}</b><small>${t('gwp.gpGlobal')}</small></span>
+      </button>`).join('')}
+    </div>
+    <p class="vazio-msg hidden" id="gwp-insc-vazio">${t('gwp.nenhumaBusca')}</p>`;
+}
+
+/** Esconde as inscritas que não batem com a busca — sem repintar, para o campo não perder o foco. */
+function filtrarInscritas(host) {
+  const q = dobrarBusca((estado.gwpBusca ?? '').trim());
+  let vistas = 0;
+  for (const card of host.querySelectorAll('.gwp-insc-card')) {
+    const passa = !q || card.dataset.busca.includes(q);
+    card.classList.toggle('hidden', !passa);
+    if (passa) vistas++;
+  }
+  host.querySelector('#gwp-insc-vazio')?.classList.toggle('hidden', vistas > 0);
+}
+
+/**
+ * Um número correndo de zero até o valor, na primeira olhada do resultado — a nota da minha guild.
+ * `fmt` escreve cada quadro: inteiro por padrão, e com uma casa na nota da guerra.
+ */
+function contarAte(el, para, ms = 1100, fmt = (v) => num(Math.round(v))) {
+  cancelAnimationFrame(el._raf ?? 0);
+  const t0 = performance.now();
+  const passo = (agora) => {
+    // O carimbo do quadro pode vir ANTES do `t0` (é o começo do quadro, não a hora da chamada) —
+    // sem o piso, a primeira fração sai negativa e a contagem abre com um "-88".
+    const p = Math.max(0, Math.min(1, (agora - t0) / ms));
+    el.textContent = fmt(para * (1 - (1 - p) ** 3));
+    if (p < 1) el._raf = requestAnimationFrame(passo);
+    else el.classList.add('chegou');
+  };
+  el._raf = requestAnimationFrame(passo);
 }
 
 function montarGuildPvp() {
   const host = $('#guild-pvp-painel');
   if (!host) return;
   const info = estado.guildPvp ?? {};
-  const prox = info.proximoEm ? Math.max(0, info.proximoEm - Date.now()) : 0;
-  const h = Math.floor(prox / 3600000);
-  const m = Math.floor((prox % 3600000) / 60000);
   const registradas = info.registradas ?? [];
   const ultima = info.ultima ?? null;
-  const aba = estado.guildPvpAba === 'ultima' ? 'ultima' : 'registradas';
-  estado.guildPvpAba = aba;
+  const temPlacar = !!ultima?.placar?.length;
+  // A aba que o jogador escolheu; sem escolha, a da última guerra — o pódio é o que a tela tem
+  // para mostrar.
+  const aba = estado.guildPvpAba === 'registradas' || (!estado.guildPvpAba && !temPlacar) ? 'registradas' : 'ultima';
+  const fase = faseDaGuerra(info);
+  // Só repinta quando algo que a aba MOSTRA mudou. Ela é chamada a cada pacote de guild, a cada
+  // mudança da coleção e na abertura do modal — que pinta com o que está em cache e de novo
+  // quando o `guild.pvp.info` chega, uns cem milissegundos depois. Repintar igual cortaria a
+  // entrada animada no meio e jogaria fora a rolagem e o foco da busca à toa.
+  const eu = estado.eu?.guild;
+  const assinatura = JSON.stringify([
+    idioma(), fase, aba, estado.gwpListaInteira, eu?.id, eu?.isOwner, eu?.isSubdono,
+    info.encerrado, info.minhaRegistrada, info.autoRegistro, info.proximoEm, info.gpMaximo, info.maxTime,
+    registradas.map((g) => `${g.id}:${g.gp}:${g.gpGlobal}:${g.membros}:${g.nome}`).join(),
+    ultima?.dia, ultima?.temReplay, (ultima?.placar ?? []).map((g) => `${g.id}:${g.pos}:${g.nota}:${g.posAbates}:${g.nome}`).join(),
+  ]);
+  if (host.dataset.assinatura === assinatura && host.firstElementChild) return;
+  host.dataset.assinatura = assinatura;
+  // A entrada animada (o pódio subindo, as barras enchendo, os pontos correndo) é UMA vez por
+  // guerra: quem fecha e reabre o modal não assiste à festa de novo.
+  const animar = temPlacar && !menosMovimento() && estado.gwpAnimouDia !== ultima.dia;
+  if (temPlacar) estado.gwpAnimouDia = ultima.dia;
+
+  // A repintura guarda a rolagem e o foco da busca: sem isto, cada pacote devolvia a aba ao topo
+  // e tirava o cursor de quem estava digitando.
+  const rolagens = [];
+  for (let el = host.parentElement; el; el = el.parentElement) if (el.scrollTop) rolagens.push([el, el.scrollTop]);
+  const campo = document.activeElement?.id === 'gwp-busca' ? document.activeElement : null;
+  const cursor = campo ? [campo.selectionStart, campo.selectionEnd] : null;
+
   host.innerHTML = `
-    <p class="guild-pvp-intro">${t('guild.pvpIntro', {
-      h: info.horaUtc ?? 22,
-      max: info.maxTime ?? estado.guildMaxTime ?? 10,
-    })}</p>
-    <!-- A regra do TIME dita, por extenso, no lugar onde ela decide alguma coisa: quem abre o
-         PvP Guild está perguntando "o que a minha guild leva para a guerra?", e a resposta
-         deixou de ser "todo mundo". -->
-    <p class="guild-pvp-time">${t('guild.pvpTime', { max: info.maxTime ?? estado.guildMaxTime ?? 10 })}</p>
-    <p class="guild-pvp-prox">${t('guild.pvpProximo', { h, m })}</p>
-    <p class="guild-pvp-gp">${t('guild.pvpGp', { n: num(info.gpMaximo ?? info.registradas?.length ?? 0) })}</p>
-    <p class="guild-pvp-gp-detalhe">${t('guild.pvpGpDetalhe')}</p>
-    <div class="guild-pvp-acoes">
-      ${
-        // Depois da guerra do dia o botão continua, e diz para qual guerra vale: o servidor grava o
-        // registro na de amanhã (ver `guild.pvp.registrar`). Antes ele sumia até a meia-noite UTC,
-        // e o card da guild, que mandava o dono para cá, virava um beco sem saída.
-        podeGerirGuild() && !info.autoRegistro
-          ? `<button type="button" class="guild-btn" id="guild-pvp-registrar">${t(info.encerrado ? 'guild.registrarAmanha' : 'guild.registrar')}</button>`
-          : info.autoRegistro
-            ? `<p class="guild-ok">${t('guild.registradaAuto')}</p>`
-            : info.minhaRegistrada
-              ? `<p class="guild-ok">${t('guild.registrada')}</p>`
-              // Quem não manda na guild nunca vê o botão — e sem esta frase concluía que ele tinha
-              // sumido do jogo.
-              : `<p class="guild-pvp-reg-nota">${escapar(t('guild.registroSoDono'))}</p>`
-      }
-      ${
-        ultima?.temReplay
-          ? `<button type="button" class="guild-btn gw-assistir" id="guild-pvp-replay">${t('guild.pvpAssistir')}</button>`
-          : ''
-      }
-      <!-- Recompensas e a ANÁLISE da última guerra lado a lado, embaixo do replay: as duas são
-           "o que saiu da guerra", uma em prêmio e a outra em números. -->
-      <div class="guild-pvp-linha2">
-        ${botaoPremiosPvp('pvp-premios-guild')}
-        ${
-          ultima?.temReplay
-            ? `<button type="button" class="pvp-premios-bt gwa-abrir-bt" id="guild-pvp-analise" title="${escapar(t('guild.analise.dica'))}">
-                 <span class="pvp-premios-ico" aria-hidden="true">📊</span>${t('guild.analise.bt')}
-               </button>`
-            : ''
-        }
+    <div class="gwp">
+      ${heroiDaGuerra(info, fase)}
+      <div class="gwp-grade">
+        <section class="gwp-col gwp-col-esq">
+          ${cartaoVoceNaGuerra(info, animar)}
+          ${acoesDaGuerra(ultima)}
+          ${comoPontuarNaGuerra(temPlacar ? (ultima.totalGuilds ?? ultima.placar.length) : registradas.length)}
+          ${regrasDaGuerra(info)}
+        </section>
+        <section class="gwp-col gwp-col-dir">
+          <div class="gwp-abas" role="tablist">
+            <button type="button" class="gwp-aba${aba === 'ultima' ? ' on' : ''}" data-aba="ultima" role="tab"
+                    aria-selected="${aba === 'ultima'}">${dlgIcone('trofeu', 14)}${t('guild.pvpUltima')}</button>
+            <button type="button" class="gwp-aba${aba === 'registradas' ? ' on' : ''}" data-aba="registradas" role="tab"
+                    aria-selected="${aba === 'registradas'}">${dlgIcone('grupo', 14)}${t('gwp.abaInscritas')}<em>${num(registradas.length)}</em></button>
+          </div>
+          <div class="gwp-aba-corpo" role="tabpanel">${aba === 'ultima' ? blocoUltimaGuerra(ultima, animar) : blocoRegistradas(registradas)}</div>
+        </section>
       </div>
-    </div>
-    <div class="guild-pvp-abas" role="tablist">
-      <button type="button" class="guild-pvp-aba${aba === 'registradas' ? ' on' : ''}" data-aba="registradas" role="tab" aria-selected="${aba === 'registradas' ? 'true' : 'false'}">${t('guild.registradas')}</button>
-      <button type="button" class="guild-pvp-aba${aba === 'ultima' ? ' on' : ''}" data-aba="ultima" role="tab" aria-selected="${aba === 'ultima' ? 'true' : 'false'}">${t('guild.pvpUltima')}</button>
-    </div>
-    <div class="guild-pvp-corpo">
-      <div class="guild-pvp-painel-aba${aba === 'registradas' ? '' : ' hidden'}" data-aba="registradas" role="tabpanel">${blocoRegistradas(registradas)}</div>
-      <div class="guild-pvp-painel-aba${aba === 'ultima' ? '' : ' hidden'}" data-aba="ultima" role="tabpanel"><div class="gw-res">${blocoUltimaGuerra(ultima)}</div></div>
     </div>`;
-  host.querySelector('#guild-pvp-registrar')?.addEventListener('click', () =>
-    enviar({ t: 'guild.pvp.registrar' }),
-  );
+  for (const [el, y] of rolagens) el.scrollTop = y;
+
+  host.querySelector('#guild-pvp-registrar')?.addEventListener('click', () => enviar({ t: 'guild.pvp.registrar' }));
+  // A guild abre por cima do modal (é janela de cima), e fechá-la devolve o jogador à guerra.
+  host.querySelector('#gwp-ir-guild')?.addEventListener('click', abrirGuild);
   host.querySelector('#guild-pvp-replay')?.addEventListener('click', pedirReplayGuerra);
   host.querySelector('#guild-pvp-analise')?.addEventListener('click', pedirAnaliseGuerra);
   host.querySelector('#pvp-premios-guild')?.addEventListener('click', abrirPremiosGuild);
-  // A ficha da guild, a mesma do Ranking. Vale nas DUAS listas: quem olha "registradas hoje"
-  // está decidindo se compensa entrar na guerra, e quem olha o placar quer saber quem foi
-  // aquela que passou na frente — as duas perguntas se respondem com a equipe dos membros.
-  for (const bt of host.querySelectorAll('.guild-abre')) {
+  host.querySelector('#gwp-regras')?.addEventListener('toggle', (ev) => {
+    estado.gwpRegrasAbertas = ev.currentTarget.open;
+  });
+  // A ficha da guild, a mesma do Ranking — no pódio, no placar e nas inscritas: quem olha as
+  // inscritas está decidindo se compensa entrar, e quem olha o placar quer saber quem foi aquela
+  // que passou na frente. As duas perguntas se respondem com a equipe dos membros.
+  for (const bt of host.querySelectorAll('[data-guild]')) {
     bt.addEventListener('click', () => pedirDetalheGuild(Number(bt.dataset.guild)));
   }
-  for (const bt of host.querySelectorAll('.guild-pvp-aba')) {
+  for (const bt of host.querySelectorAll('.gwp-aba')) {
     bt.addEventListener('click', () => {
-      const nova = bt.dataset.aba;
-      if (!nova || nova === estado.guildPvpAba) return;
-      estado.guildPvpAba = nova;
+      if (bt.dataset.aba === aba) return;
+      estado.guildPvpAba = bt.dataset.aba;
       montarGuildPvp();
     });
   }
+  host.querySelector('#gwp-ver-todas')?.addEventListener('click', (ev) => {
+    estado.gwpListaInteira = true;
+    host.querySelector('.gwp-lista')?.classList.add('inteira');
+    ev.currentTarget.remove();
+  });
+  // "Minha guild": o placar de cem linhas rola até ela e a linha pisca uma vez.
+  host.querySelector('#gwp-ir-minha')?.addEventListener('click', () => {
+    const linha = host.querySelector('.gwp-linha.eu');
+    if (!linha) return;
+    linha.scrollIntoView({ block: 'center', behavior: menosMovimento() ? 'auto' : 'smooth' });
+    linha.classList.remove('flash');
+    void linha.offsetWidth;
+    linha.classList.add('flash');
+  });
+  const busca = host.querySelector('#gwp-busca');
+  if (busca) {
+    const limpar = host.querySelector('#gwp-busca-limpar');
+    busca.oninput = () => {
+      estado.gwpBusca = busca.value;
+      limpar?.classList.toggle('hidden', !busca.value);
+      filtrarInscritas(host);
+    };
+    limpar?.addEventListener('click', () => {
+      busca.value = '';
+      busca.oninput();
+      busca.focus();
+    });
+    filtrarInscritas(host);
+    if (cursor) {
+      busca.focus();
+      busca.setSelectionRange(...cursor);
+    }
+  }
+
+  // Os brasões são SVG montados por `pintarBrasao` depois do innerHTML.
   const brasoes = new Map([
     ...registradas.map((g) => [g.id, g.brasao]),
     ...(ultima?.placar ?? []).map((g) => [g.id, g.brasao]),
   ]);
+  if (estado.eu?.guild?.brasao) brasoes.set(estado.eu.guild.id, estado.eu.guild.brasao);
   for (const el of host.querySelectorAll('.gd-mini')) {
     const b = brasoes.get(Number(el.dataset.gid));
     if (b) pintarBrasao(el, b, 28);
   }
+  for (const el of host.querySelectorAll('.gwp-podio-brasao')) {
+    const b = brasoes.get(Number(el.dataset.gid));
+    if (b) pintarBrasao(el, b, el.closest('.ouro') ? 66 : 54);
+  }
+  const conta = host.querySelector('.gwp-conta');
+  if (animar && conta) contarAte(conta, Number(conta.dataset.para) || 0, 1100, (v) => notaGw(Math.round(v * 10) / 10));
 }
+
+/**
+ * O relógio do herói, um segundo por vez — sem repintar a aba.
+ *
+ * Quando a fase vira (o relógio zerou, o resultado chegou), a aba inteira é refeita. Enquanto a
+ * guerra roda no servidor — de segundos a poucos minutos —, quem está com a aba aberta pergunta
+ * de novo a cada 20 s, e o resultado entra sozinho: sem isto o herói ficaria dizendo "agora" até
+ * alguém fechar e reabrir o modal. Quem está numa guild ainda recebe o aviso do resultado
+ * (`guildWarResultado`), que já pede o `guild.pvp.info` por conta própria.
+ */
+function tiqueGuerra() {
+  const info = estado.guildPvp;
+  const caixa = $('#gwp-relogio-caixa');
+  if (!info || !caixa) return;
+  const fase = faseDaGuerra(info);
+  if (fase !== caixa.dataset.fase) return montarGuildPvp();
+  if (fase === 'andamento') {
+    if (Date.now() - (estado.gwpPerguntouEm || 0) > 20_000) {
+      estado.gwpPerguntouEm = Date.now();
+      enviar({ t: 'guild.pvp.info' });
+    }
+    return;
+  }
+  const resta = Math.max(0, (info.proximoEm ?? 0) - Date.now());
+  const relogio = $('#gwp-relogio');
+  if (relogio) relogio.textContent = relogioDaGuerra(resta);
+  // Os últimos dez minutos acendem o relógio: é a hora de conferir a equipe de guerra.
+  caixa.classList.toggle('perto', resta < 10 * 60_000);
+}
+setInterval(() => {
+  if (estado.modalAberto === 'pvp' && estado.pvpAba === 'guild') tiqueGuerra();
+}, 1000);
 
 // ------------------------------------------- análise da Guerra de Guilds
 //
@@ -9535,11 +11182,21 @@ function htmlAbaJogadores(a) {
 function htmlAbaGuilds(a) {
   const minha = estado.eu?.guild?.id ?? null;
   const topoD = Math.max(1, ...a.guilds.map((g) => g.d));
+  // A conta por extenso usa os abates da ANÁLISE (tirados da fita), que são os mesmos que o
+  // simulador contou — `tools/teste-guild-pvp.mjs` confere os dois lado a lado —, e a nota com as
+  // duas partes e as duas posições que vieram do placar. Fita sem golpes (guerra grande demais) não
+  // tem de onde tirar os abates, e aí sai só o total.
+  const conta = (g) => (g.nota != null && !a.semGolpes
+    ? ` title="${escapar(contaDaNota({
+      queda: g.queda, sob: g.sob, com: g.com, nota: g.nota, abates: g.k, posAbates: g.posAbates,
+    }))}"`
+    : '');
   const linhas = a.guilds.map((g) => `
     <button type="button" class="gwa-g${g.id === minha ? ' eu' : ''}${g.pos === 1 ? ' campea' : ''}" data-ver-guild="${g.i}"
             title="${escapar(t('guild.analise.verJogadores'))}">
       <span class="gwa-g-pos">${g.pos}º</span>
       <span class="gwa-g-nome">${bolaGuild(g.i)}<span class="gd-mini" data-gid="${g.id}"></span><b>${escapar(g.nome)}</b></span>
+      <span class="gwa-num pts"${conta(g)}>${g.nota != null ? `${notaGw(g.nota)}<small>${t('gwp.notaCurta')}</small>` : '—'}</span>
       <span class="gwa-num lut" title="${escapar(t('guild.analise.col.lutadores'))}">${num(g.vivos)}/${num(g.n)}<small>👤</small></span>
       <span class="gwa-num k">${num(g.k)}<small>⚔</small></span>
       <span class="gwa-num mo">${num(g.mo)}<small>☠</small></span>
@@ -9550,7 +11207,7 @@ function htmlAbaGuilds(a) {
     </button>`).join('');
   return `
     <div class="gwa-g-cab" aria-hidden="true">
-      <span>#</span><span>${t('guild.analise.col.guild')}</span><span>${t('guild.analise.col.lutadores')}</span>
+      <span>#</span><span>${t('guild.analise.col.guild')}</span><span>${t('guild.analise.col.pontos')}</span><span>${t('guild.analise.col.lutadores')}</span>
       <span>⚔</span><span>☠</span><span>${t('guild.analise.col.dano')}</span><span>🛡</span><span>GP</span><span>${t('guild.analise.col.mvp')}</span>
     </div>
     <div class="gwa-lista">${linhas}</div>`;
@@ -9648,7 +11305,7 @@ $('#gwa-corpo').addEventListener('click', (ev) => {
 });
 $('#gwa-fechar').onclick = fecharAnaliseGuerra;
 $('#gwa').onclick = (ev) => {
-  if (ev.target === $('#gwa')) fecharAnaliseGuerra();
+  if (cliqueNoFundo(ev, $('#gwa'))) fecharAnaliseGuerra();
 };
 
 // ------------------------------------------- replay da Guerra de Guilds
@@ -10119,7 +11776,7 @@ function pintarReplay(s) {
 $('#gwr-fechar').onclick = fecharBatalhaPvp;
 $('#gwr').onclick = (ev) => {
   // Bloco, e não expressão — ver a nota em `#confirmar`.
-  if (ev.target === $('#gwr')) fecharBatalhaPvp();
+  if (cliqueNoFundo(ev, $('#gwr'))) fecharBatalhaPvp();
 };
 
 // ------------------------------------------------------------------ guild
@@ -10196,6 +11853,8 @@ function pintarSlotGuild(guild, convites) {
 
 function fecharGuild() {
   $('#guild').classList.add('hidden');
+  // As doações abrem por cima do painel: sem ele embaixo, não sobram sozinhas na tela.
+  fecharDoacoesDaGuild();
   guildTopoVoltar(false);
   guildPainelMembroAberto = null;
   // A ABA sobrevive (reabrir cai onde a pessoa estava); a busca não — voltar a uma lista
@@ -10224,6 +11883,8 @@ function guildTopoVoltar(mostrar) {
 
 function abrirGuild() {
   enviar({ t: 'guild.info' });
+  // A entrada animada do salão é da ABERTURA (ver `ghAnimar`), e só se ele estava fechado.
+  ghAnimar = $('#guild').classList.contains('hidden');
   if (estado.eu?.guild) return montarGuildPainel();
   // Sem guild, a tela abre no QUADRO — a pergunta de quem não tem guild é "quais existem?", e
   // ela vinha sendo respondida com um formulário de fundar uma. Quem foi convidado cai direto
@@ -10353,25 +12014,474 @@ function repintarEditorEquipeGuerra() {
   editorGuerra?.repintar();
 }
 
+// ------------------------------------------------------------------ o SALÃO da guild
+//
+// O painel do brasão (o ícone embaixo do retrato) foi refeito em 06/10/2026 — pedido do dono: "algo
+// novo, moderno, chamativo e dopaminérgico, no espírito do PvP → Guild". A gramática continua a da
+// casa (vão escuro, roxo = ligado, ouro = "o que é seu"); o que muda é o ARRANJO e a vida da tela:
+//
+//   · o HERÓI: o brasão num palco, com a luz na COR DO BRASÃO (`--gh-cor`) e raios girando devagar
+//     atrás dele; o nome com a tag, os selos do momento (o ranking de hoje, se você está no time) e
+//     as placas de número — GP, membros (e quantos estão online), o time e o ⚔ dele —, que CONTAM
+//     até o valor na abertura;
+//   · a FAIXA DE STATUS: a próxima guerra com o relógio andando e a inscrição, e o Boost (ou o
+//     banco) com a barra — as duas coisas da guild que mudam de hora em hora;
+//   · as ABAS num trilho escuro, só a ligada em roxo; presas no topo quando o herói rola para fora
+//     e, no celular, no RODAPÉ, à mão do polegar — a mesma ideia da barra de abas do jogo;
+//   · o conteúdo em CARTÕES, e não numa pilha de caixas do mesmo peso.
+//
+// A tela de quem não tem guild é a mesma casca: o herói vira o convite ("Sem guild por enquanto") e
+// as abas são as três perguntas dele (Quadro, Convites, Fundar).
+
+/** Aba aberta do painel. Vive fora da funcao: todo pacote de guild repinta a tela. */
+let guildAba = 'membros';
+/** Busca da lista de membros. Mesma vida da aba. */
+let guildBuscaMembros = '';
 /**
- * O painel de quem NÃO tem guild — as mesmas abas de quem tem, com outras três perguntas.
+ * O texto da busca como vai ao servidor. A busca não pode ser só um filtro do que chegou: a ficha
+ * corta em 60 membros, e quem ficou de fora (o "+147 além destes") nunca era achado. Com texto, o
+ * painel pede ao servidor os membros da guild INTEIRA cujo nick o contém (`guild.detalhe` com
+ * `busca`); o filtro local continua por cima, para a lista reagir na hora enquanto a resposta vem.
+ */
+const buscaDoPainelGuild = () => guildBuscaMembros.trim().slice(0, 16);
+/** O atraso entre a última tecla e o pedido ao servidor — uma busca por palavra, não por letra. */
+const GLD_BUSCA_ATRASO_MS = 300;
+let guildBuscaTimer = null;
+/** A partir de quantos membros a busca aparece — abaixo disso ela so rouba altura. */
+const GLD_BUSCA_MIN = 8;
+/**
+ * A entrada animada do salão (o brasão subindo, as placas contando) toca na ABERTURA do painel, e não
+ * a cada pacote da guild: `aoReceberGuild` remonta o painel a cada mudança (alguém entrou, o GP
+ * andou), e a festa repetida a cada dez segundos viraria ruído.
+ */
+let ghAnimar = false;
+
+/**
+ * Os desenhos da tela de guild.
+ *
+ * SVG inline, e nao emoji nem PNG: emoji muda de desenho (e de largura) a cada sistema, e o
+ * espelho de assets nao tem icone de troféu nem de espada. Inline, eles herdam `currentColor`
+ * e acompanham a cor do estado — aceso no roxo da aba ligada, apagado no resto.
+ */
+const SVG_GLD = {
+  gp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 3h10v1h4v3a4 4 0 0 1-4 4h-.6A5.6 5.6 0 0 1 13 15.8V18h4v3H7v-3h4v-2.2A5.6 5.6 0 0 1 7.6 11H7a4 4 0 0 1-4-4V4h4V3zm0 3H5v1a2 2 0 0 0 2 2V6zm10 0v3a2 2 0 0 0 2-2V6h-2z"/></svg>',
+  membros: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm7.8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 19.2c0-3.2 3.1-5.4 7-5.4s7 2.2 7 5.4V20H2v-.8zm15.6-4.5c2.7.6 4.4 2.3 4.4 4.3V20h-4.3v-.8c0-1.7-.6-3.2-1.7-4.3l1.6-.2z"/></svg>',
+  time: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="currentColor"><path d="M3 3h3.2l11 11-3.2 3.2L3 6.2V3z"/><path d="M21 3h-3.2l-4.3 4.3 3.2 3.2L21 6.2V3z"/><path d="M8.6 12.9 4.3 17.2l-1.4 3.9 3.9-1.4 4.3-4.3-2.5-2.5z" opacity=".75"/><path d="M15.4 12.9l4.3 4.3 1.4 3.9-3.9-1.4-4.3-4.3 2.5-2.5z" opacity=".75"/></g></svg>',
+  escudo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2l8 3.2v6.1c0 4.9-3.4 9.1-8 10.7-4.6-1.6-8-5.8-8-10.7V5.2L12 2z"/></svg>',
+  convidar: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.9 0-7 2.1-7 4.8V20h11.4A6 6 0 0 1 13 15.6 11 11 0 0 0 10 14zm8 0h2v3h3v2h-3v3h-2v-3h-3v-2h3v-3z"/></svg>',
+  coroa: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 7.5l4 3.2L12 4l5 6.7 4-3.2-1.7 11H4.7L3 7.5z"/></svg>',
+  sair: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2H5V5h5V3zm6.6 3.6L15.2 8l3 3H9v2h9.2l-3 3 1.4 1.4L22 12l-5.4-5.4z"/></svg>',
+  lupa: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.3 4.3-1.4 1.4-4.3-4.3A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg>',
+  porta: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 3h9a2 2 0 0 1 2 2v16H5V3zm7.5 8.2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4zM17 7h2v14h-2V7z"/></svg>',
+  // As duas divisas do ícone do Boost da Guild (a aba Boost e o botão que enche o banco).
+  boost: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 12.6 12 5.5l8 7.1-2.3 2.5L12 10.2l-5.7 4.9L4 12.6zm0 6L12 11.5l8 7.1-2.3 2.5L12 16.2l-5.7 4.9L4 18.6z"/></svg>',
+  // O cofre do banco da guild: a porta com o segredo no meio.
+  cofre: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-1v1.5h-3V19H8v1.5H5V19H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm8 3.2a4.3 4.3 0 1 0 0 8.6 4.3 4.3 0 0 0 0-8.6zm0 2.3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM18 8v3h1V8h-1z"/></svg>',
+  // A engrenagem da aba Guild (os ajustes de quem manda e a saída).
+  ajustes: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.3 2h3.4l.5 2.6 1.6.7 2.2-1.5 2.4 2.4-1.5 2.2.7 1.6 2.6.5v3.4l-2.6.5-.7 1.6 1.5 2.2-2.4 2.4-2.2-1.5-1.6.7-.5 2.6h-3.4l-.5-2.6-1.6-.7-2.2 1.5-2.4-2.4 1.5-2.2-.7-1.6L2 13.7v-3.4l2.6-.5.7-1.6-1.5-2.2 2.4-2.4 2.2 1.5 1.6-.7L10.3 2zM12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"/></svg>',
+};
+
+/** A cor da guild — a principal do brasão, que acende a luz do herói. `normalizarBrasao` só devolve `#rrggbb`. */
+const corDaGuild = (brasao) => normalizarBrasao(brasao).pri;
+
+/**
+ * O HERÓI do salão: o brasão no palco, o nome, os selos e as quatro placas.
+ *
+ * Os selos são o "agora" da guild — o lugar no ranking de hoje (com o bônus que ele dá) e o seu
+ * lugar no time — e as placas, os números que definem a guild. A do TIME é botão (abre a escalação:
+ * quem olha "8/10" quer mexer nisso) e a do ⚔ e o "online" da de membros chegam com a ficha dos
+ * membros (`atualizarDetalheNoPainelGuild`), uns cem milissegundos depois da abertura.
+ */
+function htmlHeroiGuild(g) {
+  const max = estado.guildMaxTime ?? 10;
+  const criada = Number(g.criadoEm) || 0;
+  const rank = Number(g.bonusRank) || 0;
+  const pct = Number(g.bonusPct) || 0;
+  const pol = POLITICAS_GUILD.includes(g.politica) ? g.politica : 'fechada';
+  const noTopo = rank >= 1 && rank <= 3;
+  const placa = ({ ico, valor, conta, rotulo, classe = '', extra = '', id = '' }) => `
+    <div class="gh-placa ${classe}"${id ? ` id="${id}"` : ''}>
+      <span class="gh-placa-ico">${ico}</span>
+      <b${conta != null ? ` data-gh-conta="${conta}"` : ''}>${valor}</b>
+      <small>${rotulo}</small>${extra}
+    </div>`;
+  return `
+    <section class="gh-heroi${noTopo ? ` gh-topo gh-topo-${rank}` : ''}" style="--gh-cor:${corDaGuild(g.brasao)}">
+      <div class="gh-palco" aria-hidden="true">
+        <span class="gh-raios"></span>
+        <div class="gh-brasao" id="gld-brasao"></div>
+        ${rank > 0 ? `<span class="gh-pos">${noTopo ? SVG_GLD.coroa : ''}#${num(rank)}</span>` : ''}
+      </div>
+      <div class="gh-ident">
+        <div class="gh-selos">
+          ${pct > 0 && rank > 0
+            ? `<span class="gh-chip gh-chip-rank" title="${escapar(t('guild.bonusAtivo', { top: rotuloTopGuild(rank), n: pct }))}">${
+              dlgIcone('trofeu', 12)}${t('guild.bonusChip', { top: rotuloTopGuild(rank), n: pct })}</span>`
+            : `<span class="gh-chip gh-chip-off" title="${escapar(t('guild.semBonus'))}">${dlgIcone('trofeu', 12)}${t('gh.semRank')}</span>`}
+          <span class="gh-chip ${g.escalado ? 'gh-chip-time' : 'gh-chip-reserva'}" title="${
+            escapar(t(g.escalado ? 'guild.euEscaladoCurto' : 'guild.euReserva'))}">${
+            dlgIcone(g.escalado ? 'espadas' : 'relogio', 12)}${t(g.escalado ? 'gh.voceNoTime' : 'gh.voceReserva')}</span>
+        </div>
+        <h3 class="gh-nome">${nomeGuildComTag(g)}</h3>
+        <div class="gh-sub">
+          <span class="gh-dono" title="${escapar(t('gd.dono'))}">${SVG_GLD.coroa}${escapar(g.ownerNick ?? '')}</span>
+          ${criada ? `<span class="gh-idade">${dlgIcone('calendario', 11)}${t('guild.criadaHa', { tempo: tempoCurto(Date.now() - criada) })}</span>` : ''}
+          <span class="gh-pol pol-${pol}">${dlgIcone(pol === 'aberta' ? 'porta' : 'cadeado', 11)}${t(`guild.pol.${pol}`)}</span>
+        </div>
+      </div>
+      <div class="gh-placas">
+        ${placa({ ico: SVG_GLD.gp, valor: num(g.gp), conta: Number(g.gp) || 0, rotulo: t('guild.statGp'), classe: 'ouro' })}
+        ${placa({
+          ico: SVG_GLD.membros, valor: num(Number(g.membros) || 0), conta: Number(g.membros) || 0, rotulo: t('guild.statMembros'),
+          extra: '<em class="gh-online hidden" id="gh-online"></em>',
+        })}
+        <button type="button" class="gh-placa gh-placa-bt" id="gld-stat-time" title="${escapar(t('guild.escalacaoBt'))}">
+          <span class="gh-placa-ico">${SVG_GLD.time}</span>
+          <b>${Number(g.escalados) || 0}/${max}</b>
+          <small>${t('guild.statTime')}</small>
+        </button>
+        ${placa({ ico: dlgIcone('raio', 17), valor: '—', rotulo: t('gh.poderTime'), classe: 'rx', id: 'gh-poder' })}
+      </div>
+    </section>`;
+}
+
+/**
+ * A FAIXA DA GUERRA no topo do salão: a próxima guerra com o relógio andando (`tiqueGuerraNoPainel`),
+ * a inscrição, e o atalho para a MINHA equipe de guerra — a coisa que se confere antes das 22h, de
+ * qualquer aba. Rolando a guerra, ela diz isso; com o resultado na mesa, a colocação da guild.
+ */
+function htmlGuerraNoPainelGuild(g) {
+  const info = estado.guildPvp;
+  const fase = info ? faseDaGuerra(info) : 'nada';
+  const inscrita = !!(info?.autoRegistro || info?.minhaRegistrada);
+  const minha = (info?.ultima?.placar ?? []).find((x) => x.id === g.id);
+  let rotulo = t('gwp.relogioProxima');
+  let valor = info?.proximoEm ? relogioDaGuerra(Math.max(0, info.proximoEm - Date.now())) : '—';
+  if (fase === 'andamento') {
+    rotulo = t('gh.guerraAgoraRot');
+    valor = t('gh.guerraAgora');
+  } else if (fase === 'resultado' && minha) {
+    rotulo = t('gh.guerraResultadoRot');
+    valor = t('gh.guerraResultado', { pos: num(minha.pos), gp: num(minha.gp ?? 0) });
+  }
+  return `
+    <div class="gh-st gh-st-guerra fase-${fase}" id="gh-guerra" data-fase="${fase}">
+      <span class="gh-st-ico">${dlgIcone('espadas', 20)}</span>
+      <span class="gh-st-txt">
+        <small>${rotulo}</small>
+        <b class="gh-relogio" id="gh-relogio">${valor}</b>
+        <span class="gh-st-sub ${inscrita ? 'ok' : 'fora'}">${dlgIcone(inscrita ? 'check' : 'alerta', 11)}${
+          t(inscrita ? (info?.autoRegistro ? 'gwp.inscritaAuto' : 'gwp.inscritaHoje') : 'gh.naoInscrita')}</span>
+      </span>
+      <button type="button" class="guild-btn gh-st-bt" id="guild-editar-time" title="${escapar(t('guild.minhaEquipe'))}">${
+        dlgIcone('escudo', 13)}<span>${t('gh.minhaEquipe')}</span></button>
+    </div>`;
+}
+
+function ligarGuerraNoPainelGuild() {
+  $('#guild-editar-time')?.addEventListener('click', abrirEditorEquipeGuerra);
+}
+
+/** A faixa da guerra redesenhada no lugar (chegou o `guild.pvp.info`, ou a fase virou). */
+function atualizarGuerraNoPainelGuild() {
+  const faixa = $('#gh-guerra');
+  const g = estado.eu?.guild;
+  if (!faixa || !g) return;
+  faixa.outerHTML = htmlGuerraNoPainelGuild(g);
+  ligarGuerraNoPainelGuild();
+}
+
+/**
+ * O relógio da faixa (e o da aba Guerra), um segundo por vez, sem repintar nada. Quando a fase vira
+ * — o relógio zerou, o resultado chegou —, a faixa é refeita. Os últimos dez minutos acendem o
+ * relógio na brasa da guerra: é a hora de conferir a equipe.
+ */
+function tiqueGuerraNoPainel() {
+  const faixa = $('#gh-guerra');
+  const info = estado.guildPvp;
+  if (!faixa || !info) return;
+  const fase = faseDaGuerra(info);
+  if (fase !== faixa.dataset.fase) {
+    atualizarGuerraNoPainelGuild();
+    if (guildAba === 'guerra') pintarPaneGuild();
+    return;
+  }
+  if (fase !== 'inscricoes') return;
+  const resta = Math.max(0, (info.proximoEm ?? 0) - Date.now());
+  const perto = resta < 10 * 60_000;
+  for (const rel of document.querySelectorAll('#gh-relogio, #gh-relogio-aba')) rel.textContent = relogioDaGuerra(resta);
+  faixa.classList.toggle('perto', perto);
+  $('#gh-arena')?.classList.toggle('perto', perto);
+}
+setInterval(() => {
+  if (!$('#guild')?.classList.contains('hidden')) tiqueGuerraNoPainel();
+}, 1000);
+
+/**
+ * A faixa do BOOST DA GUILD no topo do salão: valendo, o relógio e quem bancou; apagado, o banco —
+ * quanto ele tem e quanto falta, com a barra.
+ *
+ * Fica ao lado da guerra, fora da aba, porque é a resposta para "a guild está com boost?" — a
+ * pergunta de quem abre o painel depois de ver a linha no chat — e porque o banco quase cheio é o
+ * convite: "faltam 120 💎" na cara de quem abre o painel por outro motivo. O botão leva à aba Boost.
+ */
+function htmlBoostNoPainelGuild(g) {
+  const agora = agoraDoServidor();
+  const ate = Number(g?.boostAte) || 0;
+  const ativo = ate > agora;
+  const noBanco = saldoDoBanco(g?.bancoSaldo);
+  const quem = ativo ? patrocinadoresDoBoostGuild(g, 2) : '';
+  const dados = {
+    pct: BOOST_GUILD.pct,
+    dias: BOOST_GUILD.dias,
+    saldo: num(noBanco),
+    meta: num(BANCO_GUILD.meta),
+    n: num(faltaNoBanco(noBanco)),
+  };
+  return `
+    <div class="gh-st gh-st-boost gld-boost${ativo ? ' on' : ''}" id="gld-boost">
+      <span class="gh-st-ico"><img class="gld-boost-ico" src="${BOOST_GUILD.iconeMini}" width="32" height="32" alt=""></span>
+      <span class="gh-st-txt">
+        <small>${escapar(t(ativo ? 'gh.boostLigado' : 'gh.bancoBoost'))}</small>
+        <b>${ativo
+          ? `+${BOOST_GUILD.pct}% XP · <span class="gld-boost-relogio" data-gb-ate="${ate}">${escapar(tempoCurto(ate - agora))}</span>`
+          : `${num(noBanco)}<small> / ${num(BANCO_GUILD.meta)}</small> ${seloDiamante(18)}`}</b>
+        <span class="gld-boost-barra" style="--p:${(100 * noBanco) / BANCO_GUILD.meta}%"
+              title="${escapar(t('guildBanco.faixaTit', dados))}"><i></i></span>
+        <span class="gh-st-sub">${ativo
+          ? escapar(quem ? t('guildBoost.porQuem', { quem }) : t('gh.boostTodos'))
+          : escapar(t('gh.bancoFalta', dados))}</span>
+      </span>
+      <button type="button" class="gld-boost-bt gh-st-bt" id="gld-boost-bt">${SVG_GLD.boost}<span>${
+        escapar(t(ativo ? 'guildBanco.faixaBtOn' : 'guildBanco.faixaBt'))}</span></button>
+    </div>`;
+}
+
+/**
+ * Liga a faixa do boost: o botão vai para a aba Boost, e o relógio anda enquanto o painel estiver
+ * aberto. Quando o boost acaba, a faixa troca sozinha pelo banco — sem repintar o painel, que
+ * jogaria fora a aba e a rolagem de quem está lendo outra coisa.
+ */
+function ligarBoostNoPainelGuild() {
+  const faixa = $('#gld-boost');
+  if (!faixa) return;
+  $('#gld-boost-bt')?.addEventListener('click', irParaAbaBoost);
+  const relogio = faixa.querySelector('[data-gb-ate]');
+  if (!relogio) return;
+  const ate = Number(relogio.dataset.gbAte) || 0;
+  const timer = setInterval(() => {
+    if (!relogio.isConnected) return clearInterval(timer);
+    const resta = ate - agoraDoServidor();
+    if (resta > 0) {
+      relogio.textContent = tempoCurto(resta);
+      return;
+    }
+    clearInterval(timer);
+    atualizarFaixaBoostNoPainel();
+  }, 1000);
+}
+
+const ABAS_GUILD = [
+  { id: 'membros', chave: 'guild.abaMembros', ico: 'membros' },
+  // O BOOST logo depois de Membros: o banco é da guild inteira e anda com a doação de cada um — é a
+  // aba que mais se abre quando o banco está enchendo.
+  { id: 'boost', chave: 'guild.abaBoost', ico: 'boost' },
+  { id: 'guerra', chave: 'guild.abaGuerra', ico: 'time' },
+  { id: 'caixa', chave: 'guild.abaCaixa', ico: 'convidar' },
+  { id: 'quadro', chave: 'guild.abaQuadro', ico: 'lupa' },
+  { id: 'ajustes', chave: 'guild.abaAjustes', ico: 'ajustes' },
+];
+
+/** As três de quem ainda não tem guild. A ordem é a das perguntas dele, nessa ordem. */
+const ABAS_SEM_GUILD = [
+  { id: 'quadro', chave: 'guild.abaQuadro', ico: 'lupa' },
+  { id: 'convites', chave: 'guild.abaConvites', ico: 'convidar' },
+  { id: 'fundar', chave: 'guild.abaFundar', ico: 'escudo' },
+];
+
+/**
+ * Uma aba, com o selo de pendência quando há o que responder.
+ *
+ * O selo é um NÚMERO, e não uma bolinha: "3" diz que vale abrir agora, a bolinha diz só que
+ * algo mudou. É a mesma decisão da aba de chat da guild, que já mostra contagem.
+ */
+function htmlAbaGuild(a, selo = 0) {
+  const on = a.id === guildAba;
+  return `
+    <button type="button" class="gld-aba${on ? ' on' : ''}" data-aba="${a.id}"
+            role="tab" aria-selected="${on ? 'true' : 'false'}" title="${escapar(t(a.chave))}">
+      <span class="gld-aba-ico">${SVG_GLD[a.ico]}</span><span class="gld-aba-txt">${t(a.chave)}</span>
+      ${selo > 0 ? `<span class="gld-aba-selo">${selo > 99 ? '99+' : selo}</span>` : ''}
+    </button>`;
+}
+
+/**
+ * Liga o clique das abas de um painel de guild.
+ *
+ * Só as CLASSES trocam ao mudar de aba — o herói e a barra não são redesenhados. Repintar o
+ * painel inteiro aqui apagaria o campo de busca do Quadro no meio da digitação de quem clicasse
+ * numa aba e voltasse, e é o mesmo motivo pelo qual a lista de membros repinta sozinha.
+ */
+function ligarAbasGuild(abas, repintar) {
+  for (const bt of $('#guild-corpo').querySelectorAll('.gld-aba')) {
+    bt.onclick = () => {
+      if (guildAba === bt.dataset.aba) return;
+      guildAba = bt.dataset.aba;
+      marcarAbaGuild();
+      repintar();
+      voltarAoTopoDaAba();
+    };
+  }
+  return abas;
+}
+
+/** Acende a aba de `guildAba` na barra (sem redesenhá-la). */
+function marcarAbaGuild() {
+  for (const x of $('#guild-corpo').querySelectorAll('.gld-aba')) {
+    const on = x.dataset.aba === guildAba;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+}
+
+/**
+ * Trocar de aba lá embaixo da lista de membros abria a aba nova já rolada para o meio — ou no vazio,
+ * quando ela é mais curta. Se o começo do conteúdo saiu da tela, a rolagem volta a ele (o herói fica
+ * para cima, e no desktop a barra de abas, presa no topo, continua à vista).
+ */
+function voltarAoTopoDaAba() {
+  const corpo = $('#guild-corpo');
+  const pane = $('#gld-pane');
+  const barra = corpo?.querySelector('.gh-abas');
+  if (!corpo || !pane || !barra) return;
+  const embaixo = getComputedStyle(barra).bottom === '0px' && getComputedStyle(barra).position === 'sticky'
+    && barra.offsetTop > pane.offsetTop;
+  const alvo = pane.offsetTop - (embaixo ? 8 : barra.offsetHeight + 12);
+  if (corpo.scrollTop > alvo) corpo.scrollTop = Math.max(0, alvo);
+}
+
+function montarGuildPainel() {
+  guildModo = 'painel';
+  const g = estado.eu.guild;
+  guildTopoVoltar(false);
+  // O nome grande mora no herói; o topo do modal diz só onde se está.
+  $('#guild-titulo').textContent = t('guild.titulo');
+  // Quem está no painel COM guild pode ter vindo de uma aba que só existe sem guild (acabou de
+  // entrar estando no Quadro, ou aceitou um convite). `quadro` é a única que atravessa os dois
+  // modos; as outras caem em Membros, que é a tela que ele quer ver ao entrar numa guild.
+  if (!ABAS_GUILD.some((a) => a.id === guildAba)) guildAba = 'membros';
+  const animar = ghAnimar && !menosMovimento();
+  ghAnimar = false;
+  $('#guild-corpo').innerHTML = `
+    <div class="gh${animar ? ' gh-entra' : ''}">
+      ${htmlHeroiGuild(g)}
+      <div class="gh-status">
+        ${htmlGuerraNoPainelGuild(g)}
+        ${htmlBoostNoPainelGuild(g)}
+      </div>
+      <nav class="gld-abas gh-abas" role="tablist">
+        ${ABAS_GUILD.map((a) => htmlAbaGuild(a, a.id === 'caixa' ? (estado.guildPedidos || 0) : 0)).join('')}
+      </nav>
+      <div class="gld-pane gh-pane" id="gld-pane" role="tabpanel"></div>
+    </div>`;
+
+  pintarBrasao($('#gld-brasao'), g.brasao, 70);
+  $('#gld-stat-time')?.addEventListener('click', abrirEscalacaoGuild);
+  ligarGuerraNoPainelGuild();
+  ligarBoostNoPainelGuild();
+  ligarAbasGuild(ABAS_GUILD, pintarPaneGuild);
+  pintarPaneGuild();
+  // O que a ficha dos membros já sabe (online, ⚔ do time) entra no herói na hora, se ela já chegou.
+  atualizarDetalheNoPainelGuild();
+  if (animar) {
+    for (const b of $('#guild-corpo').querySelectorAll('[data-gh-conta]')) contarAte(b, Number(b.dataset.ghConta) || 0, 900);
+  }
+  $('#guild').classList.remove('hidden');
+}
+
+function pintarPaneGuild() {
+  const host = $('#gld-pane');
+  const g = estado.eu?.guild;
+  if (!host || !g) return;
+  // A aba nova entra com um deslize curto — a troca se vê, e o olho acha o começo do conteúdo.
+  host.dataset.aba = guildAba;
+  host.classList.remove('gh-pane-entra');
+  void host.offsetWidth;
+  host.classList.add('gh-pane-entra');
+  if (guildAba === 'boost') return pintarGuildBoost(host, g);
+  if (guildAba === 'guerra') return pintarGuildGuerra(host, g);
+  if (guildAba === 'ajustes') return pintarGuildAjustes(host, g);
+  if (guildAba === 'quadro') return pintarGuildQuadro(host);
+  if (guildAba === 'caixa') return pintarGuildCaixa(host, g);
+  pintarGuildMembros(host, g);
+}
+
+/**
+ * O que só a FICHA DOS MEMBROS sabe, levado ao herói e às abas que o mostram: quantos estão online
+ * (só quando a ficha trouxe a guild inteira — com a lista cortada em 60, a conta mentiria para baixo),
+ * o ⚔ somado do time (quando todos os escalados vieram na lista) e, na aba Guerra, os rostos do time.
+ */
+function atualizarDetalheNoPainelGuild() {
+  const g = estado.eu?.guild;
+  const d = guildPainelDetalhe;
+  if (!g || d?.id !== g.id) return;
+  const membros = d.membros ?? [];
+  const total = Number(d.totalMembros ?? membros.length) || 0;
+  const busca = (d.busca ?? '') !== '';
+  const inteira = !busca && membros.length >= total;
+  const online = $('#gh-online');
+  if (online) {
+    const n = membros.filter((m) => m.online).length;
+    online.classList.toggle('hidden', !inteira);
+    online.innerHTML = inteira ? `<i class="gh-dot"></i>${t('gh.online', { n: num(n) })}` : '';
+  }
+  const escalados = membros.filter((m) => m.escalado);
+  const poder = $('#gh-poder b');
+  if (poder && !busca && escalados.length >= (Number(d.escalados) || 0) && escalados.length) {
+    poder.textContent = num(escalados.reduce((s, m) => s + poderDoMembro(m), 0));
+  }
+  if (guildAba === 'guerra') pintarRostosDoTimeGuild();
+}
+
+/**
+ * O painel de quem NÃO tem guild — a mesma casca do salão, com outras três perguntas.
  *
  * Antes, esta tela era um formulário de FUNDAR guild, com os convites recebidos na frente
  * quando havia algum. Quer dizer: para o jogador que queria entrar numa guild, o jogo respondia
  * "crie a sua" — e a única forma de achar uma era pedir no chat do mundo e esperar. Agora a
  * primeira coisa que ele vê é a lista de guildas que existem, e fundar é a terceira aba, para
- * quem chegou até ela querendo isso.
+ * quem chegou até ela querendo isso. O herói diz o que uma guild dá — o porquê de entrar numa.
  */
 function montarGuildSemGuild() {
   guildModo = 'painel';
   guildTopoVoltar(false);
   $('#guild-titulo').textContent = t('guild.titulo');
   const convites = (estado.eu?.guildConvites ?? []).length;
+  const vantagem = (ico, chave) => `<span class="gh-vant">${ico}<span>${t(chave, { pct: BOOST_GUILD.pct })}</span></span>`;
   $('#guild-corpo').innerHTML = `
-    <div class="gld-abas gld-abas-3" role="tablist">
-      ${ABAS_SEM_GUILD.map((a) => htmlAbaGuild(a, a.id === 'convites' ? convites : 0)).join('')}
-    </div>
-    <div class="gld-pane" id="gld-pane"></div>`;
+    <div class="gh gh-sem">
+      <section class="gh-heroi gh-heroi-sem">
+        <div class="gh-palco" aria-hidden="true">
+          <span class="gh-raios"></span>
+          <div class="gh-brasao gh-brasao-vazio">${SVG_GLD.escudo}<b>?</b></div>
+        </div>
+        <div class="gh-ident">
+          ${convites ? `<div class="gh-selos"><span class="gh-chip gh-chip-convite">${dlgIcone('megafone', 12)}${
+            t(convites === 1 ? 'gh.convitesUm' : 'gh.convitesN', { n: num(convites) })}</span></div>` : ''}
+          <h3 class="gh-nome">${t('gh.semGuildTit')}</h3>
+          <p class="gh-sem-sub">${t('gh.semGuildSub')}</p>
+          <div class="gh-vants">
+            ${vantagem(dlgIcone('trofeu', 14), 'gh.vantBonus')}
+            ${vantagem(SVG_GLD.boost, 'gh.vantBoost')}
+            ${vantagem(dlgIcone('espadas', 14), 'gh.vantGuerra')}
+          </div>
+        </div>
+      </section>
+      <nav class="gld-abas gh-abas gh-abas-3" role="tablist">
+        ${ABAS_SEM_GUILD.map((a) => htmlAbaGuild(a, a.id === 'convites' ? convites : 0)).join('')}
+      </nav>
+      <div class="gld-pane gh-pane" id="gld-pane" role="tabpanel"></div>
+    </div>`;
   ligarAbasGuild(ABAS_SEM_GUILD, pintarPaneSemGuild);
   pintarPaneSemGuild();
   $('#guild').classList.remove('hidden');
@@ -10380,35 +12490,46 @@ function montarGuildSemGuild() {
 function pintarPaneSemGuild() {
   const host = $('#gld-pane');
   if (!host || estado.eu?.guild) return;
+  host.dataset.aba = guildAba;
+  host.classList.remove('gh-pane-entra');
+  void host.offsetWidth;
+  host.classList.add('gh-pane-entra');
   if (guildAba === 'convites') return pintarGuildConvites(host);
   if (guildAba === 'fundar') return pintarGuildFundar(host);
   pintarGuildQuadro(host);
 }
 
+/** Os convites que chegaram: cada um com o brasão de quem chama, e o aceitar à mão. */
 function pintarGuildConvites(host) {
   const convites = estado.eu?.guildConvites ?? [];
   if (!convites.length) {
-    host.innerHTML = `<p class="gld-vazio">${t('guild.semConvites')}</p>`;
+    host.innerHTML = `
+      <div class="gh-vazio">
+        <span class="gh-vazio-ico">${dlgIcone('megafone', 28)}</span>
+        <b>${t('gh.semConvitesTit')}</b>
+        <span>${t('guild.semConvites')}</span>
+      </div>`;
     return;
   }
   const lista = convites
     .map(
-      (c) => `<div class="guild-convite" data-id="${c.id}">
+      (c) => `<div class="guild-convite gh-cartao" data-id="${c.id}">
         <div class="guild-convite-brasao" id="guild-convite-brasao-${c.id}"></div>
         <div class="guild-convite-info">
           <b>${escapar(c.guildNome)}</b>
-          <span>${t('guild.conviteDe', { nick: escapar(c.deNick) })}</span>
-          <span class="guild-convite-gp">${num(c.gp)} GP</span>
+          <span>${dlgIcone('pessoa', 11)}${t('guild.conviteDe', { nick: escapar(c.deNick) })}</span>
+          <span class="guild-convite-gp">${SVG_GLD.gp}${num(c.gp)} GP</span>
         </div>
         <div class="guild-convite-acoes">
-          <button type="button" class="guild-btn" data-aceitar="${c.id}">${t('guild.aceitar')}</button>
-          <button type="button" class="guild-mini-btn btn-apagado" data-recusar="${c.id}">${t('guild.recusar')}</button>
+          <button type="button" class="guild-btn gh-bt-ico" data-aceitar="${c.id}">${dlgIcone('check', 14)}<span>${t('guild.aceitar')}</span></button>
+          <button type="button" class="guild-mini-btn btn-apagado gh-bt-x" data-recusar="${c.id}" title="${escapar(t('guild.recusar'))}"
+                  aria-label="${escapar(t('guild.recusar'))}">${dlgIcone('xis', 14)}</button>
         </div>
       </div>`,
     )
     .join('');
   host.innerHTML = `
-    <p class="guild-ajuda">${t('guild.convitesAjuda')}</p>
+    <p class="gh-ajuda">${t('guild.convitesAjuda')}</p>
     <div class="guild-convites-lista">${lista}</div>`;
   for (const c of convites) pintarBrasao($(`#guild-convite-brasao-${c.id}`), c.brasao, 48);
   for (const b of host.querySelectorAll('[data-aceitar]')) {
@@ -10419,29 +12540,18 @@ function pintarGuildConvites(host) {
   }
 }
 
-function pintarGuildFundar(host) {
-  const custo = num(estado.guildCusto ?? 250_000);
-  host.innerHTML = `
-    <p class="guild-ajuda">${t('guild.criarAjuda', { custo, max: estado.guildMaxTime ?? 10 })}</p>
-    <label class="guild-campo">${t('guild.nome')}
-      <input id="guild-nome" maxlength="16" autocomplete="off" placeholder="${t('guild.nomePh')}">
-    </label>
-    <!-- A TAG já na criação: deixar para depois faria a guild nascer com uma tag que ninguém
-         escolheu e só aparece quando alguém fala no chat. Vazia continua valendo — aí valem as
-         três primeiras letras do nome, e o campo mostra isso enquanto o nome é digitado. -->
-    <label class="guild-campo">${t('guild.tagTitulo')}
-      <div class="gld-tag-linha">
-        <span class="gld-tag-previa" id="gld-tag-previa"></span>
-        <input id="gld-tag-campo" maxlength="${MAX_TAG_GUILD}" autocomplete="off"
-               placeholder="${escapar(t('guild.tagPh'))}">
+/**
+ * As peças do EDITOR DE BRASÃO, que servem às duas telas que o desenham (fundar a guild e editar o
+ * brasão): o palco com a prévia grande e a luz na cor escolhida, e as opções em cartões. Quem chama
+ * liga os eventos com `ligarEditorDeBrasao`.
+ */
+function htmlEditorDeBrasao() {
+  return `
+    <div class="guild-editor gh-editor">
+      <div class="gh-editor-palco" id="gh-editor-palco">
+        <span class="gh-raios" aria-hidden="true"></span>
+        <div class="guild-preview" id="guild-preview"></div>
       </div>
-    </label>
-    <div class="guild-cores gld-cores-criar">
-      <span>${t('guild.tagCor')}</span>
-      <div id="gld-tag-cores" class="guild-paleta gld-paleta-tag"></div>
-    </div>
-    <div class="guild-editor">
-      <div class="guild-preview" id="guild-preview"></div>
       <div class="guild-opcoes">
         <label>${t('guild.escudo')}
           <select id="guild-escudo">${ESCUDOS.map((e) => `<option value="${e.id}">${e.nome}</option>`).join('')}</select>
@@ -10458,21 +12568,23 @@ function pintarGuildFundar(host) {
           <span>${t('guild.corSec')}</span><div id="guild-cor-sec" class="guild-paleta"></div>
         </div>
       </div>
-    </div>
-    <button type="button" class="guild-btn" id="guild-criar-btn">${t('guild.criarBtn', { custo })}</button>`;
+    </div>`;
+}
 
+/** Liga o editor de brasão desenhado por `htmlEditorDeBrasao` ao `rascunhoBrasao`. */
+function ligarEditorDeBrasao() {
   const repintar = () => {
     rascunhoBrasao.escudo = $('#guild-escudo').value;
     rascunhoBrasao.emblema = $('#guild-emblema').value;
     rascunhoBrasao.borda = $('#guild-borda').value;
     pintarBrasao($('#guild-preview'), rascunhoBrasao, 96);
+    $('#gh-editor-palco')?.style.setProperty('--gh-cor', corDaGuild(rascunhoBrasao));
   };
-  // `alvo`, e não `host`: o parâmetro desta função já se chama assim, e sombreá-lo aqui faria
-  // uma edição futura achar que está mexendo no painel inteiro.
   const paleta = (id, chave) => {
     const alvo = $(id);
     alvo.innerHTML = CORES_BRASAO.map(
-      (c) => `<button type="button" class="guild-cor ${rascunhoBrasao[chave] === c ? 'on' : ''}" style="background:${c}" data-cor="${c}"></button>`,
+      (c) => `<button type="button" class="guild-cor ${rascunhoBrasao[chave] === c ? 'on' : ''}" style="background:${c}" data-cor="${c}"
+                      aria-label="${c}"></button>`,
     ).join('');
     alvo.onclick = (ev) => {
       const b = ev.target.closest('.guild-cor');
@@ -10482,6 +12594,9 @@ function pintarGuildFundar(host) {
       repintar();
     };
   };
+  $('#guild-escudo').value = rascunhoBrasao.escudo;
+  $('#guild-emblema').value = rascunhoBrasao.emblema;
+  $('#guild-borda').value = rascunhoBrasao.borda ?? 'none';
   paleta('#guild-cor-bg', 'bg');
   paleta('#guild-cor-pri', 'pri');
   paleta('#guild-cor-sec', 'sec');
@@ -10489,6 +12604,38 @@ function pintarGuildFundar(host) {
   $('#guild-emblema').onchange = repintar;
   $('#guild-borda').onchange = repintar;
   repintar();
+}
+
+function pintarGuildFundar(host) {
+  const custo = num(estado.guildCusto ?? 250_000);
+  host.innerHTML = `
+    <section class="gh-cartao gh-fundar">
+      <h4 class="gh-cartao-tit">${SVG_GLD.escudo}${t('gh.fundarTit')}</h4>
+      <p class="gh-cartao-sub">${t('guild.criarAjuda', { custo, max: estado.guildMaxTime ?? 10 })}</p>
+      <div class="gh-fundar-campos">
+        <label class="guild-campo">${t('guild.nome')}
+          <input id="guild-nome" maxlength="16" autocomplete="off" placeholder="${t('guild.nomePh')}">
+        </label>
+        <!-- A TAG já na criação: deixar para depois faria a guild nascer com uma tag que ninguém
+             escolheu e só aparece quando alguém fala no chat. Vazia continua valendo — aí valem as
+             três primeiras letras do nome, e o campo mostra isso enquanto o nome é digitado. -->
+        <label class="guild-campo">${t('guild.tagTitulo')}
+          <div class="gld-tag-linha">
+            <span class="gld-tag-previa" id="gld-tag-previa"></span>
+            <input id="gld-tag-campo" maxlength="${MAX_TAG_GUILD}" autocomplete="off"
+                   placeholder="${escapar(t('guild.tagPh'))}">
+          </div>
+        </label>
+      </div>
+      <div class="guild-cores gld-cores-criar">
+        <span>${t('guild.tagCor')}</span>
+        <div id="gld-tag-cores" class="guild-paleta gld-paleta-tag"></div>
+      </div>
+      ${htmlEditorDeBrasao()}
+      <button type="button" class="guild-btn gh-bt-grande" id="guild-criar-btn">${SVG_GLD.escudo}<span>${t('guild.criarBtn', { custo })}</span></button>
+    </section>`;
+
+  ligarEditorDeBrasao();
   // A TAG da tela de criar. A prévia segue o NOME enquanto ninguém digita uma tag própria: é o
   // jeito de mostrar, sem explicar, que a guild já vai ter uma.
   rascunhoTag.tag = '';
@@ -10525,198 +12672,6 @@ function pintarGuildFundar(host) {
   };
 }
 
-// ------------------------------------------------- o painel da guild: faixa, abas, listas
-//
-// A tela nasceu como uma PILHA: cabecalho de texto, lista, e cinco botoes roxos de largura
-// cheia empilhados — "Time da Guild", "Minha equipe de guerra", "Editar brasao", "Convidar",
-// "Apagar guild". Todos com o mesmo peso visual, do primeiro ao que apaga a guild inteira, e
-// no celular tudo isso era um rolo de tela e meia antes do primeiro membro.
-//
-// O arranjo de agora e o de uma tela de cla: uma FAIXA de identidade em cima (brasao grande,
-// nome, dono, e os tres numeros que definem a guild em placas), ABAS logo abaixo, e so entao o
-// conteudo. Cada aba responde a uma pergunta, e nenhuma delas e "o que esses cinco botoes
-// fazem?":
-//
-//   Membros  quem esta aqui (e, para o dono, como chamar mais gente)
-//   Guerra   o que EU levo e quem a guild escala
-//   Guild    o brasao e a saida — o que se mexe uma vez e nao se mexe mais
-//
-// O que some da tela e o ganho: o dono deixa de ver "Apagar guild" toda vez que abre o painel
-// para olhar quem esta online, e as acoes por membro (expulsar, passar a lideranca) saem da
-// LINHA — onde apertavam o nick contra dois botoes roxos — e passam a morar dentro do membro
-// aberto, junto com a equipe dele.
-
-/** Aba aberta do painel. Vive fora da funcao: todo pacote de guild repinta a tela. */
-let guildAba = 'membros';
-/** Busca da lista de membros. Mesma vida da aba. */
-let guildBuscaMembros = '';
-/** A partir de quantos membros a busca aparece — abaixo disso ela so rouba altura. */
-const GLD_BUSCA_MIN = 8;
-
-/**
- * Os desenhos da tela de guild.
- *
- * SVG inline, e nao emoji nem PNG: emoji muda de desenho (e de largura) a cada sistema, e o
- * espelho de assets nao tem icone de troféu nem de espada. Inline, eles herdam `currentColor`
- * e acompanham a cor do estado — aceso no roxo da aba ligada, apagado no resto.
- */
-const SVG_GLD = {
-  gp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 3h10v1h4v3a4 4 0 0 1-4 4h-.6A5.6 5.6 0 0 1 13 15.8V18h4v3H7v-3h4v-2.2A5.6 5.6 0 0 1 7.6 11H7a4 4 0 0 1-4-4V4h4V3zm0 3H5v1a2 2 0 0 0 2 2V6zm10 0v3a2 2 0 0 0 2-2V6h-2z"/></svg>',
-  membros: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm7.8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 19.2c0-3.2 3.1-5.4 7-5.4s7 2.2 7 5.4V20H2v-.8zm15.6-4.5c2.7.6 4.4 2.3 4.4 4.3V20h-4.3v-.8c0-1.7-.6-3.2-1.7-4.3l1.6-.2z"/></svg>',
-  time: '<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="currentColor"><path d="M3 3h3.2l11 11-3.2 3.2L3 6.2V3z"/><path d="M21 3h-3.2l-4.3 4.3 3.2 3.2L21 6.2V3z"/><path d="M8.6 12.9 4.3 17.2l-1.4 3.9 3.9-1.4 4.3-4.3-2.5-2.5z" opacity=".75"/><path d="M15.4 12.9l4.3 4.3 1.4 3.9-3.9-1.4-4.3-4.3 2.5-2.5z" opacity=".75"/></g></svg>',
-  escudo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2l8 3.2v6.1c0 4.9-3.4 9.1-8 10.7-4.6-1.6-8-5.8-8-10.7V5.2L12 2z"/></svg>',
-  convidar: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.9 0-7 2.1-7 4.8V20h11.4A6 6 0 0 1 13 15.6 11 11 0 0 0 10 14zm8 0h2v3h3v2h-3v3h-2v-3h-3v-2h3v-3z"/></svg>',
-  coroa: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 7.5l4 3.2L12 4l5 6.7 4-3.2-1.7 11H4.7L3 7.5z"/></svg>',
-  sair: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v-2H5V5h5V3zm6.6 3.6L15.2 8l3 3H9v2h9.2l-3 3 1.4 1.4L22 12l-5.4-5.4z"/></svg>',
-  lupa: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.3 4.3-1.4 1.4-4.3-4.3A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg>',
-  porta: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 3h9a2 2 0 0 1 2 2v16H5V3zm7.5 8.2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4zM17 7h2v14h-2V7z"/></svg>',
-};
-
-/** O bonus de ranking da guild, em chip — ou nada, quando ela nao pontuou. */
-function chipBonusGuild(g) {
-  const pct = Number(g.bonusPct) || 0;
-  const rank = Number(g.bonusRank) || 0;
-  if (!(pct > 0 && rank > 0)) {
-    return `<span class="gld-chip gld-chip-off">${t('guild.semBonus')}</span>`;
-  }
-  return `<span class="gld-chip gld-chip-on" title="${escapar(
-    t('guild.bonusAtivo', { top: rotuloTopGuild(rank), n: pct }),
-  )}">${t('guild.bonusChip', { top: rotuloTopGuild(rank), n: pct })}</span>`;
-}
-
-/**
- * A FAIXA: brasao, nome, dono, idade da guild e as tres placas de numero.
- *
- * As placas nao sao enfeite — sao as tres perguntas que a tela recebe ("quanto a guild fez
- * hoje?", "quantos somos?", "o time esta cheio?"), e a terceira e um BOTAO: quem olha "8/10"
- * quer mexer nisso, e obrigá-lo a achar a aba Guerra para isso seria esconder a acao atras do
- * numero que a provoca.
- */
-function htmlBannerGuild(g) {
-  const max = estado.guildMaxTime ?? 10;
-  const criada = Number(g.criadoEm) || 0;
-  return `
-    <div class="gld-banner">
-      <div class="gld-brasao" id="gld-brasao"></div>
-      <div class="gld-ident">
-        <b class="gld-nome">${g.tag
-          ? `<span class="gld-tag" style="--gt:${corTagValida(g.tagCor)}">${escapar(g.tag)}</span> `
-          : ''}${escapar(g.nome)}</b>
-        <span class="gld-sub">
-          <span class="gld-dono">${SVG_GLD.coroa}${escapar(g.ownerNick ?? '')}</span>
-          ${criada ? `<span class="gld-idade">${t('guild.criadaHa', { tempo: tempoCurto(Date.now() - criada) })}</span>` : ''}
-        </span>
-        ${chipBonusGuild(g)}
-      </div>
-    </div>
-    <div class="gld-stats">
-      <div class="gld-stat">
-        <span class="gld-stat-ico">${SVG_GLD.gp}</span>
-        <b>${num(g.gp)}</b><span>${t('guild.statGp')}</span>
-      </div>
-      <div class="gld-stat">
-        <span class="gld-stat-ico">${SVG_GLD.membros}</span>
-        <b>${num(Number(g.membros) || 0)}</b><span>${t('guild.statMembros')}</span>
-      </div>
-      <button type="button" class="gld-stat gld-stat-bt" id="gld-stat-time"
-              title="${escapar(t('guild.escalacaoBt'))}">
-        <span class="gld-stat-ico">${SVG_GLD.time}</span>
-        <b>${Number(g.escalados) || 0}/${max}</b><span>${t('guild.statTime')}</span>
-      </button>
-    </div>
-    <p class="gld-eu ${g.escalado ? 'ok' : 'fora'}">
-      ${g.escalado ? t('guild.euEscaladoCurto') : t('guild.euReserva')}
-    </p>`;
-}
-
-const ABAS_GUILD = [
-  { id: 'membros', chave: 'guild.abaMembros', ico: 'membros' },
-  { id: 'caixa', chave: 'guild.abaCaixa', ico: 'convidar' },
-  { id: 'quadro', chave: 'guild.abaQuadro', ico: 'lupa' },
-  { id: 'guerra', chave: 'guild.abaGuerra', ico: 'time' },
-  { id: 'ajustes', chave: 'guild.abaAjustes', ico: 'escudo' },
-];
-
-/** As três de quem ainda não tem guild. A ordem é a das perguntas dele, nessa ordem. */
-const ABAS_SEM_GUILD = [
-  { id: 'quadro', chave: 'guild.abaQuadro', ico: 'lupa' },
-  { id: 'convites', chave: 'guild.abaConvites', ico: 'convidar' },
-  { id: 'fundar', chave: 'guild.abaFundar', ico: 'escudo' },
-];
-
-/**
- * Uma aba, com o selo de pendência quando há o que responder.
- *
- * O selo é um NÚMERO, e não uma bolinha: "3" diz que vale abrir agora, a bolinha diz só que
- * algo mudou. É a mesma decisão da aba de chat da guild, que já mostra contagem.
- */
-function htmlAbaGuild(a, selo = 0) {
-  const on = a.id === guildAba;
-  return `
-    <button type="button" class="gld-aba${on ? ' on' : ''}" data-aba="${a.id}"
-            role="tab" aria-selected="${on ? 'true' : 'false'}">
-      <span class="gld-aba-ico">${SVG_GLD[a.ico]}</span>${t(a.chave)}
-      ${selo > 0 ? `<span class="gld-aba-selo">${selo > 99 ? '99+' : selo}</span>` : ''}
-    </button>`;
-}
-
-/**
- * Liga o clique das abas de um painel de guild.
- *
- * Só as CLASSES trocam ao mudar de aba — o cabeçalho e a barra não são redesenhados. Repintar o
- * painel inteiro aqui apagaria o campo de busca do Quadro no meio da digitação de quem clicasse
- * numa aba e voltasse, e é o mesmo motivo pelo qual a lista de membros repinta sozinha.
- */
-function ligarAbasGuild(abas, repintar) {
-  for (const bt of $('#guild-corpo').querySelectorAll('.gld-aba')) {
-    bt.onclick = () => {
-      if (guildAba === bt.dataset.aba) return;
-      guildAba = bt.dataset.aba;
-      for (const x of $('#guild-corpo').querySelectorAll('.gld-aba')) {
-        const on = x.dataset.aba === guildAba;
-        x.classList.toggle('on', on);
-        x.setAttribute('aria-selected', on ? 'true' : 'false');
-      }
-      repintar();
-    };
-  }
-  return abas;
-}
-
-function montarGuildPainel() {
-  guildModo = 'painel';
-  const g = estado.eu.guild;
-  guildTopoVoltar(false);
-  $('#guild-titulo').textContent = g.nome;
-  // Quem está no painel COM guild pode ter vindo de uma aba que só existe sem guild (acabou de
-  // entrar estando no Quadro, ou aceitou um convite). `quadro` é a única que atravessa os dois
-  // modos; as outras caem em Membros, que é a tela que ele quer ver ao entrar numa guild.
-  if (!ABAS_GUILD.some((a) => a.id === guildAba)) guildAba = 'membros';
-  $('#guild-corpo').innerHTML = `
-    ${htmlBannerGuild(g)}
-    <div class="gld-abas gld-abas-5" role="tablist">
-      ${ABAS_GUILD.map((a) => htmlAbaGuild(a, a.id === 'caixa' ? (estado.guildPedidos || 0) : 0)).join('')}
-    </div>
-    <div class="gld-pane" id="gld-pane"></div>`;
-
-  pintarBrasao($('#gld-brasao'), g.brasao, 62);
-  $('#gld-stat-time')?.addEventListener('click', abrirEscalacaoGuild);
-  ligarAbasGuild(ABAS_GUILD, pintarPaneGuild);
-  pintarPaneGuild();
-  $('#guild').classList.remove('hidden');
-}
-
-function pintarPaneGuild() {
-  const host = $('#gld-pane');
-  const g = estado.eu?.guild;
-  if (!host || !g) return;
-  if (guildAba === 'guerra') return pintarGuildGuerra(host, g);
-  if (guildAba === 'ajustes') return pintarGuildAjustes(host, g);
-  if (guildAba === 'quadro') return pintarGuildQuadro(host);
-  if (guildAba === 'caixa') return pintarGuildCaixa(host, g);
-  pintarGuildMembros(host, g);
-}
-
 // ------------------------------------------------------------------ aba Quadro
 //
 // A lista de TODAS as guildas do servidor — a tela que faltava.
@@ -10737,7 +12692,23 @@ const quadroGuild = {
   pagina: 0,
   dados: null,
   pedindo: false,
+  ordem: 'gp',
 };
+
+/**
+ * As ordens do Quadro: o GP de sempre, a guild com mais gente e a mais forte (o ⚔ dos escalados —
+ * o time que vai à guerra). A escolha fica no aparelho: ela não esconde guild nenhuma, então não
+ * precisa voltar ao padrão quando o painel reabre, como a busca e o filtro.
+ */
+const ORDENS_QUADRO = [
+  ['gp', 'guild.quadroOrdemGp'],
+  ['membros', 'guild.quadroOrdemMembros'],
+  ['forca', 'guild.quadroOrdemForca'],
+];
+try {
+  const salva = localStorage.getItem('gldqOrdem');
+  if (ORDENS_QUADRO.some(([id]) => id === salva)) quadroGuild.ordem = salva;
+} catch { /* sem armazenamento: a ordem vale só nesta sessão */ }
 
 /** Espera entre a última tecla e o pedido ao servidor. O mesmo do Mercado. */
 const QUADRO_DEBOUNCE_MS = 250;
@@ -10751,6 +12722,7 @@ function pedirQuadroGuild({ pagina = quadroGuild.pagina } = {}) {
     busca: quadroGuild.busca,
     so: quadroGuild.so,
     pagina,
+    ordem: quadroGuild.ordem,
   });
 }
 
@@ -10834,17 +12806,23 @@ function htmlBotaoQuadro(g) {
 }
 
 function htmlLinhaQuadro(g) {
+  // A minha guild na lista ganha o anel roxo de "sou eu" — a mesma marca do placar da guerra.
+  const minha = g.id === estado.eu?.guild?.id;
   return `
-    <div class="gldq-linha" data-guild="${g.id}">
+    <div class="gldq-linha${minha ? ' eu' : ''}" data-guild="${g.id}" title="${escapar(t('guild.verFicha'))}">
       <span class="gldq-brasao" id="gldq-brasao-${g.id}"></span>
       <div class="gldq-info">
         <b class="gldq-nome">${g.tag
           ? `<span class="gld-tag" style="--gt:${corTagValida(g.tagCor)}">${escapar(g.tag)}</span> `
-          : ''}${escapar(g.nome)}</b>
+          : ''}${escapar(g.nome)}${minha ? `<em class="gldq-sua">${t('gwp.suaGuild')}</em>` : ''}</b>
         <span class="gldq-nums">
-          <span>${num(g.membros)} ${t('guild.statMembros')}</span>
-          <span>${num(g.gp)} GP</span>
+          <span class="gldq-num">${SVG_GLD.membros}${num(g.membros)}</span>
+          <span class="gldq-num ouro">${SVG_GLD.gp}${num(g.gp)}</span>
+          ${g.forca != null ? `<span class="gldq-num gldq-forca" title="${escapar(t('guild.quadroForcaDica'))}">${SVG_GLD.time}${num(g.forca)}</span>` : ''}
           ${chipPoliticaGuild(g)}
+          ${boostGuildAtivo(g.boostAte, agoraDoServidor())
+            ? `<span class="gldq-boost" title="${escapar(t('guildBoost.quadroDica', { pct: BOOST_GUILD.pct }))}"><img src="${BOOST_GUILD.iconeMini}" alt="" width="14" height="14">+${BOOST_GUILD.pct}% XP</span>`
+            : ''}
         </span>
         ${g.descricao ? `<span class="gldq-desc">${escapar(g.descricao)}</span>` : ''}
       </div>
@@ -10855,17 +12833,25 @@ function htmlLinhaQuadro(g) {
 function pintarGuildQuadro(host) {
   const temGuild = !!estado.eu?.guild;
   host.innerHTML = `
-    <div class="gldq-topo">
-      <input id="gldq-busca" class="gld-campo gldq-busca" type="search" autocomplete="off"
-             maxlength="32" placeholder="${escapar(t('guild.quadroBuscaPh'))}"
-             value="${escapar(quadroGuild.busca)}">
+    <div class="gldq-topo gh-ferramentas">
+      <label class="gh-busca">${SVG_GLD.lupa}
+        <input id="gldq-busca" class="gldq-busca" type="search" autocomplete="off"
+               maxlength="32" placeholder="${escapar(t('guild.quadroBuscaPh'))}"
+               value="${escapar(quadroGuild.busca)}">
+      </label>
       ${temGuild ? '' : `
         <label class="gldq-filtro">
           <input type="checkbox" id="gldq-so-posso" ${quadroGuild.so === 'posso' ? 'checked' : ''}>
           <span>${t('guild.quadroSoPosso')}</span>
         </label>`}
     </div>
-    <p class="gd-ajuda" id="gldq-resumo"></p>
+    <div class="gh-ordens-linha">
+      <div class="gd-ordens gldq-ordens" id="gldq-ordem" role="radiogroup">${ORDENS_QUADRO.map(([id, rotulo]) => `
+        <button type="button" class="gd-ordem${id === quadroGuild.ordem ? ' on' : ''}" data-gldq-ordem="${id}"
+                role="radio" aria-checked="${id === quadroGuild.ordem}">${t(rotulo)}</button>`).join('')}
+      </div>
+      <span class="gh-resumo" id="gldq-resumo"></span>
+    </div>
     <div class="gldq-lista" id="gldq-lista"></div>
     <div class="gldq-paginacao" id="gldq-paginacao"></div>`;
 
@@ -10878,6 +12864,19 @@ function pintarGuildQuadro(host) {
   }
   $('#gldq-so-posso')?.addEventListener('change', (ev) => {
     quadroGuild.so = ev.target.checked ? 'posso' : 'todas';
+    pedirQuadroGuild({ pagina: 0 });
+  });
+  // A ordem volta para a página 1: a página 3 de "mais membros" não tem nada a ver com a 3 do GP.
+  $('#gldq-ordem')?.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-gldq-ordem]');
+    if (!b || b.dataset.gldqOrdem === quadroGuild.ordem) return;
+    quadroGuild.ordem = b.dataset.gldqOrdem;
+    try { localStorage.setItem('gldqOrdem', quadroGuild.ordem); } catch { /* vale só nesta sessão */ }
+    for (const x of $('#gldq-ordem').querySelectorAll('[data-gldq-ordem]')) {
+      const on = x.dataset.gldqOrdem === quadroGuild.ordem;
+      x.classList.toggle('on', on);
+      x.setAttribute('aria-checked', String(on));
+    }
     pedirQuadroGuild({ pagina: 0 });
   });
 
@@ -10960,24 +12959,55 @@ function pintarListaQuadro() {
 // não responderam. TODO membro lê — saber quem bate na porta é parte de ser da guild, e o
 // membro comum que reconhece um amigo na fila vai cutucar o líder. Só dono e sub-dono agem.
 
+/** As cores dos discos de inicial: as dos tipos, que já são do jogo e se distinguem bem entre si. */
+const CORES_INICIAL_GUILD = ['FIRE', 'WATER', 'GRASS', 'ELECTRIC', 'PSYCHIC', 'DRAGON', 'FAIRY', 'ICE', 'GHOST', 'STEEL'];
+
+/**
+ * O rosto de quem ainda não é da guild: a inicial do nick num disco colorido. A fila (pedidos e
+ * convites) não traz o boneco de ninguém, e uma lista de nicks sem rosto se lê como uma planilha. A
+ * cor sai do nick — a mesma pessoa tem sempre a mesma cor, de um dia para o outro.
+ */
+function inicialDeNick(nick) {
+  const s = String(nick ?? '?');
+  let h = 0;
+  for (const ch of s) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  const letra = [...s][0]?.toUpperCase() ?? '?';
+  return `<span class="gh-ini" style="--ini:var(--t-${CORES_INICIAL_GUILD[h % CORES_INICIAL_GUILD.length]})" aria-hidden="true">${escapar(letra)}</span>`;
+}
+
+/** O par aceitar (o caminho esperado, roxo e escrito) e recusar (o outro: só o ×, apagado). */
+function htmlAceitarRecusar(dataAceitar, dataRecusar, id) {
+  return `
+    <div class="gldc-acoes">
+      <button type="button" class="guild-btn gh-bt-ico gh-bt-ok" data-${dataAceitar}="${id}">${dlgIcone('check', 14)}<span>${t('guild.aceitar')}</span></button>
+      <button type="button" class="guild-mini-btn btn-apagado gh-bt-x" data-${dataRecusar}="${id}"
+              title="${escapar(t('guild.recusar'))}" aria-label="${escapar(t('guild.recusar'))}">${dlgIcone('xis', 14)}</button>
+    </div>`;
+}
+
 function htmlPedidoGuild(pd, podeAgir) {
   return `
     <div class="gldc-linha" data-pedido="${pd.id}">
+      ${inicialDeNick(pd.nick)}
       <div class="gldc-info">
         <b>${escapar(pd.nick)}</b>
         <span class="gldc-nums">
-          <span>${t('painel.nivelCurto')}${num(pd.level)}</span>
-          <span>${num(pd.pr)} ${t('pvp.pr')}</span>
-          <span class="gldc-quando">${t('guild.pedidoHa', { tempo: tempoCurto(Date.now() - (pd.criadoEm || Date.now())) })}</span>
+          <span class="gh-mini">${t('painel.nivelCurto')} ${num(pd.level)}</span>
+          <span class="gh-mini">${num(pd.pr)} ${t('pvp.pr')}</span>
+          <span class="gldc-quando">${dlgIcone('relogio', 10)}${t('guild.pedidoHa', { tempo: tempoCurto(Date.now() - (pd.criadoEm || Date.now())) })}</span>
         </span>
       </div>
-      ${podeAgir ? `
-        <div class="gldc-acoes">
-          <button type="button" class="guild-btn" data-aceitar-pedido="${pd.id}">${t('guild.aceitar')}</button>
-          <button type="button" class="guild-mini-btn btn-apagado" data-recusar-pedido="${pd.id}">${t('guild.recusar')}</button>
-        </div>` : ''}
+      ${podeAgir ? htmlAceitarRecusar('aceitar-pedido', 'recusar-pedido', pd.id) : ''}
     </div>`;
 }
+
+/** O "nada aqui" de uma lista, com o desenho do assunto: uma caixa vazia é estado normal, não erro. */
+const htmlVazioGuild = (ico, texto, titulo = '') => `
+  <div class="gh-vazio">
+    <span class="gh-vazio-ico">${ico}</span>
+    ${titulo ? `<b>${titulo}</b>` : ''}
+    <span>${texto}</span>
+  </div>`;
 
 function pintarGuildCaixa(host, g) {
   const podeAgir = podeGerirGuild(g);
@@ -10991,35 +13021,36 @@ function pintarGuildCaixa(host, g) {
   const pedidos = caixa.pedidos ?? [];
   const convites = caixa.convites ?? [];
   host.innerHTML = `
-    <section class="gld-bloco">
-      <h4 class="gld-bloco-tit">${t('guild.pedidosTitulo')} ${pedidos.length ? `(${pedidos.length})` : ''}</h4>
-      <p class="gld-bloco-sub">${t(
-        g.politica === 'fechada' ? 'guild.pedidosSub' : 'guild.pedidosSubAberta',
-      )}</p>
+    <section class="gh-cartao">
+      <h4 class="gh-cartao-tit">${dlgIcone('pessoaMais', 15)}${t('guild.pedidosTitulo')}${
+        pedidos.length ? `<em class="gh-conta">${num(pedidos.length)}</em>` : ''}</h4>
+      <p class="gh-cartao-sub">${t(g.politica === 'fechada' ? 'guild.pedidosSub' : 'guild.pedidosSubAberta')}</p>
       ${pedidos.length
         ? `<div class="gldc-lista">${pedidos.map((pd) => htmlPedidoGuild(pd, podeAgir)).join('')}</div>`
-        : `<p class="gld-vazio">${t('guild.semPedidos')}</p>`}
+        : htmlVazioGuild(dlgIcone('porta', 24), t('guild.semPedidos'))}
     </section>
-    <section class="gld-bloco">
-      <h4 class="gld-bloco-tit">${t('guild.convitesEnviadosTitulo')} ${convites.length ? `(${convites.length})` : ''}</h4>
-      <p class="gld-bloco-sub">${t('guild.convitesEnviadosSub')}</p>
+    <section class="gh-cartao">
+      <h4 class="gh-cartao-tit">${dlgIcone('megafone', 15)}${t('guild.convitesEnviadosTitulo')}${
+        convites.length ? `<em class="gh-conta">${num(convites.length)}</em>` : ''}</h4>
+      <p class="gh-cartao-sub">${t('guild.convitesEnviadosSub')}</p>
       ${convites.length
         ? `<div class="gldc-lista">${convites.map((c) => `
             <div class="gldc-linha">
+              ${inicialDeNick(c.nick)}
               <div class="gldc-info">
                 <b>${escapar(c.nick)}</b>
                 <span class="gldc-nums">
                   <span>${t('guild.convidadoPor', { nick: escapar(c.porNick) })}</span>
-                  <span class="gldc-quando">${t('guild.pedidoHa', { tempo: tempoCurto(Date.now() - (c.criadoEm || Date.now())) })}</span>
+                  <span class="gldc-quando">${dlgIcone('relogio', 10)}${t('guild.pedidoHa', { tempo: tempoCurto(Date.now() - (c.criadoEm || Date.now())) })}</span>
                 </span>
               </div>
               ${podeAgir
                 ? `<div class="gldc-acoes">
-                     <button type="button" class="guild-mini-btn btn-apagado" data-cancelar-convite="${c.id}">${t('guild.cancelarConvite')}</button>
+                     <button type="button" class="guild-mini-btn btn-apagado gh-bt-ico" data-cancelar-convite="${c.id}">${dlgIcone('xis', 12)}<span>${t('guild.cancelarConvite')}</span></button>
                    </div>`
                 : ''}
             </div>`).join('')}</div>`
-        : `<p class="gld-vazio">${t('guild.semConvitesEnviados')}</p>`}
+        : htmlVazioGuild(dlgIcone('megafone', 24), t('guild.semConvitesEnviados'))}
     </section>`;
 
   if (!podeAgir) return;
@@ -11040,24 +13071,46 @@ function pintarGuildCaixa(host, g) {
 
 // ----------------------------------------------------------------- aba Membros
 
+/**
+ * A aba Membros: a busca e o CONVIDAR na mesma linha de ferramentas (o convite abre um campo por
+ * baixo só quando se quer convidar — sempre aberto, ele comia uma linha inteira de quem só veio ver
+ * quem está online), as ordens com o resumo da guild ao lado, e a lista.
+ */
 function pintarGuildMembros(host, g) {
   const total = Number(g.membros) || 0;
+  const gerir = podeGerirGuild(g);
   host.innerHTML = `
-    ${podeGerirGuild(g)
-      ? `<div class="gld-convite">
+    ${total >= GLD_BUSCA_MIN || gerir ? `
+      <div class="gh-ferramentas">
+        ${total >= GLD_BUSCA_MIN
+          ? `<label class="gh-busca">${SVG_GLD.lupa}
+               <input id="gld-busca" type="search" autocomplete="off"
+                      placeholder="${escapar(t('guild.buscarMembro'))}" value="${escapar(guildBuscaMembros)}">
+             </label>`
+          : '<span class="gh-ferramentas-vao"></span>'}
+        ${gerir ? `<button type="button" class="guild-btn gh-bt-ico" id="gh-convidar-abrir" aria-expanded="false"
+                           aria-controls="gh-convite">${SVG_GLD.convidar}<span>${t('guild.convidar')}</span></button>` : ''}
+      </div>` : ''}
+    ${gerir
+      ? `<div class="gh-convite hidden" id="gh-convite">
            <input id="guild-convite-nick" class="gld-campo" maxlength="16" autocomplete="off"
                   placeholder="${escapar(t('guild.convitePh'))}">
-           <button type="button" class="guild-btn gld-bt-ico" id="guild-convidar">
-             <span class="gld-bt-svg">${SVG_GLD.convidar}</span>${t('guild.convidar')}
-           </button>
+           <button type="button" class="guild-btn gh-bt-ico" id="guild-convidar">${dlgIcone('pessoaMais', 15)}<span>${t('gh.enviarConvite')}</span></button>
          </div>`
       : ''}
-    ${total >= GLD_BUSCA_MIN
-      ? `<input id="gld-busca" class="gld-campo gld-busca" type="search" autocomplete="off"
-                placeholder="${escapar(t('guild.buscarMembro'))}" value="${escapar(guildBuscaMembros)}">`
-      : ''}
-    <p class="gd-ajuda">${t('guild.membrosAjuda')}</p>
+    <div class="gh-ordens-linha">
+      <div class="gd-ordens" id="gld-ordem-membros" role="radiogroup"></div>
+      <span class="gh-resumo" id="gh-resumo"></span>
+    </div>
     <div class="guild-membros-host" id="guild-membros-host"></div>`;
+  // A lista desta abertura entra em cascata; as repinturas seguintes (busca, ordem, atualização da
+  // guild) não, ou cada letra digitada faria a lista inteira dançar.
+  gdListaEntrada = !menosMovimento();
+  // A ordem repinta na hora com o que está na mão e pede ao servidor os 60 dela (ver `pedirDetalheGuild`).
+  montarOrdemMembrosGuild($('#gld-ordem-membros'), () => {
+    pintarMembrosGuildPainel();
+    pedirDetalheGuild(g.id, 'painel', buscaDoPainelGuild());
+  });
 
   const campoBusca = $('#gld-busca');
   if (campoBusca) {
@@ -11065,8 +13118,23 @@ function pintarGuildMembros(host, g) {
       guildBuscaMembros = campoBusca.value;
       // So a LISTA se repinta: trocar o painel inteiro tiraria o cursor do campo a cada letra.
       pintarMembrosGuildPainel();
+      // E a guild INTEIRA vai ao servidor, quando a pessoa para de digitar: a lista local só tem 60.
+      clearTimeout(guildBuscaTimer);
+      guildBuscaTimer = setTimeout(() => {
+        const minha = estado.eu?.guild;
+        if (minha) pedirDetalheGuild(minha.id, 'painel', buscaDoPainelGuild());
+      }, GLD_BUSCA_ATRASO_MS);
     };
   }
+  $('#gh-convidar-abrir')?.addEventListener('click', (ev) => {
+    const bt = ev.currentTarget;
+    const caixa = $('#gh-convite');
+    const abrir = caixa.classList.contains('hidden');
+    caixa.classList.toggle('hidden', !abrir);
+    bt.classList.toggle('on', abrir);
+    bt.setAttribute('aria-expanded', String(abrir));
+    if (abrir) $('#guild-convite-nick')?.focus();
+  });
   $('#guild-convidar')?.addEventListener('click', () => {
     const campo = $('#guild-convite-nick');
     const nick = campo.value.trim();
@@ -11078,81 +13146,196 @@ function pintarGuildMembros(host, g) {
     if (ev.key === 'Enter') $('#guild-convidar')?.click();
   });
 
-  if (guildPainelDetalhe?.id === g.id) pintarMembrosGuildPainel();
-  else {
+  if (guildPainelDetalhe?.id === g.id) {
+    pintarMembrosGuildPainel();
+    // A ficha guardada é de outra ORDEM (a escolha é a mesma do modal de outras guilds, e pode ter
+    // mudado lá): os 60 dela são o corte da ordem velha. Pede os desta.
+    if ((guildPainelDetalhe.ordem ?? 'padrao') !== guildOrdemMembros) pedirDetalheGuild(g.id, 'painel', buscaDoPainelGuild());
+  } else {
     $('#guild-membros-host').innerHTML = `<p class="guild-membros-carregando">${t('guild.escalacaoCarregando')}</p>`;
-    pedirDetalheGuild(g.id, 'painel');
+    pedirDetalheGuild(g.id, 'painel', buscaDoPainelGuild());
   }
 }
 
 // ------------------------------------------------------------------ aba Guerra
 
-/** As cinco casas da minha equipe de guerra, com o sprite de cada bicho. */
+/**
+ * As cinco casas da MINHA equipe de guerra, grandes: o bicho, o nível como a guerra o lê e o ⚔ dele.
+ * A casa vazia é uma pokébola apagada com o "+" — tocar nela abre a folha da equipe.
+ */
 function htmlCasasEquipeGuerra(ids) {
   const porId = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
   const vivos = ids.map((id) => porId.get(id)).filter(Boolean);
   return Array.from({ length: MAX_EQUIPE }, (_, i) => {
     const pk = vivos[i];
     return pk
-      ? `<span class="gld-casa cheia" data-pk="${pk.id}" title="${escapar(
-          `${pk.shiny ? '✨ ' : ''}${pk.nome} · ${t('painel.nivelCurto')}${pk.level}`,
-        )}"></span>`
-      : '<span class="gld-casa"></span>';
+      ? `<button type="button" class="gld-casa cheia${pk.shiny ? ' shiny' : ''}" data-pk="${pk.id}" title="${escapar(
+          `${pk.shiny ? '✨ ' : ''}${nomeExibidoPokemon(pk)} · ${t('painel.nivelCurto')}${pk.level}`,
+        )}">
+          <span class="gld-casa-ordem">${i + 1}</span>
+          <span class="gld-casa-arte"></span>
+          <span class="gld-casa-nv">${t('painel.nivelCurto')} ${rotuloNivelNaGuerra(pk.level)}</span>
+          <span class="gld-casa-poder">⚔ ${num(poderNaGuerra(pk))}</span>
+        </button>`
+      : `<button type="button" class="gld-casa vazia" data-vazia="1" title="${escapar(t('guild.editarTime'))}">
+           <span class="gld-casa-ordem">${i + 1}</span><span class="gld-casa-mais" aria-hidden="true">+</span>
+         </button>`;
   }).join('');
+}
+
+/**
+ * A ARENA: a fase da guerra no chip do Campeonato, o relógio grande (que anda com o da faixa do
+ * topo, em `tiqueGuerraNoPainel`), a inscrição e o caminho para o PvP → Guild, onde ficam o placar,
+ * o replay e a análise.
+ */
+function htmlArenaDaGuerraNoPainel(g) {
+  const pvp = estado.guildPvp ?? {};
+  const fase = estado.guildPvp ? faseDaGuerra(pvp) : 'inscricoes';
+  const semRegistro = podeGerirGuild(g) && pvp.autoRegistro === false && !pvp.minhaRegistrada;
+  const inscrita = !!(pvp.autoRegistro || pvp.minhaRegistrada);
+  const resta = Math.max(0, (pvp.proximoEm ?? 0) - Date.now());
+  const hora = pvp.proximoEm
+    ? new Date(pvp.proximoEm).toLocaleTimeString(localeData(), { hour: '2-digit', minute: '2-digit' })
+    : `${pvp.horaUtc ?? 22}:00 UTC`;
+  const chip = { inscricoes: 'fase-inscricoes', andamento: 'fase-aoVivo', resultado: 'fase-concluido' }[fase];
+  return `
+    <section class="gh-arena fase-${fase}" id="gh-arena">
+      <span class="gh-arena-arte" aria-hidden="true">${dlgIcone('espadas', 34)}</span>
+      <div class="gh-arena-info">
+        <div class="gh-arena-selos">
+          <span class="camp-fase ${chip}">${t(`gwp.fase.${fase}`)}</span>
+          <span class="gh-arena-hora">${dlgIcone('relogio', 12)}${t('gwp.horaLocal', { hora })}</span>
+        </div>
+        <span class="gh-arena-rot">${t(fase === 'andamento' ? 'gwp.relogioAgora' : 'gwp.relogioProxima')}</span>
+        ${fase === 'andamento' ? '' : `<b class="gh-arena-relogio" id="gh-relogio-aba">${relogioDaGuerra(resta)}</b>`}
+      </div>
+      <div class="gh-arena-acao">
+        ${semRegistro
+          ? `<p class="gh-arena-nota">${t('guild.guerraRegistrar', { h: pvp.horaUtc ?? 22 })}</p>`
+          : `<span class="gwp-reg ${inscrita ? 'ok' : ''}">${dlgIcone(inscrita ? 'check' : 'alerta', 14)}${
+            t(inscrita ? (pvp.autoRegistro ? 'gwp.inscritaAuto' : 'gwp.inscritaHoje') : 'gh.naoInscrita')}</span>`}
+        <button type="button" class="guild-btn gh-bt-ico${semRegistro ? ' gwp-registrar' : ''}" id="gld-ir-pvp">${
+          dlgIcone(semRegistro ? 'bandeira' : 'trofeu', 14)}<span>${t(semRegistro ? 'guild.irRegistrar' : 'guild.irParaGuerra')}</span></button>
+      </div>
+    </section>`;
+}
+
+/**
+ * Como a MINHA guild foi na última guerra — o cartão do PvP → Guild em miniatura: a colocação (o
+ * troféu ou a medalha no pódio), a nota com as duas partes, os abates e o GP. Sem a guild no placar,
+ * nada: o convite para a guerra já está na arena logo acima.
+ */
+function htmlUltimaGuerraNoPainel(g) {
+  const ultima = estado.guildPvp?.ultima;
+  const placar = ultima?.placar ?? [];
+  const minha = placar.find((x) => x.id === g.id);
+  if (!minha) return '';
+  const pos = Number(minha.pos) || placar.length;
+  const icone = ICONE_LUGAR_CAMPEONATO[pos];
+  const comNota = minha.nota != null;
+  return `
+    <section class="gh-cartao gh-ultima${pos <= 3 ? ` lugar-${pos}` : ''}">
+      <h4 class="gh-cartao-tit">${dlgIcone('trofeu', 15)}${t('gh.ultimaGuerra')}<small>${escapar(diaDaGuerra(ultima.dia))}</small></h4>
+      <div class="gh-ultima-corpo">
+        <div class="gh-ultima-pos">
+          ${icone ? `<img src="${icone}" alt="">` : ''}
+          <b>${num(pos)}º</b>
+          <small>${t('gwp.deN', { n: num(ultima.totalGuilds ?? placar.length) })}</small>
+        </div>
+        <div class="gh-ultima-meio">
+          ${comNota ? `
+            <span class="gh-ultima-nota" title="${escapar(contaDaNota(minha))}"><b>${notaGw(minha.nota)}</b>${t('gwp.nota')}</span>
+            <span class="gwp-voce-partes">
+              <span class="gwp-parte sob">${dlgIcone('escudo', 12)}<b>${notaGw(minha.sob)}</b></span>
+              <span class="gwp-parte com">${dlgIcone('espadas', 12)}<b>${notaGw(minha.com)}</b></span>
+            </span>` : ''}
+          <span class="gwp-voce-stats">
+            <span title="${escapar(t('guild.analise.col.abates'))}">${dlgIcone('espadas', 12)}${num(minha.abates ?? 0)}</span>
+            <span title="${escapar(t('guild.analise.col.perdidos'))}">☠ ${num(minha.mortes ?? 0)}</span>
+          </span>
+        </div>
+        <div class="gwp-voce-gp"><b>+${num(minha.gp ?? 0)}</b><span>GP</span></div>
+      </div>
+    </section>`;
 }
 
 function pintarGuildGuerra(host, g) {
   const max = estado.guildMaxTime ?? 10;
   const ids = idsEquipeGuerraInicial();
   const daHunt = estado.guildPvpEquipe === null;
-  // O botão de REGISTRAR mora no PvP → Guild, e não aqui. Um dono que procurava o registro nesta
-  // aba só achava "Abrir o PvP Guild", apagado, sem nenhuma palavra sobre inscrição — e concluía
-  // que o botão tinha sumido do jogo. Com a guild fora da guerra, o bloco diz isso e o botão
-  // acende. `=== false`: sem o estado da guerra carregado ainda, fica a frase de sempre.
-  const pvp = estado.guildPvp ?? {};
-  const semRegistro = podeGerirGuild(g) && pvp.autoRegistro === false && !pvp.minhaRegistrada;
+  const porId = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
+  const poderEquipe = ids.reduce((s, id) => s + (porId.has(id) ? poderNaGuerra(porId.get(id)) : 0), 0);
+  const escalados = Number(g.escalados) || 0;
   host.innerHTML = `
-    <section class="gld-bloco">
-      <h4 class="gld-bloco-tit">${t('guild.minhaEquipe')}</h4>
-      <p class="gld-bloco-sub">${t(daHunt ? 'guild.minhaEquipeHunt' : 'guild.minhaEquipeSub')}</p>
+    ${htmlArenaDaGuerraNoPainel(g)}
+    ${htmlUltimaGuerraNoPainel(g)}
+    <section class="gh-cartao">
+      <h4 class="gh-cartao-tit">${dlgIcone('escudo', 15)}${t('guild.minhaEquipe')}${
+        poderEquipe ? `<em class="gh-conta rx">⚔ ${num(poderEquipe)}</em>` : ''}</h4>
+      <p class="gh-cartao-sub">${t(daHunt ? 'guild.minhaEquipeHunt' : 'guild.minhaEquipeSub')}</p>
       <div class="gld-casas">${htmlCasasEquipeGuerra(ids)}</div>
       ${ids.length ? '' : `<p class="gld-aviso">⚠ ${escapar(resumoEquipeGuerra())}</p>`}
-      <button type="button" class="guild-btn" id="guild-editar-time">${t('guild.editarTime')}</button>
+      <button type="button" class="guild-btn gh-bt-ico" id="gh-editar-time">${dlgIcone('lapis', 14)}<span>${t('gh.editarEquipe')}</span></button>
     </section>
 
-    <section class="gld-bloco">
-      <h4 class="gld-bloco-tit">${t('guild.timeDaGuild')}</h4>
-      <p class="gld-bloco-sub">${t('guild.timeDaGuildSub', {
-        n: Number(g.escalados) || 0, max, total: num(Number(g.membros) || 0),
-      })}</p>
-      <button type="button" class="guild-btn${podeGerirGuild(g) ? '' : ' btn-apagado'}" id="guild-escalacao-bt">
-        ${t(podeGerirGuild(g) ? 'guild.escalacaoBt' : 'guild.verTime')}
-      </button>
-    </section>
-
-    <section class="gld-bloco">
-      <h4 class="gld-bloco-tit">${t('guild.pvpTitulo')}</h4>
-      <p class="gld-bloco-sub">${t(semRegistro ? 'guild.guerraRegistrar' : 'guild.guerraQuando', { h: estado.guildPvp?.horaUtc ?? 22 })}</p>
-      <button type="button" class="guild-btn${semRegistro ? '' : ' btn-apagado'}" id="gld-ir-pvp">${t(semRegistro ? 'guild.irRegistrar' : 'guild.irParaGuerra')}</button>
+    <section class="gh-cartao">
+      <h4 class="gh-cartao-tit">${SVG_GLD.time}${t('guild.timeDaGuild')}<em class="gh-conta${escalados >= max ? ' cheio' : ''}">${num(escalados)}/${num(max)}</em></h4>
+      <span class="gh-barra-time" aria-hidden="true"><i style="--w:${Math.min(100, (100 * escalados) / Math.max(1, max))}%"></i></span>
+      <div class="gh-rostos" id="gh-rostos"></div>
+      <p class="gh-cartao-sub">${t('guild.timeDaGuildSub', { n: escalados, max, total: num(Number(g.membros) || 0) })}</p>
+      <button type="button" class="guild-btn gh-bt-ico${podeGerirGuild(g) ? '' : ' btn-apagado'}" id="guild-escalacao-bt">${
+        SVG_GLD.time}<span>${t(podeGerirGuild(g) ? 'guild.escalacaoBt' : 'guild.verTime')}</span></button>
     </section>`;
 
   // Os sprites entram depois do HTML, como na faixa de equipe do Campeonato. A casa cheia abre
   // a ficha do bicho: a pergunta que a fileira provoca ("esse Dratini está bom para a guerra?")
   // se responde na ficha, e obrigar a ir à Bolsa procurá-lo seria mandar o jogador embora.
-  const porId = new Map((estado.eu?.pokemons ?? []).map((pk) => [pk.id, pk]));
   for (const casa of host.querySelectorAll('.gld-casa[data-pk]')) {
     const pk = porId.get(Number(casa.dataset.pk));
     if (!pk) continue;
-    casa.appendChild(spritePokemon(pk, 32));
+    casa.querySelector('.gld-casa-arte').appendChild(spritePokemon(pk, 40));
     casa.onclick = () => abrirFichaDoPokemon(pk);
   }
-  $('#guild-editar-time')?.addEventListener('click', abrirEditorEquipeGuerra);
+  for (const casa of host.querySelectorAll('.gld-casa[data-vazia]')) casa.onclick = abrirEditorEquipeGuerra;
+  $('#gh-editar-time')?.addEventListener('click', abrirEditorEquipeGuerra);
   $('#guild-escalacao-bt')?.addEventListener('click', abrirEscalacaoGuild);
   $('#gld-ir-pvp')?.addEventListener('click', () => {
     fecharGuild();
     estado.pvpAba = 'guild';
-    abrirModal('pvp');
+    // O painel da Guild não é tela do modal (é uma janela de cima), então a volta diz como
+    // reabri-lo: `abrirGuild` cai na mesma aba, que sobrevive ao fechar.
+    abrirModal('pvp', { volta: { rotulo: () => estado.eu?.guild?.nome || t('guild.titulo'), depois: abrirGuild } });
   });
+  pintarRostosDoTimeGuild();
+  // Os rostos saem da ficha dos membros; sem ela ainda (a aba abriu direto na Guerra), pede.
+  if (guildPainelDetalhe?.id !== g.id) pedirDetalheGuild(g.id, 'painel', buscaDoPainelGuild());
+}
+
+/**
+ * Os ROSTOS do time da guild: o boneco de cada escalado, com a coroa no dono e o anel roxo em você.
+ * Saem da ficha dos membros (a ordem padrão traz os escalados primeiro); sem ela, a fileira espera.
+ */
+function pintarRostosDoTimeGuild() {
+  const host = $('#gh-rostos');
+  const g = estado.eu?.guild;
+  if (!host || !g) return;
+  const d = guildPainelDetalhe?.id === g.id ? guildPainelDetalhe : null;
+  const escalados = (d?.membros ?? []).filter((m) => m.escalado);
+  if (!escalados.length) {
+    host.innerHTML = '';
+    return;
+  }
+  const eu = String(estado.eu?.nick ?? '').toLowerCase();
+  host.innerHTML = escalados.map((m) => `
+    <span class="gh-rosto${m.ehDono ? ' dono' : ''}${String(m.nick).toLowerCase() === eu ? ' eu' : ''}${m.online ? ' on' : ''}"
+          data-pid="${m.playerId}" title="${escapar(`${m.nick} · ${t('painel.nivelCurto')} ${num(m.level)}`)}">
+      <span class="gh-rosto-ava"></span>
+      <small>${escapar(m.nick)}</small>
+    </span>`).join('');
+  for (const el of host.querySelectorAll('.gh-rosto')) {
+    const m = escalados.find((x) => x.playerId === Number(el.dataset.pid));
+    el.querySelector('.gh-rosto-ava').appendChild(spriteAnimado(m?.looktype ?? LOOKTYPE_TREINADOR, 32, 3, null, m?.visual, { treinador: true }));
+  }
 }
 
 // ----------------------------------------------------------------- aba Guild
@@ -11185,14 +13368,14 @@ function htmlBlocoRecrutamento(g) {
   rascunhoRecr.descricao = g.descricao ?? '';
   return `
     <section class="gld-bloco" id="gld-recr">
-      <h4 class="gld-bloco-tit">${t('guild.recrTitulo')}</h4>
+      <h4 class="gld-bloco-tit">${SVG_GLD.porta}${t('guild.recrTitulo')}</h4>
       <p class="gld-bloco-sub">${t('guild.recrSub')}</p>
       <div class="gldr-opcoes" role="radiogroup" aria-label="${escapar(t('guild.recrTitulo'))}">
         ${POLITICAS_GUILD.map((pol) => `
           <button type="button" class="gldr-op${pol === rascunhoRecr.politica ? ' on' : ''}"
                   role="radio" aria-checked="${pol === rascunhoRecr.politica ? 'true' : 'false'}"
                   data-pol="${pol}">
-            <b>${t(`guild.pol.${pol}`)}</b>
+            <b>${dlgIcone({ aberta: 'porta', requisitos: 'subir', fechada: 'cadeado' }[pol] ?? 'cadeado', 13)}${t(`guild.pol.${pol}`)}</b>
             <span>${t(`guild.polAjuda.${pol}`)}</span>
           </button>`).join('')}
       </div>
@@ -11275,7 +13458,7 @@ function pintarGuildAjustes(host, g) {
     ${podeGerirGuild(g) ? htmlBlocoRecrutamento(g) : ''}
     ${podeGerirGuild(g)
       ? `<section class="gld-bloco">
-           <h4 class="gld-bloco-tit">${t('guild.tagTitulo')}</h4>
+           <h4 class="gld-bloco-tit">${dlgIcone('bandeira', 15)}${t('guild.tagTitulo')}</h4>
            <p class="gld-bloco-sub">${t('guild.tagSub', { max: MAX_TAG_GUILD })} ${t('guild.tagEsperaNota')}</p>
            <div class="gld-tag-linha">
              <span class="gld-tag-previa" id="gld-tag-previa"></span>
@@ -11288,11 +13471,14 @@ function pintarGuildAjustes(host, g) {
            </button>
          </section>
          <section class="gld-bloco">
-           <h4 class="gld-bloco-tit">${t('guild.editarBrasaoTitulo')}</h4>
+           <h4 class="gld-bloco-tit">${SVG_GLD.escudo}${t('guild.editarBrasaoTitulo')}</h4>
            <p class="gld-bloco-sub">${t('guild.editarBrasaoAjuda')}</p>
-           <button type="button" class="guild-btn" id="guild-editar-brasao" ${podeBrasao ? '' : 'disabled'}>
-             ${podeBrasao ? t('guild.editarBrasao') : t('guild.brasaoEspera', { horas: num(horasEspera) })}
-           </button>
+           <div class="gh-brasao-linha">
+             <span class="gh-brasao-mini" id="gh-brasao-ajustes"></span>
+             <button type="button" class="guild-btn gh-bt-ico" id="guild-editar-brasao" ${podeBrasao ? '' : 'disabled'}>
+               ${dlgIcone('lapis', 14)}<span>${podeBrasao ? t('guild.editarBrasao') : t('guild.brasaoEspera', { horas: num(horasEspera) })}</span>
+             </button>
+           </div>
          </section>`
       : ''}
     <!-- O que nao tem volta mora sozinho, no fim, atras de um titulo que avisa. Enquanto
@@ -11300,7 +13486,7 @@ function pintarGuildAjustes(host, g) {
     <!-- Sub-dono vê "Sair da guild", e não "Apagar guild": apagar é uma das três coisas que
          continuam só do dono, porque some com a guild dele junto. -->
     <section class="gld-bloco gld-perigo">
-      <h4 class="gld-bloco-tit">${t('guild.zonaPerigo')}</h4>
+      <h4 class="gld-bloco-tit">${dlgIcone('alerta', 15)}${t('guild.zonaPerigo')}</h4>
       <p class="gld-bloco-sub">${t(g.isOwner ? 'guild.apagarTexto' : 'guild.sairTexto')}</p>
       <button type="button" class="guild-btn btn-apagado gld-bt-ico" id="${g.isOwner ? 'guild-apagar' : 'guild-sair'}">
         <span class="gld-bt-svg">${SVG_GLD.sair}</span>${t(g.isOwner ? 'guild.apagar' : 'guild.sair')}
@@ -11337,6 +13523,7 @@ function pintarGuildAjustes(host, g) {
     if (!podeTag) return;
     enviar({ t: 'guild.tag', tag: rascunhoTag.tag, tagCor: rascunhoTag.cor });
   });
+  pintarBrasao($('#gh-brasao-ajustes'), g.brasao, 44);
   $('#guild-editar-brasao')?.addEventListener('click', montarGuildEditarBrasao);
   $('#guild-apagar')?.addEventListener('click', () => confirmarApagarGuild(estado.eu?.guild));
   $('#guild-sair')?.addEventListener('click', () => confirmarSairGuild(estado.eu?.guild));
@@ -11434,7 +13621,10 @@ function confirmarExpulsar(mb, kick) {
         classe: 'sai',
         marca: dlgIcone('pessoaMenos', 15),
       }), 'perigo')}
-      ${dlgFrase('', t('guild.expulsarTexto'))}`,
+      ${dlgFrase('', t('guild.expulsarTexto'))}
+      ${Number(mb.doado) > 0
+        ? dlgAviso(escapar(t('guild.expulsarDoou', { nick: mb.nick ?? '', n: num(Number(mb.doado)) })), { tom: 'ouro' })
+        : ''}`,
     tom: 'perigo',
     aoConfirmar: () => kick.onKick(mb.playerId),
   });
@@ -11451,59 +13641,19 @@ function montarGuildEditarBrasao() {
   const podeSalvar = resta <= 0;
   const horasEspera = horasRestantesBrasaoGuild(g);
   $('#guild-titulo').textContent = t('guild.editarBrasaoTitulo');
+  // O mesmo editor do "Fundar" (`htmlEditorDeBrasao`): o palco com a luz na cor escolhida.
   $('#guild-corpo').innerHTML = `
-    <p class="guild-ajuda">${t('guild.editarBrasaoAjuda')}</p>
-    <div class="guild-editor">
-      <div class="guild-preview" id="guild-preview"></div>
-      <div class="guild-opcoes">
-        <label>${t('guild.escudo')}
-          <select id="guild-escudo">${ESCUDOS.map((e) => `<option value="${e.id}">${e.nome}</option>`).join('')}</select>
-        </label>
-        <label>${t('guild.emblema')}
-          <select id="guild-emblema">${EMBLEMAS.map((e) => `<option value="${e.id}">${e.nome}</option>`).join('')}</select>
-        </label>
-        <label>${t('guild.borda')}
-          <select id="guild-borda">${BORDAS.map((e) => `<option value="${e.id}">${e.nome}</option>`).join('')}</select>
-        </label>
-        <div class="guild-cores">
-          <span>${t('guild.corFundo')}</span><div id="guild-cor-bg" class="guild-paleta"></div>
-          <span>${t('guild.corPri')}</span><div id="guild-cor-pri" class="guild-paleta"></div>
-          <span>${t('guild.corSec')}</span><div id="guild-cor-sec" class="guild-paleta"></div>
-        </div>
-      </div>
-    </div>
-    <button type="button" class="guild-btn" id="guild-salvar-brasao" ${podeSalvar ? '' : 'disabled'}>
-      ${podeSalvar ? t('guild.salvarBrasao') : t('guild.brasaoEspera', { horas: num(horasEspera) })}
-    </button>`;
-  $('#guild-escudo').value = rascunhoBrasao.escudo;
-  $('#guild-emblema').value = rascunhoBrasao.emblema;
-  $('#guild-borda').value = rascunhoBrasao.borda ?? 'none';
-  const repintar = () => {
-    rascunhoBrasao.escudo = $('#guild-escudo').value;
-    rascunhoBrasao.emblema = $('#guild-emblema').value;
-    rascunhoBrasao.borda = $('#guild-borda').value;
-    pintarBrasao($('#guild-preview'), rascunhoBrasao, 96);
-  };
-  const paleta = (id, chave) => {
-    const host = $(id);
-    host.innerHTML = CORES_BRASAO.map(
-      (c) => `<button type="button" class="guild-cor ${rascunhoBrasao[chave] === c ? 'on' : ''}" style="background:${c}" data-cor="${c}"></button>`,
-    ).join('');
-    host.onclick = (ev) => {
-      const b = ev.target.closest('.guild-cor');
-      if (!b) return;
-      rascunhoBrasao[chave] = b.dataset.cor;
-      paleta(id, chave);
-      repintar();
-    };
-  };
-  paleta('#guild-cor-bg', 'bg');
-  paleta('#guild-cor-pri', 'pri');
-  paleta('#guild-cor-sec', 'sec');
-  $('#guild-escudo').onchange = repintar;
-  $('#guild-emblema').onchange = repintar;
-  $('#guild-borda').onchange = repintar;
-  repintar();
+    <div class="gh">
+      <section class="gh-cartao gh-fundar">
+        <h4 class="gh-cartao-tit">${SVG_GLD.escudo}${t('guild.editarBrasaoTitulo')}</h4>
+        <p class="gh-cartao-sub">${t('guild.editarBrasaoAjuda')}</p>
+        ${htmlEditorDeBrasao()}
+        <button type="button" class="guild-btn gh-bt-grande" id="guild-salvar-brasao" ${podeSalvar ? '' : 'disabled'}>
+          ${SVG_GLD.escudo}<span>${podeSalvar ? t('guild.salvarBrasao') : t('guild.brasaoEspera', { horas: num(horasEspera) })}</span>
+        </button>
+      </section>
+    </div>`;
+  ligarEditorDeBrasao();
   $('#guild-salvar-brasao')?.addEventListener('click', () => {
     if (!podeSalvar) return;
     enviar({ t: 'guild.editarBrasao', brasao: { ...rascunhoBrasao } });
@@ -11520,11 +13670,15 @@ function aoReceberGuild(m) {
     if (m.guild?.id !== estado.eu?.guild?.id) {
       estado.guildCaixa = null;
       estado.guildPedidos = 0;
+      // E o banco da aba Boost também era o da guild anterior.
+      estado.guildBanco = null;
     }
     if (estado.eu) estado.eu.guild = m.guild;
     pintarSlotGuild(estado.eu?.guild ?? null, estado.eu?.guildConvites ?? []);
     if (m.guild && aberto()) {
-      if (guildPainelDetalhe?.id === m.guild.id) pedirDetalheGuild(m.guild.id, 'painel');
+      // A atualização leva a busca de agora: sem ela, a resposta trazia os 60 de sempre por cima do
+      // resultado da busca, e o membro achado sumia na próxima mudança da guild.
+      if (guildPainelDetalhe?.id === m.guild.id) pedirDetalheGuild(m.guild.id, 'painel', buscaDoPainelGuild());
       else if (guildModo === 'brasao' && podeGerirGuild(m.guild)) montarGuildPainel();
       else montarGuildPainel();
     }
@@ -11564,7 +13718,8 @@ function aoReceberGuild(m) {
     // Respostas fora de ordem: com debounce de 250 ms, a da terceira letra pode chegar depois da
     // da quinta. A resposta que não corresponde ao que está no campo AGORA é descartada — senão
     // a lista pisca para trás no meio da digitação.
-    if (String(m.quadro.busca ?? '') === quadroGuild.busca && m.quadro.so === quadroGuild.so) {
+    if (String(m.quadro.busca ?? '') === quadroGuild.busca && m.quadro.so === quadroGuild.so
+        && (m.quadro.ordem ?? 'gp') === quadroGuild.ordem) {
       quadroGuild.dados = m.quadro;
       quadroGuild.pagina = m.quadro.pagina;
       quadroGuild.pedindo = false;
@@ -11596,11 +13751,21 @@ function aoReceberGuild(m) {
   if (m.pvp) {
     estado.guildPvp = m.pvp;
     if (estado.modalAberto === 'pvp') montarGuildPvp();
-    // A aba Guerra do painel da guild também lê o registro (ver `pintarGuildGuerra`).
-    if (!$('#guild').classList.contains('hidden') && estado.eu?.guild && guildAba === 'guerra') {
-      pintarPaneGuild();
+    if (!$('#guild').classList.contains('hidden') && estado.eu?.guild && guildModo === 'painel') {
+      // A faixa da guerra no topo do salão (o relógio, a inscrição) chega junto com o `guild.info`,
+      // DEPOIS do pacote da guild que montou o painel: ela se refaz no lugar.
+      atualizarGuerraNoPainelGuild();
+      // A aba Guerra do painel da guild também lê o registro (ver `pintarGuildGuerra`).
+      if (guildAba === 'guerra') pintarPaneGuild();
     }
   }
+  // ---- o banco da guild (a aba Boost)
+  if (m.banco) {
+    estado.guildBanco = { ...m.banco, recebidoEm: Date.now() };
+    atualizarBancoNaTela();
+  }
+  if (m.bancoAoVivo) aplicarBancoAoVivo(m.bancoAoVivo);
+  if (m.bancoLog) receberLogDoBanco(m.bancoLog);
   if (m.escalacao) receberEscalacaoGuild(m.escalacao);
   if (m.pvpEquipe !== undefined) {
     estado.guildPvpEquipe = m.pvpEquipe;
@@ -11613,6 +13778,7 @@ function aoReceberGuild(m) {
   if (m.replay) abrirReplayGuerra({ ...m.replay, busca: true });
   if (m.analise) receberAnaliseGuerra(m.analise);
   if (m.detalhe) mostrarDetalheGuild(m.detalhe);
+  if (m.membroEquipe) receberEquipeMembroGuild(m.membroEquipe);
   if (m.ranking) {
     estado.ranking.guild = m.ranking;
     if (estado.modalAberto === 'ranking' && estado.abaRanking === 'guild') pintarRanking();
@@ -11640,17 +13806,39 @@ let guildPainelMembroAberto = null;
 /** Pedido em voo, para o duplo-clique numa linha do placar não virar dois pedidos. */
 let guildDetalhePedido = 0;
 const GUILD_DETALHE_ESPERA_MS = 1500;
+/** O pedido do painel que esperou a trava abrir (ver `pedirDetalheGuild`). */
+let guildDetalheDepois = null;
+/** O pedido em voo é a troca de ORDEM do modal já aberto, não a abertura dele (ver `mostrarDetalheGuild`). */
+let guildDetalheSoReordena = false;
 
 function fecharDetalheGuild() {
   guildDetalheAberto = { dados: null, membroId: null };
   guildDetalheDestino = 'modal';
   $('#guild-detalhe')?.classList.add('hidden');
+  // A ordem trocada no modal vale também para o painel da guild: se ele ficou aberto em Membros por
+  // baixo, com a lista de outra ordem, repinta (e pede os 60 da ordem de agora).
+  if (estado.eu?.guild && guildAba === 'membros' && !$('#guild')?.classList.contains('hidden')
+      && guildPainelDetalhe?.id === estado.eu.guild.id && (guildPainelDetalhe.ordem ?? 'padrao') !== guildOrdemMembros) {
+    pintarPaneGuild();
+  }
 }
 
 function rotuloOnlineMembro(mb) {
   if (mb.online) return t('gd.online');
   if (mb.lastSeen) return t('gd.vistoAtras', { tempo: tempoCurto(Date.now() - mb.lastSeen) });
   return t('gd.vistoNunca');
+}
+
+/**
+ * Quanto o membro já doou ao banco da guild, na vida inteira: "💎 150" na linha dele. Só existe para
+ * o dono e o sub-dono — o servidor só manda `doado` a quem manda na guild (ver `guild.detalhe`) —, que
+ * é quem decide expulsar e precisa ver isso ANTES, e não depois de abrir o histórico.
+ */
+function htmlDoadoDoMembro(mb) {
+  if (mb.doado == null) return '';
+  const n = Number(mb.doado) || 0;
+  return `<small class="gd-doou${n > 0 ? '' : ' zero'}" title="${escapar(t(n > 0 ? 'gd.doouDica' : 'gd.doouNada', { n: num(n) }))}">${
+    seloDiamante(16)}${num(n)}</small>`;
 }
 
 /**
@@ -11661,19 +13849,111 @@ function rotuloOnlineMembro(mb) {
  */
 /** Último membro que a lista trouxe para a tela — ver a nota no fim de `pintarListaMembrosGuild`. */
 let gdMembroRolado = null;
+/** A próxima pintura da lista do painel entra em cascata (a primeira da aba Membros — ver `pintarGuildMembros`). */
+let gdListaEntrada = false;
 
-function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick = null) {
+/**
+ * O ⚔ do membro: o do servidor (`poder`, que vem para TODO membro, o reserva inclusive) ou, de um
+ * servidor de antes dele, a conta sobre as fichas — que só os escalados traziam.
+ */
+const poderDoMembro = (mb) => (mb.poder != null ? Number(mb.poder) || 0 : poderDaEquipe(mb.equipe));
+
+/**
+ * As ordens da lista de membros. `padrao` é a do servidor (dono, sub-donos, escalados, nível); as
+ * outras respondem as perguntas de quem escala — "quem é o mais forte?" sem abrir perfil por perfil.
+ */
+const ORDENS_MEMBROS_GUILD = {
+  padrao: { rotulo: 'gd.ordemPadrao', comparar: null },
+  poder: { rotulo: 'gd.ordemPoder', comparar: (a, b) => poderDoMembro(b) - poderDoMembro(a) || (b.level ?? 0) - (a.level ?? 0) },
+  nivel: { rotulo: 'gd.ordemNivel', comparar: (a, b) => (b.level ?? 0) - (a.level ?? 0) || poderDoMembro(b) - poderDoMembro(a) },
+  online: { rotulo: 'gd.ordemOnline', comparar: (a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0) || (b.lastSeen ?? 0) - (a.lastSeen ?? 0) },
+};
+/** O "+N além destes" diz QUEM ficou de fora — e isso depende da ordem com que o servidor cortou a lista. */
+const CHAVE_MAIS_MEMBROS = {
+  padrao: 'gd.maisMembros', poder: 'gd.maisMembrosPoder', nivel: 'gd.maisMembrosNivel', online: 'gd.maisMembrosOnline',
+};
+const chaveMaisMembros = (ordem) => CHAVE_MAIS_MEMBROS[ordem] ?? CHAVE_MAIS_MEMBROS.padrao;
+let guildOrdemMembros = 'padrao';
+try {
+  const salva = localStorage.getItem('gdOrdem');
+  if (salva && ORDENS_MEMBROS_GUILD[salva]) guildOrdemMembros = salva;
+} catch { /* sem armazenamento: a ordem do servidor */ }
+
+const ordenarMembrosGuild = (membros) => {
+  const comparar = ORDENS_MEMBROS_GUILD[guildOrdemMembros]?.comparar;
+  return comparar ? [...membros].sort(comparar) : membros;
+};
+
+/** Os chips da ordem. `aoTrocar` repinta só a lista de quem chamou. */
+function montarOrdemMembrosGuild(host, aoTrocar) {
+  if (!host) return;
+  host.innerHTML = Object.entries(ORDENS_MEMBROS_GUILD).map(([id, o]) => `
+    <button type="button" class="gd-ordem${id === guildOrdemMembros ? ' on' : ''}" data-gd-ordem="${id}"
+            role="radio" aria-checked="${id === guildOrdemMembros}">${t(o.rotulo)}</button>`).join('');
+  host.onclick = (ev) => {
+    const b = ev.target.closest('[data-gd-ordem]');
+    if (!b || b.dataset.gdOrdem === guildOrdemMembros) return;
+    guildOrdemMembros = b.dataset.gdOrdem;
+    try { localStorage.setItem('gdOrdem', guildOrdemMembros); } catch { /* vale só nesta sessão */ }
+    for (const x of host.querySelectorAll('[data-gd-ordem]')) {
+      const on = x.dataset.gdOrdem === guildOrdemMembros;
+      x.classList.toggle('on', on);
+      x.setAttribute('aria-checked', String(on));
+    }
+    aoTrocar();
+  };
+}
+
+/**
+ * A equipe de um RESERVA, pedida quando a linha dele abre: a ficha da guild traz o ⚔ de todos, mas
+ * as fichas dos pokémon só dos escalados (ver `guild.detalhe` no sim). Uma vez por membro em voo.
+ */
+const equipesPedidasGuild = new Set();
+function pedirEquipeMembroGuild(guildId, playerId) {
+  const chave = `${guildId}:${playerId}`;
+  if (equipesPedidasGuild.has(chave)) return;
+  equipesPedidasGuild.add(chave);
+  // `membroId`, e não `playerId`: esse campo o gateway sobrescreve com o nick de quem manda.
+  enviar({ t: 'guild.membroEquipe', guildId, membroId: playerId });
+  // Sem resposta (recusa calada, socket caído), um novo toque pode pedir de novo.
+  setTimeout(() => equipesPedidasGuild.delete(chave), 10_000);
+}
+
+function receberEquipeMembroGuild({ guildId, playerId, equipe }) {
+  equipesPedidasGuild.delete(`${guildId}:${playerId}`);
+  for (const d of [guildDetalheAberto.dados, guildPainelDetalhe]) {
+    if (Number(d?.id) !== Number(guildId)) continue;
+    const mb = d.membros?.find((x) => x.playerId === playerId);
+    if (mb) mb.equipe = equipe ?? [];
+  }
+  if (Number(guildDetalheAberto.dados?.id) === Number(guildId)) pintarDetalheGuild();
+  if (Number(guildPainelDetalhe?.id) === Number(guildId) && !$('#guild').classList.contains('hidden')) pintarMembrosGuildPainel();
+}
+
+function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick = null, guildId = null) {
   if (!host) return;
   host.innerHTML = '';
   if (!membros.length) {
     host.innerHTML = `<div class="cm-vazio">${t('gd.semMembros')}</div>`;
     return;
   }
+  // A barrinha do ⚔ é contra o MAIS FORTE da lista: comparar de relance é o pedido.
+  const maiorPoder = Math.max(1, ...membros.map(poderDoMembro));
+  // Ordenada por ⚔ ou por nível, a lista é um PLACAR: cada linha ganha a posição, e o pódio a
+  // medalha. Com busca, não — a posição seria dentro do que a busca achou, e mentiria.
+  const placar = (guildOrdemMembros === 'poder' || guildOrdemMembros === 'nivel') && !buscaDoPainelGuild();
+  const meuNick = String(estado.eu?.nick ?? '').toLowerCase();
+  if (host.id === 'guild-membros-lista' && gdListaEntrada) {
+    host.classList.add('anima');
+    gdListaEntrada = false;
+  } else host.classList.remove('anima');
 
-  for (const mb of membros) {
+  ordenarMembrosGuild(membros).forEach((mb, i) => {
     const aberto = membroAbertoId === mb.playerId;
+    const souEu = String(mb.nick ?? '').toLowerCase() === meuNick;
     const el = document.createElement('div');
-    el.className = 'gd-membro' + (aberto ? ' aberto' : '');
+    el.className = 'gd-membro' + (aberto ? ' aberto' : '') + (souEu ? ' eu' : '') + (mb.ehDono ? ' dono' : '');
+    el.style.setProperty('--i', String(Math.min(i, 14)));
 
     const topo = document.createElement('div');
     topo.className = 'gd-membro-top';
@@ -11685,24 +13965,31 @@ function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick =
     // Duas linhas, e nao tres: nick com os selos em cima, e o resto ("Nv 350 · 4 na equipe ·
     // Online agora") numa fita so embaixo. A terceira linha existia so para o "Online agora" e
     // esticava toda linha da lista em 14 px — numa guild de trinta, meia tela de altura.
+    // O ONLINE também mora no rosto: a bolinha verde no canto do boneco se lê de relance, sem ler.
     cab.innerHTML = `
-      <span class="gd-ava"></span>
+      ${placar ? `<span class="gd-pos${i < 3 ? ` p${i + 1}` : ''}">${i < 3 ? SVG_GLD.coroa : ''}<b>${num(i + 1)}</b></span>` : ''}
+      <span class="gd-ava${mb.online ? ' on' : ''}"><i class="gd-ava-dot" aria-hidden="true"></i></span>
       <span class="gd-membro-txt">
-        <b>${escapar(mb.nick ?? '')}${mb.ehDono ? ` <em class="gd-selo-dono">${t('gd.seloDono')}</em>` : ''}${
-          mb.ehSubdono && !mb.ehDono ? ` <em class="gd-selo-sub">${t('gd.seloSubdono')}</em>` : ''
+        <b><span class="gd-nick">${escapar(mb.nick ?? '')}</span>${souEu ? ` <em class="gd-selo-eu">${t('gh.voce')}</em>` : ''}${
+          mb.ehDono ? ` <em class="gd-selo-dono">${SVG_GLD.coroa}${t('gd.seloDono')}</em>` : ''}${
+          mb.ehSubdono && !mb.ehDono ? ` <em class="gd-selo-sub">${SVG_GLD.escudo}${t('gd.seloSubdono')}</em>` : ''
         }${
           mb.escalado
-            ? ` <em class="gd-selo-time">${t('gd.time')}</em>`
+            ? ` <em class="gd-selo-time">${SVG_GLD.time}${t('gd.time')}</em>`
             : ` <em class="gd-selo-reserva">${t('gd.reserva')}</em>`
         }</b>
         <span class="gd-membro-meta">
           <small>${t('painel.nivelCurto')} ${num(mb.level)}</small>
-          <small>${t('gd.equipeDe', { n: (mb.equipe ?? []).length })}</small>
+          <small>${t('gd.equipeDe', { n: mb.nEquipe ?? (mb.equipe ?? []).length })}</small>
+          ${htmlDoadoDoMembro(mb)}
           <span class="gd-online${mb.online ? ' on' : ''}">${escapar(rotuloOnlineMembro(mb))}</span>
         </span>
       </span>
-      <span class="gd-membro-poder">⚔ ${num(poderDaEquipe(mb.equipe))}</span>
-      <span class="gd-seta">${aberto ? '▾' : '▸'}</span>`;
+      <span class="gd-membro-poder"${mb.escalado ? '' : ` title="${escapar(t('gd.poderReserva'))}"`}>
+        <b>⚔ ${num(poderDoMembro(mb))}</b>
+        <span class="gd-poder-barra"><i style="--p:${(poderDoMembro(mb) / maiorPoder).toFixed(3)}"></i></span>
+      </span>
+      <span class="gd-seta" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M9 5.5 15.5 12 9 18.5 7.6 17.1 12.7 12 7.6 6.9z"/></svg></span>`;
     cab.querySelector('.gd-ava').appendChild(
       spriteAnimado(mb.looktype ?? LOOKTYPE_TREINADOR, 32, 3, null, mb.visual, { treinador: true }),
     );
@@ -11752,28 +14039,37 @@ function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick =
         const acoes = document.createElement('div');
         acoes.className = 'gd-acoes';
 
-        const mini = (rotulo, classe, aoClicar) => {
+        // Cada ação com o desenho do que ela faz: o escudo do sub-dono, a coroa da liderança e o
+        // "−" de quem sai. O de expulsar é o único vermelho — é o único que tira alguém da guild.
+        const mini = (rotulo, icone, classe, aoClicar) => {
           const b = document.createElement('button');
           b.type = 'button';
-          b.className = `guild-mini-btn${classe ? ` ${classe}` : ''}`;
-          b.textContent = rotulo;
+          b.className = `guild-mini-btn gh-bt-ico${classe ? ` ${classe}` : ''}`;
+          b.innerHTML = `${icone}<span>${escapar(rotulo)}</span>`;
           b.onclick = (ev) => { ev.stopPropagation(); aoClicar(); };
           acoes.appendChild(b);
         };
 
         if (souODono) {
           // Promover / rebaixar é só do dono: quem controla a permissão controla a guild.
-          mini(t(mb.ehSubdono ? 'guild.tirarSubdono' : 'guild.porSubdono'), '', () => confirmarSubdono(mb, kick));
-          mini(t('guild.transferirLider'), '', () => confirmarTransferirLider(mb, kick));
+          mini(t(mb.ehSubdono ? 'guild.tirarSubdono' : 'guild.porSubdono'), SVG_GLD.escudo, '', () => confirmarSubdono(mb, kick));
+          mini(t('guild.transferirLider'), SVG_GLD.coroa, '', () => confirmarTransferirLider(mb, kick));
         }
 
-        mini(t('guild.expulsar'), 'gd-kick', () => confirmarExpulsar(mb, kick));
+        mini(t('guild.expulsar'), dlgIcone('pessoaMenos', 13), 'gd-kick', () => confirmarExpulsar(mb, kick));
         el.appendChild(acoes);
       }
 
       const equipe = document.createElement('div');
       equipe.className = 'gd-equipe';
-      if (!(mb.equipe ?? []).length) {
+      // O reserva chega com o ⚔ e sem as fichas: elas vêm agora, a pedido — e só para quem é da guild.
+      const reservaSemFichas = !(mb.equipe ?? []).length && (mb.nEquipe ?? 0) > 0;
+      if (reservaSemFichas && guildId != null && Number(estado.eu?.guild?.id) === Number(guildId)) {
+        equipe.innerHTML = `<div class="cm-vazio gd-sem-equipe">${t('gd.carregandoEquipe')}</div>`;
+        pedirEquipeMembroGuild(guildId, mb.playerId);
+      } else if (reservaSemFichas) {
+        equipe.innerHTML = `<div class="cm-vazio gd-sem-equipe">${t('gd.equipeSoDaGuild')}</div>`;
+      } else if (!(mb.equipe ?? []).length) {
         equipe.innerHTML = `<div class="cm-vazio gd-sem-equipe">${t('gd.semEquipe')}</div>`;
       } else {
         for (const pk of mb.equipe) equipe.appendChild(cardEquipeGuild(pk));
@@ -11781,7 +14077,7 @@ function pintarListaMembrosGuild(host, membros, membroAbertoId, aoToggle, kick =
       el.appendChild(equipe);
     }
     host.appendChild(el);
-  }
+  });
 
   // Abrir um membro lá embaixo da lista deixava a equipe dele FORA da tela: a lista repinta,
   // o bloco cresce para baixo e quem tocou continua olhando o mesmo pedaço de antes, achando
@@ -11812,14 +14108,33 @@ function pintarMembrosGuildPainel() {
     return;
   }
   const lista = membrosBuscadosGuild(d.membros ?? []);
+  const busca = buscaDoPainelGuild();
+  // A lista na mão já é a resposta da busca de AGORA? Enquanto o pedido está a caminho, o vazio do
+  // filtro local não quer dizer nada: os 60 que chegaram não são a guild inteira.
+  const respondida = (d.busca ?? '') === busca;
+  // O resumo ao lado das ordens: quantos são e, com a guild inteira na mão, quantos estão online.
+  const resumo = $('#gh-resumo');
+  if (resumo) {
+    const total = Number(d.totalMembros ?? (d.membros ?? []).length) || 0;
+    const inteira = !(d.busca ?? '') && (d.membros ?? []).length >= total;
+    const online = (d.membros ?? []).filter((m) => m.online).length;
+    resumo.innerHTML = `${SVG_GLD.membros}${num(total)}${inteira
+      ? ` <span class="gh-resumo-on"><i class="gh-dot"></i>${t('gh.online', { n: num(online) })}</span>` : ''}`;
+  }
   // A busca que nao acha nada precisa dizer isso: a lista vazia sozinha parece uma guild vazia.
-  if (!lista.length && guildBuscaMembros.trim()) {
-    host.innerHTML = `<div class="cm-vazio">${t('guild.semResultado')}</div>`;
+  if (!lista.length && busca) {
+    host.innerHTML = htmlVazioGuild(SVG_GLD.lupa, t(respondida ? 'guild.semResultado' : 'guild.buscandoMembro'));
     return;
   }
-  const fora = Math.max(0, Number(d.totalMembros ?? 0) - (d.membros ?? []).length);
+  // O "+N além destes": sem busca, a guild menos a lista; com a busca respondida, os que batem menos
+  // os que couberam (a busca também corta em 60). Esperando a resposta, nenhum — o número seria velho.
+  const naLista = (d.membros ?? []).length;
+  const fora = !busca
+    ? Math.max(0, Number(d.totalMembros ?? 0) - naLista)
+    : respondida ? Math.max(0, Number(d.totalBusca ?? 0) - naLista) : 0;
+  const textoFora = busca ? 'gd.maisResultados' : chaveMaisMembros(d.ordem);
   host.innerHTML = `<div class="gd-membros" id="guild-membros-lista"></div>${
-    fora ? `<p class="gd-ajuda gd-mais">${t('gd.maisMembros', { n: num(fora) })}</p>` : ''}`;
+    fora ? `<p class="gd-ajuda gd-mais">${t(textoFora, { n: num(fora) })}</p>` : ''}`;
   pintarListaMembrosGuild(
     $('#guild-membros-lista'),
     lista,
@@ -11839,6 +14154,7 @@ function pintarMembrosGuildPainel() {
             enviar({ t: 'guild.subdono', alvoId: Number(alvoId), ligado: !!ligado }),
         }
       : null,
+    d.id,
   );
 }
 
@@ -11849,24 +14165,63 @@ function pintarMembrosGuildPainel() {
  * cada membro — numa guild cheia, duzentas. É mais cara que o resto do placar, e uma lista em
  * que cada linha é clicável é exatamente onde o duplo-clique acontece sozinho.
  */
-function pedirDetalheGuild(guildId, destino = 'modal') {
+function pedirDetalheGuild(guildId, destino = 'modal', busca = '') {
   if (!guildId) return;
+  // `reordenar` = a troca de ordem do modal aberto. Fechado enquanto esperava a trava, não pede nada.
+  if (destino === 'reordenar' && $('#guild-detalhe')?.classList.contains('hidden')) return;
   const agora = Date.now();
-  if (agora - guildDetalhePedido < GUILD_DETALHE_ESPERA_MS) return;
+  const falta = GUILD_DETALHE_ESPERA_MS - (agora - guildDetalhePedido);
+  if (falta > 0) {
+    // A trava não pode engolir a ÚLTIMA busca do painel: quem digita e apaga em menos de 1,5 s
+    // ficava com a lista do texto anterior. O pedido sai quando a trava abrir, com o texto de então.
+    // A troca de ORDEM do modal também: a lista de agora é a da ordem velha, e o último toque vale.
+    if (destino === 'painel' || destino === 'reordenar') {
+      clearTimeout(guildDetalheDepois);
+      guildDetalheDepois = setTimeout(
+        () => pedirDetalheGuild(guildId, destino, destino === 'painel' ? buscaDoPainelGuild() : busca),
+        falta,
+      );
+    }
+    return;
+  }
+  clearTimeout(guildDetalheDepois);
   guildDetalhePedido = agora;
-  guildDetalheDestino = destino;
-  enviar({ t: 'guild.detalhe', guildId });
+  guildDetalheDestino = destino === 'reordenar' ? 'modal' : destino;
+  guildDetalheSoReordena = destino === 'reordenar';
+  // A ORDEM vai junto: é o servidor que escolhe QUAIS 60 membros vêm, na guild inteira (a tela
+  // ordenando só os 60 da ordem padrão escondia o reserva mais forte — 06/10/2026).
+  enviar({
+    t: 'guild.detalhe', guildId,
+    ...(busca ? { busca } : {}),
+    ...(guildOrdemMembros !== 'padrao' ? { ordem: guildOrdemMembros } : {}),
+  });
 }
 
 function mostrarDetalheGuild(d) {
   guildDetalhePedido = 0;
+  // A resposta de uma ORDEM que o jogador já trocou fica de fora: a da ordem de agora está a caminho
+  // (o pedido dela saiu ou está na trava). Servidor de antes da ordem não devolve o campo — aí vale.
+  if (d.ordem != null && d.ordem !== guildOrdemMembros) return;
   if (guildDetalheDestino === 'painel' && estado.eu?.guild?.id === d.id) {
+    // A resposta de um texto que a pessoa já trocou fica de fora: a do texto de agora vem em seguida
+    // (o pedido dele está no atraso da busca ou na trava). Sem isso, uma busca lenta podia pintar
+    // por cima da lista que a pessoa limpou — ou o contrário.
+    if ((d.busca ?? '') !== buscaDoPainelGuild()) return;
     guildPainelDetalhe = d;
     guildPainelMembroAberto = null;
-    if (!$('#guild').classList.contains('hidden')) pintarMembrosGuildPainel();
+    if (!$('#guild').classList.contains('hidden')) {
+      pintarMembrosGuildPainel();
+      // O herói (online, ⚔ do time) e os rostos da aba Guerra também leem a ficha.
+      atualizarDetalheNoPainelGuild();
+    }
     guildDetalheDestino = 'modal';
     return;
   }
+  // A troca de ordem só repinta o modal que continua aberto, nesta guild: quem o fechou no meio do
+  // caminho não o vê reabrir sozinho quando a resposta chega.
+  const soReordena = guildDetalheSoReordena;
+  guildDetalheSoReordena = false;
+  if (soReordena && ($('#guild-detalhe')?.classList.contains('hidden') || guildDetalheAberto.dados?.id !== d.id)) return;
   guildDetalheAberto = { dados: d, membroId: null };
   const modal = $('#guild-detalhe');
   if (!modal) return;
@@ -11890,32 +14245,38 @@ function pintarDetalheGuild() {
   if (!host || !d) return;
 
   const membros = d.membros ?? [];
-  const poderTotal = membros.reduce((soma, mb) => soma + poderDaEquipe(mb.equipe), 0);
+  // O poder SOMADO é o do time da guerra: os escalados. O reserva tem ⚔ na linha dele, mas não luta.
+  const poderTotal = membros.filter((mb) => mb.escalado).reduce((soma, mb) => soma + poderDoMembro(mb), 0);
   const max = Number(d.maxTime) || estado.guildMaxTime || 10;
   // `totalMembros` é a contagem VERDADEIRA; `membros.length` é só o que coube na lista (a guild
   // não tem mais teto de gente — ver `MAX_MEMBROS_FICHA` no servidor).
   const total = Number(d.totalMembros ?? membros.length) || 0;
   const foraDaLista = Math.max(0, total - membros.length);
 
+  // O topo é o herói do salão em miniatura (ver `htmlHeroiGuild`): a mesma luz na cor do brasão e as
+  // mesmas placas — quem olha a guild dos outros lê os números no lugar em que lê os da sua.
+  const placa = (ico, valor, rotulo, classe = '') => `
+    <div class="gh-placa ${classe}"><span class="gh-placa-ico">${ico}</span><b>${valor}</b><small>${rotulo}</small></div>`;
   host.innerHTML = `
-    <div class="gd-cab">
-      <span class="gd-brasao" id="gd-brasao"></span>
-      <div class="gd-cab-txt">
-        <div class="gd-dono">${t('gd.dono')} <b>${escapar(d.ownerNick ?? '—')}</b></div>
-        <div class="gd-numeros">
-          <span>${t('gd.gp')} <b>${num(d.gp ?? 0)}</b></span>
-          <span>${t('gd.membros')} <b>${num(total)}</b></span>
-          <span>${t('gd.escalados')} <b>${num(Number(d.escalados) || 0)}/${max}</b></span>
-          <span>${t('gd.poderTotal')} <b>⚔ ${num(poderTotal)}</b></span>
-        </div>
+    <section class="gh-heroi gh-heroi-mini" style="--gh-cor:${corDaGuild(d.brasao)}">
+      <div class="gh-palco" aria-hidden="true"><span class="gh-raios"></span><div class="gh-brasao" id="gd-brasao"></div></div>
+      <div class="gh-ident">
+        <h3 class="gh-nome">${nomeGuildComTag(d)}</h3>
+        <div class="gh-sub"><span class="gh-dono" title="${escapar(t('gd.dono'))}">${SVG_GLD.coroa}${escapar(d.ownerNick ?? '—')}</span></div>
       </div>
-    </div>
-    <p class="gd-ajuda">${t('gd.ajudaTime', { max })}</p>
-    <p class="gd-ajuda">${t('gd.ajuda')}</p>
+      <div class="gh-placas">
+        ${placa(SVG_GLD.gp, num(d.gp ?? 0), t('gd.gp'), 'ouro')}
+        ${placa(SVG_GLD.membros, num(total), t('gd.membros'))}
+        ${placa(SVG_GLD.time, `${num(Number(d.escalados) || 0)}/${max}`, t('gd.escalados'))}
+        ${placa(dlgIcone('raio', 17), num(poderTotal), t('gd.poderTotal'), 'rx')}
+      </div>
+    </section>
+    <p class="gh-ajuda">${t('gd.ajudaTime', { max })}</p>
+    <div class="gh-ordens-linha"><div class="gd-ordens" id="gd-ordem-membros" role="radiogroup"></div></div>
     <div class="gd-membros" id="gd-membros"></div>
-    ${foraDaLista ? `<p class="gd-ajuda">${t('gd.maisMembros', { n: num(foraDaLista) })}</p>` : ''}`;
+    ${foraDaLista ? `<p class="gd-ajuda gd-mais">${t(chaveMaisMembros(d.ordem), { n: num(foraDaLista) })}</p>` : ''}`;
 
-  pintarBrasao($('#gd-brasao'), d.brasao, 44);
+  pintarBrasao($('#gd-brasao'), d.brasao, 56);
 
   const lista = $('#gd-membros');
   if (!membros.length) {
@@ -11923,10 +14284,14 @@ function pintarDetalheGuild() {
     return;
   }
 
+  montarOrdemMembrosGuild($('#gd-ordem-membros'), () => {
+    pintarDetalheGuild();
+    pedirDetalheGuild(d.id, 'reordenar');
+  });
   pintarListaMembrosGuild(lista, membros, guildDetalheAberto.membroId, (playerId, aberto) => {
     guildDetalheAberto.membroId = aberto ? null : playerId;
     pintarDetalheGuild();
-  });
+  }, null, d.id);
 }
 
 /** Um pokémon da equipe de guerra. Mesma fileira de selos dos cards do Market e do Mercado. */
@@ -11952,7 +14317,7 @@ $('#guild-detalhe')?.addEventListener('click', (ev) => {
   // A ficha do pokémon abre POR CIMA desta tela; o clique no fundo dela não pode atravessar
   // e fechar a guild embaixo. Mesma guarda do Depot.
   if (fichaAberta()) return;
-  if (ev.target === $('#guild-detalhe')) fecharDetalheGuild();
+  if (cliqueNoFundo(ev, $('#guild-detalhe'))) fecharDetalheGuild();
 });
 
 $('#tr-guild')?.addEventListener('click', abrirGuild);
@@ -11964,11 +14329,15 @@ $('#guild-voltar')?.addEventListener('click', () => {
   montarGuildSemGuild();
 });
 $('#guild')?.addEventListener('click', (ev) => {
-  if (ev.target === $('#guild')) fecharGuild();
+  if (cliqueNoFundo(ev, $('#guild'))) fecharGuild();
 });
 $('#guild-time-fechar')?.addEventListener('click', fecharEditorEquipeGuerra);
 $('#guild-time-modal')?.addEventListener('click', (ev) => {
-  if (ev.target === $('#guild-time-modal')) fecharEditorEquipeGuerra();
+  if (cliqueNoFundo(ev, $('#guild-time-modal'))) fecharEditorEquipeGuerra();
+});
+$('#guild-doacoes-fechar')?.addEventListener('click', fecharDoacoesDaGuild);
+$('#guild-doacoes-modal')?.addEventListener('click', (ev) => {
+  if (cliqueNoFundo(ev, $('#guild-doacoes-modal'))) fecharDoacoesDaGuild();
 });
 
 // --------------------------------------------------- o TIME da guild (a escalação)
@@ -12125,7 +14494,7 @@ function pintarEscalacaoGuild() {
 
 $('#guild-escalacao-fechar')?.addEventListener('click', fecharEscalacaoGuild);
 $('#guild-escalacao-modal')?.addEventListener('click', (ev) => {
-  if (ev.target === $('#guild-escalacao-modal')) fecharEscalacaoGuild();
+  if (cliqueNoFundo(ev, $('#guild-escalacao-modal'))) fecharEscalacaoGuild();
 });
 
 // ------------------------------------------------------------------ ginásios
@@ -12243,6 +14612,88 @@ function pintarGinasios() {
 }
 
 // ---------------------------------------------------------------- a grade
+//
+// O resumo em cima (quantos eu lidero, quantos times tenho), as regras atrás de um "Como
+// funciona" (eram um parágrafo de seis linhas na frente dos cards, toda vez), os filtros e os
+// dezoito cards. O card responde de relance as duas perguntas da tela: QUEM manda aqui, e o
+// quanto eu estou PERTO — a barra é a minha força contra a do líder.
+
+/** Os filtros da grade. `passa(g)` decide quem fica. */
+const FILTROS_GINASIO = [
+  { id: 'todos', rotulo: 'gin.filtroTodos', passa: () => true },
+  { id: 'comTime', rotulo: 'gin.filtroComTime', passa: (g) => !!g.meuTime },
+  { id: 'semTime', rotulo: 'gin.filtroSemTime', passa: (g) => !g.meuTime },
+  { id: 'lidero', rotulo: 'gin.filtroLidero', passa: (g) => g.souLider },
+];
+
+let ginasioFiltro = 'todos';
+try {
+  const salvo = localStorage.getItem('ginFiltro');
+  if (FILTROS_GINASIO.some((f) => f.id === salvo)) ginasioFiltro = salvo;
+} catch { /* sem armazenamento: começa em Todos */ }
+
+/** A minha força contra a do líder, de 0 a 1 (o líder sou eu: 1). `null` sem time ou sem líder. */
+function fracaoDoLider(g) {
+  if (g.souLider) return 1;
+  if (!g.meuTime || !g.lider?.poder) return null;
+  return Math.max(0, Math.min(1, g.meuTime.poder / g.lider.poder));
+}
+
+/** A barrinha de força: o preenchimento entra correndo uma vez (`--p` de 0 a 1). */
+const barraGinasio = (p, classe = '') =>
+  `<span class="gin-barra${classe ? ` ${classe}` : ''}"><i style="--p:${Math.max(0, Math.min(1, p)).toFixed(3)}"></i></span>`;
+
+function cardDaGrade(g, info) {
+  const card = document.createElement('div');
+  card.className = `gin-card ${g.tipo}${g.souLider ? ' meu' : ''}${g.lider ? '' : ' vago'}`;
+  card.dataset.tipo = g.tipo;
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
+  const p = fracaoDoLider(g);
+  const meu = g.souLider
+    ? `<span class="gin-card-meu-rot ouro">👑 ${t('gin.cardLidera')}</span>${barraGinasio(1, 'ouro')}`
+    : g.meuTime
+      ? `<span class="gin-card-meu-rot">${t('gin.meuPoder', { poder: num(g.meuTime.poder) })}</span>
+         ${p != null ? `${barraGinasio(p)}<span class="gin-card-pct">${t('gin.cardPct', { pct: Math.round(p * 100) })}</span>` : ''}`
+      : info.podeRegistrar
+        ? `<button type="button" class="gin-card-cta">+ ${t('gin.registrarTime')}</button>`
+        : `<i class="gin-card-sem">${t('gin.semTime')}</i>`;
+  card.innerHTML = `
+    <span class="gin-card-faixa">
+      <img class="gin-card-ico" src="${iconeDoGinasio(g.tipo)}" alt="">
+      <span class="gin-card-nome">${g.tipo}</span>
+      ${g.souLider ? `<span class="gin-card-coroa">${t('gin.cardVoce')}</span>` : ''}
+    </span>
+    <span class="gin-card-lider">
+      <span class="gin-card-palco"${g.lider ? '' : ` style="--gin-marca:url('${iconeDoGinasio(g.tipo)}')"`}></span>
+      <span class="gin-card-lider-info">${g.lider
+        ? `<b>👑 ${escapar(g.lider.nick)}</b><em>⚔ ${num(g.lider.poder)}</em>${g.lider.desde ? `<small>${tempoDesde(g.lider.desde)}</small>` : ''}`
+        : `<b class="gin-card-vago">${t('gin.vago')}</b><small>${t('gin.vagoDica')}</small>`}</span>
+    </span>
+    <span class="gin-card-meu">${meu}</span>`;
+  // O boneco do líder anda (o mesmo `spriteAnimado` do ranking): é o que dá dono a cada card.
+  if (g.lider) {
+    card.querySelector('.gin-card-palco').appendChild(
+      spriteAnimado(g.lider.looktype ?? 159, 40, 3, null, g.lider.vs, { treinador: true }),
+    );
+  }
+  const abrir = () => abrirGinasio(g.tipo);
+  card.onclick = (ev) => {
+    // O atalho do card sem time: abre o ginásio JÁ no editor, sem a parada no pódio.
+    if (ev.target.closest('.gin-card-cta')) {
+      abrirGinasio(g.tipo);
+      return abrirEditorDeGinasio(g.tipo);
+    }
+    abrir();
+  };
+  card.onkeydown = (ev) => {
+    if (ev.target === card && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      abrir();
+    }
+  };
+  return card;
+}
 
 function pintarGinasioGrade(host) {
   host.classList.remove('editando');
@@ -12253,53 +14704,40 @@ function pintarGinasioGrade(host) {
       : `<div class="gin-carregando">${t('gin.carregando')}</div>`;
     return ligarTentarDeNovo();
   }
-  const meus = info.ginasios.filter((g) => g.souLider).length;
+  const lidero = info.ginasios.filter((g) => g.souLider).length;
+  const comTime = info.ginasios.filter((g) => g.meuTime).length;
+  const contas = Object.fromEntries(FILTROS_GINASIO.map((f) => [f.id, info.ginasios.filter(f.passa).length]));
+  if (!contas[ginasioFiltro] && ginasioFiltro !== 'todos') ginasioFiltro = 'todos';
   host.innerHTML = `
-    <p class="gin-intro">${t('gin.intro', {
-      max: info.timeMax,
-      pct: GINASIO_BUFF_PCT,
-    })}</p>
-    ${info.podeRegistrar
-      ? (meus
-        ? `<p class="gin-meus-titulos">${t('gin.meusTitulos', { n: meus })}</p>`
-        : '')
-      : `<p class="gin-travado">${t('gin.semNivel', { n: info.nivelMin })}</p>`}
+    <div class="gin-resumo">
+      <span class="gin-chip${lidero ? ' ouro' : ''}">👑 ${t('gin.resumoLidero', { n: num(lidero) })}</span>
+      <span class="gin-chip">⚔ ${t('gin.resumoTimes', { n: num(comTime), total: num(info.ginasios.length) })}</span>
+      <button type="button" class="gin-ajuda-bt" id="gin-ajuda" aria-expanded="false">? ${t('gin.comoFunciona')}</button>
+    </div>
+    <p class="gin-intro hidden" id="gin-intro">${t('gin.intro', { max: info.timeMax, pct: GINASIO_BUFF_PCT })}</p>
+    ${info.podeRegistrar ? '' : `<p class="gin-travado">${t('gin.semNivel', { n: info.nivelMin })}</p>`}
+    <div class="gin-filtros" role="tablist">${FILTROS_GINASIO.map((f) => `
+      <button type="button" class="gin-filtro${f.id === ginasioFiltro ? ' on' : ''}" data-filtro="${f.id}" role="tab"
+              aria-selected="${f.id === ginasioFiltro}">${t(f.rotulo)}<em>${num(contas[f.id])}</em></button>`).join('')}
+    </div>
     <div class="gin-grade" id="gin-grade"></div>`;
-
+  $('#gin-ajuda').onclick = (ev) => {
+    const aberto = $('#gin-intro').classList.toggle('hidden') === false;
+    ev.currentTarget.setAttribute('aria-expanded', String(aberto));
+    ev.currentTarget.classList.toggle('on', aberto);
+  };
+  host.querySelector('.gin-filtros').onclick = (ev) => {
+    const b = ev.target.closest('[data-filtro]');
+    if (!b || b.dataset.filtro === ginasioFiltro) return;
+    ginasioFiltro = b.dataset.filtro;
+    try { localStorage.setItem('ginFiltro', ginasioFiltro); } catch { /* vale só nesta sessão */ }
+    pintarGinasioGrade(host);
+  };
   const grade = $('#gin-grade');
-  for (const g of info.ginasios) {
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = `gin-card ${g.tipo}${g.souLider ? ' meu' : ''}`;
-    card.dataset.tipo = g.tipo;
-    // O card é um PÔSTER do ginásio: o tipo no alto, o LÍDER andando no meio e como eu estou
-    // embaixo. O boneco no centro é o que transforma dezoito retângulos iguais em dezoito
-    // lugares com dono — e é o que dá sentido ao espaço que a grade tinha sobrando.
-    card.innerHTML = `
-      <div class="gin-card-topo">
-        <img class="gin-card-ico" src="${iconeDoGinasio(g.tipo)}" alt="">
-        <span class="gin-card-nome">${g.tipo}</span>
-      </div>
-      <div class="gin-card-palco"${g.lider ? '' : ` style="--gin-marca:url('${iconeDoGinasio(g.tipo)}')"`}></div>
-      <div class="gin-card-lider">${
-        g.lider ? `👑 ${escapar(g.lider.nick)}` : `<i>${t('gin.semLider')}</i>`
-      }</div>
-      <div class="gin-card-poder">${g.lider ? `⚔ ${num(g.lider.poder)}` : ''}</div>
-      <div class="gin-card-meu">${
-        g.meuTime
-          ? t('gin.meuPoder', { poder: num(g.meuTime.poder) })
-          : `<i>${t('gin.semTime')}</i>`
-      }</div>`;
-    // O boneco é o mesmo `spriteAnimado` do ranking e do replay: anda sozinho, olhando para
-    // baixo. Ginásio sem dono fica com o palco vazio de propósito — a ausência é a informação.
-    if (g.lider) {
-      card.querySelector('.gin-card-palco').appendChild(
-        spriteAnimado(g.lider.looktype ?? 159, 52, 3, null, g.lider.vs, { treinador: true }),
-      );
-    }
-    card.onclick = () => abrirGinasio(g.tipo);
-    grade.appendChild(card);
-  }
+  const filtro = FILTROS_GINASIO.find((f) => f.id === ginasioFiltro) ?? FILTROS_GINASIO[0];
+  const lista = info.ginasios.filter(filtro.passa);
+  for (const g of lista) grade.appendChild(cardDaGrade(g, info));
+  if (!lista.length) grade.innerHTML = `<p class="vazio-msg">${t('gin.filtroVazio')}</p>`;
 }
 
 function abrirGinasio(tipo) {
@@ -12426,7 +14864,7 @@ function ligarTimeGinasio(el, linha, tipo) {
 $('#gin-time-detalhe-fechar')?.addEventListener('click', fecharTimeGinasio);
 $('#gin-time-detalhe')?.addEventListener('click', (ev) => {
   if (fichaAberta()) return;
-  if (ev.target === $('#gin-time-detalhe')) fecharTimeGinasio();
+  if (cliqueNoFundo(ev, $('#gin-time-detalhe'))) fecharTimeGinasio();
 });
 
 function pintarGinasioPainel(host) {
@@ -12436,39 +14874,60 @@ function pintarGinasioPainel(host) {
   const daGrade = ginasioDaGrade(tipo);
   const info = estado.ginasioInfo;
 
+  // O HERÓI do ginásio: a cor do tipo, o prêmio em jogo (a regra inteira mora na dica do selo) e
+  // quem manda, há quanto tempo. Embaixo, o cartão "Você": onde eu estou, quanto falta e os dois
+  // botões — a parte da tela que traz o jogador de volta.
+  const lider = painel?.ranking?.[0] ?? null;
   host.innerHTML = `
-    <div class="gin-topo">
+    <div class="gin-heroi ${tipo}">
       <button type="button" class="gin-voltar" id="gin-voltar">← ${t('gin.voltar')}</button>
-      <img class="gin-topo-ico" src="${iconeDoGinasio(tipo)}" alt="">
-      <h3 class="gin-topo-nome">${t('gin.tituloDoGinasio', { tipo })}</h3>
+      <img class="gin-heroi-ico" src="${iconeDoGinasio(tipo)}" alt="">
+      <div class="gin-heroi-txt">
+        <h3 class="gin-topo-nome">${t('gin.tituloDoGinasio', { tipo })}</h3>
+        <span class="gin-heroi-premio" title="${escapar(t('gin.regraBuff', { pct: GINASIO_BUFF_PCT, tipo }).replace(/<[^>]+>/g, ''))}">${
+          t('gin.premioCurto', { pct: GINASIO_BUFF_PCT, tipo })}</span>
+      </div>
+      ${lider && painel?.liderDesde ? `
+        <div class="gin-heroi-lider">
+          <span class="gin-heroi-lider-ava" id="gin-heroi-lider-ava"></span>
+          <span><b>👑 ${escapar(lider.nick)}</b><small>${tempoDesde(painel.liderDesde)}</small></span>
+        </div>` : ''}
     </div>
-    <p class="gin-regra">${t('gin.regraBuff', { pct: GINASIO_BUFF_PCT, tipo })}</p>
-    <div class="gin-meu" id="gin-meu"></div>
+    <div class="gin-voce" id="gin-meu"></div>
     <h4 class="gin-podio-titulo">${t('gin.podio')}</h4>
     <div class="gin-podio" id="gin-podio">${
       painel ? '' : (ginasioErro ? htmlFalhaGinasio() : `<div class="gin-carregando">${t('gin.carregando')}</div>`)
     }</div>`;
   $('#gin-voltar').onclick = voltarParaGrade;
   ligarTentarDeNovo();
+  if (lider && painel?.liderDesde) {
+    $('#gin-heroi-lider-ava')?.appendChild(spriteAnimado(lider.looktype ?? 159, 34, 3, null, lider.vs, { treinador: true }));
+  }
 
-  // ---- o meu bloco: time registrado, posição e os dois botões
+  // ---- o cartão "Você": posição, a barra até o líder, o time e os dois botões
   const meu = $('#gin-meu');
   const podeRegistrar = info?.podeRegistrar ?? false;
   const pos = painel?.minhaPos ?? null;
   const meuTime = painel?.meuTime ?? null;
+  const souLiderAqui = daGrade?.souLider ?? (pos === 1);
+  const fracao = meuTime && lider?.poder ? Math.min(1, meuTime.poder / lider.poder) : 0;
+  meu.classList.toggle('lider', !!souLiderAqui && !!meuTime);
   meu.innerHTML = `
-    <div class="gin-meu-linha">
+    <div class="gin-voce-pos">${meuTime && pos
+      ? `<b>${num(pos)}º</b><small>${t('gin.voceDe', { n: num(painel?.total ?? pos) })}</small>`
+      : '<b>—</b>'}</div>
+    <div class="gin-voce-meio">
       <span class="gin-meu-rotulo">${t('gin.meuTime')}</span>
-      <span class="gin-meu-valor">${
-        meuTime
-          ? t('gin.minhaPosicao', { pos, poder: num(meuTime.poder) })
-          : `<i>${t('gin.semTime')}</i>`
-      }</span>
+      <span class="gin-meu-valor">${meuTime ? `⚔ ${num(meuTime.poder)}` : `<i>${t('gin.voceSemTime')}</i>`}</span>
+      ${meuTime ? barraGinasio(souLiderAqui ? 1 : fracao, souLiderAqui ? 'ouro' : '') : ''}
+      ${meuTime ? `<small class="gin-voce-falta">${souLiderAqui
+        ? t('gin.voceLider')
+        : painel?.faltaParaOTopo > 0 ? t('gin.voceFalta', { poder: num(painel.faltaParaOTopo) }) : ''}</small>` : ''}
+      <div class="gin-meu-sprites" id="gin-meu-sprites"></div>
     </div>
-    <div class="gin-meu-sprites" id="gin-meu-sprites"></div>
     <div class="gin-meu-acoes">
       <button type="button" class="gin-btn" id="gin-editar" ${podeRegistrar ? '' : 'disabled'}>${
-        meuTime ? t('gin.editarTime') : t('gin.registrarTime')
+        meuTime ? t('gin.editarTime') : `+ ${t('gin.registrarTime')}`
       }</button>
       <button type="button" class="gin-btn btn-apagado" id="gin-desafiar">${t('gin.desafiar')}</button>
     </div>
@@ -12553,26 +15012,8 @@ function montarPodioGinasio(host, painel, tipo) {
     degraus.appendChild(caixa);
   }
   host.appendChild(degraus);
-
-  // A faixa do líder: há quanto tempo ele segura o ginásio. Só aparece quando há líder.
-  if (painel.liderDesde && top3[0]) {
-    const faixa = document.createElement('p');
-    faixa.className = 'gin-desde';
-    faixa.innerHTML = t('gin.liderDesde', {
-      nick: escapar(top3[0].nick),
-      tempo: tempoDesde(painel.liderDesde),
-    });
-    host.appendChild(faixa);
-  }
-
-  // O QUANTO FALTA. É o número que traz o jogador de volta — "⚔ 4.120 atrás do 1º" é uma
-  // meta; "2º lugar" é só uma posição.
-  if (painel.minhaPos > 1 && painel.faltaParaOTopo > 0) {
-    const alvo = document.createElement('p');
-    alvo.className = 'gin-falta';
-    alvo.innerHTML = t('gin.faltaParaOTopo', { poder: num(painel.faltaParaOTopo) });
-    host.appendChild(alvo);
-  }
+  // Há quanto tempo o líder segura o ginásio e o quanto falta para mim moram no HERÓI e no cartão
+  // "Você" (`pintarGinasioPainel`), lá em cima, onde o olho chega primeiro.
 
   // Do 4º em diante, em lista.
   const resto = painel.ranking.slice(3);
@@ -12852,27 +15293,22 @@ const ICONE_TIPO = {
 };
 
 
-/** Bônus de cooldown pelo IV de Speed — mesma conta de `cooldownComSpeed` em `server/game/combate.mjs`. */
-const IV_SPEED_CD_MAX_UI = 32;
-const IV_SPEED_CD_MS_POR_PONTO_UI = 10;
-const SPD_CD_MIN_MS_UI = 400;
-function cooldownEfetivoUI(cooldownMs, ivSpeed) {
-  const base = Math.max(0, Number(cooldownMs) || 0);
-  if (base <= 0) return base;
-  const iv = Math.min(IV_SPEED_CD_MAX_UI, Math.max(1, Math.round(Number(ivSpeed) || 1)));
-  return Math.max(SPD_CD_MIN_MS_UI, base - iv * IV_SPEED_CD_MS_POR_PONTO_UI);
-}
-
-/** Golpes que o pokémon ativo tem AGORA: espécie no nível dele, mais o TM elemental (se houver). */
+/**
+ * Golpes que o pokémon ativo tem AGORA: espécie no nível dele, mais o TM elemental (se houver), com o
+ * cooldown já descontado pelo Speed — a MESMA conta do servidor (`cooldownDoGolpe` em
+ * `server/game/combate.mjs` chama a mesma `cooldownGolpeComSpeed`): o Speed base da espécie dá o
+ * potencial e o IV de Speed decide quanto dele o pokémon aproveita. A Investida não aparece aqui.
+ */
 function golpesDoAtivo(p) {
   const esp = estado.especies.get(p.speciesId);
   if (!esp) return [];
+  const comSpeed = (cd) => cooldownGolpeComSpeed(cd, esp.baseSpeed, p.ivs?.speed);
   const golpes = (esp.attacks ?? [])
     .filter((a) => (a.learnLevel ?? 1) <= p.level)
-    .map((a) => ({ ...a, cooldownMs: cooldownEfetivoUI(a.cooldownMs, p.ivs?.speed) }));
+    .map((a) => ({ ...a, cooldownMs: comSpeed(a.cooldownMs) }));
   if (p.tmElemental) {
     const tm = golpeTmElemental(p.tmElemental);
-    tm.cooldownMs = cooldownEfetivoUI(tm.cooldownMs, p.ivs?.speed);
+    tm.cooldownMs = comSpeed(tm.cooldownMs);
     golpes.push(tm);
   }
   return golpes;
@@ -13760,7 +16196,20 @@ const nomeNoAnuncio = (pk) => (apelidoDe(pk)
  * que mostra o nome passa por aqui: a regra de validação pode ser afrouxada um dia por um
  * motivo qualquer, e nesse dia nada deve depender dela para não virar injeção.
  */
-const nomePkHtml = (pk) => escapar(nomeExibidoPokemon(pk) || '—');
+/**
+ * A COROA DO RANKS no pokémon nº 1 do "Pokémon Forte" (pedido do dono, 06/10/2026: "o top 1 recebe
+ * essa tag, apenas isso, sem mais premiações"). O servidor manda o id dele no snapshot de todo mundo
+ * (`pkCoroa`, ver `server/game/coroa-pokemon.mjs`), e a coroa do botão Ranks entra ANTES do nome onde
+ * o nome do bicho aparece: no `nomePkHtml` (a Equipe, o Em campo, os diálogos), na ficha e na placa em
+ * cima dele no campo (`aplicarHeroiAtivo` na hunt e o `cr` da arena do PvP).
+ */
+const ICONE_COROA_RANKS = '/img/menu-ranks.png';
+const temCoroaPk = (pk) => pk?.id != null && estado.eu?.pkCoroa != null && Number(pk.id) === Number(estado.eu.pkCoroa);
+const coroaPkHtml = (pk) => (temCoroaPk(pk)
+  ? `<img class="pk-coroa" src="${ICONE_COROA_RANKS}" alt="" title="${escapar(t('pk.coroaDica'))}">`
+  : '');
+
+const nomePkHtml = (pk) => `${coroaPkHtml(pk)}${escapar(nomeExibidoPokemon(pk) || '—')}`;
 
 /** "1 vez" / "3 vezes". O `t()` não tem plural automático, então a escolha é feita aqui. */
 const vezesMedalha = (n) => t(n === 1 ? 'medalha.vez' : 'medalha.vezes', { n: num(n) });
@@ -13924,9 +16373,11 @@ function linhaRefino(l, { comBotao, pedra, pedras, rotuloPedras }) {
  * A linha do SPD, sem "+" e sem barra de compra.
  *
  * Ela aparece porque esconder um dos seis stats faria o jogador procurar o que sumiu; e ela
- * não tem botão porque `stats.speed` **não entra em combate nenhum** — quem decide cadência
- * de ataque é o IV de speed, fixo no nascimento (ver `cooldownComSpeed` no servidor). Vender
- * "+1 SPD" seria vender um número que não faz nada, então a linha diz isso em vez de mentir.
+ * não tem botão porque o refino de SPD não mexeria em nada: `stats.speed` **não entra em combate
+ * nenhum**. Quem acelera os ataques é o Speed BASE DA ESPÉCIE (o potencial dos golpes, até 7%) com
+ * o IV de speed, fixo no nascimento — ver `cooldownDoGolpe` no servidor e `cooldownGolpeComSpeed`
+ * em shared/cooldown-golpes.mjs —, e o refino não toca em nenhum dos dois. Vender "+1 SPD" seria
+ * vender um número que não faz nada, então a linha diz isso em vez de mentir.
  *
  * O "fixo" é um BOTÃO, e não um rótulo, por causa do celular: a explicação inteira morava no
  * `title` da linha, e num aparelho de toque `title` não existe. A única linha da bancada que
@@ -14285,7 +16736,7 @@ $('#refino-fechar')?.addEventListener('click', (ev) => {
   fecharRefino();
 });
 $('#refino')?.addEventListener('click', (ev) => {
-  if (ev.target !== $('#refino')) return;
+  if (!cliqueNoFundo(ev, $('#refino'))) return;
   ev.stopPropagation();
   fecharRefino();
 });
@@ -15256,7 +17707,7 @@ $('#depot-fechar')?.addEventListener('click', fecharDepotModal);
 $('#centro-depot-modal')?.addEventListener('click', (ev) => {
   // Com ficha ou calculadora abertas, o clique no backdrop delas atravessava e fechava o depot.
   if (calcEmpilhada() || fichaAberta()) return;
-  if (ev.target === $('#centro-depot-modal')) fecharDepotModal();
+  if (cliqueNoFundo(ev, $('#centro-depot-modal'))) fecharDepotModal();
 });
 $('#depot-filtro')?.addEventListener('input', () => montarDepotModal());
 
@@ -15534,14 +17985,13 @@ function registrarSessao(e) {
   if (!s) return;
   if (!contarNaSessao(s, e, idsDropsSessao())) return;
   if (e.k === 'capturado' && e.pokemon) {
-    estado.capturasHist.unshift({
-      em: Date.now(),
-      id: e.pokemon.id ?? null,
-      nome: e.pokemon.nome ?? '—',
-      level: e.pokemon.level ?? 0,
-      shiny: !!e.pokemon.shiny,
-    });
-    if (estado.capturasHist.length > 100) estado.capturasHist.length = 100;
+    const entrada = entradaDeCaptura(e);
+    estado.capturasHist.unshift(entrada);
+    if (entrada?.id != null && !estado.eu?.pokemons?.some((p) => Number(p.id) === entrada.id)) {
+      capturasAguardandoConta.set(entrada.id, Date.now());
+    }
+    if (estado.capturasHist.length > CAPTURAS_HIST_MAX) estado.capturasHist.length = CAPTURAS_HIST_MAX;
+    salvarCapturasHist();
     // Com o painel ABERTO a linha nova já está à vista e não há o que avisar. Fechado, a
     // captura é justamente o que o VIP de auto-bola sem parar não tem como perceber — a
     // cena rola sozinha e nada muda de lugar. Daí a bolinha.
@@ -15553,6 +18003,7 @@ function registrarSessao(e) {
   }
   salvarSessaoHunt();
   if (estado.sessaoAberta) agendarPintarSessao();
+  if (ecoPlacar) agendarPintarEconomia();
 }
 
 /**
@@ -15586,56 +18037,36 @@ const custosSessao = (s) => custosDaSessao(s, { precoBola: precoBolaSessao, prec
 const nomeBolaSessao = (id) => estado.catalogoBolas?.find((b) => b.id === id)?.nome ?? `Ball #${id}`;
 const nomeItemSessao = (id) => nomeItem(id, estado.itens?.get(id)?.name ?? `#${id}`);
 
-/**
- * O texto do botão "Copiar", em pares `[rótulo, valor]`.
- *
- * As quinze linhas de sempre vêm PRIMEIRO, na mesma ordem e com os mesmos rótulos: o texto é lido
- * em planilha e colado no chat, e quem já o processa conta com esse começo. O que a prancheta
- * passou a contar — os drops de boss, cada bola/poção/revive gasto, o gasto e o lucro — entra
- * DEPOIS. O desenho do painel (`pintarSessao`) é outro e não sai mais daqui: ele agrupa, põe
- * ícone e esconde o que é zero, e um texto para colar não pode mudar de forma a cada sessão.
- *
- * O `Tempo` é calculado na hora da chamada, então o texto copiado leva o relógio do clique. Os
- * `/h` são a conta de sempre (`ritmoDaSessao`, a do Pocket e do Hunt Analyser), com o piso de um
- * minuto no denominador que impede o primeiro abate de virar um "420.000/h".
- */
-function linhasSessao(s, agora = Date.now()) {
-  const ritmo = ritmoDaSessao(s, agora);
-  const custos = custosSessao(s);
-  const lucro = (s.gold || 0) - custos.total;
-  const gastos = [
-    ...custos.bolas.map((x) => [nomeBolaSessao(x.id), num(x.qtd)]),
-    ...custos.pocoes.map((x) => [nomeItemSessao(x.id), num(x.qtd)]),
-    ...custos.revives.map((x) => [nomeItemSessao(x.id), num(x.qtd)]),
-  ];
-  return [
-    [t('sessao.tempo'), tempoSessao(agora - s.inicio)],
-    [t('sessao.xpTreinador'), num(s.xpTreinador)],
-    [t('sessao.xpTreinadorHora'), num(ritmo?.xpTreinadorH ?? 0)],
-    [t('sessao.xpPokemon'), num(s.xpPokemon)],
-    [t('sessao.xpPokemonHora'), num(ritmo?.xpPokemonH ?? 0)],
-    [t('sessao.gold'), num(s.gold)],
-    [t('sessao.goldHora'), num(ritmo?.ouroH ?? 0)],
-    [t('sessao.abates'), num(s.abates)],
-    [t('sessao.capturas'), num(s.capturas)],
-    [t('sessao.shiniesVistos'), num(s.shiniesVistos)],
-    [t('sessao.shinies'), num(s.shinies)],
-    // Os quatro primeiros são os de sempre (Boss Tokens e os três fragmentos), na mesma ordem.
-    ...DROPS_SESSAO.map((d) => [t(`sessao.${d.campo}`), num(s[d.campo] ?? 0)]),
-    ...gastos,
-    [t('sessao.gasto'), num(custos.total)],
-    [t('sessao.gastoHora'), num(porHora(custos.total, s, agora))],
-    [t('sessao.lucro'), num(lucro)],
-    [t('sessao.lucroHora'), num(porHora(lucro, s, agora))],
-  ];
+/** O tempo da sessão até os MINUTOS, para o texto copiado: `45min`, `2h 5min`, `3h`. */
+function tempoAteMinutos(ms) {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m}min`;
+  return m ? `${h}h ${m}min` : `${h}h`;
 }
 
 /**
- * O texto que vai para a área de transferência: rótulo e valor em LINHAS SEPARADAS, sem cabeçalho
- * — o formato que o pessoal já cola no chat e joga em planilha desde quando o painel era copiado
- * com o mouse.
+ * O texto do botão "Copiar": UMA linha, com emoji, para colar no chat do jogo ou do Discord e ser
+ * lida de relance — o tempo (até os minutos), o XP/h, o Gold/h e os shinies vistos e capturados.
+ *
+ * Era a prancheta inteira, rótulo e valor em linhas separadas, no formato de planilha; o pedido de
+ * 05/10/2026 foi ficar só com o que se compartilha. O painel continua mostrando tudo.
+ *
+ * Um XP/h só, o do treinador: o do treinador e o dos pokémon andam juntos (é a mesma XP, cada uma na
+ * sua barra), e dois números quase iguais lado a lado eram ruído. Tempo e `/h` saem da hora do
+ * clique, com a conta de sempre (`ritmoDaSessao`, com o piso de um minuto no denominador).
  */
-const textoSessao = (s) => linhasSessao(s).map(([rotulo, valor]) => `${rotulo}\n${valor}`).join('\n');
+function textoSessao(s, agora = Date.now()) {
+  const ritmo = ritmoDaSessao(s, agora);
+  return t('sessao.copiaTexto', {
+    tempo: tempoAteMinutos(agora - s.inicio),
+    xp: num(ritmo?.xpTreinadorH ?? 0),
+    gold: num(ritmo?.ouroH ?? 0),
+    vistos: num(s.shiniesVistos ?? 0),
+    capturados: num(s.shinies ?? 0),
+  });
+}
 
 /**
  * Copia texto, com o caminho de baixo para quem não tem a API moderna.
@@ -15866,6 +18297,10 @@ function resetarSessao() {
   estado.sessao = sessaoNova();
   salvarSessaoHunt(agora, true); // o zero tem que ir ao disco, senão o F5 traz tudo de volta
   pintarSessao();
+  if (ecoPlacar) {
+    ecoPlacar.valores = null; // o zero não "sobe": nada pula
+    pintarPlacarEconomia();
+  }
 }
 
 /**
@@ -15936,43 +18371,214 @@ function alternarSessao() {
 
 const horaCaptura = (ms) => new Date(ms).toLocaleTimeString('pt-BR');
 
+/**
+ * O HISTÓRICO DE CAPTURAS atravessa o F5 e a reconexão, como a prancheta.
+ *
+ * Antes ele nascia vazio a cada `welcome` — o F5, o deploy, o wi-fi que caiu — enquanto a
+ * prancheta, gravada no disco, continuava contando: a tela dizia "Capturas 2" em cima de um
+ * histórico "nenhuma captura registrada". Agora as últimas `CAPTURAS_HIST_MAX` ficam no
+ * `localStorage`, por nick, e só o Reset dele as apaga.
+ *
+ * Cada linha guarda o que a desenha — espécie, potência, IVs, qualidade —, e não só o id: o
+ * pokémon vendido sai do snapshot, e a linha continua mostrando o que ele era.
+ */
+const CHAVE_CAPTURAS_HIST = 'capturas-hist';
+const CAPTURAS_HIST_MAX = 100;
+
+/**
+ * As capturas cujo pokémon ainda não chegou a `estado.eu.pokemons` (id → hora do evento).
+ *
+ * O evento `capturado` chega ANTES do pacote de estado que traz o bicho. Sem isto, a linha nova
+ * nascia apagada ("não está mais com você") e só se corrigia quando a captura SEGUINTE repintava a
+ * lista — a última captura vivia cinza. Uma linha à espera aparece normal; o pacote que traz o
+ * pokémon repinta a lista (com a etiqueta de onde ele está), e a que nunca chega — vendida na hora
+ * pela automação — apaga depois de `CAPTURA_AGUARDA_MS`. Ver `conferirCapturasAguardando`.
+ */
+const capturasAguardandoConta = new Map();
+const CAPTURA_AGUARDA_MS = 15_000;
+
+/** Chamado a cada pacote de estado: só trabalha enquanto há captura esperando (segundos). */
+function conferirCapturasAguardando(pokemons) {
+  if (!capturasAguardandoConta.size) return;
+  const ids = new Set((pokemons ?? []).map((p) => Number(p.id)));
+  const agora = Date.now();
+  let mudou = false;
+  for (const [id, em] of capturasAguardandoConta) {
+    if (ids.has(id) || agora - em > CAPTURA_AGUARDA_MS) {
+      capturasAguardandoConta.delete(id);
+      mudou = true;
+    }
+  }
+  if (mudou && estado.capturasHistAberta) pintarCapturasHist();
+}
+
+const chaveCapturasHist = () => {
+  const nick = estado.eu?.nick ?? '';
+  return nick ? `${CHAVE_CAPTURAS_HIST}:${nick.toLowerCase()}` : '';
+};
+
+/** Uma linha do histórico, saneada — vale para o evento e para o que volta do disco. */
+function sanearCaptura(c) {
+  if (!c || typeof c !== 'object') return null;
+  const n = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const ivs = c.ivs && typeof c.ivs === 'object'
+    ? Object.fromEntries(CALC_IV_KEYS.map((k) => [k, n(c.ivs[k]) ?? 0]))
+    : null;
+  return {
+    em: n(c.em) ?? Date.now(),
+    id: n(c.id),
+    nome: String(c.nome ?? '—').slice(0, 40),
+    level: n(c.level) ?? 0,
+    shiny: !!c.shiny,
+    speciesId: n(c.speciesId),
+    quality: n(c.quality),
+    potencia: n(c.potencia),
+    ivs,
+    lookShiny: n(c.lookShiny),
+  };
+}
+
+const entradaDeCaptura = (e) => sanearCaptura({ ...e.pokemon, em: Date.now() });
+
+function salvarCapturasHist() {
+  const chave = chaveCapturasHist();
+  if (!chave) return;
+  try {
+    localStorage.setItem(chave, JSON.stringify(estado.capturasHist ?? []));
+  } catch { /* privado / quota */ }
+}
+
+function capturasGuardadas() {
+  const chave = chaveCapturasHist();
+  if (!chave) return [];
+  try {
+    const lista = JSON.parse(localStorage.getItem(chave) ?? '[]');
+    return Array.isArray(lista) ? lista.map(sanearCaptura).filter(Boolean).slice(0, CAPTURAS_HIST_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A captura mais nova já desenhada: as que chegarem depois dela entram deslizando. */
+let capturaMaisNovaPintada = 0;
+
+/**
+ * Uma linha: o retrato, nome e nível, a hora, e embaixo os SELOS (potência, IV, qualidade e nota —
+ * os mesmos do card do Depot, `selosAtributos`). Toque abre a ficha. Quem não está mais na conta
+ * (vendido, oferendado, anunciado) fica apagado — a linha continua contando o que ele era.
+ */
+function linhaDeCaptura(c, i, meus, colecao) {
+  const vivo = c.id != null ? meus.get(c.id) : null;
+  // O que a linha GUARDOU manda (é o pokémon da hora da captura); sem IVs (captura de antes desta
+  // versão), vale o da conta.
+  const dados = c.ivs ? c : (vivo ?? c);
+  // Sem o pokémon na conta: ou ele saiu (vendido, oferendado, anunciado) ou o pacote que o traz
+  // ainda não chegou — este fica normal, sem etiqueta, até a lista ser repintada.
+  const chegando = !vivo && c.id != null && capturasAguardandoConta.has(c.id);
+  const onde = vivo ? (vivo.slot != null ? 'equipe' : localDoPokemon(vivo, colecao)) : chegando ? 'chegando' : 'fora';
+  const tag = onde === 'colecao' ? t('colecao.titulo') : onde === 'equipe' ? t('capturas.tagEquipe') : '';
+  const nova = capturaMaisNovaPintada > 0 && c.em > capturaMaisNovaPintada;
+  return `
+    <li class="capturas-linha${c.shiny ? ' shiny' : ''}${onde === 'fora' ? ' fora' : ''}${nova ? ' nova' : ''}"
+        data-i="${i}" role="button" tabindex="0"
+        title="${escapar(onde === 'fora' ? t('capturas.foraDaConta') : t('cm.verFicha'))}">
+      <span class="capturas-retrato" data-cap-retrato="${i}"></span>
+      <span class="capturas-l1">
+        <b class="capturas-nome">${c.shiny ? prefixoShiny() : ''}${escapar(c.nome)}</b>
+        <i class="capturas-nv">${t('cm.nivel')} ${num(c.level)}</i>
+        ${tag ? `<em class="capturas-tag capturas-tag-${onde}">${escapar(tag)}</em>` : ''}
+      </span>
+      <span class="capturas-hora">${horaCaptura(c.em)}</span>
+      ${selosAtributos(dados, { compacto: true })}
+    </li>`;
+}
+
+/** A linha do alto da vista de uma lista ROLADA, com o índice que ela terá depois das capturas novas. */
+function ancoraDaRolagem(corpo, lista) {
+  if (corpo.scrollTop <= 0) return null;
+  const topo = corpo.getBoundingClientRect().top;
+  const linha = [...corpo.querySelectorAll('.capturas-linha')]
+    .find((li) => li.getBoundingClientRect().bottom > topo + 1);
+  // As capturas novas entram em CIMA (as `em` depois da mais nova já pintada) e empurram o índice.
+  const novas = lista.findIndex((c) => c.em <= capturaMaisNovaPintada);
+  return {
+    i: linha && novas >= 0 ? Number(linha.dataset.i) + novas : -1,
+    dy: linha ? linha.getBoundingClientRect().top - topo : 0,
+    scrollTop: corpo.scrollTop,
+  };
+}
+
+/** Devolve a linha-âncora ao mesmo lugar da vista; sem ela (caiu do fim da lista cheia), a rolagem fica. */
+function restaurarRolagem(corpo, ancora) {
+  const alvo = corpo.querySelector(`.capturas-linha[data-i="${ancora.i}"]`);
+  const certo = alvo
+    ? corpo.scrollTop + alvo.getBoundingClientRect().top - corpo.getBoundingClientRect().top - ancora.dy
+    : ancora.scrollTop;
+  // Só escreve quando muda: escrever o `scrollTop` corta a inércia do dedo no iOS.
+  if (Math.abs(corpo.scrollTop - certo) >= 1) corpo.scrollTop = certo;
+}
+
 function pintarCapturasHist() {
   const painel = $('#capturas-painel');
   const lista = estado.capturasHist ?? [];
   if (!painel) return;
   const resetBloqueado = Date.now() < estado.capturasHistResetLivreEm;
-  painel.innerHTML = `
-    <div class="sessao-topo">
-      <h3>${t('capturas.titulo')}</h3>
+  const meus = new Map((estado.eu?.pokemons ?? []).map((p) => [Number(p.id), p]));
+  const colecao = conjuntoColecaoCliente();
+  const cabecalho = `
+      <h3>${t('capturas.titulo')}${lista.length ? ` <em class="capturas-conta">${num(lista.length)}</em>` : ''}</h3>
       <button type="button" class="sessao-reset" id="capturas-reset"${resetBloqueado ? ' disabled' : ''}
-        data-i18n-attr="title:tip.capturasHistReset" title="${t('tip.capturasHistReset')}">${t('capturas.reset')}</button>
+        data-i18n-attr="title:tip.capturasHistReset" title="${t('tip.capturasHistReset')}">${t('capturas.reset')}</button>`;
+  const linhas = lista.map((c, i) => linhaDeCaptura(c, i, meus, colecao)).join('');
+  // A lista JÁ montada troca só as linhas e o cabeçalho: o `.capturas-corpo` (quem rola) fica o
+  // mesmo. Recriá-lo a cada captura devolvia a rolagem ao topo — com a auto-bola, a cada poucos
+  // segundos — e, no celular, matava o arrasto no meio: o dedo "soltava" a lista. A linha do alto da
+  // vista é a âncora (`ancoraDaRolagem`), e volta ao mesmo lugar depois da troca.
+  const corpo = painel.querySelector('.capturas-corpo');
+  const topo = painel.querySelector('.sessao-topo');
+  if (corpo && topo && lista.length) {
+    const ancora = ancoraDaRolagem(corpo, lista);
+    topo.innerHTML = cabecalho;
+    corpo.querySelector('.capturas-linhas').innerHTML = linhas;
+    if (ancora) restaurarRolagem(corpo, ancora);
+  } else {
+    painel.innerHTML = `
+    <div class="sessao-topo">${cabecalho}
     </div>
-    ${
-      lista.length
-        ? `<div class="capturas-corpo"><ul class="capturas-linhas">${lista
-            .map(
-              (c) =>
-                `<li class="capturas-linha">
-                  <span class="capturas-hora">${horaCaptura(c.em)}</span>
-                  <b class="capturas-nome">${escapar(c.nome)} ${t('cm.nivel')} ${num(c.level)}${c.shiny ? ' ✨' : ''}</b>
-                  <span class="capturas-info" role="button" data-id="${c.id ?? ''}"
-                    title="${t('cm.verFicha')}">i</span>
-                </li>`,
-            )
-            .join('')}</ul></div>`
-        : `<div class="cm-vazio capturas-vazio">${t('capturas.vazio')}</div>`
-    }`;
+    ${lista.length
+      ? `<div class="capturas-corpo"><ul class="capturas-linhas">${linhas}</ul></div>`
+      : `<div class="cm-vazio capturas-vazio">${t('capturas.vazio')}</div>`}`;
+  }
+  capturaMaisNovaPintada = lista[0]?.em ?? capturaMaisNovaPintada;
+  // O retrato PARADO (um quadro, nenhum relógio): cem linhas animadas seriam cem relógios.
+  for (const el of painel.querySelectorAll('[data-cap-retrato]')) {
+    const c = lista[Number(el.dataset.capRetrato)];
+    const comum = especieDe(c)?.looktype ?? c?.looktype;
+    el.appendChild(spriteAnimado(looktypeDe(c), 30, 3, () => iconeEspecie(comum, 30), null, { encaixar: true, parado: true }));
+  }
+  // O botão é novo nos dois caminhos (o cabeçalho foi refeito), então ganha o clique de novo.
   $('#capturas-reset')?.addEventListener('click', resetarCapturasHist);
-  painel.querySelector('.capturas-linhas')?.addEventListener('click', (ev) => {
-    const info = ev.target.closest('.capturas-info');
-    if (!info) return;
-    ev.stopPropagation();
-    const id = Number(info.dataset.id);
-    if (!id) return toast(t('capturas.semFicha'));
-    const pk = estado.eu?.pokemons?.find((p) => p.id === id);
+  // Religados a cada pintura (atribuição, não `addEventListener`): a `lista` de agora é a que vale —
+  // a lista que fica de pé não pode abrir a ficha pela lista de uma captura atrás.
+  const abrir = (linha) => {
+    const c = lista[Number(linha.dataset.i)];
+    const pk = c?.id != null ? estado.eu?.pokemons?.find((p) => Number(p.id) === c.id) : null;
     if (pk) abrirFichaDoPokemon(pk);
     else toast(t('capturas.semFicha'));
-  });
+  };
+  const ul = painel.querySelector('.capturas-linhas');
+  if (!ul) return;
+  ul.onclick = (ev) => {
+    const linha = ev.target.closest('.capturas-linha');
+    if (linha) abrir(linha);
+  };
+  ul.onkeydown = (ev) => {
+    const linha = ev.target.closest('.capturas-linha');
+    if (linha && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      abrir(linha);
+    }
+  };
 }
 
 function resetarCapturasHist() {
@@ -15980,6 +18586,7 @@ function resetarCapturasHist() {
   if (agora < estado.capturasHistResetLivreEm) return;
   estado.capturasHistResetLivreEm = agora + SESSAO_RESET_MS;
   estado.capturasHist = [];
+  salvarCapturasHist();
   zerarSeloCapturas();
   pintarCapturasHist();
 }
@@ -16024,50 +18631,306 @@ function alternarCapturasHist() {
 // O JOGO não muda em nada: a caça continua no servidor, os eventos de `batalha` continuam
 // chegando, e é deles que sai tudo o que a tela mostra aqui. Isto é tela, não regra.
 //
-// E o que fica é o que se acompanha num idle: o ritmo por hora (a mesma conta do cartão
-// Pocket, `ritmoDaSessao`), a prancheta da sessão e o histórico de capturas. Os dois últimos
-// são os MESMOS nós do HUD do palco, MOVIDOS para cá — a regra do `mobile.mjs`, e o que faz
-// `pintarSessao`/`pintarCapturasHist` continuarem valendo sem saber que este modo existe.
+// E o que fica é o que se acompanha num idle, cada número num lugar só:
+//
+//   · o PLACAR da sessão — o total, o ritmo por hora e quando vem o próximo nível. A conta é a da
+//     prancheta (`estado.sessao`), desenhada de novo para esta tela, e não a prancheta MOVIDA para
+//     cá: as duas juntas repetiam metade dos números (o "/h" e o relógio, duas vezes cada);
+//   · os ACHADOS e os GASTOS da sessão — atalhos para o cofre, onde o item está;
+//   · o histórico de capturas — o MESMO nó do HUD do palco, movido para cá (a regra do
+//     `mobile.mjs`, e o que faz `pintarCapturasHist` valer sem saber que este modo existe);
+//   · o cofre (Itens · Depot · Coleção).
 
-/** De onde a prancheta e o histórico vieram, para poder devolvê-los na mesma ordem. */
+/** De onde o histórico veio, para poder devolvê-lo no mesmo lugar. */
 let ecoDeVolta = null;
-/** Os `<b>` da grade de ritmo. Trocar texto é TODO o repinte que este modo faz por segundo. */
-let ecoRitmo = null;
 
 /**
- * Monta a grade UMA vez. Daí para a frente só os `<b>` mudam. As células vêm de
- * `CELULAS_DO_RITMO` (popup.mjs) porque a janelinha de números do Modo Economia mostra as
- * mesmas seis, na mesma ordem.
+ * Os nós do placar que o relógio e os eventos mexem. Montado uma vez por ligada (e de novo na
+ * troca de idioma); daí para a frente só `textContent` e a classe de um pulo.
  */
-function montarRitmoEconomia() {
-  const host = $('#eco-ritmo');
-  if (!host || ecoRitmo) return;
-  host.innerHTML = '';
-  ecoRitmo = {};
-  for (const [chave, rotulo] of CELULAS_DO_RITMO) {
-    const cel = document.createElement('div');
-    cel.className = 'eco-cel';
-    const i = document.createElement('i');
-    i.dataset.i18n = rotulo; // troca de idioma repassa por `aplicarI18n`
-    i.textContent = t(rotulo);
-    const b = document.createElement('b');
-    b.textContent = '—';
-    cel.append(i, b);
-    host.appendChild(cel);
-    ecoRitmo[chave] = b;
+let ecoPlacar = null;
+
+/** As cinco placas. `ico` é função: os ícones são lidos na hora de desenhar, não no carregamento. */
+const KPIS_ECONOMIA = [
+  { id: 'xpTreinador', rotulo: 'sessao.xpTreinador', ico: () => dlgIcone('pessoa', 13) },
+  { id: 'xpPokemon', rotulo: 'sessao.xpPokemon', ico: () => dlgIcone('estrela', 13) },
+  { id: 'lucro', rotulo: 'sessao.lucro', ico: () => dlgIcone('trofeu', 13) },
+  { id: 'abates', rotulo: 'eco.kpiAbates', ico: () => dlgIcone('espadas', 13) },
+  { id: 'capturas', rotulo: 'sessao.capturas', ico: () => '<span data-eco-bola="1"></span>' },
+];
+
+/** Os dois contadores de shiny dos Achados: [campo da sessão, rótulo curto, nome inteiro]. */
+const SHINY_ECONOMIA = [
+  ['shiniesVistos', 'eco.shinyVistos', 'sessao.shiniesVistos'],
+  ['shinies', 'eco.shinyPegos', 'sessao.shinies'],
+];
+
+/** Sem evento de batalha há mais que isto, a luz sai do verde: a caça parou (equipe caída, sem poção…). */
+const ECO_QUIETO_MS = 30_000;
+
+/** Monta o placar, os achados e os gastos. */
+function montarPlacarEconomia() {
+  const placar = $('#eco-placar');
+  const achados = $('#eco-achados');
+  if (!placar || !achados) return;
+  placar.innerHTML = `
+    <div class="eco-placar-topo">
+      <h3>${t('eco.sessao')}</h3>
+      <span class="eco-relogio" title="${escapar(t('eco.relogioDica'))}">
+        <i class="eco-luz" data-estado="cacando"></i><b class="eco-tempo">0:00</b><em class="eco-estado"></em>
+      </span>
+      <span class="eco-placar-acoes">
+        <button type="button" class="sessao-reset sessao-copiar eco-copiar" title="${escapar(t('tip.sessaoCopiar'))}">${t('sessao.copiar')}</button>
+        <button type="button" class="sessao-reset eco-reset" title="${escapar(t('tip.sessaoReset'))}">${t('sessao.reset')}</button>
+      </span>
+    </div>
+    <div class="eco-kpis">${KPIS_ECONOMIA.map((k) => `
+      <div class="eco-kpi" data-kpi="${k.id}">
+        <span class="eco-kpi-rot">${k.ico()}<span>${t(k.rotulo)}</span></span>
+        <b class="eco-kpi-v">0</b>
+        <span class="eco-kpi-h"></span>
+        <span class="eco-kpi-sub"></span>
+      </div>`).join('')}
+    </div>`;
+  const ids = idsDropsSessao();
+  achados.innerHTML = `
+    <div class="eco-achados-g">
+      <h4>${t('eco.achados')}</h4>
+      <div class="eco-slots">
+        ${SHINY_ECONOMIA.map(([campo, curto, nome]) => `
+          <span class="eco-slot eco-slot-shiny" data-campo="${campo}" title="${escapar(t(nome))}">
+            ${dlgIcone('brilho', 15)}<small>${t(curto)}</small><b></b>
+          </span>`).join('')}
+        ${DROPS_SESSAO.map((d) => {
+          const id = ids[d.campo] ?? d.id;
+          return `
+          <button type="button" class="eco-slot" data-campo="${d.campo}" data-chave="i${id}" disabled
+                  title="${escapar(t(`sessao.${d.campo}`))}">
+            <span class="eco-slot-ico" data-eco-item="${id}"></span><b></b>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="eco-achados-g eco-gastos">
+      <h4>${t('eco.gastos')}</h4>
+      <div class="eco-gastos-chips"></div>
+    </div>`;
+  for (const el of placar.querySelectorAll('[data-eco-bola]')) el.replaceWith(iconeBola(Number(el.dataset.ecoBola), 13));
+  for (const el of achados.querySelectorAll('[data-eco-item]')) el.appendChild(imgItem(Number(el.dataset.ecoItem), 24));
+  placar.querySelector('.eco-copiar').onclick = copiarSessao;
+  placar.querySelector('.eco-reset').onclick = resetarSessao;
+  // Achado e gasto são ATALHOS: o toque leva o cofre até o item (quanto sobrou, quanto vale).
+  achados.onclick = (ev) => {
+    const alvo = ev.target.closest('[data-chave]');
+    if (alvo && !alvo.disabled) focarItemNoCofre(alvo.dataset.chave);
+  };
+  ecoPlacar = {
+    idioma: idioma(),
+    tempo: placar.querySelector('.eco-tempo'),
+    luz: placar.querySelector('.eco-luz'),
+    estadoTxt: placar.querySelector('.eco-estado'),
+    reset: placar.querySelector('.eco-reset'),
+    kpi: Object.fromEntries(KPIS_ECONOMIA.map(({ id }) => {
+      const el = placar.querySelector(`[data-kpi="${id}"]`);
+      return [id, { el, v: el.querySelector('.eco-kpi-v'), h: el.querySelector('.eco-kpi-h'), sub: el.querySelector('.eco-kpi-sub') }];
+    })),
+    slots: new Map([...achados.querySelectorAll('.eco-slot')].map((el) => [el.dataset.campo, el])),
+    gastos: achados.querySelector('.eco-gastos-chips'),
+    gastosAssinatura: null,
+    valores: null, // os totais da última pintura: o que subiu dá o pulo
+    nivel: null, // { treinador, pkId, pk }: o nível que subiu acende a placa
+  };
+}
+
+let pinturaEcoAgendada = false;
+/**
+ * A pintura dos totais, uma por PACOTE: um abate traz XP, ouro e drops em eventos separados, e a
+ * automação gasta várias poções num tique. `setTimeout` e não `requestAnimationFrame`: este modo
+ * existe para a tela não pedir quadro.
+ */
+function agendarPintarEconomia() {
+  if (pinturaEcoAgendada) return;
+  pinturaEcoAgendada = true;
+  setTimeout(() => {
+    pinturaEcoAgendada = false;
+    pintarPlacarEconomia();
+  }, 0);
+}
+
+/** Os TOTAIS (a cada evento que mexe na prancheta): placas, achados e gastos. O que subiu pula. */
+function pintarPlacarEconomia() {
+  const s = estado.sessao;
+  if (!ecoPlacar || !s) return;
+  const custos = custosSessao(s);
+  const lucro = (s.gold || 0) - custos.total;
+  const valores = {
+    xpTreinador: s.xpTreinador || 0,
+    xpPokemon: s.xpPokemon || 0,
+    lucro,
+    abates: s.abates || 0,
+    capturas: s.capturas || 0,
+  };
+  const antes = ecoPlacar.valores;
+  ecoPlacar.valores = valores;
+  for (const [id, v] of Object.entries(valores)) {
+    const el = ecoPlacar.kpi[id].v;
+    const texto = num(v);
+    if (el.textContent === texto) continue;
+    el.textContent = texto;
+    if (antes && v > antes[id]) pularEco(el);
+  }
+  ecoPlacar.kpi.lucro.el.classList.toggle('negativo', lucro < 0);
+  // Na placa cabe só o gasto (o ganho é o lucro mais ele); a conta inteira vai na dica.
+  ecoPlacar.kpi.lucro.sub.textContent = custos.total
+    ? t('eco.lucroGasto', { gasto: num(custos.total) })
+    : t('eco.lucroSemGasto');
+  ecoPlacar.kpi.lucro.el.title = t('eco.lucroConta', { bruto: num(s.gold || 0), gasto: num(custos.total) });
+  for (const [campo, el] of ecoPlacar.slots) {
+    const n = Number(s[campo]) || 0;
+    const b = el.querySelector('b');
+    const texto = n > 0 ? num(n) : '';
+    if (b.textContent !== texto) {
+      if (antes && n > 0) pularEco(el);
+      b.textContent = texto;
+    }
+    el.classList.toggle('tem', n > 0);
+    if (el.tagName === 'BUTTON') el.disabled = !(n > 0);
+  }
+  pintarGastosEconomia(custos);
+  pintarRelogioEconomia();
+}
+
+/** O que a automação gastou: um chip por bola, poção e revive — o toque mostra quanto ainda resta. */
+function pintarGastosEconomia(custos) {
+  const host = ecoPlacar.gastos;
+  const lista = [
+    ...custos.bolas.map((x) => ({ chave: `b${x.id}`, x, nome: nomeBolaSessao(x.id), ico: () => iconeBola(x.id, 18) })),
+    ...custos.pocoes.map((x) => ({ chave: `i${x.id}`, x, nome: nomeItemSessao(x.id), ico: () => imgItem(x.id, 18) })),
+    ...custos.revives.map((x) => ({ chave: `i${x.id}`, x, nome: nomeItemSessao(x.id), ico: () => imgItem(x.id, 18) })),
+  ];
+  const assinatura = lista.map((g) => g.chave).join('|');
+  if (assinatura !== ecoPlacar.gastosAssinatura) {
+    ecoPlacar.gastosAssinatura = assinatura;
+    if (!lista.length) {
+      host.innerHTML = `<p class="eco-gastos-vazio">${t('eco.gastosNada')}</p>`;
+    } else {
+      host.replaceChildren(...lista.map((g) => {
+        const bt = document.createElement('button');
+        bt.type = 'button';
+        bt.className = 'ss-chip eco-gasto';
+        bt.dataset.chave = g.chave;
+        bt.append(g.ico(), document.createElement('b'));
+        return bt;
+      }));
+    }
+  }
+  for (const g of lista) {
+    const bt = host.querySelector(`[data-chave="${g.chave}"]`);
+    if (!bt) continue;
+    bt.querySelector('b').textContent = num(g.x.qtd);
+    bt.title = g.x.unidade
+      ? t('sessao.custoItem', { nome: g.nome, qtd: num(g.x.qtd), preco: num(g.x.unidade), custo: num(g.x.custo) })
+      : t('sessao.custoSemPreco', { nome: g.nome, qtd: num(g.x.qtd) });
   }
 }
 
-function pintarRitmoEconomia() {
+/** Como está a caça agora — a luz do placar. */
+function estadoDaCacaEconomia(agora) {
+  if (estado.ws?.readyState !== 1) return { id: 'caindo', texto: t('eco.caindo') };
+  const e = estado.eu;
+  if (!e || !(huntEmCampo(e) || e.boss?.arena || e.mistico)) return { id: 'fora', texto: t('eco.estadoFora') };
+  const quieto = agora - (estado.ultimoEventoBatalhaEm ?? 0);
+  if (quieto > ECO_QUIETO_MS) return { id: 'parado', texto: t('eco.estadoParado', { t: tempoCurto(quieto) }) };
+  return { id: 'cacando', texto: t('eco.estadoCacando') };
+}
+
+/** Quanto falta para o próximo nível NO RITMO DESTA SESSÃO, em texto ("3h 12m"), ou `null`. */
+function previsaoDeNivel(xp, xpProximo, porHora) {
+  if (xp == null || xpProximo == null || !(porHora > 0)) return null;
+  return tempoCurto((Math.max(0, xpProximo - xp) / porHora) * 3_600_000);
+}
+
+/** O que anda com o RELÓGIO (o tique de 1 s): o tempo, a luz, os "/h" e as previsões de nível. */
+function pintarRelogioEconomia(agora = Date.now()) {
   const s = estado.sessao;
-  const ritmo = ritmoDaSessao(s);
-  if (!ecoRitmo || !s || !ritmo) return;
-  ecoRitmo.xpTreinadorH.textContent = num(ritmo.xpTreinadorH);
-  ecoRitmo.xpPokemonH.textContent = num(ritmo.xpPokemonH);
-  ecoRitmo.ouroH.textContent = num(ritmo.ouroH);
-  ecoRitmo.abatesH.textContent = num(ritmo.abatesH);
-  ecoRitmo.capturasH.textContent = num(ritmo.capturasH);
-  ecoRitmo.tempo.textContent = tempoSessao(Date.now() - s.inicio);
+  if (!ecoPlacar || !s) return;
+  const ms = Math.max(0, agora - s.inicio);
+  ecoPlacar.tempo.textContent = tempoSessao(ms);
+  const caca = estadoDaCacaEconomia(agora);
+  if (ecoPlacar.luz.dataset.estado !== caca.id) ecoPlacar.luz.dataset.estado = caca.id;
+  ecoPlacar.estadoTxt.textContent = caca.texto;
+  const ritmo = ritmoDaSessao(s, agora);
+  const k = ecoPlacar.kpi;
+  const hora = (v) => `${num(v)}/h`;
+  k.xpTreinador.h.textContent = hora(ritmo.xpTreinadorH);
+  k.xpPokemon.h.textContent = hora(ritmo.xpPokemonH);
+  k.lucro.h.textContent = hora(porHora(ecoPlacar.valores?.lucro ?? 0, s, agora));
+  k.abates.h.textContent = hora(ritmo.abatesH);
+  // Captura é rara: "0/h" mentiria para quem pega uma a cada duas horas. Uma casa decimal abaixo de 10.
+  const capH = (s.capturas || 0) / (Math.max(ms, 60_000) / 3_600_000);
+  k.capturas.h.textContent = capH < 10 ? `${virgula(capH.toFixed(1))}/h` : hora(Math.round(capH));
+  const e = estado.eu;
+  const prevT = previsaoDeNivel(e?.xp, e?.xpProximo, ritmo.xpTreinadorH);
+  k.xpTreinador.sub.textContent = e
+    ? (prevT ? t('eco.etaTreinador', { n: num((e.level ?? 0) + 1), t: prevT }) : t('eco.etaSemRitmo'))
+    : '';
+  // O pokémon EM CAMPO. O nome dele vai na dica, e não na linha: na placa de 130 px do notebook,
+  // "Charizard Nv 101 em …" cortava justamente o tempo.
+  const ativo = e?.pokemons?.find((p) => p.id === e.activeId) ?? null;
+  const prevP = ativo && previsaoDeNivel(ativo.xp, ativo.xpProximo, ritmo.xpPokemonH);
+  const linhaP = ativo
+    ? (prevP ? t('eco.etaTreinador', { n: num((ativo.level ?? 0) + 1), t: prevP }) : t('eco.etaSemRitmo'))
+    : '';
+  if (k.xpPokemon.sub.textContent !== linhaP) {
+    k.xpPokemon.sub.textContent = linhaP;
+    k.xpPokemon.el.title = ativo ? `${nomeExibidoPokemon(ativo) || ativo.nome || ''}: ${linhaP}` : '';
+  }
+  // Piso de 1 s: no começo da sessão dois abates no mesmo segundo escreviam "um a cada 0s".
+  k.abates.sub.textContent = s.abates ? t('eco.abatesCada', { t: tempoCurto(Math.max(1000, ms / s.abates)) }) : '';
+  const cadaN = s.capturas && s.abates ? Math.max(1, Math.round(s.abates / s.capturas)) : 0;
+  k.capturas.sub.textContent = !cadaN ? '' : cadaN === 1 ? t('eco.capturasTodo') : t('eco.capturasCada', { n: num(cadaN) });
+  const bloqueado = agora < estado.sessaoResetLivreEm;
+  if (ecoPlacar.reset.disabled !== bloqueado) ecoPlacar.reset.disabled = bloqueado;
+}
+
+/**
+ * O snapshot chegou com o modo ligado: idioma novo refaz o placar; o nível que SUBIU (o do
+ * treinador, ou o do pokémon em campo) acende a placa dele.
+ */
+function atualizarPlacarEconomia() {
+  if (!$('#eco-placar')) return;
+  if (!ecoPlacar || ecoPlacar.idioma !== idioma()) {
+    montarPlacarEconomia();
+    pintarPlacarEconomia();
+  }
+  const e = estado.eu;
+  if (!ecoPlacar || !e) return;
+  const ativo = e.pokemons?.find((p) => p.id === e.activeId) ?? null;
+  const antes = ecoPlacar.nivel;
+  ecoPlacar.nivel = { treinador: e.level ?? 0, pkId: ativo?.id ?? null, pk: ativo?.level ?? 0 };
+  if (!antes) return;
+  if ((e.level ?? 0) > antes.treinador) pularEco(ecoPlacar.kpi.xpTreinador.el, 'subiu-nivel');
+  if (ativo && ativo.id === antes.pkId && (ativo.level ?? 0) > antes.pk) pularEco(ecoPlacar.kpi.xpPokemon.el, 'subiu-nivel');
+}
+
+/**
+ * Leva o cofre até um item — o atalho dos Achados e dos Gastos: aba Itens, a categoria dele, o
+ * card escolhido (com a ficha embaixo) e à vista.
+ */
+function focarItemNoCofre(chave) {
+  const cats = entradasDoCofre();
+  const cat = ECO_CATS.find((c) => cats.get(c).some((ent) => chaveDaEntradaCofre(ent) === chave));
+  if (!cat) return toast(t('eco.semNoCofre'));
+  if (ecoCofre.aba !== 'itens') trocarAbaCofre('itens');
+  ecoCofre.cat = cat;
+  ecoCofre.sel = chave;
+  pintarCofreEconomia(true);
+  const card = document.querySelector(`#eco-cofre .eco-item[data-chave="${chave}"]`);
+  if (!card) return;
+  const comportamento = menosMovimento() ? 'auto' : 'smooth';
+  card.scrollIntoView({ block: 'nearest', behavior: comportamento });
+  $('#eco-cofre .eco-sel')?.scrollIntoView({ block: 'nearest', behavior: comportamento });
+  pularEco(card);
 }
 
 /** A linha de "onde estou" — o mesmo texto da plaquinha da cena, que aqui está escondida. */
@@ -16077,52 +18940,45 @@ function pintarOndeEconomia(e) {
   bt.textContent = e ? rotuloDaCena(e) : t('eco.semArea');
 }
 
-/**
- * Traz a prancheta e o histórico para dentro do painel e os abre.
- *
- * Abrir na unha (em vez de chamar `alternarSessao`) é de propósito: os dois são MUTUAMENTE
- * exclusivos no canto da cena, onde há vaga para um cartãozinho só. Aqui há duas colunas.
- */
+/** Traz o histórico de capturas para dentro do painel, monta o placar e o cofre. */
 function montarEconomia() {
-  const corpo = $('#eco-corpo');
-  const lado = $('#eco-lado');
-  const sessao = $('#sessao-painel');
   const capturas = $('#capturas-painel');
-  if (!corpo || !lado || !sessao || !capturas) return;
-  montarRitmoEconomia();
-  // O irmão de baixo é a âncora da volta: `appendChild` devolveria os dois para o fim do
-  // `.hud-zoom`, embaixo dos botões de zoom.
-  ecoDeVolta ??= {
-    sessao: [sessao.parentElement, sessao.nextElementSibling],
-    capturas: [capturas.parentElement, capturas.nextElementSibling],
-  };
-  lado.appendChild(sessao); // embaixo do ritmo, na coluna dos números
-  corpo.appendChild(capturas); // a coluna da direita, inteira
-  estado.sessaoAberta = true;
+  const caixa = $('#eco-capturas');
+  if (!capturas || !caixa) return;
+  // O irmão de baixo é a âncora da volta: `appendChild` o devolveria ao fim do `.hud-zoom`,
+  // embaixo dos botões de zoom.
+  ecoDeVolta ??= [capturas.parentElement, capturas.nextElementSibling];
+  caixa.appendChild(capturas);
   estado.capturasHistAberta = true;
-  for (const el of [sessao, capturas]) {
-    el.classList.remove('hidden');
-    el.setAttribute('aria-hidden', 'false');
-  }
+  capturas.classList.remove('hidden');
+  capturas.setAttribute('aria-hidden', 'false');
+  // A prancheta do canto NÃO vem: o placar é ela, redesenhada para esta tela. Aberta lá atrás,
+  // ela seguiria se repintando a cada abate sem ninguém ver.
+  fecharPainelSessao();
+  estado.ultimoEventoBatalhaEm ??= Date.now();
   $('#eco-painel')?.setAttribute('aria-hidden', 'false');
   zerarSeloCapturas(); // o histórico está à vista o tempo todo: não há "por ver"
-  pintarSessao();
   pintarCapturasHist();
-  pintarRitmoEconomia();
+  montarPlacarEconomia();
+  pintarPlacarEconomia();
+  atualizarPlacarEconomia();
   pintarOndeEconomia(estado.eu);
+  montarCofreEconomia();
 }
 
-/** Devolve os dois painéis ao canto da cena, fechados, como o jogador os encontrou. */
+/** Devolve o histórico ao canto da cena, fechado, como o jogador o encontrou. */
 function desmontarEconomia() {
   $('#eco-painel')?.setAttribute('aria-hidden', 'true');
+  desmontarCofreEconomia();
+  ecoPlacar = null;
+  for (const id of ['#eco-placar', '#eco-achados']) {
+    const el = $(id);
+    if (el) el.innerHTML = '';
+  }
   if (!ecoDeVolta) return;
-  const sessao = $('#sessao-painel');
   const capturas = $('#capturas-painel');
-  // O de baixo primeiro: a âncora da prancheta é o próprio histórico.
-  const [paiCap, aposCap] = ecoDeVolta.capturas;
-  if (capturas && paiCap) paiCap.insertBefore(capturas, aposCap);
-  const [paiSes, aposSes] = ecoDeVolta.sessao;
-  if (sessao && paiSes) paiSes.insertBefore(sessao, aposSes);
+  const [pai, apos] = ecoDeVolta;
+  if (capturas && pai) pai.insertBefore(capturas, apos);
   ecoDeVolta = null;
   fecharPainelSessao();
   fecharPainelCapturas();
@@ -16183,6 +19039,498 @@ $('#eco-onde')?.addEventListener('click', () => {
   if (!estado.eu) return;
   abrirModal('mapa');
 });
+
+// ----------------------------------------------------------- o cofre do Modo Economia
+//
+// A metade de baixo da coluna da direita, embaixo do histórico de capturas: o que o jogador TEM,
+// numa chave de três posições — Itens (a bolsa, com as abas dela), Depot e Coleção. É a resposta a
+// "o que a caça me rendeu?" sem ligar a cena nem abrir janela: o item que chega aparece com um
+// "+N", o pokémon recém-capturado com o selo NOVO, e o número da aba dá um pulo quando cresce.
+// Tocar num item abre a ficha dele logo embaixo (com o "Usar" de quem tem uso e o atalho para a
+// Bolsa); tocar num pokémon abre a ficha do pokémon.
+//
+// ### Movimento só por evento
+//
+// O Modo Economia existe para a bateria (ver o bloco de cima e o CSS): nada aqui fica em laço. O
+// que se mexe é RESPOSTA — trocar de aba, passar o mouse, um drop chegando — e para em meio
+// segundo. Os pokémon vão em retrato PARADO (`spriteAnimado` com `parado`): o sprite animado das
+// listas é um relógio de 220 ms por card, e sessenta deles a noite inteira seriam a conta que este
+// modo existe para não pagar.
+//
+// ### Repintar pouco
+//
+// O snapshot chega duas vezes por segundo, e o Depot de quem joga há meses passa de mil pokémon.
+// A aba à vista só é refeita quando a ASSINATURA dela muda (as quantidades da bolsa; os ids, os
+// níveis e as espécies dos pokémon), e mesmo aí os cards que já existem são REAPROVEITADOS pela
+// chave (`reconciliarGradeCofre`) — só o número troca. Os pokémon vão em páginas de
+// `ECO_PAGINA_PK`.
+
+/** As três posições da chave. Ícone e nome do Depot e da Coleção são os das abas do Depot. */
+const ECO_ABAS = [
+  { id: 'itens', nome: 'eco.cofreItens', ico: 'img:site/assets/ui/menu-bolsa.png' },
+  { id: 'depot', nome: 'depot.guardados', ico: 'img:site/assets/ui/ball-poke.png' },
+  // Getter: `ICONE_COLECAO` é declarado bem mais abaixo no arquivo — lido aqui, no carregamento,
+  // seria acesso antes da declaração (TDZ) e derrubaria o app.js inteiro.
+  { id: 'colecao', nome: 'colecao.titulo', get ico() { return ICONE_COLECAO; } },
+];
+
+/** As abas da Bolsa que são LISTA de item. As oficinas (Oferenda, Chocadeira) ficam na Bolsa. */
+const ECO_CATS = ['treinador', 'raros', 'pedras', 'loots', 'skins'];
+
+/** Pokémon por página da grade. */
+const ECO_PAGINA_PK = 60;
+
+/**
+ * As ordens da grade de pokémon — as do Depot que respondem "o que eu tenho de bom" — com o
+ * rótulo do Mercado, fora a nota: "Maior Nota Calculadora" quebrava a fileira em duas.
+ */
+const ECO_ORDENS_PK = { recentes: 'mk.ordemRecentes', padrao: 'mk.ordemPadrao', nota: 'eco.cofreOrdemNota', potencia: 'depot.ordemPotencia' };
+
+const ecoCofre = {
+  aba: 'itens',
+  cat: 'treinador',
+  sel: null, // a chave do item aberto na ficha de baixo
+  ordem: 'recentes',
+  paginas: { depot: 1, colecao: 1 },
+  // O que existia quando o modo ligou: é contra isto que o "+N" e o NOVO se medem.
+  base: null,
+  assinatura: '',
+  contas: null,
+  ganhosVistos: null, // o "+N" de cada categoria na última pintura: pula só a que cresceu
+  idioma: null,
+};
+try {
+  const salva = localStorage.getItem('ecoCofreAba');
+  if (ECO_ABAS.some((a) => a.id === salva)) ecoCofre.aba = salva;
+} catch { /* sem armazenamento: começa em Itens */ }
+
+const chaveDaEntradaCofre = (ent) =>
+  ent.tipo === 'bola' ? `b${ent.bola.id}`
+    : ent.tipo === 'caixa' ? `cx${ent.caixa.id}`
+      : ent.tipo === 'casa' ? `casa${ent.casa.id}`
+        : ent.tipo === 'bicicleta' ? `bike${ent.bici.id}`
+          : `i${ent.id}`;
+
+/** O retrato do cofre: quanto havia de cada coisa, e quais pokémon. */
+function fotografarCofre() {
+  const e = estado.eu;
+  const itens = new Map();
+  if (e) for (const ent of entradasBolsa(e)) itens.set(chaveDaEntradaCofre(ent), Number(ent.q) || 0);
+  return { itens, pks: new Set((e?.pokemons ?? []).map((pk) => pk.id)) };
+}
+
+/**
+ * As entradas da bolsa por categoria — a mesma divisão das abas da Bolsa (`categoriaBolsa`).
+ *
+ * Guardadas pelas REFERÊNCIAS dos campos de onde saem: o mesclador de delta só troca o campo que
+ * chegou (`estado-delta.mjs`), e montar a bolsa — com a ordenação por nome — é quase todo o custo
+ * do cofre a cada snapshot. Caçando, a bolsa muda em um de cada três.
+ */
+let ecoCofreBolsa = null;
+function entradasDoCofre() {
+  const e = estado.eu;
+  const fonte = [e.items, e.balls, e.caixas, e.casa, e.bicicleta];
+  if (ecoCofreBolsa?.fonte.every((x, i) => x === fonte[i])) return ecoCofreBolsa.porCat;
+  const porCat = new Map(ECO_CATS.map((c) => [c, []]));
+  for (const ent of entradasBolsa(e)) porCat.get(categoriaBolsa(ent))?.push(ent);
+  ecoCofreBolsa = { fonte, porCat };
+  return porCat;
+}
+
+/** Os guardados (fora da equipe), separados pela Coleção — a regra de `localDoPokemon`. */
+function pokemonsDoCofre() {
+  const colecao = conjuntoColecaoCliente();
+  const depot = [];
+  const daColecao = [];
+  for (const pk of estado.eu?.pokemons ?? []) {
+    if (pk.slot != null) continue;
+    (colecao.has(Number(pk.id)) ? daColecao : depot).push(pk);
+  }
+  return { depot, colecao: daColecao };
+}
+
+/**
+ * Um pulo de meia batida — o único movimento do painel que não nasce de um clique (o número que
+ * subiu, o drop que chegou, o nível novo). `classe` escolhe qual animação.
+ */
+function pularEco(el, classe = 'pulou') {
+  el.classList.remove(classe);
+  void el.offsetWidth; // recomeça a animação, se ela ainda estiver rodando
+  el.classList.add(classe);
+}
+
+/**
+ * Põe a lista na grade reaproveitando o que já está lá pela `chave`: card que continua só é
+ * atualizado (sem refazer o ícone), card novo nasce, card que saiu some — e a ordem é a da lista.
+ */
+function reconciliarGradeCofre(grade, lista, criar, atualizar) {
+  const velhos = new Map();
+  for (const el of grade.children) if (el.dataset?.chave) velhos.set(el.dataset.chave, el);
+  let ref = grade.firstElementChild;
+  for (const x of lista) {
+    let el = velhos.get(x.chave);
+    if (el) {
+      velhos.delete(x.chave);
+      atualizar(el, x);
+    } else el = criar(x);
+    if (el === ref) ref = ref.nextElementSibling;
+    else grade.insertBefore(el, ref);
+  }
+  for (const el of velhos.values()) el.remove();
+}
+
+/** Liga o cofre (o `montarEconomia`): as abas e a aba guardada. */
+function montarCofreEconomia() {
+  const host = $('#eco-cofre');
+  if (!host || !estado.eu) return;
+  ecoCofre.base ??= fotografarCofre();
+  ecoCofre.idioma = idioma();
+  ecoCofre.assinatura = '';
+  ecoCofre.contas = null;
+  ecoCofre.ganhosVistos = null;
+  host.innerHTML = `
+    <div class="eco-abas" role="tablist" data-aba="${ecoCofre.aba}">
+      ${ECO_ABAS.map((a) => `
+        <button type="button" class="eco-aba${a.id === ecoCofre.aba ? ' on' : ''}" role="tab"
+                data-eco-aba="${a.id}" aria-selected="${a.id === ecoCofre.aba}">
+          <span class="eco-aba-ico" data-ico="${a.ico}" data-ico-px="16"></span>
+          <span class="eco-aba-nome">${t(a.nome)}</span>
+          <b class="eco-aba-n" data-eco-n="${a.id}"></b>
+        </button>`).join('')}
+      <i class="eco-abas-manopla" aria-hidden="true"></i>
+    </div>
+    <div class="eco-cofre-corpo" id="eco-cofre-corpo" role="tabpanel"></div>`;
+  for (const el of host.querySelectorAll('[data-ico]')) pintarIcone(el);
+  host.querySelector('.eco-abas').onclick = (ev) => {
+    const b = ev.target.closest('[data-eco-aba]');
+    if (b) trocarAbaCofre(b.dataset.ecoAba);
+  };
+  pintarCofreEconomia(true);
+}
+
+/** Desliga: da próxima vez, o "+N" e o NOVO contam a partir do novo liga. */
+function desmontarCofreEconomia() {
+  ecoCofre.base = null;
+  ecoCofre.sel = null;
+  ecoCofre.assinatura = '';
+  ecoCofre.ganhosVistos = null;
+  ecoCofreBolsa = null;
+  const host = $('#eco-cofre');
+  if (host) host.innerHTML = '';
+}
+
+function trocarAbaCofre(aba) {
+  if (aba === ecoCofre.aba || !ECO_ABAS.some((a) => a.id === aba)) return;
+  ecoCofre.aba = aba;
+  try { localStorage.setItem('ecoCofreAba', aba); } catch { /* vale só nesta sessão */ }
+  const abas = $('#eco-cofre .eco-abas');
+  if (abas) {
+    abas.dataset.aba = aba;
+    for (const b of abas.querySelectorAll('[data-eco-aba]')) {
+      const on = b.dataset.ecoAba === aba;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', String(on));
+    }
+  }
+  const corpo = $('#eco-cofre-corpo');
+  if (corpo) {
+    corpo.innerHTML = '';
+    delete corpo.dataset.aba;
+    corpo.classList.remove('entra');
+    void corpo.offsetWidth;
+    corpo.classList.add('entra');
+  }
+  pintarCofreEconomia(true);
+}
+
+/** O snapshot chegou com o modo ligado (`aplicarEstado`). */
+function atualizarCofreEconomia() {
+  if (!$('#eco-cofre-corpo')) return;
+  if (ecoCofre.idioma !== idioma()) return montarCofreEconomia();
+  pintarCofreEconomia(false);
+}
+
+/** Os números das três abas. O que cresceu dá o pulo. */
+function pintarContasCofre(contas) {
+  const antes = ecoCofre.contas;
+  ecoCofre.contas = contas;
+  for (const [aba, n] of Object.entries(contas)) {
+    const el = document.querySelector(`#eco-cofre [data-eco-n="${aba}"]`);
+    if (!el) continue;
+    const texto = num(n);
+    if (el.textContent !== texto) el.textContent = texto;
+    if (antes && n > antes[aba]) pularEco(el);
+  }
+}
+
+/** Refaz a aba à vista — só quando a assinatura dela mudou, a não ser que `forcar`. */
+function pintarCofreEconomia(forcar) {
+  const corpo = $('#eco-cofre-corpo');
+  if (!corpo || !estado.eu) return;
+  const cats = entradasDoCofre();
+  const pks = pokemonsDoCofre();
+  pintarContasCofre({
+    itens: [...cats.values()].reduce((s, l) => s + l.length, 0),
+    depot: pks.depot.length,
+    colecao: pks.colecao.length,
+  });
+  const aba = ecoCofre.aba;
+  const ganhos = aba === 'itens' ? ganhosDoCofre(cats) : null;
+  const assinatura = aba === 'itens'
+    ? [ecoCofre.cat, ecoCofre.sel, ...ECO_CATS.map((c) => `${cats.get(c).length}+${ganhos[c]}`),
+      ...cats.get(ecoCofre.cat).map((e) => `${chaveDaEntradaCofre(e)}:${e.q}`)].join('|')
+    : [aba, ecoCofre.ordem, ecoCofre.paginas[aba],
+      ...pks[aba].map((pk) => `${pk.id}:${pk.speciesId}:${pk.level}:${pk.shiny ? 1 : 0}`)].join('|');
+  if (!forcar && assinatura === ecoCofre.assinatura) return;
+  ecoCofre.assinatura = assinatura;
+  if (aba === 'itens') pintarItensCofre(corpo, cats, ganhos);
+  else pintarPokemonsCofre(corpo, aba, pks[aba]);
+}
+
+// ---- a aba Itens
+
+/** Um card do cofre a partir de uma entrada da bolsa. `ico(px)` desenha o ícone. */
+function tileDaEntradaCofre(ent) {
+  const chave = chaveDaEntradaCofre(ent);
+  if (ent.tipo === 'bola') return { chave, ent, nome: ent.bola.nome, q: ent.q, ico: (px) => iconeBola(ent.bola.id, px) };
+  if (ent.tipo === 'caixa') {
+    return {
+      chave, ent, nome: t(`caixas.nome.${ent.caixa.tipo}`), rotulo: serieDaCaixa(ent.caixa.tipo, ent.caixa.serie),
+      raro: true, ico: (px) => iconeArquivo(`/img/itens/caixa-${ent.caixa.tipo}.png`, px),
+    };
+  }
+  if (ent.tipo === 'casa') {
+    return {
+      chave, ent, nome: nomeCasaRaridade(ent.casa.rar), rotulo: numeroDaCasa(ent.casa.id),
+      rar: ent.casa.rar, ico: (px) => imgItem(CASA_ITEM_POR_RAR[ent.casa.rar], px),
+    };
+  }
+  if (ent.tipo === 'bicicleta') {
+    return {
+      chave, ent, nome: nomeBicicletaRaridade(ent.bici.rar), rotulo: numeroDaBicicleta(ent.bici.id),
+      rar: ent.bici.rar, ico: (px) => imgItem(BICICLETA_ITEM_POR_RAR[ent.bici.rar], px),
+    };
+  }
+  return {
+    chave, ent, nome: nomeItem(ent.item ?? ent.id, ent.item?.name ?? `item ${ent.id}`), q: ent.q,
+    raro: ehRaroBolsa(ent.item), ico: (px) => imgItem(ent.id, px),
+  };
+}
+
+/** O que dá para fazer com o item AQUI — os mesmos usos da Bolsa (`pintarBolsaCorpo`). */
+function usoDoItemCofre(ent) {
+  if (ent.tipo !== 'item') return null;
+  if (nameTagAtiva() && ent.id === NAME_TAG_ID) return { rotulo: t('nametag.usar'), acao: abrirNameTag };
+  if (ent.id === MYSTIC_TICKET_ID) return { rotulo: t('mistico.usar'), acao: abrirUsoTicketMistico };
+  if (ehItemOvo(ent.id)) {
+    return { rotulo: t('chocadeira.chocarEste'), acao: () => abrirChocadeiraComOvo(OVO_POR_ITEM.get(ent.id).id) };
+  }
+  if (xpShareHeldAtivo() && ent.id === xpShareHeldItemId()) return { rotulo: t('eco.cofreXpShare'), acao: abrirXpShareHeld };
+  return null;
+}
+
+/** Quanto entrou desde que o modo ligou. Peça numerada (casa, caixa, bicicleta) conta 1 se é nova. */
+function ganhoNoCofre(ent) {
+  const base = ecoCofre.base?.itens.get(chaveDaEntradaCofre(ent));
+  if (ent.tipo === 'caixa' || ent.tipo === 'casa' || ent.tipo === 'bicicleta') return base == null ? 1 : 0;
+  return (Number(ent.q) || 0) - (base ?? 0);
+}
+
+/**
+ * Quanto entrou em cada categoria desde que o modo ligou: o selo verde dos chips, que mostra
+ * para onde foi o drop que caiu FORA da categoria à vista. Conta uma vez por bolsa nova (fica
+ * no cache de `entradasDoCofre`), não a cada snapshot.
+ */
+function ganhosDoCofre(cats) {
+  if (ecoCofreBolsa?.porCat === cats && ecoCofreBolsa.ganhos) return ecoCofreBolsa.ganhos;
+  const ganhos = {};
+  for (const [c, lista] of cats) ganhos[c] = lista.reduce((soma, ent) => soma + Math.max(0, ganhoNoCofre(ent)), 0);
+  if (ecoCofreBolsa?.porCat === cats) ecoCofreBolsa.ganhos = ganhos;
+  return ganhos;
+}
+
+function criarTileItemCofre(x) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.dataset.chave = x.chave;
+  el.className = `eco-item${x.raro ? ' raro' : ''}${x.rar ? ` rar-${x.rar}` : ''}`;
+  el.innerHTML = '<span class="eco-item-ico"></span><b class="eco-item-q"></b><i class="eco-item-mais" hidden></i>';
+  el.querySelector('.eco-item-ico').appendChild(x.ico(30));
+  el.onclick = () => {
+    ecoCofre.sel = ecoCofre.sel === x.chave ? null : x.chave;
+    pintarCofreEconomia(true);
+    // No celular a grade tem meia tela e a ficha nasce embaixo dela, às vezes fora da vista:
+    // sem isto o toque parecia não fazer nada. No computador ela já está à vista e nada rola.
+    if (ecoCofre.sel) {
+      $('#eco-cofre .eco-sel')?.scrollIntoView({ block: 'nearest', behavior: menosMovimento() ? 'auto' : 'smooth' });
+    }
+  };
+  atualizarTileItemCofre(el, x, true);
+  return el;
+}
+
+function atualizarTileItemCofre(el, x, novo = false) {
+  el.title = x.nome;
+  const q = el.querySelector('.eco-item-q');
+  const texto = x.rotulo ?? `×${num(x.q)}`;
+  const mudou = q.textContent !== texto;
+  q.textContent = texto;
+  const ganho = ganhoNoCofre(x.ent);
+  const mais = el.querySelector('.eco-item-mais');
+  mais.hidden = !(ganho > 0);
+  mais.textContent = ganho > 0 ? (x.q != null ? `+${num(ganho)}` : t('eco.cofreNovo')) : '';
+  // Um drop chegou com o cofre aberto: o card dá o pulo.
+  if (mudou && !novo && ganho > 0) pularEco(el);
+}
+
+function pintarItensCofre(corpo, cats, ganhos) {
+  if (!corpo.querySelector('.eco-itens')) {
+    corpo.innerHTML = `
+      <div class="eco-itens">
+        <div class="eco-cats" role="tablist"></div>
+        <div class="eco-grade eco-grade-itens"></div>
+        <div class="eco-sel" aria-live="polite"></div>
+      </div>`;
+    corpo.querySelector('.eco-cats').onclick = (ev) => {
+      const b = ev.target.closest('[data-eco-cat]');
+      if (!b || b.dataset.ecoCat === ecoCofre.cat) return;
+      ecoCofre.cat = b.dataset.ecoCat;
+      ecoCofre.sel = null;
+      pintarCofreEconomia(true);
+    };
+  }
+  // Só as categorias que têm algo — e a escolhida, mesmo vazia, para o jogador não perder o lugar.
+  // O selo verde é o que entrou nela desde que o modo ligou, e só PULA a categoria que cresceu.
+  const chips = corpo.querySelector('.eco-cats');
+  const vistos = ecoCofre.ganhosVistos;
+  ecoCofre.ganhosVistos = ganhos;
+  chips.innerHTML = ECO_CATS
+    .filter((c) => c === ecoCofre.cat || cats.get(c).length)
+    .map((c) => {
+      const aba = ABAS_BOLSA.find((a) => a.id === c);
+      const g = ganhos[c];
+      const selo = g > 0 ? `<i class="eco-cat-mais${vistos && g > vistos[c] ? ' pulou' : ''}">+${numCurto(g)}</i>` : '';
+      return `<button type="button" class="eco-cat${c === ecoCofre.cat ? ' on' : ''}" data-eco-cat="${c}" role="tab"
+                aria-selected="${c === ecoCofre.cat}">${htmlIcoAbaBolsa(aba)}<span>${t(aba.nome)}</span><em>${num(cats.get(c).length)}</em>${selo}</button>`;
+    }).join('');
+  for (const el of chips.querySelectorAll('[data-ico]')) pintarIcone(el);
+
+  const lista = cats.get(ecoCofre.cat).map(tileDaEntradaCofre);
+  const grade = corpo.querySelector('.eco-grade-itens');
+  grade.querySelector('.eco-vazio')?.remove();
+  reconciliarGradeCofre(grade, lista, criarTileItemCofre, atualizarTileItemCofre);
+  if (!lista.length) grade.insertAdjacentHTML('beforeend', `<p class="eco-vazio">${t('bolsa.vazia')}</p>`);
+  if (ecoCofre.sel && !lista.some((x) => x.chave === ecoCofre.sel)) ecoCofre.sel = null;
+  for (const el of grade.children) el.classList.toggle('on', !!ecoCofre.sel && el.dataset.chave === ecoCofre.sel);
+  pintarFichaItemCofre(corpo.querySelector('.eco-sel'), lista.find((x) => x.chave === ecoCofre.sel));
+}
+
+/** A ficha do item escolhido, embaixo da grade: o que é, quanto tem, o que vale e o que fazer. */
+function pintarFichaItemCofre(host, x) {
+  if (!host) return;
+  if (!x) {
+    host.className = 'eco-sel vazia';
+    host.innerHTML = `<p>${t('eco.cofreToque')}</p>`;
+    return;
+  }
+  const ent = x.ent;
+  const uso = usoDoItemCofre(ent);
+  const preco = ent.tipo === 'item' ? precoDeVendaPorNomeItem(ent.item?.name) : 0;
+  const ganho = ganhoNoCofre(ent);
+  host.className = `eco-sel${x.raro ? ' raro' : ''}${x.rar ? ` rar-${x.rar}` : ''}`;
+  host.innerHTML = `
+    <span class="eco-sel-ico"></span>
+    <div class="eco-sel-info">
+      <b>${escapar(x.nome)}</b>
+      <span>${x.rotulo ? escapar(x.rotulo) : t('eco.cofreQtd', { n: num(x.q) })}${
+        ganho > 0 && x.q != null ? ` <em>${t('eco.cofreGanho', { n: num(ganho) })}</em>` : ''}</span>
+      ${ent.tipo === 'item' ? `<i>${preco > 0 ? t('eco.cofreNpc', { v: num(preco) }) : t('eco.cofreNpcNao')}</i>` : ''}
+    </div>
+    <div class="eco-sel-bts">
+      ${uso ? '<button type="button" class="eco-sel-usar"></button>' : ''}
+      <button type="button" class="eco-sel-bolsa">${t('eco.cofreNaBolsa')}</button>
+    </div>`;
+  host.querySelector('.eco-sel-ico').appendChild(x.ico(40));
+  const usar = host.querySelector('.eco-sel-usar');
+  if (usar) {
+    usar.textContent = uso.rotulo;
+    usar.onclick = () => uso.acao();
+  }
+  host.querySelector('.eco-sel-bolsa').onclick = () => {
+    estado.abaBolsa = categoriaBolsa(ent);
+    abrirModal('bolsa');
+  };
+}
+
+// ---- as abas Depot e Coleção
+
+function criarTilePkCofre(x) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.dataset.chave = x.chave;
+  el.innerHTML = `<span class="eco-pk-arte"></span><b class="eco-pk-nv"></b><i class="eco-pk-novo">${t('eco.cofreNovo')}</i>`;
+  el.onclick = () => abrirFichaDoPokemon(estado.eu?.pokemons?.find((k) => k.id === x.pk.id) ?? x.pk);
+  atualizarTilePkCofre(el, x);
+  return el;
+}
+
+function atualizarTilePkCofre(el, { pk }) {
+  // A espécie muda quando ele evolui: o retrato é refeito só aí (o resto do card é texto).
+  const especie = String(pk.speciesId ?? '');
+  const look = String(looktypeDe(pk) ?? '');
+  if (el.dataset.especie !== especie || el.dataset.look !== look) {
+    el.dataset.especie = especie;
+    el.dataset.look = look;
+    // Recortado (`encaixar`) para o bicho encher o card, e PARADO: um quadro, nenhum relógio.
+    const comum = especieDe(pk)?.looktype ?? pk.looktype;
+    el.querySelector('.eco-pk-arte').replaceChildren(
+      spriteAnimado(looktypeDe(pk), 44, 3, () => iconeEspecie(comum, 44), null, { encaixar: true, parado: true }));
+  }
+  const novo = !!ecoCofre.base && !ecoCofre.base.pks.has(pk.id);
+  el.className = `eco-pk${pk.shiny ? ' shiny' : ''}${novo ? ' novo' : ''}`;
+  const nv = t('eco.cofreNv', { n: num(pk.level) });
+  el.querySelector('.eco-pk-nv').textContent = nv;
+  el.title = `${pk.shiny ? prefixoShiny() : ''}${pk.nome ?? ''} · ${nv}`;
+}
+
+function pintarPokemonsCofre(corpo, aba, todos) {
+  if (corpo.dataset.aba !== aba || !corpo.querySelector('.eco-pks')) {
+    corpo.dataset.aba = aba;
+    corpo.innerHTML = `
+      <div class="eco-pks">
+        <div class="eco-ordens" role="radiogroup">${Object.entries(ECO_ORDENS_PK).map(([o, rotulo]) =>
+          `<button type="button" class="eco-ordem" data-eco-ordem="${o}">${t(rotulo)}</button>`).join('')}</div>
+        <div class="eco-grade eco-grade-pk"></div>
+        <button type="button" class="eco-mais hidden"></button>
+      </div>`;
+    corpo.querySelector('.eco-ordens').onclick = (ev) => {
+      const b = ev.target.closest('[data-eco-ordem]');
+      if (!b || b.dataset.ecoOrdem === ecoCofre.ordem) return;
+      ecoCofre.ordem = b.dataset.ecoOrdem;
+      ecoCofre.paginas[ecoCofre.aba] = 1;
+      pintarCofreEconomia(true);
+      corpo.querySelector('.eco-grade-pk')?.scrollTo({ top: 0 });
+    };
+    corpo.querySelector('.eco-mais').onclick = () => {
+      ecoCofre.paginas[ecoCofre.aba]++;
+      pintarCofreEconomia(true);
+    };
+  }
+  for (const b of corpo.querySelectorAll('[data-eco-ordem]')) b.classList.toggle('on', b.dataset.ecoOrdem === ecoCofre.ordem);
+  const ordenada = ordenarMarketPokemon([...todos], ecoCofre.ordem);
+  const mostra = ordenada.slice(0, ecoCofre.paginas[aba] * ECO_PAGINA_PK);
+  const grade = corpo.querySelector('.eco-grade-pk');
+  grade.querySelector('.eco-vazio')?.remove();
+  reconciliarGradeCofre(grade, mostra.map((pk) => ({ chave: `p${pk.id}`, pk })), criarTilePkCofre, atualizarTilePkCofre);
+  if (!todos.length) {
+    grade.insertAdjacentHTML('beforeend', `<p class="eco-vazio">${t(aba === 'depot' ? 'eco.cofreDepotVazio' : 'colecao.vazia')}</p>`);
+  }
+  const resto = ordenada.length - mostra.length;
+  const mais = corpo.querySelector('.eco-mais');
+  mais.classList.toggle('hidden', resto <= 0);
+  if (resto > ECO_PAGINA_PK) mais.textContent = t('eco.cofreMais', { n: num(ECO_PAGINA_PK), total: num(resto) });
+  else if (resto > 0) mais.textContent = t('eco.cofreMaisFim', { n: num(resto) });
+}
 
 // ------------------------------------------------------- Tela sempre acesa
 //
@@ -16905,6 +20253,7 @@ function textoSelvagemDerrotado(e) {
 }
 
 function aoEvento(e) {
+  estado.ultimoEventoBatalhaEm = Date.now(); // a luz do Modo Economia: a caça está andando
   registrarSessao(e);
   const c = estado.campo;
   switch (e.k) {
@@ -17220,16 +20569,20 @@ function aoEvento(e) {
       toast(t('guild.escalacaoSalva'));
       break;
     // A guerra acabou de rodar no servidor. Chega para quem estava online no momento — os
-    // outros veem o resultado no painel de PvP quando entrarem.
-    case 'guildWarResultado':
+    // outros veem o resultado no painel de PvP quando entrarem. Os pontos de abate e dano são o
+    // que deu a colocação; a guerra "sozinha" não teve batalha e chega sem eles.
+    case 'guildWarResultado': {
+      const comNota = e.nota != null;
+      const v = { guild: e.guild, pos: e.pos, total: e.total, gp: num(e.gp ?? 0), nota: notaGw(e.nota), q: num(e.queda ?? 0) };
       toast(
         e.venceu
-          ? t('ev.guildWarVenceu', { guild: e.guild, gp: num(e.gp ?? 0) })
-          : t('ev.guildWarColocacao', { pos: e.pos, total: e.total, gp: num(e.gp ?? 0) }),
+          ? t(comNota ? 'ev.guildWarVenceuNota' : 'ev.guildWarVenceu', v)
+          : t(comNota ? 'ev.guildWarColocacaoNota' : 'ev.guildWarColocacao', v),
       );
       logCena(t('ev.guildWarLog', { pos: e.pos, total: e.total }));
       enviar({ t: 'guild.pvp.info' });
       break;
+    }
     // A MEDALHA DE GUERRA acabou de ser carimbada num bicho SEU: ele foi o Pokémon da Guerra
     // de hoje. Chega em qualquer shard (o aviso é do `CANAL_GUILD`), e o número novo já veio
     // no mesmo pacote de estado — aqui é só a comemoração.
@@ -17254,6 +20607,33 @@ function aoEvento(e) {
       if (estado.modalAberto === 'shop') montarLoja();
       if (estado.modalAberto === 'diamantes') atualizarDiamantes(estado.eu ?? {}, {});
       break;
+    // O PRÊMIO DA SEMANA do PvP Ranqueado chegou — no login, ou na varredura de quem estava jogando
+    // na virada. Os boosts já valem e o diamante já está no saldo (o sim acertou a memória antes de
+    // avisar). Até 04/10/2026 este evento saía do servidor e nada o desenhava: o prêmio chegava calado.
+    case 'pvpPremio':
+      mostrarPremioPvp(e);
+      if (estado.modalAberto === 'shop') montarLoja();
+      if (estado.modalAberto === 'diamantes') atualizarDiamantes(estado.eu ?? {}, {});
+      break;
+    // O BOOST DA GUILD ligou (ou estendeu) — para todo membro online, comprador incluído. O carimbo
+    // novo chega pelo estado (e pelo pacote da guild): a Loja, a ficha e o painel da guild se
+    // redesenham sozinhos pelas assinaturas deles. Aqui é só a festa.
+    case 'guildBoostAtivado':
+      comemorarBoostGuild(e);
+      break;
+    // A resposta a quem DOOU ao banco da guild: quanto saiu de verdade (o pedido é cortado no que
+    // faltava para encher). O banco que encheu tem a comemoração própria (`guildBoostAtivado`).
+    case 'guildDoou':
+      if (e.cheio) break;
+      toast(t(Number(e.qtd) < Number(e.pedido) ? 'ev.guildDoouCortado' : 'ev.guildDoou', { n: num(Number(e.qtd) || 0) }));
+      break;
+    // A guild foi apagada com diamante no banco: o que este jogador doou voltou para ele.
+    case 'guildBancoDevolvido': {
+      const frase = t('ev.guildBancoDevolvido', { n: num(Number(e.qtd) || 0), guild: e.guild ?? '' });
+      toast(frase);
+      logCena(frase);
+      break;
+    }
     case 'starter': logCena(t('ev.starter', { nome: e.nome, nivel: e.level })); toast(t('ev.starterEscolhido', { nome: e.nome })); break;
     // Troca que o SERVIDOR decidiu: o suplente de um nocaute, na hunt e na arena. O evento chega
     // antes do primeiro `ataque` do suplente, então a pausa da recarga pega o pokémon certo sem
@@ -17313,14 +20693,23 @@ function aoEvento(e) {
       if (e.soltosCasa) toast(t(e.soltosCasa === 1 ? 'casa.soltoAoAnunciar' : 'casa.soltosAoAnunciar', { n: e.soltosCasa }));
       break;
     case 'marketCancelado': toast(t('ev.marketCancelado')); break;
+    // A estadia aumentou: o aviso diz até quando, e o selo "Na feira" do card pula quando a lista
+    // nova chegar (ver `duracaoSelo`) — o "deu certo" no lugar em que o jogador vai olhar.
+    case 'marketEstendido':
+      estado.cmEstadiaSubiu = { id: Number(e.id), em: Date.now() };
+      toast(t('ev.marketEstendido', { descricao: e.descricao, quando: e.expiraEm ? quandoVence(e.expiraEm) : '—' }));
+      break;
     // O prazo da vitrine acabou (ou o servidor fechou o anúncio por regra: curadoria, preço
     // abaixo do mínimo) e a mercadoria voltou — na hora, ou no login de quem estava fora.
     //
     // `marketDevolvidoColecao` é o pokémon que caiu abaixo da nota mínima da vitrine: ele volta
     // GUARDADO, e o aviso diz isso — quem o procurasse na aba de venda do Depot não o acharia.
+    // `marketDevolvidoIndicacao` é o lote de diamante que guardava diamante de indicação, que
+    // deixou de se vender no Mercado (03/10/2026): o aviso diz o porquê.
     case 'marketExpirou':
     case 'marketDevolvido':
     case 'marketDevolvidoColecao':
+    case 'marketDevolvidoIndicacao':
       toast(t(`ev.${e.k}`, { descricao: e.descricao }));
       if (estado.modalAberto === 'community' && estado.cmAba === 'meus') pedirMercado();
       break;
@@ -17405,10 +20794,30 @@ function aoEvento(e) {
       break;
     }
     case 'lojaCompra':
-      toast(`${t('loja.comprado')}: ${e.nome}`);
+      toast(e.efeito === 'atrasados'
+        ? t('atrasados.comprado', { mult: ATRASADOS.mult, alvo: num(e.alvo) })
+        : `${t('loja.comprado')}: ${e.nome}`);
       if (estado.modalAberto === 'shop') montarLoja();
       // O Fragmento de Chave comprado muda o contador do teto na tela da Casa.
       if (estado.modalAberto === 'casa') montarCasa();
+      break;
+    // O PRÊMIO DO MÊS do Ranking caiu na conta: um aviso por placar em que ele ficou no prêmio. O saldo
+    // novo vem no snapshot seguinte (o servidor já releu do livro-razão).
+    case 'rankingMensalPremio':
+      for (const pz of e.premios ?? []) {
+        const msg = t('rkm.premio', {
+          mes: e.mes ?? '', pos: pz.posicao, placar: t(`rkm.placar.${pz.placar}`), n: num(pz.diamantes),
+        });
+        toast(msg);
+        logCena(msg);
+      }
+      break;
+    // O treinador chegou ao alvo do Boost dos Atrasados: o boost acabou sozinho. É o "você alcançou os
+    // veteranos" — vai no log da cena, que fica, e no toast, que se vê na hora.
+    case 'atrasadosFim':
+      toast(t('atrasados.fim', { alvo: num(e.alvo) }));
+      logCena(t('atrasados.fim', { alvo: num(e.alvo) }));
+      if (estado.modalAberto === 'shop') montarLoja();
       break;
     case 'casaFabricada':
       // O sorteio merece a própria tela, com a dopamina do tamanho da raridade — e o número.
@@ -17729,13 +21138,17 @@ function limparMsgsDeIgnorados() {
 const podeUsarChat = () => (estado.eu?.level ?? 0) >= CHAT_NIVEL_MIN && !chatMutado();
 
 /**
- * Os canais do chat, na ordem do seletor. Espelha `CANAIS_CHAT` do `protocol.mjs`.
+ * Os canais do chat, na ordem dos botões. Espelha `CANAIS_CHAT` do `protocol.mjs`.
  *
- * `seloGeral`: o canal entra nas contas que aparecem com o menu FECHADO — o selo no botão do
- * seletor, o do chat recolhido e o da gaveta do celular. Comércio e Dúvidas ficam de fora de
- * propósito: o Comércio recebe anúncio o dia inteiro, e somar isso no selo do chat seria obrigar
- * quem só quer conversar a conviver com um número que nunca zera — o contrário do que separar o
- * canal prometeu. O número deles aparece dentro do menu, ao lado do nome, para quem for procurar.
+ * Cada canal tem o PRÓPRIO botão, sempre à vista, com o próprio número de não-lidas (ver
+ * `montarBotoesCanais`). `seloGeral` decide o resto:
+ *
+ *   · se o canal entra na SOMA que aparece quando os botões somem — o selo do rail e o da gaveta
+ *     do celular. Comércio e Dúvidas ficam de fora de propósito: o Comércio recebe anúncio o dia
+ *     inteiro, e somar isso no selo do chat seria obrigar quem só quer conversar a conviver com
+ *     um número que nunca zera — o contrário do que separar o canal prometeu;
+ *   · a COR do número no botão: roxo (a cor de "tem novidade para você") no Mundo e na Guild, e
+ *     um vão apagado no Comércio e nas Dúvidas — o número está lá para quem quiser, sem gritar.
  */
 const CANAIS_DO_CHAT = [
   { id: 'mundo', emoji: '🌎', nome: 'chat.mundo', desc: 'chat.canalDescMundo', seloGeral: true },
@@ -17746,6 +21159,8 @@ const CANAIS_DO_CHAT = [
 
 const CANAIS_CHAT_PUBLICOS = CANAIS_DO_CHAT.map((c) => c.id);
 const canalDoChat = (id) => CANAIS_DO_CHAT.find((c) => c.id === id) ?? CANAIS_DO_CHAT[0];
+/** Os canais que o "Interromper o chat" da moderação fecha: os abertos. A Guild é conversa de dentro. */
+const CANAIS_QUE_INTERROMPEM = ['mundo', 'comercio', 'duvidas'];
 /** Os canais que o jogador pode abrir agora: a Guild só com guild. */
 const canaisDoJogador = () => CANAIS_DO_CHAT.filter((c) => !c.soGuild || !!estado.eu?.guild?.id);
 
@@ -17767,7 +21182,7 @@ function contarChatNaoLidas(canal) {
   ).length;
 }
 
-/** A soma dos canais com `seloGeral` — o que o chat fechado (e o botão do seletor) mostra. */
+/** A soma dos canais com `seloGeral` — o que o rail e a gaveta do celular mostram sem os botões. */
 function naoLidasGerais({ exceto = null } = {}) {
   return canaisDoJogador()
     .filter((c) => c.seloGeral && c.id !== exceto)
@@ -17783,35 +21198,72 @@ function pintarSelo(selo, n) {
 /**
  * O selo de não-lidas do RAIL: a soma dos canais, numa plaquinha só.
  *
- * No rail o seletor some, e com ele os selos. Sem este substituto, fechar o chat com a coluna
- * estreita seria ficar cego para ele — que é justamente o que o modo recolhido não pode custar.
+ * No rail os botões dos canais somem, e com eles os números. Sem este substituto, fechar o chat
+ * com a coluna estreita seria ficar cego para ele — que é justamente o que o modo recolhido não
+ * pode custar.
  */
 function pintarSeloChatRail() {
   pintarSelo($('#chat-cnt-rail'), naoLidasGerais());
 }
 
+// ---- os botões dos canais
+
+/** O que os botões montados representam: a lista de canais e o idioma em que foram escritos. */
+const chaveDosBotoesCanais = () => `${canaisDoJogador().map((c) => c.id).join(',')}|${idioma()}`;
+
 /**
- * O botão do seletor (emoji e nome do canal de agora, e o selo dos OUTROS canais) e, com o menu
- * aberto, o número de cada opção.
+ * Os botões dos canais: um por canal que o jogador pode abrir, com o emoji, o nome e o número de
+ * não-lidas — Mundo, Comércio, Dúvidas e Guild sempre à vista, numa grade de dois.
+ *
+ * Até 04/10/2026 eram um SELETOR (o canal de agora e um menu com os outros), e o pedido que
+ * trocou foi de jogador: com um canal só na tela, o Mundo levava a conversa e a Guild ficava
+ * esquecida — o número dela morava dentro do menu, que ninguém abria para conferir.
+ *
+ * A descrição do canal ("Compra, venda e anúncios do Market") vai no `title`: era a segunda linha
+ * das opções do menu, e é o que diz para que servem o Comércio e as Dúvidas antes de alguém abrir
+ * e ficar sem saber o que escrever.
+ *
+ * Monta de novo só quando a LISTA muda (entrou ou saiu de uma guild) ou o idioma — o resto do
+ * tempo `pintarSelosChatAbas` só acende o botão e troca os números, sem roubar o foco de quem
+ * está andando pelas setas.
+ */
+function montarBotoesCanais(host) {
+  const canais = canaisDoJogador();
+  host.innerHTML = canais.map((c) => `
+    <button type="button" role="tab" class="chat-canal-bt${c.seloGeral ? '' : ' lateral'}" data-canal="${c.id}"
+            aria-controls="chat-msgs" title="${escapar(t(c.desc))}">
+      <span class="chat-canal-emoji" aria-hidden="true">${c.emoji}</span>
+      <span class="chat-canal-nome">${escapar(t(c.nome))}</span>
+      <span class="chat-aba-selo hidden" aria-hidden="true"></span>
+    </button>`).join('');
+  // Sem guild são três: uma fileira só, em vez de uma grade de dois com um buraco no canto.
+  host.classList.toggle('tres', canais.length === 3);
+  host.dataset.montado = chaveDosBotoesCanais();
+}
+
+/**
+ * Qual canal está aberto e o número de cada um — nos botões e no selo do rail.
  *
  * O nome ainda diz "abas" porque ela é chamada de uma dúzia de lugares desde quando os canais
- * eram abas lado a lado — a pergunta que ela responde continua a mesma.
+ * eram abas lado a lado — e voltaram a ser, agora numa grade de dois que cabe na coluna.
  */
 function pintarSelosChatAbas() {
   // Fechado, não há canal "sendo visto": o painel virou uma fita e ninguém leu nada. Sem isto o
-  // canal aberto ficaria eternamente sem selo e fechar o chat seria ficar cego para ele.
+  // canal aberto ficaria eternamente sem número e fechar o chat seria ficar cego para ele.
   const vendo = !chatRecolhido() && ehCanalPublico(estado.canalChat) ? estado.canalChat : null;
-  const atual = canalDoChat(estado.canalChat);
-  const emoji = $('#chat-canal-emoji');
-  const nome = $('#chat-canal-nome');
-  if (emoji) emoji.textContent = atual.emoji;
-  if (nome) nome.textContent = t(atual.nome);
-  pintarSelo($('#chat-canal-selo'), naoLidasGerais({ exceto: vendo }));
-  const menu = $('#chat-canal-menu');
-  if (menu && !menu.classList.contains('hidden')) {
-    for (const op of menu.querySelectorAll('[data-canal]')) {
-      const canal = op.dataset.canal;
-      pintarSelo(op.querySelector('.chat-aba-selo'), canal === vendo ? 0 : contarChatNaoLidas(canal));
+  const host = $('#chat-canais');
+  if (host) {
+    if (host.dataset.montado !== chaveDosBotoesCanais()) montarBotoesCanais(host);
+    for (const bt of host.querySelectorAll('[data-canal]')) {
+      const c = canalDoChat(bt.dataset.canal);
+      const on = c.id === estado.canalChat;
+      const n = c.id === vendo ? 0 : contarChatNaoLidas(c.id);
+      bt.classList.toggle('on', on);
+      bt.setAttribute('aria-selected', on ? 'true' : 'false');
+      // Só o canal aberto entra na ordem do Tab; as setas andam entre os outros (o padrão de abas).
+      bt.tabIndex = on ? 0 : -1;
+      bt.setAttribute('aria-label', n > 0 ? t('chat.canalNovas', { canal: t(c.nome), n: num(n) }) : t(c.nome));
+      pintarSelo(bt.querySelector('.chat-aba-selo'), n);
     }
   }
   pintarSeloChatRail();
@@ -17824,78 +21276,31 @@ function marcarCanalChatVisto(canal, ate = Date.now()) {
   pintarSelosChatAbas();
 }
 
-// ---- o menu do seletor de canal
-
-function montarMenuCanais() {
-  const menu = $('#chat-canal-menu');
-  if (!menu) return;
-  menu.innerHTML = canaisDoJogador().map((c) => {
-    const on = c.id === estado.canalChat;
-    return `<button type="button" role="option" class="chat-canal-op${on ? ' on' : ''}" data-canal="${c.id}"
-        aria-selected="${on ? 'true' : 'false'}">
-        <span class="chat-canal-emoji" aria-hidden="true">${c.emoji}</span>
-        <span class="chat-canal-txt"><b>${escapar(t(c.nome))}</b><small>${escapar(t(c.desc))}</small></span>
-        <span class="chat-aba-selo hidden" aria-hidden="true"></span>
-      </button>`;
-  }).join('');
-}
-
-function fecharMenuCanais() {
-  const menu = $('#chat-canal-menu');
-  if (!menu || menu.classList.contains('hidden')) return;
-  menu.classList.add('hidden');
-  $('#chat-canal-bt')?.setAttribute('aria-expanded', 'false');
-  $('#chat-canal')?.classList.remove('aberto');
-}
-
-function abrirMenuCanais() {
-  const menu = $('#chat-canal-menu');
-  if (!menu) return;
-  fecharPainelModChat();
-  fecharPainelIgnorados();
-  montarMenuCanais();
-  menu.classList.remove('hidden');
-  $('#chat-canal-bt')?.setAttribute('aria-expanded', 'true');
-  $('#chat-canal')?.classList.add('aberto');
-  pintarSelosChatAbas();
-  (menu.querySelector('.chat-canal-op.on') ?? menu.querySelector('.chat-canal-op'))?.focus();
-}
-
-$('#chat-canal-bt')?.addEventListener('click', (ev) => {
-  ev.stopPropagation();
-  if ($('#chat-canal-menu')?.classList.contains('hidden')) abrirMenuCanais();
-  else fecharMenuCanais();
-});
-
-$('#chat-canal-menu')?.addEventListener('click', (ev) => {
-  const op = ev.target.closest('[data-canal]');
-  if (!op) return;
-  fecharMenuCanais();
-  // Ordem importa: abrir ANTES de trocar. `trocarCanalChat` marca o canal como visto e rola a lista
-  // ao fim, e as duas coisas só valem com a lista na tela.
+// O clique num canal. Ordem importa: abrir ANTES de trocar — `trocarCanalChat` marca o canal como
+// visto e rola a lista ao fim, e as duas coisas só valem com a lista na tela.
+$('#chat-canais')?.addEventListener('click', (ev) => {
+  const bt = ev.target.closest('[data-canal]');
+  if (!bt) return;
   definirChatRecolhido(false);
-  trocarCanalChat(op.dataset.canal);
-  $('#chat-canal-bt')?.focus();
+  trocarCanalChat(bt.dataset.canal);
 });
 
-// As setas andam pelo menu; Esc fecha e devolve o foco ao botão.
-$('#chat-canal-menu')?.addEventListener('keydown', (ev) => {
-  const ops = [...ev.currentTarget.querySelectorAll('.chat-canal-op')];
-  const i = ops.indexOf(document.activeElement);
-  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-    ev.preventDefault();
-    const passo = ev.key === 'ArrowDown' ? 1 : -1;
-    ops[(i + passo + ops.length) % ops.length]?.focus();
-  } else if (ev.key === 'Escape') {
-    ev.stopPropagation();
-    fecharMenuCanais();
-    $('#chat-canal-bt')?.focus();
-  }
-});
-
-document.addEventListener('click', (ev) => {
-  if (ev.target.closest('#chat-canal')) return;
-  fecharMenuCanais();
+// As setas andam pelos canais e abrem o que alcançam, como um clique; Home e End vão às pontas.
+const PASSO_DAS_SETAS_CHAT = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+$('#chat-canais')?.addEventListener('keydown', (ev) => {
+  const bts = [...ev.currentTarget.querySelectorAll('[data-canal]')];
+  const i = bts.indexOf(document.activeElement);
+  if (i < 0) return;
+  let j = null;
+  if (Object.hasOwn(PASSO_DAS_SETAS_CHAT, ev.key)) j = (i + PASSO_DAS_SETAS_CHAT[ev.key] + bts.length) % bts.length;
+  else if (ev.key === 'Home') j = 0;
+  else if (ev.key === 'End') j = bts.length - 1;
+  if (j == null) return;
+  ev.preventDefault();
+  const canal = bts[j].dataset.canal;
+  definirChatRecolhido(false);
+  trocarCanalChat(canal);
+  ev.currentTarget.querySelector(`[data-canal="${canal}"]`)?.focus();
 });
 
 /** O convite de cada canal no campo de digitar — diz para que ele serve antes da primeira fala. */
@@ -17919,6 +21324,14 @@ function syncChatInput() {
     inp.placeholder = t('chat.mutadoPlaceholder', {
       tempo: formatarRestanteMute(estado.chatMutadoAte - Date.now()),
     });
+    return;
+  }
+  // Chat INTERROMPIDO pela moderação: o servidor recusa de qualquer jeito; travar aqui é para
+  // ninguém digitar uma frase inteira à toa.
+  if (chatTravadoParaMim()) {
+    inp.disabled = true;
+    btn.disabled = true;
+    inp.placeholder = t('chat.interrompidoPlaceholder');
     return;
   }
   if (estado.canalChat === 'guild' && !estado.eu?.guild?.id) {
@@ -18193,7 +21606,7 @@ const horaDaMsg = (ts) =>
   });
 
 const textoDeAnuncioPvp = (m) => {
-  const nick = `<i>${escapar(m.nickDestaque ?? '')}</i>`;
+  const nick = `<i class="m-nick">${escapar(m.nickDestaque ?? '')}</i>`;
   if (m.pvpEntrada === 'ancestral') return t('chat.pvpEntrouAncestral', { nick });
   if (m.pvpEntrada === 'flamejante') return t('chat.pvpEntrouFlamejante', { nick });
   return null;
@@ -18215,7 +21628,7 @@ const textoDeCompartilharPk = (m) => {
 
 const textoDeShinyCaptura = (m) => {
   if (!m.shinyCaptura) return null;
-  const nick = `<i>${escapar(m.shinyCaptura.nick ?? '')}</i>`;
+  const nick = `<i class="m-nick">${escapar(m.shinyCaptura.nick ?? '')}</i>`;
   const pokemon =
     `<button type="button" class="m-pk-link" data-nick="${escapar(m.shinyCaptura.nick)}" data-pk="${Number(m.shinyCaptura.pokemonId) || ''}">` +
     `<i>${escapar(m.shinyCaptura.nome ?? '')}</i></button>`;
@@ -18229,7 +21642,7 @@ const textoDeShinyCaptura = (m) => {
 const textoDeLendarioCaptura = (m) => {
   if (!m.lendarioCaptura) return null;
   const l = m.lendarioCaptura;
-  const nick = `<i>${escapar(l.nick ?? '')}</i>`;
+  const nick = `<i class="m-nick">${escapar(l.nick ?? '')}</i>`;
   const nome = `${l.shiny ? prefixoShiny() : ''}${l.nome ?? ''}`;
   const pokemon =
     `<button type="button" class="m-pk-link" data-nick="${escapar(l.nick ?? '')}" data-pk="${Number(l.pokemonId) || ''}">` +
@@ -18240,7 +21653,7 @@ const textoDeLendarioCaptura = (m) => {
 /** "[DROP Lendário] O jogador X dropou uma Casa Lendária!" — o fato vem do servidor, a frase é daqui. */
 const textoDeDropLendario = (m) => {
   if (!m.dropLendario) return null;
-  const nick = `<i>${escapar(m.dropLendario.nick ?? '')}</i>`;
+  const nick = `<i class="m-nick">${escapar(m.dropLendario.nick ?? '')}</i>`;
   const item = t(m.dropLendario.tipo === 'bicicleta' ? 'chat.dropLendarioBicicleta' : 'chat.dropLendarioCasa');
   return t('chat.dropLendario', { nick, item: escapar(item) });
 };
@@ -18287,6 +21700,24 @@ const textoDeTagDiscord = (m) => {
   });
   return `<a class="m-convite-link" href="${DISCORD_URL}" target="_blank" rel="noopener noreferrer"`
     + ` title="${escapar(t('discordPop.cta'))}">${frase}</a>`;
+};
+
+/**
+ * "⚡ Fulano completou o banco da guild: BOOST DA GUILD ligado…" — a linha que o banco cheio deixa
+ * no chat da GUILD (`anunciarBoostGuildNoChat` no sim). A frase inteira é o botão que abre o banco
+ * (a aba Boost): quem lê "encheu de novo" e quer ajudar na próxima semana está a um clique. Do
+ * servidor só vêm o nick (escapado) e números.
+ */
+const textoDeBoostGuild = (m) => {
+  if (!m.boostGuild) return null;
+  const b = m.boostGuild;
+  const frase = t(b.estendido ? 'guildBoost.chatEstendeu' : 'guildBoost.chatAtivou', {
+    nick: `<i>${escapar(b.nick ?? '')}</i>`,
+    pct: num(Number(b.pct) || BOOST_GUILD.pct),
+    dias: num(Number(b.dias) || BOOST_GUILD.dias),
+  });
+  return `<button type="button" class="m-boost-guild" title="${escapar(t('guildBoost.chatVer'))}">`
+    + `<img src="${BOOST_GUILD.iconeMini}" alt="" width="18" height="18">${frase}</button>`;
 };
 
 /**
@@ -18364,6 +21795,22 @@ function alvoDeResposta(m, d) {
   return alvo.toLowerCase() === meuNickChat() ? null : alvo;
 }
 
+/**
+ * Os SELOS do Ranking, entre a tag da guild e o nick: o 1º de cada placar AGORA, ao vivo (o Ash no
+ * Top Treinadores, a Poké Ball no Top Catch, a moeda no Top Coins, o ícone de Bosses no Top Bosses).
+ * Vêm carimbados na mensagem pelo gateway; ainda assim só entra placar conhecido — o desenho sai da
+ * tabela, nunca do fio. Saem num grupo só (`.m-tops`), que dá o respiro antes do nick.
+ */
+function selosDoChat(lista) {
+  if (!Array.isArray(lista) || !lista.length) return '';
+  const imgs = [...new Set(lista)]
+    .filter((pl) => SELOS_RANKING[pl])
+    .map((pl) => `<img class="m-top" src="${srcIcone(SELOS_RANKING[pl].icone)}" alt="" width="16" height="16"`
+      + ` title="${escapar(t(`rkm.selo.${pl}`))}">`)
+    .join('');
+  return imgs ? `<span class="m-tops">${imgs}</span>` : '';
+}
+
 /** Uma linha da lista. Sai pronta para o `appendChild` — quem chama decide onde entra. */
 function linhaDeChat(m) {
   const d = document.createElement('div');
@@ -18374,7 +21821,8 @@ function linhaDeChat(m) {
     : m.dropLendario ? ' drop-lendario'
     : m.lendarioCaptura ? ' drop-lendario lendario-captura'
     : m.conviteResgate || m.tagDiscord ? ' convite-resgate'
-    : m.anuncioChat ? ' anuncio-mercado' : '';
+    : m.anuncioChat ? ' anuncio-mercado'
+    : m.boostGuild ? ' boost-guild' : '';
   if (m.id) d.dataset.msgId = m.id;
   // Quem escreveu, na própria linha: é daqui que o painel tira o alvo das ações, sem
   // ter de reencontrar a mensagem no `estado.mensagens` pelo id.
@@ -18389,7 +21837,7 @@ function linhaDeChat(m) {
   // cima seria pintar menção em pedaço de tag.
   const montado = textoDeAnuncioPvp(m) ?? textoDeCompartilharPk(m) ?? textoDeShinyCaptura(m)
     ?? textoDeDropLendario(m) ?? textoDeLendarioCaptura(m) ?? textoDeConviteResgate(m) ?? textoDeTagDiscord(m)
-    ?? textoDeAnuncioMercado(m);
+    ?? textoDeAnuncioMercado(m) ?? textoDeBoostGuild(m);
   const fala = montado ? null : comMencoes(escapar(trocarApelidos(m.texto)));
   const corpo = montado ?? comEmojiVip(comEmoji(fala.texto));
   // A linha acesa é para quem foi CHAMADO. Na sua própria mensagem ela não acende: você
@@ -18416,11 +21864,17 @@ function linhaDeChat(m) {
     ? `<span class="m-guild-tag" style="--gt:${corTagValida(m.guildTagCor)}">`
       + `${escapar(String(m.guildTag).slice(0, MAX_TAG_GUILD))}</span>`
     : '';
+  // O remetente que é JOGADOR ganha o `m-nick`: é por ele que se abre o painel da linha (ver o
+  // clique em `#chat-msgs`). O do sistema ("✨ Shiny", "⚔ PvP", "🌍 Temporada Global") não passa
+  // no formato de nick e fica sem — nesses avisos o nick clicável é o do jogador, dentro da frase.
   const deHtml = m.dropLendario || m.lendarioCaptura || m.conviteResgate || m.tagDiscord
     ? ''
-    : `<span class="m-de">${m.anuncioChat ? '<span class="m-alto" aria-hidden="true">📢</span>' : ''}`
+    : `<span class="m-de${NICK_OK.test(m.de ?? '') ? ' m-nick' : ''}">`
+      + `${m.anuncioChat ? '<span class="m-alto" aria-hidden="true">📢</span>' : ''}`
       + `${selo ? `<span class="m-selo">${selo}</span>` : ''}${tagGuild}` +
-      `${escapar(m.de)}${m.nivel != null ? `<span class="m-nv"> [${m.nivel}]</span>` : ''}:</span> `;
+      // Os selos do Ranking vêm logo depois da tag da guild e antes do nick ("[MAF] <selos> Fulano
+      // [nv]:"), e o nick volta a ficar colado ao nível. São `<img>`: não entram no texto da linha.
+      `${selosDoChat(m.topMes)}${escapar(m.de)}${m.nivel != null ? `<span class="m-nv"> [${m.nivel}]</span>` : ''}:</span> `;
   // A setinha de responder, no canto da linha — aparece no hover (ver `.m-responder`). Quem clica
   // começa a frase com "@nick" (`responderNoChat`); no celular a mesma ação mora no painel.
   const responder = alvoDeResposta(m, d);
@@ -18558,10 +22012,11 @@ function restaurarCanalChatSessao() {
   } catch { /* ok */ }
   syncChatInput();
   syncBotaoOpcoesChat();
+  pintarChatInterrompido();
   pintarSelosChatAbas();
 }
 
-/** Troca de canal por código — o mesmo caminho de uma opção do seletor. */
+/** Troca de canal por código — o mesmo caminho do clique num botão de canal. */
 function trocarCanalChat(canal) {
   // Um canal que o jogador não pode abrir (a Guild sem guild, um id velho da sessão) cai no Mundo.
   if (!canaisDoJogador().some((c) => c.id === canal)) canal = 'mundo';
@@ -18574,6 +22029,7 @@ function trocarCanalChat(canal) {
   }
   syncChatInput();
   syncBotaoOpcoesChat();
+  pintarChatInterrompido();
   fecharPainelModChat();
   pintarChat();
   pintarSelosChatAbas();
@@ -18675,9 +22131,9 @@ function abrirPainelModChat(linha) {
   // RESPONDER: o mesmo da setinha do hover, aqui para o dedo — no celular não existe hover.
   chatResponderAlvo = responderAlvo;
   $('#chat-responder')?.classList.toggle('hidden', !chatResponderAlvo);
-  // FIXAR: só admin, e só nos canais abertos (a Guild é conversa de dentro). Na linha que já é a
-  // fixada, o mesmo botão desafixa — é ali que o admin vai procurar a volta.
-  const podeFixar = estado.souAdmin && estado.canalChat !== 'guild' && ehCanalPublico(estado.canalChat);
+  // FIXAR: só admin e moderador, e só nos canais abertos (a Guild é conversa de dentro). Na linha
+  // que já é a fixada, o mesmo botão desafixa — é ali que quem fixou vai procurar a volta.
+  const podeFixar = estado.chatFixar && estado.canalChat !== 'guild' && ehCanalPublico(estado.canalChat);
   const fixadaAgora = podeFixar ? fixadaNaTela() : null;
   chatFixarAlvo = !podeFixar ? null
     : fixadaAgora?.msg?.id === linha.dataset.msgId
@@ -18820,7 +22276,7 @@ function pintarChatFixada() {
     <div class="chat-fixada-cab">
       <span class="chat-fixada-pino">${GLIFO_PINO}</span>
       <span class="chat-fixada-por">${t('chat.fixadaPor', { nick: `<b>${escapar(f.por ?? '')}</b>` })}</span>
-      ${estado.souAdmin ? `<button type="button" class="chat-fixada-bt chat-fixada-tirar"
+      ${estado.chatFixar ? `<button type="button" class="chat-fixada-bt chat-fixada-tirar"
         title="${escapar(t('chat.desafixar'))}" aria-label="${escapar(t('chat.desafixar'))}">×</button>` : ''}
       <button type="button" class="chat-fixada-bt chat-fixada-dobrar" aria-expanded="${recolhida ? 'false' : 'true'}"
         title="${escapar(rotuloDobra)}" aria-label="${escapar(rotuloDobra)}">${GLIFO_DOBRA}</button>
@@ -18947,24 +22403,27 @@ $('#chat-msgs').addEventListener('click', (ev) => {
     enviar({ t: 'chat.verPokemon', nick, pokemonId });
     return;
   }
-  // O ALTO-FALANTE do Mercado: a frase leva ao anúncio. Antes do painel de moderação, pelo mesmo
-  // motivo do convite logo abaixo — o clique é do link, e não da linha.
+  // O ALTO-FALANTE do Mercado: a frase leva ao anúncio.
   const anuncio = ev.target.closest('.m-anuncio-link');
   if (anuncio) {
     ev.stopPropagation();
     abrirAnuncioNoMercado(Number(anuncio.dataset.anuncio));
     return;
   }
-  // O convite do Discord no anúncio do Convide & Ganhe é um `<a>` de verdade, e abrir a aba é
-  // trabalho dele. Sem esta saída o MESMO clique escorregaria para a linha e abriria o painel
-  // de moderação por baixo da aba nova — o jogador voltaria do Discord para um painel que não
-  // pediu.
-  if (ev.target.closest('.m-convite-link')) {
+  // O BOOST DA GUILD no chat da guild: a frase leva ao banco da guild (a aba Boost).
+  if (ev.target.closest('.m-boost-guild')) {
     ev.stopPropagation();
+    abrirBancoDaGuild();
     return;
   }
-  // Quem decide o que aparece lá dentro é `abrirPainelModChat`.
-  const linha = ev.target.closest('.chat-msg[data-msg-id]');
+  // O painel do jogador abre no NICK, e só nele (`.m-nick`: o remetente que é jogador e, nos avisos
+  // do sistema, o jogador citado na frase). Quando a linha inteira abria, cada clique para ler — ou
+  // para fechar o painel — abria o de outro jogador. Admin e moderador abrem também pelo remetente
+  // de QUALQUER linha (`.m-de`): é por ele que chegam ao Excluir e ao Fixar de um aviso do sistema,
+  // que não tem nick de jogador. O resto da linha segue para o ouvinte do documento, que fecha o
+  // painel aberto. Quem decide o que aparece lá dentro é `abrirPainelModChat`.
+  const nick = ev.target.closest(estado.chatMod ? '.m-nick, .m-de' : '.m-nick');
+  const linha = nick?.closest('.chat-msg[data-msg-id]');
   if (!linha) return;
   ev.stopPropagation();
   abrirPainelModChat(linha);
@@ -19050,10 +22509,16 @@ $('#chat-mod-excluir')?.addEventListener('click', () => {
   toast(t('chat.modExcluido'));
 });
 
+// O × do canto, Esc, ou um clique fora do painel: fecha. "Fora" inclui o resto da conversa — o nick
+// que abre o painel para o clique em `#chat-msgs` e nem chega aqui.
+$('#chat-mod-fechar')?.addEventListener('click', fecharPainelModChat);
 document.addEventListener('click', (ev) => {
   if ($('#chat-mod-panel')?.classList.contains('hidden')) return;
-  if (ev.target.closest('#chat-mod-panel') || ev.target.closest('.chat-msg[data-msg-id]')) return;
+  if (ev.target.closest('#chat-mod-panel')) return;
   fecharPainelModChat();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !$('#chat-mod-panel')?.classList.contains('hidden')) fecharPainelModChat();
 });
 
 document.addEventListener('click', (ev) => {
@@ -19186,7 +22651,9 @@ function montarIdiomasDoChat() {
     alternarPainelIgnorados(btnIgn);
   };
   wrap.appendChild(btnIgn);
-  abas.appendChild(wrap);
+  // Na frente do botão de recolher, dentro da grade das ferramentas: bandeiras em cima, × e
+  // recolher embaixo. O painel dos ignorados continua filho da barra, que é quem o posiciona.
+  (abas.querySelector('.chat-ferramentas') ?? abas).prepend(wrap);
 
   const painel = document.createElement('div');
   painel.id = 'chat-ignorados-panel';
@@ -19278,39 +22745,138 @@ function pintarTecladoVip() {
 }
 
 
-// ---- as OPÇÕES do chat: a setinha ao lado do emoji, só no Mundo
+// ---- as OPÇÕES do chat: a setinha ao lado do emoji
 //
-// Um painel no mesmo lugar do teclado de emoji (os dois se revezam), com o interruptor
-// "Esconder anúncios da comunidade". A seta aponta para cima fechado e vira para baixo aberto —
-// o mesmo gesto do chevron que recolhe o chat, no sentido de "abre para cima da linha de digitar".
+// Um painel no mesmo lugar do teclado de emoji (os dois se revezam). A seta aponta para cima fechado
+// e vira para baixo aberto — o mesmo gesto do chevron que recolhe o chat, no sentido de "abre para
+// cima da linha de digitar". Duas opções, cada uma no seu canal:
 //
-// O alto-falante sai nos DOIS canais, Mundo e Comércio, mas a escolha de esconder é só do Mundo:
-// lá o anúncio divide espaço com a conversa; no Comércio ele é o assunto do canal, e quem abriu o
-// Comércio foi atrás justamente dele.
+//   · "Esconder anúncios do Market", só no MUNDO. O alto-falante sai nos dois canais, Mundo e
+//     Comércio, mas lá o anúncio divide espaço com a conversa; no Comércio ele é o assunto do canal,
+//     e quem abriu o Comércio foi atrás justamente dele;
+//   · "Interromper o chat", só para ADMIN e MODERADOR, nos três canais abertos — é o mesmo interruptor
+//     para os três (e para os dois idiomas). Pedido de 04/10/2026, para a época de eleição.
 
-/** A setinha aparece só no Mundo; fora dele, o painel que estiver aberto fecha junto. */
-function syncBotaoOpcoesChat() {
-  const noMundo = estado.canalChat === 'mundo';
-  $('#chat-opcoes-btn')?.classList.toggle('hidden', !noMundo);
-  if (!noMundo) fecharOpcoesChat();
+/** Admin ou moderador, num canal que o interruptor fecha (os abertos — a Guild nunca fecha). */
+function veInterruptorDoChat() {
+  return !!estado.chatInterromper && CANAIS_QUE_INTERROMPEM.includes(estado.canalChat);
 }
 
-/** O interruptor e a linha de estado ("3 anúncios escondidos agora"), conforme a preferência. */
+/**
+ * O chat interrompido me cala AGORA? Só nos canais abertos, e nunca a equipe: admin, moderador e
+ * helper (`chatMod`) continuam falando — é o que o gateway confere do outro lado.
+ *
+ * Declarada (e não `const`) porque `syncChatInput` a chama no carregamento do módulo, pela
+ * `restaurarCanalChatSessao` lá em cima — antes de esta linha rodar.
+ */
+function chatTravadoParaMim() {
+  return !!estado.chatInterrompido && CANAIS_QUE_INTERROMPEM.includes(estado.canalChat) && !estado.chatMod;
+}
+
+/** A setinha: no Mundo para todos, e nos outros canais abertos para quem pode interromper o chat. */
+function syncBotaoOpcoesChat() {
+  const noMundo = estado.canalChat === 'mundo';
+  const interruptor = veInterruptorDoChat();
+  $('#chat-opcoes-btn')?.classList.toggle('hidden', !noMundo && !interruptor);
+  $('#chat-opcao-anuncios')?.classList.toggle('hidden', !noMundo);
+  $('#chat-opcao-interromper')?.classList.toggle('hidden', !interruptor);
+  if (!noMundo && !interruptor) fecharOpcoesChat();
+  else if (!$('#chat-opcoes')?.classList.contains('hidden')) pintarOpcoesChat();
+}
+
+/**
+ * Os interruptores e as linhas de estado ("3 anúncios escondidos agora", "interrompido por Fulano
+ * há 5 min"), conforme a preferência e o servidor. O título do painel diz "Opções do chat" quando
+ * ele tem mais de uma — com uma só, o título é o nome dela, como sempre foi.
+ */
 function pintarOpcoesChat() {
+  const anuncios = estado.canalChat === 'mundo';
+  const interruptor = veInterruptorDoChat();
+  const titulo = $('#chat-opcoes-titulo');
+  if (titulo) {
+    titulo.textContent = t(anuncios && interruptor ? 'chat.opcoesBotao'
+      : interruptor ? 'chat.interromper' : 'chat.semAnunciosTitulo');
+  }
   const bt = $('#chat-sem-anuncios');
   if (bt) {
     bt.classList.toggle('on', semAnunciosNoChat);
     bt.setAttribute('aria-checked', String(semAnunciosNoChat));
   }
   const est = $('#chat-sem-anuncios-estado');
-  if (!est) return;
-  const n = (estado.mensagens.mundo ?? []).filter(
-    (m) => m.anuncioChat && !msgIgnorada(m) && idiomaDaMsg(m) === estado.idiomaChat,
-  ).length;
-  est.hidden = !semAnunciosNoChat;
-  est.textContent = semAnunciosNoChat
-    ? n ? t('chat.semAnunciosEscondidos', { n: num(n) }) : t('chat.semAnunciosLigado')
-    : '';
+  if (est) {
+    const n = (estado.mensagens.mundo ?? []).filter(
+      (m) => m.anuncioChat && !msgIgnorada(m) && idiomaDaMsg(m) === estado.idiomaChat,
+    ).length;
+    est.hidden = !semAnunciosNoChat;
+    est.textContent = semAnunciosNoChat
+      ? n ? t('chat.semAnunciosEscondidos', { n: num(n) }) : t('chat.semAnunciosLigado')
+      : '';
+  }
+  const parado = estado.chatInterrompido;
+  const btInt = $('#chat-interromper');
+  if (btInt) {
+    btInt.classList.toggle('on', !!parado);
+    btInt.setAttribute('aria-checked', String(!!parado));
+  }
+  const estInt = $('#chat-interromper-estado');
+  if (estInt) {
+    estInt.hidden = !parado;
+    estInt.textContent = parado ? t('chat.interromperLigado', { nick: parado.por ?? '?', quando: quandoFoi(parado.em) }) : '';
+  }
+}
+
+/**
+ * O interruptor da moderação. Ligar fecha o chat do servidor inteiro, então pede confirmação;
+ * desligar devolve a palavra a todo mundo e vai direto. A tela não muda nada sozinha: o estado novo
+ * chega do servidor (`chat.interrompido`) para todos ao mesmo tempo, inclusive para quem clicou.
+ */
+function aoClicarInterromperChat() {
+  if (!estado.chatInterromper) return;
+  if (estado.chatInterrompido) return enviar({ t: 'chat.interromper', ligado: false });
+  confirmar({
+    titulo: t('chat.interromperConfTitulo'),
+    texto: `
+      ${dlgFrase('', escapar(t('chat.interromperConfTexto')))}
+      ${dlgSelos(
+        dlgSelo('cadeado', escapar(t('chat.interromperConfSelo')), 'perigo'),
+        dlgSelo('escudo', escapar(t('chat.interromperConfEquipe'))),
+      )}`,
+    tom: 'perigo',
+    rotuloSim: t('chat.interromperConfSim'),
+    aoConfirmar: () => enviar({ t: 'chat.interromper', ligado: true }),
+  });
+}
+
+/**
+ * O chat foi interrompido ou reaberto — no `hello` (o estado de agora) ou ao vivo (`aoVivo`), quando
+ * a tela também escreve na conversa o que aconteceu: quem estava lendo vê a linha chegar, e não só o
+ * campo de digitar apagando sem explicação.
+ */
+function receberChatInterrompido(m) {
+  const antes = !!estado.chatInterrompido;
+  estado.chatInterrompido = m.estado?.em ? m.estado : null;
+  const agora = !!estado.chatInterrompido;
+  if (m.aoVivo && antes !== agora) mostrarAvisoChat(agora ? 'chat.interrompidoLinha' : 'chat.reabertoLinha');
+  syncChatInput();
+  pintarChatInterrompido();
+  if (!$('#chat-opcoes')?.classList.contains('hidden')) pintarOpcoesChat();
+}
+
+/**
+ * A faixa do chat interrompido, entre a conversa e a linha de digitar — só nos canais que ele fecha.
+ * Para a equipe ela diz quem interrompeu (é quem reabre); para os outros, não: o nick do moderador
+ * na tela de todo mundo, numa noite de tumulto, é um alvo.
+ */
+function pintarChatInterrompido() {
+  const faixa = $('#chat-interrompido');
+  if (!faixa) return;
+  const parado = estado.chatInterrompido;
+  const mostrar = !!parado && CANAIS_QUE_INTERROMPEM.includes(estado.canalChat);
+  faixa.classList.toggle('hidden', !mostrar);
+  if (!mostrar) return;
+  faixa.innerHTML = `<span class="chat-interrompido-ico" aria-hidden="true">🔒</span><span>${estado.chatMod
+    ? t('chat.interrompidoFaixaEquipe', { nick: escapar(parado.por ?? '?') })
+    : t('chat.interrompidoFaixa')}</span>`;
 }
 
 function fecharOpcoesChat() {
@@ -19343,6 +22909,7 @@ $('#chat-sem-anuncios').onclick = () => {
   pintarChat();
   pintarSelosChatAbas();
 };
+$('#chat-interromper').onclick = aoClicarInterromperChat;
 
 // Fora do painel, ou Esc: fecha. A própria seta fica de fora — ela já alterna sozinha.
 document.addEventListener('click', (ev) => {
@@ -19376,7 +22943,7 @@ $('#chat-emoji').onclick = () => {
  */
 let ultimoChatTentado = '';
 const CHAVES_ERRO_CHAT = new Set([
-  'chat.espera', 'chat.semGuild', 'chat.nivelMinimo', 'chat.vipEmojiTravado',
+  'chat.espera', 'chat.semGuild', 'chat.nivelMinimo', 'chat.vipEmojiTravado', 'chat.interrompido',
 ]);
 
 /**
@@ -20132,6 +23699,12 @@ function montarPainelGuild(host) {
       <button type="submit" class="dm-enviar">${t('amigos.dmEnviar')}</button>
     </form>`;
   pintarBrasao(host.querySelector('.amigo-av-guild'), g.brasao, 40);
+  // A linha do Boost da Guild também é botão aqui na conversa da guild — ver `textoDeBoostGuild`.
+  host.querySelector('#guild-chat-thread').addEventListener('click', (ev) => {
+    if (!ev.target.closest('.m-boost-guild')) return;
+    ev.stopPropagation();
+    abrirBancoDaGuild();
+  });
   pintarThreadGuild(coladoNoFim);
   if (rascunho) {
     const inp = $('#guild-chat-input');
@@ -20810,7 +24383,7 @@ $('#acoin-fechar').onclick = (ev) => {
   fecharEnvioDeCoins();
 };
 $('#amigo-coins').onclick = (ev) => {
-  if (ev.target === $('#amigo-coins')) fecharEnvioDeCoins();
+  if (cliqueNoFundo(ev, $('#amigo-coins'))) fecharEnvioDeCoins();
 };
 
 /**
@@ -21961,7 +25534,7 @@ function mostrarAberturaPasse(r) {
   });
   host.classList.remove('hidden');
   host.querySelector('#ps-abrir-ok').onclick = () => host.classList.add('hidden');
-  host.onclick = (ev) => { if (ev.target === host) host.classList.add('hidden'); };
+  host.onclick = (ev) => { if (cliqueNoFundo(ev, host)) host.classList.add('hidden'); };
 }
 
 // Os relógios da tela (volte em, zera em): um tique por segundo, só com o Passe aberto. Na virada
@@ -21995,6 +25568,8 @@ const MODAIS = {
   p5s: { titulo: 'modal.p5s', render: renderP5s, quadrado: true },
   // Quadrado: o manual é duas colunas (menu e texto) e precisa de altura, não de largura.
   pokepedia: { titulo: 'modal.pokepedia', render: renderPokepedia, quadrado: true },
+  // As ESTATÍSTICAS DO JOGO, do botão do topo da Wiki (a volta leva a ela — `PAI_DO_MODAL`).
+  economia: { titulo: 'econ.titulo', render: renderEconomiaDoJogo },
   market: { titulo: 'modal.market', render: renderMarket },
   bolsa: { titulo: 'modal.bolsa', render: renderBolsa, quadrado: true },
   // Altura fixa: a Loja virou duas colunas (seções + vitrine) e cada uma rola por dentro.
@@ -24188,6 +27763,7 @@ function pintarOvosNpc(grade) {
     const card = cardMarket({
       chave: `ovo${o.id}`,
       nome: nomeItem(o.itemId, o.nome),
+      atributos: linhaTemMarket(estado.eu?.items?.[o.itemId]),
       sub: t('chocadeira.subMarket', { pot: o.potencia, horas: o.horas }),
       preco,
       acao: [ctd.cx, total, bt],
@@ -24219,7 +27795,7 @@ function revelarOvoChocado(e) {
 // ------------------------------------------------------------- bônus Twitch
 //
 // +15% de XP do treinador e do pokémon para quem assiste a uma live oficial LOGADO numa conta da
-// Twitch vinculada, e +1% por live oficial a mais aberta ao mesmo tempo. O vínculo sai daqui (o botão leva ao site da Twitch e volta em
+// Twitch vinculada, e +2,5% por live oficial a mais aberta ao mesmo tempo. O vínculo sai daqui (o botão leva ao site da Twitch e volta em
 // `/app?twitch=<resultado>`); quem acha o jogador no chat é o vigia do servidor, uma vez por
 // minuto. Esta tela não confirma nada — ela explica, leva para a Twitch e mostra o que o
 // servidor achou, do mesmo jeito que o Vote & Ganhe.
@@ -24245,6 +27821,8 @@ function montarTwitch() {
   }
   const pct = Number(tw.pct) || 0;
   const extra = Number(tw.extra) || 0;
+  // O que vai nos TEXTOS ("2,5"); `extra` segue número para a conta da escadinha.
+  const extraTxt = pctTwitchTexto(extra);
   const emLives = Number(tw.emLives) || 0;
   const linkDe = (canal) => `https://www.twitch.tv/${encodeURIComponent(String(canal ?? ''))}`;
   const login = `<b>${escapar(tw.login ?? '')}</b>`;
@@ -24272,7 +27850,7 @@ function montarTwitch() {
   //
   //   já está lá   → o selo verde no lugar do dourado. O dourado existe para ele ESCOLHER uma live;
   //                  nesta ele já escolheu, e repeti-lo só tiraria espaço do que falta decidir.
-  //   falta ele    → o ponto vermelho na frente da linha. É o convite do +1%.
+  //   falta ele    → o ponto vermelho na frente da linha. É o convite do +2,5%.
   //   sem bônus    → nada de novo: continua o "Falta a ativação", que é problema do streamer.
   const jaEstouEm = new Set((tw.assistindoEm ?? []).map((x) => String(x).toLowerCase()));
   const linhaCanal = (c) => {
@@ -24281,7 +27859,7 @@ function montarTwitch() {
     return `
         <a class="tw-canal${c.aoVivo ? ' ao-vivo' : ''}${c.bonus ? ' com-bonus' : ''}${jaEstou ? ' tw-aqui' : ''}${faltaEle ? ' tw-falta-eu' : ''}"
            href="${escapar(linkDe(c.login))}" target="_blank" rel="noopener noreferrer"
-           ${faltaEle ? `title="${escapar(t('twitch.vaAte', { extra }))}"` : ''}>
+           ${faltaEle ? `title="${escapar(t('twitch.vaAte', { extra: extraTxt }))}"` : ''}>
           ${faltaEle ? '<i class="tw-ponto" aria-hidden="true"></i>' : ''}
           ${GLIFO_TWITCH}
           <span class="tw-canal-nome">${escapar(c.nome || c.login)}</span>
@@ -24289,9 +27867,9 @@ function montarTwitch() {
             ? `<span class="tw-canal-aqui" title="${escapar(t('twitch.jaEstaLaDica'))}">✓ <b class="tw-aqui-longo">${t('twitch.jaEstaLa')}</b><b class="tw-aqui-curto">${t('twitch.jaEstaLaCurto')}</b></span>`
             : c.bonus === true
             // O SELO do bônus: só nos canais em que assistir dá o bônus de verdade (o faasii é
-            // moderador lá). Sem o "+15%": as lives se somam (15 + 1 + 1...), e um "+15%" em cada
+            // moderador lá). Sem o "+15%": as lives se somam (15 + 2,5 + 2,5...), e um "+15%" em cada
             // canal leria como 15 por live. No celular o "BÔNUS ATIVADO" encurta para "BÔNUS".
-            ? `<span class="tw-canal-bonus" title="${escapar(t('twitch.bonusAtivadoDica', { pct, extra }))}"><i class="tw-bonus-brilho" aria-hidden="true"></i>⚡ <b class="tw-bonus-longo">${t('twitch.bonusAtivado')}</b><b class="tw-bonus-curto">${t('twitch.bonusAtivadoCurto')}</b></span>`
+            ? `<span class="tw-canal-bonus" title="${escapar(t('twitch.bonusAtivadoDica', { pct, extra: extraTxt }))}"><i class="tw-bonus-brilho" aria-hidden="true"></i>⚡ <b class="tw-bonus-longo">${t('twitch.bonusAtivado')}</b><b class="tw-bonus-curto">${t('twitch.bonusAtivadoCurto')}</b></span>`
             // E quem ainda não deu o `/mod faasii`: o aviso aponta para a instrução logo abaixo da
             // lista. `false` de verdade, e não "sem informação" — antes da primeira apuração (o
             // boot) o campo nem vem, e aí não há selo nenhum em vez de um "falta" que pode ser falso.
@@ -24363,7 +27941,7 @@ function montarTwitch() {
       </a>
     </div>`;
 
-  // A SOMA DAS LIVES, dentro do prêmio: a escadinha 15 → 16 → 17% e um "4+" que diz "+1% cada",
+  // A SOMA DAS LIVES, dentro do prêmio: a escadinha 15 → 17,5 → 20% e um "4+" que diz "+2,5% cada",
   // com o degrau em que ele está AGORA aceso e marcado "você". Quem está em 4 lives ou mais acende o
   // último, com o número dele. Um ícone da Twitch por live, para a conta se ler sem o texto.
   const degrau = ({ icones, valor, rotulo, aceso }) => `
@@ -24376,18 +27954,18 @@ function montarTwitch() {
   const seta = '<i class="tw-soma-seta" aria-hidden="true">›</i>';
   const soma = extra > 0 ? `
     <div class="tw-soma">
-      <div class="tw-soma-titulo"><i class="tw-bonus-brilho" aria-hidden="true"></i>⚡ ${t('twitch.somaTitulo', { extra })}</div>
+      <div class="tw-soma-titulo"><i class="tw-bonus-brilho" aria-hidden="true"></i>⚡ ${t('twitch.somaTitulo', { extra: extraTxt })}</div>
       <div class="tw-soma-degraus">
         ${[1, 2, 3].map((n) => degrau({
           icones: GLIFO_TWITCH.repeat(n),
-          valor: `+${pct + (n - 1) * extra}%`,
+          valor: `+${pctTwitchTexto(pct + (n - 1) * extra)}%`,
           rotulo: n === 1 ? t('twitch.somaUma') : t('twitch.somaVarias', { n }),
           aceso: emLives === n,
         })).join(seta)}
         ${seta}
         ${degrau({
           icones: `${GLIFO_TWITCH.repeat(3)}<i class="tw-degrau-mais">+</i>`,
-          valor: emLives >= 4 ? `+${Number(tw.pctAtual) || pct}%` : t('twitch.somaCada', { extra }),
+          valor: emLives >= 4 ? `+${pctTwitchTexto(Number(tw.pctAtual) || pct)}%` : t('twitch.somaCada', { extra: extraTxt }),
           rotulo: t('twitch.somaVarias', { n: emLives >= 4 ? emLives : '4+' }),
           aceso: emLives >= 4,
         })}
@@ -24398,7 +27976,7 @@ function montarTwitch() {
     <div class="vt-premio tw-premio">
       <div class="tw-premio-linha">
         <span class="vt-premio-qtd tw-premio-qtd">${GLIFO_TWITCH} +${pct}%</span>
-        <span class="vt-premio-txt">${t('twitch.intro', { pct, extra })}</span>
+        <span class="vt-premio-txt">${t('twitch.intro', { pct, extra: extraTxt })}</span>
       </div>
       ${soma}
     </div>`;
@@ -24414,10 +27992,10 @@ function montarTwitch() {
       ${parceiro}`
     : `
       ${tw.assistindo
-        // Em duas lives ou mais, o status diz em quantas — é a conta que explica o 16%, 17%...
+        // Em duas lives ou mais, o status diz em quantas — é a conta que explica o 17,5%, 20%...
         ? `<div class="vt-estado pronto">${emLives > 1
-          ? t('twitch.statusAtivoVarias', { pct: Number(tw.pctAtual) || pct, n: emLives })
-          : t('twitch.statusAtivo', { pct: Number(tw.pctAtual) || pct })}</div>`
+          ? t('twitch.statusAtivoVarias', { pct: pctTwitchTexto(Number(tw.pctAtual) || pct), n: emLives })
+          : t('twitch.statusAtivo', { pct: pctTwitchTexto(Number(tw.pctAtual) || pct) })}</div>`
         : tw.aoVivo
           ? `<div class="vt-estado tw-procurando"><i class="tw-ponto" aria-hidden="true"></i><span>${t('twitch.statusProcurando', { login })}</span></div>`
           : `<div class="vt-estado esperando">${t('twitch.statusOffline')}</div>`}
@@ -24435,7 +28013,7 @@ function montarTwitch() {
         <li>${t('twitch.passo1')}</li>
         <li>${t('twitch.passo2')}</li>
         <li>${t('twitch.passo3')}</li>
-        <li>${t('twitch.acumula', { extra, pct2: pct + extra, pct3: pct + 2 * extra })}</li>
+        <li>${t('twitch.acumula', { extra: extraTxt, pct2: pctTwitchTexto(pct + extra), pct3: pctTwitchTexto(pct + 2 * extra) })}</li>
       </ol>
     </div>
     <div class="af-aviso-pequeno">${t('twitch.rodape')}</div>`;
@@ -27802,30 +31380,45 @@ function htmlTipoMercado(elemento) {
  * anuncia mais (ver `ITENS_MERCADO` em `content.mjs`), e sem eles as três abas ficariam
  * sempre vazias. Sobra o que dá para negociar — e cada uma casa com uma família de
  * `categoriaMercado`.
+ *
+ * Cada uma leva o ÍCONE de um item da casa, como os três tipos lá em cima (Pokémon, Itens,
+ * Diamantes): numa coluna de dez palavras, quem procura a Fire Stone acha a pedra vermelha antes
+ * de ler "Pedras". As artes que não enchiam a caixa de 16 px (a casa, a bicicleta, a mega, o
+ * fragmento) têm uma versão aparada, `img/itens/cat-*.png` — ver `tools/gerar-icones-mercado.py`.
+ * "Todas" é a bolsa, o mesmo desenho do tipo Itens: é a aba de itens inteira.
  */
 const CATEGORIAS_ITEM = [
-  { id: '', nome: 'cm.catTodas' },
+  { id: '', nome: 'cm.catTodas', ico: `img:${ICONE_ITEM_GENERICO}` },
   // Boxes — as Caixas de Fundador. Aba própria porque é a única em que cada anúncio é uma
   // PEÇA numerada: dois anúncios de "Founder Box" são caixas diferentes, e o número na frente
   // é o que os distingue. Ver `shared/caixas-beta.mjs`.
-  { id: 'box', nome: 'cm.catBox' },
-  { id: 'casa', nome: 'cm.catCasa' },
-  { id: 'bicicleta', nome: 'cm.catBicicleta' },
+  { id: 'box', nome: 'cm.catBox', ico: 'img:/img/itens/caixa-fundador.png' },
+  { id: 'casa', nome: 'cm.catCasa', ico: 'img:/img/itens/cat-casa.png' },
+  { id: 'bicicleta', nome: 'cm.catBicicleta', ico: 'img:/img/itens/cat-bicicleta.png' },
   // As SKINS de pokémon: nascem numa venda limitada da Loja, e depois dela é aqui que existem.
   // (A aba `beast` saiu em 30/09/2026: das coisas de diamante, só as skins e as Caixas de Fundador
-  // ficam na vitrine — ver `ITENS_MERCADO` em `content.mjs`.)
-  { id: 'skin', nome: 'cm.catSkin' },
-  { id: 'fragment', nome: 'cm.catFragment' },
+  // ficam na vitrine — ver `ITENS_MERCADO` em `content.mjs`.) O ícone é o vestido dos Cosméticos,
+  // o desenho que a Loja e a Bolsa já usam para skin.
+  { id: 'skin', nome: 'cm.catSkin', ico: `img:${ICONE_COSMETICOS}` },
+  { id: 'fragment', nome: 'cm.catFragment', ico: 'img:/img/itens/cat-fragmento.png' },
   // As Mega Stones têm aba própria em vez de dividir a de Pedras: são 63, contra as 21 pedras
   // de evolução de sempre, e juntas enterravam a Water Stone de todo dia numa lista de 84
   // linhas. Ver `categoriaMercado` em `content.mjs`.
-  { id: 'mega', nome: 'cm.catMega' },
+  { id: 'mega', nome: 'cm.catMega', ico: 'img:/img/itens/cat-mega.png' },
   // A aba `held` saiu com a Exp. Share: ela era a única moradora, e o item deixou de ser
   // negociável para a auditoria dele caber numa conta por jogador. Ver `shared/xp-share-held.mjs`.
-  { id: 'stone', nome: 'cm.catStone' },
-  { id: 'tm', nome: 'cm.catTm' },
-  { id: 'boss', nome: 'cm.catBoss' },
+  { id: 'stone', nome: 'cm.catStone', ico: 'img:site/assets/items/fire_stone.gif' },
+  { id: 'tm', nome: 'cm.catTm', ico: 'img:site/assets/items/tm_disk_elemental.png' },
+  { id: 'boss', nome: 'cm.catBoss', ico: 'img:site/assets/items/bronze_boss_token.png' },
 ];
+
+/**
+ * "Ocultar sem estoque" mora embaixo das categorias, mas não é uma delas: é um interruptor. O
+ * ícone dele é a caixa do Mercado, apagada em cinza e acesa com o botão — a mesma gramática do
+ * "Agregar espécies" da aba de pokémon. Sem isso, ligado, ele era uma segunda linha com o anel
+ * roxo de "escolhida" logo abaixo da categoria escolhida.
+ */
+const ICONE_SO_COM_ESTOQUE = 'img:site/assets/ui/menu-market.png';
 
 // ------------------------------------------- vitrine de itens (lista + painel)
 //
@@ -28670,9 +32263,10 @@ function renderComunidade() {
   const f = estado.cmFiltro;
   const meus = estado.cmAba === 'meus';
   const favoritos = estado.cmAba === 'favoritos';
-  // As três opções de mercado (recentes, mais barato, mais caro) valem para as duas abas: elas
-  // falam do ANÚNCIO, não da mercadoria. O que era exclusivo de pokémon virou critério e mora
-  // no seletor de "Filtrar por", que só aparece na aba de pokémon.
+  // As três opções de mercado (recentes, mais barato, mais caro) são SÓ da aba de pokémon, a única
+  // em que se escolhe um exemplar. Item e diamante têm ordem fixa — o mais barato primeiro e, no
+  // mesmo preço, quem anunciou antes (`ORDEM_MERCADORIA`, em market-db.mjs) —, e o seletor ali não
+  // mexia em nada (decisão do dono, 06/10/2026). Os critérios do pokémon moram no "Filtrar por".
   const ordens = ORDENS_MERCADO;
   const movel = movelAtivo();
   // Quantos filtros estão ligados AGORA. No desktop a barra lateral está sempre à vista e o
@@ -28694,13 +32288,13 @@ function renderComunidade() {
                seria oferecer um recorte que sempre devolve a lista inteira. -->
           ${f.tipo === 'diamante' ? '' : htmlTipoMercado(f.elemento)}
           ${f.tipo === 'pokemon' ? htmlFiltrarPorMercado() : ''}
-          ${f.tipo === 'diamante'
-            ? ''
-            : `<label class="cm-ordenar">${t('cm.ordenarPor')}
+          ${f.tipo === 'pokemon'
+            ? `<label class="cm-ordenar">${t('cm.ordenarPor')}
                 <select id="cm-ordem">
                   ${ordens.map((o) => `<option value="${o.id}" ${f.ordem === o.id ? 'selected' : ''}>${t(o.nome)}</option>`).join('')}
                 </select>
-              </label>`}
+              </label>`
+            : ''}
         </div>`;
 
   // No celular o campo perde ~100 px para a lupa e para os dois botões ao lado: "buscar
@@ -28846,9 +32440,12 @@ function renderComunidade() {
         ${f.tipo === 'item'
           ? `<div class="cm-fgrupo">${t('cm.categoria')}</div>
              ${CATEGORIAS_ITEM.map(
-               (c) => `<button class="cm-filtro ${f.categoria === c.id ? 'on' : ''}" data-cat="${c.id}">${t(c.nome)}</button>`,
+               (c) => `<button class="cm-filtro ${f.categoria === c.id ? 'on' : ''}" data-cat="${c.id}">
+                         <span class="cm-fico" data-ico="${c.ico}" data-ico-px="16"></span>${t(c.nome)}</button>`,
              ).join('')}
-             <button class="cm-filtro ${f.soComEstoque ? 'on' : ''}" id="cm-so-estoque">${t('cm.soComEstoque')}</button>`
+             <button class="cm-filtro cm-so-estoque ${f.soComEstoque ? 'on' : ''}" id="cm-so-estoque"
+                     aria-pressed="${f.soComEstoque ? 'true' : 'false'}">
+               <span class="cm-fico" data-ico="${ICONE_SO_COM_ESTOQUE}" data-ico-px="16"></span>${t('cm.soComEstoque')}</button>`
           : ''}
         ${movel ? barraDaVitrine + rodapeDaFolha : btLimpar}
       </div>
@@ -28896,9 +32493,10 @@ function pedirMercado() {
     tipo: f.tipo,
     moeda: moedaDoPedido(f),
     busca: f.busca,
-    // Diamante é sempre do mais barato para o mais caro — é a mesma ordem fixa do painel de
-    // item, e a razão é a mesma: quem abre a aba está comprando diamante, não escolhendo um
-    // exemplar. Por isso o "Ordenar por" nem aparece nessa aba.
+    // Diamante é sempre do mais barato para o mais caro, e no mesmo preço quem anunciou antes — a
+    // mesma ordem fixa do painel de item, e a razão é a mesma: quem abre a aba está comprando
+    // diamante, não escolhendo um exemplar. Quem fixa é o servidor (`ORDEM_MERCADORIA`); o
+    // "Ordenar por" nem aparece nessa aba.
     ordem: f.tipo === 'diamante' ? 'baratos' : f.ordem,
     // Os critérios do pokémon vão à parte do `ordem`: lá o servidor põe um só (o eixo do
     // mercado, que fecha o ORDER BY) e aqui vários, na ordem de prioridade. Só na aba de
@@ -29320,6 +32918,7 @@ function pintarVitrineDiamantes() {
           <b>${t('cm.diamantes')}</b>
           <i>${t('cm.diamanteOfertas', { n: num(total) })}</i>
         </div>
+        <span class="cmp-fav-slot" data-fav-diamante-slot></span>
       </div>
       <div class="cmp-switch" data-moeda="${moedaId}">
         <button class="cmp-op ${moedaId === 'gold' ? 'on' : ''}" data-swmoeda="gold">
@@ -29337,6 +32936,7 @@ function pintarVitrineDiamantes() {
     </div>`;
 
   for (const el of host.querySelectorAll('[data-ico]')) pintarIcone(el);
+  host.querySelector('[data-fav-diamante-slot]')?.replaceWith(botaoFavoritoDiamanteMercado());
 
   // A chave de moeda daqui é a MESMA de `htmlFiltroMoedaMercado` do lado de pokémon: as duas
   // escrevem em `cmFiltro.moeda` e repedem a lista. Muda o desenho, não o estado.
@@ -29423,6 +33023,8 @@ function pintarVitrineDoMercado() {
   // Os ITENS e as ESPÉCIES favoritas vêm antes dos anúncios: são poucos, não saem da lista quando
   // alguém vende, e são o atalho que o jogador mais usa — "quanto está o Boss Token hoje?".
   const itensFav = favoritos ? favoritosItensMercado().map(cardItemFavorito).filter(Boolean) : [];
+  // Os DIAMANTES abrem o grupo dos itens: são o mesmo tipo de atalho (as ofertas de uma mercadoria).
+  if (favoritos && ehDiamanteFavoritoMercado()) itensFav.unshift(cardDiamanteFavorito(dados.diamante));
   const especiesFav = favoritos ? favoritosEspeciesMercado().map(cardEspecieFavorita).filter(Boolean) : [];
 
   if (!dados.linhas?.length && !itensFav.length && !especiesFav.length) {
@@ -29967,18 +33569,21 @@ function rolavelSobOCursor(inicio, limite, sentido) {
 }
 
 /** A folha que cobre o modal. Some no Esc, no clique fora e ao publicar. */
-function folhaMercado(titulo) {
+function folhaMercado(titulo, { voltar = null } = {}) {
   document.querySelector('.cm-folha')?.remove();
   const f = document.createElement('div');
   f.className = 'cm-folha';
+  // O `‹` nasce escondido e só aparece quando há para onde voltar — `voltar` aqui, ou
+  // `definirVoltaDaFolha` depois, para os passos que trocam o miolo da mesma folha.
   f.innerHTML = `
     <div class="cm-folha-caixa">
-      <div class="cm-folha-topo"><b>${titulo}</b><button class="cm-fechar" type="button">×</button></div>
+      <div class="cm-folha-topo"><b>${titulo}</b><span class="cm-folha-acoes"><button class="cm-folha-voltar hidden" type="button">‹</button><button class="cm-fechar" type="button">×</button></span></div>
       <div class="cm-folha-corpo"></div>
     </div>`;
   const fechar = () => f.remove();
   f.querySelector('.cm-fechar').onclick = fechar;
-  f.onclick = (ev) => { if (ev.target === f) fechar(); };
+  if (voltar) definirVoltaDaFolha(f, voltar);
+  f.onclick = (ev) => { if (cliqueNoFundo(ev, f)) fechar(); };
   // No palco a roda do mouse dá zoom na cena — capturar aqui e rolar o alvo certo.
   //
   // O alvo é o que está DEBAIXO DO CURSOR: há folhas com duas rolagens, uma dentro da outra (o
@@ -30010,6 +33615,32 @@ function folhaMercado(titulo) {
   const ancorar = (estado.modalAberto ? $('#modal .modal-caixa') : null) ?? $('#palco');
   ancorar?.appendChild(f);
   return { folha: f, corpo: f.querySelector('.cm-folha-corpo'), fechar };
+}
+
+/**
+ * Liga (ou desliga, com `null`) o `‹` da folha onde `dentro` mora — o mesmo do modal comum.
+ *
+ * Por elemento, e não pelo retorno de `folhaMercado`, porque quem troca de passo são funções
+ * que só recebem o corpo (`passoPreco(corpo, fechar, …)`): cada passo diz para onde o seu `‹`
+ * leva, e o primeiro, que não tem volta, o apaga. O `aoVoltar` é dono da limpeza do passo que
+ * sai — a folha não sabe que ouvinte de resposta ele deixou ligado.
+ */
+function definirVoltaDaFolha(dentro, aoVoltar) {
+  const folha = dentro?.closest?.('.cm-folha');
+  const bt = folha?.querySelector('.cm-folha-voltar');
+  if (!bt) return;
+  bt.classList.toggle('hidden', !aoVoltar);
+  bt.onclick = aoVoltar
+    ? (ev) => {
+      ev.stopPropagation();
+      aoVoltar();
+    }
+    : null;
+  if (!aoVoltar) return;
+  // A volta de uma folha é um PASSO dela (a escolha antes do preço, o menu antes do formulário),
+  // e passo não tem nome próprio para pôr no "Voltar para…" do modal.
+  bt.title = t('modal.voltar');
+  bt.setAttribute('aria-label', t('modal.voltar'));
 }
 
 /**
@@ -30080,9 +33711,23 @@ function abrirAnuncio(tipoInicial = null) {
   const { corpo, fechar } = folhaMercado(t('cm.anunciarTitulo'));
   // A folha pode nascer já no passo certo — é o que o botão "vender diamantes" da barra
   // lateral da aba de Diamantes usa, para não cobrar um clique num menu de três opções em que
-  // o jogador acabou de dizer qual das três quer.
+  // o jogador acabou de dizer qual das três quer. Por isso, também, esse caminho não tem `‹`:
+  // o menu que ele pulou não é "de onde ele veio".
   if (tipoInicial === 'diamante') return passoEscolherDiamantes(corpo, fechar);
+  passoOQueAnunciar(corpo, fechar);
+}
 
+/**
+ * O primeiro passo do anúncio: item, pokémon ou diamantes.
+ *
+ * Os passos seguintes trocam o miolo desta mesma folha, e cada um liga o `‹` da folha para o
+ * passo de antes (ver `definirVoltaDaFolha`): quem escolheu o pokémon errado volta à grade com o
+ * filtro de pé, em vez de fechar tudo e refazer "Anunciar → Pokémon → filtro". O `voltar` que
+ * os passos recebem é `(corpo, fechar) => …` — pelos parâmetros, e não por fecho, porque a
+ * volta do PRAZO reabre o preço numa folha nova (ver `passoPreco`).
+ */
+function passoOQueAnunciar(corpo, fechar) {
+  definirVoltaDaFolha(corpo, null);
   corpo.innerHTML = `
     <p class="cm-passo-txt">${t('cm.oQueAnunciar')}</p>
     <div class="cm-escolha">
@@ -30100,9 +33745,9 @@ function abrirAnuncio(tipoInicial = null) {
   corpo.onclick = (ev) => {
     const b = ev.target.closest('[data-tipo]');
     if (!b) return;
-    if (b.dataset.tipo === 'item') passoEscolherItem(corpo, fechar);
-    else if (b.dataset.tipo === 'diamante') passoEscolherDiamantes(corpo, fechar);
-    else passoEscolherPokemon(corpo, fechar);
+    if (b.dataset.tipo === 'item') passoEscolherItem(corpo, fechar, passoOQueAnunciar);
+    else if (b.dataset.tipo === 'diamante') passoEscolherDiamantes(corpo, fechar, passoOQueAnunciar);
+    else passoEscolherPokemon(corpo, fechar, passoOQueAnunciar);
   };
 }
 
@@ -30127,15 +33772,21 @@ function abrirAnuncio(tipoInicial = null) {
  * relê a mesma cota dentro da transação, com o lock do vendedor na mão. Um cliente adulterado
  * mandando 10.000 esbarra lá.
  */
-function passoEscolherDiamantes(corpo, fechar) {
+function passoEscolherDiamantes(corpo, fechar, voltar = null) {
   corpo.onclick = null;
+  // Voltar ao passo 1 desliga o ouvinte da cota: a folha continua na tela, então o
+  // `isConnected` abaixo não barraria uma resposta atrasada de redesenhar por cima do menu.
+  definirVoltaDaFolha(corpo, voltar && (() => {
+    cmCotaDiamantes = null;
+    voltar(corpo, fechar);
+  }));
   corpo.innerHTML = `<p class="cm-passo-txt">${t('cm.diamanteCarregando')}</p>`;
   // Guardado no estado para a resposta saber que ainda é esta folha que está na tela — uma
   // cota que chega depois de o jogador ter fechado (ou voltado ao passo 1) não pode redesenhar
   // por cima do que ele está fazendo agora.
   cmCotaDiamantes = (cota) => {
     if (!corpo.isConnected) return;
-    pintarPassoDiamantes(corpo, fechar, cota);
+    pintarPassoDiamantes(corpo, fechar, cota, voltar);
   };
   enviar({ t: 'market.diamantes.cota' });
 }
@@ -30143,7 +33794,7 @@ function passoEscolherDiamantes(corpo, fechar) {
 /** Quem redesenha o passo quando a cota chega. `null` quando a folha não está mais aberta. */
 let cmCotaDiamantes = null;
 
-function pintarPassoDiamantes(corpo, fechar, cota) {
+function pintarPassoDiamantes(corpo, fechar, cota, voltar = null) {
   const vendavel = Math.max(0, Math.floor(Number(cota?.vendavel) || 0));
   const saldo = Math.max(0, Math.floor(Number(cota?.saldo) || 0));
 
@@ -30157,7 +33808,12 @@ function pintarPassoDiamantes(corpo, fechar, cota) {
   // a marca de "vende" ou "não vende" — o olho acha a dele sem ler as outras. A cota vira uma
   // barra: quanto do saldo pode ir ao Mercado, e as parcelas como selos logo embaixo.
   const pct = saldo ? Math.max(0, Math.min(100, (vendavel / saldo) * 100)) : 0;
+  // O título da regra, antes de qualquer número: desde 03/10/2026 SÓ o diamante comprado vende —
+  // a indicação saiu (ver `MOTIVOS_QUE_ENCHEM_A_COTA` no servidor). Quem tinha diamante de indicação
+  // e via o número cair precisa ler o porquê em letras grandes, e não deduzir das regras embaixo.
+  // O `brindes` do servidor já soma a indicação: o selo vermelho é tudo o que fica fora.
   corpo.innerHTML = `
+    ${dlgAviso(escapar(t('cm.diamanteSoComprados')), { icone: 'moedas', tom: 'ouro', classe: 'dlg-aviso-titulo' })}
     <div class="dlg-cota${vendavel ? '' : ' vazia'}">
       <span class="dlg-cota-arte">${dlgArteArquivo(ICONE_DIAMANTE, 48)}</span>
       <span class="dlg-cota-rot">${t('cm.diamanteVendaveis')}</span>
@@ -30167,13 +33823,12 @@ function pintarPassoDiamantes(corpo, fechar, cota) {
     </div>
     ${dlgSelos(
       cota?.deCompra > 0 ? dlgSelo('moedas', escapar(t('cm.diamanteDeCompra', { n: num(cota.deCompra) })), 'bom') : '',
-      cota?.deAfiliado > 0 ? dlgSelo('pessoaMais', escapar(t('cm.diamanteDeAfiliado', { n: num(cota.deAfiliado) })), 'bom') : '',
       cota?.emAnuncios > 0 ? dlgSelo('megafone', escapar(t('cm.diamanteEmAnuncios', { n: num(cota.emAnuncios) })), 'info') : '',
       cota?.brindes > 0 ? dlgSelo('xis', escapar(t('cm.diamanteBrindesCurto', { n: num(cota.brindes) })), 'perigo') : '',
     )}
     ${dlgLista([
       { icone: 'check', html: t('cm.diaRegraCompra') },
-      { icone: 'check', html: t('cm.diaRegraIndicacao') },
+      { icone: 'xis', html: t('cm.diaRegraIndicacao'), perigo: true },
       { icone: 'xis', html: t('cm.diaRegraBrinde'), perigo: true },
       { icone: 'volta', html: t('cm.diaRegraUmaVolta') },
     ])}
@@ -30214,7 +33869,8 @@ function pintarPassoDiamantes(corpo, fechar, cota) {
       maximo: 1,
       qtdFixa: qtd,
       npc: 0,
-    });
+    // A volta pede a cota de novo: o lote é escolhido contra ela, e ela pode ter mudado.
+    }, (c, f) => passoEscolherDiamantes(c, f, voltar));
   };
 }
 
@@ -30279,7 +33935,9 @@ function diasRestantes(a) {
 function duracaoSelo(a) {
   const d = diasRestantes(a);
   if (d == null) return '';
-  return `<div class="cm-duracao ${d <= 1 ? 'acabando' : ''}" title="${t('cm.duracaoTitulo')}">
+  // O anúncio que acabou de ganhar dias (`marketEstendido`) chega com o selo pulando uma vez.
+  const subiu = estado.cmEstadiaSubiu?.id === a.id && Date.now() - estado.cmEstadiaSubiu.em < 6000;
+  return `<div class="cm-duracao ${d <= 1 ? 'acabando' : ''}${subiu ? ' subiu' : ''}" title="${t('cm.duracaoTitulo')}">
             ${t('cm.duracao', { d })}
           </div>`;
 }
@@ -30409,9 +34067,17 @@ const ehItemFavoritoMercado = (itemId) => favoritosItensMercado().includes(Numbe
 const favoritosEspeciesMercado = () => estado.eu?.automation?.mercadoFavEspecies ?? [];
 const ehEspecieFavoritaMercado = (speciesId) => favoritosEspeciesMercado().includes(Number(speciesId));
 
-/** O número do botão "Meus favoritos": anúncios, itens e espécies somados. */
+/**
+ * Os DIAMANTES na estrela (`automation.mercadoFavDiamante`) — um interruptor, e não uma quarta
+ * lista: diamante é uma mercadoria só. O que se guarda é o atalho para a vitrine deles, como o de
+ * um item, e o card da aba Favoritos mostra quantos vendem e a partir de quanto.
+ */
+const ehDiamanteFavoritoMercado = () => estado.eu?.automation?.mercadoFavDiamante === true;
+
+/** O número do botão "Meus favoritos": anúncios, itens, espécies e os diamantes somados. */
 const totalFavoritosMercado = () =>
-  favoritosMercado().length + favoritosItensMercado().length + favoritosEspeciesMercado().length;
+  favoritosMercado().length + favoritosItensMercado().length + favoritosEspeciesMercado().length
+  + (ehDiamanteFavoritoMercado() ? 1 : 0);
 
 /**
  * Acende ou apaga uma estrela. `chaves` troca o texto do título — a estrela de uma ESPÉCIE guarda
@@ -30427,6 +34093,9 @@ function pintarBotaoFavorito(b, on, chaves = ['cm.favoritar', 'cm.desfavoritar']
 
 /** As duas frases da estrela de uma espécie. */
 const CHAVES_FAV_ESPECIE = ['cm.favoritarEspecie', 'cm.desfavoritarEspecie'];
+
+/** As duas frases da estrela dos diamantes. */
+const CHAVES_FAV_DIAMANTE = ['cm.favoritarDiamantes', 'cm.desfavoritarDiamantes'];
 
 /**
  * Liga ou desliga a estrela de um anúncio. Sem `ativo`, inverte.
@@ -30515,6 +34184,26 @@ function alternarFavoritoEspecieMercado(speciesId, ativo = !ehEspecieFavoritaMer
   if (!ativo && estado.cmAba === 'favoritos') pintarMercado();
 }
 
+/**
+ * Liga ou desliga a estrela dos DIAMANTES. Mesma regra das de cima, sem teto: é um interruptor.
+ *
+ * Ligar com a aba Favoritos aberta pede a lista de novo — é a resposta dela que traz o resumo das
+ * ofertas de diamante, e sem ele o card nasceria sem número nenhum.
+ */
+function alternarFavoritoDiamanteMercado(ativo = !ehDiamanteFavoritoMercado()) {
+  const auto = estado.eu?.automation;
+  if (!auto || ehDiamanteFavoritoMercado() === ativo) return;
+  auto.mercadoFavDiamante = ativo;
+  enviar({ t: 'market.favoritarDiamante', ativo });
+  for (const b of document.querySelectorAll('.cm-fav[data-fav-diamante]')) pintarBotaoFavorito(b, ativo, CHAVES_FAV_DIAMANTE);
+  const conta = $('#cm-favoritos .cm-fav-conta');
+  if (conta) conta.textContent = num(totalFavoritosMercado());
+  if (estado.cmAba === 'favoritos') {
+    if (ativo) pedirMercado();
+    else pintarMercado();
+  }
+}
+
 /** A estrela de uma ESPÉCIE — no card da grade e na faixa da lista de ofertas dela. */
 function botaoFavoritoEspecieMercado(speciesId) {
   const b = document.createElement('button');
@@ -30526,6 +34215,21 @@ function botaoFavoritoEspecieMercado(speciesId) {
   b.onclick = (ev) => {
     ev.stopPropagation();
     alternarFavoritoEspecieMercado(speciesId);
+  };
+  return b;
+}
+
+/** A estrela dos DIAMANTES — no cabeçalho da vitrine deles e no card da aba Favoritos. */
+function botaoFavoritoDiamanteMercado() {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'cm-fav';
+  b.dataset.favDiamante = '1';
+  b.textContent = '★';
+  pintarBotaoFavorito(b, ehDiamanteFavoritoMercado(), CHAVES_FAV_DIAMANTE);
+  b.onclick = (ev) => {
+    ev.stopPropagation();
+    alternarFavoritoDiamanteMercado();
   };
   return b;
 }
@@ -30625,6 +34329,59 @@ function cardItemFavorito(itemId) {
     }
   };
   return el;
+}
+
+/**
+ * O card dos DIAMANTES na aba Favoritos — a fôrma do card de item favorito, com o resumo das
+ * ofertas que veio junto da lista (`market.favoritos` → `diamante`). O preço é o de UM diamante,
+ * que é como a vitrine deles se ordena. O card inteiro leva à vitrine; a estrela tira dos favoritos.
+ */
+function cardDiamanteFavorito(r) {
+  const vazio = !r || !r.anuncios;
+  const el = document.createElement('div');
+  el.className = 'cm-card cm-card-item-fav cm-card-dia-fav tem-fav';
+  el.tabIndex = 0;
+  el.innerHTML = `
+    <div class="cm-arte"><span data-ico="img:${ICONE_DIAMANTE}" data-ico-px="52"></span></div>
+    <div class="cm-selos"></div>
+    <div class="cm-info">
+      <div class="cm-nome">${t('cm.diamantes')}</div>
+      <div class="cm-sub">${r === undefined ? '…' : vazio ? t('cm.semVendedores') : t('cm.nVendendo', { n: num(r.anuncios), u: num(r.unidades) })}</div>
+    </div>
+    <div class="cm-rodape">${precosDaEspecie(r)}</div>
+    <div class="cm-botoes"><button type="button" class="cm-btn">${t('cm.verOfertas')}</button></div>`;
+  for (const ico of el.querySelectorAll('[data-ico]')) pintarIcone(ico);
+  el.appendChild(botaoFavoritoDiamanteMercado());
+  el.onclick = irParaOfertasDeDiamantes;
+  el.onkeydown = (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      irParaOfertasDeDiamantes();
+    }
+  };
+  return el;
+}
+
+/**
+ * Leva à VITRINE DE DIAMANTES — o clique no card deles na aba Favoritos. É o clique em
+ * "Diamantes" da barra lateral: zera o que só vale para pokémon, e `abrirModal` redesenha a barra
+ * e pede a lista.
+ */
+function irParaOfertasDeDiamantes() {
+  const f = estado.cmFiltro;
+  estado.cmAba = 'vitrine';
+  f.tipo = 'diamante';
+  f.soShiny = false;
+  f.soP5 = false;
+  f.soTmElemental = false;
+  f.soTmAoe = false;
+  f.semOutland = false;
+  estado.cmEspecieSel = null;
+  zerarFaixasDoMercado(f);
+  f.criterios = [];
+  f.busca = '';
+  estado.cmPagina = 0;
+  abrirModal('community');
 }
 
 /**
@@ -30732,7 +34489,10 @@ function plaquinhaDoAnuncio(a, classe = 'cmv-serie') {
   return n ? `<b class="${classe}" style="--cx-cor:${n.cor}">${escapar(n.rotulo)}</b>` : '';
 }
 
-function passoEscolherItem(corpo, fechar) {
+function passoEscolherItem(corpo, fechar, voltar = null) {
+  definirVoltaDaFolha(corpo, voltar && (() => voltar(corpo, fechar)));
+  // A volta do preço reabre esta grade (com a volta DELA para o menu).
+  const aqui = (c, f) => passoEscolherItem(c, f, voltar);
   const disponiveis = Object.entries(estado.eu.items ?? {})
     .map(([id, q]) => ({ item: estado.itens.get(Number(id)), q }))
     .filter((x) => x.q > 0 && anunciavelNaTela(x.item));
@@ -30831,7 +34591,7 @@ function passoEscolherItem(corpo, fechar) {
         npc: 0,
         // A regra que dói se descoberta depois: anunciar solta os pokémon, e cancelar não os traz.
         nota: soltos ? t(soltos === 1 ? 'casa.avisoAnunciarUm' : 'casa.avisoAnunciar', { n: soltos }) : '',
-      });
+      }, aqui);
       return;
     }
     if (b.dataset.bici) {
@@ -30848,7 +34608,7 @@ function passoEscolherItem(corpo, fechar) {
         npc: 0,
         // Anunciar a equipada tira a velocidade na hora — melhor saber antes de pôr o preço.
         nota: estado.eu.bicicleta?.equipada === bici.id ? t('bicicleta.avisoAnunciarEquipada') : '',
-      });
+      }, aqui);
       return;
     }
     if (b.dataset.caixa) {
@@ -30864,7 +34624,7 @@ function passoEscolherItem(corpo, fechar) {
         nome: `${t(`caixas.nome.${caixa.tipo}`)} ${serieDaCaixa(caixa.tipo, caixa.serie)}`,
         maximo: 1,
         npc: 0,
-      });
+      }, aqui);
       return;
     }
     const item = estado.itens.get(Number(b.dataset.id));
@@ -30874,11 +34634,15 @@ function passoEscolherItem(corpo, fechar) {
       nome: nomeItem(item, item.name),
       maximo: estado.eu.items[item.id] ?? 1,
       npc: item.npcPrice ?? 0,
-    });
+    }, aqui);
   };
 }
 
-function passoEscolherPokemon(corpo, fechar) {
+function passoEscolherPokemon(corpo, fechar, voltar = null) {
+  // Os cards têm ouvinte próprio; o clique da folha é do menu do passo 1, e ele não pode
+  // continuar ligado debaixo da grade (nem voltar ligado quando se volta do preço).
+  corpo.onclick = null;
+  definirVoltaDaFolha(corpo, voltar && (() => voltar(corpo, fechar)));
   // O ativo fica de fora: é o que está lutando, e o servidor recusaria de qualquer jeito.
   // O starter do onboarding também fica de fora — trade lock contra reroll de alt (ver sim.mjs).
   const todos = (estado.eu.pokemons ?? []).filter((k) => k.id !== estado.eu.activeId);
@@ -30964,7 +34728,8 @@ function passoEscolherPokemon(corpo, fechar) {
           tipo: 'pokemon', pokemonId: k.id, nome: `${nomeNoAnuncio(k)} Nv ${k.level}`, maximo: 1,
           // O bicho em si, para a folha dos dias desenhá-lo na barraca da feira.
           pk: k,
-        }),
+        // Volta à grade: a busca e os filtros (`cmPkFiltro`) moram fora daqui e continuam de pé.
+        }, (c, f) => passoEscolherPokemon(c, f, voltar)),
       }));
     }
   };
@@ -31007,9 +34772,15 @@ const cmPkFiltro = { busca: '', tipo: '', ivMin: '', ordem: 'padrao', local: 'to
  * acontece ("quanto vale um destes?" vem antes de "quantos eu solto?"), e deixa claro que o
  * número digitado é por unidade e não pelo lote. O resumo fecha a conta com o total.
  */
-function passoPreco(corpo, fechar, alvo) {
+function passoPreco(corpo, fechar, alvo, voltar = null) {
   corpo.onclick = null;
   cmPassoPrecoAtualizar = null;
+  // A volta desliga o ouvinte das médias: ela chega depois (`market.itens`) e o `isConnected` do
+  // `atualizar` não a barraria — a folha continua na tela, só que já sem a placa de preço.
+  definirVoltaDaFolha(corpo, voltar && (() => {
+    cmPassoPrecoAtualizar = null;
+    voltar(corpo, fechar);
+  }));
   // DUAS perguntas diferentes, e elas se separaram quando o diamante chegou:
   //
   //   `emLote`     o resumo fala em LOTE ("532 × 2 por unidade") em vez de um preço só?
@@ -31024,6 +34795,9 @@ function passoPreco(corpo, fechar, alvo) {
   // se digita — o vendedor vê o anúncio como o comprador vai ver. A pergunta "por quanto vender
   // X?" virou isso: o X está ali em pé, com o preço no pescoço.
   const pk = alvo.tipo === 'pokemon' ? alvo.pk : null;
+  // `precoInicial`/`moedaInicial` só vêm na volta do PRAZO: o preço e a moeda que ele já tinha
+  // escolhido reaparecem, em vez do "1 em Coins" de quem começa agora.
+  const moedaInicial = alvo.moedaInicial === 'orb' ? 'orb' : 'gold';
   corpo.innerHTML = `
     ${barraca({
       ator: dlgAtor({
@@ -31039,11 +34813,11 @@ function passoPreco(corpo, fechar, alvo) {
     ${alvo.nota ? `<p class="cm-nota cm-nota-alerta">${escapar(alvo.nota)}</p>` : ''}
     <div class="cm-form">
       <label>${t(alvo.tipo === 'diamante' ? 'cm.precoPorDiamante' : 'cm.precoUnit')}
-        <input id="cm-preco" type="number" value="${alvo.npc || 1}" min="1" inputmode="numeric">
+        <input id="cm-preco" type="number" value="${alvo.precoInicial ?? (alvo.npc || 1)}" min="1" inputmode="numeric">
         <em id="cm-preco-ajuda">${alvo.npc ? t('cm.npcPaga', { v: num(alvo.npc) }) : t('cm.precoUnitAjuda')}</em>
       </label>
       ${alvo.itemId || alvo.tipo === 'diamante' ? '<div class="dlg-refs" id="cm-preco-refs"></div>' : ''}
-      ${htmlMoedasAnuncio('gold')}
+      ${htmlMoedasAnuncio(moedaInicial)}
       <div id="cm-qtd-host"></div>
       <div id="cm-resumo"></div>
       ${avisoRetencaoAnuncio()}
@@ -31051,7 +34825,7 @@ function passoPreco(corpo, fechar, alvo) {
     </div>`;
   hidratarDialogo(corpo);
 
-  let moedaEscolhida = 'gold';
+  let moedaEscolhida = moedaInicial;
   const resumo = corpo.querySelector('#cm-resumo');
   const inpPreco = corpo.querySelector('#cm-preco');
   const minMoeda = () => precoMinMercado(moedaEscolhida);
@@ -31146,8 +34920,14 @@ function passoPreco(corpo, fechar, alvo) {
     // Perguntar os dias depois do preço é de propósito — é aí que o custo aparece, e decidir
     // o prazo antes de saber quanto vai pedir pelo bicho é decidir no escuro.
     const seguir = () => {
-      if (alvo.tipo === 'pokemon') abrirDiasAnuncio(publicar, { pk: alvo.pk, preco: preco * qtd, moeda: moedaEscolhida });
-      else publicar(null);
+      if (alvo.tipo !== 'pokemon') return publicar(null);
+      // A folha do prazo toma o lugar desta. O `‹` dela reabre o preço numa folha nova — já com
+      // o preço e a moeda de agora, e com a mesma volta para a grade de pokémon.
+      const voltarAoPreco = () => {
+        const nova = folhaMercado(t('cm.anunciarTitulo'));
+        passoPreco(nova.corpo, nova.fechar, { ...alvo, precoInicial: preco, moedaInicial: moedaEscolhida }, voltar);
+      };
+      abrirDiasAnuncio(publicar, { pk: alvo.pk, preco: preco * qtd, moeda: moedaEscolhida, voltar: voltarAoPreco });
     };
 
     // O aviso de moeda vem ANTES dos dias, e não no fim: é aqui que a moeda foi escolhida, e
@@ -31373,7 +35153,7 @@ const diasNaFeira = (n) => t(n === 1 ? 'cm.diaN' : 'cm.diasN', { n: num(n) });
  * os atalhos para quem pensa em "uma semana", e a barra para arrastar. Os três mexem no MESMO
  * `input[type=range]`, que continua sendo o valor de verdade.
  */
-function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold' } = {}) {
+function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold', voltar = null } = {}) {
   const reg = estado.mercado ?? {};
   const diaria = reg.taxaDiaria ?? 100000;
   const dMin = reg.diasMin ?? 1;
@@ -31398,7 +35178,7 @@ function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold'
     dlgSelo('volta', escapar(t('cm.diasSeloVolta', { dias: diasNaFeira(dias) })), 'bom'),
   );
 
-  const { corpo, fechar } = folhaMercado(t('cm.diasTitulo'));
+  const { corpo, fechar } = folhaMercado(t('cm.diasTitulo'), { voltar });
   corpo.innerHTML = `
     ${barracaDaFeira({ pk, preco, moeda, dias: dMin })}
     <p class="dlg-sub">${t('cm.diasLead')}</p>
@@ -31454,9 +35234,12 @@ function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold'
   // consegue desfazer: vender no primeiro dia NÃO devolve os outros dias já pagos, e não
   // vender devolve a mercadoria (mas não o aluguel). Descobrir isso depois de pagar 30 dias
   // e vender em duas horas seria descobrir tarde.
+  //
+  // A folha fica ATRÁS da confirmação, e só fecha no "Publicar": "Cancelar" ali é desistir
+  // DESTE prazo, e devolve a folha para ajustar os dias — antes ele jogava fora o anúncio inteiro,
+  // e o jogador refazia o pokémon, o preço e a moeda do zero.
   ok.onclick = () => {
     const dias = Number(faixa.value);
-    fechar();
     confirmar({
       titulo: t('cm.confirmaTitulo', { dias: diasNaFeira(dias) }),
       texto: `
@@ -31464,7 +35247,10 @@ function abrirDiasAnuncio(aoConfirmar, { pk = null, preco = null, moeda = 'gold'
         ${custo(dias)}
         ${regras(dias)}`,
       rotuloSim: t('cm.publicar'),
-      aoConfirmar: () => aoConfirmar(dias),
+      aoConfirmar: () => {
+        fechar();
+        aoConfirmar(dias);
+      },
     });
   };
 }
@@ -31569,7 +35355,150 @@ function abrirCompra(a) {
   };
 }
 
-/** Editar só mexe em preço e moeda — trocar quantidade é cancelar e reanunciar. */
+// ------------------------------------------------------------------ a ESTADIA na feira
+
+/** Um dia de pensão, em ms — a feira conta em dias inteiros, como o servidor (`estenderAnuncio`). */
+const DIA_FEIRA_MS = 86_400_000;
+
+/**
+ * Folga do relógio no teto da estadia. A tela ESTIMA a hora do servidor (`agoraDoServidor`, acertada a
+ * cada pacote de estado), e no fio da navalha ofereceria um dia que o banco recusa. Um minuto cobre o
+ * erro da estimativa com sobra; o preço é o "Máx" mostrar um dia a menos no primeiro minuto depois de
+ * publicar ou estender — mais que isso, e a folga comeria o dia justamente de quem acabou de mexer.
+ */
+const FOLGA_ESTADIA_MS = 60_000;
+
+/**
+ * A estadia de um anúncio na feira, em números: quanto falta, quantos dias já estão pagos
+ * (arredondados para CIMA, como o selo "Na feira: 3d" do card) e quantos ainda cabem antes do teto
+ * de `diasMax` dias À FRENTE — o mesmo teto da publicação, que o servidor confere de novo.
+ *
+ * Só pokémon tem prazo. Item, diamante e o pokémon anunciado antes da pensão devolvem `null`, e o
+ * anúncio que já venceu (está voltando para o dono) também: ali não há o que estender.
+ */
+function estadiaDoAnuncio(a) {
+  if (a?.tipo !== 'pokemon' || !a.expiraEm) return null;
+  const resta = a.expiraEm - agoraDoServidor();
+  if (resta <= 0) return null;
+  const dMax = estado.mercado?.diasMax ?? 30;
+  return {
+    resta,
+    dMax,
+    pagos: Math.ceil(resta / DIA_FEIRA_MS),
+    cabem: Math.max(0, Math.floor((dMax * DIA_FEIRA_MS - resta - FOLGA_ESTADIA_MS) / DIA_FEIRA_MS)),
+  };
+}
+
+/** "sáb., 05/10, 14:30" — o fim da estadia no relógio e na língua de quem lê. */
+const quandoVence = (ms) => new Date(ms).toLocaleString(localeData(), {
+  weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+/** O selo dos dias na barraca: o prazo de agora e, se ele vai crescer, o de antes riscado em cima. */
+const placaDeDias = (antes, depois = antes) =>
+  `${depois !== antes ? `<s>${escapar(diasNaFeira(antes))}</s>` : ''}${escapar(diasNaFeira(depois))}`;
+
+/**
+ * A seção ESTADIA da folha de editar: o que falta, a RÉGUA de dias e o "Aumentar a estadia".
+ *
+ * A régua é um calendário de `diasMax` casas, de hoje até o teto: roxas as já pagas, verdes as que se
+ * está comprando, escuras as que ainda cabem. Ela é o desenho do teto — o jogador VÊ até onde a feira
+ * vai, em vez de descobrir por uma recusa — e é clicável: tocar numa casa estende até ela.
+ *
+ * O seletor embaixo é o MESMO da publicação (`abrirDiasAnuncio`): − número +, a barra e os atalhos
+ * (+1, +3, +7, +15 e o "Máx", o que sobra até o teto). Fechado, a seção é uma leitura e um botão; o
+ * seletor só abre quando o jogador pede, para quem veio mexer no preço não rolar a folha à toa.
+ */
+function estadiaHtml(est) {
+  const diaria = estado.mercado?.taxaDiaria ?? 100000;
+  const casas = Array.from({ length: est.dMax }, (_, i) => `<i class="cm-estadia-casa" data-casa="${i + 1}"></i>`).join('');
+  const atalhos = [1, 3, 7, 15]
+    .filter((d) => d < est.cabem)
+    .map((d) => `<button type="button" class="qtd-atalho" data-mais="${d}">+${escapar(diasNaFeira(d))}</button>`)
+    .join('')
+    + `<button type="button" class="qtd-atalho" data-mais="${est.cabem}">${escapar(t('cm.estadiaMax', { n: num(est.cabem) }))}</button>`;
+  return `
+    <div class="cm-estadia" id="cm-estadia">
+      <div class="cm-estadia-topo">
+        <span class="dlg-dias-rot">${dlgIcone('calendario', 15)}${escapar(t('cm.estadiaTitulo'))}</span>
+        <span class="cm-estadia-falta${est.pagos <= 1 ? ' acabando' : ''}">${escapar(t('cm.estadiaFaltam', { tempo: tempoCurto(est.resta) }))}</span>
+      </div>
+      <div class="cm-estadia-regua" aria-hidden="true" style="--casas: ${est.dMax}">${casas}</div>
+      <div class="cm-estadia-pontas" aria-hidden="true">
+        <span>${escapar(t('cm.estadiaHoje'))}</span><span>${escapar(diasNaFeira(est.dMax))}</span>
+      </div>
+      <div class="cm-estadia-linha">
+        <p class="cm-estadia-vence" id="cm-estadia-vence"></p>
+        ${est.cabem >= 1
+    ? `<button type="button" class="cm-estadia-abrir" id="cm-estadia-abrir" title="${escapar(t('cm.estadiaPorDia', { valor: num(diaria) }))}">
+             ${dlgIcone('calendario', 16)}<span>${escapar(t('cm.estadiaAumentar'))}</span>
+           </button>`
+    : `<p class="cm-estadia-cheia">${dlgIcone('check', 14)}<span>${escapar(t('cm.estadiaCheia', { dias: diasNaFeira(est.dMax) }))}</span></p>`}
+      </div>
+      ${est.cabem >= 1
+    ? `<div class="dlg-dias cm-estadia-dias" id="cm-estadia-dias" hidden>
+           <div class="cm-estadia-dias-topo">
+             <span class="dlg-dias-rot">${escapar(t('cm.estadiaQuantos'))}<small>${escapar(t('cm.estadiaPorDia', { valor: num(diaria) }))}</small></span>
+             <button type="button" class="qtd-atalho cm-estadia-desistir" id="cm-estadia-desistir">${escapar(t('cm.estadiaDesistir'))}</button>
+           </div>
+           <div class="dlg-dias-linha">
+             <button type="button" class="mk-passo" data-passo="-1" aria-label="−1">−</button>
+             <span class="dlg-dias-num"><b id="cm-estadia-v">+1</b><small id="cm-estadia-un"></small></span>
+             <button type="button" class="mk-passo" data-passo="1" aria-label="+1">+</button>
+           </div>
+           <input type="range" class="qtd-barra" id="cm-estadia-faixa" min="1" max="${est.cabem}" step="1" value="1"
+                  aria-label="${escapar(t('cm.estadiaQuantos'))}">
+           <div class="qtd-atalhos">${atalhos}</div>
+         </div>`
+    : ''}
+    </div>
+    <div id="cm-estadia-custo"></div>`;
+}
+
+/**
+ * A última parada antes de pagar a estadia, na lógica da confirmação da publicação: a barraca com o
+ * prazo de antes riscado e o novo, a etiqueta da pensão com o saldo antes → depois e as regras que não
+ * se desfazem. Se o preço também mudou, um selo a mais avisa que é ELE que reinicia a retenção.
+ */
+function confirmarEstadia({ a, est, dias, preco, moeda, trocaPreco, aoConfirmar }) {
+  const diaria = estado.mercado?.taxaDiaria ?? 100000;
+  const total = est.pagos + dias;
+  confirmar({
+    titulo: t('cm.estadiaConfirmaTitulo', { dias: diasNaFeira(dias) }),
+    texto: `
+      ${barraca({
+        ator: atorDoAnuncio(a),
+        placa: placaDePreco(preco, moeda, { era: moeda === a.moeda ? a.preco : null }),
+        selo: placaDeDias(est.pagos, total),
+      })}
+      <p class="dlg-sub cm-estadia-ate">${t('cm.estadiaAte', { quando: `<b>${escapar(quandoVence(a.expiraEm + dias * DIA_FEIRA_MS))}</b>` })}</p>
+      ${dlgCusto({
+        moeda: 'ouro',
+        valor: diaria * dias,
+        saldo: Math.floor(estado.eu?.gold ?? 0),
+        rotulo: t('cm.diasPensao'),
+        extra: `${num(diaria)} × ${num(dias)}`,
+      })}
+      ${dlgSelos(
+        dlgSelo('moedas', escapar(t('cm.diasSeloPago')), 'perigo'),
+        dlgSelo('volta', escapar(t('cm.diasSeloVolta', { dias: diasNaFeira(total) })), 'bom'),
+        trocaPreco ? dlgSelo('ampulheta', escapar(t('cm.estadiaSeloRetencao', { tempo: tempoRetencao() })), 'ouro') : '',
+      )}`,
+    rotuloSim: t('cm.estadiaPagar'),
+    aoConfirmar,
+  });
+}
+
+/**
+ * Editar mexe no preço e na moeda — trocar quantidade é cancelar e reanunciar — e, no pokémon com
+ * prazo, na ESTADIA: os dias de pensão que faltam e o "Aumentar a estadia" (ver `estadiaHtml`).
+ *
+ * Um botão só salva tudo, e o rótulo dele diz o que vai acontecer — "Salvar", "Estender por 7 dias",
+ * "Salvar e estender" —, para ninguém ter de adivinhar qual botão leva o quê. Por baixo são dois
+ * pedidos independentes: `market.estender` cobra e empurra o prazo, e `market.editar` só vai quando o
+ * preço ou a moeda MUDARAM. Ele reinicia a retenção, e quem só pagou por mais dias não pode ver o
+ * bicho sair da venda por dois minutos por causa disso.
+ */
 function abrirEdicao(a) {
   if (anuncioEmRetencao(a)) {
     toast(t('cm.retencaoEditar'));
@@ -31577,10 +35506,16 @@ function abrirEdicao(a) {
   }
   const { corpo, fechar } = folhaMercado(t('cm.editarTitulo'));
   // A mesma barraca do anúncio novo, com o preço de HOJE riscado na placa enquanto o novo for
-  // diferente: editar é comparar os dois, e a placa é onde o comprador vai ler.
+  // diferente: editar é comparar os dois, e a placa é onde o comprador vai ler. O selo do outro lado é
+  // o tamanho do lote — ou, no pokémon, os dias de feira, que crescem junto com a estadia.
   const lote = (a.qtd ?? 1) > 1;
+  const est = estadiaDoAnuncio(a);
   corpo.innerHTML = `
-    ${barraca({ ator: atorDoAnuncio(a), idPlaca: 'cm-placa', selo: lote ? `×${num(a.qtd)}` : '', compacta: true })}
+    ${barraca({
+      ator: atorDoAnuncio(a), idPlaca: 'cm-placa', compacta: true,
+      selo: lote ? `×${num(a.qtd)}` : est ? placaDeDias(est.pagos) : '',
+      idSelo: est ? 'cm-placa-dias' : '',
+    })}
     <div class="cm-form">
       <label>${t('cm.precoUnit')}
         <input id="cm-preco" type="number" value="${a.preco}" min="1" inputmode="numeric">
@@ -31589,15 +35524,132 @@ function abrirEdicao(a) {
       ${a.itemId || ehAnuncioDiamante(a) ? '<div class="dlg-refs" id="cm-preco-refs"></div>' : ''}
       ${htmlMoedasAnuncio(a.moeda)}
       <div id="cm-resumo"></div>
+      ${est ? estadiaHtml(est) : ''}
       ${avisoRetencaoAnuncio()}
       <button class="cm-publicar" id="cm-salvar">${t('cm.salvar')}</button>
     </div>`;
   hidratarDialogo(corpo);
   penduraArteDoAnuncio(corpo, a, 44);
+  // Com a estadia a folha cresce, e numa tela baixa o Salvar fica abaixo da dobra: o pé dissolve e a
+  // seta pula, como nas outras folhas que rolam.
+  setaDeRolagem(corpo);
   let moedaEscolhida = a.moeda;
   const inpPreco = corpo.querySelector('#cm-preco');
+  const salvarBt = corpo.querySelector('#cm-salvar');
+  const avisoRetencao = corpo.querySelector('.cm-retencao-aviso');
   const minMoeda = () => precoMinMercado(moedaEscolhida);
   const precoDe = () => Math.max(minMoeda(), Math.floor(Number(inpPreco?.value)) || 1);
+  const mudouPreco = () => precoDe() !== a.preco || moedaEscolhida !== a.moeda;
+
+  // ------------------------------------------------ a estadia (só pokémon com prazo)
+  const diaria = estado.mercado?.taxaDiaria ?? 100000;
+  const saldoOuro = Math.floor(estado.eu?.gold ?? 0);
+  let extra = 0; // os dias A MAIS escolhidos; 0 = não estender
+
+  // O rótulo e o "pode" do botão saem das DUAS metades da folha: o preço e a estadia.
+  const pintarBotao = () => {
+    const liquidoOk = totalLiquidoMercado(precoDe(), a.qtd ?? 1, moedaEscolhida, a.tipo) >= 1;
+    salvarBt.disabled = !liquidoOk || diaria * extra > saldoOuro;
+    salvarBt.textContent = !extra ? t('cm.salvar')
+      : mudouPreco() ? t('cm.salvarEstender')
+        : t('cm.estadiaEstenderBt', { dias: diasNaFeira(extra) });
+    // A retenção só reinicia quando o PREÇO muda: numa estadia pura o aviso dela não tem o que dizer.
+    if (avisoRetencao) avisoRetencao.hidden = extra > 0 && !mudouPreco();
+  };
+
+  const secao = est ? corpo.querySelector('#cm-estadia') : null;
+  const casas = secao ? [...secao.querySelectorAll('.cm-estadia-casa')] : [];
+  const faixa = secao?.querySelector('#cm-estadia-faixa');
+  const pintarEstadia = () => {
+    if (!secao) return;
+    const total = est.pagos + extra;
+    secao.classList.toggle('estendendo', extra > 0);
+    let fila = 0;
+    for (const c of casas) {
+      const n = Number(c.dataset.casa);
+      const tipo = n <= est.pagos ? 'paga' : n <= total ? 'nova' : n <= est.pagos + est.cabem ? 'livre' : 'fora';
+      if (c.dataset.tipo === tipo) continue;
+      // A casa que ACENDE agora entra na fila: pular de +1 para +15 acende as quinze em sequência, da
+      // esquerda para a direita, como uma barra enchendo.
+      c.style.animationDelay = tipo === 'nova' && c.dataset.tipo ? `${fila++ * 22}ms` : '';
+      c.dataset.tipo = tipo;
+      c.className = `cm-estadia-casa ${tipo}`;
+    }
+    const fim = a.expiraEm + extra * DIA_FEIRA_MS;
+    secao.querySelector('#cm-estadia-vence').innerHTML = t('cm.estadiaVence', {
+      quando: extra
+        ? `<s>${escapar(quandoVence(a.expiraEm))}</s> → <b>${escapar(quandoVence(fim))}</b>`
+        : `<b>${escapar(quandoVence(a.expiraEm))}</b>`,
+    });
+    corpo.querySelector('#cm-placa-dias').innerHTML = placaDeDias(est.pagos, total);
+    if (faixa && extra) {
+      faixa.value = String(extra);
+      secao.querySelector('#cm-estadia-v').textContent = `+${num(extra)}`;
+      secao.querySelector('#cm-estadia-un').textContent = t(extra === 1 ? 'cm.diaUm' : 'cm.diasVarios');
+      for (const b of secao.querySelectorAll('[data-mais]')) b.classList.toggle('on', Number(b.dataset.mais) === extra);
+    }
+    corpo.querySelector('#cm-estadia-custo').innerHTML = extra
+      ? dlgCusto({
+        moeda: 'ouro', valor: diaria * extra, saldo: saldoOuro,
+        rotulo: t('cm.diasPensao'), extra: `${num(diaria)} × ${num(extra)}`,
+      }) + (diaria * extra <= saldoOuro ? '' : `<p class="cm-erro dlg-erro">${t('cm.diasSemSaldo')}</p>`)
+      : '';
+    pintarBotao();
+  };
+  // Abrir o seletor empurra o Salvar para baixo: a folha rola até ele aparecer, com o custo no meio.
+  const mostrarSalvar = () => requestAnimationFrame(() => {
+    const passa = salvarBt.getBoundingClientRect().bottom - corpo.getBoundingClientRect().bottom + 14;
+    if (passa > 0) {
+      corpo.scrollBy({ top: passa, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }
+  });
+  const estender = (dias) => {
+    const abrindo = !extra;
+    extra = Math.min(est.cabem, Math.max(1, Math.floor(dias) || 1));
+    if (abrindo) {
+      secao.querySelector('#cm-estadia-abrir').hidden = true;
+      secao.querySelector('#cm-estadia-dias').hidden = false;
+    }
+    pintarEstadia();
+    if (abrindo) mostrarSalvar();
+  };
+  const desistir = () => {
+    extra = 0;
+    secao.querySelector('#cm-estadia-dias').hidden = true;
+    secao.querySelector('#cm-estadia-abrir').hidden = false;
+    pintarEstadia();
+  };
+  if (secao && est.cabem >= 1) {
+    secao.querySelector('#cm-estadia-abrir').onclick = () => estender(1);
+    faixa.oninput = () => estender(Number(faixa.value));
+    secao.querySelector('#cm-estadia-dias').onclick = (ev) => {
+      if (ev.target.closest('#cm-estadia-desistir')) return desistir();
+      const passo = ev.target.closest('[data-passo]');
+      const atalho = ev.target.closest('[data-mais]');
+      if (passo) estender(extra + Number(passo.dataset.passo));
+      else if (atalho) estender(Number(atalho.dataset.mais));
+    };
+    // A régua: tocar numa casa que cabe estende até ela; passar o mouse mostra até onde iria.
+    const regua = secao.querySelector('.cm-estadia-regua');
+    const mirar = (ate) => {
+      for (const c of casas) {
+        const n = Number(c.dataset.casa);
+        c.classList.toggle('mira', ate != null && n > est.pagos + extra && n <= ate);
+      }
+    };
+    regua.onclick = (ev) => {
+      const casa = ev.target.closest('.cm-estadia-casa.livre, .cm-estadia-casa.nova');
+      if (!casa) return;
+      mirar(null);
+      estender(Number(casa.dataset.casa) - est.pagos);
+    };
+    regua.onpointerover = (ev) => {
+      const casa = ev.target.closest('.cm-estadia-casa.livre');
+      mirar(casa ? Number(casa.dataset.casa) : null);
+    };
+    regua.onpointerleave = () => mirar(null);
+  }
+
   const atualizar = () => {
     if (!corpo.isConnected) {
       cmPassoPrecoAtualizar = null;
@@ -31616,8 +35668,7 @@ function abrirEdicao(a) {
     corpo.querySelector('#cm-resumo').innerHTML = reciboAnuncioHtml({
       moeda: moedaEscolhida, preco, qtd: a.qtd ?? 1, tipo: a.tipo,
     });
-    corpo.querySelector('#cm-salvar').disabled =
-      totalLiquidoMercado(preco, a.qtd ?? 1, moedaEscolhida, a.tipo) < 1;
+    pintarBotao();
   };
   corpo.querySelector('#cm-preco-refs')?.addEventListener('click', (ev) => {
     const b = ev.target.closest('[data-usar-preco]');
@@ -31636,6 +35687,7 @@ function abrirEdicao(a) {
   };
   inpPreco.oninput = atualizar;
   atualizar();
+  pintarEstadia();
   // As réguas (menor anúncio, média vendida) vêm do resumo do catálogo — o mesmo pedido do
   // anúncio novo. A resposta repinta esta folha pelo `cmPassoPrecoAtualizar`.
   if (a.itemId) {
@@ -31643,20 +35695,28 @@ function abrirEdicao(a) {
     estado.cmMedias = undefined;
     enviar({ t: 'market.itens' });
   }
-  corpo.querySelector('#cm-salvar').onclick = () => {
-    const salvar = () => {
-      enviar({ t: 'market.editar', id: a.id, preco: precoDe(), moeda: moedaEscolhida });
+  salvarBt.onclick = () => {
+    const preco = precoDe();
+    const moeda = moedaEscolhida;
+    const trocaPreco = mudouPreco();
+    const dias = extra;
+    const enviarTudo = () => {
+      if (dias) enviar({ t: 'market.estender', id: a.id, dias });
+      // Só a estadia: o `market.editar` fica de fora, porque ele reinicia a retenção (ver acima).
+      if (!dias || trocaPreco) enviar({ t: 'market.editar', id: a.id, preco, moeda });
       fechar();
     };
+    // Estender cobra: antes de pagar, a confirmação com a pensão e as regras (ver `confirmarEstadia`).
+    const seguir = dias
+      ? () => confirmarEstadia({ a, est, dias, preco, moeda, trocaPreco, aoConfirmar: enviarTudo })
+      : enviarTudo;
     // Aqui o aviso só aparece na TROCA de gema para coin: editar um anúncio que já era em
     // Coins é mexer no preço, e avisar nisso seria só barulho. O que se está desfazendo com um
     // toque é a decisão de vender em gema — e é isso que merece a pergunta.
-    if (moedaEscolhida === 'gold' && a.moeda !== 'gold' && (a.tipo === 'pokemon' || a.tipo === 'diamante')) {
-      return avisarAnuncioEmCoins({
-        nome: nomeNoAnuncio(a.ficha), preco: precoDe(), qtd: a.qtd ?? 1, aoSeguir: salvar,
-      });
+    if (moeda === 'gold' && a.moeda !== 'gold' && (a.tipo === 'pokemon' || a.tipo === 'diamante')) {
+      return avisarAnuncioEmCoins({ nome: nomeNoAnuncio(a.ficha), preco, qtd: a.qtd ?? 1, aoSeguir: seguir });
     }
-    salvar();
+    seguir();
   };
 }
 
@@ -34971,8 +39031,10 @@ function assinaturaEquipeBossDe(eu) {
  */
 function renderBosses() {
   return `
-    <p class="boss-intro">${t('boss.intro', { ideal: estado.maxEquipe ?? 5 })}</p>
-    <p class="boss-intro boss-intro-tm">${t('boss.introTm')}</p>
+    <div class="boss-intros">
+      <p class="boss-intro">${t('boss.intro', { ideal: estado.maxEquipe ?? 5 })}</p>
+      <p class="boss-intro boss-intro-tm">${t('boss.introTm')}</p>
+    </div>
     <div class="boss-corpo">
       <div class="boss-lista" id="boss-lista"></div>
       <div class="boss-ficha" id="boss-ficha"></div>
@@ -35056,6 +39118,12 @@ function montarBosses() {
     };
     lista.appendChild(item);
   }
+  // O aberto à vista na lista: no celular ela é uma fita de lado, e o boss de nível alto que o
+  // jogador estava olhando ficaria fora da tela, sem nada dizer qual é o da ficha.
+  lista.querySelector('.boss-item.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  // As duas regras do topo, no celular, viram duas linhas que abrem no toque: eram ~150 px de texto
+  // empurrando a ficha (e as recompensas) para baixo da dobra.
+  dobrarNotaNoCelular($('#modal-corpo .boss-intros'));
   pintarFichaDoBoss();
 }
 
@@ -35077,7 +39145,79 @@ function atualizarContadorBoss(key) {
   }
 }
 
-/** A ficha do boss aberto: arte, selos, drops, entrada, a sua equipe e o botão. */
+/**
+ * A RARIDADE de um prêmio de boss, pela chance de cair — a escada de dopamina do jogo inteiro
+ * (cinza → verde → azul → roxo → ouro, DESIGN.md §1), com os nomes da Casa (`casa.rar.*`).
+ *
+ * A régua é a dos BOSSES, e não a de "comum = metade das vezes": as chances deles vão de 0,0005%
+ * (o MysticTicket) a ~6,5% (as peças dos bosses de cima), e uma régua genérica pintaria os quatro
+ * prêmios de roxo. Com esta, o mesmo boss mostra a escada inteira — e o MysticTicket, que é o
+ * prêmio que se conta para os amigos, é sempre o lendário.
+ */
+function raridadeDoDropBoss(chance) {
+  if (chance == null || chance >= 0.25) return 'comum';
+  if (chance >= 0.02) return 'incomum';
+  if (chance >= 0.005) return 'rara';
+  if (chance >= 0.001) return 'mitica';
+  return 'lendaria';
+}
+
+/** A chance de um prêmio, em %. Ver o comentário das casas em `pintarFichaDoBoss`. */
+function chanceDoDropBoss(chance) {
+  const pct = (chance ?? 0) * 100;
+  // Abaixo de 0,1% vão QUATRO casas: é a faixa do MysticTicket (0,0005% a ~0,02%), e duas casas
+  // arredondariam os 0,005% de um boss alto para "0,01%" — o dobro do que cai de verdade.
+  const casas = pct > 0 && pct < 0.1 ? 4 : 2;
+  const txt = pct.toFixed(casas).replace(/0+$/, '').replace(/\.$/, '');
+  return `${txt.replace('.', ',')}%`;
+}
+
+/**
+ * Uma CARTA de prêmio: o ícone num halo da cor da raridade, nome, quantidade, a chance em % e em
+ * "1 em N vitórias", e quantos o jogador já tem. Mítica e lendária ganham o anel que gira e a
+ * lâmina de luz da Casa (mesmos quadros-chave, `csm-*`) — é o que faz o MysticTicket saltar aos
+ * olhos de quem abre a tela pela primeira vez.
+ */
+function cartaDropBoss(d, i) {
+  const ico = iconeItem(d.itemId);
+  const qtd = d.qtd ? (d.qtd[0] === d.qtd[1] ? `×${d.qtd[0]}` : `×${d.qtd[0]}–${d.qtd[1]}`) : '';
+  const rar = raridadeDoDropBoss(d.chance);
+  const umEm = d.chance ? Math.round(1 / d.chance) : null;
+  const tem = Number(estado.eu?.items?.[d.itemId] ?? 0) || 0;
+  // `nomeItem` e não `d.nome`: o catálogo do servidor é todo em inglês, e era por isso que
+  // "Fragmento de Chave" aparecia traduzido na bolsa e "Mega Stone Fragment" cru aqui.
+  const nome = nomeItem(d.itemId, d.nome);
+  const dica = d.chance != null ? t('boss.umEm', { n: num(umEm) }) : t('boss.sempreDrop');
+  return `
+    <div class="bsr-card rar-${rar}" style="--i:${i}" title="${escapar(`${nome} — ${dica}`)}">
+      <div class="bsr-miolo">
+        <span class="bsr-rar">${t(`casa.rar.${rar}`)}</span>
+        <div class="bsr-ico">${ico ? `<img src="${ico}" alt="">` : ''}</div>
+        <b class="bsr-nome">${escapar(nome)}${qtd ? ` <i>${qtd}</i>` : ''}</b>
+        <span class="bsr-chance">${d.chance != null ? chanceDoDropBoss(d.chance) : t('boss.sempreDrop')}</span>
+        <span class="bsr-linha">
+          ${umEm ? `<span class="bsr-umem">${t('boss.umEmCurto', { n: num(umEm) })}</span>` : ''}
+          <span class="bsr-tem${tem ? '' : ' zero'}">${t('boss.voceTem', { n: num(tem) })}</span>
+        </span>
+      </div>
+    </div>`;
+}
+
+/**
+ * A ficha do boss aberto, em três faixas que cabem na tela sem rolar:
+ *
+ *   · o HERÓI — a arte na arena (o brilho é a cor do tipo dele), nome, selos, tipos e fraquezas;
+ *   · as RECOMPENSAS — cartas de raridade, a faixa do meio, que é o que faz alguém querer lutar;
+ *   · o RODAPÉ — entrada, a sua equipe, a penalidade, "Desafiar" e o repetir.
+ *
+ * As recompensas moravam embaixo de tudo, numa coluna que rolava — no desktop, NENHUM prêmio
+ * aparecia sem rolar, e um jogador novo perguntou com razão como ia saber que havia algo ali. A
+ * arte de 150 px encolheu para a arena do herói, tipos e fraquezas viraram uma linha, e o espaço
+ * que sobrou é das cartas.
+ *
+ * A entrada animada (a arte subindo, as cartas em cascata) só toca quando o BOSS muda: a ficha
+ * também é repintada quando o "Repetir" liga ou desliga, e ali a cascata seria ruído.
+ */
 function pintarFichaDoBoss() {
   const host = $('#boss-ficha');
   if (!host) return;
@@ -35085,54 +39225,22 @@ function pintarFichaDoBoss() {
   const b = estado.bossesCatalogo.find((x) => x.key === bossAberto);
   if (!b) return void (host.innerHTML = '');
   const ficha = fichaDoBoss(b.key);
+  const novo = host.dataset.boss !== b.key;
+  host.dataset.boss = b.key;
+  host.classList.toggle('entrando', novo);
 
-  // Drops: os da ficha vêm com ícone, quantidade e chance; os da galeria são só nomes —
-  // é o que o original também mostra para quem ainda não abriu.
-  //
-  // DUAS casas, e sem zero à direita. Uma casa só arredondava o Fragmento de Mega Shiny Stone
-  // de 0,25% para "0,3%" — um número que o jogador compara lado a lado com os 0,5% do
-  // fragmento comum, e em que meio ponto percentual muda a conta do quanto vai farmar. O corte
-  // dos zeros é o que mantém "0,5%" e "1%" curtos em vez de "0,50%" e "1,00%".
-  const fmtChance = (chance) => {
-    const pct = (chance ?? 0) * 100;
-    // Abaixo de 0,1% vão QUATRO casas: é a faixa do MysticTicket (0,0005% a ~0,02%), e duas casas
-    // arredondariam os 0,005% de um boss alto para "0,01%" — o dobro do que cai de verdade.
-    const casas = pct > 0 && pct < 0.1 ? 4 : 2;
-    const txt = pct.toFixed(casas).replace(/0+$/, '').replace(/\.$/, '');
-    return `${txt.replace('.', ',')}%`;
-  };
-  const fmtDrop = (d) => {
-    const ico = iconeItem(d.itemId);
-    const qtd = d.qtd ? (d.qtd[0] === d.qtd[1] ? `×${d.qtd[0]}` : `×${d.qtd[0]}–${d.qtd[1]}`) : '';
-    const chance = d.chance != null
-      ? `<em>${t('boss.chancePorVitoria', { pct: fmtChance(d.chance) })}</em>`
-      : `<em>${t('boss.sempreDrop')}</em>`;
-    // `nomeItem` e não `d.nome`: o catálogo do servidor é todo em inglês, e era por isso que
-    // "Fragmento de Chave" aparecia traduzido na bolsa e "Mega Stone Fragment" cru aqui.
-    return `<span class="boss-drop">
-      ${ico ? `<img src="${ico}" alt="">` : ''}${escapar(nomeItem(d.itemId, d.nome))}
-      <b>${qtd}</b>${chance}</span>`;
-  };
-  const drops = ficha
-    ? ficha.drops.map(fmtDrop).join('')
-    : (b.drops ?? []).map((d) => `<span class="boss-drop">${escapar(d)}</span>`).join('');
-  const tmPecas = ficha?.drops?.filter((d) => /tm|piece/i.test(d.nome)) ?? [];
-  const blocoTm = tmPecas.length
-    ? `<div class="boss-tm-pecas">
-        <b>${t('boss.tmPecas')}</b>
-        <div class="boss-droplista">${tmPecas.map((d) => {
-          const ico = iconeItem(d.itemId);
-          const pct = d.chance != null ? fmtChance(d.chance) : '—';
-          return `<span class="boss-drop boss-drop-tm">
-            ${ico ? `<img src="${ico}" alt="">` : ''}${escapar(nomeItem(d.itemId, d.nome))}
-            <b>${t('boss.chancePorVitoria', { pct })}</b></span>`;
-        }).join('')}</div>
-      </div>`
-    : '';
+  // Da mais comum à mais rara, da esquerda para a direita: a fileira termina no prêmio grande.
+  // O boss sem arena só tem os nomes do catálogo (é o que o original também mostra).
+  const cartas = ficha
+    ? [...ficha.drops]
+      .sort((x, y) => (y.chance ?? 1) - (x.chance ?? 1))
+      .map(cartaDropBoss)
+      .join('')
+    : (b.drops ?? []).map((d, i) => `
+        <div class="bsr-card rar-comum" style="--i:${i}">
+          <div class="bsr-miolo"><b class="bsr-nome">${escapar(d)}</b></div>
+        </div>`).join('');
 
-  // A arte e os drops rolam; a entrada, a equipe e o botão NÃO. O que decide se vale a
-  // pena entrar tem de estar sempre à vista — um "Desafiar" que só aparece depois de rolar
-  // é um botão que metade das pessoas não encontra.
   const nvMin = ficha?.minNivelTreinador ?? b.minNivelTreinador ?? b.level ?? 0;
   const nvTreinador = estado.eu?.level ?? 0;
   const nvOk = nvTreinador >= nvMin;
@@ -35140,41 +39248,44 @@ function pintarFichaDoBoss() {
   const { fracos: fraquezasBoss } = tiposBoss.length
     ? matchupDefensivo(tiposBoss, estado.tabelaTipos)
     : { fracos: [] };
-  const blocoTiposBoss = tiposBoss.length
-    ? `<div class="boss-tipos">
-        <b>${t('boss.tipos')}</b>
-        <div class="boss-tipos-linha">${selosDeTipo(tiposBoss)}</div>
-      </div>`
-    : '';
-  const blocoFraquezas = fraquezasBoss.length
-    ? `<div class="boss-fraquezas">
-        <b>${t('boss.fraquezas')}</b>
-        ${blocoTiposAnalyser(fraquezasBoss, false, true)}
+  // A cor do brilho da arena é a do tipo principal — a mesma variável dos selos de tipo.
+  const tipoCor = /^[A-Z]+$/.test(tiposBoss[0] ?? '') ? tiposBoss[0] : null;
+  const linhaTipos = tiposBoss.length
+    ? `<div class="bsh-tipos">
+        ${selosDeTipo(tiposBoss)}
+        ${fraquezasBoss.length
+          ? `<span class="bsh-fraco">${t('boss.fracoA')}</span>${blocoTiposAnalyser(fraquezasBoss, false, true)}`
+          : ''}
       </div>`
     : '';
 
   host.innerHTML = `
-    <div class="boss-rolagem">
-      <div class="boss-arte"></div>
-      <h4 class="boss-nome">${escapar(b.name)}</h4>
-      <div class="boss-selos">
-        <span class="boss-cat">${escapar(b.category)}</span>
-        <span class="boss-nv">${t('boss.nivel', { nv: num(b.level) })}</span>
-        ${ficha ? `<span class="boss-nv-min ${nvOk ? '' : 'travado'}">${t('boss.nivelMinTreinador', { nv: num(nvMin) })}</span>` : ''}
-        ${ficha ? '' : `<span class="boss-embreve">${t('boss.emBreve')}</span>`}
-        <span class="boss-vitorias">${t('boss.vitorias', { n: num(vezesDerrotadoBoss(b.key)) })}</span>
+    <div class="bsh">
+      <div class="bsh-arena"${tipoCor ? ` style="--bsh-cor: var(--t-${tipoCor})"` : ''}>
+        <div class="boss-arte"></div>
       </div>
-      ${blocoTiposBoss}
-      ${blocoFraquezas}
-      <div class="boss-drops">
-        <b>${t('boss.recompensas')}</b>
-        <div class="boss-droplista">${drops || `<span class="boss-drop">—</span>`}</div>
+      <div class="bsh-info">
+        <h4 class="boss-nome">${escapar(b.name)}</h4>
+        <div class="boss-selos">
+          <span class="boss-cat">${escapar(b.category)}</span>
+          <span class="boss-nv">${t('boss.nivel', { nv: num(b.level) })}</span>
+          ${ficha ? `<span class="boss-nv-min ${nvOk ? '' : 'travado'}">${t('boss.nivelMinTreinador', { nv: num(nvMin) })}</span>` : ''}
+          ${ficha ? '' : `<span class="boss-embreve">${t('boss.emBreve')}</span>`}
+          <span class="boss-vitorias">${t('boss.vitorias', { n: num(vezesDerrotadoBoss(b.key)) })}</span>
+        </div>
+        ${linhaTipos}
       </div>
-      ${blocoTm}
     </div>
+    <section class="bsr">
+      <header class="bsr-topo">
+        <b>${t('boss.recompensas')}</b>
+        ${ficha ? `<em>${t('boss.recompensasDica')}</em>` : ''}
+      </header>
+      <div class="bsr-grade">${cartas || '<span class="bsr-vazio">—</span>'}</div>
+    </section>
     <div class="boss-rodape"></div>`;
 
-  preencherArteBoss(host.querySelector('.boss-arte'), b, 96);
+  preencherArteBoss(host.querySelector('.boss-arte'), b, 88);
 
   const rodape = host.querySelector('.boss-rodape');
 
@@ -35257,7 +39368,9 @@ function linhaAutoBoss(b, tokens) {
   return el;
 }
 
-const nomeDoBoss = (key) => estado.bossesCatalogo.find((x) => x.key === key)?.name ?? key;
+const nomeDoBoss = (key) => (key === BOSS_TODOS
+  ? t('rk.bossTodos')
+  : estado.bossesCatalogo.find((x) => x.key === key)?.name ?? key);
 
 // ----------------------------------------------------------------- ranking
 //
@@ -35272,14 +39385,15 @@ const nomeDoBoss = (key) => estado.bossesCatalogo.find((x) => x.key === key)?.na
 const ABAS_RANKING = [
   // `nome` e `destaque` são CHAVES de i18n, não texto: quem desenha resolve com `t()`. Guardar
   // a frase pronta aqui congelaria o idioma do primeiro render.
-  { id: 'nivel', nome: 'rk.treinadores', destaque: 'rk.maiorNivel' },
-  { id: 'poder', nome: 'rk.pokemonForte', destaque: 'rk.maisForte' },
-  { id: 'capturas', nome: 'rk.topCatch', destaque: 'rk.maisEspecies' },
-  { id: 'coins', nome: 'rk.topCoins', destaque: 'rk.maisCoins' },
-  { id: 'elo', nome: 'rk.arenaPvp', destaque: 'rk.maiorElo' },
-  { id: 'bosses', nome: 'rk.bosses', destaque: 'rk.maisVitoriasBoss' },
-  { id: 'guild', nome: 'rk.guild', destaque: 'rk.maisGp' },
-  { id: 'guildGlobal', nome: 'rk.guildGlobal', destaque: 'rk.maisGpGlobal' },
+  // `ico` é o nome de um desenho de `DLG_ICONES` — a aba se acha pelo ícone antes do nome.
+  { id: 'nivel', nome: 'rk.treinadores', destaque: 'rk.maiorNivel', ico: 'subir' },
+  { id: 'poder', nome: 'rk.pokemonForte', destaque: 'rk.maisForte', ico: 'espadas' },
+  { id: 'capturas', nome: 'rk.topCatch', destaque: 'rk.maisEspecies', ico: 'olho' },
+  { id: 'coins', nome: 'rk.topCoins', destaque: 'rk.maisCoins', ico: 'moedas' },
+  { id: 'elo', nome: 'rk.arenaPvp', destaque: 'rk.maiorElo', ico: 'trofeu' },
+  { id: 'bosses', nome: 'rk.bosses', destaque: 'rk.maisVitoriasBoss', ico: 'coroa' },
+  { id: 'guild', nome: 'rk.guild', destaque: 'rk.maisGp', ico: 'escudo' },
+  { id: 'guildGlobal', nome: 'rk.guildGlobal', destaque: 'rk.maisGpGlobal', ico: 'grupo' },
 ];
 
 /**
@@ -35376,16 +39490,42 @@ function pintarLegendaPvp() {
   if (!el) return;
   el.classList.remove('hidden');
   // A legenda mostra o que ESTÁ EM JOGO, e não mais um bônus permanente de farm: a posição
-  // agora paga uma vez, na virada da semana, em boost. As três linhas são as três faixas de
-  // `PVP_PREMIOS` — se elas mudarem no shared, este texto tem de mudar junto.
+  // agora paga uma vez, na virada da semana. Uma linha por faixa, escrita a partir da MESMA tabela
+  // com que o servidor paga (`PVP_PREMIOS`) — era texto à mão, e envelhecia no primeiro ajuste.
+  let de = 1;
+  const linhas = PVP_PREMIOS.map((f) => {
+    const faixa = { de, ate: f.ate };
+    de = f.ate + 1;
+    return `<li><b>${escapar(rotuloDasPosicoesPvp(faixa))}</b> → ${escapar(textoDoPremioPvp(f.horas, f.diamantes))}</li>`;
+  }).join('');
   el.innerHTML = `
     <p class="rk-guild-legenda-tit">${t('rk.pvpPremiosTitulo')}</p>
-    <ul class="rk-guild-legenda-lista">
-      <li>${t('rk.pvpPremio1')}</li>
-      <li>${t('rk.pvpPremio2')}</li>
-      <li>${t('rk.pvpPremio3')}</li>
-    </ul>
+    <ul class="rk-guild-legenda-lista">${linhas}</ul>
     <p class="rk-guild-legenda-nota">${t('rk.pvpPremiosNota', { horas: PVP_DECAIMENTO_HORAS })}</p>`;
+}
+
+/**
+ * O PRÊMIO DO MÊS nas três abas de treinador (Treinadores, Top Catch, Top Coins): a escada sai da
+ * MESMA tabela com que o servidor paga (`shared/ranking-mensal.mjs`), e o selo do 1º é o desenho
+ * daquela aba — o mesmo que aparece no chat.
+ */
+function pintarLegendaRankingMensal(aba) {
+  const el = $('#rk-mensal-legenda');
+  if (!el) return;
+  el.classList.remove('hidden');
+  let de = 1;
+  const linhas = FAIXAS_RANKING_MENSAL.map((f) => {
+    const rotulo = f.ate === de ? `${de}º` : `${de}º–${f.ate}º`;
+    de = f.ate + 1;
+    const selo = f.selo && SELOS_RANKING[aba]
+      ? ` + <img class="rk-mensal-selo" src="${srcIcone(SELOS_RANKING[aba].icone)}" alt="" width="16" height="16"> ${t('rkm.seloChat')}`
+      : '';
+    return `<li><b>${rotulo}</b> → ${num(f.diamantes)} 💎${selo}</li>`;
+  }).join('');
+  el.innerHTML = `
+    <p class="rk-guild-legenda-tit">${t('rkm.titulo')}</p>
+    <ul class="rk-guild-legenda-lista">${linhas}</ul>
+    <p class="rk-guild-legenda-nota">${t('rkm.nota')}</p>`;
 }
 
 function pintarLegendaPoder() {
@@ -35407,7 +39547,7 @@ function renderRanking() {
   return `
     <div class="rk-abas">
       ${ABAS_RANKING.map(
-        (a) => `<button class="rk-aba ${a.id === aba ? 'on' : ''}" data-aba="${a.id}">${t(a.nome)}</button>`,
+        (a) => `<button class="rk-aba ${a.id === aba ? 'on' : ''}" data-aba="${a.id}">${dlgIcone(a.ico, 13)}<span>${t(a.nome)}</span></button>`,
       ).join('')}
     </div>
     <div class="rk-corpo">
@@ -35420,7 +39560,11 @@ function renderRanking() {
         <div class="rk-guild-legenda hidden" id="rk-guild-global-legenda"></div>
         <div class="rk-guild-legenda hidden" id="rk-pvp-legenda"></div>
         <div class="rk-guild-legenda hidden" id="rk-poder-legenda"></div>
+        <div class="rk-guild-legenda hidden" id="rk-mensal-legenda"></div>
         <div class="rk-podio" id="rk-podio"></div>
+        <!-- SUA POSIÇÃO: onde eu estou nesta aba e quanto falta para subir um degrau (ou para
+             entrar no placar). Gruda no alto enquanto a lista rola. -->
+        <div class="rk-voce hidden" id="rk-voce"></div>
         <div class="filtro-linha"><input id="rk-busca" placeholder="buscar treinador…" autocomplete="off"></div>
         <div class="rk-linhas" id="rk-linhas"></div>
       </div>
@@ -35445,11 +39589,12 @@ const souEu = (l, aba) =>
     ? estado.eu?.guild?.id === l.id
     : (ehLinhaPokemon(l) ? l.nick : l.nick) === estado.eu?.nick;
 
-/** Boss padrão do placar — o primeiro jogável, ou regice se existir. */
+/**
+ * Boss padrão do placar: "Todos" — a soma das vitórias em todos os bosses. É o placar que diz quem
+ * mais vence boss no jogo (e o que leva o prêmio do mês); um boss em particular fica no seletor.
+ */
 function bossKeyRankingPadrao() {
-  const lista = estado.bossesJogaveis ?? [];
-  if (!lista.length) return '';
-  return lista.find((b) => b.key === 'regice')?.key ?? lista[0].key;
+  return BOSS_TODOS;
 }
 
 /** Linhas do placar da aba atual — bosses usa cache por `bossKey`. */
@@ -35470,15 +39615,22 @@ function pintarSelectBossRanking() {
     (a, b) => (a.minNivelTreinador ?? a.level ?? 0) - (b.minNivelTreinador ?? b.level ?? 0)
       || String(a.nome ?? a.name ?? '').localeCompare(String(b.nome ?? b.name ?? '')),
   );
-  host.innerHTML = ordenados.map(
-    (b) => `<option value="${escapar(b.key)}"${b.key === atual ? ' selected' : ''}>${escapar(b.nome ?? b.name ?? b.key)}</option>`,
-  ).join('');
+  // "Todos" abre a lista: é o padrão, e o único com prêmio do mês.
+  host.innerHTML = `<option value="${BOSS_TODOS}"${atual === BOSS_TODOS ? ' selected' : ''}>${escapar(t('rk.bossTodos'))}</option>`
+    + ordenados.map(
+      (b) => `<option value="${escapar(b.key)}"${b.key === atual ? ' selected' : ''}>${escapar(b.nome ?? b.name ?? b.key)}</option>`,
+    ).join('');
 }
 
-function pedirRankingBoss(key) {
+/**
+ * Pede o placar de um boss (ou do "Todos"). Sem `forcar`, o que já veio nesta sessão é reaproveitado —
+ * é a troca de opção no seletor. Ao ABRIR o Ranking pede de novo, como as outras abas: sem isso o placar
+ * de boss ficava congelado no primeiro que veio, até recarregar a página.
+ */
+function pedirRankingBoss(key, { forcar = false, selecionar = true } = {}) {
   if (!key) return;
-  estado.rankingBossKey = key;
-  if (estado.rankingBoss?.[key]) return;
+  if (selecionar) estado.rankingBossKey = key;
+  if (!forcar && estado.rankingBoss?.[key]) return;
   enviar({ t: 'ranking.pedir', aba: 'bosses', bossKey: key });
 }
 
@@ -35496,10 +39648,15 @@ function pintarRanking() {
   $('#rk-guild-global-legenda')?.classList.toggle('hidden', aba !== 'guildGlobal');
   $('#rk-pvp-legenda')?.classList.toggle('hidden', aba !== 'elo');
   $('#rk-poder-legenda')?.classList.toggle('hidden', aba !== 'poder');
+  // A legenda do prêmio do mês: nas abas premiadas — e, em Bosses, só no "Todos", que é o placar pago.
+  const comPremioMensal = PLACARES_MENSAIS.includes(aba)
+    && (aba !== 'bosses' || (estado.rankingBossKey || bossKeyRankingPadrao()) === BOSS_TODOS);
+  $('#rk-mensal-legenda')?.classList.toggle('hidden', !comPremioMensal);
   if (aba === 'guild') pintarLegendaGuild();
   if (aba === 'guildGlobal') pintarLegendaGuildGlobal();
   if (aba === 'elo') pintarLegendaPvp();
   if (aba === 'poder') pintarLegendaPoder();
+  if (comPremioMensal) pintarLegendaRankingMensal(aba);
 
   if (!linhas) {
     podio.innerHTML = '';
@@ -35509,7 +39666,9 @@ function pintarRanking() {
   if (!linhas.length) {
     podio.innerHTML = '';
     const msg = aba === 'bosses'
-      ? t('rk.bossVazio', { boss: nomeDoBoss(estado.rankingBossKey || bossKeyRankingPadrao()) })
+      ? ((estado.rankingBossKey || bossKeyRankingPadrao()) === BOSS_TODOS
+        ? t('rk.bossTodosVazio')
+        : t('rk.bossVazio', { boss: nomeDoBoss(estado.rankingBossKey || bossKeyRankingPadrao()) }))
       : 'ninguém no ranking ainda. Seja o primeiro! 🚀';
     lista.innerHTML = `<div class="aviso-modal">${msg}</div>`;
     return;
@@ -35558,6 +39717,7 @@ function pintarRanking() {
   for (const l of resto) {
     const el = document.createElement('div');
     el.className = 'rk-linha' + (souEu(l, aba) ? ' eu' : '');
+    el.dataset.rank = String(l.rank);
     el.innerHTML = `
       <span class="rk-pos">${l.rank}</span>
       <span class="rk-ava"></span>
@@ -35578,7 +39738,102 @@ function pintarRanking() {
   }
   if (!resto.length) lista.innerHTML = '<div class="aviso-modal">— fim do ranking —</div>';
 
+  pintarMinhaPosicaoRanking(aba, linhas);
   pintarDestaques();
+}
+
+/**
+ * O MEU número nesta aba, quando a tela o conhece sem perguntar ao servidor — o mesmo que a consulta
+ * do placar ordena (`db.ranking*`). `null` onde não conhece (PvP, guild): ali o cartão só fala da
+ * posição quando eu ESTOU na lista.
+ */
+function meuValorRanking(aba) {
+  const e = estado.eu;
+  if (!e) return null;
+  switch (aba) {
+    case 'nivel': return Number(e.xp) || 0;
+    case 'coins': return Number(e.gold) || 0;
+    case 'poder': return (e.pokemons ?? []).reduce((m, p) => Math.max(m, Number(p.poder) || 0), 0);
+    case 'capturas': return Object.values(e.pokedex ?? {}).filter((v) => Number(v?.c) > 0).length;
+    case 'bosses': {
+      const key = estado.rankingBossKey || bossKeyRankingPadrao();
+      const kills = e.automation?.bossKills ?? {};
+      // "Todos" é a soma das vitórias em todos os bosses — a mesma conta do placar.
+      if (key === BOSS_TODOS) return Object.values(kills).reduce((s, n) => s + (Number(n) || 0), 0);
+      return Number(kills[key]) || 0;
+    }
+    default: return null;
+  }
+}
+
+/** Quanto falta, escrito como a aba escreve o número dela ("12.345 XP", "⚔ 900", "3 espécies"…). */
+const faltaRanking = (aba, v) => VALOR_RANKING[aba]({ valor: Math.max(1, Math.ceil(v)) });
+
+/**
+ * O cartão SUA POSIÇÃO. Na lista: o meu lugar, a barra entre quem está logo abaixo e quem está logo
+ * acima, e quanto falta para passá-lo. Fora dela: quanto falta para entrar no placar (quando a tela
+ * sabe o meu número) — a meta que traz o jogador de volta. Com o botão, a minha linha pisca à vista.
+ */
+function pintarMinhaPosicaoRanking(aba, linhas) {
+  const host = $('#rk-voce');
+  if (!host) return;
+  const guild = ehAbaGuild(aba);
+  if (guild && !estado.eu?.guild?.id) {
+    host.classList.add('hidden');
+    return;
+  }
+  const i = linhas.findIndex((l) => souEu(l, aba));
+  const eu = i >= 0 ? linhas[i] : null;
+  const meu = eu ? Number(eu.valor) || 0 : meuValorRanking(aba);
+  let texto;
+  let barra = null;
+  if (eu && eu.rank === 1) {
+    texto = t('rk.voceTopo');
+    barra = 1;
+  } else if (eu) {
+    const acima = linhas[i - 1];
+    const abaixo = linhas[i + 1];
+    texto = t('rk.vocePassar', { v: faltaRanking(aba, (Number(acima.valor) || 0) - meu), nick: escapar(guild ? acima.nome : acima.nick) });
+    const piso = abaixo ? Number(abaixo.valor) || 0 : 0;
+    const teto = Number(acima.valor) || 0;
+    barra = teto > piso ? (meu - piso) / (teto - piso) : 1;
+  } else if (meu != null && linhas.length >= 50) {
+    texto = t('rk.voceEntrar', { v: faltaRanking(aba, (Number(linhas[linhas.length - 1].valor) || 0) - meu + 1), n: linhas.length });
+    barra = Number(linhas[linhas.length - 1].valor) > 0 ? meu / Number(linhas[linhas.length - 1].valor) : 0;
+  } else {
+    texto = t(guild ? 'rk.voceGuildFora' : 'rk.voceFora', { n: linhas.length || 50 });
+  }
+  host.classList.remove('hidden');
+  host.classList.toggle('topo', eu?.rank === 1);
+  host.innerHTML = `
+    <span class="rk-voce-ava"></span>
+    <span class="rk-voce-pos">${eu ? `<b>${num(eu.rank)}º</b>` : '<b>—</b>'}<small>${t('rk.voceTitulo')}</small></span>
+    <span class="rk-voce-meio">
+      <b>${eu ? VALOR_RANKING[aba](eu) : meu != null ? VALOR_RANKING[aba]({ valor: meu }) : ''}</b>
+      <small>${texto}</small>
+      ${barra != null ? `<span class="gin-barra${eu?.rank === 1 ? ' ouro' : ''}"><i style="--p:${Math.max(0, Math.min(1, barra)).toFixed(3)}"></i></span>` : ''}
+    </span>
+    ${eu && eu.rank > 3 ? `<button type="button" class="rk-voce-ir">${t('rk.voceVerLinha')}</button>` : ''}`;
+  host.querySelector('.rk-voce-ava').appendChild(
+    eu
+      ? avatarRanking(eu, 34, aba)
+      : guild
+        ? Object.assign(document.createElement('span'), { className: 'rk-brasao' })
+        : spriteAnimado(estado.eu?.loja?.looktype ?? LOOKTYPE_TREINADOR, 34, 3, null, empacotarVisual(estado.eu?.loja?.visual), { treinador: true }),
+  );
+  host.querySelector('.rk-voce-ir')?.addEventListener('click', () => {
+    // A busca pode estar escondendo a minha linha: limpa antes de procurar.
+    if ((estado.buscaRanking ?? '').trim()) {
+      estado.buscaRanking = '';
+      const busca = $('#rk-busca');
+      if (busca) busca.value = '';
+      pintarRanking();
+    }
+    const minha = $(`#rk-linhas .rk-linha[data-rank="${eu.rank}"]`);
+    if (!minha) return;
+    minha.scrollIntoView({ block: 'center', behavior: menosMovimento() ? 'auto' : 'smooth' });
+    pularEco(minha, 'acende');
+  });
 }
 
 /** Coluna da direita: o primeiro colocado de cada aba, de relance. */
@@ -35587,13 +39842,23 @@ function pintarDestaques() {
   if (!host) return;
   host.innerHTML = '<h3>Destaques</h3>';
   for (const a of ABAS_RANKING) {
+    // O destaque de Bosses é SEMPRE o "Todos" (quem mais venceu boss no jogo), seja qual for o boss
+    // escolhido no seletor — era o líder de um boss só (o Regice), e dizia "Mais vitórias" com 871
+    // de quem tinha 5.902 no total.
     const topo = a.id === 'bosses'
-      ? estado.rankingBoss?.[estado.rankingBossKey || bossKeyRankingPadrao()]?.[0]
+      ? estado.rankingBoss?.[BOSS_TODOS]?.[0]
       : estado.ranking[a.id]?.[0];
-    const el = document.createElement('div');
-    el.className = 'rk-destaque';
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = `rk-destaque${a.id === (estado.abaRanking ?? 'nivel') ? ' on' : ''}`;
+    el.title = t('rk.destaqueIr');
+    el.onclick = () => {
+      if (a.id === (estado.abaRanking ?? 'nivel')) return;
+      for (const b of document.querySelectorAll('.rk-aba')) b.classList.toggle('on', b.dataset.aba === a.id);
+      abrirAbaRanking(a.id);
+    };
     el.innerHTML = `
-      <span class="rk-d-rot">${t(a.destaque)}</span>
+      <span class="rk-d-rot">${dlgIcone(a.ico, 12)}${t(a.destaque)}</span>
       <span class="rk-d-val">${
         topo && (!ehAbaGuild(a.id) || gpRankingGuild(topo) > 0)
           ? `${escapar(ehAbaGuild(a.id) ? topo.nome : ehLinhaPokemon(topo) ? topo.nome : topo.nick)} · ${VALOR_RANKING[a.id](topo)}`
@@ -37275,7 +41540,7 @@ function corpoDaEspecie(especie) {
         : `<div class="fi-placas">
              ${ehMega
                ? fiPlaca(t('dex.comoObter'), t('dex.megaShinyComoObter'), { icone: 'brilho', classe: 'largo texto shiny' })
-               : `${fiPlaca(t('dex.chanceEncontro'), umEm(chanceShiny), { icone: 'olho', sub: pct(chanceShiny), classe: 'shiny' })}
+               : `${fiPlaca(t('dex.chanceTentativa'), umEm(chanceShiny), { icone: 'olho', sub: pct(chanceShiny), classe: 'shiny' })}
                   ${fiPlaca(t('dex.comIsca'), umEm(chanceShiny * 2), { icone: 'brilho', sub: pct(chanceShiny * 2), classe: 'shiny' })}`}
              ${fiPlaca(t('dex.bonusShiny'), `×${estado.multShinyStats}`, { icone: 'subir', sub: t('dex.emTodosStats'), classe: 'shiny' })}
            </div>`,
@@ -37471,7 +41736,7 @@ function corpoDoPokemon(pk) {
   return `
     <div class="fi-heroi">
       <div class="fi-heroi-info">
-        <div class="fi-nome">${pk.shiny ? prefixoShiny() : ''}${escapar(nomeExibidoPokemon(pk) || '—')}${seloRefino(pk)}</div>
+        <div class="fi-nome">${coroaPkHtml(pk)}${pk.shiny ? prefixoShiny() : ''}${escapar(nomeExibidoPokemon(pk) || '—')}${seloRefino(pk)}</div>
         <div class="fi-heroi-sub">
           <span class="fi-nivel-chip">${t('cm.nivel')} ${num(nivel)}</span>
           ${apelidoDe(pk) ? `<span class="fi-apelido">${t('nametag.fichaEspecie', { especie: escapar(pk.nome ?? '—') })}</span>` : ''}
@@ -37539,6 +41804,8 @@ const FRAC_MORTE_BLESS = { blessplus: 0.08, blessultra: 0.03, blessmax: 0 };
 const FRAC_MORTE_PADRAO = 0.1;
 function xpPerdaDesistenciaPrevista(e) {
   if (!e) return { xp: 0, pct: 10 };
+  // Com o Boost dos Atrasados ligado o servidor não cobra perda nenhuma (`aplicarPerdaDeXpTreinador`).
+  if (e.loja?.atrasados) return { xp: 0, pct: 0, atrasados: Number(e.loja.atrasados.alvo) || 0 };
   const piso = xpTotalParaNivelCliente(e.level ?? 1);
   const dentro = Math.max(0, (e.xp ?? 0) - piso);
   const frac = e.bless != null ? (FRAC_MORTE_BLESS[e.bless] ?? FRAC_MORTE_PADRAO) : FRAC_MORTE_PADRAO;
@@ -37548,7 +41815,7 @@ function xpPerdaDesistenciaPrevista(e) {
 function confirmarDesistenciaCombate() {
   const e = estado.eu;
   if (!e?.huntSlug || e.noCentro || e.boss?.arena || e.mistico) return;
-  const { xp, pct } = xpPerdaDesistenciaPrevista(e);
+  const { xp, pct, atrasados } = xpPerdaDesistenciaPrevista(e);
   const ativo = e.pokemons?.find((p) => p.id === e.activeId) ?? e.pokemons?.[0] ?? null;
   // A bandeira branca: o pokémon que está lutando, sem cor, e a seta para o Centro. O preço da
   // desistência (o XP) é o aviso em caixa — é o número que a pessoa precisa ler antes do clique.
@@ -37565,9 +41832,11 @@ function confirmarDesistenciaCombate() {
         ${dlgSeta()}
         ${dlgAtor({ arte: dlgArteHtml(dlgMedalha({ icone: 'cura', tom: 'verde' })), nome: escapar(t('dlg.centro')) })}`, 'perigo')}
       ${dlgFrase('', escapar(t('cena.desistirTexto')))}
-      ${xp > 0
-        ? dlgAviso(t('cena.desistirXpPerda', { xp: num(xp), pct }))
-        : dlgAviso(t('cena.desistirXpZero'), { icone: 'check', tom: 'info' })}
+      ${atrasados
+        ? dlgAviso(t('cena.desistirXpAtrasados', { alvo: num(atrasados) }), { icone: 'check', tom: 'info' })
+        : xp > 0
+          ? dlgAviso(t('cena.desistirXpPerda', { xp: num(xp), pct }))
+          : dlgAviso(t('cena.desistirXpZero'), { icone: 'check', tom: 'info' })}
       <p class="confirmar-desistir-nota">${t('cena.desistirAutoHunt')}</p>`,
     tom: 'perigo',
     aoConfirmar: () => enviar({ t: 'centro.desistir' }),
@@ -37705,10 +41974,79 @@ const fecharFicha = () => {
   fichaCompartilharPkId = null;
   $('#ficha-compartilhar')?.classList.add('hidden');
   $('#ficha').classList.add('hidden');
+  fichaAtual = null;
+  historicoFicha.length = 0;
 };
 
-/** Põe a ficha na tela e liga o que dentro dela precisa de JS (sprites, ícones, botões). */
-function mostrarFicha(titulo, html, aoMontar) {
+// O caminho de volta DENTRO da ficha — o mesmo `‹` do modal comum (ver `historicoModal`).
+//
+// A ficha troca de conteúdo no lugar: a evolução leva à ficha da espécie seguinte, o "Ver
+// espécie" troca o bicho pela espécie dele. Cada troca é uma janela nova por cima da mesma caixa,
+// e o pokémon de onde se partiu (o Dragonite do anúncio, o shiny da vitrine) sumia — para revê-lo,
+// fechar e clicar de novo no card, se o card ainda estivesse à vista.
+
+/** A ficha à vista: `{ chave, titulo, reabrir }`. A chave diz se uma remontagem é a MESMA ficha. */
+let fichaAtual = null;
+/** As fichas de antes, da mais antiga para a mais recente, com a rolagem de cada uma. */
+const historicoFicha = [];
+/** Ligado enquanto o `‹` reabre a ficha anterior: aí a troca não anota caminho. */
+let fichaVoltando = false;
+
+function pintarVoltaDaFicha() {
+  const bt = $('#ficha-voltar');
+  if (!bt) return;
+  const anterior = historicoFicha.at(-1);
+  bt.classList.toggle('hidden', !anterior);
+  if (!anterior) return;
+  const dica = t('modal.voltarPara', { tela: anterior.titulo });
+  bt.title = dica;
+  bt.setAttribute('aria-label', dica);
+}
+
+function voltarFicha() {
+  const anterior = historicoFicha.pop();
+  if (!anterior) return;
+  fichaVoltando = true;
+  try {
+    anterior.reabrir();
+  } finally {
+    fichaVoltando = false;
+  }
+  aplicarRolagens($('#ficha-corpo'), anterior.rolagem);
+}
+
+/**
+ * A ficha aberta com o caminho dela, para reabrir depois de sair para outra tela — o boss da
+ * Pokédex, que fecha a ficha para abrir a aba Bosses.
+ */
+function guardarFicha() {
+  if (!fichaAtual || $('#ficha').classList.contains('hidden')) return null;
+  return { ...fichaAtual, rolagem: lerRolagens($('#ficha-corpo')), pilha: [...historicoFicha] };
+}
+
+function reabrirFicha(guardada) {
+  if (!guardada) return;
+  guardada.reabrir();
+  historicoFicha.splice(0, historicoFicha.length, ...guardada.pilha);
+  pintarVoltaDaFicha();
+  aplicarRolagens($('#ficha-corpo'), guardada.rolagem);
+}
+
+/**
+ * Põe a ficha na tela e liga o que dentro dela precisa de JS (sprites, ícones, botões).
+ *
+ * `qual` identifica a ficha para o caminho de volta (ver `fichaAtual`): abrir uma ficha DIFERENTE
+ * com outra já à vista anota a de antes; a mesma (o refino redesenhando o bicho) não anota nada.
+ */
+function mostrarFicha(titulo, html, aoMontar, qual = null) {
+  const aberta = !$('#ficha').classList.contains('hidden');
+  if (!aberta) historicoFicha.length = 0;
+  else if (!fichaVoltando && fichaAtual && qual?.chave !== fichaAtual.chave) {
+    historicoFicha.push({ ...fichaAtual, rolagem: lerRolagens($('#ficha-corpo')) });
+    if (historicoFicha.length > MAX_HISTORICO_MODAL) historicoFicha.shift();
+  }
+  fichaAtual = qual ? { ...qual, titulo } : null;
+  pintarVoltaDaFicha();
   $('#ficha-titulo').textContent = titulo;
   // O invólucro `.fi-corpo` é o container das `@container` da ficha. Fica DENTRO do elemento que
   // rola, e não nele: contenção no próprio rolador atrapalhava a conta da rolagem, e o fim da
@@ -37727,12 +42065,18 @@ function mostrarFicha(titulo, html, aoMontar) {
   $('#ficha').classList.remove('hidden');
 }
 
-/** Fecha a ficha da Pokédex e abre a aba Bosses com o boss da espécie selecionado. */
+/**
+ * Fecha a ficha da Pokédex e abre a aba Bosses com o boss da espécie selecionado.
+ *
+ * A volta reabre a tela de trás (a Pokédex, na rolagem em que estava) E a ficha por cima dela,
+ * com o caminho de fichas dela: quem foi conferir o boss do Charizard quer voltar ao Charizard.
+ */
 function abrirBossDaPokedex(key) {
   if (!key || !estado.bossesCatalogo?.some((b) => b.key === key)) return;
   bossAberto = key;
+  const ficha = guardarFicha();
   fecharFicha();
-  abrirModal('bosses');
+  abrirModal('bosses', ficha ? { volta: { rotulo: ficha.titulo, depois: () => reabrirFicha(ficha) } } : undefined);
 }
 
 function abrirFichaDaEspecie(pokeId) {
@@ -37777,7 +42121,7 @@ function abrirFichaDaEspecie(pokeId) {
         fecharModal();
       };
     }
-  });
+  }, { chave: `esp:${especie.pokeId ?? id}`, reabrir: () => abrirFichaDaEspecie(pokeId) });
 }
 
 /**
@@ -37811,6 +42155,12 @@ function abrirFichaDoPokemon(pk) {
     const baixarNv = $('#fi-baixar-nv');
     if (baixarNv) baixarNv.onclick = () => pedirReducaoNivel(pk);
     ligarBotoesRefino($('#ficha-corpo'), pk);
+  }, {
+    // Bicho de outro jogador (vitrine de shinys, anúncio) pode vir sem `id`: aí a chave é quem ele é.
+    chave: pk.id != null ? `pk:${pk.id}` : `pk:${pk.speciesId}:${pk.dono ?? ''}:${pk.level ?? ''}`,
+    // Reabrir pelo estado de AGORA quando o bicho é do jogador — ele pode ter subido de nível ou
+    // ganhado um refino enquanto a outra ficha estava na frente.
+    reabrir: () => abrirFichaDoPokemon(pokemonAtualizado(pk)),
   });
 }
 
@@ -37894,10 +42244,14 @@ $('#ficha-fechar').onclick = (ev) => {
   ev.stopPropagation();
   fecharFicha();
 };
+$('#ficha-voltar').onclick = (ev) => {
+  ev.stopPropagation();
+  voltarFicha();
+};
 $('#ficha').onclick = (ev) => {
   // Bloco, e não expressão — ver a nota em `#confirmar`.
   if (calcEmpilhada()) return;
-  if (ev.target !== $('#ficha')) return;
+  if (!cliqueNoFundo(ev, $('#ficha'))) return;
   ev.stopPropagation();
   fecharFicha();
 };
@@ -37906,7 +42260,7 @@ $('#calc-fechar').onclick = (ev) => {
   fecharCalculadora();
 };
 $('#calc').onclick = (ev) => {
-  if (ev.target !== $('#calc')) return;
+  if (!cliqueNoFundo(ev, $('#calc'))) return;
   ev.stopPropagation();
   fecharCalculadora();
 };
@@ -38034,6 +42388,122 @@ function montarPokepedia() {
     }
     fechar();
   };
+}
+
+// ------------------------------------------------------------ estatísticas do jogo
+//
+// O botão "Estatísticas" do topo da Wiki (`ACAO_DO_TOPO.pokepedia`): quanto de cada moeda existe
+// nas contas dos treinadores — a economia do jogo inteiro, em três cofres. Os números vêm do
+// servidor (`economia-db.mjs`, com cache de 5 min) e são só SOMAS: nenhum diz quem tem quanto.
+//
+// A tela é para dar gosto de olhar: os três totais CONTAM de zero até o valor, um depois do outro,
+// a barra de quantos treinadores têm aquela moeda enche, e o número acende quando chega. Tudo isso
+// para em `prefers-reduced-motion` (`menosMovimento`) — aí os números aparecem prontos.
+
+/** As três moedas, na ordem dos cofres. `classe` dá a cor de cada um (ver `.ecj-cofre` no CSS). */
+const COFRES_ECONOMIA = [
+  { id: 'diamantes', nome: 'econ.diamantes', ico: ICONE_DIAMANTE, classe: 'dia' },
+  { id: 'gemas', nome: 'econ.gemas', ico: ICONE_GEMA, classe: 'gema' },
+  { id: 'coins', nome: 'econ.coins', ico: ICONE_OURO, classe: 'coin' },
+];
+
+/** Duração da contagem de cada cofre, e o atraso entre um e o próximo. */
+const ECJ_CONTA_MS = 1100;
+const ECJ_ESCADA_MS = 160;
+
+function renderEconomiaDoJogo() {
+  return `<div class="ecj" id="ecj">${htmlEconomiaDoJogo(estado.economiaJogo)}</div>`;
+}
+
+function htmlEconomiaDoJogo(e) {
+  if (!e) return `<div class="ecj-carregando">${t('econ.carregando')}</div>`;
+  const total = Number(e.treinadores) || 0;
+  const cofres = COFRES_ECONOMIA.map((c, i) => {
+    const m = e[c.id] ?? { total: 0, treinadores: 0 };
+    const com = Number(m.treinadores) || 0;
+    const parcela = total ? Math.min(100, (100 * com) / total) : 0;
+    const media = com ? Math.round(m.total / com) : 0;
+    return `
+      <section class="ecj-cofre ${c.classe}" style="--i:${i}">
+        <div class="ecj-ico"><img src="${srcIcone(c.ico)}" alt=""></div>
+        <h3>${t(c.nome)}</h3>
+        <b class="ecj-total" data-alvo="${Number(m.total) || 0}">${num(m.total)}</b>
+        <span class="ecj-curto">${numCurto(m.total)}</span>
+        ${c.id === 'diamantes' && m.noMercado
+          ? `<span class="ecj-mercado" title="${escapar(t('econ.noMercadoDica'))}">${t('econ.noMercado', { v: num(m.noMercado) })}</span>`
+          : ''}
+        <div class="ecj-barra" role="img" aria-label="${escapar(t('econ.parcela', { p: parcela.toFixed(1).replace('.', ',') }))}">
+          <i style="--p:${parcela.toFixed(2)}%"></i>
+        </div>
+        <p class="ecj-quem">${t('econ.quem', { n: num(com), p: parcela < 10 ? parcela.toFixed(1).replace('.', ',') : Math.round(parcela) })}</p>
+        <p class="ecj-media">${t('econ.media', { v: num(media) })}</p>
+      </section>`;
+  }).join('');
+  return `
+    <header class="ecj-topo">
+      <span class="ecj-selo">${t('econ.agora')}</span>
+      <p>${t('econ.subtitulo', { n: num(total) })}</p>
+    </header>
+    <div class="ecj-cofres">${cofres}</div>
+    <p class="ecj-nota">${t('econ.nota', { h: horaCurta(e.em) })}</p>`;
+}
+
+/**
+ * A contagem: cada total sobe de zero ao valor (curva que desacelera no fim, como um contador de
+ * cassino), em escada — o segundo cofre começa quando o primeiro já vai pela metade. A barra
+ * enche junto (transição de CSS no `.ecj.cheio`), e o cofre que chega ganha `.pronto`, que acende
+ * o número uma vez.
+ */
+function animarEconomiaDoJogo(host) {
+  const totais = [...host.querySelectorAll('.ecj-total')];
+  if (!totais.length) return;
+  if (menosMovimento()) {
+    host.classList.add('cheio');
+    for (const el of totais) el.closest('.ecj-cofre')?.classList.add('pronto');
+    return;
+  }
+  requestAnimationFrame(() => host.classList.add('cheio'));
+  const inicio = performance.now();
+  totais.forEach((el, i) => {
+    const alvo = Number(el.dataset.alvo) || 0;
+    const t0 = inicio + i * ECJ_ESCADA_MS;
+    el.textContent = num(0);
+    const passo = (agora) => {
+      if (!el.isConnected) return;
+      const x = Math.min(1, Math.max(0, (agora - t0) / ECJ_CONTA_MS));
+      el.textContent = num(Math.round(alvo * (1 - (1 - x) ** 3)));
+      if (x < 1) requestAnimationFrame(passo);
+      else el.closest('.ecj-cofre')?.classList.add('pronto');
+    };
+    requestAnimationFrame(passo);
+  });
+}
+
+/** Pinta (e anima) a janela com o que há em `estado.economiaJogo`. */
+function pintarEconomiaDoJogo() {
+  const host = $('#ecj');
+  if (!host) return;
+  host.classList.remove('cheio');
+  host.innerHTML = htmlEconomiaDoJogo(estado.economiaJogo);
+  for (const img of host.querySelectorAll('.ecj-ico img')) img.decoding = 'async';
+  animarEconomiaDoJogo(host);
+}
+
+/**
+ * Abriu a janela: pede os números. O servidor tem o cache dele (5 min), então pedir a cada
+ * abertura é barato — e é o que faz a hora do rodapé andar quando o jogador volta depois.
+ */
+function montarEconomiaDoJogo() {
+  enviar({ t: 'wiki.economia' });
+  if (estado.economiaJogo) animarEconomiaDoJogo($('#ecj'));
+}
+
+/** A resposta do `wiki.economia`. Mesma conta de antes (o cache): não anima de novo à toa. */
+function aoReceberEconomiaDoJogo(m) {
+  const igual = estado.economiaJogo?.em === m.em;
+  estado.economiaJogo = m;
+  if (estado.modalAberto !== 'economia' || igual) return;
+  pintarEconomiaDoJogo();
 }
 
 // ------------------------------------------------------------------ bolsa
@@ -39644,7 +44114,7 @@ function renderMarket() {
           (a) => `<button class="mk-aba ${a.id === aba ? 'on' : ''}" data-aba="${a.id}">${t(a.nome)}</button>`,
         ).join('')}
       </div>
-      <div class="mk-saldo">${moeda(estado.eu.gold)}</div>
+      <div class="mk-saldo" id="mk-saldo">${moeda(estado.eu.gold)}</div>
     </div>
     <div id="mk-corpo"></div>`;
 }
@@ -39921,6 +44391,97 @@ function botaoCadeadoVenda(travado, aoToggle) {
 }
 
 /** Contador − / campo / + . Devolve o bloco e uma função que lê a quantidade atual. */
+/**
+ * O ícone de cada categoria da Compra — o produto mais simples dela, desenhado como nos cards. A
+ * categoria se acha pelo desenho antes do nome (e no celular, onde as abas viram uma fita de chips).
+ */
+function icoCategoriaCompra(id) {
+  const px = 18;
+  if (id === 'bolas') return iconeBola(1, px);
+  if (id === 'caixas') return CAIXAS[0] ? iconeArquivo(`/img/caixas/${CAIXAS[0].plate}.png`, px) : null;
+  if (id === 'ovos') return OVOS[0] ? iconeArquivo(`/img/itens/ovo-${OVOS[0].id}.png`, px) : null;
+  const categoria = id === 'revives' ? 'revive' : 'heal';
+  const item = [...estado.itens.values()].find((i) => i.category === categoria && i.npcPrice > 0);
+  const src = item && iconeItem(item.id);
+  return src ? iconeArquivo(src, px) : null;
+}
+
+/** "você tem ×N" do card de compra — o quanto já há na bolsa, que é o que decide a quantidade. */
+const linhaTemMarket = (n) => `<div class="mk-tem" data-tem="${Number(n) || 0}">${t('mk.temQuantos', { q: `×${num(Number(n) || 0)}` })}</div>`;
+
+/** A força da bola em quatro pontos (Poké 1, Great 2, Super 3, Ultra 4) — o "×N" do texto, desenhado. */
+const medidorDeCaptura = (n) => `<span class="mk-medidor" aria-hidden="true">${
+  [1, 2, 3, 4].map((i) => `<i${i <= Number(n) ? ' class="on"' : ''}></i>`).join('')}</span>`;
+
+/** O "você tem" de cada card na última pintura: o que CRESCEU depois de um clique é a compra. */
+let marketTemAntes = null;
+/**
+ * O que o jogador PEDIU em cada card (chave → quantidade), do clique até a compra entrar. O "+N" é o
+ * pedido, e não a diferença do estoque: com a auto-ball jogando, cinco compradas viravam "+4".
+ */
+const compraPedidaMarket = new Map();
+
+/**
+ * O realce da compra: o card cujo estoque cresceu acende, e um "+N" sobe dele. Roda depois de toda
+ * pintura do Market; a primeira (a da abertura) só anota.
+ */
+function realcarComprasMarket() {
+  const host = $('#mk-corpo');
+  if (!host) return;
+  const agora = new Map();
+  for (const el of host.querySelectorAll('.mk-card[data-chave] .mk-tem')) {
+    const card = el.closest('.mk-card');
+    const n = Number(el.dataset.tem) || 0;
+    agora.set(card.dataset.chave, n);
+    const antes = marketTemAntes?.get(card.dataset.chave);
+    if (antes == null || n <= antes) continue;
+    pularEco(card, 'comprou');
+    const pedido = compraPedidaMarket.get(card.dataset.chave);
+    compraPedidaMarket.delete(card.dataset.chave);
+    const chip = document.createElement('i');
+    chip.className = 'mk-ganho';
+    chip.textContent = `+${num(pedido ?? n - antes)}`;
+    card.append(chip);
+    setTimeout(() => chip.remove(), 1300);
+  }
+  marketTemAntes = agora;
+}
+
+/**
+ * O SALDO do Market. A renda da caça (um abate, alguns Coins) só troca o número; um gasto ou uma
+ * venda — o que o jogador acabou de fazer — rola até o valor novo e acende (vermelho saiu, verde
+ * entrou). Rola por `requestAnimationFrame` meio segundo e para.
+ */
+let saldoMarketAntes = null;
+/** Quando o jogador apertou um botão do Market — o saldo que muda logo depois é obra DELE. */
+let acaoMarketEm = 0;
+function pintarSaldoMarket(gold) {
+  const host = $('#mk-saldo');
+  if (!host) return;
+  const antes = saldoMarketAntes;
+  saldoMarketAntes = gold;
+  if (antes == null || antes === gold) {
+    if (antes == null) host.innerHTML = moeda(gold);
+    return;
+  }
+  const delta = gold - antes;
+  const evento = delta < 0 || Date.now() - acaoMarketEm < 4000 || delta >= Math.max(1000, antes * 0.005);
+  if (!evento || menosMovimento()) {
+    host.innerHTML = moeda(gold);
+    if (evento) pularEco(host, delta < 0 ? 'gastou' : 'ganhou');
+    return;
+  }
+  pularEco(host, delta < 0 ? 'gastou' : 'ganhou');
+  const inicio = performance.now();
+  const passo = (t0) => {
+    if (!host.isConnected || saldoMarketAntes !== gold) return;
+    const x = Math.min(1, (t0 - inicio) / 500);
+    host.innerHTML = moeda(Math.round(antes + delta * (1 - (1 - x) ** 3)));
+    if (x < 1) requestAnimationFrame(passo);
+  };
+  requestAnimationFrame(passo);
+}
+
 function contador(maximo) {
   const cx = document.createElement('div');
   cx.className = 'mk-qtd';
@@ -40297,7 +44858,9 @@ function pintarMarket() {
     for (const c of CATEGORIAS_COMPRA) {
       const bt = document.createElement('button');
       bt.className = 'mk-cat' + (c.id === cat ? ' on' : '');
-      bt.textContent = t(c.nome);
+      const ico = icoCategoriaCompra(c.id);
+      if (ico) bt.append(ico);
+      bt.append(Object.assign(document.createElement('span'), { textContent: t(c.nome) }));
       bt.onclick = () => {
         estado.catCompra = c.id;
         pintarMarket();
@@ -40328,7 +44891,8 @@ function pintarMarket() {
         const card = cardMarket({
           chave: `b${b.id}`,
           nome: b.nome,
-          sub: `chance de captura ×${b.catchRate}`,
+          sub: `${t('mk.chanceCaptura', { n: b.catchRate })}${medidorDeCaptura(b.catchRate)}`,
+          atributos: linhaTemMarket(estado.eu?.balls?.[b.id]),
           preco,
           acao: [ctd.cx, total, bt],
         });
@@ -40346,6 +44910,7 @@ function pintarMarket() {
           chave: `i${item.id}`,
           nome: nomeItem(item, item.name),
           sub: subItemMarket(item),
+          atributos: linhaTemMarket(estado.eu?.items?.[item.id]),
           preco,
           acao: [ctd.cx, total, bt],
         });
@@ -40536,6 +45101,8 @@ function assinaturaLojaGrade() {
     l.vipAte ?? 0,
     JSON.stringify(l.boosts ?? {}),
     l.looktype ?? '',
+    // O selo "Boost Guild" da faixa de bônus ativos: liga quando o banco de um colega enche.
+    e?.guild?.boostAte ?? 0,
   ].join('|');
 }
 
@@ -40575,7 +45142,7 @@ function atualizarDiamantes(e, anterior) {
 function atualizarMarket() {
   const saldo = document.querySelector('.mk-saldo');
   if (!saldo) return;
-  saldo.innerHTML = moeda(estado.eu.gold);
+  pintarSaldoMarket(estado.eu.gold);
 
   const corpo = $('#mk-corpo');
   const assinatura = assinaturaMarket();
@@ -40599,6 +45166,7 @@ function atualizarMarket() {
 
   estado.assinaturaMarket = assinatura;
   pintarMarket();
+  realcarComprasMarket();
 
   for (const [chave, valor] of qtdSalvas) {
     const campo = corpo?.querySelector(`.mk-card[data-chave="${chave}"] .mk-qtd input`);
@@ -41012,33 +45580,24 @@ const ACAO_DO_TOPO = {
       { id: 'modal-extra-b', icone: 'p5', dica: 'dex.verP5Ajuda', aoClicar: () => abrirModal('p5s') },
     ],
   },
-  shinys: {
-    extras: [{ id: 'modal-extra', rotulo: 'shl.voltarDex', voltar: true, dica: 'shl.voltarDexAjuda', aoClicar: () => abrirModal('pokedex') }],
-  },
-  p5s: {
-    extras: [{ id: 'modal-extra', rotulo: 'p5l.voltarDex', voltar: true, dica: 'p5l.voltarDexAjuda', aoClicar: () => abrirModal('pokedex') }],
-  },
-  deposito: {
+  // As ESTATÍSTICAS DO JOGO: quanto de cada moeda existe nas contas. Desenho E palavra, como o
+  // Tracker — uma pilha de moedas sozinha não diz "estatísticas" a ninguém.
+  pokepedia: {
     extras: [{
       id: 'modal-extra',
-      voltar: true,
-      soSeta: true,
-      dica: 'orbs.voltarComunidadeAjuda',
-      aoClicar: () => abrirModal('community'),
+      icone: 'moedas',
+      rotulo: 'econ.botao',
+      dica: 'econ.botaoDica',
+      aoClicar: () => abrirModal('economia'),
     }],
   },
-  withdraw: {
-    extras: [{
-      id: 'modal-extra',
-      voltar: true,
-      soSeta: true,
-      dica: 'orbs.voltarComunidadeAjuda',
-      aoClicar: () => abrirModal('community'),
-    }],
-  },
+  // Os Shinys, os P5 do servidor, o Depósito e o Withdraw tinham aqui um "voltar" feito à mão.
+  // Saíram: a volta agora é a mesma para toda janela aberta de dentro de outra (`#modal-voltar`,
+  // ver `historicoModal`), e o "pai" deles mora em `PAI_DO_MODAL`.
 };
 
 function montarAcaoDoTopo(nome) {
+  pintarVoltaDoModal(nome);
   const cfg = ACAO_DO_TOPO[nome];
   const extras = cfg?.extras ?? [];
   const mob = movelAtivo();
@@ -41046,7 +45605,7 @@ function montarAcaoDoTopo(nome) {
     const bt = $(`#${id}`);
     if (!bt) continue;
     bt.classList.add('hidden');
-    bt.classList.remove('modal-extra-ico', 'modal-extra-shiny', 'modal-extra-p5', 'modal-extra-voltar', 'modal-extra-tracker');
+    bt.classList.remove('modal-extra-ico', 'modal-extra-shiny', 'modal-extra-p5', 'modal-extra-rotulo');
     bt.removeAttribute('aria-label');
     bt.onclick = null;
     bt.replaceChildren();
@@ -41058,25 +45617,23 @@ function montarAcaoDoTopo(nome) {
     bt.title = t(ex.dica);
     bt.onclick = ex.aoClicar;
 
-    if (ex.voltar && (mob || ex.soSeta)) {
-      bt.classList.add('modal-extra-ico', 'modal-extra-voltar');
-      bt.textContent = '‹';
-      bt.setAttribute('aria-label', t(ex.dica));
-    } else if (ex.icone === 'tracker') {
-      // O ÚNICO extra com desenho E palavra, e só no desktop.
+    if (ex.icone === 'tracker' || ex.icone === 'moedas') {
+      // Os extras com desenho E palavra (o Tracker e as Estatísticas da Wiki), a palavra só no
+      // desktop.
       //
       // O desenho sozinho não bastaria: "tracker" não tem um símbolo que o jogador já conheça
       // (a prancheta já é de outra coisa), e um ícone que ninguém decifra vira um botão que
       // ninguém clica. A palavra sozinha, num modal que no celular já tem título e ×, comeria
-      // a linha do título — daí o celular ficar só com o gráfico e o rótulo mudar de lugar,
+      // a linha do título — daí o celular ficar só com o desenho e o rótulo mudar de lugar,
       // para o `aria-label` e o `title`.
-      bt.classList.add('modal-extra-tracker');
+      const desenho = ex.icone === 'moedas' ? iconeMoedas() : iconeGrafico();
+      bt.classList.add('modal-extra-rotulo');
       bt.setAttribute('aria-label', t(ex.rotulo));
       if (mob) {
         bt.classList.add('modal-extra-ico');
-        bt.innerHTML = iconeGrafico();
+        bt.innerHTML = desenho;
       } else {
-        bt.innerHTML = `${iconeGrafico()}<span>${escapar(t(ex.rotulo))}</span>`;
+        bt.innerHTML = `${desenho}<span>${escapar(t(ex.rotulo))}</span>`;
       }
     } else if (ex.icone) {
       bt.classList.add('modal-extra-ico');
@@ -41150,9 +45707,193 @@ function ligarDobraDeFiltros() {
   $('#filtros-pronto')?.addEventListener('click', () => abrir(false));
 }
 
-function abrirModal(nome) {
+// ------------------------------------------------- o caminho de volta das janelas
+//
+// O modal comum é UMA caixa só: abrir uma tela de dentro de outra (a Bolsa pela Loja, o Depósito
+// pelo Mercado, o Armário pela Ficha do Treinador) troca o miolo, e a tela de antes some. Sem
+// volta, o jogador fechava tudo e refazia os cliques — abrir a janela pelo menu, achar a aba,
+// refazer o filtro — para chegar aonde já estava. Foi a reclamação.
+//
+// Então cada troca anota DE ONDE se veio, e o `‹` ao lado do × (o mesmo que o Depósito já tinha)
+// volta um passo. O estado das telas (aba, filtros, página) já mora no `estado` e sobrevive ao
+// redesenho; o que a pilha guarda a mais é o que se perderia nele: a rolagem e o painel aberto
+// do celular.
+//
+// A REGRA de quando anotar está em `anotarCaminho`, e ela não depende de quem chama: se o modal
+// já está à vista com OUTRA tela, a de agora foi aberta de dentro dela. Os botões de fora (menu,
+// painel lateral, chat) não alcançam isso — com o modal aberto, o fundo escuro cobre a tela —,
+// então abrir por eles é sempre começar do zero. Quem precisa de outra coisa diz: `raiz` (o guia
+// do primeiro login, que troca de tela sozinho) e `volta` (a janela de origem é uma das de CIMA,
+// como o painel da Guild, e não uma tela do modal).
+
+/** As telas por onde o jogador passou antes da aberta, da mais antiga para a mais recente. */
+const historicoModal = [];
+/** Ninguém volta dez telas; o teto só impede que um vaivém de horas cresça sem fim. */
+const MAX_HISTORICO_MODAL = 10;
+
+/**
+ * A volta de quem só se abre de dentro de outra tela, para quando a pilha está vazia — aberta
+ * pelo link `?modal=`, por exemplo. Era o que os botões feitos à mão da Pokédex e do Mercado já
+ * faziam, e eles não podem perder a volta só porque o caminho não foi anotado.
+ */
+const PAI_DO_MODAL = { shinys: 'pokedex', p5s: 'pokedex', deposito: 'community', withdraw: 'community', economia: 'pokepedia' };
+
+/** O nome da tela do modal comum À VISTA agora, ou `null`. */
+const modalComumAberto = () => (!$('#modal').classList.contains('hidden') && estado.modalAberto) || null;
+
+/**
+ * As rolagens de dentro de `raiz` — ela e cada filho rolado —, pelo CAMINHO de índices até ele.
+ *
+ * Caminho, e não seletor: as listas que rolam são `div`s sem id, várias com a mesma classe, e o
+ * redesenho da mesma tela com o mesmo estado devolve a mesma árvore. A tag vai junto para não
+ * rolar o nó errado se a árvore tiver mudado no meio (um anúncio a menos, uma aba que sumiu).
+ */
+function lerRolagens(raiz) {
+  if (!raiz) return [];
+  const lidas = [];
+  for (const el of [raiz, ...raiz.querySelectorAll('*')]) {
+    if (!el.scrollTop && !el.scrollLeft) continue;
+    const caminho = [];
+    for (let no = el; no !== raiz; no = no.parentElement) caminho.unshift([...no.parentElement.children].indexOf(no));
+    lidas.push({ caminho, tag: el.tagName, y: el.scrollTop, x: el.scrollLeft });
+  }
+  return lidas;
+}
+
+/**
+ * Devolve as rolagens lidas por `lerRolagens`.
+ *
+ * Três tentativas: já, depois de dois quadros e depois de 400 ms. Parte das telas desenha a lista
+ * em seguida (o Mercado pinta o que tinha em memória, a Pokédex monta a grade aos poucos), e uma
+ * rolagem aplicada numa lista ainda curta fica presa no meio. Só reaplica onde o número não
+ * mudou desde a última vez — se mudou, foi o jogador que rolou, e a mão dele manda.
+ */
+function aplicarRolagens(raiz, lidas) {
+  if (!raiz || !lidas?.length) return;
+  const alvos = lidas.map((r) => ({ r, el: null, y: null, x: null }));
+  const aplicar = () => {
+    for (const a of alvos) {
+      const el = a.r.caminho.reduce((no, i) => no?.children[i], raiz);
+      if (!el || el.tagName !== a.r.tag) continue;
+      if (a.el === el && (el.scrollTop !== a.y || el.scrollLeft !== a.x)) continue;
+      if (el.scrollTop !== a.r.y) el.scrollTop = a.r.y;
+      if (el.scrollLeft !== a.r.x) el.scrollLeft = a.r.x;
+      a.el = el;
+      a.y = el.scrollTop;
+      a.x = el.scrollLeft;
+    }
+  };
+  aplicar();
+  requestAnimationFrame(() => requestAnimationFrame(aplicar));
+  setTimeout(aplicar, 400);
+}
+
+/** O que se perderia ao trocar a tela `nome`, aberta agora, por outra. */
+function retratoDaTela(nome) {
+  if (!nome) return { nome: null };
+  return {
+    nome,
+    rolagem: lerRolagens($('#modal-corpo')),
+    // A Lista de Amigos no celular: a conversa aberta é uma classe na caixa, e o `abrirModal`
+    // zera a classe de propósito (abrir pelo menu cai na lista). Voltar tem de cair na conversa.
+    verPainel: $('#modal .modal-caixa')?.classList.contains('ver-painel') ?? false,
+  };
+}
+
+/** Depois de reabrir a tela de uma entrada da pilha: o painel do celular e as rolagens. */
+function restaurarTela(entrada) {
+  if (entrada.verPainel) verPainelAmigos(true);
+  aplicarRolagens($('#modal-corpo'), entrada.rolagem);
+}
+
+/**
+ * Decide se a tela `nome`, que vai abrir, foi aberta DE DENTRO de outra — e anota a outra.
+ *
+ * `volta` completa (ou substitui, quando o modal está fechado) a entrada anotada:
+ *   `depois`  o que refazer depois de reabrir — a ficha que estava por cima da Pokédex, o painel
+ *             da Guild que não é tela do modal;
+ *   `rotulo`  o nome da janela de origem quando ela não é uma tela do modal (texto ou função,
+ *             lida na hora de pintar, para acompanhar a troca de idioma).
+ */
+function anotarCaminho(nome, { voltando = false, raiz = false, volta = null } = {}) {
+  if (voltando) return; // quem volta já tirou a entrada da pilha
+  if (raiz) {
+    historicoModal.length = 0;
+    return;
+  }
+  const anterior = modalComumAberto();
+  if (anterior === nome) return; // redesenho da mesma tela: o caminho não muda
+  if (!anterior && !volta) {
+    historicoModal.length = 0; // aberta do zero, pelo menu ou por um botão de fora
+    return;
+  }
+  // Modal fechado com `volta`: a origem é uma janela de cima, e não há tela nenhuma antes dela.
+  if (!anterior) historicoModal.length = 0;
+  historicoModal.push({ ...retratoDaTela(anterior), ...volta });
+  if (historicoModal.length > MAX_HISTORICO_MODAL) historicoModal.shift();
+}
+
+/** Para onde o `‹` leva agora: o topo da pilha, ou o pai fixo de quem só se abre de dentro. */
+function destinoDaVolta(nome) {
+  const topo = historicoModal.at(-1);
+  if (topo) return topo;
+  return PAI_DO_MODAL[nome] ? { nome: PAI_DO_MODAL[nome] } : null;
+}
+
+/** O `‹` do topo: aparece quando há para onde voltar, e diz para onde no `title`. */
+function pintarVoltaDoModal(nome) {
+  const bt = $('#modal-voltar');
+  if (!bt) return;
+  const destino = destinoDaVolta(nome);
+  bt.classList.toggle('hidden', !destino);
+  if (!destino) return;
+  const rotulo = typeof destino.rotulo === 'function' ? destino.rotulo() : destino.rotulo;
+  const tela = rotulo || (MODAIS[destino.nome] ? t(MODAIS[destino.nome].titulo) : '');
+  const dica = tela ? t('modal.voltarPara', { tela }) : t('modal.voltar');
+  bt.title = dica;
+  bt.setAttribute('aria-label', dica);
+}
+
+/** O clique no `‹`: reabre a tela de antes onde ela estava — ou a janela de cima de onde se veio. */
+function voltarModal() {
+  const destino = historicoModal.pop() ?? destinoDaVolta(estado.modalAberto);
+  if (!destino) return;
+  if (destino.nome) {
+    abrirModal(destino.nome, { voltando: true });
+    restaurarTela(destino);
+  } else {
+    fecharModal();
+  }
+  destino.depois?.();
+}
+
+/**
+ * O caminho inteiro, para quem precisa FECHAR o modal e reabri-lo depois no mesmo ponto — o
+ * editor de avatar, que ocupa a tela toda e não pode abrir por cima da Ficha do Treinador.
+ */
+function guardarCaminho() {
+  const nome = modalComumAberto();
+  return nome ? { ...retratoDaTela(nome), pilha: [...historicoModal] } : null;
+}
+
+function reabrirCaminho(guardado) {
+  if (!guardado?.nome) return;
+  historicoModal.splice(0, historicoModal.length, ...guardado.pilha);
+  abrirModal(guardado.nome, { voltando: true });
+  restaurarTela(guardado);
+}
+
+/**
+ * Abre a tela `nome` no modal comum (ou a redesenha, se já é ela).
+ *
+ * `opcoes` é do caminho de volta — ver `anotarCaminho`: `voltando` (o `‹` reabrindo a tela de
+ * antes), `raiz` (começa um caminho novo mesmo com o modal aberto) e `volta` (a origem é uma
+ * janela de cima).
+ */
+function abrirModal(nome, opcoes) {
   const cfg = MODAIS[nome];
   if (!cfg) return;
+  anotarCaminho(nome, opcoes);
   if (nome === 'calculadora') fecharCalculadora();
   document.querySelector('.cm-folha')?.remove();
   estado.modalAberto = nome;
@@ -41249,6 +45990,7 @@ function abrirModal(nome) {
   if (nome === 'ginasios') montarGinasios();
   if (nome === 'campeonato') montarCampeonato();
   if (nome === 'pokepedia') montarPokepedia();
+  if (nome === 'economia') montarEconomiaDoJogo();
 
   if (nome === 'perfil') {
     estado.caraPerfilDesenhada =
@@ -41298,9 +46040,10 @@ function abrirModal(nome) {
     const aplicarFiltro = (mudar) => {
       estado.cmAba = 'vitrine';
       mudar();
-      // As três de `ORDENS_MERCADO` valem nas duas abas, então trocar de aba não pode mais
-      // deixar o `<select>` mostrando uma opção que o servidor ignora. O que era exclusivo de
-      // pokémon virou critério, e a troca para itens zera os critérios logo abaixo.
+      // O `<select>` das três de `ORDENS_MERCADO` só existe na aba de pokémon, e a escolha fica
+      // guardada enquanto o jogador passa pelas outras: uma ordem que já não exista (de um cliente
+      // velho) volta para a primeira. O que era exclusivo de pokémon virou critério, e a troca para
+      // itens zera os critérios logo abaixo.
       if (!ORDENS_MERCADO.some((o) => o.id === estado.cmFiltro.ordem)) {
         estado.cmFiltro.ordem = ORDENS_MERCADO[0].id;
       }
@@ -41516,8 +46259,11 @@ function abrirModal(nome) {
     estado.buscaRanking = '';
     if (!estado.rankingBossKey) estado.rankingBossKey = bossKeyRankingPadrao();
     for (const a of ABAS_RANKING) {
-      if (a.id === 'bosses') pedirRankingBoss(estado.rankingBossKey);
-      else enviar({ t: 'ranking.pedir', aba: a.id });
+      if (a.id === 'bosses') {
+        // O "Todos" sempre (é dele o destaque "Mais vitórias"), e o boss escolhido, se for outro.
+        pedirRankingBoss(BOSS_TODOS, { forcar: true, selecionar: false });
+        if (estado.rankingBossKey !== BOSS_TODOS) pedirRankingBoss(estado.rankingBossKey, { forcar: true });
+      } else enviar({ t: 'ranking.pedir', aba: a.id });
     }
     pintarRanking();
     // No celular as sete abas são uma FITA que rola de lado, e só três cabem na tela. Quem
@@ -41553,6 +46299,18 @@ function abrirModal(nome) {
     };
     estado.assinaturaMarket = assinaturaMarket();
     pintarMarket();
+    // Abriu (ou trocou de aba): o estoque e o saldo de agora são a régua, nada "subiu" ainda.
+    marketTemAntes = null;
+    realcarComprasMarket();
+    saldoMarketAntes = estado.eu?.gold ?? null;
+    $('#mk-corpo')?.addEventListener('click', (ev) => {
+      const bt = ev.target.closest('button');
+      if (!bt) return;
+      acaoMarketEm = Date.now();
+      const card = bt.classList.contains('mk-acao') ? bt.closest('.mk-card[data-chave]') : null;
+      const campo = card?.querySelector('.mk-qtd input');
+      if (campo) compraPedidaMarket.set(card.dataset.chave, Math.max(1, Math.floor(Number(campo.value)) || 1));
+    }, true);
   }
 
   if (nome === 'bolsa') {
@@ -41712,7 +46470,7 @@ $('#rc-ok').onclick = fecharRecompensa;
 $('#rc-todos').onclick = () => fecharLoteDoBoss();
 // Bloco, não expressão — ver a nota do `#confirmar`: devolver `false` cancelaria o clique.
 $('#recompensa').onclick = (ev) => {
-  if (ev.target === $('#recompensa') || ev.target.classList.contains('rc-palco')) fecharRecompensa();
+  if (cliqueNoFundo(ev, $('#recompensa')) || cliqueNoFundo(ev, $('#recompensa .rc-palco'))) fecharRecompensa();
 };
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && !$('#recompensa').classList.contains('hidden')) fecharRecompensa();
@@ -42096,7 +46854,7 @@ const fecharBossLoot = () => {
 
 $('#boss-loot-ok').onclick = fecharBossLoot;
 $('#boss-loot').onclick = (ev) => {
-  if (ev.target === $('#boss-loot')) fecharBossLoot();
+  if (cliqueNoFundo(ev, $('#boss-loot'))) fecharBossLoot();
 };
 
 // ---------------------------------------------------------------- TM Researcher
@@ -42327,12 +47085,12 @@ const fecharTmInfo = () => {
 $('#tm-info-bt').onclick = abrirTmInfo;
 $('#tm-info-fechar').onclick = fecharTmInfo;
 $('#tm-info').onclick = (ev) => {
-  if (ev.target === $('#tm-info')) fecharTmInfo();
+  if (cliqueNoFundo(ev, $('#tm-info'))) fecharTmInfo();
 };
 
 $('#tm-fechar').onclick = fecharTmResearcher;
 $('#tm-researcher').onclick = (ev) => {
-  if (ev.target === $('#tm-researcher')) fecharTmResearcher();
+  if (cliqueNoFundo(ev, $('#tm-researcher'))) fecharTmResearcher();
 };
 $('#tm-abas').onclick = (ev) => {
   const b = ev.target.closest('.tm-aba');
@@ -43442,6 +48200,8 @@ const DLG_ICONES = {
   bandeira: '<path d="M4.4 18.6V2.4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path fill="currentColor" d="M5.4 3.2c3-1.6 5 1.4 8 0 1.6-.8 2.6-.9 3.6-.9v8.2c-1 0-2 .1-3.6.9-3 1.4-5-1.6-8 0z"/>',
   raio: '<path fill="currentColor" d="M11.6 1.4L3.8 11.2h5.1l-1.4 7.4 8.7-10.2h-5.2z"/>',
   pessoa: '<circle cx="10" cy="5.8" r="4" fill="currentColor"/><path fill="currentColor" d="M2.4 18.6c0-4.2 3.4-7 7.6-7s7.6 2.8 7.6 7z"/>',
+  // Dois membros lado a lado, o de trás menor — "a guild toda", e não uma pessoa (Boost da Guild).
+  grupo: '<circle cx="13.6" cy="5.4" r="3" fill="currentColor" opacity=".72"/><path fill="currentColor" opacity=".72" d="M9.6 15.6c.3-3.4 2-5.6 4.4-5.6 2.8 0 4.6 2.6 4.6 5.6z"/><circle cx="7.2" cy="6.6" r="3.6" fill="currentColor"/><path fill="currentColor" d="M1.4 18.6c0-4 2.6-6.8 5.8-6.8s5.8 2.8 5.8 6.8z"/>',
   moedas: '<ellipse cx="8" cy="6" rx="5.6" ry="3" fill="currentColor"/><path d="M2.4 6v4c0 1.7 2.5 3 5.6 3s5.6-1.3 5.6-3V6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 13.2v1.6c0 1.7 2.5 3 5.6 3s5.6-1.3 5.6-3v-4c0-1.6-2.2-2.9-5.1-3" fill="none" stroke="currentColor" stroke-width="1.8"/>',
   bolsa: '<path d="M6.6 6.4V5a3.4 3.4 0 0 1 6.8 0v1.4" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M3.4 6.4h13.2l-1 11.6H4.4z"/>',
   olho: '<path fill="currentColor" fill-rule="evenodd" d="M10 4c4.6 0 7.8 3.6 8.8 6-1 2.4-4.2 6-8.8 6s-7.8-3.6-8.8-6C2.2 7.6 5.4 4 10 4zm0 2.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z"/>',
@@ -43747,7 +48507,7 @@ $('#confirmar-sim').onclick = () => {
  * nunca roda. Foi exatamente isto que quebrou o "só liberadas" do Mapa.
  */
 $('#confirmar').onclick = (ev) => {
-  if (ev.target === $('#confirmar')) fecharConfirmar();
+  if (cliqueNoFundo(ev, $('#confirmar'))) fecharConfirmar();
 };
 
 const fecharModal = () => {
@@ -43760,6 +48520,8 @@ const fecharModal = () => {
   if (!$('#amigo-coins').classList.contains('hidden')) fecharEnvioDeCoins();
   $('#modal').classList.add('hidden');
   estado.modalAberto = null;
+  // Fechar é sair do caminho inteiro: a próxima abertura começa do zero (ver `anotarCaminho`).
+  historicoModal.length = 0;
 };
 
 document.querySelector('.menu-topo').onclick = (ev) => {
@@ -43768,22 +48530,23 @@ document.querySelector('.menu-topo').onclick = (ev) => {
   abrirModal(b.dataset.modal);
 };
 $('#modal-fechar').onclick = fecharModal;
+$('#modal-voltar').onclick = voltarModal;
 // Bloco, não expressão — ver a nota em `#confirmar`: retornar `false` aqui cancelaria o
 // clique de tudo que vive dentro do modal.
 $('#modal').onclick = (ev) => {
   if (calcEmpilhada() || fichaAberta()) return;
   if (!$('#amigo-coins').classList.contains('hidden')) return; // diálogo de coins por cima
-  if (ev.target === $('#modal')) fecharModal();
+  if (cliqueNoFundo(ev, $('#modal'))) fecharModal();
 };
 $('#perfil-fechar').onclick = fecharPerfil;
 $('#perfil').onclick = (ev) => {
-  if (ev.target === $('#perfil')) fecharPerfil();
+  if (cliqueNoFundo(ev, $('#perfil'))) fecharPerfil();
 };
 
 // ---- Montar vitrine
 $('#vitrine-editor-fechar')?.addEventListener('click', fecharEditorVitrine);
 $('#vitrine-editor')?.addEventListener('click', (ev) => {
-  if (ev.target === $('#vitrine-editor')) fecharEditorVitrine();
+  if (cliqueNoFundo(ev, $('#vitrine-editor'))) fecharEditorVitrine();
 });
 $('#vte-salvar')?.addEventListener('click', salvarVitrine);
 $('#vte-busca')?.addEventListener('input', montarEditorVitrine);
@@ -43804,6 +48567,7 @@ document.addEventListener('keydown', (ev) => {
   if (!$('#vitrine-editor').classList.contains('hidden')) return fecharEditorVitrine();
   if (!$('#gin-time-detalhe').classList.contains('hidden')) return fecharTimeGinasio();
   if (!$('#guild-detalhe').classList.contains('hidden')) return fecharDetalheGuild();
+  if (!$('#guild-doacoes-modal').classList.contains('hidden')) return fecharDoacoesDaGuild();
   if (!$('#guild-time-modal').classList.contains('hidden')) return fecharEditorEquipeGuerra();
   if (!$('#tm-info').classList.contains('hidden')) return fecharTmInfo();
   if (!$('#centro-depot-modal').classList.contains('hidden')) return fecharDepotModal();
@@ -43911,6 +48675,7 @@ function redesenharPorIdioma() {
   if (estado.eu) aplicarEstado(estado.eu);
   pintarChat();
   montarIdiomasDoChat();
+  pintarChatInterrompido();
   // As dicas dos três botões de recolher dependem do ESTADO (recolher/expandir), e o
   // `data-i18n-attr` do HTML só sabe escrever a metade "recolher". Sem isto, trocar de idioma
   // com um painel fechado deixava o botão prometendo fechar o que já está fechado.

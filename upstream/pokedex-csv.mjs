@@ -40,9 +40,10 @@ const danoPorSegundo = (poder, segundos) => (segundos > 0 ? (poder / segundos).t
 
 /**
  * Escapa uma célula. Vírgula, aspas e quebra de linha são o que quebra CSV, e nome de espécie
- * traz as três mais do que se imagina (`Farfetch'd`, `Mr. Mime`, `Porygon-Z`).
+ * traz as três mais do que se imagina (`Farfetch'd`, `Mr. Mime`, `Porygon-Z`). O ponto e vírgula
+ * entra junto: é o separador do CSV das doações da guild em português (ver `exportarDoacoesCsv`).
  */
-const cel = (v) => {
+export const cel = (v) => {
   const s = String(v ?? '');
   return /[",;\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
