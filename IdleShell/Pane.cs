@@ -41,7 +41,8 @@ internal sealed class Pane
 
     public static async Task<Pane> CreateAsync(
         CoreWebView2Environment env, IntPtr hwnd, PaneSpec spec,
-        ViolentmonkeyManager? userscripts = null)
+        ViolentmonkeyManager? userscripts = null,
+        bool navigate = true)
     {
         var options = env.CreateCoreWebView2ControllerOptions();
         options.ProfileName = spec.Profile;
@@ -51,7 +52,9 @@ internal sealed class Pane
         var pane = new Pane(spec, controller, env, userscripts);
         await pane.ConfigureAsync();
 
-        pane.View.Navigate(spec.Url);
+        if (navigate)
+            pane.View.Navigate(spec.Url);
+
         return pane;
     }
 
