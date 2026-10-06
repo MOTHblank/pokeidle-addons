@@ -23,25 +23,61 @@ internal sealed class Pane
     // True while this pane is displayed in the layout; false when hidden/parked.
     public bool IsForeground { get; private set; } = true;
 
-    private Pane(PaneSpec spec, CoreWebView2Controller controller)
+    // False after Close(); guards host-script registration on dead views.
+    public bool IsAttached { get; private set; } = true;
+
+    private Pane(
+        PaneSpec spec,
+        CoreWebView2Controller controller,
+        UserscriptLoader? nativeScripts)
     {
         Spec = spec;
         Controller = controller;
+        _nativeScripts = nativeScripts;
         if (spec.Kind == PaneKind.Stream) Mode = spec.Mode;
     }
 
     public static async Task<Pane> CreateAsync(
-        CoreWebView2Environment env, IntPtr hwnd, PaneSpec spec)
+        CoreWebView2Environment env, IntPtr hwnd, PaneSpec spec,
+        ExtensionManager? extensions = null,
+        UserscriptLoader? nativeScripts = null)
     {
         var options = env.CreateCoreWebView2ControllerOptions();
         options.ProfileName = spec.Profile;
         options.IsInPrivateModeEnabled = false;
 
         var controller = await env.CreateCoreWebView2ControllerAsync(hwnd, options);
-        var pane = new Pane(spec, controller);
+        var pane = new Pane(spec, controller, nativeScripts);
         await pane.ConfigureAsync();
+
+        // Install/enable Tampermonkey in this pane's profile before the first
+        // navigation so its content script is registered for the game page.
+        if (extensions is not null)
+        {
+            try
+            {
+                await extensions.EnsureTampermonkeyAsync(pane.View.Profile);
+                pane.TampermonkeyReady = true;
+            }
+            catch (Exception ex)
+            {
+                pane.TampermonkeyError = ex.Message;
+                Console.Error.WriteLine(
+                    $"[IdleShell] Tampermonkey unavailable in profile " +
+                    $"{spec.Profile}: {ex}");
+            }
+        }
+
         pane.View.Navigate(spec.Url);
         return pane;
+    }
+
+    // Attaches the native userscript bootstrap to an already-created pane
+    // (used when Tampermonkey turns out to be unavailable mid-session).
+    public async Task AttachUserscriptFallback()
+    {
+        if (_nativeScripts is null || !IsAttached) return;
+        await _nativeScripts.AttachAsync(View);
     }
 
     // Bootstrap injected into EVERY isolated world (including Tampermonkey's)
@@ -68,6 +104,14 @@ internal sealed class Pane
         })();
         """;
 
+    // Tampermonkey installation result for this pane's profile (game panes
+    // only). Null error + true ready means the extension is installed and
+    // enabled.
+    public bool TampermonkeyReady { get; private set; }
+    public string? TampermonkeyError { get; private set; }
+
+    private readonly UserscriptLoader? _nativeScripts;
+
     private async Task ConfigureAsync()
     {
         var s = View.Settings;
@@ -76,6 +120,9 @@ internal sealed class Pane
         s.IsZoomControlEnabled = true;
 
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
+
+        if (_nativeScripts is not null)
+            await _nativeScripts.AttachAsync(View);
 
         View.WebMessageReceived += (_, e) =>
         {
