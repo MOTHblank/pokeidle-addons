@@ -291,10 +291,10 @@ internal sealed class ViolentmonkeyManager
     {
         var candidates = new[]
         {
-            Path.Combine(AppContext.BaseDirectory, "violentmonkey"),
+            // Canonical runtime copy produced by the project build.
             Path.Combine(AppContext.BaseDirectory, "vendor", "violentmonkey"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "vendor", "violentmonkey"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "vendor", "violentmonkey"),
+            // Source-tree fallback for development when running directly from the
+            // repository before the content has been copied to bin/.
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "vendor", "violentmonkey")
         };
 
