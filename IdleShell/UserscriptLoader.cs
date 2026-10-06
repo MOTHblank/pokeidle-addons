@@ -157,7 +157,7 @@ internal sealed class UserscriptLoader
                 Js = [fileName],
                 RunAt = ToManifestRunAt(script.RunAt),
                 World = "MAIN",
-                AllFrames = false
+                AllFrames = true
             });
         }
 
