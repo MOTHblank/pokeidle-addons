@@ -140,8 +140,9 @@ internal sealed class ViolentmonkeyManager
         var tcs = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        CoreWebView2NavigationCompletedEventHandler? handler = null;
-        handler = (_, e) =>
+        // Let the compiler infer WebView2's event delegate type. The delegate
+        // type itself is not public in the pinned WebView2 package.
+        view.NavigationCompleted += (_, e) =>
         {
             if (e.IsSuccess)
                 tcs.TrySetResult(true);
@@ -150,16 +151,8 @@ internal sealed class ViolentmonkeyManager
                     $"Violentmonkey options navigation failed: HTTP {e.HttpStatusCode}."));
         };
 
-        view.NavigationCompleted += handler;
-        try
-        {
-            view.Navigate(url);
-            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        finally
-        {
-            view.NavigationCompleted -= handler;
-        }
+        view.Navigate(url);
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     private static async Task ImportScriptAsync(CoreWebView2 view, LocalScript script)
