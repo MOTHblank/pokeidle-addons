@@ -351,7 +351,7 @@ internal sealed class UserscriptLoader
   });
 
   const __idleshellStoragePrefix =
-    '__idleshell_gm_v2__' +
+    '__idleshell_gm__' +
     __idleshellScriptMeta.namespace + ':' +
     __idleshellScriptMeta.name + ':';
 
