@@ -47,9 +47,9 @@ internal sealed class AccountManager
     public const int MaxStreamAccountsPerService = 10;
     public const int MaxStreamAccounts = MaxStreamAccountsPerService * 2;
     public const int MaxStreamsPerService = 10;
-    // A login profile may back any number of the service's stream slots;
-    // the per-service cap is the hard ceiling. This removes the old hidden
-    // four-stream ceiling (2 slots × 2 game workspaces) for each login.
+    // A login may back the full service capacity. The old 2-slots-per-login
+    // rule created an artificial 4-stream ceiling across the two game panes.
+    public const int MaxStreamSlotsPerAccount = MaxStreamsPerService;
     public const int MaxStreamSlots = MaxStreamsPerService * 2;
     public const int DefaultVisibleStreams = 2;
 
