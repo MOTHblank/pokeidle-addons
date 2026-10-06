@@ -150,7 +150,6 @@ internal sealed class MainForm : Form
     private IEnumerable<Pane> AllPanes() =>
         _games
             .Concat(AllStreamSlots().Select(s => s.Pane))
-            .Concat(_workspaces.SelectMany(w => w.ExtraPanes.Values))
             .OfType<Pane>();
 
     private void BuildWorkspaceChrome()
@@ -852,17 +851,6 @@ internal sealed class MainForm : Form
         pane.Close();
     }
 
-    private void CloseSlot(GameWorkspace workspace, StreamSlot slot)
-    {
-        if (slot.Pane is { } p) DetachAndClose(p);
-
-        workspace.StreamTabs.TabPages.Remove(slot.Tab);
-        workspace.Slots.Remove(slot);
-        if (workspace.ActiveTabIndex >= workspace.Slots.Count)
-            workspace.ActiveTabIndex = workspace.Slots.Count - 1;
-        LayoutPanes();
-    }
-
     private void RefreshAddonsPicker()
     {
         _suppressAddonPickerEvent = true;
@@ -1022,18 +1010,6 @@ internal sealed class MainForm : Form
         }
     }
 
-    private static string ChannelLabel(string url)
-    {
-        try
-        {
-            var u = new Uri(url);
-            var seg = u.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            var host = u.Host.Contains("kick", StringComparison.OrdinalIgnoreCase) ? "kick" : "twitch";
-            return $"{host}/{(seg.Length > 0 ? seg[0] : "")}";
-        }
-        catch { return "stream"; }
-    }
-
     private void Log(string message)
     {
         try
@@ -1175,12 +1151,6 @@ internal sealed class MainForm : Form
                 else slot.Pane.Hide();
             }
 
-            foreach (var pane in workspace.ExtraPanes.Values)
-            {
-                if (candidates.Contains(pane)) continue;
-                if (pane.Mode == StreamMode.Parked) pane.Park();
-                else pane.Hide();
-            }
         }
 
         UpdateWorkspaceHeaders();
@@ -1202,11 +1172,6 @@ internal sealed class MainForm : Form
 
         if (activeSlot?.Pane is { } activePane)
             result.Add(activePane);
-
-        if (activeSlot is not null &&
-            workspace.ExtraPanes.TryGetValue(
-                ExtraPaneKey(workspace, activeSlot.Account.Id), out var extra))
-            result.Add(extra);
 
         foreach (var slot in visibleAccounts)
         {
