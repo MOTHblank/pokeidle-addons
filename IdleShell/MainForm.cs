@@ -982,7 +982,7 @@ internal sealed class MainForm : Form
         var workspace = WorkspaceForPane(pane);
         if (workspace is not null)
             _ = RouteStreamLinkAsync(
-                msg.Url, $"userscript ({msg.Source})", workspace.GameProfile);
+                msg.Url, $"userscript ({msg.Source})");
     }
 
     private void OnPopupRequested(Pane pane, string url)
@@ -991,7 +991,7 @@ internal sealed class MainForm : Form
         {
             var workspace = WorkspaceForPane(pane);
             if (workspace is not null)
-                _ = RouteStreamLinkAsync(url, "popup backstop", workspace.GameProfile);
+                _ = RouteStreamLinkAsync(url, "popup backstop");
             return;
         }
 
@@ -1003,13 +1003,13 @@ internal sealed class MainForm : Form
     {
         if (!IsStreamUrl(e.Uri)) return;
         e.Cancel = true;
-        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop", pane.Spec.Profile);
+        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop");
     }
 
     public static bool IsStreamUrl(string? url) =>
         AccountManager.ServiceForUrl(url) is AccountService.Twitch or AccountService.Kick;
 
-    private async Task RouteStreamLinkAsync(string url, string via, string gameProfile)
+    private async Task RouteStreamLinkAsync(string url, string via)
     {
         await _streamRouteGate.WaitAsync();
         try
@@ -1060,7 +1060,8 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            Log($"link routing failed: {ex.Message}");
+            Log($"link routing failed: {ex}");
+            _status.Text = $"Stream route failed: {ex.Message}";
         }
         finally
         {
@@ -1146,6 +1147,76 @@ internal sealed class MainForm : Form
 
         LayoutPanes();
         SaveSession();
+    }
+
+    private async Task AddStreamManualAsync(int workspaceIndex)
+    {
+        var workspace = _workspaces[Math.Clamp(workspaceIndex, 0, _workspaces.Count - 1)];
+        SetActiveWorkspace(workspace.Index);
+        workspace.StreamsExpanded = true;
+        LayoutPanes();
+
+        var initial = workspace.ActiveStreamService == AccountService.Kick
+            ? "https://kick.com/"
+            : "https://www.twitch.tv/";
+
+        var url = Prompt(
+            $"Open stream · Game {workspace.Index + 1}",
+            initial);
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        if (!url.Contains("://", StringComparison.Ordinal))
+            url = "https://" + url.Trim();
+
+        if (!IsStreamUrl(url))
+        {
+            MessageBox.Show(
+                this,
+                "Only Twitch or Kick stream URLs are supported.",
+                "Open stream",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        var service = AccountManager.ServiceForUrl(url);
+        if (service is null) return;
+
+        var existing = FindOpenStreamSlot(workspace, url);
+        if (existing is not null)
+        {
+            SelectTab(workspace, workspace.Slots.IndexOf(existing));
+            return;
+        }
+
+        var slot = FindFreeStreamSlot(workspace, service.Value);
+        if (slot is null)
+        {
+            MessageBox.Show(
+                this,
+                $"No free {service} slot. This workspace supports {AccountManager.MaxStreamsPerService} {service} streams.",
+                "Open stream",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            await EnsureStreamPaneAsync(workspace, slot, url);
+            SelectTab(workspace, workspace.Slots.IndexOf(slot));
+            SaveSession();
+        }
+        catch (Exception ex)
+        {
+            Log($"manual stream open failed: {ex}");
+            MessageBox.Show(
+                this,
+                $"The stream could not be opened.\n\n{ex.Message}\n\nSee the IdleShell log for details.",
+                "Open stream",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
     }
 
     // --- Layout --------------------------------------------------------------------
