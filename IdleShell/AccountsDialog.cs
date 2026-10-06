@@ -3,10 +3,9 @@ namespace Moth.PokeIdle.IdleShell;
 /// <summary>
 /// Account manager dialog: one row per managed login (PokéIdle / Twitch / Kick).
 /// Add, rename, switch service, enable/disable (route links or not), delete, and
-/// "Log in…" which shows that account's pane so the sign-in can be completed
-/// interactively. Also sets how many stream panes are visible at once — with up
-/// to 10 stream accounts open, only N are shown on screen while the rest keep
-/// running hidden in Background mode.
+/// "Log in…" which shows that account's stream slot so the sign-in can be completed
+/// interactively. Also sets how many stream panes are visible at once — open slots
+/// remain alive in Background mode while only N are composited on screen.
 /// </summary>
 internal sealed class AccountsDialog : Form
 {
