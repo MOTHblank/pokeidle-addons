@@ -124,7 +124,8 @@ run and then mirrored by AccountManager.
 
 ## Scope
 
-The shell uses the official Violentmonkey extension unchanged. The only custom
+The shell uses the official Violentmonkey 2.49.0 codebase, with only the
+WebView2-specific manifest packaging adjustment described above. The only custom
 integration is the host-side installation plus synchronization of the repository's
 userscripts into VM's own script database. Generated extension state stays
 under LocalAppData rather than being committed to the repository.
