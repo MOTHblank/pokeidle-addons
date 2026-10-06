@@ -65,7 +65,7 @@ internal sealed class Pane
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
 
         if (_nativeScripts is not null)
-            await _nativeScripts.AttachAsync(View);
+            await _nativeScripts.InstallAsync(View.Profile);
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -101,6 +101,11 @@ internal sealed class Pane
     // Low-memory target must be set on a *visible* webview (setting it while
     // suspended/hidden is ignored per docs), so Show() applies Normal and
     // Hide()/Park() apply Low. Never mix with TrySuspend.
+    public async Task AttachUserscriptAsync(UserscriptLoader loader)
+    {
+        await loader.InstallAsync(View.Profile);
+    }
+
     public void Show(Rectangle bounds)
     {
         Controller.Bounds = bounds;
