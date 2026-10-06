@@ -866,8 +866,8 @@ internal sealed class MainForm : Form
         {
             _addonsPicker.Items.Clear();
             _addonsPicker.Items.Add("Reload userscripts (all panes)");
-            foreach (var script in _userscripts?.Scripts ?? [])
-                _addonsPicker.Items.Add(script.Name);
+            foreach (var scriptName in _userscripts?.ScriptNames ?? [])
+                _addonsPicker.Items.Add(scriptName);
             if (_addonsPicker.Items.Count > 0)
                 _addonsPicker.SelectedIndex = 0;
         }
