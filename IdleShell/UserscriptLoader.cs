@@ -18,11 +18,11 @@ internal sealed class UserscriptLoader
     private const string ExtensionName = "IdleShell Userscript Engine";
 
     private static readonly Regex MetadataBlock = new(
-        @"//\\s*==UserScript==\\s*(?<body>.*?)//\\s*==/UserScript==",
+        @"//\s*==UserScript==\s*(?<body>.*?)//\s*==/UserScript==",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     private static readonly Regex MetadataLine = new(
-        @"^\\s*//\\s*@(?<key>[A-Za-z][A-Za-z0-9_-]*)\\s+(?<value>.+?)\\s*$",
+        @"^\s*//\s*@(?<key>[A-Za-z][A-Za-z0-9_-]*)\s+(?<value>.+?)\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private readonly List<Userscript> _scripts = [];
