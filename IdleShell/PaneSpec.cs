@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Moth.PokeIdle.IdleShell;
 
-internal enum PaneKind { Game, Stream }
+internal enum PaneKind { Game, Stream, ActiveStreamMarker }
 
 // How an inactive stream pane behaves. Background = IsVisible=false (no compositing,
 // timers kept alive via browser flags). Parked = off-screen but still rendering

@@ -26,37 +26,23 @@ internal static class AppConfig
     public const string StreamHostPattern = @"(?:www\.|m\.)?(?:twitch\.tv|kick\.com)";
 
     // Twitch/Kick login profiles. Each intercepted stream link opens one
-    // hidden Background-mode pane per profile here, so drops are farmed on
-    // every account at once. Add accounts by extending this list; names must
-    // be alphanumeric (WebView2 profile restriction).
+    // hidden Background-mode pane per enabled account, so drops are farmed on
+    // every account at once (up to 10 concurrent streams). The authoritative
+    // registry is AccountManager (accounts.json); names must be alphanumeric
+    // (WebView2 profile restriction).
     public static readonly string[] StreamProfiles = ["Stream1", "Stream2"];
 
-    // Accounts file: one profile name per line, # comments allowed. When it
-    // exists it overrides StreamProfiles above.
+    // Account registry managed by the Accounts dialog / AccountManager.
+    public static string AccountsFile => Path.Combine(Root, "accounts.json");
+
+    // Legacy mirror of the enabled stream profiles: one profile name per line,
+    // # comments allowed. Written by AccountManager; read as a first-run import.
     public static string StreamAccountsFile => Path.Combine(Root, "stream-accounts.txt");
 
     // Event log (link routing, popups, startup).
     public static string LogFile => Path.Combine(Root, "idleshell.log");
 
-    public static IReadOnlyList<string> LoadStreamProfiles()
-    {
-        try
-        {
-            if (File.Exists(StreamAccountsFile))
-            {
-                var lines = File.ReadAllLines(StreamAccountsFile)
-                    .Select(l => l.Trim())
-                    .Where(l => l.Length > 0 && !l.StartsWith('#'))
-                    .Where(l => l.All(char.IsLetterOrDigit))
-                    .ToArray();
-                if (lines.Length > 0) return lines;
-            }
-        }
-        catch { /* fall back to built-in list */ }
-        return StreamProfiles;
-    }
-
-    private static string Root =>
+    public static string Root =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Moth", "IdleShell");
