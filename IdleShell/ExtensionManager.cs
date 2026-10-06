@@ -8,11 +8,8 @@ internal sealed class ExtensionManager
     public const string TampermonkeyExtensionId =
         "dhdgffkkebhmkfjojejmpbldmpobfkfo";
 
-    public const string TampermonkeyPackageVersion =
-        "5.6.6242";
-
     public const string TampermonkeyPackageUrl =
-        "https://data.tampermonkey.net/tampermonkey_5_6_6242.crx";
+        "https://www.tampermonkey.net/crx/tampermonkey_stable.crx";
 
     private readonly string _tampermonkeyFolder;
 
