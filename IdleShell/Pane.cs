@@ -61,14 +61,14 @@ internal sealed class Pane
         var profile = JsonSerializer.Serialize(spec.Profile);
         var kind = JsonSerializer.Serialize(spec.Kind.ToString());
 
-        return $"""
+        var script = """
             (() => {
               'use strict';
 
               const info = Object.freeze({
-                title: {{title}},
-                profile: {{profile}},
-                kind: {{kind}}
+                title: __TITLE__,
+                profile: __PROFILE__,
+                kind: __KIND__
               });
 
               try {
@@ -106,6 +106,11 @@ internal sealed class Pane
               } catch (_) {}
             })();
             """;
+
+        return script
+            .Replace("__TITLE__", title, StringComparison.Ordinal)
+            .Replace("__PROFILE__", profile, StringComparison.Ordinal)
+            .Replace("__KIND__", kind, StringComparison.Ordinal);
     }
 
     private async Task ConfigureAsync()
