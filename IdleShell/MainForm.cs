@@ -889,4 +889,3 @@ internal sealed class MainForm : Form
         return form.ShowDialog(this) == DialogResult.OK ? box.Text.Trim() : null;
     }
 }
-        var pane = await Pane.CreateAsync(env, Handle, spec, _userscripts);
