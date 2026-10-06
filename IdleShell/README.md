@@ -9,8 +9,8 @@ native userscript injection and optional persistent Twitch/Kick stream panes.
 - Two persistent WebView2 game profiles: AccountA and AccountB.
 - One shared stream environment with separate named stream profiles.
 - The UI is split into two independent Game 1 / Game 2 workspaces.
-- Each workspace has its own stream tab strip and can use up to 10 stream panes
-  at once, including Twitch and Kick accounts.
+- Each workspace has its own stream tab strip and supports up to 10 Twitch + 10
+  Kick stream slots. A single login profile can carry at most 2 active channels.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell registers them directly with WebView2's
   `AddScriptToExecuteOnDocumentCreatedAsync`; no browser extension or CRX is
@@ -113,3 +113,13 @@ run and then mirrored by AccountManager.
 
 The shell intentionally keeps userscripts simple and transparent: no proprietary
 extension bootstrap, no CRX extraction, and no checked-in generated build state.
+
+
+## Twitch low-resource addon
+
+`addons/twitch-low-resource.user.js` runs on Twitch stream pages. It repeatedly
+forces the lowest quality exposed by Twitch's own quality menu (normally 160p),
+re-applies the setting after player/navigation changes, and disables nonessential
+chat/sidebar rendering with conservative CSS. It does not spoof the player
+protocol or rewrite Twitch media requests, so it remains compatible with normal
+Twitch playback while materially reducing bandwidth and video decode/render cost.
