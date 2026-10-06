@@ -51,7 +51,6 @@ internal sealed class AccountManager
     // rule created an artificial 4-stream ceiling across the two game panes.
     public const int MaxStreamSlotsPerAccount = MaxStreamsPerService;
     public const int MaxStreamSlots = MaxStreamsPerService * 2;
-    public const int DefaultVisibleStreams = 2;
 
     private static readonly Regex GeneratedIdPattern =
         new(@"^(?:StreamKick|Stream|Account)(\d+)$",
@@ -73,8 +72,6 @@ internal sealed class AccountManager
     public IEnumerable<Account> GameAccounts => _accounts.Where(a => a.Service == AccountService.PokeIdle);
     public IEnumerable<Account> StreamAccounts => _accounts.Where(a => a.IsStream);
     public IEnumerable<Account> EnabledStreamAccounts => _accounts.Where(a => a.IsStream && a.Enabled);
-
-    public int VisibleStreamCount { get; set; } = DefaultVisibleStreams;
 
     public Account? Find(string id) =>
         _accounts.FirstOrDefault(a => string.Equals(a.Id, id, StringComparison.OrdinalIgnoreCase));
@@ -114,13 +111,6 @@ internal sealed class AccountManager
         AccountService.PokeIdle => AppConfig.GameUrl,
         _ => AppConfig.GameUrl
     };
-
-    public void SetVisibleStreamCount(int n)
-    {
-        VisibleStreamCount = Math.Clamp(n, 1, MaxStreamSlots);
-        Save();
-        Changed?.Invoke();
-    }
 
     public Account EnsureStreamAccount(AccountService service)
     {
