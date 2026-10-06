@@ -44,7 +44,11 @@ internal sealed record Account(
 /// </summary>
 internal sealed class AccountManager
 {
-    public const int MaxStreamAccounts = 10;
+    public const int MaxStreamAccountsPerService = 10;
+    public const int MaxStreamAccounts = MaxStreamAccountsPerService * 2;
+    public const int MaxStreamsPerService = 10;
+    public const int MaxStreamSlotsPerAccount = 2;
+    public const int MaxStreamSlots = MaxStreamsPerService * 2;
     public const int DefaultVisibleStreams = 2;
 
     private static readonly Regex GeneratedIdPattern =
@@ -111,7 +115,7 @@ internal sealed class AccountManager
 
     public void SetVisibleStreamCount(int n)
     {
-        VisibleStreamCount = Math.Clamp(n, 1, MaxStreamAccounts);
+        VisibleStreamCount = Math.Clamp(n, 1, MaxStreamSlots);
         Save();
         Changed?.Invoke();
     }
@@ -121,9 +125,10 @@ internal sealed class AccountManager
         label = SanitizeLabel(label);
         if (label.Length == 0)
             throw new ArgumentException("Account label must not be empty.");
-        if (service.IsStream() && StreamAccounts.Count() >= MaxStreamAccounts)
+        if (service.IsStream() &&
+            StreamAccounts.Count(a => a.Service == service) >= MaxStreamAccountsPerService)
             throw new InvalidOperationException(
-                $"At most {MaxStreamAccounts} Twitch/Kick login profiles are supported.");
+                $"At most {MaxStreamAccountsPerService} {service} login profiles are supported.");
 
         var account = new Account(NextId(service), label, service);
         _accounts.Add(account);
@@ -143,9 +148,11 @@ internal sealed class AccountManager
     public void SetService(Account account, AccountService service)
     {
         // Moving into the stream pool still respects the cap.
-        if (service.IsStream() && !account.IsStream && StreamAccounts.Count() >= MaxStreamAccounts)
+        if (service.IsStream() &&
+            account.Service != service &&
+            StreamAccounts.Count(a => a.Service == service) >= MaxStreamAccountsPerService)
             throw new InvalidOperationException(
-                $"At most {MaxStreamAccounts} Twitch/Kick login profiles are supported.");
+                $"At most {MaxStreamAccountsPerService} {service} login profiles are supported.");
         Replace(account, account with { Service = service });
     }
 
@@ -206,7 +213,7 @@ internal sealed class AccountManager
                 {
                     mgr._accounts.AddRange(list.Where(IsValid));
                     mgr.VisibleStreamCount =
-                        Math.Clamp(doc.VisibleStreams ?? DefaultVisibleStreams, 1, MaxStreamAccounts);
+                        Math.Clamp(doc.VisibleStreams ?? DefaultVisibleStreams, 1, MaxStreamSlots);
                 }
             }
         }
