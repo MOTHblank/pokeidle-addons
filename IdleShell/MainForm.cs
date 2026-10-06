@@ -329,7 +329,7 @@ internal sealed class MainForm : Form
 
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new ViolentmonkeyManager(addonsFolder);
-            Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.Scripts.Count} repository script(s) found in {addonsFolder}");
+            Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.ScriptNames.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
 
