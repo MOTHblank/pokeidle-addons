@@ -55,6 +55,59 @@ internal sealed class Pane
 
     private readonly UserscriptLoader? _nativeScripts;
 
+    private static string BootstrapScript(PaneSpec spec)
+    {
+        var title = JsonSerializer.Serialize(spec.Title);
+        var profile = JsonSerializer.Serialize(spec.Profile);
+        var kind = JsonSerializer.Serialize(spec.Kind.ToString());
+
+        return $"""
+            (() => {
+              'use strict';
+
+              const info = Object.freeze({
+                title: {{title}},
+                profile: {{profile}},
+                kind: {{kind}}
+              });
+
+              try {
+                Object.defineProperty(window, '__idleshell_hostInfo', {
+                  value: info,
+                  configurable: false,
+                  enumerable: false,
+                  writable: false
+                });
+              } catch (_) {
+                try { window.__idleshell_hostInfo = info; } catch (_) {}
+              }
+
+              try {
+                Object.defineProperty(window, '__idleshell_openLink', {
+                  value: (url, source = 'host-bridge') => {
+                    try {
+                      if (window.chrome?.webview?.postMessage) {
+                        window.chrome.webview.postMessage(JSON.stringify({
+                          type: 'link',
+                          url: String(url),
+                          source,
+                          pane: info.title,
+                          profile: info.profile
+                        }));
+                        return true;
+                      }
+                    } catch (_) {}
+                    return false;
+                  },
+                  configurable: false,
+                  enumerable: false,
+                  writable: false
+                });
+              } catch (_) {}
+            })();
+            """;
+    }
+
     private async Task ConfigureAsync()
     {
         var s = View.Settings;
