@@ -13,12 +13,16 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
   Kick stream slots. A single login profile may carry the full per-service
   capacity; the old two-slot-per-login limit is removed.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
-- The shell builds an unpacked Manifest V3 WebExtension from those files and
-  installs it into each WebView2 profile with
+- The shell embeds the official upstream **Violentmonkey 2.49.0 MV3** extension
+  and installs it into each WebView2 profile with
   `CoreWebView2Profile.AddBrowserExtensionAsync`.
-- Chromium/WebView2 owns URL matching, `run_at`, frame targeting and script
-  execution. The shell no longer evaluates addon source through its old native
-  userscript wrapper.
+- `prepare-violentmonkey.ps1` downloads the official release archive once and
+  verifies its SHA-256 before placing the unpacked extension under
+  `IdleShell/vendor/violentmonkey`. The downloaded runtime is ignored by git.
+- The shell sends the repository's `*.user.js` files to Violentmonkey through
+  VM's own `ParseScript` command on the extension's options page. Chromium and
+  Violentmonkey then own metadata parsing, matching, `run_at`, frame targeting,
+  sandboxing, GM APIs, storage, resources, dependencies and execution.
 
 ## Userscripts
 
@@ -45,8 +49,11 @@ name.
 
 ## Build
 
-Install the .NET 10 SDK and the Evergreen WebView2 Runtime.
+Install the .NET 10 SDK, the Evergreen WebView2 Runtime, and Git/PowerShell.
+The first `.\\run.ps1` or `.\\build.ps1` run downloads and verifies the
+official Violentmonkey 2.49.0 MV3 package.
 
+    .\\run.ps1 -NoRun
     dotnet build IdleShell/IdleShell.csproj -c Release
     dotnet run --project IdleShell/IdleShell.csproj
 
