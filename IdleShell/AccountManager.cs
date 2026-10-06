@@ -47,7 +47,9 @@ internal sealed class AccountManager
     public const int MaxStreamAccountsPerService = 10;
     public const int MaxStreamAccounts = MaxStreamAccountsPerService * 2;
     public const int MaxStreamsPerService = 10;
-    public const int MaxStreamSlotsPerAccount = 2;
+    // A login profile may back any number of the service's stream slots;
+    // the per-service cap is the hard ceiling. This removes the old hidden
+    // four-stream ceiling (2 slots × 2 game workspaces) for each login.
     public const int MaxStreamSlots = MaxStreamsPerService * 2;
     public const int DefaultVisibleStreams = 2;
 
@@ -118,6 +120,19 @@ internal sealed class AccountManager
         VisibleStreamCount = Math.Clamp(n, 1, MaxStreamSlots);
         Save();
         Changed?.Invoke();
+    }
+
+    public Account EnsureStreamAccount(AccountService service)
+    {
+        if (!service.IsStream())
+            throw new ArgumentException("Only Twitch/Kick accounts can be ensured.", nameof(service));
+
+        var existing = StreamAccounts.FirstOrDefault(a => a.Service == service);
+        if (existing is not null)
+            return existing;
+
+        var label = service == AccountService.Kick ? "Kick 1" : "Twitch 1";
+        return Add(label, service);
     }
 
     public Account Add(string label, AccountService service)
@@ -243,6 +258,7 @@ internal sealed class AccountManager
         {
             _accounts.Add(new Account("Stream1", "Stream 1", AccountService.Twitch));
             _accounts.Add(new Account("Stream2", "Stream 2", AccountService.Twitch));
+            _accounts.Add(new Account("StreamKick1", "Kick 1", AccountService.Kick));
         }
         Save();
     }
