@@ -115,17 +115,18 @@ every 30 seconds and writes `probe.csv` under the LocalAppData root.
 
 ## Stream link routing
 
-Twitch/Kick links inside PokéIdle are intercepted by
-`addons/idleshell-link-router.user.js` and handed to the host. The same
-streamer URL is shared between the two game accounts, so a click in either game
-fans the URL out to **both Game 1 and Game 2**, one stream pane per game using
-the matching enabled Twitch/Kick login profile. Manual `G1 + Stream` and
-`G2 + Stream` remain available for opening a stream explicitly.
+Twitch/Kick links inside PokéIdle are intercepted natively by the WebView2 host.
+Game anchor clicks, `window.open`, popup requests, and navigation backstops all feed
+the same routing path, so there is no second userscript competing with the native
+handler. The same streamer URL is shared between the two game accounts, so a click
+in either game fans the URL out to both Game 1 and Game 2, one stream pane per game
+using the matching enabled Twitch/Kick login profile.
 
-Stream profiles are configured through Accounts and persisted in
-`accounts.json`. The legacy `stream-accounts.txt` file is imported on first
-run and then mirrored by AccountManager.
-
+Use the compact **+ Open stream** button in either workspace for manual stream URLs.
+The stream dock is collapsed by default; expand it only when streams are needed.
+Choose **Twitch** or **Kick** to show that service's ten stable slots, `T1`–`T10`
+or `K1`–`K10`. Right-click a slot for login information, open/reload, mute, or
+close actions.
 ## Scope
 
 The shell uses the official Violentmonkey 2.49.0 codebase, with only the
