@@ -74,6 +74,8 @@ else {
 
 # --- run ----------------------------------------------------------------------
 if (-not $NoRun) {
+    $exe = Join-Path $target "IdleShell.exe"
+    if (-not (Test-Path $exe)) { throw "Build output missing: $exe" }
     Write-Host "Launching..."
     Start-Process -FilePath $exe -WorkingDirectory $target
 }
