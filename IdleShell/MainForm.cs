@@ -155,7 +155,6 @@ internal sealed class MainForm : Form
         }
 
         // The picker doubles as a "Reload addons" action: selecting the first
-        // entry re-provisions Tampermonkey + refreshes the native loader and
         // reloads every game pane. Other entries just list loaded scripts.
         _addonsPicker.SelectedIndexChanged += async (_, _) =>
         {
@@ -846,7 +845,6 @@ internal sealed class MainForm : Form
                            $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
                            $" · Accounts: {enabled}/{_slots.Count} routing" +
                            $" · Visible: {_accounts.VisibleStreamCount}" +
-                           $" · Addons: {(_nativeFallback ? "native injector" : "Tampermonkey")} " +
                            $"({_userscripts?.Scripts.Count ?? 0} scripts)";
         }
         catch
@@ -854,7 +852,6 @@ internal sealed class MainForm : Form
             // Keep the last known status; show the addon state if the base
             // text was never set (startup failure path).
             if (_status.Text.Length == 0)
-                _status.Text = $"Addons: {(_tampermonkeyState)}";
         }
     }
 
@@ -888,3 +885,4 @@ internal sealed class MainForm : Form
         return form.ShowDialog(this) == DialogResult.OK ? box.Text.Trim() : null;
     }
 }
+        var pane = await Pane.CreateAsync(env, Handle, spec, _userscripts);
