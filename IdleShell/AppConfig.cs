@@ -25,12 +25,9 @@ internal static class AppConfig
     // match against this pattern — keep the two in sync.
     public const string StreamHostPattern = @"(?:www\.|m\.)?(?:twitch\.tv|kick\.com)";
 
-    // Twitch/Kick login profiles. Each intercepted stream link opens one
-    // hidden Background-mode pane per enabled account, so drops are farmed on
-    // every account at once (up to 10 concurrent streams). The authoritative
-    // registry is AccountManager (accounts.json); names must be alphanumeric
-    // (WebView2 profile restriction).
-    public static readonly string[] StreamProfiles = ["Stream1", "Stream2"];
+    // Stream capacity is managed by AccountManager: up to 10 Twitch stream
+    // slots + 10 Kick stream slots per game, with at most 2 active channels
+    // assigned to any one login profile. accounts.json is authoritative.
 
     // Account registry managed by the Accounts dialog / AccountManager.
     public static string AccountsFile => Path.Combine(Root, "accounts.json");
