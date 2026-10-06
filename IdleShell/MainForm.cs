@@ -124,8 +124,10 @@ internal sealed class MainForm : Form
         BuildToolbar();
         BuildWorkspaceChrome();
         Controls.Add(_toolbar);
-        foreach (var workspace in _workspaces)
-            Controls.Add(workspace.Frame);
+
+        // WebView2 controllers are child HWNDs of the form. A full-size WinForms
+        // Panel above them would occlude the browser surface.
+        // Workspace chrome is therefore parented directly to the form.
 
         Resize += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
@@ -151,11 +153,11 @@ internal sealed class MainForm : Form
         {
             workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
             workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
-            workspace.Frame.Controls.Add(workspace.Header);
-            workspace.Frame.Controls.Add(workspace.Health);
-            workspace.Frame.Controls.Add(workspace.GameToggle);
-            workspace.Frame.Controls.Add(workspace.StreamHeader);
-            workspace.Frame.Controls.Add(workspace.StreamTabs);
+            Controls.Add(workspace.Header);
+            Controls.Add(workspace.Health);
+            Controls.Add(workspace.GameToggle);
+            Controls.Add(workspace.StreamHeader);
+            Controls.Add(workspace.StreamTabs);
 
             workspace.GameToggle.Click += (_, _) =>
             {
@@ -1077,7 +1079,20 @@ internal sealed class MainForm : Form
             var innerWidth = Math.Max(0, frame.Width - 2);
             var innerHeight = Math.Max(0, frame.Height - 2);
 
-            workspace.Header.Bounds = new Rectangle(0, 0, innerWidth, headerHeight);
+            var headerX = frame.X + 1;
+            var headerY = frame.Y + 1;
+            var headerWidth = Math.Max(0, innerWidth - 2);
+
+            workspace.Header.Bounds =
+                new Rectangle(headerX, headerY, Math.Max(0, headerWidth - 154), headerHeight);
+            workspace.Health.Bounds =
+                new Rectangle(headerX + Math.Max(0, headerWidth - 154), headerY, 82, headerHeight);
+            workspace.GameToggle.Bounds =
+                new Rectangle(
+                    headerX + Math.Max(0, headerWidth - 72),
+                    headerY + 4,
+                    68,
+                    headerHeight - 8);
             workspace.Header.BackColor = SystemColors.ActiveCaption;
             workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
 
@@ -1089,11 +1104,19 @@ internal sealed class MainForm : Form
                     innerHeight - streamHeaderHeight - tabHeight - 180));
 
             workspace.StreamHeader.Bounds =
-                new Rectangle(0, streamSplit, innerWidth, streamHeaderHeight);
+                new Rectangle(
+                    headerX,
+                    frame.Y + 1 + streamSplit,
+                    headerWidth,
+                    streamHeaderHeight);
             workspace.StreamHeader.BackColor = SystemColors.ControlLight;
 
             workspace.StreamTabs.Bounds =
-                new Rectangle(0, streamSplit + streamHeaderHeight, innerWidth, tabHeight);
+                new Rectangle(
+                    headerX,
+                    frame.Y + 1 + streamSplit + streamHeaderHeight,
+                    headerWidth,
+                    tabHeight);
 
             var gameBounds = new Rectangle(
                 frame.X + 3,
