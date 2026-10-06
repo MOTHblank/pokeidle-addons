@@ -1,2 +1,11 @@
-/IdleShell/bin
-/IdleShell/obj
+# Compiled/Binary files and Build Artifacts
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.cache
+
+# IDE/Editor files
+.vscode/
+.idea/
