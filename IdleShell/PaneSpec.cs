@@ -5,8 +5,15 @@ namespace Moth.PokeIdle.IdleShell;
 
 internal enum PaneKind { Game, Stream }
 
+// How an inactive stream pane behaves. Background = IsVisible=false (no compositing,
+// timers kept alive via browser flags). Parked = off-screen but still rendering
+// (fallback if platforms pause when hidden).
+internal enum StreamMode { Background, Parked }
+
 // Profile names must be alphanumeric (WebView2 restriction).
-internal sealed record PaneSpec(string Title, string Url, string Profile, PaneKind Kind);
+internal sealed record PaneSpec(
+    string Title, string Url, string Profile, PaneKind Kind,
+    StreamMode Mode = StreamMode.Background);
 
 internal static class SessionStore
 {
