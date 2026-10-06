@@ -25,8 +25,8 @@
 
     <!-- WebView2 userscript extension bridge files. -->
     <Content Include="UserscriptExtension\**\*"
-             LinkBase="userscript-extension"
-             CopyToOutputDirectory="PreserveNewest" />
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- WebView2 includes a WPF assembly in its transitive package surface.
