@@ -28,14 +28,23 @@ Run once from the repository:
 
     powershell -ExecutionPolicy Bypass -File IdleShell/setup-tampermonkey.ps1
 
-The script downloads the official Tampermonkey package and extracts it to:
+The script downloads the official stable Tampermonkey package and extracts it
+to:
 
     %LOCALAPPDATA%\Moth\IdleShell\Extensions\Tampermonkey
 
 Idle Shell installs that unpacked package into AccountA and AccountB
 automatically.
 
-The setup script currently pins Tampermonkey 5.6.6242.
+## Important Tampermonkey permission
+
+Current Chrome/Edge Tampermonkey releases require the browser's special
+userscript permission before userscripts can be injected. WebView2 does not
+provide the normal browser extension-management UI, so this permission must
+be confirmed during local validation. If the installed extension reports that
+userscript injection is disabled, the shell integration is incomplete on that
+WebView2 runtime and must be handled before relying on Tampermonkey as the
+runtime.
 
 ## Build
 
@@ -61,5 +70,11 @@ The shell now delegates userscript execution to Tampermonkey. The former
 `UserscriptLoader.cs` compatibility injector remains in the repository only
 as a fallback/reference while the integration is being validated.
 
-The next shell layer should build tabs and explicit foreground/background
-lifecycle on top of this profile/extension foundation.
+Automatic registration of the repository's `addons/*.user.js` files is not
+implemented yet. This is intentionally separate from extension installation:
+Tampermonkey provides the userscript runtime, but its script database is not
+part of the WebView2 extension-management API.
+
+The next shell layer should build a small script provisioning mechanism and
+then tabs plus explicit foreground/background lifecycle on top of this
+profile/extension foundation.
