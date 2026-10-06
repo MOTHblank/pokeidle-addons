@@ -109,12 +109,8 @@ internal sealed class AccountsDialog : Form
             _accounts.SetVisibleStreamCount((int)_visibleUpDown.Value);
             UpdateVisibleLabel();
         };
-        visibleRow.Controls.AddRange([_visibleLabel, new Label
-        {
-            AutoSize = true,
-            Text = "Visible streams per game (the rest run hidden):",
-            Location = new Point(10, 9)
-        }, _visibleUpDown]);
+        _visibleLabel.Location = new Point(10, 9);
+        visibleRow.Controls.AddRange([_visibleLabel, _visibleUpDown]);
 
         Controls.Add(_list);
         Controls.Add(_serviceCombo);
