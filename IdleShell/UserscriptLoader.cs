@@ -5,16 +5,8 @@ using Microsoft.Web.WebView2.Core;
 
 namespace Moth.PokeIdle.IdleShell;
 
-// Native userscript injector used when Tampermonkey is unavailable (or as a
-// fallback alongside it). It parses each addons/*.user.js header block, and
-// registers a document-start bootstrap per pane that decodes and evaluates
-// every script whose @match/@include patterns cover the page URL.
-//
-// Scripts are evaluated inside the MAIN world wrapped in an IIFE, so they
-// observe and hook the real page (the addons feature-detect `unsafeWindow`
-// and fall back to `window`). A minimal GM_* compatibility surface is defined
-// first: storage over localStorage, menu/no-op APIs, and a fetch-based
-// GM_xmlhttpRequest shim.
+// Lightweight userscript host for this repository's *.user.js addons.
+// Supports the metadata and GM APIs currently used by the project.
 internal sealed class UserscriptLoader
 {
     private static readonly Regex MetadataBlock = new(
@@ -30,36 +22,25 @@ internal sealed class UserscriptLoader
     public UserscriptLoader(string addonsFolder)
     {
         Folder = Path.GetFullPath(addonsFolder);
-
         Load();
     }
 
     public string Folder { get; }
-
     public IReadOnlyList<Userscript> Scripts => _scripts;
 
-    // Registers (or re-registers) the injection bootstrap on a pane's view.
-    // Safe to call repeatedly; AddScriptToExecuteOnDocumentCreatedAsync
-    // persists for the lifetime of the CoreWebView2 instance.
     public async Task AttachAsync(CoreWebView2 view)
     {
-        var bootstrap = BuildBootstrap();
-
-        await view.AddScriptToExecuteOnDocumentCreatedAsync(bootstrap);
+        if (_scripts.Count == 0) return;
+        await view.AddScriptToExecuteOnDocumentCreatedAsync(BuildBootstrap());
     }
 
     private void Load()
     {
         _scripts.Clear();
+        if (!Directory.Exists(Folder)) return;
 
-        if (!Directory.Exists(Folder))
-            return;
-
-        var files = Directory
-            .EnumerateFiles(Folder, "*.user.js", SearchOption.TopDirectoryOnly)
-            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var file in files)
+        foreach (var file in Directory.EnumerateFiles(Folder, "*.user.js", SearchOption.TopDirectoryOnly)
+                     .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
@@ -68,8 +49,7 @@ internal sealed class UserscriptLoader
             catch (Exception ex)
             {
                 Console.Error.WriteLine(
-                    $"[IdleShell] userscript {Path.GetFileName(file)} " +
-                    $"skipped: {ex.Message}");
+                    $"[IdleShell] userscript {Path.GetFileName(file)} skipped: {ex.Message}");
             }
         }
     }
@@ -77,11 +57,9 @@ internal sealed class UserscriptLoader
     private static Userscript Parse(string path)
     {
         var source = File.ReadAllText(path);
-
         var body = MetadataBlock.Match(source) is { Success: true } m
             ? m.Groups["body"].Value
-            : throw new InvalidDataException(
-                "no ==UserScript== metadata block");
+            : throw new InvalidDataException("no ==UserScript== metadata block");
 
         var name = Path.GetFileNameWithoutExtension(path);
         var runAt = "document-end";
@@ -93,34 +71,20 @@ internal sealed class UserscriptLoader
         {
             var key = line.Groups["key"].Value.ToLowerInvariant();
             var value = line.Groups["value"].Value.Trim();
-
             switch (key)
             {
-                case "name":
-                    if (value.Length > 0) name = value;
-                    break;
-                case "match":
-                    matches.Add(value);
-                    break;
-                case "include":
-                    includes.Add(value);
-                    break;
-                case "grant":
-                    grants.Add(value);
-                    break;
-                case "run-at":
-                    runAt = value.ToLowerInvariant();
-                    break;
+                case "name": if (value.Length > 0) name = value; break;
+                case "match": matches.Add(value); break;
+                case "include": includes.Add(value); break;
+                case "grant": grants.Add(value); break;
+                case "run-at": runAt = value.ToLowerInvariant(); break;
             }
         }
 
         if (matches.Count == 0 && includes.Count == 0)
-        {
-            throw new InvalidDataException(
-                "no @match or @include metadata");
-        }
+            throw new InvalidDataException("no @match or @include metadata");
 
-        return new Userscript(name, source, matches, runAt, path)
+        return new Userscript(name, source, matches, NormalizeRunAt(runAt), path)
         {
             Includes = includes,
             Grants = grants
@@ -129,194 +93,302 @@ internal sealed class UserscriptLoader
 
     private string BuildBootstrap()
     {
-        var payload = _scripts.Select(script => new InjectedScript(
+        var payload = JsonSerializer.Serialize(_scripts.Select(script => new InjectedScript(
             script.Name,
             script.Matches,
             script.Includes,
-            Convert.ToBase64String(
-                Encoding.UTF8.GetBytes(script.Source))));
+            script.RunAt,
+            script.Grants,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(script.Source)))));
 
-        var json = JsonSerializer.Serialize(payload);
-
-        // The generated JS must not contain a literal </script> sequence.
-        json = json.Replace("</", "<\\/");
-
+        payload = payload.Replace("</", "<\/");
         return $$"""
             (() => {
               'use strict';
-              const SCRIPTS = {{json}};
-              const NS = '__idleshell_native_' + Math.random().toString(36).slice(2);
+              const SCRIPTS = {{payload}};
 
-              try { Object.defineProperty(window, NS, { value: window }); } catch (e) {}
+              const escapeRegex = (value) => String(value)
+                .replaceAll("\\", "\\\\")
+                .replaceAll(".", "\\.")
+                .replaceAll("+", "\\+")
+                .replaceAll("?", "\\?")
+                .replaceAll("^", "\\^")
+                .replaceAll("|", "\\|")
+                .replaceAll("(", "\\(")
+                .replaceAll(")", "\\)")
+                .replaceAll("[", "\\[")
+                .replaceAll("]", "\\]");
 
-              function idleshellMatch(pattern, url) {
+              const wildcardRegex = (pattern) =>
+                new RegExp("^" + escapeRegex(pattern).split("*").join(".*") + "$", "i");
+
+              const matchPattern = (pattern, url) => {
                 try {
-                  const prefix = pattern.split('*')[0];
+                  const p = String(pattern).trim();
                   const u = new URL(url);
-                  const candidate = u.origin + u.pathname;
-                  if (!candidate.startsWith(prefix)) return false;
-                  if (pattern.endsWith('*')) return true;
-                  const last = pattern[pattern.length - 1];
-                  if ('/?=&#'.includes(last)) return true;
-                  return candidate === pattern || u.href === pattern;
-                } catch (e) { return false; }
-              }
+                  const parts = p.match(/^([^:]+):\/\/([^/]+)(\/.*)?$/);
+                  if (!parts) return false;
+                  const protocol = parts[1] === "*" ? "[a-z]+" : escapeRegex(parts[1]);
+                  const host = parts[2].split("*").map(escapeRegex).join("[^/]*");
+                  const path = (parts[3] || "").split("*").map(escapeRegex).join(".*");
+                  return new RegExp("^" + protocol + "://" + host + path + "$", "i").test(u.href);
+                } catch (_) {
+                  return false;
+                }
+              };
 
-              function idleshellGM() {
-                const storeMem = new Map();
-                const raw = (k) => 'userscript.' + k;
+              const includePattern = (pattern, url) => {
+                try { return wildcardRegex(pattern).test(url); }
+                catch (_) { return false; }
+              };
+
+              const installApi = (entry) => {
+                const memory = new Map();
+                const prefix = "userscript:" + entry.name + ":";
                 let ls = null;
-                try { ls = window.localStorage; ls.getItem('__probe__'); }
-                catch (e) { ls = null; }
-                const getItem = (k) => {
-                  try { return ls ? ls.getItem(raw(k)) : (storeMem.has(k) ? storeMem.get(k) : null); }
-                  catch (e) { return storeMem.has(k) ? storeMem.get(k) : null; }
+                try { ls = window.localStorage; ls.getItem("__idleshell_probe__"); } catch (_) {}
+
+                const read = (key) => {
+                  try {
+                    return ls ? ls.getItem(prefix + key) :
+                      (memory.has(key) ? memory.get(key) : null);
+                  } catch (_) {
+                    return memory.get(key) ?? null;
+                  }
                 };
-                const setItem = (k, v) => {
-                  v = String(v);
-                  try { if (ls) ls.setItem(raw(k), v); else storeMem.set(k, v); }
-                  catch (e) { storeMem.set(k, v); }
+
+                const write = (key, value) => {
+                  const text = String(value);
+                  try {
+                    if (ls) ls.setItem(prefix + key, text);
+                    else memory.set(key, text);
+                  } catch (_) {
+                    memory.set(key, text);
+                  }
                 };
-                const delItem = (k) => {
-                  try { if (ls) ls.removeItem(raw(k)); else storeMem.delete(k); }
-                  catch (e) { storeMem.delete(k); }
+
+                const remove = (key) => {
+                  try {
+                    if (ls) ls.removeItem(prefix + key);
+                    else memory.delete(key);
+                  } catch (_) {
+                    memory.delete(key);
+                  }
                 };
-                const noop = () => {};
+
                 const api = {
-                  GM_getValue: (k, d) => {
-                    const v = getItem(k);
-                    if (v === null) return d;
-                    try { return JSON.parse(v); } catch (e) { return v; }
+                  GM_getValue: (key, fallback) => {
+                    const value = read(String(key));
+                    if (value === null) return fallback;
+                    try { return JSON.parse(value); } catch (_) { return value; }
                   },
-                  GM_setValue: (k, v) => setItem(k, JSON.stringify(v)),
-                  GM_deleteValue: (k) => delItem(k),
+                  GM_setValue: (key, value) => write(String(key), JSON.stringify(value)),
+                  GM_deleteValue: (key) => remove(String(key)),
                   GM_listValues: () => {
                     try {
-                      if (!ls) return [...storeMem.keys()];
+                      if (!ls) return [...memory.keys()];
                       const out = [];
                       for (let i = 0; i < ls.length; i++) {
                         const key = ls.key(i);
-                        if (key && key.startsWith('userscript.')) out.push(key.slice(11));
+                        if (key && key.startsWith(prefix)) out.push(key.slice(prefix.length));
                       }
                       return out;
-                    } catch (e) { return [...storeMem.keys()]; }
+                    } catch (_) {
+                      return [...memory.keys()];
+                    }
+                  },
+                  GM_addStyle: (css) => {
+                    try {
+                      const style = document.createElement("style");
+                      style.textContent = String(css);
+                      (document.head || document.documentElement).appendChild(style);
+                      return style;
+                    } catch (_) {
+                      return null;
+                    }
+                  },
+                  GM_registerMenuCommand: () => null,
+                  GM_unregisterMenuCommand: () => null,
+                  GM_notification: () => null,
+                  GM_setClipboard: (value) => {
+                    try { return navigator.clipboard?.writeText(String(value)); }
+                    catch (_) { return null; }
+                  },
+                  GM_openInTab: (url) => {
+                    try { return window.open(String(url), "_blank"); }
+                    catch (_) { return null; }
                   },
                   GM_getResourceText: () => null,
                   GM_getResourceURL: () => null,
-                  GM_addStyle: (css) => {
-                    try {
-                      const s = document.createElement('style');
-                      s.textContent = css;
-                      (document.head || document.documentElement).appendChild(s);
-                      return s;
-                    } catch (e) { return null; }
-                  },
-                  GM_registerMenuCommand: noop,
-                  GM_unregisterMenuCommand: noop,
-                  GM_setClipboard: (text) => {
-                    try { navigator.clipboard.writeText(String(text)); } catch (e) {}
-                  },
-                  GM_openInTab: (url) => {
-                    try { window.open(url, '_blank'); } catch (e) {}
-                  },
-                  GM_notification: noop,
                   unsafeWindow: window
                 };
-                api.GM_xmlhttpRequest = (details) => {
-                  details = details || {};
-                  const done = (fn, arg) => { try { if (typeof fn === 'function') fn(arg); } catch (e) {} };
+
+                api.GM_xmlhttpRequest = (details = {}) => {
+                  let settled = false;
+                  const controller = typeof AbortController !== "undefined"
+                    ? new AbortController()
+                    : null;
+                  const finish = (callback, value) => {
+                    try {
+                      if (typeof callback === "function") callback(value);
+                    } catch (_) {}
+                  };
+
                   const headers = {};
                   try {
-                    (String(details.headers || '') ? [] : Object.entries(details.headers || {}))
-                      .forEach(([k, v]) => { headers[k] = String(v); });
-                  } catch (e) {}
-                  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    if (details.headers && typeof details.headers === "object") {
+                      for (const [key, value] of Object.entries(details.headers))
+                        headers[key] = String(value);
+                    }
+                  } catch (_) {}
+
                   const request = {
-                    abort: () => { try { controller && controller.abort(); } catch (e) {} }
+                    abort() {
+                      if (settled) return;
+                      settled = true;
+                      try { controller?.abort(); } catch (_) {}
+                      finish(details.onabort, request);
+                      finish(details.onloadend, request);
+                    }
                   };
-                  done(details.onabort, request);
-                  fetch(details.url, {
-                    method: details.method || (details.data !== undefined ? 'POST' : 'GET'),
+
+                  const timeoutId = details.timeout > 0
+                    ? setTimeout(() => request.abort(), Number(details.timeout))
+                    : null;
+
+                  fetch(String(details.url), {
+                    method: String(details.method ||
+                      (details.data !== undefined ? "POST" : "GET")).toUpperCase(),
                     headers,
                     body: details.data !== undefined ? details.data : undefined,
-                    redirect: 'follow',
-                    credentials: details.anonymous ? 'omit' : 'same-origin',
-                    signal: controller ? controller.signal : undefined
-                  }).then(async (res) => {
-                    const text = await res.text();
-                    const xml = (() => {
-                      try {
-                        return /xml/i.test(res.headers.get('content-type') || '') ||
-                               /^\s*<\?xml/.test(text)
-                          ? new DOMParser().parseFromString(text, 'text/xml') : null;
-                      } catch (e) { return null; }
-                    })();
-                    const resp = {
-                      readyState: 4, status: res.status, statusText: res.statusText,
-                      responseHeaders: (() => {
-                        let out = '';
-                        try { res.headers.forEach((v, k) => { out += k + ': ' + v + '\r\n'; }); } catch (e) {}
-                        return out;
-                      })(),
-                      responseText: text, response: text, responseXML: xml,
-                      finalUrl: res.url, context: details.context
+                    redirect: "follow",
+                    credentials: "omit",
+                    mode: "cors",
+                    signal: controller?.signal
+                  }).then(async (response) => {
+                    if (settled) return;
+
+                    const text = await response.text();
+                    let parsed = text;
+                    if (details.responseType === "json") {
+                      try { parsed = JSON.parse(text); } catch (_) {}
+                    }
+
+                    const responseHeaders = [];
+                    try {
+                      response.headers.forEach((value, key) =>
+                        responseHeaders.push(key + ": " + value));
+                    } catch (_) {}
+
+                    const result = {
+                      readyState: 4,
+                      status: response.status,
+                      statusText: response.statusText,
+                      responseHeaders: responseHeaders.join("\r\n"),
+                      responseText: text,
+                      response: parsed,
+                      responseXML: null,
+                      finalUrl: response.url,
+                      context: details.context
                     };
-                    if (res.ok) done(details.onload, resp);
-                    else done(details.onerror, { ...resp, status: res.status });
-                    done(details.onloadend, resp);
-                  }).catch((err) => {
-                    done(details.onerror, {
-                      readyState: 4, status: 0, statusText: String(err && err.name || 'error'),
-                      responseText: '', response: null, responseXML: null,
-                      finalUrl: details.url, context: details.context, error: err
-                    });
-                    done(details.onloadend, null);
+
+                    settled = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    if (response.ok) finish(details.onload, result);
+                    else finish(details.onerror, result);
+                    finish(details.onloadend, result);
+                  }).catch((error) => {
+                    if (settled) return;
+
+                    settled = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    if (error?.name === "AbortError")
+                      finish(details.onabort, request);
+                    else
+                      finish(details.onerror, {
+                        readyState: 4,
+                        status: 0,
+                        statusText: String(error?.name || "error"),
+                        responseText: "",
+                        response: null,
+                        responseXML: null,
+                        finalUrl: String(details.url || ""),
+                        context: details.context,
+                        error
+                      });
+                    finish(details.onloadend, request);
                   });
+
                   return request;
                 };
-                return api;
-              }
 
-              function idleshellInstall() {
-                const gm = idleshellGM();
-                for (const key of Object.keys(gm)) {
+                for (const [key, value] of Object.entries(api)) {
                   try {
                     if (window[key] === undefined) {
-                      Object.defineProperty(window, key,
-                        { value: gm[key], configurable: true, writable: true });
+                      Object.defineProperty(window, key, {
+                        value,
+                        configurable: true,
+                        writable: true
+                      });
                     }
-                  } catch (e) {}
+                  } catch (_) {}
                 }
-                for (const entry of SCRIPTS) {
-                  let hit = entry.matches.some((p) => idleshellMatch(p, location.href));
-                  if (!hit) hit = entry.includes.some((p) => {
-                    try { return location.href.includes(new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).source.replace(/\\\*/g, '.*')); }
-                    catch (e) { return location.href.includes(p); }
-                  });
-                  if (!hit) continue;
-                  try {
-                    const src = decodeURIComponent(escape(atob(entry.code)));
-                    const fn = new Function('"use strict";\n' + src +
-                      '\n//# sourceURL=idleshell://' + encodeURIComponent(entry.name) + '.user.js');
-                    fn.call(window);
-                  } catch (err) {
-                    try {
-                      console.error('[IdleShell] userscript failed: ' + entry.name, err);
-                    } catch (e) {}
-                  }
-                }
-              }
+              };
 
-              try { idleshellInstall(); } catch (e) {
-                try { console.error('[IdleShell] userscript bootstrap failed', e); } catch (x) {}
-              }
+              const execute = (entry) => {
+                const hitMatch = entry.matches.some(p => matchPattern(p, location.href));
+                const hitInclude = !hitMatch && entry.includes.some(p => includePattern(p, location.href));
+                if (!hitMatch && !hitInclude) return;
+
+                const run = () => {
+                  try {
+                    installApi(entry);
+                    const source = decodeURIComponent(escape(atob(entry.code)));
+                    const fn = new Function('"use strict";\n' + source +
+                      '\n//# sourceURL=idleshell://' +
+                      encodeURIComponent(entry.name) + '.user.js');
+                    fn.call(window);
+                  } catch (error) {
+                    try {
+                      console.error("[IdleShell] userscript failed: " + entry.name, error);
+                    } catch (_) {}
+                  }
+                };
+
+                switch (entry.runAt) {
+                  case "document-start":
+                    run();
+                    break;
+                  case "document-idle":
+                    if (document.readyState === "complete")
+                      setTimeout(run, 0);
+                    else
+                      window.addEventListener("load", () => setTimeout(run, 0), { once: true });
+                    break;
+                  default:
+                    if (document.readyState === "loading")
+                      document.addEventListener("DOMContentLoaded", run, { once: true });
+                    else
+                      queueMicrotask(run);
+                    break;
+                }
+              };
+
+              for (const entry of SCRIPTS) execute(entry);
             })();
             """;
     }
+
+    private static string NormalizeRunAt(string value) =>
+        value is "document-start" or "document-end" or "document-idle"
+            ? value
+            : "document-end";
 
     private sealed record InjectedScript(
         string Name,
         IReadOnlyList<string> Matches,
         IReadOnlyList<string> Includes,
+        string RunAt,
+        IReadOnlyList<string> Grants,
         string Code);
 }

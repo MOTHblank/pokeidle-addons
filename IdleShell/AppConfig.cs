@@ -35,8 +35,8 @@ internal static class AppConfig
     // Account registry managed by the Accounts dialog / AccountManager.
     public static string AccountsFile => Path.Combine(Root, "accounts.json");
 
-    // Legacy mirror of the enabled stream profiles: one profile name per line,
-    // # comments allowed. Written by AccountManager; read as a first-run import.
+    // Optional legacy mirror of enabled stream profiles. Imported on first run,
+    // then kept in sync by AccountManager.
     public static string StreamAccountsFile => Path.Combine(Root, "stream-accounts.txt");
 
     // Event log (link routing, popups, startup).
@@ -51,10 +51,7 @@ internal static class AppConfig
 
     public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
     public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
-    public static string SessionFile => Path.Combine(Root, "session.json");
-	public static string TampermonkeyProvisioningFolder =>
-		Path.Combine(Root, "TampermonkeyProvisioning");
-    // Put unpacked extensions (e.g. Tampermonkey) in subfolders here.
+    public static string SessionFile => Path.Combine(Root, "session.json");    // Put unpacked extensions (e.g. Tampermonkey) in subfolders here.
     public static string ExtensionsFolder =>
         Path.Combine(AppContext.BaseDirectory, "extensions");
 }
