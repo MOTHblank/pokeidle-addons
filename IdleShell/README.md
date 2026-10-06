@@ -78,7 +78,12 @@ Stream profile data:
 
     %LOCALAPPDATA%\Moth\IdleShell\Streams\
 
-## Stream background mode
+## Background game and stream mode
+
+Each game workspace can be switched independently between **Foreground** and
+**Background**. Background games remain alive and keep running their userscripts;
+the shell probes JavaScript responsiveness and 1-second timer drift every 30
+seconds and shows a per-game health indicator.
 
 Inactive stream panes default to **Background** mode:
 `CoreWebView2Controller.IsVisible = false`, while Chromium's background
