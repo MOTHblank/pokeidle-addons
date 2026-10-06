@@ -981,15 +981,15 @@ internal sealed class MainForm : Form
 
             var infos = _gameEnv.GetProcessInfos();
             var streamInfos = _streamEnv?.GetProcessInfos();
-            var open = _slots.Count(s => s.Pane is not null);
-            var fg = ForegroundCandidates().Count;
-            var enabled = EnabledStreamSlots().Count();
+            var open = AllStreamSlots().Count(s => s.Pane is not null);
+            var fg = _workspaces.Sum(w => ForegroundCandidates(w).Count);
+            var enabled = _accounts.EnabledStreamAccounts.Count();
 
             _status.Text =
-                $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
+                $"Games: {_games.Count}/2 · Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
                 $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
-                $" · Accounts: {enabled}/{_slots.Count} routing" +
-                $" · Visible: {_accounts.VisibleStreamCount}" +
+                $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · Up to 10 per game" +
+                $" · Visible/game: {_accounts.VisibleStreamCount}" +
                 $" · Addons: {_userscripts?.Scripts.Count ?? 0} userscripts";
         }
         catch (Exception ex)
@@ -1004,12 +1004,30 @@ internal sealed class MainForm : Form
     {
         var specs = new List<PaneSpec>();
         specs.AddRange(_games.Select(p => p.Snapshot()));
-        foreach (var slot in _slots)
-            if (slot.Pane is { } p) specs.Add(p.Snapshot());
-        specs.AddRange(_extraPanes.Values.Select(p => p.Snapshot()));
-        // Remember which tab was foregrounded (-1 = all background).
-        specs.Add(new PaneSpec("active", "", _activeTabIndex >= 0 && _activeTabIndex < _slots.Count
-            ? _slots[_activeTabIndex].Account.Id : "-", PaneKind.ActiveStreamMarker));
+        foreach (var workspace in _workspaces)
+        {
+            foreach (var slot in workspace.Slots)
+            {
+                if (slot.Pane is { } p)
+                    specs.Add(p.Snapshot() with { Group = workspace.GameProfile });
+            }
+
+            foreach (var pane in workspace.ExtraPanes.Values)
+                specs.Add(pane.Snapshot() with { Group = workspace.GameProfile });
+
+            var activeProfile = workspace.ActiveTabIndex >= 0 &&
+                                workspace.ActiveTabIndex < workspace.Slots.Count
+                ? workspace.Slots[workspace.ActiveTabIndex].Account.Id
+                : "-";
+
+            specs.Add(new PaneSpec(
+                $"active-game-{workspace.Index + 1}",
+                "",
+                activeProfile,
+                PaneKind.ActiveStreamMarker,
+                StreamMode.Background,
+                workspace.GameProfile));
+        }
         SessionStore.Save(specs);
     }
 
