@@ -30,13 +30,11 @@ internal sealed class Pane
         PaneSpec spec,
         CoreWebView2Controller controller,
         CoreWebView2Environment environment,
-        IntPtr hostWindowHandle,
         ViolentmonkeyManager? userscripts)
     {
         Spec = spec;
         Controller = controller;
         _environment = environment;
-        _hostWindowHandle = hostWindowHandle;
         _userscripts = userscripts;
         if (spec.Kind == PaneKind.Stream) Mode = spec.Mode;
     }
@@ -50,7 +48,7 @@ internal sealed class Pane
         options.IsInPrivateModeEnabled = false;
 
         var controller = await env.CreateCoreWebView2ControllerAsync(hwnd, options);
-        var pane = new Pane(spec, controller, env, hwnd, userscripts);
+        var pane = new Pane(spec, controller, env, userscripts);
         await pane.ConfigureAsync();
 
         pane.View.Navigate(spec.Url);
@@ -59,7 +57,6 @@ internal sealed class Pane
 
     private readonly ViolentmonkeyManager? _userscripts;
     private readonly CoreWebView2Environment _environment;
-    private readonly IntPtr _hostWindowHandle;
 
     private static string BootstrapScript(PaneSpec spec)
     {
@@ -230,7 +227,7 @@ internal sealed class Pane
         // navigation, and synchronize repository scripts through VM's own API.
         if (_userscripts is not null)
             await _userscripts.InstallForProfileAsync(
-                View.Profile, _environment, _hostWindowHandle);
+                View.Profile, _environment);
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -268,7 +265,7 @@ internal sealed class Pane
     // Hide()/Park() apply Low. Never mix with TrySuspend.
     public Task AttachUserscriptAsync(ViolentmonkeyManager manager) =>
         manager.InstallForProfileAsync(
-            View.Profile, _environment, _hostWindowHandle);
+            View.Profile, _environment);
 
     public void Show(Rectangle bounds)
     {
