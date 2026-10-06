@@ -58,16 +58,25 @@
         if (typeof rawUrl !== 'string' || !STREAM_URL_RE.test(rawUrl)) return false;
         const url = new URL(rawUrl, location.href).href;
         const h = info();
-        // Always report what we intercepted so the shell can log it.
-        post({ type: 'link', url, source, pane: h.title, profile: h.profile });
-        return true;
+        // Only claim the event when the host actually received it. If the
+        // WebView2 bridge is unavailable (for example, when this userscript
+        // executes in a context that cannot see chrome.webview), return false
+        // so the browser/native WebView2 fallback can handle the popup or
+        // navigation normally.
+        return post({
+            type: 'link',
+            url,
+            source,
+            pane: h.title,
+            profile: h.profile
+        });
     };
 
     // 1. window.open(...) calls from the game or other userscripts.
     const realOpen = HOST.open ? HOST.open.bind(HOST) : null;
     const patchedOpen = function (url, ...rest) {
         if (route(url, 'window.open')) {
-            // Return a dummy Window-like object so callers don't crash.
+            // The host owns the stream URL only after post() succeeds.
             return { closed: false, close() {}, focus() {}, blur() {}, location: { href: String(url) } };
         }
         return realOpen ? realOpen(url, ...rest) : undefined;
@@ -77,7 +86,9 @@
 
     // 2. Anchor clicks (target=_blank or plain) anywhere in the page.
     //    Capture phase + stopPropagation so the game's own handlers don't
-    //    double-handle the same click.
+    //    double-handle the same click. We only suppress the click if the host
+    //    accepted the route; otherwise native WebView2 popup/navigation
+    //    handling remains available as the fallback.
     const clickHandler = (e) => {
         const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
         if (!a) return;
