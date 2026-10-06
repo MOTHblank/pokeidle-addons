@@ -124,8 +124,6 @@ internal sealed class MainForm : Form
         BuildToolbar();
         BuildWorkspaceChrome();
         Controls.Add(_toolbar);
-        foreach (var workspace in _workspaces)
-            Controls.Add(workspace.Frame);
 
         Resize += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
@@ -151,11 +149,14 @@ internal sealed class MainForm : Form
         {
             workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
             workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
-            workspace.Frame.Controls.Add(workspace.Header);
-            workspace.Frame.Controls.Add(workspace.Health);
-            workspace.Frame.Controls.Add(workspace.GameToggle);
-            workspace.Frame.Controls.Add(workspace.StreamHeader);
-            workspace.Frame.Controls.Add(workspace.StreamTabs);
+
+            // WebView2 controllers are child HWNDs of the form. A full-size
+            // workspace panel can otherwise cover the WebView surface.
+            Controls.Add(workspace.Header);
+            Controls.Add(workspace.Health);
+            Controls.Add(workspace.GameToggle);
+            Controls.Add(workspace.StreamHeader);
+            Controls.Add(workspace.StreamTabs);
 
             workspace.GameToggle.Click += (_, _) =>
             {
@@ -1084,7 +1085,8 @@ internal sealed class MainForm : Form
             var innerWidth = Math.Max(0, frame.Width - 2);
             var innerHeight = Math.Max(0, frame.Height - 2);
 
-            workspace.Header.Bounds = new Rectangle(0, 0, innerWidth, headerHeight);
+            workspace.Header.Bounds =
+                new Rectangle(frame.X + 1, frame.Y, innerWidth, headerHeight);
             workspace.Header.BackColor = SystemColors.ActiveCaption;
             workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
 
@@ -1096,11 +1098,15 @@ internal sealed class MainForm : Form
                     innerHeight - streamHeaderHeight - tabHeight - 180));
 
             workspace.StreamHeader.Bounds =
-                new Rectangle(0, streamSplit, innerWidth, streamHeaderHeight);
+                new Rectangle(frame.X + 1, frame.Y + streamSplit, innerWidth, streamHeaderHeight);
             workspace.StreamHeader.BackColor = SystemColors.ControlLight;
 
             workspace.StreamTabs.Bounds =
-                new Rectangle(0, streamSplit + streamHeaderHeight, innerWidth, tabHeight);
+                new Rectangle(
+                    frame.X + 1,
+                    frame.Y + streamSplit + streamHeaderHeight,
+                    innerWidth,
+                    tabHeight);
 
             var gameBounds = new Rectangle(
                 frame.X + 3,
