@@ -20,9 +20,9 @@ internal static class AppConfig
     // Probe CSV: logs visibilityState + timer drift per pane, one row per tick.
     public static string ProbeCsvFile => Path.Combine(Root, "probe.csv");
 
-    // Hosts treated as stream links (twitch.tv / kick.com). The link-router
-    // userscript and the shell's NewWindowRequested/navigation backstops all
-    // match against this pattern — keep the two in sync.
+    // Hosts treated as stream links (twitch.tv / kick.com). Native WebView2
+    // navigation/popup handling in Pane.cs owns routing; no separate router
+    // userscript is required.
     public const string StreamHostPattern = @"(?:www\.|m\.)?(?:twitch\.tv|kick\.com)";
 
     // Stream capacity is managed by AccountManager: up to 10 Twitch stream
