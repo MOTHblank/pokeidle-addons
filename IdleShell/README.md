@@ -9,9 +9,13 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
 - Two persistent WebView2 game profiles: AccountA and AccountB.
 - One shared stream environment with separate named stream profiles.
 - The UI is split into two independent Game 1 / Game 2 workspaces.
-- Each workspace has its own stream tab strip and supports up to 10 Twitch + 10
-  Kick stream slots. A single login profile may carry the full per-service
-  capacity; the old two-slot-per-login limit is removed.
+- Each workspace has a collapsible stream dock. It is collapsed by default so the
+  game keeps almost the full vertical workspace for normal navigation.
+- The stream dock has a service selector and ten stable slots per service: T1–T10
+  for Twitch and K1–K10 for Kick. Slot labels identify the stream position, not
+  the login profile, so multiple tabs no longer alternate between account names.
+- Each slot is mapped to an enabled login profile behind the scenes. A single login
+  profile may carry the full ten-slot service capacity.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell embeds the official upstream **Violentmonkey 2.49.0 MV3** extension
   and installs it into each WebView2 profile with
