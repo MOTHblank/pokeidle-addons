@@ -24,9 +24,16 @@ function Test-ViolentmonkeyFolder {
 
     try {
         $manifest = Get-Content (Join-Path $vendorRoot "manifest.json") -Raw | ConvertFrom-Json
+        $hasStaticInjector = $manifest.content_scripts -and
+            ($manifest.content_scripts | Where-Object {
+                $_.js -contains "injected.js" -and
+                $_.js -contains "injected-web.js"
+            })
+
         return $manifest.manifest_version -eq 3 -and
                ([string]$manifest.version) -eq $version -and
-               ([string]$manifest.name) -match "Violentmonkey|extName"
+               ([string]$manifest.name) -match "Violentmonkey|extName" -and
+               $hasStaticInjector
     }
     catch {
         return $false
@@ -69,12 +76,39 @@ Get-ChildItem -LiteralPath $sourceRoot -Force | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $vendorRoot -Recurse -Force
 }
 
-$installedManifest = Get-Content (Join-Path $vendorRoot "manifest.json") -Raw | ConvertFrom-Json
+$manifestPath = Join-Path $vendorRoot "manifest.json"
+$installedManifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 if ($installedManifest.manifest_version -ne 3 -or [string]$installedManifest.version -ne $version) {
     throw "Prepared Violentmonkey manifest does not match the pinned MV3 version $version."
+}
+
+# WebView2 does not expose Chromium's chrome://extensions "Allow User Scripts"
+# toggle. Violentmonkey's MV3 release normally relies on chrome.userScripts for
+# dynamic user-code registration, so we also declare VM's own injected bootstrap
+# as a regular static content script. VM already contains the full fallback
+# injection pipeline (the same injected.js/injected-web.js files used by its
+# MV2 build); no script engine is reimplemented here.
+$staticInjector = @{
+    matches = @("<all_urls>")
+    js = @("injected-web.js", "injected.js")
+    run_at = "document_start"
+    all_frames = $true
+}
+
+$installedManifest.content_scripts = @($staticInjector)
+$manifestJson = $installedManifest | ConvertTo-Json -Depth 30
+Set-Content -LiteralPath $manifestPath -Value $manifestJson -Encoding UTF8
+
+$finalManifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+$hasStaticInjector = $finalManifest.content_scripts -and
+    ($finalManifest.content_scripts | Where-Object {
+        $_.js -contains "injected.js" -and $_.js -contains "injected-web.js"
+    })
+if (-not $hasStaticInjector) {
+    throw "Failed to add Violentmonkey's static injector to the WebView2 manifest."
 }
 
 Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $downloadPath -Force -ErrorAction SilentlyContinue
 
-Write-Host "Prepared official Violentmonkey $version MV3 at $vendorRoot"
+Write-Host "Prepared official Violentmonkey $version MV3 (WebView2 static-injector manifest) at $vendorRoot"
