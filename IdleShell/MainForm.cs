@@ -20,9 +20,7 @@ internal sealed class MainForm : Form
     };
     private readonly Label _status = new()
         { AutoSize = true, Padding = new Padding(3, 4, 3, 0), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-    private readonly ComboBox _streamPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
     private readonly ComboBox _addonsPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
-    private readonly Label _status = new() { AutoSize = true, Padding = new Padding(3, 4, 3, 0) };
 
     private CoreWebView2Environment? _gameEnv;
     private CoreWebView2Environment? _streamEnv;
@@ -31,8 +29,6 @@ internal sealed class MainForm : Form
     private readonly List<StreamSlot> _slots = [];
     private readonly Dictionary<string, Pane> _extraPanes =
         new(StringComparer.OrdinalIgnoreCase); // OAuth popups etc., keyed by profile id
-    private readonly List<Pane> _streams = [];
-    private Pane? _activeStream;
     private ExtensionManager? _extensions;
     private UserscriptLoader? _userscripts;
     private string _tampermonkeyState = "not ready";
@@ -118,8 +114,6 @@ internal sealed class MainForm : Form
         return Path.GetFullPath(candidates[0]);
     }
 
-    private IEnumerable<Pane> AllPanes() => _games.Concat(_streams);
-
     private void BuildToolbar()
     {
         var menu = new MenuStrip { Dock = DockStyle.Left, GripStyle = ToolStripGripStyle.Hidden };
@@ -149,12 +143,6 @@ internal sealed class MainForm : Form
             Button("+ Stream", async (_, _) => await AddStreamManualAsync()),
             Button("Mute/Unmute", (_, _) => MuteActiveStream()),
             _addonsPicker,
-            _streamPicker,
-            Button("+ Stream", async (_, _) => await AddStreamAsync()),
-            Button("Close stream", (_, _) => CloseActiveStream()),
-            Button("Foreground", (_, _) => SetAllStreamsForeground()),
-            Button("Background", (_, _) => SetAllStreamsBackground()),
-            Button("Mute/Unmute", (_, _) => UnmuteActiveStream()),
             _modeButton,
             _probeToggle,
             _status
@@ -167,12 +155,6 @@ internal sealed class MainForm : Form
             _toolbar.Controls.Add(c);
             x += c.Width + 6;
         }
-
-        _streamPicker.SelectedIndexChanged += (_, _) =>
-        {
-            _activeStream = _streamPicker.SelectedIndex >= 0 ? _streams[_streamPicker.SelectedIndex] : null;
-            LayoutPanes();
-        };
 
         // The picker doubles as a "Reload addons" action: selecting the first
         // entry re-provisions Tampermonkey + refreshes the native loader and
@@ -442,7 +424,6 @@ internal sealed class MainForm : Form
 
     private async Task AddGamePaneAsync(PaneSpec spec)
     {
-        var pane = await Pane.CreateAsync(_gameEnv!, Handle, spec);
         var env = spec.Kind == PaneKind.Game ? _gameEnv! : _streamEnv!;
 
         // Game profiles get Tampermonkey (which owns the provisioned addons).
@@ -538,7 +519,6 @@ internal sealed class MainForm : Form
         _streamTabs.TabPages.Remove(slot.Tab);
     }
 
-    // --- Stream link routing -----------------------------------------------------
     private static async Task EnableNativeFallbackAsync(Pane pane)
     {
         // The bootstrap runs at document creation, so a reload is required for
@@ -766,8 +746,9 @@ internal sealed class MainForm : Form
         if (_gameEnv is null) return; // init not finished yet
 
         var top = AppConfig.ToolbarHeight + (_streamTabs.TabPages.Count > 0 ? _streamTabs.Height : 0);
-        // The tab strip is docked Top and stays in the layout even when all
-        // streams are backgrounded; hand its reserved band back to the panes.
+        // The tab strip is docked Top and keeps its full width in the layout even
+        // when all streams are backgrounded; hand its reserved band back to the
+        // panes by collapsing it to zero height (it grows again on resize).
         if (_streamTabs.TabPages.Count > 0) _streamTabs.SetBounds(0, AppConfig.ToolbarHeight, ClientSize.Width, 0);
         var height = Math.Max(0, ClientSize.Height - top);
         var width = ClientSize.Width;
@@ -913,8 +894,7 @@ internal sealed class MainForm : Form
             _status.Text = $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
                            $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
                            $" · Accounts: {enabled}/{_slots.Count} routing" +
-                           $" · Visible: {_accounts.VisibleStreamCount}";
-                           $" · Streams: {_streams.Count - hidden} fg / {hidden} bg" +
+                           $" · Visible: {_accounts.VisibleStreamCount}" +
                            $" · Addons: {(_nativeFallback ? "native injector" : "Tampermonkey")} " +
                            $"({_userscripts?.Scripts.Count ?? 0} scripts)";
         }

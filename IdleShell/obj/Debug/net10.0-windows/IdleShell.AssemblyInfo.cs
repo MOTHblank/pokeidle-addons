@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("IdleShell")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9e05fc5228398c24c30d0c30caa96c03985b9acc")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a21561112c17a3a88a7a9b61e3067d82ab98b6ed")]
 [assembly: System.Reflection.AssemblyProductAttribute("IdleShell")]
 [assembly: System.Reflection.AssemblyTitleAttribute("IdleShell")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
