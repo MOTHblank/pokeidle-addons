@@ -235,12 +235,35 @@ internal sealed class UserscriptLoader
 
           const __idleshellScriptSource = {{source}};
 
+          const __idleshellEscapeRegexChar = (ch) => {
+            switch (ch) {
+              case '\\':
+              case '.':
+              case '+':
+              case '?':
+              case '^':
+              case '$':
+              case '(':
+              case ')':
+              case '[':
+              case ']':
+              case '{':
+              case '}':
+              case '|':
+                return '\\' + ch;
+              default:
+                return ch;
+            }
+          };
+
+          // Keep glob parsing dependency-free. This avoids embedding a fragile
+          // character-class regex in the bootstrap runtime itself.
           const __idleshellGlobRegex = (pattern) => {
             let out = '^';
             for (const ch of String(pattern)) {
               if (ch === '*') out += '.*';
               else if (ch === '?') out += '.';
-              else out += ch.replace(/[|\{}()[]^$+?.]/g, '\$&');
+              else out += __idleshellEscapeRegexChar(ch);
             }
             return new RegExp(out + '$');
           };
@@ -490,17 +513,27 @@ internal sealed class UserscriptLoader
 
           const GM_openInTab = (urlOrUrl, optionsOrBackground) => {
             const url = String(urlOrUrl);
-            try {
-              if (typeof __idleshellHostOpenLink === 'function')
-                __idleshellHostOpenLink(url, optionsOrBackground);
-            } catch (_) {}
-
             const active =
               typeof optionsOrBackground === 'boolean'
                 ? !optionsOrBackground
                 : Boolean(optionsOrBackground?.active ?? true);
 
             const opened = { closed: false, onclose: null };
+
+            try {
+              // A successful IdleShell bridge owns the navigation. Do not then
+              // fall through to window.open(), which would route the same stream
+              // twice through the native popup interceptor.
+              if (typeof __idleshellHostOpenLink === 'function' &&
+                  __idleshellHostOpenLink(url, optionsOrBackground)) {
+                opened.close = () => {
+                  opened.closed = true;
+                  try { opened.onclose?.(); } catch (_) {}
+                };
+                return opened;
+              }
+            } catch (_) {}
+
             const target = active ? '_blank' : '_blank';
             try {
               const real = window.open(url, target);
