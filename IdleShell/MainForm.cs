@@ -657,58 +657,74 @@ internal sealed class MainForm : Form
     }
 
     // --- Stream link routing -------------------------------------------------
-    // A pokeidle page (or any pane) reported a twitch.tv/kick.com link. Fan it
-    // out to one pane per enabled account of the matching service (Twitch/Kick),
-    // so each link plays simultaneously on every login — up to 10 at once.
+    // Stream links stay inside the game workspace that generated them.
     private void OnPaneMessage(Pane pane, HostMessage msg)
     {
         if (msg.Type != "link" || !IsStreamUrl(msg.Url)) return;
-        _ = RouteStreamLinkAsync(msg.Url, $"userscript ({msg.Source})");
+
+        var workspace = WorkspaceForPane(pane);
+        if (workspace is not null)
+            _ = RouteStreamLinkAsync(
+                msg.Url, $"userscript ({msg.Source})", workspace.GameProfile);
     }
 
-    // Backstops for pages that bypass the userscript: popups from game panes,
-    // and game panes that somehow navigated straight onto a stream host.
     private void OnPopupRequested(Pane pane, string url)
     {
         if (pane.Spec.Kind == PaneKind.Game && IsStreamUrl(url))
         {
-            _ = RouteStreamLinkAsync(url, "popup backstop");
+            _ = RouteStreamLinkAsync(url, "popup backstop", pane.Spec.Profile);
             return;
         }
-        // Stream-pane popups (Twitch OAuth "Log in with Twitch" etc.): open them
-        // as a visible pane in the SAME profile so window.opener keeps working.
+
         _ = OpenStreamPopupAsync(pane, url);
     }
 
-    private void GamePaneNavigating(Pane pane, object? sender, CoreWebView2NavigationStartingEventArgs e)
+    private void GamePaneNavigating(
+        Pane pane, object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
         if (!IsStreamUrl(e.Uri)) return;
-        e.Cancel = true; // never leave the game page
-        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop");
+        e.Cancel = true;
+        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop", pane.Spec.Profile);
     }
 
     public static bool IsStreamUrl(string? url) =>
         url is not null && StreamUrlRegex.IsMatch(url);
 
-    private async Task RouteStreamLinkAsync(string url, string via)
+    private async Task RouteStreamLinkAsync(string url, string via, string gameProfile)
     {
         try
         {
+            var workspace = WorkspaceForGroup(gameProfile);
+            if (workspace is null)
+            {
+                Log($"no workspace for game profile {gameProfile}; ignored stream link {url}");
+                return;
+            }
+
             var targets = _accounts.StreamAccountsForUrl(url);
             if (targets.Count == 0)
             {
-                Log($"no enabled stream accounts for {url} (via {via}) — ignored");
+                Log($"no enabled Twitch/Kick accounts for {url} (via {via}) — ignored");
                 return;
             }
-                var created = 0;
+
+            var created = 0;
             foreach (var account in targets)
             {
-                var slot = SlotForAccount(account);
+                var slot = SlotForProfile(workspace, account.Id);
                 if (slot is null) continue;
                 if (slot.Pane is null) created++;
-                await EnsureStreamPaneAsync(slot, url);
+                await EnsureStreamPaneAsync(workspace, slot, url);
             }
-            Log($"Routed {url} to {targets.Count} stream account(s) via {via}" +
+
+            var first = workspace.Slots.FirstOrDefault(s =>
+                s.Pane is not null &&
+                targets.Any(a =>
+                    string.Equals(a.Id, s.Account.Id, StringComparison.OrdinalIgnoreCase)));
+            if (first is not null)
+                SelectTab(workspace, workspace.Slots.IndexOf(first));
+
+            Log($"Routed {url} to Game {workspace.Index + 1}: {targets.Count} account(s) via {via}" +
                 (created > 0 ? $" ({created} new pane(s) created)" : ""));
             SaveSession();
         }
@@ -722,13 +738,24 @@ internal sealed class MainForm : Form
     {
         try
         {
+            var workspace = WorkspaceForPane(opener);
+            if (workspace is null)
+            {
+                Log($"popup has no workspace: {url}");
+                return;
+            }
+
             var title = Uri.TryCreate(url, UriKind.Absolute, out var u)
                 ? u.Host.Replace("www.", "") + u.AbsolutePath : url;
-            await AddExtraPaneAsync(new PaneSpec(title, url, opener.Spec.Profile,
-                PaneKind.Stream, _inactiveStreamMode));
-            var slot = SlotForProfile(opener.Spec.Profile);
-            if (slot is not null) SelectTab(_slots.IndexOf(slot));
-            Log($"Opened popup in foreground: {url} (profile {opener.Spec.Profile})");
+            await AddExtraPaneAsync(workspace, new PaneSpec(
+                title, url, opener.Spec.Profile, PaneKind.Stream,
+                _inactiveStreamMode, workspace.GameProfile));
+
+            var slot = SlotForProfile(workspace, opener.Spec.Profile);
+            if (slot is not null)
+                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+
+            Log($"Opened popup in Game {workspace.Index + 1}: {url} (profile {opener.Spec.Profile})");
         }
         catch (Exception ex)
         {
