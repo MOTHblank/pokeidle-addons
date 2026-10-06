@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js
-// @version      1.7.5
+// @version      1.7.6
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -741,6 +741,13 @@
         hunts: [],
         playerLevel: 0,
         currentHuntSlug: null,
+        huntSceneKnown: false,
+        huntScene: {
+            noCentro: false,
+            casaDentro: null,
+            bossArena: null,
+            mistico: false
+        },
 
         pokedex: new Map(),
         ownedSpecies: new Set(),
@@ -1314,7 +1321,37 @@
             )
         );
     }
+    function isHuntHere(
+        slug =
+            state.currentHuntSlug
+    ) {
+        if (
+            !slug ||
+            !state.huntSceneKnown
+        ) {
+            return false;
+        }
+
+        const scene =
+            state.huntScene;
+
+        return !(
+            scene.noCentro ||
+            scene.casaDentro ||
+            scene.bossArena ||
+            scene.mistico
+        ) &&
+            slug ===
+                state.currentHuntSlug;
+    }
+
     function currentHunt() {
+        if (
+            !isHuntHere()
+        ) {
+            return null;
+        }
+
         return (
             state.hunts.find(
                 hunt =>
@@ -2399,7 +2436,7 @@
             !Array.isArray(
                 events
             ) ||
-            !state.currentHuntSlug
+            !isHuntHere()
         ) {
             return;
         }
@@ -2695,6 +2732,66 @@
                     : null;
         }
 
+        /*
+         * PokéIdle keeps huntSlug as the last selected hunt while another
+         * scene can own the field. Mirror the native huntEmCampo() rule:
+         * Center, house, boss arena and Mystic Arena are not active hunts.
+         */
+        if (
+            fullSnapshot ||
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'noCentro'
+            )
+        ) {
+            state.huntScene.noCentro =
+                Boolean(
+                    gameState.noCentro
+                );
+        }
+
+        if (
+            fullSnapshot ||
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'casa'
+            )
+        ) {
+            state.huntScene.casaDentro =
+                gameState.casa?.dentro ??
+                null;
+        }
+
+        if (
+            fullSnapshot ||
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'boss'
+            )
+        ) {
+            state.huntScene.bossArena =
+                gameState.boss?.arena ??
+                null;
+        }
+
+        if (
+            fullSnapshot ||
+            Object.prototype.hasOwnProperty.call(
+                gameState,
+                'mistico'
+            )
+        ) {
+            state.huntScene.mistico =
+                Boolean(
+                    gameState.mistico
+                );
+        }
+
+        if (fullSnapshot) {
+            state.huntSceneKnown =
+                true;
+        }
+
         if (
             Object.prototype.hasOwnProperty.call(
                 gameState,
@@ -2833,6 +2930,21 @@
 
         state.currentHuntSlug =
             huntEvent.slug;
+
+        /*
+         * A hunt battle event is authoritative proof that the normal hunt
+         * scene owns the field, even before the next state snapshot arrives.
+         */
+        state.huntSceneKnown =
+            true;
+        state.huntScene.noCentro =
+            false;
+        state.huntScene.casaDentro =
+            null;
+        state.huntScene.bossArena =
+            null;
+        state.huntScene.mistico =
+            false;
 
         state.combatTargets.clear();
 
@@ -6909,8 +7021,9 @@
                     if (
                         state.pendingTravel?.slug ===
                             hunt.slug &&
-                        state.currentHuntSlug !==
+                        !isHuntHere(
                             hunt.slug
+                        )
                     ) {
                         setStatus(
                             'status.notAccepted',
@@ -6970,8 +7083,9 @@
         }
 
         if (
-            hunt.slug ===
-            state.currentHuntSlug
+            isHuntHere(
+                hunt.slug
+            )
         ) {
             setStatus(
                 'status.alreadyHere',
@@ -6997,8 +7111,9 @@
             setTimeout(
                 () => {
                     if (
-                        state.currentHuntSlug ===
-                        hunt.slug
+                        isHuntHere(
+                            hunt.slug
+                        )
                     ) {
                         q(
                             '#modal-fechar'
@@ -8768,8 +8883,9 @@
             );
 
         const current =
-            hunt.slug ===
-            state.currentHuntSlug;
+            isHuntHere(
+                hunt.slug
+            );
 
         const xpInfo =
             huntXpEstimate(
@@ -9076,8 +9192,9 @@
                 .map(
                     (row, index) => {
                         const here =
-                            row.hunt.slug ===
-                            state.currentHuntSlug;
+                            isHuntHere(
+                                row.hunt.slug
+                            );
 
                         return `
                             <div class="mha-best-row">
@@ -9147,8 +9264,11 @@
                 .join('');
 
         const bestHere =
-            best?.hunt?.slug ===
-            state.currentHuntSlug;
+            best?.hunt?.slug
+                ? isHuntHere(
+                    best.hunt.slug
+                )
+                : false;
 
         host.innerHTML = `
             <div class="mha-xp-heading">
