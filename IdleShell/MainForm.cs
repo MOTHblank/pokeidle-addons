@@ -5,7 +5,7 @@ namespace Moth.PokeIdle.IdleShell;
 internal sealed class MainForm : Form
 {
     private readonly Panel _toolbar;
-    private readonly Label _status;
+    private Label _status = null!;
     private CoreWebView2Environment? _environment;
     private CoreWebView2Controller? _controllerA;
     private CoreWebView2Controller? _controllerB;
@@ -30,7 +30,7 @@ internal sealed class MainForm : Form
         AddToolbarControls();
         Controls.Add(_toolbar);
 
-        Resize += (_, _) => UpdateBounds();
+        Resize += (_, _) => LayoutWebViews();
         FormClosed += (_, _) => DisposeWebViews();
         Shown += async (_, _) => await InitializeAsync();
     }
@@ -117,7 +117,7 @@ internal sealed class MainForm : Form
             _webViewB.Navigate(AppConfig.GameUrl);
 
             _status.Text = $"Loaded {countA}/{countB} scripts";
-            UpdateBounds();
+            LayoutWebViews();
         }
         catch (Exception ex)
         {
@@ -166,7 +166,7 @@ internal sealed class MainForm : Form
         };
     }
 
-    private void UpdateBounds()
+    private void LayoutWebViews()
     {
         var top = AppConfig.ToolbarHeight;
         var height = Math.Max(0, ClientSize.Height - top);
@@ -180,7 +180,5 @@ internal sealed class MainForm : Form
     {
         _controllerA?.Close();
         _controllerB?.Close();
-        _controllerA?.Dispose();
-        _controllerB?.Dispose();
     }
 }
