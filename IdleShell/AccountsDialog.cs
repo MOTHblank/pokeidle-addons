@@ -31,7 +31,9 @@ internal sealed class AccountsDialog : Form
         DropDownStyle = ComboBoxStyle.DropDownList,
         Width = 100
     };
-    
+
+    private bool _refreshing;
+
     public AccountsDialog(
         AccountManager accounts,
         Func<Account, bool> isPaneOpen,
