@@ -26,8 +26,8 @@ internal static class AppConfig
     public const string StreamHostPattern = @"(?:www\.|m\.)?(?:twitch\.tv|kick\.com)";
 
     // Stream capacity is managed by AccountManager: up to 10 Twitch stream
-    // slots + 10 Kick stream slots per game, with at most 2 active channels
-    // assigned to any one login profile. accounts.json is authoritative.
+    // slots + 10 Kick stream slots per game. A login may back the full
+    // per-service capacity; accounts.json is authoritative.
 
     // Account registry managed by the Accounts dialog / AccountManager.
     public static string AccountsFile => Path.Combine(Root, "accounts.json");
