@@ -259,14 +259,10 @@ internal sealed class MainForm : Form
 
     private void BuildToolbar()
     {
-        var menu = new MenuStrip { Dock = DockStyle.Left, GripStyle = ToolStripGripStyle.Hidden };
-        menu.Items.Add(new ToolStripMenuItem("View"));
-
         _modeButton = Button("Hidden panes: Background", (_, _) => ToggleStreamMode());
 
         var items = new Control[]
         {
-            menu,
             Button("Reload games", (_, _) => ReloadGames()),
             Button("DevTools A", (_, _) => _games.ElementAtOrDefault(0)?.View.OpenDevToolsWindow()),
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
