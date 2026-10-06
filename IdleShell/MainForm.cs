@@ -1031,7 +1031,7 @@ internal sealed class MainForm : Form
                 title, url, opener.Spec.Profile, PaneKind.Stream,
                 _inactiveStreamMode, workspace.GameProfile));
 
-            var slot = SlotForProfile(workspace, opener.Spec.Profile);
+            var slot = FirstSlotForAccount(workspace, opener.Spec.Profile);
             if (slot is not null)
                 SelectTab(workspace, workspace.Slots.IndexOf(slot));
 
