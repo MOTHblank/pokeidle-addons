@@ -702,6 +702,13 @@ internal sealed class MainForm : Form
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
         pane.View.NavigationStarting += (_, e) => GamePaneNavigating(pane, _, e);
+        pane.View.NavigationCompleted += (_, e) =>
+            Log($"Game {spec.Profile} navigation {(e.IsSuccess ? "completed" : "FAILED")} " +
+                $"({e.HttpStatusCode}): {pane.View.Source}");
+        pane.View.SourceChanged += (_, _) =>
+            Log($"Game {spec.Profile} source: {pane.View.Source}");
+        pane.View.ProcessFailed += (_, e) =>
+            Log($"Game {spec.Profile} WebView process FAILED: {e.ProcessFailedKind}");
 
         _games.Add(pane);
 
