@@ -394,40 +394,64 @@ internal sealed class MainForm : Form
         LayoutPanes();
     }
 
-    private Pane? PaneForAccount(Account acc) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase))?.Pane
-        ?? (_extraPanes.TryGetValue(acc.Id, out var p) ? p : null);
+    private Pane? PaneForAccount(Account acc)
+    {
+        if (acc.IsStream)
+            return AllStreamSlots()
+                .FirstOrDefault(s =>
+                    string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase))
+                ?.Pane
+                ?? _workspaces
+                    .Select(w => w.ExtraPanes.TryGetValue(ExtraPaneKey(w, acc.Id), out var p) ? p : null)
+                    .FirstOrDefault(p => p is not null);
+
+        return _games.FirstOrDefault(g =>
+            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
+    }
 
     private void OnAccountsChanged()
     {
-        // Keep slots and tabs in sync with the registry.
-        foreach (var slot in _slots)
+        foreach (var workspace in _workspaces)
         {
-            var current = _accounts.Find(slot.Account.Id);
-            if (current is not null) slot.Account = current;
-        }
-
-        var removed = _slots.Where(s => _accounts.Find(s.Account.Id) is null).ToArray();
-        foreach (var slot in removed)
-        {
-            CloseSlot(slot);
-            _slots.Remove(slot);
-        }
-
-        foreach (var account in _accounts.StreamAccounts)
-        {
-            if (_slots.All(s => !string.Equals(s.Account.Id, account.Id, StringComparison.OrdinalIgnoreCase)))
+            foreach (var slot in workspace.Slots)
             {
-                var slot = new StreamSlot(account);
-                _slots.Add(slot);
-                _streamTabs.TabPages.Add(slot.Tab);
+                var current = _accounts.Find(slot.Account.Id);
+                if (current is not null) slot.Account = current;
             }
+
+            foreach (var slot in workspace.Slots
+                         .Where(s => _accounts.Find(s.Account.Id) is null)
+                         .ToArray())
+                CloseSlot(workspace, slot);
+
+            foreach (var account in _accounts.StreamAccounts)
+                AddStreamSlot(workspace, account);
         }
 
         RebuildTabTitles();
         UpdateVisibleStreamsText();
+        UpdateWorkspaceHeaders();
         LayoutPanes();
         SaveSession();
+    }
+
+    private void AddStreamSlot(GameWorkspace workspace, Account account)
+    {
+        var existing = workspace.Slots.FirstOrDefault(s =>
+            string.Equals(s.Account.Id, account.Id, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            existing.Account = account;
+            existing.Tab.Text = account.DisplayLabel;
+            return;
+        }
+
+        if (workspace.Slots.Count >= AccountManager.MaxStreamAccounts)
+            return;
+
+        var slot = new StreamSlot(account, workspace.GameProfile);
+        workspace.Slots.Add(slot);
+        workspace.StreamTabs.TabPages.Add(slot.Tab);
     }
 
     private void RebuildTabTitles()
@@ -435,60 +459,108 @@ internal sealed class MainForm : Form
         _suppressTabEvent = true;
         try
         {
-            for (var i = 0; i < _slots.Count && i < _streamTabs.TabPages.Count; i++)
-                _streamTabs.TabPages[i].Text = _slots[i].Account.DisplayLabel;
+            foreach (var workspace in _workspaces)
+                for (var i = 0; i < workspace.Slots.Count && i < workspace.StreamTabs.TabPages.Count; i++)
+                    workspace.StreamTabs.TabPages[i].Text = workspace.Slots[i].Account.DisplayLabel;
         }
         finally { _suppressTabEvent = false; }
     }
 
-    private async Task ShowAccountForLoginAsync(Account acc)
+    private void UpdateWorkspaceHeader(GameWorkspace workspace)
     {
-        var slot = SlotForAccount(acc);
-        if (slot is not null)
-        {
-            await EnsureStreamPaneAsync(slot, slot.Url ?? AccountManager.LoginUrl(acc.Service));
-            SelectTab(_slots.IndexOf(slot));
-            return;
-        }
-        // Game account: reload/focus is enough — sign-in happens on pokeidle.io.
-        var game = _games.FirstOrDefault(g =>
-            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
-        game?.View.Navigate(AccountManager.LoginUrl(acc.Service));
+        var open = workspace.Slots.Count(s => s.Pane is not null);
+        var visible = ForegroundCandidates(workspace).Count;
+        workspace.Header.Text =
+            $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
+        workspace.StreamHeader.Text =
+            $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible";
     }
 
-    private StreamSlot? SlotForAccount(Account acc) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase));
+    private void UpdateWorkspaceHeaders()
+    {
+        foreach (var workspace in _workspaces)
+            UpdateWorkspaceHeader(workspace);
+    }
 
-    private StreamSlot? SlotForProfile(string profile) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase));
+    private async Task ShowAccountForLoginAsync(Account acc)
+    {
+        if (acc.IsStream)
+        {
+            var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
+            var slot = SlotForProfile(workspace, acc.Id);
+            if (slot is not null)
+            {
+                await EnsureStreamPaneAsync(
+                    workspace, slot, slot.Url ?? AccountManager.LoginUrl(acc.Service));
+                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+            }
+            return;
+        }
+
+        var game = _games.FirstOrDefault(g =>
+            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
+        if (game is not null)
+            game.View.Navigate(AccountManager.LoginUrl(acc.Service));
+    }
+
+    private StreamSlot? SlotForProfile(GameWorkspace workspace, string profile) =>
+        workspace.Slots.FirstOrDefault(s =>
+            string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase));
+
+    private GameWorkspace? WorkspaceForGroup(string? group) =>
+        string.IsNullOrWhiteSpace(group) ? null :
+        _workspaces.FirstOrDefault(w =>
+            string.Equals(w.GameProfile, group, StringComparison.OrdinalIgnoreCase));
+
+    private GameWorkspace? WorkspaceForGroupByStreamProfile(string profile) =>
+        _workspaces.FirstOrDefault(w =>
+            w.Slots.Any(s => string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase)));
+
+    private GameWorkspace? WorkspaceForPane(Pane pane)
+    {
+        if (pane.Spec.Kind == PaneKind.Game)
+            return WorkspaceForGroup(pane.Spec.Profile);
+
+        return WorkspaceForGroup(pane.Spec.Group)
+               ?? _workspaces.FirstOrDefault(w =>
+                   w.Slots.Any(s => ReferenceEquals(s.Pane, pane)));
+    }
 
     // --- Panes -----------------------------------------------------------------
 
     private async Task AddGamePaneAsync(PaneSpec spec)
     {
-        var env = spec.Kind == PaneKind.Game ? _gameEnv! : _streamEnv!;
-
-        var pane = await Pane.CreateAsync(env, Handle, spec,
-            spec.Kind == PaneKind.Game ? _userscripts : null);
+        var pane = await Pane.CreateAsync(_gameEnv!, Handle, spec, _userscripts);
 
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
-        // Navigation backstop: a game page that bypasses the userscript and
-        // navigates to twitch/kick gets bounced into background stream panes.
         pane.View.NavigationStarting += (_, e) => GamePaneNavigating(pane, _, e);
+
         _games.Add(pane);
+
+        if (_games.Count <= _workspaces.Count)
+        {
+            var workspace = _workspaces[_games.Count - 1];
+            workspace.GamePane = pane;
+            workspace.GameProfile = spec.Profile;
+            UpdateWorkspaceHeader(workspace);
+        }
     }
 
-    private async Task EnsureStreamPaneAsync(StreamSlot slot, string url)
+    private async Task EnsureStreamPaneAsync(GameWorkspace workspace, StreamSlot slot, string url)
     {
         if (slot.Pane is not null)
         {
             slot.Url = url;
-            if (slot.Pane.View.Source != url) slot.Pane.View.Navigate(url);
+            if (!string.Equals(slot.Pane.View.Source, url, StringComparison.OrdinalIgnoreCase))
+                slot.Pane.View.Navigate(url);
             return;
         }
-        var spec = new PaneSpec(slot.Account.DisplayLabel, url, slot.Account.Id,
-            PaneKind.Stream, _inactiveStreamMode);
+
+        var spec = new PaneSpec(
+            slot.Account.DisplayLabel, url, slot.Account.Id,
+            PaneKind.Stream, _inactiveStreamMode, workspace.GameProfile);
+
         var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
@@ -497,18 +569,23 @@ internal sealed class MainForm : Form
         LayoutPanes();
     }
 
-    // Extra pane inside an existing stream profile (OAuth popups, login detours).
-    private async Task AddExtraPaneAsync(PaneSpec spec)
+    private static string ExtraPaneKey(GameWorkspace workspace, string profile) =>
+        $"{workspace.GameProfile}:0:{profile}";
+
+    private async Task AddExtraPaneAsync(GameWorkspace workspace, PaneSpec spec)
     {
-        if (_extraPanes.TryGetValue(spec.Profile, out var old))
+        var key = ExtraPaneKey(workspace, spec.Profile);
+        if (workspace.ExtraPanes.TryGetValue(key, out var old))
         {
             DetachAndClose(old);
-            _extraPanes.Remove(spec.Profile);
+            workspace.ExtraPanes.Remove(key);
         }
-        var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec);
+
+        var paneSpec = spec with { Group = workspace.GameProfile };
+        var pane = await Pane.CreateAsync(_streamEnv!, Handle, paneSpec);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
-        _extraPanes[spec.Profile] = pane;
+        workspace.ExtraPanes[key] = pane;
         LayoutPanes();
     }
 
@@ -519,15 +596,22 @@ internal sealed class MainForm : Form
         pane.Close();
     }
 
-    private void CloseSlot(StreamSlot slot)
+    private void CloseSlot(GameWorkspace workspace, StreamSlot slot)
     {
         if (slot.Pane is { } p) DetachAndClose(p);
-        if (_extraPanes.TryGetValue(slot.Account.Id, out var extra))
+
+        var key = ExtraPaneKey(workspace, slot.Account.Id);
+        if (workspace.ExtraPanes.TryGetValue(key, out var extra))
         {
             DetachAndClose(extra);
-            _extraPanes.Remove(slot.Account.Id);
+            workspace.ExtraPanes.Remove(key);
         }
-        _streamTabs.TabPages.Remove(slot.Tab);
+
+        workspace.StreamTabs.TabPages.Remove(slot.Tab);
+        workspace.Slots.Remove(slot);
+        if (workspace.ActiveTabIndex >= workspace.Slots.Count)
+            workspace.ActiveTabIndex = workspace.Slots.Count - 1;
+        LayoutPanes();
     }
 
     private void RefreshAddonsPicker()
