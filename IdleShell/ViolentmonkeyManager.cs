@@ -34,7 +34,8 @@ internal sealed class ViolentmonkeyManager
 
     public string Folder { get; }
     public string ExtensionFolder { get; }
-    public IReadOnlyList<LocalScript> Scripts => _scripts;
+    public IReadOnlyList<string> ScriptNames =>
+        _scripts.Select(script => script.Name).ToArray();
 
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
