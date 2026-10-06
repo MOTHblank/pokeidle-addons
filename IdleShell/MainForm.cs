@@ -30,7 +30,6 @@ internal sealed class MainForm : Form
     private Button _game1Button = null!;
     private Button _game2Button = null!;
     private Button _foregroundBothButton = null!;
-    private ToolStripMenuItem _visibleStreamsItem = null!;
     private int _activeWorkspaceIndex;
     // Each game owns a completely separate stream area. A login profile can be
     // used by both games because each workspace owns its own WebView2 controller.
@@ -261,17 +260,7 @@ internal sealed class MainForm : Form
     private void BuildToolbar()
     {
         var menu = new MenuStrip { Dock = DockStyle.Left, GripStyle = ToolStripGripStyle.Hidden };
-        var viewMenu = new ToolStripMenuItem("View");
-        _visibleStreamsItem = new ToolStripMenuItem($"Visible streams: {_accounts.VisibleStreamCount}");
-        for (var n = 1; n <= AccountManager.MaxStreamSlots; n++)
-        {
-            var count = n;
-            _visibleStreamsItem.DropDownItems.Add(new ToolStripMenuItem($"{count}", null,
-                (_, _) => SetVisibleStreamCount(count))
-            { ShowShortcutKeys = false });
-        }
-        viewMenu.DropDownItems.Add(_visibleStreamsItem);
-        menu.Items.Add(viewMenu);
+        menu.Items.Add(new ToolStripMenuItem("View"));
 
         _modeButton = Button("Hidden panes: Background", (_, _) => ToggleStreamMode());
 
@@ -316,7 +305,6 @@ internal sealed class MainForm : Form
         };
 
         UpdateModeButtonText();
-        UpdateVisibleStreamsText();
     }
 
     private void ToggleStreamMode()
@@ -332,17 +320,6 @@ internal sealed class MainForm : Form
 
     private void UpdateModeButtonText() =>
         _modeButton.Text = $"Hidden panes: {(_inactiveStreamMode == StreamMode.Background ? "Background" : "Parked")}";
-
-    private void UpdateVisibleStreamsText() =>
-        _visibleStreamsItem.Text = $"Visible streams: {_accounts.VisibleStreamCount}";
-
-    private void SetVisibleStreamCount(int n)
-    {
-        _accounts.SetVisibleStreamCount(n);
-        UpdateVisibleStreamsText();
-        LayoutPanes();
-        SaveSession();
-    }
 
     private static Button Button(string text, EventHandler handler)
     {
@@ -485,7 +462,6 @@ internal sealed class MainForm : Form
         }
 
         RebuildTabTitles();
-        UpdateVisibleStreamsText();
         UpdateWorkspaceHeaders();
         LayoutPanes();
         SaveSession();
@@ -1345,25 +1321,13 @@ internal sealed class MainForm : Form
     {
         var result = new List<Pane>();
         if (!workspace.StreamsExpanded) return result;
-        if (workspace.ActiveTabIndex < 0) return result;
 
-        var visibleAccounts = workspace.Slots
-            .Where(s => s.Account.Enabled && s.Account.Service == workspace.ActiveStreamService)
-            .Take(_accounts.VisibleStreamCount)
-            .ToList();
-
-        var activeSlot = workspace.ActiveTabIndex < workspace.Slots.Count
-            ? workspace.Slots[workspace.ActiveTabIndex]
-            : null;
-
-        if (activeSlot?.Pane is { } activePane)
-            result.Add(activePane);
-
-        foreach (var slot in visibleAccounts)
+        // Every opened stream pane is composited while the stream dock is open.
+        // Tabs select/manage slots; selecting a tab never replaces another stream.
+        foreach (var slot in workspace.Slots)
         {
-            if (slot.Pane is null || slot == activeSlot) continue;
-            if (result.Count >= Math.Max(1, _accounts.VisibleStreamCount)) break;
-            result.Add(slot.Pane);
+            if (slot.Account.Enabled && slot.Pane is { } pane)
+                result.Add(pane);
         }
 
         return result;
@@ -1491,7 +1455,6 @@ internal sealed class MainForm : Form
                 $"Games: {_games.Count}/2 · Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
                 $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
                 $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · 10 Twitch + 10 Kick/game" +
-                $" · Visible/game: {_accounts.VisibleStreamCount}" +
                 $" · Health: {GameHealthSummary()}" +
                 $" · Addons: {_userscripts?.ScriptNames.Count ?? 0} userscripts";
         }
