@@ -1,7 +1,7 @@
 # PokéIdle Idle Shell
 
 A minimal Windows WebView2 host for running persistent PokéIdle accounts with
-native userscript injection and optional persistent Twitch/Kick stream panes.
+browser-native userscript execution and optional persistent Twitch/Kick stream panes.
 
 ## Architecture
 
@@ -13,11 +13,12 @@ native userscript injection and optional persistent Twitch/Kick stream panes.
   Kick stream slots. A single login profile may carry the full per-service
   capacity; the old two-slot-per-login limit is removed.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
-- The shell registers them directly with WebView2's
-  `AddScriptToExecuteOnDocumentCreatedAsync`; no browser extension or CRX is
-  required.
-- The runtime follows the common Greasemonkey/Tampermonkey/Violentmonkey API
-  conventions instead of bundling a partial browser-extension clone.
+- The shell builds an unpacked Manifest V3 WebExtension from those files and
+  installs it into each WebView2 profile with
+  `CoreWebView2Profile.AddBrowserExtensionAsync`.
+- Chromium/WebView2 owns URL matching, `run_at`, frame targeting and script
+  execution. The shell no longer evaluates addon source through its old native
+  userscript wrapper.
 
 ## Userscripts
 
@@ -33,10 +34,9 @@ The WebView2 extension engine supports:
   cross-origin requests through the extension service worker
 - compatibility implementations for menu, notification, download and resource APIs
 
-The engine is intentionally not a fork of Violentmonkey. It uses the browser's
-real extension execution machinery so the repository's existing userscripts are
-executed as ordinary extension content scripts, while keeping the addon files
-compatible with normal userscript managers.
+The engine is intentionally not a fork of Violentmonkey. It uses the real
+WebView2 browser-extension mechanism while keeping the repository's `*.user.js`
+files compatible with normal userscript managers.
 
 A repository-wide scan found no `@require` or `@resource` dependencies.
 Hunt Atlas is the only addon using `GM_xmlhttpRequest`, and it only performs
@@ -119,8 +119,10 @@ run and then mirrored by AccountManager.
 
 ## Scope
 
-The shell intentionally keeps userscripts simple and transparent: no proprietary
-extension bootstrap, no CRX extraction, and no checked-in generated build state.
+The shell does not bundle Violentmonkey itself. It turns the repository's
+userscripts into a normal unpacked Manifest V3 extension so Chromium performs
+the actual content-script loading and execution. Generated extension state stays
+under LocalAppData rather than being committed to the repository.
 
 
 ## Twitch low-resource addon
