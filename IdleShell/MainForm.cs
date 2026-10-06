@@ -933,7 +933,7 @@ internal sealed class MainForm : Form
     }
 
     public static bool IsStreamUrl(string? url) =>
-        url is not null && StreamUrlRegex.IsMatch(url);
+        AccountManager.ServiceForUrl(url) is AccountService.Twitch or AccountService.Kick;
 
     private async Task RouteStreamLinkAsync(string url, string via, string gameProfile)
     {
