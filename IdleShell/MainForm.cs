@@ -206,7 +206,8 @@ internal sealed class MainForm : Form
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
             _allBackgroundButton,
-            Button("+ Stream", async (_, _) => await AddStreamManualAsync()),
+            Button("G1 + Stream", async (_, _) => await AddStreamManualAsync(0)),
+            Button("G2 + Stream", async (_, _) => await AddStreamManualAsync(1)),
             Button("Mute/Unmute", (_, _) => MuteActiveStream()),
             _addonsPicker,
             _modeButton,
@@ -236,14 +237,6 @@ internal sealed class MainForm : Form
             else _probeTimer.Stop();
         };
 
-        _streamTabs.SelectedIndexChanged += (_, _) =>
-        {
-            if (_suppressTabEvent) return;
-            _activeTabIndex = _streamTabs.SelectedIndex;
-            LayoutPanes();
-            SaveSession();
-        };
-
         UpdateModeButtonText();
         UpdateVisibleStreamsText();
     }
@@ -252,7 +245,7 @@ internal sealed class MainForm : Form
     {
         _inactiveStreamMode = _inactiveStreamMode == StreamMode.Background
             ? StreamMode.Parked : StreamMode.Background;
-        foreach (var slot in _slots)
+        foreach (var slot in AllStreamSlots())
             if (slot.Pane is { } p) p.Mode = _inactiveStreamMode;
         SaveSession();
         UpdateModeButtonText();
@@ -333,50 +326,46 @@ internal sealed class MainForm : Form
             foreach (var spec in session.Where(s => s.Kind == PaneKind.Game))
                 await AddGamePaneAsync(spec);
 
-            // One tab per stream account. Panes are created lazily — on first
-            // routed link, manual open, restore, or login — so 10 configured
-            // accounts don't mean 10 renderers until they actually play video.
-            foreach (var account in _accounts.StreamAccounts)
+            // Each game column gets an independent set of stream account tabs.
+            foreach (var workspace in _workspaces)
             {
-                var slot = new StreamSlot(account);
-                _slots.Add(slot);
-                _streamTabs.TabPages.Add(slot.Tab);
+                foreach (var account in _accounts.StreamAccounts)
+                    AddStreamSlot(workspace, account);
+                UpdateWorkspaceHeader(workspace);
             }
 
-            // Restore previously-open stream panes (URLs from the last session).
+            // Restore stream panes. Old sessions had no Group, so their streams
+            // migrate into Game 1 instead of becoming visually mixed.
             foreach (var spec in session.Where(s => s.Kind == PaneKind.Stream))
             {
-                var slot = SlotForProfile(spec.Profile);
-                if (slot is null || string.IsNullOrWhiteSpace(spec.Url)) continue;
+                var workspace = WorkspaceForGroup(spec.Group) ??
+                                (_workspaces.Count > 0 ? _workspaces[0] : null);
+                var slot = workspace is null ? null : SlotForProfile(workspace, spec.Profile);
+                if (workspace is null || slot is null || string.IsNullOrWhiteSpace(spec.Url))
+                    continue;
+
                 if (IsStreamUrl(spec.Url))
-                {
-                    await EnsureStreamPaneAsync(slot, spec.Url);
-                }
+                    await EnsureStreamPaneAsync(workspace, slot, spec.Url);
                 else
-                {
-                    // Popup/login pane that lived in a stream profile — reopen it.
-                    await AddExtraPaneAsync(new PaneSpec(spec.Title, spec.Url, spec.Profile,
-                        PaneKind.Stream, spec.Mode));
-                }
+                    await AddExtraPaneAsync(workspace, new PaneSpec(
+                        spec.Title, spec.Url, spec.Profile, PaneKind.Stream,
+                        spec.Mode, workspace.GameProfile));
             }
 
             _accounts.Changed += OnAccountsChanged;
 
-            // Default: first visible stream tab in foreground.
-            var restoredActive = session.FirstOrDefault(s => s.Kind == PaneKind.ActiveStreamMarker)?.Profile;
-            var startIndex = 0;
-            if (restoredActive is not null)
+            foreach (var marker in session.Where(s => s.Kind == PaneKind.ActiveStreamMarker))
             {
-                var idx = _slots.FindIndex(s =>
-                    string.Equals(s.Account.Id, restoredActive, StringComparison.OrdinalIgnoreCase));
-                if (idx >= 0) startIndex = idx;
-            }
-            if (_slots.Count > 0) SelectTab(startIndex);
-            else _activeTabIndex = -1;
+                var workspace = WorkspaceForGroup(marker.Group) ??
+                                WorkspaceForGroupByStreamProfile(marker.Profile);
+                if (workspace is null) continue;
 
-            // Add the tab strip after the toolbar so docking puts it directly
-            // below the toolbar; panes stay children of the form itself.
-            Controls.Add(_streamTabs);
+                var idx = workspace.Slots.FindIndex(s =>
+                    string.Equals(s.Account.Id, marker.Profile, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) SelectTab(workspace, idx);
+            }
+
+            _activeWorkspaceIndex = 0;
             LayoutPanes();
             _statsTimer.Start();
             if (_probeToggle.Checked) _probeTimer.Start();
