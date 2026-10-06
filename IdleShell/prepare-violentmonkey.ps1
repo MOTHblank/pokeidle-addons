@@ -98,14 +98,26 @@ $staticInjector = @{
     all_frames = $true
 }
 
-$installedManifest.content_scripts = @($staticInjector)
+# PowerShell cannot assign a property that is absent from a PSCustomObject.
+# The official MV3 manifest does not currently declare content_scripts, so add
+# the property when needed; do the same for permissions for forward compatibility.
+if ($null -eq $installedManifest.PSObject.Properties["content_scripts"]) {
+    $installedManifest | Add-Member -MemberType NoteProperty -Name "content_scripts" -Value @($staticInjector)
+}
+else {
+    $installedManifest.content_scripts = @($staticInjector)
+}
 
 # The WebView2 host deliberately uses VM's static content-script injector.
 # Removing the dynamic userScripts permission prevents Chromium from requiring
 # the per-extension "Allow User Scripts" UI toggle just to load Violentmonkey.
-$installedManifest.permissions = @(
-    $installedManifest.permissions | Where-Object { $_ -ne "userScripts" }
-)
+$permissions = @($installedManifest.permissions | Where-Object { $_ -ne "userScripts" })
+if ($null -eq $installedManifest.PSObject.Properties["permissions"]) {
+    $installedManifest | Add-Member -MemberType NoteProperty -Name "permissions" -Value $permissions
+}
+else {
+    $installedManifest.permissions = $permissions
+}
 
 $manifestJson = $installedManifest | ConvertTo-Json -Depth 30
 Set-Content -LiteralPath $manifestPath -Value $manifestJson -Encoding UTF8
