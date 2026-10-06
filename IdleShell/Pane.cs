@@ -261,7 +261,7 @@ internal sealed class Pane
     // suspended/hidden is ignored per docs), so Show() applies Normal and
     // Hide()/Park() apply Low. Never mix with TrySuspend.
     public Task AttachUserscriptAsync(UserscriptLoader loader) =>
-        loader.InstallAsync(View.Profile, force: true);
+        loader.InstallAsync(View.Profile);
 
     public void Show(Rectangle bounds)
     {
