@@ -41,7 +41,7 @@ internal sealed class AccountsDialog : Form
     private readonly NumericUpDown _visibleUpDown = new()
     {
         Minimum = 1,
-        Maximum = AccountManager.MaxStreamAccounts,
+        Maximum = AccountManager.MaxStreamSlots,
         Width = 50,
         Location = new Point(470, 5)
     };
@@ -68,6 +68,7 @@ internal sealed class AccountsDialog : Form
         _list.Columns.Add("Service", 80);
         _list.Columns.Add("Routing", 70);
         _list.Columns.Add("Pane", 55);
+        _list.Columns.Add("Capacity", 75);
         _list.DoubleClick += (_, _) => LogInSelected();
         _list.SelectedIndexChanged += (_, _) => SyncServiceCombo();
 
@@ -133,7 +134,9 @@ internal sealed class AccountsDialog : Form
         // The limit applies independently inside Game 1 and Game 2.
         var enabled = Math.Max(1, _accounts.EnabledStreamAccounts.Count());
         _visibleLabel.Text =
-            $"Each game: {Math.Min((int)_visibleUpDown.Value, enabled)} visible of {enabled} stream accounts · hidden panes still run:";
+            $"Each game: {Math.Min((int)_visibleUpDown.Value, AccountManager.MaxStreamSlots)} visible stream slots · " +
+            $"capacity {AccountManager.MaxStreamsPerService} Twitch + {AccountManager.MaxStreamsPerService} Kick · " +
+            $"max {AccountManager.MaxStreamSlotsPerAccount} per login · hidden panes still run:";
     }
 
     private void AddAccount(AccountService service)
@@ -232,6 +235,7 @@ internal sealed class AccountsDialog : Form
             item.SubItems.Add(a.Service.ToString());
             item.SubItems.Add(!a.IsStream ? "—" : a.Enabled ? "On" : "Off");
             item.SubItems.Add(_isPaneOpen(a) ? "open" : "—");
+            item.SubItems.Add(a.IsStream ? $"0–{AccountManager.MaxStreamSlotsPerAccount}" : "—");
             item.Tag = a;
             if (string.Equals(a.Id, selectedId, StringComparison.OrdinalIgnoreCase))
                 item.Selected = true;
