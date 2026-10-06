@@ -7,28 +7,16 @@ namespace Moth.PokeIdle.IdleShell;
 internal sealed class MainForm : Form
 {
     private readonly Panel _toolbar;
-    // Tab strip listing every stream account (up to 10); the selected tab's pane
-    // is foregrounded in the stream area below it. Panes are parented to the form,
-    // not the TabPage, so the strip only acts as a selector.
-    private readonly TabControl _streamTabs = new()
-    {
-        Dock = DockStyle.Top,
-        Appearance = TabAppearance.FlatButtons,
-        ItemSize = new Size(150, 26),
-        SizeMode = TabSizeMode.Fixed,
-        Height = 30
-    };
     private readonly Label _status = new()
         { AutoSize = true, Padding = new Padding(3, 4, 3, 0), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-    private readonly ComboBox _addonsPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
+    private readonly ComboBox _addonsPicker = new()
+        { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
 
     private CoreWebView2Environment? _gameEnv;
     private CoreWebView2Environment? _streamEnv;
     private readonly AccountManager _accounts = AccountManager.Load();
     private readonly List<Pane> _games = [];
-    private readonly List<StreamSlot> _slots = [];
-    private readonly Dictionary<string, Pane> _extraPanes =
-        new(StringComparer.OrdinalIgnoreCase); // OAuth popups etc., keyed by profile id
+    private readonly List<GameWorkspace> _workspaces = [new(0), new(1)];
     private UserscriptLoader? _userscripts;
     private readonly System.Windows.Forms.Timer _statsTimer = new() { Interval = 5000 };
     private readonly System.Windows.Forms.Timer _probeTimer = new() { Interval = 30000 };
@@ -38,17 +26,61 @@ internal sealed class MainForm : Form
     private bool _probing;
     private bool _suppressTabEvent;
     private bool _suppressAddonPickerEvent;
-    private Button _modeButton = null!;   // assigned in BuildToolbar, called from the ctor
+    private Button _modeButton = null!;
     private Button _allBackgroundButton = null!;
     private ToolStripMenuItem _visibleStreamsItem = null!;
-    private int _activeTabIndex = -1;     // -1 = "All background"
+    private int _activeWorkspaceIndex;
     private static readonly Regex StreamUrlRegex =
         new($@"^https?://{AppConfig.StreamHostPattern}/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // One tab per stream account: a lazily-created pane plus its last routed URL.
-    private sealed class StreamSlot(Account account)
+    // Each game owns a completely separate stream area. A login profile can be
+    // used by both games because each workspace owns its own WebView2 controller.
+    private sealed class GameWorkspace(int index)
+    {
+        public int Index { get; } = index;
+        public string GameProfile { get; set; } = "";
+        public Pane? GamePane;
+        public int ActiveTabIndex { get; set; } = -1;
+
+        public Panel Frame { get; } = new()
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = SystemColors.Control
+        };
+
+        public Label Header { get; } = new()
+        {
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
+            Padding = new Padding(8, 0, 8, 0)
+        };
+
+        public Label StreamHeader { get; } = new()
+        {
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(8, 0, 8, 0)
+        };
+
+        public TabControl StreamTabs { get; } = new()
+        {
+            Appearance = TabAppearance.FlatButtons,
+            ItemSize = new Size(98, 26),
+            SizeMode = TabSizeMode.Fixed,
+            Multiline = false,
+            Height = 30
+        };
+
+        public List<StreamSlot> Slots { get; } = [];
+        public Dictionary<string, Pane> ExtraPanes { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class StreamSlot(Account account, string gameProfile)
     {
         public Account Account { get; set; } = account;
+        public string GameProfile { get; } = gameProfile;
         public Pane? Pane;
         public string? Url;
         public TabPage Tab { get; } = new(account.DisplayLabel);
@@ -68,12 +100,12 @@ internal sealed class MainForm : Form
             Padding = new Padding(8, 5, 8, 5)
         };
         BuildToolbar();
+        BuildWorkspaceChrome();
         Controls.Add(_toolbar);
+        foreach (var workspace in _workspaces)
+            Controls.Add(workspace.Frame);
 
         Resize += (_, _) => LayoutPanes();
-        // The tab strip keeps its full width in the layout even when all streams
-        // are backgrounded, so panes must follow every dock-size change.
-        _streamTabs.SizeChanged += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
         FormClosed += (_, _) => { _statsTimer.Stop(); _probeTimer.Stop(); foreach (var p in AllPanes()) p.Close(); };
         Shown += async (_, _) => await InitializeAsync();
@@ -82,8 +114,44 @@ internal sealed class MainForm : Form
         _probeTimer.Tick += async (_, _) => await ProbeTickAsync();
     }
 
+    private IEnumerable<StreamSlot> AllStreamSlots() =>
+        _workspaces.SelectMany(w => w.Slots);
+
     private IEnumerable<Pane> AllPanes() =>
-        _games.Concat(_slots.Select(s => s.Pane)).Concat(_extraPanes.Values).OfType<Pane>();
+        _games
+            .Concat(AllStreamSlots().Select(s => s.Pane))
+            .Concat(_workspaces.SelectMany(w => w.ExtraPanes.Values))
+            .OfType<Pane>();
+
+    private void BuildWorkspaceChrome()
+    {
+        foreach (var workspace in _workspaces)
+        {
+            workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
+            workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
+            workspace.Frame.Controls.Add(workspace.Header);
+            workspace.Frame.Controls.Add(workspace.StreamHeader);
+            workspace.Frame.Controls.Add(workspace.StreamTabs);
+
+            workspace.Header.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamHeader.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamTabs.Enter += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamTabs.SelectedIndexChanged += (_, _) =>
+            {
+                SetActiveWorkspace(workspace.Index);
+                if (_suppressTabEvent) return;
+                workspace.ActiveTabIndex = workspace.StreamTabs.SelectedIndex;
+                LayoutPanes();
+                SaveSession();
+            };
+        }
+    }
+
+    private void SetActiveWorkspace(int index)
+    {
+        _activeWorkspaceIndex = Math.Clamp(index, 0, _workspaces.Count - 1);
+    }
+
     // Addons folder resolution order: repo checkout next to the exe's parent
     // folders, then the build-output copy shipped beside the exe.
     internal static string ResolveAddonsFolder()
