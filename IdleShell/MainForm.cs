@@ -370,8 +370,8 @@ internal sealed class MainForm : Form
             _statsTimer.Start();
             if (_probeToggle.Checked) _probeTimer.Start();
             UpdateStatus();
-            Log($"startup: {_games.Count} game pane(s), {_slots.Count} stream account(s) " +
-                $"({EnabledStreamSlots().Count()} enabled), visible streams: {_accounts.VisibleStreamCount}; " +
+            Log($"startup: {_games.Count} game workspace(s), {_accounts.StreamAccounts.Count()} stream login(s) × 2 workspaces " +
+                $"({ _accounts.EnabledStreamAccounts.Count() } enabled; up to 10 streams per game); " +
                 $"accounts file: {AppConfig.AccountsFile}");
         }
         catch (Exception ex)
@@ -761,43 +761,58 @@ internal sealed class MainForm : Form
 
     // --- Toolbar buttons ---------------------------------------------------------
 
-    private void SelectTab(int index)
+    private void SelectTab(GameWorkspace workspace, int index)
     {
-        if (_streamTabs.TabPages.Count == 0) { _activeTabIndex = -1; return; }
-        _activeTabIndex = Math.Clamp(index, 0, _streamTabs.TabPages.Count - 1);
+        if (workspace.StreamTabs.TabPages.Count == 0)
+        {
+            workspace.ActiveTabIndex = -1;
+            return;
+        }
+
+        workspace.ActiveTabIndex =
+            Math.Clamp(index, 0, workspace.StreamTabs.TabPages.Count - 1);
+        SetActiveWorkspace(workspace.Index);
         _suppressTabEvent = true;
-        _streamTabs.SelectedIndex = _activeTabIndex;
+        workspace.StreamTabs.SelectedIndex = workspace.ActiveTabIndex;
         _suppressTabEvent = false;
         LayoutPanes();
     }
 
-    // "Hide all streams": no stream shown; games take full width. Hidden panes
-    // stop compositing but keep running timers/addons (Background mode).
     private void SetAllStreamsBackground()
     {
-        _activeTabIndex = -1;
-        _suppressTabEvent = true;
-        _streamTabs.SelectedIndex = -1;
-        _suppressTabEvent = false;
+        foreach (var workspace in _workspaces)
+        {
+            workspace.ActiveTabIndex = -1;
+            _suppressTabEvent = true;
+            workspace.StreamTabs.SelectedIndex = -1;
+            _suppressTabEvent = false;
+        }
+
         LayoutPanes();
         SaveSession();
     }
 
     private void MuteActiveStream()
     {
-        var pane = ActiveStreamPane() ?? ForegroundCandidates().FirstOrDefault();
+        var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
+        var pane = ActiveStreamPane(workspace) ??
+                   _workspaces.SelectMany(ForegroundCandidates).FirstOrDefault();
         if (pane is null) return;
+
         pane.View.IsMuted = !pane.View.IsMuted;
-        // Unmuting one audible stream while several are visible: mute the others.
         if (!pane.View.IsMuted)
-            foreach (var other in ForegroundCandidates())
+            foreach (var other in _workspaces.SelectMany(ForegroundCandidates))
                 if (other != pane) other.View.IsMuted = true;
     }
 
-    // Manually open a stream URL on the currently selected account only.
-    private async Task AddStreamManualAsync()
+    private async Task AddStreamManualAsync(int workspaceIndex)
     {
-        var url = Prompt("Stream URL", "https://www.twitch.tv/");
+        var workspace = _workspaces[Math.Clamp(workspaceIndex, 0, _workspaces.Count - 1)];
+        SetActiveWorkspace(workspace.Index);
+
+        var url = Prompt(
+            $"Stream URL for Game {workspace.Index + 1}",
+            "https://www.twitch.tv/");
         if (string.IsNullOrWhiteSpace(url)) return;
         if (!url.Contains("://")) url = "https://" + url;
         if (!IsStreamUrl(url))
@@ -806,84 +821,140 @@ internal sealed class MainForm : Form
                 "Add stream", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        var slot = _activeTabIndex >= 0 && _activeTabIndex < _slots.Count
-            ? _slots[_activeTabIndex]
-            : _slots.FirstOrDefault(s => s.Account.Enabled);
+
+        var slot = workspace.ActiveTabIndex >= 0 &&
+                   workspace.ActiveTabIndex < workspace.Slots.Count
+            ? workspace.Slots[workspace.ActiveTabIndex]
+            : workspace.Slots.FirstOrDefault(s => s.Account.Enabled);
+
         if (slot is null)
         {
-            MessageBox.Show(this, "No stream accounts configured — add one under Accounts…",
+            MessageBox.Show(this, "No Twitch/Kick accounts configured — add one under Accounts…",
                 "Add stream", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        await EnsureStreamPaneAsync(slot, url);
+
+        await EnsureStreamPaneAsync(workspace, slot, url);
+        SelectTab(workspace, workspace.Slots.IndexOf(slot));
         SaveSession();
     }
 
-    private Pane? ActiveStreamPane()
+    private Pane? ActiveStreamPane(GameWorkspace workspace)
     {
-        if (_activeTabIndex < 0 || _activeTabIndex >= _slots.Count) return null;
-        var slot = _slots[_activeTabIndex];
-        return slot.Pane ?? (_extraPanes.TryGetValue(slot.Account.Id, out var p) ? p : null);
+        if (workspace.ActiveTabIndex < 0 || workspace.ActiveTabIndex >= workspace.Slots.Count)
+            return null;
+
+        var slot = workspace.Slots[workspace.ActiveTabIndex];
+        return slot.Pane
+               ?? (workspace.ExtraPanes.TryGetValue(
+                       ExtraPaneKey(workspace, slot.Account.Id), out var p) ? p : null);
     }
 
-    private IEnumerable<StreamSlot> EnabledStreamSlots() =>
-        _slots.Where(s => s.Account.Enabled);
+    private IEnumerable<StreamSlot> EnabledStreamSlots(GameWorkspace workspace) =>
+        workspace.Slots.Where(s => s.Account.Enabled);
 
     // --- Layout --------------------------------------------------------------------
-    // Games occupy the left column; the right side hosts a grid of visible stream
-    // panes (one tab foregrounded at a time, up to VisibleStreamCount cells). With
-    // 10 accounts open, only the visible cells render; the rest run hidden.
+    // Two distinct columns: each Game N sits above "STREAMS FOR GAME N". Stream
+    // panes never cross the center divider. Each game can render up to 10.
     private void LayoutPanes()
     {
-        if (_gameEnv is null) return; // init not finished yet
+        if (_gameEnv is null) return;
 
-        var top = AppConfig.ToolbarHeight + (_streamTabs.TabPages.Count > 0 ? _streamTabs.Height : 0);
-        // The tab strip is docked Top and keeps its full width in the layout even
-        // when all streams are backgrounded; hand its reserved band back to the
-        // panes by collapsing it to zero height (it grows again on resize).
-        if (_streamTabs.TabPages.Count > 0) _streamTabs.SetBounds(0, AppConfig.ToolbarHeight, ClientSize.Width, 0);
-        var height = Math.Max(0, ClientSize.Height - top);
-        var width = ClientSize.Width;
+        const int pagePadding = 6;
+        const int columnGap = 6;
+        const int headerHeight = 34;
+        const int streamHeaderHeight = 28;
+        const int tabHeight = 30;
+        const int topGap = 6;
 
-        var candidates = ForegroundCandidates().ToList();
-        var streamWidth = candidates.Count == 0 ? 0 : (candidates.Count > 1 ? width * 2 / 5 : width / 3);
-        var gamesWidth = width - streamWidth;
-        var each = _games.Count > 0 ? gamesWidth / _games.Count : 0;
+        var contentTop = AppConfig.ToolbarHeight + topGap;
+        var contentHeight = Math.Max(0, ClientSize.Height - contentTop - pagePadding);
+        var contentWidth = Math.Max(0, ClientSize.Width - pagePadding * 2);
+        var columnWidth = Math.Max(0, (contentWidth - columnGap) / 2);
 
-        for (var i = 0; i < _games.Count; i++)
-            _games[i].Show(new Rectangle(i * each, top, each, height));
-
-        GridLayout(candidates, new Rectangle(gamesWidth, top, streamWidth, height));
-
-        foreach (var slot in _slots)
+        for (var i = 0; i < _workspaces.Count; i++)
         {
-            if (slot.Pane is null || candidates.Contains(slot.Pane)) continue;
-            if (slot.Pane.Mode == StreamMode.Parked) slot.Pane.Park();
-            else slot.Pane.Hide(); // Background: no compositing, timers kept alive by flags.
+            var workspace = _workspaces[i];
+            var x = pagePadding + i * (columnWidth + columnGap);
+            var frame = new Rectangle(x, contentTop, columnWidth, contentHeight);
+            workspace.Frame.Bounds = frame;
+
+            var innerWidth = Math.Max(0, frame.Width - 2);
+            var innerHeight = Math.Max(0, frame.Height - 2);
+
+            workspace.Header.Bounds = new Rectangle(0, 0, innerWidth, headerHeight);
+            workspace.Header.BackColor = SystemColors.ActiveCaption;
+            workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
+
+            var gameTop = headerHeight + 6;
+            var streamSplit = Math.Clamp(
+                innerHeight * 7 / 10,
+                gameTop + 190,
+                Math.Max(gameTop + 190,
+                    innerHeight - streamHeaderHeight - tabHeight - 180));
+
+            workspace.StreamHeader.Bounds =
+                new Rectangle(0, streamSplit, innerWidth, streamHeaderHeight);
+            workspace.StreamHeader.BackColor = SystemColors.ControlLight;
+
+            workspace.StreamTabs.Bounds =
+                new Rectangle(0, streamSplit + streamHeaderHeight, innerWidth, tabHeight);
+
+            var gameBounds = new Rectangle(
+                frame.X + 3,
+                frame.Y + 1 + gameTop,
+                Math.Max(0, frame.Width - 6),
+                Math.Max(0, streamSplit - gameTop));
+
+            var streamBounds = new Rectangle(
+                frame.X + 3,
+                frame.Y + 1 + streamSplit + streamHeaderHeight + tabHeight,
+                Math.Max(0, frame.Width - 6),
+                Math.Max(0, innerHeight - streamSplit - streamHeaderHeight - tabHeight - 2));
+
+            workspace.GamePane?.Show(gameBounds);
+
+            var candidates = ForegroundCandidates(workspace);
+            GridLayout(candidates, streamBounds);
+
+            foreach (var slot in workspace.Slots)
+            {
+                if (slot.Pane is null || candidates.Contains(slot.Pane)) continue;
+                if (slot.Pane.Mode == StreamMode.Parked) slot.Pane.Park();
+                else slot.Pane.Hide();
+            }
+
+            foreach (var pane in workspace.ExtraPanes.Values)
+            {
+                if (candidates.Contains(pane)) continue;
+                if (pane.Mode == StreamMode.Parked) pane.Park();
+                else pane.Hide();
+            }
         }
-        foreach (var (profile, pane) in _extraPanes)
-        {
-            if (candidates.Contains(pane)) continue;
-            if (pane.Mode == StreamMode.Parked) pane.Park();
-            else pane.Hide();
-        }
+
+        UpdateWorkspaceHeaders();
     }
 
-    // Panes that should be rendered right now: the active tab (+ its extra pane)
-    // plus any additional visible-account panes up to VisibleStreamCount.
-    private List<Pane> ForegroundCandidates()
+    private List<Pane> ForegroundCandidates(GameWorkspace workspace)
     {
         var result = new List<Pane>();
-        if (_activeTabIndex < 0) return result;
+        if (workspace.ActiveTabIndex < 0) return result;
 
-        var visibleAccounts = EnabledStreamSlots().Take(_accounts.VisibleStreamCount).ToList();
-        var activeSlot = _activeTabIndex < _slots.Count ? _slots[_activeTabIndex] : null;
+        var visibleAccounts = EnabledStreamSlots(workspace)
+            .Take(_accounts.VisibleStreamCount)
+            .ToList();
 
-        // Always show the selected tab first, even if its account sits beyond the
-        // visible-count window.
-        if (activeSlot?.Pane is { } ap) result.Add(ap);
-        if (activeSlot is not null && _extraPanes.TryGetValue(activeSlot.Account.Id, out var ep))
-            result.Add(ep);
+        var activeSlot = workspace.ActiveTabIndex < workspace.Slots.Count
+            ? workspace.Slots[workspace.ActiveTabIndex]
+            : null;
+
+        if (activeSlot?.Pane is { } activePane)
+            result.Add(activePane);
+
+        if (activeSlot is not null &&
+            workspace.ExtraPanes.TryGetValue(
+                ExtraPaneKey(workspace, activeSlot.Account.Id), out var extra))
+            result.Add(extra);
 
         foreach (var slot in visibleAccounts)
         {
@@ -891,23 +962,23 @@ internal sealed class MainForm : Form
             if (result.Count >= Math.Max(1, _accounts.VisibleStreamCount)) break;
             result.Add(slot.Pane);
         }
+
         return result;
     }
 
-    // Arrange N panes in a WxH grid inside bounds: columns = ceil(sqrt(N)), rows
-    // spread to fill. One pane = full cell (same as before).
     private static void GridLayout(List<Pane> panes, Rectangle bounds)
     {
         if (panes.Count == 0 || bounds.Width <= 0 || bounds.Height <= 0) return;
+
         var cols = (int)Math.Ceiling(Math.Sqrt(panes.Count));
         var rows = (int)Math.Ceiling(panes.Count / (double)cols);
         var cw = bounds.Width / cols;
         var ch = bounds.Height / rows;
+
         for (var i = 0; i < panes.Count; i++)
         {
             var r = i / cols;
             var c = i % cols;
-            // Last column absorbs rounding remainder.
             var w = c == cols - 1 ? bounds.Right - bounds.X - c * cw : cw;
             var h = r == rows - 1 ? bounds.Bottom - bounds.Y - r * ch : ch;
             panes[i].Show(new Rectangle(bounds.X + c * cw, bounds.Y + r * ch, w, h));
