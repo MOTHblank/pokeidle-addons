@@ -7,28 +7,16 @@ namespace Moth.PokeIdle.IdleShell;
 internal sealed class MainForm : Form
 {
     private readonly Panel _toolbar;
-    // Tab strip listing every stream account (up to 10); the selected tab's pane
-    // is foregrounded in the stream area below it. Panes are parented to the form,
-    // not the TabPage, so the strip only acts as a selector.
-    private readonly TabControl _streamTabs = new()
-    {
-        Dock = DockStyle.Top,
-        Appearance = TabAppearance.FlatButtons,
-        ItemSize = new Size(150, 26),
-        SizeMode = TabSizeMode.Fixed,
-        Height = 30
-    };
     private readonly Label _status = new()
         { AutoSize = true, Padding = new Padding(3, 4, 3, 0), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-    private readonly ComboBox _addonsPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
+    private readonly ComboBox _addonsPicker = new()
+        { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
 
     private CoreWebView2Environment? _gameEnv;
     private CoreWebView2Environment? _streamEnv;
     private readonly AccountManager _accounts = AccountManager.Load();
     private readonly List<Pane> _games = [];
-    private readonly List<StreamSlot> _slots = [];
-    private readonly Dictionary<string, Pane> _extraPanes =
-        new(StringComparer.OrdinalIgnoreCase); // OAuth popups etc., keyed by profile id
+    private readonly List<GameWorkspace> _workspaces = [new(0), new(1)];
     private UserscriptLoader? _userscripts;
     private readonly System.Windows.Forms.Timer _statsTimer = new() { Interval = 5000 };
     private readonly System.Windows.Forms.Timer _probeTimer = new() { Interval = 30000 };
@@ -38,17 +26,61 @@ internal sealed class MainForm : Form
     private bool _probing;
     private bool _suppressTabEvent;
     private bool _suppressAddonPickerEvent;
-    private Button _modeButton = null!;   // assigned in BuildToolbar, called from the ctor
+    private Button _modeButton = null!;
     private Button _allBackgroundButton = null!;
     private ToolStripMenuItem _visibleStreamsItem = null!;
-    private int _activeTabIndex = -1;     // -1 = "All background"
+    private int _activeWorkspaceIndex;
     private static readonly Regex StreamUrlRegex =
         new($@"^https?://{AppConfig.StreamHostPattern}/", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // One tab per stream account: a lazily-created pane plus its last routed URL.
-    private sealed class StreamSlot(Account account)
+    // Each game owns a completely separate stream area. A login profile can be
+    // used by both games because each workspace owns its own WebView2 controller.
+    private sealed class GameWorkspace(int index)
+    {
+        public int Index { get; } = index;
+        public string GameProfile { get; set; } = "";
+        public Pane? GamePane;
+        public int ActiveTabIndex { get; set; } = -1;
+
+        public Panel Frame { get; } = new()
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = SystemColors.Control
+        };
+
+        public Label Header { get; } = new()
+        {
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
+            Padding = new Padding(8, 0, 8, 0)
+        };
+
+        public Label StreamHeader { get; } = new()
+        {
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(8, 0, 8, 0)
+        };
+
+        public TabControl StreamTabs { get; } = new()
+        {
+            Appearance = TabAppearance.FlatButtons,
+            ItemSize = new Size(98, 26),
+            SizeMode = TabSizeMode.Fixed,
+            Multiline = false,
+            Height = 30
+        };
+
+        public List<StreamSlot> Slots { get; } = [];
+        public Dictionary<string, Pane> ExtraPanes { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class StreamSlot(Account account, string gameProfile)
     {
         public Account Account { get; set; } = account;
+        public string GameProfile { get; } = gameProfile;
         public Pane? Pane;
         public string? Url;
         public TabPage Tab { get; } = new(account.DisplayLabel);
@@ -68,12 +100,12 @@ internal sealed class MainForm : Form
             Padding = new Padding(8, 5, 8, 5)
         };
         BuildToolbar();
+        BuildWorkspaceChrome();
         Controls.Add(_toolbar);
+        foreach (var workspace in _workspaces)
+            Controls.Add(workspace.Frame);
 
         Resize += (_, _) => LayoutPanes();
-        // The tab strip keeps its full width in the layout even when all streams
-        // are backgrounded, so panes must follow every dock-size change.
-        _streamTabs.SizeChanged += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
         FormClosed += (_, _) => { _statsTimer.Stop(); _probeTimer.Stop(); foreach (var p in AllPanes()) p.Close(); };
         Shown += async (_, _) => await InitializeAsync();
@@ -82,8 +114,44 @@ internal sealed class MainForm : Form
         _probeTimer.Tick += async (_, _) => await ProbeTickAsync();
     }
 
+    private IEnumerable<StreamSlot> AllStreamSlots() =>
+        _workspaces.SelectMany(w => w.Slots);
+
     private IEnumerable<Pane> AllPanes() =>
-        _games.Concat(_slots.Select(s => s.Pane)).Concat(_extraPanes.Values).OfType<Pane>();
+        _games
+            .Concat(AllStreamSlots().Select(s => s.Pane))
+            .Concat(_workspaces.SelectMany(w => w.ExtraPanes.Values))
+            .OfType<Pane>();
+
+    private void BuildWorkspaceChrome()
+    {
+        foreach (var workspace in _workspaces)
+        {
+            workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
+            workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
+            workspace.Frame.Controls.Add(workspace.Header);
+            workspace.Frame.Controls.Add(workspace.StreamHeader);
+            workspace.Frame.Controls.Add(workspace.StreamTabs);
+
+            workspace.Header.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamHeader.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamTabs.Enter += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.StreamTabs.SelectedIndexChanged += (_, _) =>
+            {
+                if (_suppressTabEvent) return;
+                SetActiveWorkspace(workspace.Index);
+                workspace.ActiveTabIndex = workspace.StreamTabs.SelectedIndex;
+                LayoutPanes();
+                SaveSession();
+            };
+        }
+    }
+
+    private void SetActiveWorkspace(int index)
+    {
+        _activeWorkspaceIndex = Math.Clamp(index, 0, _workspaces.Count - 1);
+    }
+
     // Addons folder resolution order: repo checkout next to the exe's parent
     // folders, then the build-output copy shipped beside the exe.
     internal static string ResolveAddonsFolder()
@@ -138,7 +206,8 @@ internal sealed class MainForm : Form
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
             _allBackgroundButton,
-            Button("+ Stream", async (_, _) => await AddStreamManualAsync()),
+            Button("G1 + Stream", async (_, _) => await AddStreamManualAsync(0)),
+            Button("G2 + Stream", async (_, _) => await AddStreamManualAsync(1)),
             Button("Mute/Unmute", (_, _) => MuteActiveStream()),
             _addonsPicker,
             _modeButton,
@@ -168,14 +237,6 @@ internal sealed class MainForm : Form
             else _probeTimer.Stop();
         };
 
-        _streamTabs.SelectedIndexChanged += (_, _) =>
-        {
-            if (_suppressTabEvent) return;
-            _activeTabIndex = _streamTabs.SelectedIndex;
-            LayoutPanes();
-            SaveSession();
-        };
-
         UpdateModeButtonText();
         UpdateVisibleStreamsText();
     }
@@ -184,7 +245,7 @@ internal sealed class MainForm : Form
     {
         _inactiveStreamMode = _inactiveStreamMode == StreamMode.Background
             ? StreamMode.Parked : StreamMode.Background;
-        foreach (var slot in _slots)
+        foreach (var slot in AllStreamSlots())
             if (slot.Pane is { } p) p.Mode = _inactiveStreamMode;
         SaveSession();
         UpdateModeButtonText();
@@ -265,56 +326,60 @@ internal sealed class MainForm : Form
             foreach (var spec in session.Where(s => s.Kind == PaneKind.Game))
                 await AddGamePaneAsync(spec);
 
-            // One tab per stream account. Panes are created lazily — on first
-            // routed link, manual open, restore, or login — so 10 configured
-            // accounts don't mean 10 renderers until they actually play video.
-            foreach (var account in _accounts.StreamAccounts)
+            // Each game column gets an independent set of stream account tabs.
+            _suppressTabEvent = true;
+            try
             {
-                var slot = new StreamSlot(account);
-                _slots.Add(slot);
-                _streamTabs.TabPages.Add(slot.Tab);
+                foreach (var workspace in _workspaces)
+                {
+                    foreach (var account in _accounts.StreamAccounts)
+                        AddStreamSlot(workspace, account);
+                }
             }
+            finally
+            {
+                _suppressTabEvent = false;
+            }
+            UpdateWorkspaceHeaders();
 
-            // Restore previously-open stream panes (URLs from the last session).
+            // Restore stream panes. Old sessions had no Group, so their streams
+            // migrate into Game 1 instead of becoming visually mixed.
             foreach (var spec in session.Where(s => s.Kind == PaneKind.Stream))
             {
-                var slot = SlotForProfile(spec.Profile);
-                if (slot is null || string.IsNullOrWhiteSpace(spec.Url)) continue;
+                var workspace = WorkspaceForGroup(spec.Group) ??
+                                (_workspaces.Count > 0 ? _workspaces[0] : null);
+                var slot = workspace is null ? null : SlotForProfile(workspace, spec.Profile);
+                if (workspace is null || slot is null || string.IsNullOrWhiteSpace(spec.Url))
+                    continue;
+
                 if (IsStreamUrl(spec.Url))
-                {
-                    await EnsureStreamPaneAsync(slot, spec.Url);
-                }
+                    await EnsureStreamPaneAsync(workspace, slot, spec.Url);
                 else
-                {
-                    // Popup/login pane that lived in a stream profile — reopen it.
-                    await AddExtraPaneAsync(new PaneSpec(spec.Title, spec.Url, spec.Profile,
-                        PaneKind.Stream, spec.Mode));
-                }
+                    await AddExtraPaneAsync(workspace, new PaneSpec(
+                        spec.Title, spec.Url, spec.Profile, PaneKind.Stream,
+                        spec.Mode, workspace.GameProfile));
             }
 
             _accounts.Changed += OnAccountsChanged;
 
-            // Default: first visible stream tab in foreground.
-            var restoredActive = session.FirstOrDefault(s => s.Kind == PaneKind.ActiveStreamMarker)?.Profile;
-            var startIndex = 0;
-            if (restoredActive is not null)
+            foreach (var marker in session.Where(s => s.Kind == PaneKind.ActiveStreamMarker))
             {
-                var idx = _slots.FindIndex(s =>
-                    string.Equals(s.Account.Id, restoredActive, StringComparison.OrdinalIgnoreCase));
-                if (idx >= 0) startIndex = idx;
-            }
-            if (_slots.Count > 0) SelectTab(startIndex);
-            else _activeTabIndex = -1;
+                var workspace = WorkspaceForGroup(marker.Group) ??
+                                WorkspaceForGroupByStreamProfile(marker.Profile);
+                if (workspace is null) continue;
 
-            // Add the tab strip after the toolbar so docking puts it directly
-            // below the toolbar; panes stay children of the form itself.
-            Controls.Add(_streamTabs);
+                var idx = workspace.Slots.FindIndex(s =>
+                    string.Equals(s.Account.Id, marker.Profile, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) SelectTab(workspace, idx);
+            }
+
+            _activeWorkspaceIndex = 0;
             LayoutPanes();
             _statsTimer.Start();
             if (_probeToggle.Checked) _probeTimer.Start();
             UpdateStatus();
-            Log($"startup: {_games.Count} game pane(s), {_slots.Count} stream account(s) " +
-                $"({EnabledStreamSlots().Count()} enabled), visible streams: {_accounts.VisibleStreamCount}; " +
+            Log($"startup: {_games.Count} game workspace(s), {_accounts.StreamAccounts.Count()} stream login(s) × 2 workspaces " +
+                $"({ _accounts.EnabledStreamAccounts.Count() } enabled; up to 10 streams per game); " +
                 $"accounts file: {AppConfig.AccountsFile}");
         }
         catch (Exception ex)
@@ -337,40 +402,64 @@ internal sealed class MainForm : Form
         LayoutPanes();
     }
 
-    private Pane? PaneForAccount(Account acc) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase))?.Pane
-        ?? (_extraPanes.TryGetValue(acc.Id, out var p) ? p : null);
+    private Pane? PaneForAccount(Account acc)
+    {
+        if (acc.IsStream)
+            return AllStreamSlots()
+                .FirstOrDefault(s =>
+                    string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase))
+                ?.Pane
+                ?? _workspaces
+                    .Select(w => w.ExtraPanes.TryGetValue(ExtraPaneKey(w, acc.Id), out var p) ? p : null)
+                    .FirstOrDefault(p => p is not null);
+
+        return _games.FirstOrDefault(g =>
+            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
+    }
 
     private void OnAccountsChanged()
     {
-        // Keep slots and tabs in sync with the registry.
-        foreach (var slot in _slots)
+        foreach (var workspace in _workspaces)
         {
-            var current = _accounts.Find(slot.Account.Id);
-            if (current is not null) slot.Account = current;
-        }
-
-        var removed = _slots.Where(s => _accounts.Find(s.Account.Id) is null).ToArray();
-        foreach (var slot in removed)
-        {
-            CloseSlot(slot);
-            _slots.Remove(slot);
-        }
-
-        foreach (var account in _accounts.StreamAccounts)
-        {
-            if (_slots.All(s => !string.Equals(s.Account.Id, account.Id, StringComparison.OrdinalIgnoreCase)))
+            foreach (var slot in workspace.Slots)
             {
-                var slot = new StreamSlot(account);
-                _slots.Add(slot);
-                _streamTabs.TabPages.Add(slot.Tab);
+                var current = _accounts.Find(slot.Account.Id);
+                if (current is not null) slot.Account = current;
             }
+
+            foreach (var slot in workspace.Slots
+                         .Where(s => _accounts.Find(s.Account.Id) is null)
+                         .ToArray())
+                CloseSlot(workspace, slot);
+
+            foreach (var account in _accounts.StreamAccounts)
+                AddStreamSlot(workspace, account);
         }
 
         RebuildTabTitles();
         UpdateVisibleStreamsText();
+        UpdateWorkspaceHeaders();
         LayoutPanes();
         SaveSession();
+    }
+
+    private void AddStreamSlot(GameWorkspace workspace, Account account)
+    {
+        var existing = workspace.Slots.FirstOrDefault(s =>
+            string.Equals(s.Account.Id, account.Id, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            existing.Account = account;
+            existing.Tab.Text = account.DisplayLabel;
+            return;
+        }
+
+        if (workspace.Slots.Count >= AccountManager.MaxStreamAccounts)
+            return;
+
+        var slot = new StreamSlot(account, workspace.GameProfile);
+        workspace.Slots.Add(slot);
+        workspace.StreamTabs.TabPages.Add(slot.Tab);
     }
 
     private void RebuildTabTitles()
@@ -378,60 +467,108 @@ internal sealed class MainForm : Form
         _suppressTabEvent = true;
         try
         {
-            for (var i = 0; i < _slots.Count && i < _streamTabs.TabPages.Count; i++)
-                _streamTabs.TabPages[i].Text = _slots[i].Account.DisplayLabel;
+            foreach (var workspace in _workspaces)
+                for (var i = 0; i < workspace.Slots.Count && i < workspace.StreamTabs.TabPages.Count; i++)
+                    workspace.StreamTabs.TabPages[i].Text = workspace.Slots[i].Account.DisplayLabel;
         }
         finally { _suppressTabEvent = false; }
     }
 
-    private async Task ShowAccountForLoginAsync(Account acc)
+    private void UpdateWorkspaceHeader(GameWorkspace workspace)
     {
-        var slot = SlotForAccount(acc);
-        if (slot is not null)
-        {
-            await EnsureStreamPaneAsync(slot, slot.Url ?? AccountManager.LoginUrl(acc.Service));
-            SelectTab(_slots.IndexOf(slot));
-            return;
-        }
-        // Game account: reload/focus is enough — sign-in happens on pokeidle.io.
-        var game = _games.FirstOrDefault(g =>
-            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
-        game?.View.Navigate(AccountManager.LoginUrl(acc.Service));
+        var open = workspace.Slots.Count(s => s.Pane is not null);
+        var visible = ForegroundCandidates(workspace).Count;
+        workspace.Header.Text =
+            $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
+        workspace.StreamHeader.Text =
+            $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible";
     }
 
-    private StreamSlot? SlotForAccount(Account acc) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase));
+    private void UpdateWorkspaceHeaders()
+    {
+        foreach (var workspace in _workspaces)
+            UpdateWorkspaceHeader(workspace);
+    }
 
-    private StreamSlot? SlotForProfile(string profile) =>
-        _slots.FirstOrDefault(s => string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase));
+    private async Task ShowAccountForLoginAsync(Account acc)
+    {
+        if (acc.IsStream)
+        {
+            var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
+            var slot = SlotForProfile(workspace, acc.Id);
+            if (slot is not null)
+            {
+                await EnsureStreamPaneAsync(
+                    workspace, slot, slot.Url ?? AccountManager.LoginUrl(acc.Service));
+                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+            }
+            return;
+        }
+
+        var game = _games.FirstOrDefault(g =>
+            string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
+        if (game is not null)
+            game.View.Navigate(AccountManager.LoginUrl(acc.Service));
+    }
+
+    private StreamSlot? SlotForProfile(GameWorkspace workspace, string profile) =>
+        workspace.Slots.FirstOrDefault(s =>
+            string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase));
+
+    private GameWorkspace? WorkspaceForGroup(string? group) =>
+        string.IsNullOrWhiteSpace(group) ? null :
+        _workspaces.FirstOrDefault(w =>
+            string.Equals(w.GameProfile, group, StringComparison.OrdinalIgnoreCase));
+
+    private GameWorkspace? WorkspaceForGroupByStreamProfile(string profile) =>
+        _workspaces.FirstOrDefault(w =>
+            w.Slots.Any(s => string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase)));
+
+    private GameWorkspace? WorkspaceForPane(Pane pane)
+    {
+        if (pane.Spec.Kind == PaneKind.Game)
+            return WorkspaceForGroup(pane.Spec.Profile);
+
+        return WorkspaceForGroup(pane.Spec.Group)
+               ?? _workspaces.FirstOrDefault(w =>
+                   w.Slots.Any(s => ReferenceEquals(s.Pane, pane)));
+    }
 
     // --- Panes -----------------------------------------------------------------
 
     private async Task AddGamePaneAsync(PaneSpec spec)
     {
-        var env = spec.Kind == PaneKind.Game ? _gameEnv! : _streamEnv!;
-
-        var pane = await Pane.CreateAsync(env, Handle, spec,
-            spec.Kind == PaneKind.Game ? _userscripts : null);
+        var pane = await Pane.CreateAsync(_gameEnv!, Handle, spec, _userscripts);
 
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
-        // Navigation backstop: a game page that bypasses the userscript and
-        // navigates to twitch/kick gets bounced into background stream panes.
         pane.View.NavigationStarting += (_, e) => GamePaneNavigating(pane, _, e);
+
         _games.Add(pane);
+
+        if (_games.Count <= _workspaces.Count)
+        {
+            var workspace = _workspaces[_games.Count - 1];
+            workspace.GamePane = pane;
+            workspace.GameProfile = spec.Profile;
+            UpdateWorkspaceHeader(workspace);
+        }
     }
 
-    private async Task EnsureStreamPaneAsync(StreamSlot slot, string url)
+    private async Task EnsureStreamPaneAsync(GameWorkspace workspace, StreamSlot slot, string url)
     {
         if (slot.Pane is not null)
         {
             slot.Url = url;
-            if (slot.Pane.View.Source != url) slot.Pane.View.Navigate(url);
+            if (!string.Equals(slot.Pane.View.Source, url, StringComparison.OrdinalIgnoreCase))
+                slot.Pane.View.Navigate(url);
             return;
         }
-        var spec = new PaneSpec(slot.Account.DisplayLabel, url, slot.Account.Id,
-            PaneKind.Stream, _inactiveStreamMode);
+
+        var spec = new PaneSpec(
+            slot.Account.DisplayLabel, url, slot.Account.Id,
+            PaneKind.Stream, _inactiveStreamMode, workspace.GameProfile);
+
         var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
@@ -440,18 +577,23 @@ internal sealed class MainForm : Form
         LayoutPanes();
     }
 
-    // Extra pane inside an existing stream profile (OAuth popups, login detours).
-    private async Task AddExtraPaneAsync(PaneSpec spec)
+    private static string ExtraPaneKey(GameWorkspace workspace, string profile) =>
+        $"{workspace.GameProfile}:0:{profile}";
+
+    private async Task AddExtraPaneAsync(GameWorkspace workspace, PaneSpec spec)
     {
-        if (_extraPanes.TryGetValue(spec.Profile, out var old))
+        var key = ExtraPaneKey(workspace, spec.Profile);
+        if (workspace.ExtraPanes.TryGetValue(key, out var old))
         {
             DetachAndClose(old);
-            _extraPanes.Remove(spec.Profile);
+            workspace.ExtraPanes.Remove(key);
         }
-        var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec);
+
+        var paneSpec = spec with { Group = workspace.GameProfile };
+        var pane = await Pane.CreateAsync(_streamEnv!, Handle, paneSpec);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
-        _extraPanes[spec.Profile] = pane;
+        workspace.ExtraPanes[key] = pane;
         LayoutPanes();
     }
 
@@ -462,15 +604,22 @@ internal sealed class MainForm : Form
         pane.Close();
     }
 
-    private void CloseSlot(StreamSlot slot)
+    private void CloseSlot(GameWorkspace workspace, StreamSlot slot)
     {
         if (slot.Pane is { } p) DetachAndClose(p);
-        if (_extraPanes.TryGetValue(slot.Account.Id, out var extra))
+
+        var key = ExtraPaneKey(workspace, slot.Account.Id);
+        if (workspace.ExtraPanes.TryGetValue(key, out var extra))
         {
             DetachAndClose(extra);
-            _extraPanes.Remove(slot.Account.Id);
+            workspace.ExtraPanes.Remove(key);
         }
-        _streamTabs.TabPages.Remove(slot.Tab);
+
+        workspace.StreamTabs.TabPages.Remove(slot.Tab);
+        workspace.Slots.Remove(slot);
+        if (workspace.ActiveTabIndex >= workspace.Slots.Count)
+            workspace.ActiveTabIndex = workspace.Slots.Count - 1;
+        LayoutPanes();
     }
 
     private void RefreshAddonsPicker()
@@ -516,58 +665,74 @@ internal sealed class MainForm : Form
     }
 
     // --- Stream link routing -------------------------------------------------
-    // A pokeidle page (or any pane) reported a twitch.tv/kick.com link. Fan it
-    // out to one pane per enabled account of the matching service (Twitch/Kick),
-    // so each link plays simultaneously on every login — up to 10 at once.
+    // Stream links stay inside the game workspace that generated them.
     private void OnPaneMessage(Pane pane, HostMessage msg)
     {
         if (msg.Type != "link" || !IsStreamUrl(msg.Url)) return;
-        _ = RouteStreamLinkAsync(msg.Url, $"userscript ({msg.Source})");
+
+        var workspace = WorkspaceForPane(pane);
+        if (workspace is not null)
+            _ = RouteStreamLinkAsync(
+                msg.Url, $"userscript ({msg.Source})", workspace.GameProfile);
     }
 
-    // Backstops for pages that bypass the userscript: popups from game panes,
-    // and game panes that somehow navigated straight onto a stream host.
     private void OnPopupRequested(Pane pane, string url)
     {
         if (pane.Spec.Kind == PaneKind.Game && IsStreamUrl(url))
         {
-            _ = RouteStreamLinkAsync(url, "popup backstop");
+            _ = RouteStreamLinkAsync(url, "popup backstop", pane.Spec.Profile);
             return;
         }
-        // Stream-pane popups (Twitch OAuth "Log in with Twitch" etc.): open them
-        // as a visible pane in the SAME profile so window.opener keeps working.
+
         _ = OpenStreamPopupAsync(pane, url);
     }
 
-    private void GamePaneNavigating(Pane pane, object? sender, CoreWebView2NavigationStartingEventArgs e)
+    private void GamePaneNavigating(
+        Pane pane, object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
         if (!IsStreamUrl(e.Uri)) return;
-        e.Cancel = true; // never leave the game page
-        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop");
+        e.Cancel = true;
+        _ = RouteStreamLinkAsync(e.Uri, "navigation backstop", pane.Spec.Profile);
     }
 
     public static bool IsStreamUrl(string? url) =>
         url is not null && StreamUrlRegex.IsMatch(url);
 
-    private async Task RouteStreamLinkAsync(string url, string via)
+    private async Task RouteStreamLinkAsync(string url, string via, string gameProfile)
     {
         try
         {
+            var workspace = WorkspaceForGroup(gameProfile);
+            if (workspace is null)
+            {
+                Log($"no workspace for game profile {gameProfile}; ignored stream link {url}");
+                return;
+            }
+
             var targets = _accounts.StreamAccountsForUrl(url);
             if (targets.Count == 0)
             {
-                Log($"no enabled stream accounts for {url} (via {via}) — ignored");
+                Log($"no enabled Twitch/Kick accounts for {url} (via {via}) — ignored");
                 return;
             }
-                var created = 0;
+
+            var created = 0;
             foreach (var account in targets)
             {
-                var slot = SlotForAccount(account);
+                var slot = SlotForProfile(workspace, account.Id);
                 if (slot is null) continue;
                 if (slot.Pane is null) created++;
-                await EnsureStreamPaneAsync(slot, url);
+                await EnsureStreamPaneAsync(workspace, slot, url);
             }
-            Log($"Routed {url} to {targets.Count} stream account(s) via {via}" +
+
+            var first = workspace.Slots.FirstOrDefault(s =>
+                s.Pane is not null &&
+                targets.Any(a =>
+                    string.Equals(a.Id, s.Account.Id, StringComparison.OrdinalIgnoreCase)));
+            if (first is not null)
+                SelectTab(workspace, workspace.Slots.IndexOf(first));
+
+            Log($"Routed {url} to Game {workspace.Index + 1}: {targets.Count} account(s) via {via}" +
                 (created > 0 ? $" ({created} new pane(s) created)" : ""));
             SaveSession();
         }
@@ -581,13 +746,24 @@ internal sealed class MainForm : Form
     {
         try
         {
+            var workspace = WorkspaceForPane(opener);
+            if (workspace is null)
+            {
+                Log($"popup has no workspace: {url}");
+                return;
+            }
+
             var title = Uri.TryCreate(url, UriKind.Absolute, out var u)
                 ? u.Host.Replace("www.", "") + u.AbsolutePath : url;
-            await AddExtraPaneAsync(new PaneSpec(title, url, opener.Spec.Profile,
-                PaneKind.Stream, _inactiveStreamMode));
-            var slot = SlotForProfile(opener.Spec.Profile);
-            if (slot is not null) SelectTab(_slots.IndexOf(slot));
-            Log($"Opened popup in foreground: {url} (profile {opener.Spec.Profile})");
+            await AddExtraPaneAsync(workspace, new PaneSpec(
+                title, url, opener.Spec.Profile, PaneKind.Stream,
+                _inactiveStreamMode, workspace.GameProfile));
+
+            var slot = SlotForProfile(workspace, opener.Spec.Profile);
+            if (slot is not null)
+                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+
+            Log($"Opened popup in Game {workspace.Index + 1}: {url} (profile {opener.Spec.Profile})");
         }
         catch (Exception ex)
         {
@@ -620,43 +796,58 @@ internal sealed class MainForm : Form
 
     // --- Toolbar buttons ---------------------------------------------------------
 
-    private void SelectTab(int index)
+    private void SelectTab(GameWorkspace workspace, int index)
     {
-        if (_streamTabs.TabPages.Count == 0) { _activeTabIndex = -1; return; }
-        _activeTabIndex = Math.Clamp(index, 0, _streamTabs.TabPages.Count - 1);
+        if (workspace.StreamTabs.TabPages.Count == 0)
+        {
+            workspace.ActiveTabIndex = -1;
+            return;
+        }
+
+        workspace.ActiveTabIndex =
+            Math.Clamp(index, 0, workspace.StreamTabs.TabPages.Count - 1);
+        SetActiveWorkspace(workspace.Index);
         _suppressTabEvent = true;
-        _streamTabs.SelectedIndex = _activeTabIndex;
+        workspace.StreamTabs.SelectedIndex = workspace.ActiveTabIndex;
         _suppressTabEvent = false;
         LayoutPanes();
     }
 
-    // "Hide all streams": no stream shown; games take full width. Hidden panes
-    // stop compositing but keep running timers/addons (Background mode).
     private void SetAllStreamsBackground()
     {
-        _activeTabIndex = -1;
-        _suppressTabEvent = true;
-        _streamTabs.SelectedIndex = -1;
-        _suppressTabEvent = false;
+        foreach (var workspace in _workspaces)
+        {
+            workspace.ActiveTabIndex = -1;
+            _suppressTabEvent = true;
+            workspace.StreamTabs.SelectedIndex = -1;
+            _suppressTabEvent = false;
+        }
+
         LayoutPanes();
         SaveSession();
     }
 
     private void MuteActiveStream()
     {
-        var pane = ActiveStreamPane() ?? ForegroundCandidates().FirstOrDefault();
+        var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
+        var pane = ActiveStreamPane(workspace) ??
+                   _workspaces.SelectMany(ForegroundCandidates).FirstOrDefault();
         if (pane is null) return;
+
         pane.View.IsMuted = !pane.View.IsMuted;
-        // Unmuting one audible stream while several are visible: mute the others.
         if (!pane.View.IsMuted)
-            foreach (var other in ForegroundCandidates())
+            foreach (var other in _workspaces.SelectMany(ForegroundCandidates))
                 if (other != pane) other.View.IsMuted = true;
     }
 
-    // Manually open a stream URL on the currently selected account only.
-    private async Task AddStreamManualAsync()
+    private async Task AddStreamManualAsync(int workspaceIndex)
     {
-        var url = Prompt("Stream URL", "https://www.twitch.tv/");
+        var workspace = _workspaces[Math.Clamp(workspaceIndex, 0, _workspaces.Count - 1)];
+        SetActiveWorkspace(workspace.Index);
+
+        var url = Prompt(
+            $"Stream URL for Game {workspace.Index + 1}",
+            "https://www.twitch.tv/");
         if (string.IsNullOrWhiteSpace(url)) return;
         if (!url.Contains("://")) url = "https://" + url;
         if (!IsStreamUrl(url))
@@ -665,84 +856,140 @@ internal sealed class MainForm : Form
                 "Add stream", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        var slot = _activeTabIndex >= 0 && _activeTabIndex < _slots.Count
-            ? _slots[_activeTabIndex]
-            : _slots.FirstOrDefault(s => s.Account.Enabled);
+
+        var slot = workspace.ActiveTabIndex >= 0 &&
+                   workspace.ActiveTabIndex < workspace.Slots.Count
+            ? workspace.Slots[workspace.ActiveTabIndex]
+            : workspace.Slots.FirstOrDefault(s => s.Account.Enabled);
+
         if (slot is null)
         {
-            MessageBox.Show(this, "No stream accounts configured — add one under Accounts…",
+            MessageBox.Show(this, "No Twitch/Kick accounts configured — add one under Accounts…",
                 "Add stream", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        await EnsureStreamPaneAsync(slot, url);
+
+        await EnsureStreamPaneAsync(workspace, slot, url);
+        SelectTab(workspace, workspace.Slots.IndexOf(slot));
         SaveSession();
     }
 
-    private Pane? ActiveStreamPane()
+    private Pane? ActiveStreamPane(GameWorkspace workspace)
     {
-        if (_activeTabIndex < 0 || _activeTabIndex >= _slots.Count) return null;
-        var slot = _slots[_activeTabIndex];
-        return slot.Pane ?? (_extraPanes.TryGetValue(slot.Account.Id, out var p) ? p : null);
+        if (workspace.ActiveTabIndex < 0 || workspace.ActiveTabIndex >= workspace.Slots.Count)
+            return null;
+
+        var slot = workspace.Slots[workspace.ActiveTabIndex];
+        return slot.Pane
+               ?? (workspace.ExtraPanes.TryGetValue(
+                       ExtraPaneKey(workspace, slot.Account.Id), out var p) ? p : null);
     }
 
-    private IEnumerable<StreamSlot> EnabledStreamSlots() =>
-        _slots.Where(s => s.Account.Enabled);
+    private IEnumerable<StreamSlot> EnabledStreamSlots(GameWorkspace workspace) =>
+        workspace.Slots.Where(s => s.Account.Enabled);
 
     // --- Layout --------------------------------------------------------------------
-    // Games occupy the left column; the right side hosts a grid of visible stream
-    // panes (one tab foregrounded at a time, up to VisibleStreamCount cells). With
-    // 10 accounts open, only the visible cells render; the rest run hidden.
+    // Two distinct columns: each Game N sits above "STREAMS FOR GAME N". Stream
+    // panes never cross the center divider. Each game can render up to 10.
     private void LayoutPanes()
     {
-        if (_gameEnv is null) return; // init not finished yet
+        if (_gameEnv is null) return;
 
-        var top = AppConfig.ToolbarHeight + (_streamTabs.TabPages.Count > 0 ? _streamTabs.Height : 0);
-        // The tab strip is docked Top and keeps its full width in the layout even
-        // when all streams are backgrounded; hand its reserved band back to the
-        // panes by collapsing it to zero height (it grows again on resize).
-        if (_streamTabs.TabPages.Count > 0) _streamTabs.SetBounds(0, AppConfig.ToolbarHeight, ClientSize.Width, 0);
-        var height = Math.Max(0, ClientSize.Height - top);
-        var width = ClientSize.Width;
+        const int pagePadding = 6;
+        const int columnGap = 6;
+        const int headerHeight = 34;
+        const int streamHeaderHeight = 28;
+        const int tabHeight = 30;
+        const int topGap = 6;
 
-        var candidates = ForegroundCandidates().ToList();
-        var streamWidth = candidates.Count == 0 ? 0 : (candidates.Count > 1 ? width * 2 / 5 : width / 3);
-        var gamesWidth = width - streamWidth;
-        var each = _games.Count > 0 ? gamesWidth / _games.Count : 0;
+        var contentTop = AppConfig.ToolbarHeight + topGap;
+        var contentHeight = Math.Max(0, ClientSize.Height - contentTop - pagePadding);
+        var contentWidth = Math.Max(0, ClientSize.Width - pagePadding * 2);
+        var columnWidth = Math.Max(0, (contentWidth - columnGap) / 2);
 
-        for (var i = 0; i < _games.Count; i++)
-            _games[i].Show(new Rectangle(i * each, top, each, height));
-
-        GridLayout(candidates, new Rectangle(gamesWidth, top, streamWidth, height));
-
-        foreach (var slot in _slots)
+        for (var i = 0; i < _workspaces.Count; i++)
         {
-            if (slot.Pane is null || candidates.Contains(slot.Pane)) continue;
-            if (slot.Pane.Mode == StreamMode.Parked) slot.Pane.Park();
-            else slot.Pane.Hide(); // Background: no compositing, timers kept alive by flags.
+            var workspace = _workspaces[i];
+            var x = pagePadding + i * (columnWidth + columnGap);
+            var frame = new Rectangle(x, contentTop, columnWidth, contentHeight);
+            workspace.Frame.Bounds = frame;
+
+            var innerWidth = Math.Max(0, frame.Width - 2);
+            var innerHeight = Math.Max(0, frame.Height - 2);
+
+            workspace.Header.Bounds = new Rectangle(0, 0, innerWidth, headerHeight);
+            workspace.Header.BackColor = SystemColors.ActiveCaption;
+            workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
+
+            var gameTop = headerHeight + 6;
+            var streamSplit = Math.Clamp(
+                innerHeight * 7 / 10,
+                gameTop + 190,
+                Math.Max(gameTop + 190,
+                    innerHeight - streamHeaderHeight - tabHeight - 180));
+
+            workspace.StreamHeader.Bounds =
+                new Rectangle(0, streamSplit, innerWidth, streamHeaderHeight);
+            workspace.StreamHeader.BackColor = SystemColors.ControlLight;
+
+            workspace.StreamTabs.Bounds =
+                new Rectangle(0, streamSplit + streamHeaderHeight, innerWidth, tabHeight);
+
+            var gameBounds = new Rectangle(
+                frame.X + 3,
+                frame.Y + 1 + gameTop,
+                Math.Max(0, frame.Width - 6),
+                Math.Max(0, streamSplit - gameTop));
+
+            var streamBounds = new Rectangle(
+                frame.X + 3,
+                frame.Y + 1 + streamSplit + streamHeaderHeight + tabHeight,
+                Math.Max(0, frame.Width - 6),
+                Math.Max(0, innerHeight - streamSplit - streamHeaderHeight - tabHeight - 2));
+
+            workspace.GamePane?.Show(gameBounds);
+
+            var candidates = ForegroundCandidates(workspace);
+            GridLayout(candidates, streamBounds);
+
+            foreach (var slot in workspace.Slots)
+            {
+                if (slot.Pane is null || candidates.Contains(slot.Pane)) continue;
+                if (slot.Pane.Mode == StreamMode.Parked) slot.Pane.Park();
+                else slot.Pane.Hide();
+            }
+
+            foreach (var pane in workspace.ExtraPanes.Values)
+            {
+                if (candidates.Contains(pane)) continue;
+                if (pane.Mode == StreamMode.Parked) pane.Park();
+                else pane.Hide();
+            }
         }
-        foreach (var (profile, pane) in _extraPanes)
-        {
-            if (candidates.Contains(pane)) continue;
-            if (pane.Mode == StreamMode.Parked) pane.Park();
-            else pane.Hide();
-        }
+
+        UpdateWorkspaceHeaders();
     }
 
-    // Panes that should be rendered right now: the active tab (+ its extra pane)
-    // plus any additional visible-account panes up to VisibleStreamCount.
-    private List<Pane> ForegroundCandidates()
+    private List<Pane> ForegroundCandidates(GameWorkspace workspace)
     {
         var result = new List<Pane>();
-        if (_activeTabIndex < 0) return result;
+        if (workspace.ActiveTabIndex < 0) return result;
 
-        var visibleAccounts = EnabledStreamSlots().Take(_accounts.VisibleStreamCount).ToList();
-        var activeSlot = _activeTabIndex < _slots.Count ? _slots[_activeTabIndex] : null;
+        var visibleAccounts = EnabledStreamSlots(workspace)
+            .Take(_accounts.VisibleStreamCount)
+            .ToList();
 
-        // Always show the selected tab first, even if its account sits beyond the
-        // visible-count window.
-        if (activeSlot?.Pane is { } ap) result.Add(ap);
-        if (activeSlot is not null && _extraPanes.TryGetValue(activeSlot.Account.Id, out var ep))
-            result.Add(ep);
+        var activeSlot = workspace.ActiveTabIndex < workspace.Slots.Count
+            ? workspace.Slots[workspace.ActiveTabIndex]
+            : null;
+
+        if (activeSlot?.Pane is { } activePane)
+            result.Add(activePane);
+
+        if (activeSlot is not null &&
+            workspace.ExtraPanes.TryGetValue(
+                ExtraPaneKey(workspace, activeSlot.Account.Id), out var extra))
+            result.Add(extra);
 
         foreach (var slot in visibleAccounts)
         {
@@ -750,23 +997,23 @@ internal sealed class MainForm : Form
             if (result.Count >= Math.Max(1, _accounts.VisibleStreamCount)) break;
             result.Add(slot.Pane);
         }
+
         return result;
     }
 
-    // Arrange N panes in a WxH grid inside bounds: columns = ceil(sqrt(N)), rows
-    // spread to fill. One pane = full cell (same as before).
     private static void GridLayout(List<Pane> panes, Rectangle bounds)
     {
         if (panes.Count == 0 || bounds.Width <= 0 || bounds.Height <= 0) return;
+
         var cols = (int)Math.Ceiling(Math.Sqrt(panes.Count));
         var rows = (int)Math.Ceiling(panes.Count / (double)cols);
         var cw = bounds.Width / cols;
         var ch = bounds.Height / rows;
+
         for (var i = 0; i < panes.Count; i++)
         {
             var r = i / cols;
             var c = i % cols;
-            // Last column absorbs rounding remainder.
             var w = c == cols - 1 ? bounds.Right - bounds.X - c * cw : cw;
             var h = r == rows - 1 ? bounds.Bottom - bounds.Y - r * ch : ch;
             panes[i].Show(new Rectangle(bounds.X + c * cw, bounds.Y + r * ch, w, h));
@@ -840,15 +1087,15 @@ internal sealed class MainForm : Form
 
             var infos = _gameEnv.GetProcessInfos();
             var streamInfos = _streamEnv?.GetProcessInfos();
-            var open = _slots.Count(s => s.Pane is not null);
-            var fg = ForegroundCandidates().Count;
-            var enabled = EnabledStreamSlots().Count();
+            var open = AllStreamSlots().Count(s => s.Pane is not null);
+            var fg = _workspaces.Sum(w => ForegroundCandidates(w).Count);
+            var enabled = _accounts.EnabledStreamAccounts.Count();
 
             _status.Text =
-                $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
+                $"Games: {_games.Count}/2 · Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
                 $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
-                $" · Accounts: {enabled}/{_slots.Count} routing" +
-                $" · Visible: {_accounts.VisibleStreamCount}" +
+                $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · Up to 10 per game" +
+                $" · Visible/game: {_accounts.VisibleStreamCount}" +
                 $" · Addons: {_userscripts?.Scripts.Count ?? 0} userscripts";
         }
         catch (Exception ex)
@@ -863,12 +1110,30 @@ internal sealed class MainForm : Form
     {
         var specs = new List<PaneSpec>();
         specs.AddRange(_games.Select(p => p.Snapshot()));
-        foreach (var slot in _slots)
-            if (slot.Pane is { } p) specs.Add(p.Snapshot());
-        specs.AddRange(_extraPanes.Values.Select(p => p.Snapshot()));
-        // Remember which tab was foregrounded (-1 = all background).
-        specs.Add(new PaneSpec("active", "", _activeTabIndex >= 0 && _activeTabIndex < _slots.Count
-            ? _slots[_activeTabIndex].Account.Id : "-", PaneKind.ActiveStreamMarker));
+        foreach (var workspace in _workspaces)
+        {
+            foreach (var slot in workspace.Slots)
+            {
+                if (slot.Pane is { } p)
+                    specs.Add(p.Snapshot() with { Group = workspace.GameProfile });
+            }
+
+            foreach (var pane in workspace.ExtraPanes.Values)
+                specs.Add(pane.Snapshot() with { Group = workspace.GameProfile });
+
+            var activeProfile = workspace.ActiveTabIndex >= 0 &&
+                                workspace.ActiveTabIndex < workspace.Slots.Count
+                ? workspace.Slots[workspace.ActiveTabIndex].Account.Id
+                : "-";
+
+            specs.Add(new PaneSpec(
+                $"active-game-{workspace.Index + 1}",
+                "",
+                activeProfile,
+                PaneKind.ActiveStreamMarker,
+                StreamMode.Background,
+                workspace.GameProfile));
+        }
         SessionStore.Save(specs);
     }
 
