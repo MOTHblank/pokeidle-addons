@@ -24,7 +24,10 @@
              CopyToOutputDirectory="PreserveNewest" />
 
     <!-- WebView2 userscript extension bridge files. -->
-    <Content Include="UserscriptExtension\**\*"
+    <!-- The real Violentmonkey MV3 extension is prepared by
+         prepare-violentmonkey.ps1 and copied unchanged into the app output. -->
+    <Content Include="vendor\violentmonkey\**\*"
+             LinkBase="violentmonkey"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
