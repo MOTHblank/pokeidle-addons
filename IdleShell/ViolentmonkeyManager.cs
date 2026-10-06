@@ -56,11 +56,28 @@ internal sealed class ViolentmonkeyManager
                         Path.Combine(ExtensionFolder, "manifest.json"));
                 }
 
-                var extension = await profile.AddBrowserExtensionAsync(ExtensionFolder);
+                var installed = await profile.GetBrowserExtensionsAsync();
+                var extension = installed.FirstOrDefault(e =>
+                    e.Name.Contains("Violentmonkey", StringComparison.OrdinalIgnoreCase));
+
+                if (extension is null)
+                {
+                    extension = await profile.AddBrowserExtensionAsync(ExtensionFolder);
+                    Console.Error.WriteLine(
+                        $"[IdleShell] real Violentmonkey {Version} installed in profile " +
+                        $"{profile.ProfileName}: {extension.Id}");
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        $"[IdleShell] real Violentmonkey {Version} already present in profile " +
+                        $"{profile.ProfileName}: {extension.Id}");
+                }
+
+                if (!extension.IsEnabled)
+                    await extension.EnableAsync(true);
+
                 _installedProfiles.Add(key);
-                Console.Error.WriteLine(
-                    $"[IdleShell] real Violentmonkey {Version} installed in profile " +
-                    $"{profile.ProfileName}: {extension.Id}");
             }
 
             if (!_syncedProfiles.Contains(key))
