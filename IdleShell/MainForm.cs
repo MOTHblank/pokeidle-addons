@@ -138,8 +138,8 @@ internal sealed class MainForm : Form
             workspace.StreamTabs.Enter += (_, _) => SetActiveWorkspace(workspace.Index);
             workspace.StreamTabs.SelectedIndexChanged += (_, _) =>
             {
-                SetActiveWorkspace(workspace.Index);
                 if (_suppressTabEvent) return;
+                SetActiveWorkspace(workspace.Index);
                 workspace.ActiveTabIndex = workspace.StreamTabs.SelectedIndex;
                 LayoutPanes();
                 SaveSession();
@@ -327,12 +327,20 @@ internal sealed class MainForm : Form
                 await AddGamePaneAsync(spec);
 
             // Each game column gets an independent set of stream account tabs.
-            foreach (var workspace in _workspaces)
+            _suppressTabEvent = true;
+            try
             {
-                foreach (var account in _accounts.StreamAccounts)
-                    AddStreamSlot(workspace, account);
-                UpdateWorkspaceHeader(workspace);
+                foreach (var workspace in _workspaces)
+                {
+                    foreach (var account in _accounts.StreamAccounts)
+                        AddStreamSlot(workspace, account);
+                }
             }
+            finally
+            {
+                _suppressTabEvent = false;
+            }
+            UpdateWorkspaceHeaders();
 
             // Restore stream panes. Old sessions had no Group, so their streams
             // migrate into Game 1 instead of becoming visually mixed.
