@@ -17,6 +17,18 @@ internal static class AppConfig
             "IdleShell",
             "PokeIdle");
 
+    public static string ExtensionsFolder =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Moth",
+            "IdleShell",
+            "Extensions");
+
+    public static string TampermonkeyExtensionFolder =>
+        Path.Combine(
+            ExtensionsFolder,
+            "Tampermonkey");
+
     public static string AddonsFolder =>
         Path.Combine(AppContext.BaseDirectory, "addons");
 }
