@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 namespace Moth.PokeIdle.IdleShell;
@@ -98,19 +99,24 @@ internal static class CrxPackage
     {
         version = 0;
 
-        Span<byte> magic = stackalloc byte[4];
-
-        if (stream.ReadExactly(magic) ||
-            !BitConverter.TryReadUInt32LittleEndian(magic, out var tag) ||
-            tag != CrxMagic)
+        try
         {
-            return 1;
+            Span<byte> magic = stackalloc byte[4];
+
+            stream.ReadExactly(magic);
+
+            if (BinaryPrimitives.ReadUInt32LittleEndian(magic) != CrxMagic)
+            {
+                return 1;
+            }
+
+            Span<byte> four = stackalloc byte[4];
+
+            stream.ReadExactly(four);
+
+            version = BinaryPrimitives.ReadUInt32LittleEndian(four);
         }
-
-        Span<byte> four = stackalloc byte[4];
-
-        if (stream.ReadExactly(four) ||
-            !BitConverter.TryReadUInt32LittleEndian(four, out version))
+        catch (EndOfStreamException)
         {
             return 1;
         }
@@ -158,14 +164,17 @@ internal static class CrxPackage
     {
         Span<byte> four = stackalloc byte[4];
 
-        if (stream.ReadExactly(four) ||
-            !BitConverter.TryReadUInt32LittleEndian(four, out var value))
+        try
+        {
+            stream.ReadExactly(four);
+        }
+        catch (EndOfStreamException)
         {
             throw new TampermonkeySetupException(
                 $"The CRX header in '{path}' is truncated.");
         }
 
-        return value;
+        return BinaryPrimitives.ReadUInt32LittleEndian(four);
     }
 
     private static void ExtractZip(
