@@ -234,7 +234,7 @@ internal sealed class UserscriptLoader
     {
         var sourceFolder = Path.Combine(
             AppContext.BaseDirectory, "userscript-extension");
-        var staticFiles = new[] { "manifest-support.js", "background.js" };
+        var staticFiles = new[] { "bridge.js", "background.js" };
 
         foreach (var file in staticFiles)
         {
@@ -296,7 +296,7 @@ internal sealed class UserscriptLoader
                 .Prepend(new Dictionary<string, object?>
                 {
                     ["matches"] = ["<all_urls>"],
-                    ["js"] = ["manifest-support.js"],
+                    ["js"] = ["bridge.js"],
                     ["run_at"] = "document_start",
                     ["all_frames"] = true
                 })
