@@ -49,7 +49,4 @@ internal static class AppConfig
     public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
     public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
     public static string SessionFile => Path.Combine(Root, "session.json");
-    // Writable per-user bundle root for the real WebView2 userscript extension.
-    public static string UserscriptExtensionDataFolder =>
-        Path.Combine(Root, "UserscriptExtensions");
 }
