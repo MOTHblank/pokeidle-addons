@@ -54,7 +54,6 @@ internal sealed class Pane
     }
 
     private readonly UserscriptLoader? _nativeScripts;
-    private readonly List<string> _userscriptIds = [];
 
     private static string BootstrapScript(PaneSpec spec)
     {
@@ -221,11 +220,11 @@ internal sealed class Pane
         if (Spec.Kind == PaneKind.Game)
             await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
 
+        // Install the browser-native userscript extension before the first
+        // navigation. The extension engine owns matching, timing and execution;
+        // this host no longer injects/evals addon source itself.
         if (_nativeScripts is not null)
-        {
-            _userscriptIds.Clear();
-            _userscriptIds.AddRange(await _nativeScripts.InstallAsync(View));
-        }
+            await _nativeScripts.InstallAsync(View.Profile);
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -261,11 +260,8 @@ internal sealed class Pane
     // Low-memory target must be set on a *visible* webview (setting it while
     // suspended/hidden is ignored per docs), so Show() applies Normal and
     // Hide()/Park() apply Low. Never mix with TrySuspend.
-    public async Task AttachUserscriptAsync(UserscriptLoader loader)
-    {
-        _userscriptIds.Clear();
-        _userscriptIds.AddRange(await loader.InstallAsync(View, _userscriptIds));
-    }
+    public Task AttachUserscriptAsync(UserscriptLoader loader) =>
+        loader.InstallAsync(View.Profile, force: true);
 
     public void Show(Rectangle bounds)
     {
