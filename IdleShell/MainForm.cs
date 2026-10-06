@@ -243,6 +243,7 @@ internal sealed class MainForm : Form
             _allBackgroundButton,
             Button("G1 + Stream", async (_, _) => await AddStreamManualAsync(0)),
             Button("G2 + Stream", async (_, _) => await AddStreamManualAsync(1)),
+            Button("Close stream", (_, _) => CloseActiveStream()),
             Button("Mute/Unmute", (_, _) => MuteActiveStream()),
             _addonsPicker,
             _modeButton,
@@ -493,6 +494,114 @@ internal sealed class MainForm : Form
         workspace.GameToggle.Text = workspace.GameForeground ? "Background" : "Foreground";
         workspace.StreamHeader.Text =
             $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible  ·  {state}";
+    }
+
+    private void CloseActiveStream()
+    {
+        var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
+        if (workspace.ActiveTabIndex < 0 || workspace.ActiveTabIndex >= workspace.Slots.Count)
+            return;
+        CloseStream(workspace, workspace.Slots[workspace.ActiveTabIndex]);
+    }
+
+    private void ShowStreamContextMenu(GameWorkspace workspace, Point location)
+    {
+        var hit = -1;
+        for (var i = 0; i < workspace.StreamTabs.TabPages.Count; i++)
+        {
+            if (workspace.StreamTabs.GetTabRect(i).Contains(location))
+            {
+                hit = i;
+                break;
+            }
+        }
+
+        if (hit < 0 || hit >= workspace.Slots.Count)
+            return;
+
+        SetActiveWorkspace(workspace.Index);
+        _suppressTabEvent = true;
+        workspace.StreamTabs.SelectedIndex = hit;
+        _suppressTabEvent = false;
+        workspace.ActiveTabIndex = hit;
+
+        var slot = workspace.Slots[hit];
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(
+            $"Close {slot.Account.DisplayLabel}",
+            null,
+            (_, _) => CloseStream(workspace, slot));
+        menu.Items.Add(
+            $"Close all open streams for Game {workspace.Index + 1}",
+            null,
+            (_, _) => CloseAllStreams(workspace));
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(
+            "Open this account",
+            null,
+            async (_, _) =>
+            {
+                await EnsureStreamPaneAsync(
+                    workspace,
+                    slot,
+                    slot.Url ?? AccountManager.LoginUrl(slot.Account.Service));
+                SelectTab(workspace, hit);
+            });
+        menu.Show(workspace.StreamTabs, location);
+    }
+
+    private void CloseStream(GameWorkspace workspace, StreamSlot slot)
+    {
+        if (slot.Pane is { } pane)
+            DetachAndClose(pane);
+
+        slot.Pane = null;
+        slot.Url = null;
+
+        var key = ExtraPaneKey(workspace, slot.Account.Id);
+        if (workspace.ExtraPanes.TryGetValue(key, out var extra))
+        {
+            DetachAndClose(extra);
+            workspace.ExtraPanes.Remove(key);
+        }
+
+        if (workspace.ActiveTabIndex >= 0 &&
+            workspace.ActiveTabIndex < workspace.Slots.Count &&
+            ReferenceEquals(workspace.Slots[workspace.ActiveTabIndex], slot))
+        {
+            var next = workspace.Slots.FindIndex(s => s.Pane is not null);
+            workspace.ActiveTabIndex = next;
+
+            _suppressTabEvent = true;
+            workspace.StreamTabs.SelectedIndex = next;
+            _suppressTabEvent = false;
+        }
+
+        LayoutPanes();
+        SaveSession();
+    }
+
+    private void CloseAllStreams(GameWorkspace workspace)
+    {
+        foreach (var slot in workspace.Slots)
+        {
+            if (slot.Pane is { } pane)
+                DetachAndClose(pane);
+            slot.Pane = null;
+            slot.Url = null;
+        }
+
+        foreach (var pane in workspace.ExtraPanes.Values)
+            DetachAndClose(pane);
+        workspace.ExtraPanes.Clear();
+
+        workspace.ActiveTabIndex = -1;
+        _suppressTabEvent = true;
+        workspace.StreamTabs.SelectedIndex = -1;
+        _suppressTabEvent = false;
+
+        LayoutPanes();
+        SaveSession();
     }
 
     private void ToggleGameForeground(GameWorkspace workspace)
