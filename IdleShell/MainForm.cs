@@ -8,6 +8,7 @@ internal sealed class MainForm : Form
 {
     private readonly Panel _toolbar;
     private readonly ComboBox _streamPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 220 };
+    private readonly ComboBox _addonsPicker = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
     private readonly Label _status = new() { AutoSize = true, Padding = new Padding(3, 4, 3, 0) };
 
     private CoreWebView2Environment? _gameEnv;
@@ -15,6 +16,10 @@ internal sealed class MainForm : Form
     private readonly List<Pane> _games = [];
     private readonly List<Pane> _streams = [];
     private Pane? _activeStream;
+    private ExtensionManager? _extensions;
+    private UserscriptLoader? _userscripts;
+    private string _tampermonkeyState = "not ready";
+    private bool _nativeFallback;
     private readonly System.Windows.Forms.Timer _statsTimer = new() { Interval = 5000 };
     private readonly System.Windows.Forms.Timer _probeTimer = new() { Interval = 30000 };
     private readonly CheckBox _probeToggle = new()
@@ -50,6 +55,34 @@ internal sealed class MainForm : Form
         _probeTimer.Tick += async (_, _) => await ProbeTickAsync();
     }
 
+    // Addons folder resolution order: repo checkout next to the exe's parent
+    // folders, then the build-output copy shipped beside the exe.
+    internal static string ResolveAddonsFolder()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "addons"),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "addons")),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "addons")),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "addons"))
+        };
+
+        foreach (var dir in candidates)
+        {
+            try
+            {
+                if (Directory.Exists(dir) &&
+                    Directory.EnumerateFiles(dir, "*.user.js").Any())
+                {
+                    return Path.GetFullPath(dir);
+                }
+            }
+            catch { }
+        }
+
+        return Path.GetFullPath(candidates[0]);
+    }
+
     private IEnumerable<Pane> AllPanes() => _games.Concat(_streams);
 
     private void BuildToolbar()
@@ -62,6 +95,7 @@ internal sealed class MainForm : Form
             Button("Reload B", (_, _) => _games.ElementAtOrDefault(1)?.View.Reload()),
             Button("DevTools A", (_, _) => _games.ElementAtOrDefault(0)?.View.OpenDevToolsWindow()),
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
+            _addonsPicker,
             _streamPicker,
             Button("+ Stream", async (_, _) => await AddStreamAsync()),
             Button("Close stream", (_, _) => CloseActiveStream()),
@@ -85,6 +119,15 @@ internal sealed class MainForm : Form
         {
             _activeStream = _streamPicker.SelectedIndex >= 0 ? _streams[_streamPicker.SelectedIndex] : null;
             LayoutPanes();
+        };
+
+        // The picker doubles as a "Reload addons" action: selecting the first
+        // entry re-provisions Tampermonkey + refreshes the native loader and
+        // reloads every game pane. Other entries just list loaded scripts.
+        _addonsPicker.SelectedIndexChanged += async (_, _) =>
+        {
+            if (_addonsPicker.SelectedIndex != 0) return;
+            await ReloadAddonsAsync();
         };
 
         _probeToggle.CheckedChanged += (_, _) =>
@@ -122,6 +165,36 @@ internal sealed class MainForm : Form
         {
             Directory.CreateDirectory(AppConfig.GameUserDataFolder);
             Directory.CreateDirectory(AppConfig.StreamUserDataFolder);
+
+            // --- Addon plumbing (must happen BEFORE the WebView2 environments
+            // exist: the jsonImport policy is read at browser startup and the
+            // loopback provisioning server must be listening before Tampermonkey's
+            // background page boots). Previously nothing ever called into
+            // ExtensionManager, so Tampermonkey was never installed and no
+            // userscript was ever injected — "scripts not loaded at all".
+            var addonsFolder = ResolveAddonsFolder();
+
+            _extensions = new ExtensionManager(
+                Path.Combine(AppConfig.Root, "Extensions", "Tampermonkey"),
+                addonsFolder);
+
+            try
+            {
+                _tampermonkeyState = _extensions.PrepareTampermonkeyProvisioning();
+                Log($"tampermonkey provisioning: {_tampermonkeyState}");
+            }
+            catch (Exception ex)
+            {
+                _tampermonkeyState = "provisioning failed";
+                Log($"tampermonkey provisioning FAILED: {ex.Message}");
+            }
+
+            // Native injector fallback so addons still run when Tampermonkey
+            // cannot be installed (missing package, policy not honored, etc.).
+            _userscripts = new UserscriptLoader(addonsFolder);
+            Log($"native userscript loader: {_userscripts.Scripts.Count} script(s) parsed from {addonsFolder}");
+
+            RefreshAddonsPicker();
 
             _gameEnv = await CoreWebView2Environment.CreateAsync(
                 null, AppConfig.GameUserDataFolder,
@@ -163,7 +236,41 @@ internal sealed class MainForm : Form
     private async Task AddPaneAsync(PaneSpec spec)
     {
         var env = spec.Kind == PaneKind.Game ? _gameEnv! : _streamEnv!;
-        var pane = await Pane.CreateAsync(env, Handle, spec);
+
+        // Game profiles get Tampermonkey (which owns the provisioned addons).
+        var installTampermonkey =
+            spec.Kind == PaneKind.Game && _extensions is not null;
+
+        // Native injection fallback: only when Tampermonkey is not in play for
+        // this pane, so scripts never run twice.
+        var nativeScripts =
+            spec.Kind == PaneKind.Game && (!installTampermonkey || _nativeFallback)
+                ? _userscripts
+                : null;
+
+        var pane = await Pane.CreateAsync(env, Handle, spec,
+            installTampermonkey ? _extensions : null, nativeScripts);
+
+        if (spec.Kind == PaneKind.Game && installTampermonkey && !pane.TampermonkeyReady)
+        {
+            // Tampermonkey could not be installed/started in this profile —
+            // enable the native injector on every game pane from now on and
+            // reload this one with it attached.
+            Log($"Tampermonkey unavailable ({pane.TampermonkeyError}); " +
+                "falling back to the native userscript injector");
+
+            if (!_nativeFallback)
+            {
+                _nativeFallback = true;
+                foreach (var g in _games) await EnableNativeFallbackAsync(g);
+                await EnableNativeFallbackAsync(pane);
+            }
+            else
+            {
+                await EnableNativeFallbackAsync(pane);
+            }
+        }
+
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
 
@@ -179,6 +286,50 @@ internal sealed class MainForm : Form
             _streams.Add(pane);
             _streamPicker.Items.Add(spec.Title);
             _streamPicker.SelectedIndex = _streams.Count - 1; // triggers layout
+        }
+    }
+
+    private static async Task EnableNativeFallbackAsync(Pane pane)
+    {
+        // The bootstrap runs at document creation, so a reload is required for
+        // it to take effect on the already-loaded page.
+        await pane.AttachUserscriptFallback();
+        pane.View.Reload();
+    }
+
+    private void RefreshAddonsPicker()
+    {
+        _addonsPicker.Items.Clear();
+        _addonsPicker.Items.Add("Reload addons (all games)");
+        foreach (var script in _userscripts?.Scripts ?? [])
+            _addonsPicker.Items.Add(script.Name);
+        if (_addonsPicker.Items.Count > 0) _addonsPicker.SelectedIndex = 0;
+    }
+
+    private async Task ReloadAddonsAsync()
+    {
+        if (_extensions is not null)
+        {
+            try
+            {
+                _tampermonkeyState = _extensions.PrepareTampermonkeyProvisioning();
+                Log($"addons reloaded: {_tampermonkeyState}");
+            }
+            catch (Exception ex)
+            {
+                _tampermonkeyState = "provisioning failed";
+                Log($"addon reload FAILED: {ex.Message}");
+            }
+        }
+
+        _userscripts = new UserscriptLoader(
+            _userscripts?.Folder ?? ResolveAddonsFolder());
+        RefreshAddonsPicker();
+
+        foreach (var game in _games.ToList())
+        {
+            if (_nativeFallback) await game.AttachUserscriptFallback();
+            game.View.Reload();
         }
     }
 
@@ -432,9 +583,17 @@ internal sealed class MainForm : Form
             var streamInfos = _streamEnv?.GetProcessInfos();
             var hidden = _streams.Count(s => !s.IsForeground);
             _status.Text = $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
-                           $" · Streams: {_streams.Count - hidden} fg / {hidden} bg";
+                           $" · Streams: {_streams.Count - hidden} fg / {hidden} bg" +
+                           $" · Addons: {(_nativeFallback ? "native injector" : "Tampermonkey")} " +
+                           $"({_userscripts?.Scripts.Count ?? 0} scripts)";
         }
-        catch { }
+        catch
+        {
+            // Keep the last known status; show the addon state if the base
+            // text was never set (startup failure path).
+            if (_status.Text.Length == 0)
+                _status.Text = $"Addons: {(_tampermonkeyState)}";
+        }
     }
 
     private void SaveSession() =>
