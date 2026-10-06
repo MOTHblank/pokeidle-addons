@@ -329,7 +329,7 @@ internal sealed class MainForm : Form
 
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new UserscriptLoader(addonsFolder);
-            Log($"native userscript runtime: {_userscripts.Scripts.Count} script(s) parsed from {addonsFolder}");
+            Log($"WebView2 userscript extension: {_userscripts.Scripts.Count} script(s) packaged from {addonsFolder}");
 
             RefreshAddonsPicker();
 
@@ -350,7 +350,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.GameBrowserArguments,
-                    AreBrowserExtensionsEnabled = false
+                    AreBrowserExtensionsEnabled = true
                 });
 
             // All stream accounts share ONE user data folder so their profiles
@@ -361,7 +361,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.StreamBrowserArguments,
-                    AreBrowserExtensionsEnabled = false
+                    AreBrowserExtensionsEnabled = true
                 });
 
             var session = SessionStore.Load();
@@ -369,9 +369,11 @@ internal sealed class MainForm : Form
                 await AddGamePaneAsync(spec);
 
             // Each game column gets up to 10 Twitch + 10 Kick stream slots.
-            // Slots are distributed one-per-login first, then a second slot per
-            // login until the per-service cap is reached. Each login can therefore
-            // carry at most two concurrent channels.
+            // Slots are distributed round-robin across enabled logins for each
+            // service. A login can back the full service capacity, so the old
+            // two-slots-per-login/four-stream-across-two-games ceiling is gone.
+            _accounts.EnsureStreamAccount(AccountService.Twitch);
+            _accounts.EnsureStreamAccount(AccountService.Kick);
             _suppressTabEvent = true;
             try
             {
@@ -475,16 +477,16 @@ internal sealed class MainForm : Form
                 continue;
 
             var remaining = accounts
-                .Take(AccountManager.MaxStreamsPerService)
+                .Take(AccountManager.MaxStreamAccountsPerService)
                 .ToList();
 
-            // First pass: spread streams across distinct logins.
-            foreach (var account in remaining)
-                AddStreamSlot(workspace, account, 1);
-
-            // Second pass: give each login its second slot, up to the
-            // per-service stream cap.
-            if (remaining.Count < AccountManager.MaxStreamsPerService)
+            // Round-robin slot construction keeps multiple logins useful while
+            // allowing a single login to carry the entire service capacity.
+            for (var slotNumber = 1;
+                 slotNumber <= AccountManager.MaxStreamSlotsPerAccount &&
+                 workspace.Slots.Count(s => s.Account.Service == service) <
+                     AccountManager.MaxStreamsPerService;
+                 slotNumber++)
             {
                 foreach (var account in remaining)
                 {
@@ -492,7 +494,7 @@ internal sealed class MainForm : Form
                         AccountManager.MaxStreamsPerService)
                         break;
 
-                    AddStreamSlot(workspace, account, 2);
+                    AddStreamSlot(workspace, account, slotNumber);
                 }
             }
         }
@@ -883,13 +885,13 @@ internal sealed class MainForm : Form
             _userscripts = new UserscriptLoader(folder);
             RefreshAddonsPicker();
 
-            foreach (var game in _games.ToList())
+            foreach (var pane in AllPanes().ToList())
             {
-                await game.AttachUserscriptAsync(_userscripts);
-                game.View.Reload();
+                await pane.AttachUserscriptAsync(_userscripts);
+                pane.View.Reload();
             }
 
-            Log($"addons reloaded: {_userscripts.Scripts.Count} script(s)");
+            Log($"userscript extension reloaded: {_userscripts.Scripts.Count} script(s) across {_games.Count} game(s) and {AllStreamSlots().Count(s => s.Pane is not null)} open stream pane(s)");
         }
         catch (Exception ex)
         {
