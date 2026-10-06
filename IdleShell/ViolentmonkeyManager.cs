@@ -163,7 +163,7 @@ internal sealed class ViolentmonkeyManager
         const string legacyName = "IdleShell Link Router (pokeidle.io)";
         const string legacyNamespace = "moth.pokeidle";
 
-        var request = $"""
+        var request = """
 (() => {
   const state = { removed: false, id: null };
   return Promise.resolve(
@@ -171,8 +171,8 @@ internal sealed class ViolentmonkeyManager
       cmd: 'GetScript',
       data: {
         meta: {
-          name: {{JsonSerializer.Serialize(legacyName)}},
-          namespace: {{JsonSerializer.Serialize(legacyNamespace)}}
+          name: __LEGACY_NAME__,
+          namespace: __LEGACY_NAMESPACE__
         }
       }
     })
@@ -191,7 +191,9 @@ internal sealed class ViolentmonkeyManager
     });
   }).then(value => JSON.stringify(value));
 })()
-""";
+"""
+            .Replace("__LEGACY_NAME__", JsonSerializer.Serialize(legacyName), StringComparison.Ordinal)
+            .Replace("__LEGACY_NAMESPACE__", JsonSerializer.Serialize(legacyNamespace), StringComparison.Ordinal);
 
         try
         {
