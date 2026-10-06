@@ -268,7 +268,7 @@ internal sealed class Pane
     // Hide()/Park() apply Low. Never mix with TrySuspend.
     public Task AttachUserscriptAsync(ViolentmonkeyManager manager) =>
         manager.InstallForProfileAsync(
-            View.Profile, View.Environment, _hostWindowHandle);
+            View.Profile, _environment, _hostWindowHandle);
 
     public void Show(Rectangle bounds)
     {
