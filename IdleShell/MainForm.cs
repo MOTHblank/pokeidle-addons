@@ -1421,7 +1421,7 @@ internal sealed class MainForm : Form
                 $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · 10 Twitch + 10 Kick/game" +
                 $" · Visible/game: {_accounts.VisibleStreamCount}" +
                 $" · Health: {GameHealthSummary()}" +
-                $" · Addons: {_userscripts?.Scripts.Count ?? 0} userscripts";
+                $" · Addons: {_userscripts?.ScriptNames.Count ?? 0} userscripts";
         }
         catch (Exception ex)
         {
