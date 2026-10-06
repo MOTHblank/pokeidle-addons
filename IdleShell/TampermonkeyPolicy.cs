@@ -22,7 +22,7 @@ internal sealed class TampermonkeyPolicy
         using var root =
             Registry.CurrentUser.CreateSubKey(
                 $@"{PolicyRoot}\3rdparty\extensions\" +
-                $"{ExtensionManager.TampermonkeyExtensionId}\jsonImport",
+                $@"{ExtensionManager.TampermonkeyExtensionId}\jsonImport",
                 writable: true);
 
         if (root is null)
