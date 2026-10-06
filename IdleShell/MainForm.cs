@@ -247,7 +247,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.GameBrowserArguments,
-                    AreBrowserExtensionsEnabled = true
+                    AreBrowserExtensionsEnabled = false
                 });
 
             // All stream accounts share ONE user data folder so their profiles
@@ -258,7 +258,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.StreamBrowserArguments,
-                    AreBrowserExtensionsEnabled = true
+                    AreBrowserExtensionsEnabled = false
                 });
 
             var session = SessionStore.Load();
@@ -411,7 +411,8 @@ internal sealed class MainForm : Form
     {
         var env = spec.Kind == PaneKind.Game ? _gameEnv! : _streamEnv!;
 
-        var pane = await Pane.CreateAsync(env, Handle, spec, _userscripts);
+        var pane = await Pane.CreateAsync(env, Handle, spec,
+            spec.Kind == PaneKind.Game ? _userscripts : null);
 
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
