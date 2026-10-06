@@ -103,7 +103,7 @@ internal sealed class AccountsDialog : Form
         Button("Log in…", LogInSelected);
 
         var visibleRow = new Panel { Dock = DockStyle.Bottom, Height = 32, Padding = new Padding(8, 4, 8, 2) };
-        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamAccounts);
+        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamSlots);
         _visibleUpDown.ValueChanged += (_, _) =>
         {
             if (_refreshing) return;
