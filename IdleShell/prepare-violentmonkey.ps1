@@ -30,10 +30,13 @@ function Test-ViolentmonkeyFolder {
                 $_.js -contains "injected-web.js"
             })
 
+        $hasUserScriptsPermission = $manifest.permissions -contains "userScripts"
+
         return $manifest.manifest_version -eq 3 -and
                ([string]$manifest.version) -eq $version -and
                ([string]$manifest.name) -match "Violentmonkey|extName" -and
-               $hasStaticInjector
+               $hasStaticInjector -and
+               -not $hasUserScriptsPermission
     }
     catch {
         return $false
