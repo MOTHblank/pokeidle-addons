@@ -192,22 +192,51 @@ internal sealed class AccountManager
 
     private string NextId(AccountService service)
     {
-        var prefix = service == AccountService.PokeIdle ? "Account" : "Stream";
+        var prefix = service switch
+        {
+            AccountService.PokeIdle => "Account",
+            AccountService.Kick => "StreamKick",
+            _ => "Stream"
+        };
+
         var max = 0;
         foreach (var a in _accounts)
         {
             var m = GeneratedIdPattern.Match(a.Id);
-            if (m.Success &&
-                m.Groups[1].Value.StartsWith('0') == false &&
-                a.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (!m.Success || m.Groups[1].Value.StartsWith('0'))
+                continue;
+
+            var belongs = service switch
             {
+                AccountService.PokeIdle =>
+                    a.Id.StartsWith("Account", StringComparison.OrdinalIgnoreCase),
+
+                // New Kick profiles are explicitly named StreamKickN. Legacy
+                // StreamN profiles remain valid Kick profiles when already
+                // stored in accounts.json and are not renumbered.
+                AccountService.Kick =>
+                    a.Id.StartsWith("StreamKick", StringComparison.OrdinalIgnoreCase),
+
+                AccountService.Twitch =>
+                    a.Id.StartsWith("Stream", StringComparison.OrdinalIgnoreCase) &&
+                    !a.Id.StartsWith("StreamKick", StringComparison.OrdinalIgnoreCase),
+
+                _ => false
+            };
+
+            if (belongs)
                 max = Math.Max(max, int.Parse(m.Groups[1].Value));
-            }
         }
+
+        var candidate = $"{prefix}{max + 1}";
         while (_accounts.Any(a =>
-                   string.Equals(a.Id, $"{prefix}{max + 1}", StringComparison.OrdinalIgnoreCase)))
+                   string.Equals(a.Id, candidate, StringComparison.OrdinalIgnoreCase)))
+        {
             max++;
-        return $"{prefix}{max + 1}";
+            candidate = $"{prefix}{max + 1}";
+        }
+
+        return candidate;
     }
 
     private static string SanitizeLabel(string label) => label.Trim();
