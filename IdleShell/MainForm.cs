@@ -821,10 +821,6 @@ internal sealed class MainForm : Form
         _workspaces.FirstOrDefault(w =>
             string.Equals(w.GameProfile, group, StringComparison.OrdinalIgnoreCase));
 
-    private GameWorkspace? WorkspaceForGroupByStreamProfile(string profile) =>
-        _workspaces.FirstOrDefault(w =>
-            w.Slots.Any(s => string.Equals(s.Account.Id, profile, StringComparison.OrdinalIgnoreCase)));
-
     private GameWorkspace? WorkspaceForPane(Pane pane)
     {
         if (pane.Spec.Kind == PaneKind.Game)
@@ -867,9 +863,12 @@ internal sealed class MainForm : Form
     {
         if (slot.Pane is not null)
         {
-            slot.Url = url;
-            if (!string.Equals(slot.Pane.View.Source, url, StringComparison.OrdinalIgnoreCase))
-                slot.Pane.View.Navigate(url);
+            slot.Url = CanonicalStreamUrl(url);
+            workspace.StreamsExpanded = true;
+            workspace.ActiveStreamService = slot.Account.Service;
+            SelectTab(workspace, workspace.Slots.IndexOf(slot));
+            if (!string.Equals(slot.Pane.View.Source, slot.Url, StringComparison.OrdinalIgnoreCase))
+                slot.Pane.View.Navigate(slot.Url);
             return;
         }
 
@@ -1244,7 +1243,6 @@ internal sealed class MainForm : Form
             var workspace = _workspaces[i];
             var x = pagePadding + i * (columnWidth + columnGap);
             var frame = new Rectangle(x, contentTop, columnWidth, contentHeight);
-            workspace.Frame.Bounds = frame;
 
             var innerWidth = Math.Max(0, frame.Width - 2);
             var innerHeight = Math.Max(0, frame.Height - 2);
