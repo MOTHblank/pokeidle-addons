@@ -24,6 +24,7 @@ internal sealed class UserscriptLoader
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private readonly List<Userscript> _scripts = [];
+    private readonly HashSet<string> _installedProfiles = new(StringComparer.OrdinalIgnoreCase);
 
     public UserscriptLoader(string addonsFolder)
     {
@@ -39,9 +40,25 @@ internal sealed class UserscriptLoader
         if (_scripts.Count == 0)
             return null;
 
+        var profileKey = profile.ProfilePath;
+        if (_installedProfiles.Contains(profileKey))
+            return null;
+
+        var extensions = await profile.GetBrowserExtensionsAsync();
+        foreach (var extension in extensions.Where(e =>
+                     e.Name.StartsWith(ExtensionNamePrefix, StringComparison.Ordinal)))
+        {
+            try { await extension.RemoveAsync(); }
+            catch { /* stale extension cleanup is best-effort */ }
+        }
+
         var extensionFolder = BuildExtensionFolder();
-        return await profile.AddBrowserExtensionAsync(extensionFolder);
+        var installed = await profile.AddBrowserExtensionAsync(extensionFolder);
+        _installedProfiles.Add(profileKey);
+        return installed;
     }
+
+    private const string ExtensionNamePrefix = "PokéIdle Idle Shell Userscripts";
 
     private void Load()
     {
