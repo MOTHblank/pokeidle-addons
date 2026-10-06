@@ -1,9 +1,8 @@
-using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 
 namespace Moth.PokeIdle.IdleShell;
 
-internal sealed class ExtensionManager
+internal sealed class ExtensionManager : IDisposable
 {
     public const string TampermonkeyExtensionId =
         "dhdgffkkebhmkfjojejmpbldmpobfkfo";
@@ -12,22 +11,60 @@ internal sealed class ExtensionManager
         "https://www.tampermonkey.net/crx/tampermonkey_stable.crx";
 
     private readonly string _tampermonkeyFolder;
+    private readonly string _addonsFolder;
+    private readonly TampermonkeyPolicy _policy;
 
-    public ExtensionManager(string tampermonkeyFolder)
+    private TampermonkeyProvisioning? _provisioning;
+    private bool _disposed;
+
+    public ExtensionManager(
+        string tampermonkeyFolder,
+        string addonsFolder)
     {
-        _tampermonkeyFolder = Path.GetFullPath(tampermonkeyFolder);
+        _tampermonkeyFolder =
+            Path.GetFullPath(tampermonkeyFolder);
+
+        _addonsFolder =
+            Path.GetFullPath(addonsFolder);
+
+        _policy =
+            new TampermonkeyPolicy();
     }
 
-    public async Task<CoreWebView2BrowserExtension> EnsureTampermonkeyAsync(
-        CoreWebView2Profile profile)
+    public void PrepareTampermonkeyProvisioning()
     {
-        var installed = await profile.GetBrowserExtensionsAsync();
+        ThrowIfDisposed();
 
-        var existing = installed.FirstOrDefault(
-            extension => string.Equals(
-                extension.Id,
-                TampermonkeyExtensionId,
-                StringComparison.OrdinalIgnoreCase));
+        _provisioning?.Dispose();
+
+        _provisioning =
+            new TampermonkeyProvisioning(
+                _addonsFolder,
+                Path.Combine(
+                    AppConfig.TampermonkeyProvisioningFolder,
+                    "tm.json"));
+
+        _provisioning.Prepare();
+        _policy.Apply(_provisioning);
+    }
+
+    public async Task<CoreWebView2BrowserExtension>
+        EnsureTampermonkeyAsync(
+            CoreWebView2Profile profile)
+    {
+        ThrowIfDisposed();
+
+        var installed =
+            await profile
+                .GetBrowserExtensionsAsync();
+
+        var existing =
+            installed.FirstOrDefault(
+                extension =>
+                    string.Equals(
+                        extension.Id,
+                        TampermonkeyExtensionId,
+                        StringComparison.OrdinalIgnoreCase));
 
         if (existing is not null)
         {
@@ -43,8 +80,10 @@ internal sealed class ExtensionManager
 
         try
         {
-            added = await profile.AddBrowserExtensionAsync(
-                _tampermonkeyFolder);
+            added =
+                await profile
+                    .AddBrowserExtensionAsync(
+                        _tampermonkeyFolder);
         }
         catch (Exception ex)
         {
@@ -55,7 +94,8 @@ internal sealed class ExtensionManager
                 ex);
         }
 
-        if (!string.Equals(
+        if (
+            !string.Equals(
                 added.Id,
                 TampermonkeyExtensionId,
                 StringComparison.OrdinalIgnoreCase))
@@ -79,9 +119,10 @@ internal sealed class ExtensionManager
 
     private void ValidateExtensionFolder()
     {
-        var manifestPath = Path.Combine(
-            _tampermonkeyFolder,
-            "manifest.json");
+        var manifestPath =
+            Path.Combine(
+                _tampermonkeyFolder,
+                "manifest.json");
 
         if (!File.Exists(manifestPath))
         {
@@ -94,13 +135,21 @@ internal sealed class ExtensionManager
 
         try
         {
-            using var document = JsonDocument.Parse(
-                File.ReadAllText(manifestPath));
+            using var document =
+                System.Text.Json.JsonDocument.Parse(
+                    File.ReadAllText(
+                        manifestPath));
 
-            var root = document.RootElement;
+            var root =
+                document.RootElement;
 
-            if (!root.TryGetProperty("name", out _) ||
-                !root.TryGetProperty("version", out _))
+            if (
+                !root.TryGetProperty(
+                    "name",
+                    out _) ||
+                !root.TryGetProperty(
+                    "version",
+                    out _))
             {
                 throw new InvalidDataException(
                     "The Tampermonkey manifest is missing name or version.");
@@ -117,19 +166,22 @@ internal sealed class ExtensionManager
                 ex);
         }
     }
-}
 
-internal sealed class TampermonkeySetupException : Exception
-{
-    public TampermonkeySetupException(string message)
-        : base(message)
+    private void ThrowIfDisposed()
     {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(
+                nameof(ExtensionManager));
+        }
     }
 
-    public TampermonkeySetupException(
-        string message,
-        Exception innerException)
-        : base(message, innerException)
+    public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _provisioning?.Dispose();
     }
 }
