@@ -4,8 +4,7 @@ namespace Moth.PokeIdle.IdleShell;
 /// Account manager dialog: one row per managed login (PokéIdle / Twitch / Kick).
 /// Add, rename, switch service, enable/disable (route links or not), delete, and
 /// "Log in…" which shows that account's stream slot so the sign-in can be completed
-/// interactively. Also sets how many stream panes are visible at once — open slots
-/// remain alive in Background mode while only N are composited on screen.
+/// interactively.
 /// </summary>
 internal sealed class AccountsDialog : Form
 {
@@ -32,20 +31,7 @@ internal sealed class AccountsDialog : Form
         DropDownStyle = ComboBoxStyle.DropDownList,
         Width = 100
     };
-    private readonly Label _visibleLabel = new()
-    {
-        AutoSize = true,
-        Location = new Point(10, 8)
-    };
-    private readonly NumericUpDown _visibleUpDown = new()
-    {
-        Minimum = 1,
-        Maximum = AccountManager.MaxStreamSlots,
-        Width = 50,
-        Location = new Point(470, 5)
-    };
-    private bool _refreshing;
-
+    
     public AccountsDialog(
         AccountManager accounts,
         Func<Account, bool> isPaneOpen,
@@ -101,21 +87,9 @@ internal sealed class AccountsDialog : Form
         Button("Delete", DeleteSelected);
         Button("Log in…", LogInSelected);
 
-        var visibleRow = new Panel { Dock = DockStyle.Bottom, Height = 32, Padding = new Padding(8, 4, 8, 2) };
-        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamSlots);
-        _visibleUpDown.ValueChanged += (_, _) =>
-        {
-            if (_refreshing) return;
-            _accounts.SetVisibleStreamCount((int)_visibleUpDown.Value);
-            UpdateVisibleLabel();
-        };
-        _visibleLabel.Location = new Point(10, 9);
-        visibleRow.Controls.AddRange([_visibleLabel, _visibleUpDown]);
-
         Controls.Add(_list);
         Controls.Add(_serviceCombo);
         Controls.Add(buttons);
-        Controls.Add(visibleRow);
 
         RefreshList();
         return;
@@ -126,15 +100,6 @@ internal sealed class AccountsDialog : Form
             b.Click += (_, _) => act();
             buttons.Controls.Add(b);
         }
-    }
-
-    private void UpdateVisibleLabel()
-    {
-        // The limit applies independently inside Game 1 and Game 2.
-        _visibleLabel.Text =
-            $"Each game: {Math.Min((int)_visibleUpDown.Value, AccountManager.MaxStreamSlots)} visible stream slots · " +
-            $"capacity {AccountManager.MaxStreamsPerService} Twitch + {AccountManager.MaxStreamsPerService} Kick · " +
-            $"up to {AccountManager.MaxStreamSlotsPerAccount} streams per login · hidden panes still run:";
     }
 
     private void AddAccount(AccountService service)
@@ -243,10 +208,6 @@ internal sealed class AccountsDialog : Form
         if (_list.SelectedItems.Count == 0 && _list.Items.Count > 0)
             _list.Items[0].Selected = true;
         SyncServiceCombo();
-        _refreshing = true;
-        _visibleUpDown.Value = Math.Min(_accounts.VisibleStreamCount, AccountManager.MaxStreamSlots);
-        _refreshing = false;
-        UpdateVisibleLabel();
     }
 
     private string? PromptText(string title, string initial)
