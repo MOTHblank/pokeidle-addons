@@ -116,11 +116,19 @@ every 30 seconds and writes `probe.csv` under the LocalAppData root.
 ## Stream link routing
 
 Twitch/Kick links inside PokéIdle are intercepted natively by the WebView2 host.
-Game anchor clicks, `window.open`, popup requests, and navigation backstops all feed
-the same routing path, so there is no second userscript competing with the native
-handler. The same streamer URL is shared between the two game accounts, so a click
-in either game fans the URL out to both Game 1 and Game 2, one stream pane per game
-using the matching enabled Twitch/Kick login profile.
+Game anchor clicks, `window.open`, popup requests, navigation backstops, and the
+live-stream userscript all feed the same routing path. There is no competing legacy
+router: the addon calls the shell's `__idleshell_openLink` bridge when available.
+
+`addons/stream-auto-open.user.js` watches the v1.240.1 upstream SPA for Twitch/Kick
+channel links marked live/online. It reacts to DOM changes as well as a periodic
+rescan, deduplicates channel URLs, and automatically routes each newly-live channel
+to the stream system. It recognizes upstream-style live state attributes/classes
+and compact live badges, rather than assuming one fixed DOM selector.
+
+The same streamer URL is shared between the two game accounts, so a routed live
+stream fans the URL out to both Game 1 and Game 2, one stream pane per game using
+the matching enabled Twitch/Kick login profile.
 
 Use the compact **+ Open stream** button in either workspace for manual stream URLs.
 The stream dock is collapsed by default; expand it only when streams are needed.
