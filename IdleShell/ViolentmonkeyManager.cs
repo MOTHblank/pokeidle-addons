@@ -37,8 +37,7 @@ internal sealed class ViolentmonkeyManager
 
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
-        CoreWebView2Environment environment,
-        IntPtr hostWindowHandle)
+        CoreWebView2Environment environment)
     {
         var key = profile.ProfilePath;
         await _gate.WaitAsync();
@@ -82,7 +81,7 @@ internal sealed class ViolentmonkeyManager
 
             if (!_syncedProfiles.Contains(key))
             {
-                await SyncScriptsAsync(profile, environment, hostWindowHandle);
+                await SyncScriptsAsync(profile, environment);
                 _syncedProfiles.Add(key);
             }
         }
@@ -94,8 +93,7 @@ internal sealed class ViolentmonkeyManager
 
     private async Task SyncScriptsAsync(
         CoreWebView2Profile profile,
-        CoreWebView2Environment environment,
-        IntPtr hostWindowHandle)
+        CoreWebView2Environment environment)
     {
         var extensions = await profile.GetBrowserExtensionsAsync();
         var vm = extensions.FirstOrDefault(e =>
@@ -109,8 +107,11 @@ internal sealed class ViolentmonkeyManager
         controllerOptions.ProfileName = profile.ProfileName;
         controllerOptions.IsInPrivateModeEnabled = false;
 
+        // HWND_MESSAGE creates an invisible message-only WebView. This keeps
+        // the VM control page completely outside IdleShell's visible layout.
+        var messageWindow = new IntPtr(-3);
         var controller = await environment.CreateCoreWebView2ControllerAsync(
-            hostWindowHandle, controllerOptions);
+            messageWindow, controllerOptions);
 
         try
         {
