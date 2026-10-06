@@ -233,7 +233,7 @@ internal sealed class UserscriptLoader
     private string PrepareExtensionBundle()
     {
         var sourceFolder = Path.Combine(
-            AppContext.BaseDirectory, "userscript-extension");
+            AppContext.BaseDirectory, "UserscriptExtension");
         var staticFiles = new[] { "bridge.js", "background.js" };
 
         foreach (var file in staticFiles)
