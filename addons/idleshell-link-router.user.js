@@ -37,12 +37,20 @@
 
     const post = (payload) => {
         try {
-            if (HOST.chrome && HOST.chrome.webview &&
+            // Prefer the host function injected by IdleShell itself. This avoids
+            // depending on whether chrome.webview is exposed to an extension
+            // content script running in the page's MAIN world.
+            if (typeof HOST.__idleshell_openLink === 'function')
+                return HOST.__idleshell_openLink(payload.url, payload.source || 'userscript');
+        } catch (_) {}
+
+        try {
+            if (HOST.chrome?.webview &&
                 typeof HOST.chrome.webview.postMessage === 'function') {
                 HOST.chrome.webview.postMessage(JSON.stringify(payload));
                 return true;
             }
-        } catch (_) { /* not hosted by IdleShell */ }
+        } catch (_) {}
         return false;
     };
 
@@ -89,15 +97,59 @@
     //    double-handle the same click. We only suppress the click if the host
     //    accepted the route; otherwise native WebView2 popup/navigation
     //    handling remains available as the fallback.
+    const elementValue = (element) => {
+        try {
+            for (const name of element.getAttributeNames()) {
+                const value = element.getAttribute(name);
+                if (value && STREAM_URL_RE.test(value))
+                    return value;
+            }
+
+            const onclick = element.getAttribute('onclick');
+            if (onclick) {
+                const match = onclick.match(/https?:\/\/(?:www\.|m\.)?(?:twitch\.tv|kick\.com)\/[^\s"'<>)]*/i);
+                if (match) return match[0];
+            }
+        } catch (_) {}
+        return null;
+    };
+
+    const findStreamUrl = (event) => {
+        try {
+            const path = typeof event.composedPath === 'function'
+                ? event.composedPath()
+                : [event.target];
+
+            for (const item of path) {
+                if (!item || item.nodeType !== 1) continue;
+
+                if (item.href && typeof item.href === 'string' &&
+                    STREAM_URL_RE.test(item.href))
+                    return item.href;
+
+                const value = elementValue(item);
+                if (value) return value;
+            }
+        } catch (_) {}
+        return null;
+    };
+
     const clickHandler = (e) => {
-        const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-        if (!a) return;
-        if (route(a.href, 'anchor-click')) {
+        const url = findStreamUrl(e);
+        if (!url) return;
+
+        if (route(url, e.type === 'auxclick' ? 'auxclick' : 'click')) {
             e.preventDefault();
             e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function')
+                e.stopImmediatePropagation();
         }
     };
-    const bindClicks = () => document.addEventListener('click', clickHandler, true);
+
+    const bindClicks = () => {
+        document.addEventListener('click', clickHandler, true);
+        document.addEventListener('auxclick', clickHandler, true);
+    };
     if (document.documentElement) bindClicks();
     else document.addEventListener('DOMContentLoaded', bindClicks, true);
 
