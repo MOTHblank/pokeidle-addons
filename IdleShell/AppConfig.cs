@@ -51,7 +51,7 @@ internal static class AppConfig
 
     public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
     public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
-    public static string SessionFile => Path.Combine(Root, "session.json");    // Put unpacked extensions (e.g. Tampermonkey) in subfolders here.
+    public static string SessionFile => Path.Combine(Root, "session.json");
     public static string ExtensionsFolder =>
         Path.Combine(AppContext.BaseDirectory, "extensions");
 }
