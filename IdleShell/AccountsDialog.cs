@@ -109,12 +109,8 @@ internal sealed class AccountsDialog : Form
             _accounts.SetVisibleStreamCount((int)_visibleUpDown.Value);
             UpdateVisibleLabel();
         };
-        visibleRow.Controls.AddRange([_visibleLabel, new Label
-        {
-            AutoSize = true,
-            Text = "Visible streams (the rest run hidden):",
-            Location = new Point(10, 9)
-        }, _visibleUpDown]);
+        _visibleLabel.Location = new Point(10, 9);
+        visibleRow.Controls.AddRange([_visibleLabel, _visibleUpDown]);
 
         Controls.Add(_list);
         Controls.Add(_serviceCombo);
@@ -134,9 +130,10 @@ internal sealed class AccountsDialog : Form
 
     private void UpdateVisibleLabel()
     {
-        // The label sits left of the numeric up/down; keep its text short.
-        _visibleLabel.Text = $"Hidden ones still farm drops · showing {Math.Min((int)_visibleUpDown.Value, Math.Max(1, _accounts.EnabledStreamAccounts.Count()))} of " +
-                             $"{Math.Max(1, _accounts.EnabledStreamAccounts.Count())}:";
+        // The limit applies independently inside Game 1 and Game 2.
+        var enabled = Math.Max(1, _accounts.EnabledStreamAccounts.Count());
+        _visibleLabel.Text =
+            $"Each game: {Math.Min((int)_visibleUpDown.Value, enabled)} visible of {enabled} stream accounts · hidden panes still run:";
     }
 
     private void AddAccount(AccountService service)

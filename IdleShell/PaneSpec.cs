@@ -11,9 +11,12 @@ internal enum PaneKind { Game, Stream, ActiveStreamMarker }
 internal enum StreamMode { Background, Parked }
 
 // Profile names must be alphanumeric (WebView2 restriction).
+// Group identifies the game workspace that owns a stream pane. Older session files
+// omit Group and are migrated into Game 1 by MainForm.
 internal sealed record PaneSpec(
     string Title, string Url, string Profile, PaneKind Kind,
-    StreamMode Mode = StreamMode.Background);
+    StreamMode Mode = StreamMode.Background,
+    string Group = "");
 
 internal static class SessionStore
 {
