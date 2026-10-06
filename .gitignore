@@ -21,3 +21,6 @@
 # IdleShell local diagnostics
 *.log
 probe.csv
+
+# Official Violentmonkey runtime (downloaded by IdleShell/prepare-violentmonkey.ps1)
+**/vendor/violentmonkey/
