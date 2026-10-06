@@ -4,7 +4,7 @@
     Installs the official Tampermonkey package for PokéIdle Idle Shell.
 
 .DESCRIPTION
-    Downloads the official Chrome/Edge MV3 Tampermonkey package,
+    Downloads the official stable Chrome/Edge MV3 Tampermonkey package,
     extracts the CRX payload, and installs it into the persistent Idle Shell
     extension directory.
 
@@ -15,11 +15,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Version = '5.6.6242'
-$DownloadUrl = "https://data.tampermonkey.net/tampermonkey_$($Version.Replace('.', '_')).crx"
+$DownloadUrl = 'https://www.tampermonkey.net/crx/tampermonkey_stable.crx'
 $ExtensionRoot = Join-Path $env:LOCALAPPDATA 'Moth\IdleShell\Extensions'
 $Destination = Join-Path $ExtensionRoot 'Tampermonkey'
-$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("IdleShell-Tampermonkey-" + [Guid]::NewGuid().ToString('N'))
+$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('IdleShell-Tampermonkey-' + [Guid]::NewGuid().ToString('N'))
 $CrxPath = Join-Path $TempRoot 'tampermonkey.crx'
 $ZipPath = Join-Path $TempRoot 'tampermonkey.zip'
 
@@ -36,9 +35,14 @@ try {
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $ExtensionRoot | Out-Null
 
-    Write-Host "Downloading Tampermonkey $Version..."
+    Write-Host 'Downloading official stable Tampermonkey package...'
     $client = New-Object System.Net.WebClient
-    $client.DownloadFile($DownloadUrl, $CrxPath)
+    try {
+        $client.DownloadFile($DownloadUrl, $CrxPath)
+    }
+    finally {
+        $client.Dispose()
+    }
 
     $bytes = [System.IO.File]::ReadAllBytes($CrxPath)
 
