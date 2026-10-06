@@ -10,7 +10,8 @@ native userscript injection and optional persistent Twitch/Kick stream panes.
 - One shared stream environment with separate named stream profiles.
 - The UI is split into two independent Game 1 / Game 2 workspaces.
 - Each workspace has its own stream tab strip and supports up to 10 Twitch + 10
-  Kick stream slots. A single login profile can carry at most 2 active channels.
+  Kick stream slots. A single login profile may carry the full per-service
+  capacity; the old two-slot-per-login limit is removed.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell registers them directly with WebView2's
   `AddScriptToExecuteOnDocumentCreatedAsync`; no browser extension or CRX is
@@ -20,7 +21,7 @@ native userscript injection and optional persistent Twitch/Kick stream panes.
 
 ## Userscripts
 
-The native runner supports:
+The WebView2 extension engine supports:
 
 - `@match` and `@include`
 - `@run-at document-start`, `document-end`, and `document-idle`
@@ -28,7 +29,14 @@ The native runner supports:
 - `GM_getValue`, `GM_setValue`, `GM_deleteValue`, `GM_listValues`
 - `GM_addStyle`, `GM_setClipboard`, `GM_openInTab`
 - `GM_xmlhttpRequest` using browser CORS for Hunt Atlas
-- safe no-op implementations for menu, notification, and resource APIs
+- browser-native MV3 extension messaging for `GM_xmlhttpRequest`, including
+  cross-origin requests through the extension service worker
+- compatibility implementations for menu, notification, download and resource APIs
+
+The engine is intentionally not a fork of Violentmonkey. It uses the browser's
+real extension execution machinery so the repository's existing userscripts are
+executed as ordinary extension content scripts, while keeping the addon files
+compatible with normal userscript managers.
 
 A repository-wide scan found no `@require` or `@resource` dependencies.
 Hunt Atlas is the only addon using `GM_xmlhttpRequest`, and it only performs
