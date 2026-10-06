@@ -77,7 +77,7 @@ internal sealed class UserscriptLoader
 
         var name = JsonSerializer.Serialize(script.Name);
         var sourceLiteral = JsonSerializer.Serialize(source);
-        var matches = "[" + string.Join(",", script.Matches.Select(JsonSerializer.Serialize)) + "]";
+        var matches = "[" + string.Join(",", script.Matches.Select(match => JsonSerializer.Serialize(match))) + "]";
 
         var run = script.RunAt switch
         {
@@ -107,8 +107,8 @@ internal sealed class UserscriptLoader
             const urlMatches = (pattern, url) => {
                 if (!pattern) return false;
                 const escaped = pattern
-                    .replace(/[.*+?^$()|[\]\\]/g, '\\$&')
-                    .replace(/\*/g, '.*');
+                    .replace(/[.*+?^$()|[]\]/g, '\$&')
+                    .replace(/*/g, '.*');
                 return new RegExp('^' + escaped + '$', 'i').test(url);
             };
 
