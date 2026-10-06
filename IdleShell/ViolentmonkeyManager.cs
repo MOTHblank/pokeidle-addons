@@ -122,6 +122,8 @@ internal sealed class ViolentmonkeyManager
                 view,
                 $"chrome-extension://{vm.Id}/options/index.html#settings");
 
+            await RemoveLegacyRouterAsync(view);
+
             foreach (var script in _scripts)
                 await ImportScriptAsync(view, script);
 
@@ -154,6 +156,69 @@ internal sealed class ViolentmonkeyManager
 
         view.Navigate(url);
         await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    private static async Task RemoveLegacyRouterAsync(CoreWebView2 view)
+    {
+        const string legacyName = "IdleShell Link Router (pokeidle.io)";
+        const string legacyNamespace = "moth.pokeidle";
+
+        var request = $"""
+(() => {
+  const state = { removed: false, id: null };
+  return Promise.resolve(
+    chrome.runtime.sendMessage({
+      cmd: 'GetScript',
+      data: {
+        meta: {
+          name: {{JsonSerializer.Serialize(legacyName)}},
+          namespace: {{JsonSerializer.Serialize(legacyNamespace)}}
+        }
+      }
+    })
+  ).then(script => {
+    const id = script?.props?.id;
+    if (!id) return state;
+    state.id = id;
+    return Promise.resolve(
+      chrome.runtime.sendMessage({
+        cmd: 'MarkRemoved',
+        data: { id, removed: true }
+      })
+    ).then(() => {
+      state.removed = true;
+      return state;
+    });
+  }).then(value => JSON.stringify(value));
+})()
+""";
+
+        try
+        {
+            var outer = await view.ExecuteScriptAsync(request);
+            using var outerDoc = JsonDocument.Parse(outer);
+            var inner = outerDoc.RootElement.GetString();
+            if (string.IsNullOrWhiteSpace(inner))
+                return;
+
+            using var result = JsonDocument.Parse(inner);
+            if (result.RootElement.TryGetProperty("removed", out var removed) &&
+                removed.GetBoolean())
+            {
+                var id = result.RootElement.TryGetProperty("id", out var idValue)
+                    ? idValue.ToString()
+                    : "?";
+                Console.Error.WriteLine(
+                    $"[IdleShell] removed legacy stream-link router script #{id}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // A fresh profile simply has nothing to remove; do not make startup
+            // dependent on this one-time migration.
+            Console.Error.WriteLine(
+                $"[IdleShell] legacy stream-link router cleanup skipped: {ex.Message}");
+        }
     }
 
     private static async Task ImportScriptAsync(CoreWebView2 view, LocalScript script)
