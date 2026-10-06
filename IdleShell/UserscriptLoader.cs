@@ -45,33 +45,25 @@ internal sealed class UserscriptLoader
     /// Installs the current unpacked extension in a WebView2 profile before
     /// navigation. WebView2 requires AreBrowserExtensionsEnabled=true.
     /// </summary>
-    public async Task InstallAsync(CoreWebView2Profile profile, bool force = false)
+    public async Task InstallAsync(CoreWebView2Profile profile)
     {
         var profileKey = profile.ProfilePath;
-        if (!force && _installedProfiles.Contains(profileKey))
+        if (_installedProfiles.Contains(profileKey))
             return;
 
         await _installGate.WaitAsync();
         try
         {
-            if (!force && _installedProfiles.Contains(profileKey))
+            if (_installedProfiles.Contains(profileKey))
                 return;
 
+            // Each UserscriptLoader instance represents one immutable bundle.
+            // Replace any older IdleShell Userscript Engine in this profile so
+            // addon changes can never leave stale script code installed.
             var installed = await profile.GetBrowserExtensionsAsync();
             foreach (var extension in installed.Where(e =>
                          string.Equals(e.Name, ExtensionName, StringComparison.Ordinal)))
             {
-                if (!force)
-                {
-                    if (!extension.IsEnabled)
-                        await extension.EnableAsync(true);
-
-                    _installedProfiles.Add(profileKey);
-                    Console.Error.WriteLine(
-                        $"[IdleShell] userscript extension already installed in profile {profile.ProfileName}: {extension.Id}");
-                    return;
-                }
-
                 try { await extension.RemoveAsync(); }
                 catch (Exception ex)
                 {
