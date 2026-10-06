@@ -804,7 +804,7 @@ internal sealed class MainForm : Form
             $"{slot.Account.DisplayLabel} · S{slot.SlotNumber}", url, slot.Account.Id,
             PaneKind.Stream, _inactiveStreamMode, workspace.GameProfile);
 
-        var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec);
+        var pane = await Pane.CreateAsync(_streamEnv!, Handle, spec, _userscripts);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
         slot.Pane = pane;
@@ -825,7 +825,7 @@ internal sealed class MainForm : Form
         }
 
         var paneSpec = spec with { Group = workspace.GameProfile };
-        var pane = await Pane.CreateAsync(_streamEnv!, Handle, paneSpec);
+        var pane = await Pane.CreateAsync(_streamEnv!, Handle, paneSpec, _userscripts);
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
         workspace.ExtraPanes[key] = pane;
