@@ -23,6 +23,11 @@ $config  = if ($DebugBuild) { "Debug" } else { "Release" }
 $outDir  = Join-Path $PSScriptRoot "bin\$config\net10.0-windows"
 $pubDir  = Join-Path $PSScriptRoot "publish"
 
+# The shell runs the real upstream Violentmonkey extension, not a clone.
+Write-Host "Preparing official Violentmonkey 2.49.0 MV3..."
+& (Join-Path $PSScriptRoot "prepare-violentmonkey.ps1")
+if ($LASTEXITCODE) { throw "Violentmonkey preparation failed" }
+
 # --- prerequisites -----------------------------------------------------------
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw ".NET SDK not found. Install the .NET 10 SDK: https://dotnet.microsoft.com/download"
