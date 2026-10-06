@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Auto-Open+
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.0.1
 // @description  Automatically opens every Twitch/Kick channel that PokéIdle currently marks as live, including streams added by the SPA after load.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -31,7 +31,7 @@
         /^(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo|assistir agora|watch now|ver ao vivo|assistir)$/i;
 
     const NEGATIVE_LIVE_TEXT_RE =
-        /^(?:offline|off-line|encerrad[oa]|ended|not live|nao ao vivo|não ao vivo)$/i;
+        /^(?:offline|off-line|encerrad[oa]|ended|not live|nao ao vivo)$/i;
 
     const EXCLUDED_TWITCH_PATHS = new Set([
         'directory',
@@ -208,6 +208,14 @@
         return null;
     }
 
+    function normalizedBadgeText(value) {
+        return normalizeText(value)
+            .replace(/^[^a-z0-9à-ÿ]+/i, '')
+            .replace(/[^a-z0-9à-ÿ]+$/i, '')
+            .replace(/(?:^|\s)(?:•|·|[-–—])(?:\s|$)/g, ' ')
+            .trim();
+    }
+
     function inspectBadgeText(container) {
         if (!container) {
             return null;
@@ -219,7 +227,7 @@
         );
 
         for (const node of badgeCandidates.slice(0, 80)) {
-            const text = normalizeText(node.textContent);
+            const text = normalizedBadgeText(node.textContent);
 
             if (!text || text.length > 40) {
                 continue;
@@ -230,6 +238,10 @@
             }
 
             if (LIVE_TEXT_RE.test(text)) {
+                return true;
+            }
+
+            if (/^(?:\d+\s+)?(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo)(?:\s+\d+)?$/i.test(text)) {
                 return true;
             }
         }
