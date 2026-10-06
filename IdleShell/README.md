@@ -26,7 +26,7 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
 
 ## Userscripts
 
-The WebView2 extension engine supports:
+Violentmonkey provides:
 
 - `@match` and `@include`
 - `@run-at document-start`, `document-end`, and `document-idle`
@@ -34,9 +34,7 @@ The WebView2 extension engine supports:
 - `GM_getValue`, `GM_setValue`, `GM_deleteValue`, `GM_listValues`
 - `GM_addStyle`, `GM_setClipboard`, `GM_openInTab`
 - `GM_xmlhttpRequest` using browser CORS for Hunt Atlas
-- browser-native MV3 extension messaging for `GM_xmlhttpRequest`, including
-  cross-origin requests through the extension service worker
-- compatibility implementations for menu, notification, download and resource APIs
+
 
 The engine is intentionally not a fork of Violentmonkey. It uses the real
 WebView2 browser-extension mechanism while keeping the repository's `*.user.js`
@@ -49,7 +47,7 @@ name.
 
 ## Build
 
-Install the .NET 10 SDK, the Evergreen WebView2 Runtime, and Git/PowerShell.
+Install the .NET 10 SDK, the Evergreen WebView2 Runtime, and PowerShell.
 The first `.\\run.ps1` or `.\\build.ps1` run downloads and verifies the
 official Violentmonkey 2.49.0 MV3 package.
 
@@ -126,9 +124,9 @@ run and then mirrored by AccountManager.
 
 ## Scope
 
-The shell does not bundle Violentmonkey itself. It turns the repository's
-userscripts into a normal unpacked Manifest V3 extension so Chromium performs
-the actual content-script loading and execution. Generated extension state stays
+The shell uses the official Violentmonkey extension unchanged. The only custom
+integration is the host-side installation plus synchronization of the repository's
+userscripts into VM's own script database. Generated extension state stays
 under LocalAppData rather than being committed to the repository.
 
 
