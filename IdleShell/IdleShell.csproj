@@ -22,6 +22,11 @@
     <Content Include="..\addons\**\*.user.js"
              LinkBase="addons"
              CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- WebView2 userscript extension bridge files. -->
+    <Content Include="UserscriptExtension\**\*"
+             LinkBase="userscript-extension"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- WebView2 includes a WPF assembly in its transitive package surface.
