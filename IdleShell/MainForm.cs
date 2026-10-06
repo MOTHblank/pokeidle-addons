@@ -124,10 +124,8 @@ internal sealed class MainForm : Form
         BuildToolbar();
         BuildWorkspaceChrome();
         Controls.Add(_toolbar);
-
-        // WebView2 controllers are child HWNDs of the form. A full-size WinForms
-        // Panel above them would occlude the browser surface.
-        // Workspace chrome is therefore parented directly to the form.
+        foreach (var workspace in _workspaces)
+            Controls.Add(workspace.Frame);
 
         Resize += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
@@ -153,11 +151,11 @@ internal sealed class MainForm : Form
         {
             workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
             workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
-            Controls.Add(workspace.Header);
-            Controls.Add(workspace.Health);
-            Controls.Add(workspace.GameToggle);
-            Controls.Add(workspace.StreamHeader);
-            Controls.Add(workspace.StreamTabs);
+            workspace.Frame.Controls.Add(workspace.Header);
+            workspace.Frame.Controls.Add(workspace.Health);
+            workspace.Frame.Controls.Add(workspace.GameToggle);
+            workspace.Frame.Controls.Add(workspace.StreamHeader);
+            workspace.Frame.Controls.Add(workspace.StreamTabs);
 
             workspace.GameToggle.Click += (_, _) =>
             {
@@ -704,6 +702,13 @@ internal sealed class MainForm : Form
         pane.MessageReceived += OnPaneMessage;
         pane.PopupRequested += OnPopupRequested;
         pane.View.NavigationStarting += (_, e) => GamePaneNavigating(pane, _, e);
+        pane.View.NavigationCompleted += (_, e) =>
+            Log($"Game {spec.Profile} navigation {(e.IsSuccess ? "completed" : "FAILED")} " +
+                $"({e.HttpStatusCode}): {pane.View.Source}");
+        pane.View.SourceChanged += (_, _) =>
+            Log($"Game {spec.Profile} source: {pane.View.Source}");
+        pane.View.ProcessFailed += (_, e) =>
+            Log($"Game {spec.Profile} WebView process FAILED: {e.ProcessFailedKind}");
 
         _games.Add(pane);
 
@@ -1079,20 +1084,7 @@ internal sealed class MainForm : Form
             var innerWidth = Math.Max(0, frame.Width - 2);
             var innerHeight = Math.Max(0, frame.Height - 2);
 
-            var headerX = frame.X + 1;
-            var headerY = frame.Y + 1;
-            var headerWidth = Math.Max(0, innerWidth - 2);
-
-            workspace.Header.Bounds =
-                new Rectangle(headerX, headerY, Math.Max(0, headerWidth - 154), headerHeight);
-            workspace.Health.Bounds =
-                new Rectangle(headerX + Math.Max(0, headerWidth - 154), headerY, 82, headerHeight);
-            workspace.GameToggle.Bounds =
-                new Rectangle(
-                    headerX + Math.Max(0, headerWidth - 72),
-                    headerY + 4,
-                    68,
-                    headerHeight - 8);
+            workspace.Header.Bounds = new Rectangle(0, 0, innerWidth, headerHeight);
             workspace.Header.BackColor = SystemColors.ActiveCaption;
             workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
 
@@ -1104,19 +1096,11 @@ internal sealed class MainForm : Form
                     innerHeight - streamHeaderHeight - tabHeight - 180));
 
             workspace.StreamHeader.Bounds =
-                new Rectangle(
-                    headerX,
-                    frame.Y + 1 + streamSplit,
-                    headerWidth,
-                    streamHeaderHeight);
+                new Rectangle(0, streamSplit, innerWidth, streamHeaderHeight);
             workspace.StreamHeader.BackColor = SystemColors.ControlLight;
 
             workspace.StreamTabs.Bounds =
-                new Rectangle(
-                    headerX,
-                    frame.Y + 1 + streamSplit + streamHeaderHeight,
-                    headerWidth,
-                    tabHeight);
+                new Rectangle(0, streamSplit + streamHeaderHeight, innerWidth, tabHeight);
 
             var gameBounds = new Rectangle(
                 frame.X + 3,
