@@ -54,6 +54,7 @@ internal sealed class Pane
     }
 
     private readonly UserscriptLoader? _nativeScripts;
+    private readonly List<string> _userscriptIds = [];
 
     private static string BootstrapScript(PaneSpec spec)
     {
@@ -123,7 +124,10 @@ internal sealed class Pane
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
 
         if (_nativeScripts is not null)
-            await _nativeScripts.InstallAsync(View.Profile);
+        {
+            _userscriptIds.Clear();
+            _userscriptIds.AddRange(await _nativeScripts.InstallAsync(View));
+        }
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -161,7 +165,8 @@ internal sealed class Pane
     // Hide()/Park() apply Low. Never mix with TrySuspend.
     public async Task AttachUserscriptAsync(UserscriptLoader loader)
     {
-        await loader.InstallAsync(View.Profile);
+        _userscriptIds.Clear();
+        _userscriptIds.AddRange(await loader.InstallAsync(View, _userscriptIds));
     }
 
     public void Show(Rectangle bounds)
