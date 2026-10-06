@@ -1,16 +1,16 @@
 # pokeidle-addons
 
 PokéIdle userscripts plus a lightweight Windows WebView2 shell for running two
-persistent accounts without incognito browser windows.
+persistent game accounts and optional Twitch/Kick stream panes.
 
 ## Layout
 
-- addons/ — installable Tampermonkey-compatible userscripts.
-- IdleShell/ — native .NET 10/WebView2 two-account host.
-- upstream/ — captured upstream PokéIdle client data.
+- `addons/` — installable Tampermonkey-compatible userscripts.
+- `IdleShell/` — native .NET 10/WebView2 host.
+- `upstream/` — captured upstream PokéIdle client data.
 
-The Idle Shell does not replace Tampermonkey yet. It provides the browser/session
-container and a small userscript injection layer so the existing addons can be
-used without a full browser.
+Idle Shell uses its own native userscript runner, so the shipped addons work
+without installing Tampermonkey or any browser extension. The same `*.user.js`
+files remain usable in a normal userscript manager.
 
-See IdleShell/README.md for build and runtime details.
+See `IdleShell/README.md` for build and runtime details.

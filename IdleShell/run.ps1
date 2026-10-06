@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = "Stop"
 $project = Join-Path $PSScriptRoot "IdleShell.csproj"
 $config  = if ($DebugBuild) { "Debug" } else { "Release" }
-$outDir  = Join-Path $PSScriptRoot "out"
+$outDir  = Join-Path $PSScriptRoot "bin\$config\net10.0-windows"
 $pubDir  = Join-Path $PSScriptRoot "publish"
 
 # --- prerequisites -----------------------------------------------------------
@@ -71,16 +71,6 @@ else {
     if ($LASTEXITCODE) { throw "build failed" }
     $target = $outDir
 }
-
-# --- extensions folder (drop unpacked Tampermonkey here) ----------------------
-$extDir = Join-Path $target "extensions"
-if (-not (Test-Path $extDir)) {
-    New-Item -ItemType Directory -Path $extDir | Out-Null
-    Write-Host "Created $extDir  (put unpacked extensions in subfolders, e.g. extensions\tampermonkey\manifest.json)"
-}
-
-$exe = Join-Path $target "IdleShell.exe"
-Write-Host "Built: $exe"
 
 # --- run ----------------------------------------------------------------------
 if (-not $NoRun) {
