@@ -345,7 +345,7 @@ internal sealed class HttpProvisioningServer : IDisposable
         TcpClient client,
         CancellationToken cancellationToken)
     {
-        using (client);
+        using var _ = client;
 
         try
         {
