@@ -329,7 +329,7 @@ internal sealed class MainForm : Form
 
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new UserscriptLoader(addonsFolder);
-            Log($"WebView2 userscript extension: {_userscripts.Scripts.Count} script(s) packaged from {addonsFolder}");
+            Log($"WebView2 userscript extension: {_userscripts.Scripts.Count} script(s) packaged from {addonsFolder}; browser-native execution enabled");
 
             RefreshAddonsPicker();
 
@@ -865,7 +865,7 @@ internal sealed class MainForm : Form
         try
         {
             _addonsPicker.Items.Clear();
-            _addonsPicker.Items.Add("Reload addons (all games)");
+            _addonsPicker.Items.Add("Reload userscripts (all panes)");
             foreach (var script in _userscripts?.Scripts ?? [])
                 _addonsPicker.Items.Add(script.Name);
             if (_addonsPicker.Items.Count > 0)
