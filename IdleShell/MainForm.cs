@@ -28,6 +28,9 @@ internal sealed class MainForm : Form
     private bool _suppressAddonPickerEvent;
     private Button _modeButton = null!;
     private Button _allBackgroundButton = null!;
+    private Button _game1Button = null!;
+    private Button _game2Button = null!;
+    private Button _foregroundBothButton = null!;
     private ToolStripMenuItem _visibleStreamsItem = null!;
     private int _activeWorkspaceIndex;
     private static readonly Regex StreamUrlRegex =
@@ -236,9 +239,9 @@ internal sealed class MainForm : Form
             Button("Reload games", (_, _) => ReloadGames()),
             Button("DevTools A", (_, _) => _games.ElementAtOrDefault(0)?.View.OpenDevToolsWindow()),
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
-            Button("Game 1", (_, _) => ToggleGameForeground(_workspaces[0])),
-            Button("Game 2", (_, _) => ToggleGameForeground(_workspaces[1])),
-            Button("Foreground both", (_, _) => SetGamesForeground(true)),
+            _game1Button = Button("Game 1: foreground", (_, _) => ToggleGameForeground(_workspaces[0])),
+            _game2Button = Button("Game 2: foreground", (_, _) => ToggleGameForeground(_workspaces[1])),
+            _foregroundBothButton = Button("Games: foreground both", (_, _) => SetGamesForeground(true)),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
             _allBackgroundButton,
             Button("G1 + Stream", async (_, _) => await AddStreamManualAsync(0)),
@@ -469,6 +472,7 @@ internal sealed class MainForm : Form
         var slot = new StreamSlot(account, workspace.GameProfile);
         workspace.Slots.Add(slot);
         workspace.StreamTabs.TabPages.Add(slot.Tab);
+        slot.Tab.Text = $"○ {account.DisplayLabel}";
     }
 
     private void RebuildTabTitles()
@@ -478,7 +482,8 @@ internal sealed class MainForm : Form
         {
             foreach (var workspace in _workspaces)
                 for (var i = 0; i < workspace.Slots.Count && i < workspace.StreamTabs.TabPages.Count; i++)
-                    workspace.StreamTabs.TabPages[i].Text = workspace.Slots[i].Account.DisplayLabel;
+                    workspace.StreamTabs.TabPages[i].Text =
+                        $"{(workspace.Slots[i].Pane is null ? "○" : "●")} {workspace.Slots[i].Account.DisplayLabel}";
         }
         finally { _suppressTabEvent = false; }
     }
@@ -491,9 +496,24 @@ internal sealed class MainForm : Form
         workspace.Header.Text =
             $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
         workspace.Health.Text = workspace.LastProbeSummary;
+        workspace.Health.ForeColor = workspace.LastProbeHealthy switch
+        {
+            true => System.Drawing.Color.DarkGreen,
+            false => System.Drawing.Color.Firebrick,
+            _ => SystemColors.ControlText
+        };
         workspace.GameToggle.Text = workspace.GameForeground ? "Background" : "Foreground";
         workspace.StreamHeader.Text =
             $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible  ·  {state}";
+
+        if (workspace.Index == 0 && _game1Button is not null)
+            _game1Button.Text = $"Game 1: {state.ToLowerInvariant()}";
+        if (workspace.Index == 1 && _game2Button is not null)
+            _game2Button.Text = $"Game 2: {state.ToLowerInvariant()}";
+        if (_foregroundBothButton is not null)
+            _foregroundBothButton.Text = _workspaces.All(w => w.GameForeground)
+                ? "Games: both foreground"
+                : "Games: foreground both";
     }
 
     private void CloseActiveStream()
@@ -1188,8 +1208,9 @@ internal sealed class MainForm : Form
                         workspace.LastProbeAt = DateTime.Now;
                         workspace.LastProbeHealthy =
                             ProbeHealthy(fields.vis, fields.hidden, fields.drift);
+                        var label = workspace.GameForeground ? "Healthy" : "BG healthy";
                         workspace.LastProbeSummary = workspace.LastProbeHealthy == true
-                            ? $"● Healthy · {fields.drift} ms"
+                            ? $"● {label} · {fields.drift} ms"
                             : $"● Check · {fields.drift} ms";
                         UpdateWorkspaceHeader(workspace);
                     }
