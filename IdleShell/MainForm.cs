@@ -51,7 +51,7 @@ internal sealed class MainForm : Form
         {
             AutoSize = false,
             TextAlign = ContentAlignment.MiddleLeft,
-            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
+            Font = new Font(SystemFonts.MessageBoxFont ?? Control.DefaultFont, FontStyle.Bold),
             Padding = new Padding(8, 0, 8, 0)
         };
 
@@ -1347,8 +1347,8 @@ internal sealed class MainForm : Form
         if (!workspace.StreamsExpanded) return result;
         if (workspace.ActiveTabIndex < 0) return result;
 
-        var visibleAccounts = EnabledStreamSlots(workspace)
-            .Where(s => s.Account.Service == workspace.ActiveStreamService)
+        var visibleAccounts = workspace.Slots
+            .Where(s => s.Account.Enabled && s.Account.Service == workspace.ActiveStreamService)
             .Take(_accounts.VisibleStreamCount)
             .ToList();
 
