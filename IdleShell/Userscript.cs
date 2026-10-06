@@ -5,4 +5,9 @@ internal sealed record Userscript(
     string Source,
     IReadOnlyList<string> Matches,
     string RunAt,
-    string Path);
+    string Path)
+{
+    public List<string> Includes { get; init; } = [];
+
+    public List<string> Grants { get; init; } = [];
+}
