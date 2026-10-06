@@ -24,4 +24,16 @@
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- WebView2's package targets add both hosting wrappers. This project is WinForms-only,
+       so remove the unused WPF wrapper before assembly resolution. -->
+  <Target
+    Name="RemoveUnusedWebView2WpfReference"
+    BeforeTargets="ResolveAssemblyReferences"
+    Condition="'$(UseWPF)' != 'true'">
+    <ItemGroup>
+      <Reference Remove="@(Reference)"
+                 Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
 </Project>
