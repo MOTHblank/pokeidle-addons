@@ -107,7 +107,7 @@ internal sealed class UserscriptLoader
             const urlMatches = (pattern, url) => {
                 if (!pattern) return false;
                 const escaped = pattern
-                    .replace(/[\^$+?.()|{}[\]]/g, '\\$&')
+                    .replace(/[.*+?^$()|[\]\\]/g, '\\$&')
                     .replace(/\*/g, '.*');
                 return new RegExp('^' + escaped + '$', 'i').test(url);
             };
