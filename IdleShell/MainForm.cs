@@ -446,6 +446,10 @@ internal sealed class MainForm : Form
                 if (slot.Pane is { } pane)
                     DetachAndClose(pane);
 
+            foreach (var pane in workspace.ExtraPanes.Values.ToArray())
+                DetachAndClose(pane);
+            workspace.ExtraPanes.Clear();
+
             BuildStreamSlots(workspace);
         }
 
@@ -943,7 +947,6 @@ internal sealed class MainForm : Form
 
             var canonical = CanonicalStreamUrl(url);
             var routed = 0;
-            var created = 0;
             var duplicate = 0;
             var full = 0;
 
@@ -971,7 +974,6 @@ internal sealed class MainForm : Form
                 await EnsureStreamPaneAsync(workspace, slot, canonical);
                 SelectTab(workspace, workspace.Slots.IndexOf(slot));
                 routed++;
-                created++;
             }
 
             Log($"Routed {canonical} as {service} via {via}: " +
