@@ -14,7 +14,7 @@ internal sealed class ExtensionManager : IDisposable
     private readonly string _addonsFolder;
     private readonly TampermonkeyPolicy _policy;
 
-    private TampermonkeyProvisioning? _provisioning;
+    private HttpProvisioningServer? _server;
     private bool _disposed;
 
     public ExtensionManager(
@@ -31,21 +31,81 @@ internal sealed class ExtensionManager : IDisposable
             new TampermonkeyPolicy();
     }
 
-    public void PrepareTampermonkeyProvisioning()
+    // Unpacks the Tampermonkey CRX (if needed), builds the jsonImport
+    // provisioning document from addons/*.user.js, serves it over loopback,
+    // and writes the third-party extension policy. Must run BEFORE any
+    // WebView2 environment is created so the browser picks up the policy at
+    // startup. Returns a human-readable summary for the log.
+    public string PrepareTampermonkeyProvisioning()
     {
         ThrowIfDisposed();
 
-        _provisioning?.Dispose();
+        EnsureUnpackedTampermonkey();
 
-        _provisioning =
-            new TampermonkeyProvisioning(
-                _addonsFolder,
-                Path.Combine(
-                    AppConfig.TampermonkeyProvisioningFolder,
-                    "tm.json"));
+        var outputPath = Path.Combine(
+            AppConfig.TampermonkeyProvisioningFolder,
+            "tm.json");
 
-        _provisioning.Prepare();
-        _policy.Apply(_provisioning);
+        var provisioning = new TampermonkeyProvisioning(
+            _addonsFolder,
+            outputPath);
+
+        _server?.Dispose();
+        _server = provisioning.OwnedServer;
+
+        provisioning.Prepare();
+        _policy.Apply(provisioning);
+
+        return $"{provisioning.ScriptCount} userscript(s) provisioned " +
+            $"from {provisioning.AddonsFolder}; " +
+            $"jsonImport url={provisioning.Url} hash={provisioning.Hash}";
+    }
+
+    // The setup script extracts the CRX to %LOCALAPPDATA%; when it has not
+    // been run, fall back to unpacking a *.crx found next to the shell so
+    // Tampermonkey can still be installed automatically.
+    private void EnsureUnpackedTampermonkey()
+    {
+        if (File.Exists(Path.Combine(_tampermonkeyFolder, "manifest.json")))
+            return;
+
+        var candidates = new List<string>();
+
+        foreach (var dir in new[]
+        {
+            AppConfig.ExtensionsFolder,
+            Path.Combine(AppContext.BaseDirectory, "extensions"),
+            _addonsFolder.Length > 0
+                ? Path.Combine(
+                    Path.GetDirectoryName(_addonsFolder) ?? "",
+                    "IdleShell", "extensions")
+                : ""
+        })
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                continue;
+
+            candidates.AddRange(Directory.EnumerateFiles(dir, "*.crx"));
+        }
+
+        foreach (var crx in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                CrxPackage.ExtractTo(crx, _tampermonkeyFolder);
+
+                Console.Error.WriteLine(
+                    $"[IdleShell] Unpacked {Path.GetFileName(crx)} into " +
+                    $"{_tampermonkeyFolder}");
+
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"[IdleShell] Could not unpack {crx}: {ex.Message}");
+            }
+        }
     }
 
     public async Task<CoreWebView2BrowserExtension>
@@ -182,6 +242,6 @@ internal sealed class ExtensionManager : IDisposable
             return;
 
         _disposed = true;
-        _provisioning?.Dispose();
+        _server?.Dispose();
     }
 }
