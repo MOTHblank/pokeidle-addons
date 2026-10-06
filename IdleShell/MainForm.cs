@@ -40,6 +40,10 @@ internal sealed class MainForm : Form
         public int Index { get; } = index;
         public string GameProfile { get; set; } = "";
         public Pane? GamePane;
+        public bool GameForeground { get; set; } = true;
+        public DateTime? LastProbeAt { get; set; }
+        public bool? LastProbeHealthy { get; set; }
+        public string LastProbeSummary { get; set; } = "Checking…";
         public int ActiveTabIndex { get; set; } = -1;
 
         public Panel Frame { get; } = new()
@@ -54,6 +58,21 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
             Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
             Padding = new Padding(8, 0, 8, 0)
+        };
+
+        public Label Health { get; } = new()
+        {
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Padding = new Padding(4, 0, 4, 0),
+            Text = "Checking…"
+        };
+
+        public Button GameToggle { get; } = new()
+        {
+            AutoSize = false,
+            Text = "Background",
+            Height = 26
         };
 
         public Label StreamHeader { get; } = new()
@@ -130,10 +149,18 @@ internal sealed class MainForm : Form
             workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
             workspace.StreamHeader.Text = $"STREAMS FOR GAME {workspace.Index + 1}";
             workspace.Frame.Controls.Add(workspace.Header);
+            workspace.Frame.Controls.Add(workspace.Health);
+            workspace.Frame.Controls.Add(workspace.GameToggle);
             workspace.Frame.Controls.Add(workspace.StreamHeader);
             workspace.Frame.Controls.Add(workspace.StreamTabs);
 
+            workspace.GameToggle.Click += (_, _) =>
+            {
+                SetActiveWorkspace(workspace.Index);
+                ToggleGameForeground(workspace);
+            };
             workspace.Header.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
+            workspace.Health.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
             workspace.StreamHeader.MouseDown += (_, _) => SetActiveWorkspace(workspace.Index);
             workspace.StreamTabs.Enter += (_, _) => SetActiveWorkspace(workspace.Index);
             workspace.StreamTabs.SelectedIndexChanged += (_, _) =>
@@ -143,6 +170,11 @@ internal sealed class MainForm : Form
                 workspace.ActiveTabIndex = workspace.StreamTabs.SelectedIndex;
                 LayoutPanes();
                 SaveSession();
+            };
+            workspace.StreamTabs.MouseUp += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Right)
+                    ShowStreamContextMenu(workspace, e.Location);
             };
         }
     }
@@ -204,6 +236,9 @@ internal sealed class MainForm : Form
             Button("Reload games", (_, _) => ReloadGames()),
             Button("DevTools A", (_, _) => _games.ElementAtOrDefault(0)?.View.OpenDevToolsWindow()),
             Button("DevTools B", (_, _) => _games.ElementAtOrDefault(1)?.View.OpenDevToolsWindow()),
+            Button("Game 1", (_, _) => ToggleGameForeground(_workspaces[0])),
+            Button("Game 2", (_, _) => ToggleGameForeground(_workspaces[1])),
+            Button("Foreground both", (_, _) => SetGamesForeground(true)),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
             _allBackgroundButton,
             Button("G1 + Stream", async (_, _) => await AddStreamManualAsync(0)),
@@ -342,36 +377,9 @@ internal sealed class MainForm : Form
             }
             UpdateWorkspaceHeaders();
 
-            // Restore stream panes. Old sessions had no Group, so their streams
-            // migrate into Game 1 instead of becoming visually mixed.
-            foreach (var spec in session.Where(s => s.Kind == PaneKind.Stream))
-            {
-                var workspace = WorkspaceForGroup(spec.Group) ??
-                                (_workspaces.Count > 0 ? _workspaces[0] : null);
-                var slot = workspace is null ? null : SlotForProfile(workspace, spec.Profile);
-                if (workspace is null || slot is null || string.IsNullOrWhiteSpace(spec.Url))
-                    continue;
-
-                if (IsStreamUrl(spec.Url))
-                    await EnsureStreamPaneAsync(workspace, slot, spec.Url);
-                else
-                    await AddExtraPaneAsync(workspace, new PaneSpec(
-                        spec.Title, spec.Url, spec.Profile, PaneKind.Stream,
-                        spec.Mode, workspace.GameProfile));
-            }
-
+            // Stream tabs represent available login slots only. Stream browser panes
+            // are intentionally fresh each shell session and are never restored.
             _accounts.Changed += OnAccountsChanged;
-
-            foreach (var marker in session.Where(s => s.Kind == PaneKind.ActiveStreamMarker))
-            {
-                var workspace = WorkspaceForGroup(marker.Group) ??
-                                WorkspaceForGroupByStreamProfile(marker.Profile);
-                if (workspace is null) continue;
-
-                var idx = workspace.Slots.FindIndex(s =>
-                    string.Equals(s.Account.Id, marker.Profile, StringComparison.OrdinalIgnoreCase));
-                if (idx >= 0) SelectTab(workspace, idx);
-            }
 
             _activeWorkspaceIndex = 0;
             LayoutPanes();
@@ -478,10 +486,32 @@ internal sealed class MainForm : Form
     {
         var open = workspace.Slots.Count(s => s.Pane is not null);
         var visible = ForegroundCandidates(workspace).Count;
+        var state = workspace.GameForeground ? "FOREGROUND" : "BACKGROUND";
         workspace.Header.Text =
             $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
+        workspace.Health.Text = workspace.LastProbeSummary;
+        workspace.GameToggle.Text = workspace.GameForeground ? "Background" : "Foreground";
         workspace.StreamHeader.Text =
-            $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible";
+            $"STREAMS FOR GAME {workspace.Index + 1}  ·  {open}/{AccountManager.MaxStreamAccounts} open  ·  {visible} visible  ·  {state}";
+    }
+
+    private void ToggleGameForeground(GameWorkspace workspace)
+    {
+        workspace.GameForeground = !workspace.GameForeground;
+        UpdateWorkspaceHeader(workspace);
+        LayoutPanes();
+        SaveSession();
+        Log($"Game {workspace.Index + 1} switched to {(workspace.GameForeground ? "foreground" : "background")}");
+    }
+
+    private void SetGamesForeground(bool foreground)
+    {
+        foreach (var workspace in _workspaces)
+            workspace.GameForeground = foreground;
+
+        LayoutPanes();
+        SaveSession();
+        Log($"games switched to {(foreground ? "foreground" : "background")}");
     }
 
     private void UpdateWorkspaceHeaders()
@@ -551,6 +581,7 @@ internal sealed class MainForm : Form
             var workspace = _workspaces[_games.Count - 1];
             workspace.GamePane = pane;
             workspace.GameProfile = spec.Profile;
+            workspace.GameForeground = !spec.Background;
             UpdateWorkspaceHeader(workspace);
         }
     }
@@ -947,7 +978,13 @@ internal sealed class MainForm : Form
                 Math.Max(0, frame.Width - 6),
                 Math.Max(0, innerHeight - streamSplit - streamHeaderHeight - tabHeight - 2));
 
-            workspace.GamePane?.Show(gameBounds);
+            if (workspace.GamePane is { } gamePane)
+            {
+                if (workspace.GameForeground)
+                    gamePane.Show(gameBounds);
+                else
+                    gamePane.Hide();
+            }
 
             var candidates = ForegroundCandidates(workspace);
             GridLayout(candidates, streamBounds);
@@ -1020,13 +1057,11 @@ internal sealed class MainForm : Form
         }
     }
 
-    // Probe: every 30s, run the visibility/timer-drift script in each pane and
-    // append one CSV row per pane to AppConfig.ProbeCsvFile. This settles whether
-    // hidden (IsVisible=false) panes still report "visible" and keep unthrottled
-    // timers — i.e. whether streams/addons survive background mode.
+    // Probe every pane. A hidden game is considered healthy when JavaScript
+    // still responds and the 1-second timer remains near real time.
     private async Task ProbeTickAsync()
     {
-        if (_probing) return; // skip a tick if the previous round is still running
+        if (_probing) return;
         _probing = true;
         try
         {
@@ -1035,6 +1070,22 @@ internal sealed class MainForm : Form
             {
                 var raw = await p.ProbeAsync();
                 var fields = ParseProbeJson(raw ?? "");
+
+                if (p.Spec.Kind == PaneKind.Game)
+                {
+                    var workspace = WorkspaceForGroup(p.Spec.Profile);
+                    if (workspace is not null)
+                    {
+                        workspace.LastProbeAt = DateTime.Now;
+                        workspace.LastProbeHealthy =
+                            ProbeHealthy(fields.vis, fields.hidden, fields.drift);
+                        workspace.LastProbeSummary = workspace.LastProbeHealthy == true
+                            ? $"● Healthy · {fields.drift} ms"
+                            : $"● Check · {fields.drift} ms";
+                        UpdateWorkspaceHeader(workspace);
+                    }
+                }
+
                 var state = p.Spec.Kind == PaneKind.Stream && !p.IsForeground
                     ? p.Mode.ToString() : "Foreground";
                 var line = string.Join(',',
@@ -1050,6 +1101,19 @@ internal sealed class MainForm : Form
         }
         finally { _probing = false; }
     }
+
+    private static bool ProbeHealthy(string vis, string hidden, string drift)
+    {
+        if (vis is "error" or "?" || hidden is "error" or "?" ||
+            drift is "error" or "?")
+            return false;
+
+        return double.TryParse(drift, out var ms) && Math.Abs(ms) < 1500;
+    }
+
+    private string GameHealthSummary() =>
+        string.Join(" / ", _workspaces.Select(w =>
+            $"G{w.Index + 1} {w.LastProbeSummary}"));
 
     private static void EnsureProbeHeader()
     {
@@ -1096,6 +1160,7 @@ internal sealed class MainForm : Form
                 $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
                 $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · Up to 10 per game" +
                 $" · Visible/game: {_accounts.VisibleStreamCount}" +
+                $" · Health: {GameHealthSummary()}" +
                 $" · Addons: {_userscripts?.Scripts.Count ?? 0} userscripts";
         }
         catch (Exception ex)
@@ -1109,31 +1174,19 @@ internal sealed class MainForm : Form
     private void SaveSession()
     {
         var specs = new List<PaneSpec>();
-        specs.AddRange(_games.Select(p => p.Snapshot()));
         foreach (var workspace in _workspaces)
         {
-            foreach (var slot in workspace.Slots)
+            if (workspace.GamePane is { } gamePane)
             {
-                if (slot.Pane is { } p)
-                    specs.Add(p.Snapshot() with { Group = workspace.GameProfile });
+                specs.Add(gamePane.Snapshot() with
+                {
+                    Background = !workspace.GameForeground,
+                    Group = workspace.GameProfile
+                });
             }
-
-            foreach (var pane in workspace.ExtraPanes.Values)
-                specs.Add(pane.Snapshot() with { Group = workspace.GameProfile });
-
-            var activeProfile = workspace.ActiveTabIndex >= 0 &&
-                                workspace.ActiveTabIndex < workspace.Slots.Count
-                ? workspace.Slots[workspace.ActiveTabIndex].Account.Id
-                : "-";
-
-            specs.Add(new PaneSpec(
-                $"active-game-{workspace.Index + 1}",
-                "",
-                activeProfile,
-                PaneKind.ActiveStreamMarker,
-                StreamMode.Background,
-                workspace.GameProfile));
         }
+
+        // Stream panes and active stream tabs are deliberately not persisted.
         SessionStore.Save(specs);
     }
 
