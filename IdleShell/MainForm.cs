@@ -327,7 +327,7 @@ internal sealed class MainForm : Form
 
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new UserscriptLoader(addonsFolder);
-            Log($"native userscript loader: {_userscripts.Scripts.Count} script(s) parsed from {addonsFolder}");
+            Log($"native userscript runtime: {_userscripts.Scripts.Count} script(s) parsed from {addonsFolder}");
 
             RefreshAddonsPicker();
 
@@ -348,7 +348,7 @@ internal sealed class MainForm : Form
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.GameBrowserArguments,
-                    AreBrowserExtensionsEnabled = true
+                    AreBrowserExtensionsEnabled = false
                 });
 
             // All stream accounts share ONE user data folder so their profiles
