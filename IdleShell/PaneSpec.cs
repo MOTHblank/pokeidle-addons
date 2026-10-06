@@ -16,7 +16,8 @@ internal enum StreamMode { Background, Parked }
 internal sealed record PaneSpec(
     string Title, string Url, string Profile, PaneKind Kind,
     StreamMode Mode = StreamMode.Background,
-    string Group = "");
+    string Group = "",
+    bool Background = false);
 
 internal static class SessionStore
 {
