@@ -77,8 +77,8 @@
     function normalizeText(value) {
         return String(value == null ? '' : value)
             .normalize('NFD')
-            .replace(/[\\u0300-\\u036f]/g, '')
-            .replace(/\\s+/g, ' ')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
             .trim()
             .toLowerCase();
     }
@@ -91,7 +91,7 @@
                 return null;
             }
 
-            const host = url.hostname.toLowerCase().replace(/^www\\./, '');
+            const host = url.hostname.toLowerCase().replace(/^www\./, '');
 
             if (host !== 'twitch.tv' && host !== 'kick.com') {
                 return null;
