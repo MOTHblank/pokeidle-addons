@@ -837,25 +837,28 @@ internal sealed class MainForm : Form
         try
         {
             if (_gameEnv is null) return;
+
             var infos = _gameEnv.GetProcessInfos();
             var streamInfos = _streamEnv?.GetProcessInfos();
             var open = _slots.Count(s => s.Pane is not null);
             var fg = ForegroundCandidates().Count;
             var enabled = EnabledStreamSlots().Count();
-            _status.Text = $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
-                           $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
-                           $" · Accounts: {enabled}/{_slots.Count} routing" +
-                           $" · Visible: {_accounts.VisibleStreamCount}" +
-                           $"({_userscripts?.Scripts.Count ?? 0} scripts)";
+
+            _status.Text =
+                $"Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
+                $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
+                $" · Accounts: {enabled}/{_slots.Count} routing" +
+                $" · Visible: {_accounts.VisibleStreamCount}" +
+                $" · Addons: {_userscripts?.Scripts.Count ?? 0} userscripts";
         }
-        catch
+        catch (Exception ex)
         {
-            // Keep the last known status; show the addon state if the base
-            // text was never set (startup failure path).
             if (_status.Text.Length == 0)
+                _status.Text = "Status unavailable";
+
+            Log($"status update failed: {ex.Message}");
         }
     }
-
     private void SaveSession()
     {
         var specs = new List<PaneSpec>();
@@ -886,4 +889,3 @@ internal sealed class MainForm : Form
         return form.ShowDialog(this) == DialogResult.OK ? box.Text.Trim() : null;
     }
 }
-        var pane = await Pane.CreateAsync(env, Handle, spec, _userscripts);
