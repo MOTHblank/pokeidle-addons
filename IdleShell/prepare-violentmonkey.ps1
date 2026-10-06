@@ -96,6 +96,14 @@ $staticInjector = @{
 }
 
 $installedManifest.content_scripts = @($staticInjector)
+
+# The WebView2 host deliberately uses VM's static content-script injector.
+# Removing the dynamic userScripts permission prevents Chromium from requiring
+# the per-extension "Allow User Scripts" UI toggle just to load Violentmonkey.
+$installedManifest.permissions = @(
+    $installedManifest.permissions | Where-Object { $_ -ne "userScripts" }
+)
+
 $manifestJson = $installedManifest | ConvertTo-Json -Depth 30
 Set-Content -LiteralPath $manifestPath -Value $manifestJson -Encoding UTF8
 
