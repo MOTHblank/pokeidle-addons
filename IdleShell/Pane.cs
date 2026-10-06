@@ -114,6 +114,101 @@ internal sealed class Pane
             .Replace("__KIND__", kind, StringComparison.Ordinal);
     }
 
+    private static string StreamLinkInterceptorScript() => """
+        (() => {
+          'use strict';
+
+          const streamUrl = (raw) => {
+            try {
+              const url = new URL(String(raw || ''), location.href);
+              if (!/^https?:$/.test(url.protocol)) return null;
+              if (!/^(?:www\\.|m\\.)?(?:twitch\\.tv|kick\\.com)$/i.test(url.hostname))
+                return null;
+              return url.href;
+            } catch (_) {
+              return null;
+            }
+          };
+
+          const post = (url, source) => {
+            const normalized = streamUrl(url);
+            if (!normalized) return false;
+
+            try {
+              if (typeof window.__idleshell_openLink === 'function') {
+                if (window.__idleshell_openLink(normalized, source))
+                  return true;
+              }
+            } catch (_) {}
+
+            try {
+              window.chrome?.webview?.postMessage(JSON.stringify({
+                type: 'link',
+                url: normalized,
+                source
+              }));
+              return true;
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const findLink = (event) => {
+            try {
+              const path = typeof event.composedPath === 'function'
+                ? event.composedPath()
+                : [event.target];
+
+              for (const item of path) {
+                if (!item || item.nodeType !== 1) continue;
+
+                const href = item.href;
+                if (typeof href === 'string') {
+                  const url = streamUrl(href);
+                  if (url) return url;
+                }
+
+                const raw = item.getAttribute?.('href');
+                const url = streamUrl(raw);
+                if (url) return url;
+              }
+            } catch (_) {}
+
+            return null;
+          };
+
+          const onClick = (event) => {
+            const url = findLink(event);
+            if (!url) return;
+
+            if (post(url, 'native-anchor-click')) {
+              event.preventDefault();
+              event.stopPropagation();
+              event.stopImmediatePropagation?.();
+            }
+          };
+
+          document.addEventListener('click', onClick, true);
+          document.addEventListener('auxclick', onClick, true);
+
+          const realOpen = window.open;
+          window.open = function(url, ...rest) {
+            if (post(url, 'native-window-open')) {
+              return {
+                closed: false,
+                close() {},
+                focus() {},
+                blur() {}
+              };
+            }
+
+            return realOpen ? realOpen.call(window, url, ...rest) : undefined;
+          };
+
+          console.info('[IdleShell] native stream-link interceptor installed');
+        })();
+        """;
+
     private async Task ConfigureAsync()
     {
         var s = View.Settings;
@@ -122,6 +217,9 @@ internal sealed class Pane
         s.IsZoomControlEnabled = true;
 
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
+
+        if (Spec.Kind == PaneKind.Game)
+            await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
 
         if (_nativeScripts is not null)
         {
