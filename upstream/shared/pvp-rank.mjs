@@ -282,22 +282,36 @@ export function decaiEm(ultimaEm, tierId) {
 }
 
 /**
+ * Até que posição a tabela final premia: as 100 primeiras. Até 04/10/2026 eram só as 50 da elite
+ * (Challenger e Mestre); a faixa do 51º ao 100º é a de quem está logo abaixo do Mestre.
+ */
+export const PVP_POSICOES_PREMIADAS = 100;
+
+/**
  * O prêmio de cada faixa na virada da semana, por POSIÇÃO na tabela final.
  *
- * As faixas seguem a escada, e não um número solto: `ate: 3` é o pódio do Challenger, `ate: 20`
- * é o resto dele (`PVP_VAGAS_CHALLENGER`) e `ate: 50` é o Mestre (`PVP_VAGAS_MESTRE`). Cada
- * jogador recebe UM pacote — a busca para na primeira faixa que o cobre.
+ * As faixas seguem a escada, e não um número solto: o 1º, o pódio (2º e 3º) e o top 10 são o alto
+ * do Challenger, `ate: 20` é o resto dele (`PVP_VAGAS_CHALLENGER`), `ate: 50` é o Mestre
+ * (`PVP_VAGAS_MESTRE`) e `ate: 100` é quem vem logo abaixo (`PVP_POSICOES_PREMIADAS`). Cada jogador
+ * recebe UM pacote — a busca para na primeira faixa que o cobre. A tabela é a de 04/10/2026.
  *
  * `horas` é a duração de cada boost, EM HORAS (eram dias até a temporada virar semanal — o
  * registro do prêmio guarda a unidade junto, ver `pvp_premios.unidade`). As chaves são as de
  * `TIPOS_BOOST` em `server/game/loja.mjs` (`shiny` é o Shiny Secret Lure e `captura` é o Capture
  * Boost; os ids de produto deles divergem, as chaves não). O prêmio NÃO consome a cota diária de
  * boost: cota é freio de compra, e isto não é compra.
+ *
+ * `diamantes` entra no saldo pelo ledger, com o motivo `pvp_temporada` (`server/game/diamantes.mjs`):
+ * é brinde de competição, como o pódio das guilds — vale na Loja e no banco da guild, mas não se
+ * vende no Mercado (só o diamante COMPRADO se vende). O teto é estrutural: 2.650 💎 por semana.
  */
 export const PVP_PREMIOS = [
-  { ate: 3, faixa: 'podio', horas: { shiny: 48, captura: 48 } },
-  { ate: PVP_VAGAS_CHALLENGER, faixa: 'challenger', horas: { shiny: 18, captura: 18 } },
-  { ate: PVP_VAGAS_MESTRE, faixa: 'mestre', horas: { xp: 18, pokexp: 18 } },
+  { ate: 1, faixa: 'campeao', horas: { shiny: 72, captura: 72, xp: 72, pokexp: 72 }, diamantes: 300 },
+  { ate: 3, faixa: 'podio', horas: { shiny: 48, captura: 48, xp: 48, pokexp: 48 }, diamantes: 200 },
+  { ate: 10, faixa: 'top10', horas: { shiny: 24, captura: 24, xp: 24, pokexp: 24 }, diamantes: 100 },
+  { ate: PVP_VAGAS_CHALLENGER, faixa: 'challenger', horas: { shiny: 18, captura: 18, xp: 18, pokexp: 18 }, diamantes: 50 },
+  { ate: PVP_VAGAS_MESTRE, faixa: 'mestre', horas: { xp: 18, pokexp: 18 }, diamantes: 25 },
+  { ate: PVP_POSICOES_PREMIADAS, faixa: 'top100', horas: { xp: 12, pokexp: 12 }, diamantes: 0 },
 ];
 
 /** O prêmio desta posição, ou `null` se ela não premia. Posição 0/ausente nunca premia. */

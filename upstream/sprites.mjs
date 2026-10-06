@@ -327,6 +327,9 @@ function boundsDaAnimacao(sprite, quadros) {
  * saía com metade da altura dos outros dois. Aqui a medida é a união dos quadros da animação,
  * medida uma vez (ver `boundsDaAnimacao`), então o bicho não pulsa entre um quadro e outro.
  *
+ * `parado` — pinta o primeiro quadro e NÃO liga o relógio: o retrato para lista longa que não
+ * pode pagar 220 ms por card (o cofre do Modo Economia, que existe para poupar bateria).
+ *
  * `aoFalhar` é chamado quando o looktype não existe no índice ou o atlas não carrega. Sem
  * ele o canvas ficava no lugar, vazio e do tamanho certo: um buraco que parecia bug de layout
  * em vez de sprite faltando. Quem chama decide o que pôr no lugar (em geral o retrato do
@@ -338,7 +341,7 @@ export function spriteAnimado(
   dir = 3,
   aoFalhar = null,
   visual = null,
-  { treinador = false, encaixar = false } = {},
+  { treinador = false, encaixar = false, parado = false } = {},
 ) {
   const cv = document.createElement('canvas');
   cv.width = 32;
@@ -398,7 +401,7 @@ export function spriteAnimado(
     // antes de pendurá-la no documento, e o canvas ainda solto perdia o desenho de estreia —
     // ficava em branco até o segundo quadro, e para sempre nos sprites de um quadro só.
     pintar();
-    if (quadros.length > 1) {
+    if (quadros.length > 1 && !parado) {
       const timer = setInterval(() => {
         if (!cv.isConnected) return clearInterval(timer); // saiu da tela: para o laço
         pintar();

@@ -19,7 +19,7 @@
 /** Dano do golpe do TM elemental. É alto de propósito: é o prêmio de 10 peças de boss. */
 export const TM_ELEMENTAL_POWER = 2800;
 
-/** Cooldown do golpe do TM elemental, antes do desconto de IV de Speed. */
+/** Cooldown do golpe do TM elemental, antes do desconto do Speed (`cooldownGolpeComSpeed`). */
 export const TM_ELEMENTAL_CD_MS = 60_000;
 
 /** Raio do golpe (3×3 com centro no alvo) — usado só pelo combate do servidor. */

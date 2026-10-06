@@ -6,6 +6,7 @@
 
 import { ouroPorDerrotaHunt, xpPorDerrota } from '../shared/recompensa-hunt.mjs';
 import { efetividade as efetividadeTipos } from '../shared/tipo-efetividade.mjs';
+import { multBoostGuild } from '../shared/guild-boost.mjs';
 
 export const MS_ONDA = 2600;
 export const MAX_MOBS = 16;
@@ -40,16 +41,21 @@ function multBoost(loja, chave, agora, tiposBoost) {
 }
 
 const multGuild = (p) => 1 + (Number(p?.guildBonusPct) || 0) / 100;
+// O Boost da Guild (comprado por um membro, vale para todos): o mesmo fator do servidor, lido do
+// carimbo da guild — ver `multXpTreinador` em `server/game/loja.mjs`.
+const multBoostDaGuild = (p, agora) => multBoostGuild(p?.guild?.boostAte, agora);
 const vipAtivo = (loja, agora) => agora < (loja?.vipAte ?? 0);
 
 export function multXpTreinador(p, agora, tiposBoost) {
   const l = p.loja ?? {};
-  return multBoost(l, 'xp', agora, tiposBoost) * (vipAtivo(l, agora) ? VIP_MULT_XP : 1) * multGuild(p);
+  return multBoost(l, 'xp', agora, tiposBoost) * (vipAtivo(l, agora) ? VIP_MULT_XP : 1) * multGuild(p)
+    * multBoostDaGuild(p, agora);
 }
 
 export function multXpPokemon(p, agora, tiposBoost) {
   const l = p.loja ?? {};
-  return multBoost(l, 'pokexp', agora, tiposBoost) * (vipAtivo(l, agora) ? VIP_MULT_XP : 1) * multGuild(p);
+  return multBoost(l, 'pokexp', agora, tiposBoost) * (vipAtivo(l, agora) ? VIP_MULT_XP : 1) * multGuild(p)
+    * multBoostDaGuild(p, agora);
 }
 
 export function ouroPorDerrota(hunt, nivelMob, especie) {

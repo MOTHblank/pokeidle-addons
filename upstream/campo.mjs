@@ -43,6 +43,13 @@ const TINTA_ARENA_MISTICA = { cor: '#7a3cff', forca: 0.55 };
  */
 const MARGEM_VISTA = 128;
 
+/**
+ * A COROA DO RANKS, antes do nome do pokémon nº 1 do "Pokémon Forte" na placa (ver `coroaPkHtml` no
+ * app.js e `server/game/coroa-pokemon.mjs`). A mesma arte do botão Ranks; carrega uma vez, e a placa
+ * só a desenha depois de pronta — antes disso, o nome sai sozinho, como sempre.
+ */
+const IMG_COROA = typeof Image === 'undefined' ? null : Object.assign(new Image(), { src: '/img/menu-ranks.png' });
+
 /** Formata o multiplicador de tipo para o popup de dano (×2, ×2.5, ×0.5…). */
 const fmtMultEf = (v) => {
   const r = Math.round(v * 100) / 100;
@@ -518,6 +525,9 @@ export class Campo {
     if (b.n !== undefined) e.nome = b.n;
     if (b.nv !== undefined) e.level = b.nv;
     if (b.sh !== undefined) e.shiny = !!b.sh;
+    // A COROA do Ranks (o nº 1 do "Pokémon Forte"): na arena do PvP vem do servidor; na hunt, o herói
+    // a recebe em `definirHeroi`, que o app.js chama com `coroa`.
+    if (b.cr !== undefined) e.coroa = !!b.cr;
     if (b.x !== undefined) e.morto = !!b.x;
     // PvP: `tr` marca o boneco de um treinador (desenha sem barra de HP) e `elo` é o número
     // que vai escrito embaixo dele. Fora da arena nenhum dos dois vem no pacote.
@@ -610,9 +620,15 @@ export class Campo {
 
   // ------------------------------------------------------- posição na tela
 
-  /** Posição interpolada, em tiles fracionários. */
+  /**
+   * Posição interpolada, em tiles fracionários.
+   *
+   * Sem a caixa da área não há onde pôr ninguém: é o intervalo entre desligar o Modo Economia
+   * (o `limpar` soltou a caixa, mas o `heroi` ficou) e o campo voltar do servidor. Um arremesso
+   * da auto-ball nesse intervalo lia `this.caixa.minTx` e derrubava o resto do pacote.
+   */
   pos(e) {
-    if (!e) return null;
+    if (!e || !this.caixa) return null;
     const agora = this.agora;
     // O passo guardado em `mesclar` vale até a hora do novo.
     const p = e.anterior && agora < e.passoEm ? e.anterior : e;
@@ -1441,7 +1457,20 @@ export class Campo {
         ctx.fillStyle = e.ehTreinador ? '#ffd166' : e.shiny ? '#ffd166' : destaque ? '#fff' : '#dfe6ec';
         ctx.shadowColor = '#000';
         ctx.shadowBlur = 3;
-        ctx.fillText(`${e.shiny ? `✨ ${t('calc.shiny')} ` : ''}${e.nome}${e.level ? ` ${t('painel.nivelCurto')}${e.level}` : ''}`, x, y - 4);
+        const texto = `${e.shiny ? `✨ ${t('calc.shiny')} ` : ''}${e.nome}${e.level ? ` ${t('painel.nivelCurto')}${e.level}` : ''}`;
+        if (e.coroa && !e.ehTreinador && IMG_COROA?.complete && IMG_COROA.naturalWidth) {
+          // A COROA antes do nome: o par (coroa + texto) fica centrado no bicho, como o nome sozinho.
+          const alt = destaque ? 13 : 11;
+          const larg = Math.round((alt * IMG_COROA.naturalWidth) / IMG_COROA.naturalHeight);
+          const w = ctx.measureText(texto).width;
+          const x0 = x - (larg + 3 + w) / 2;
+          ctx.shadowBlur = 0;
+          ctx.drawImage(IMG_COROA, Math.round(x0), Math.round(y - 4 - alt + 1), larg, alt);
+          ctx.shadowBlur = 3;
+          ctx.fillText(texto, x0 + larg + 3 + w / 2, y - 4);
+        } else {
+          ctx.fillText(texto, x, y - 4);
+        }
         ctx.shadowBlur = 0;
       }
 
