@@ -79,3 +79,51 @@ export function aplicarCurvaNoGolpe(a) {
   a.cooldownMs = cd;
   return true;
 }
+
+/**
+ * O DESCONTO DO SPEED nos golpes (skills e ultimates) — em %, e não em segundos.
+ *
+ * Antes o Speed base da espécie não servia para nada: só o IV de Speed contava, tirando um valor
+ * FIXO (10 ms por ponto, até −0,32 s) — o mesmo para um Jolteon e um Snorlax, e desigual entre os
+ * golpes: −0,32 s são 2,7% de uma skill de 12 s e só 0,5% de um ultimate de 60 s. Agora a espécie dá
+ * o POTENCIAL e o IV decide quanto dele o pokémon aproveita:
+ *
+ *   potencial = Speed ÷ 20                 até 120 (cada 20 de Speed, 1%: 6% no 120)
+ *             = 6 + (Speed − 120) ÷ 40     acima de 120 (cada 40, mais 1%) — teto de 7%
+ *   desconto  = potencial × IV ÷ 32        IV 32 aproveita tudo; IV 16, metade
+ *   cooldown  = cooldown × (1 − desconto ÷ 100)
+ *
+ *   Jolteon (Speed 130), IV 24, ultimate de 60 s: 6,25% × 24/32 = 4,69% → 57,2 s
+ *
+ * O teto de 7% é o do Ninjask (160). Só o Regieleki (200) passaria dele, e fica nos mesmos 7%.
+ *
+ * A Investida e o intervalo entre ataques NÃO passam por aqui: seguem o desconto fixo do IV
+ * (`cooldownComSpeed`, em server/game/combate.mjs). É neles que o IV pesa de verdade — a Investida
+ * de 2 s vira 1,68 s com IV 32 —, e trocar aquilo por % derrubaria a cadência de quase todo pokémon.
+ */
+export const SPEED_POTENCIAL_TETO_PCT = 7;
+
+/** Até aqui cada 20 de Speed vale 1%; daqui para cima, cada 40. */
+const SPEED_JOELHO = 120;
+
+/** O IV de Speed vai de 1 a 32 — fora disso (ou sem IV) conta como o do servidor (`ivSpeedDe`). */
+const ivDoSpeed = (iv) => Math.min(32, Math.max(1, Math.round(Number(iv) || 1)));
+
+/** O potencial (em %) que o Speed base da espécie dá aos golpes — o desconto de um IV 32. */
+export function potencialDoSpeed(speedBase) {
+  const s = Math.max(0, Number(speedBase) || 0);
+  const pct = s <= SPEED_JOELHO ? s / 20 : 6 + (s - SPEED_JOELHO) / 40;
+  return Math.min(SPEED_POTENCIAL_TETO_PCT, pct);
+}
+
+/** O desconto (em %) nos golpes deste pokémon: o potencial da espécie, na fração que o IV aproveita. */
+export function descontoDoSpeedPct(speedBase, ivSpeed) {
+  return potencialDoSpeed(speedBase) * (ivDoSpeed(ivSpeed) / 32);
+}
+
+/** O cooldown de um GOLPE (skill ou ultimate) depois do desconto do Speed, em ms inteiros. */
+export function cooldownGolpeComSpeed(cooldownMs, speedBase, ivSpeed) {
+  const base = Math.max(0, Number(cooldownMs) || 0);
+  if (base <= 0) return base;
+  return Math.round(base * (1 - descontoDoSpeedPct(speedBase, ivSpeed) / 100));
+}

@@ -51,16 +51,17 @@ import {
   PVP_DECAIMENTO_HORAS,
   PVP_NIVEL_MIN,
   PVP_PREMIOS,
+  PVP_POSICOES_PREMIADAS,
   PVP_TIME_MAX,
   PVP_TIME_MIN,
 } from '../shared/pvp-rank.mjs';
 // E a NOTA da calculadora: os degraus de cor saem de `FAIXAS_NOTA`, a mesma tabela que pinta a
 // caixa grande da calculadora (`faixaDaNota`). Um degrau novo aparece na tabela do capítulo sozinho.
-import { FAIXAS_NOTA, AUTO_LOCK_NOTA_MIN } from '../shared/nota-pokemon.mjs';
+import { FAIXAS_NOTA, AUTO_LOCK_NOTA_MIN, GANHO_MIN_EVOLUCAO } from '../shared/nota-pokemon.mjs';
 // A OFERENDA, o CAMPEONATO e o nível do EEVEE também moram em `shared/`, lidos pelas duas pontas:
 // as casas da roleta, as datas, o requisito e o prêmio do campeonato, e o degrau fixo dos oito
 // destinos do Eevee saem daqui, e não de um número copiado no texto.
-import { OFERENDA_CASAS } from '../shared/oferenda.mjs';
+import { OFERENDA_CASAS, OFERENDA_LOTE_GIROS_MAX } from '../shared/oferenda.mjs';
 import { faixasOrbParaTela, liquidoOrbDaVenda, TAXA_ORB_PLANA } from '../shared/taxa-mercado.mjs';
 // A ÁREA DE TREINAMENTO e as CAIXAS DO MARKET, pela mesma razão: os limites da bancada (casas
 // por lado, espera entre batalhas) e as tabelas das caixas (preço, diamante, multiplicador e as
@@ -84,6 +85,37 @@ import {
 // área saem daqui, e o capítulo de TM Disks conta o alcance dele a partir do raio.
 import { TM_ELEMENTAL_POWER, TM_ELEMENTAL_CD_MS, TM_ELEMENTAL_RAIO } from '../shared/tm-elemental.mjs';
 import { MEGAS, megaTemShiny } from '../shared/megas.mjs';
+import { BOOST_GUILD, BANCO_GUILD } from '../shared/guild-boost.mjs';
+import {
+  PESO_SOBREVIVENCIA, PESO_COMBATE, notaSobrevivencia, notaCombate,
+} from '../shared/guild-pontos.mjs';
+import { ATRASADOS, ganhoAteOAlvo, precoAtrasados, xpTotalDoNivel } from '../shared/boost-atrasados.mjs';
+import { FAIXAS_RANKING_MENSAL, TETO_DIAMANTES_MES } from '../shared/ranking-mensal.mjs';
+// A leva de setembro e outubro de 2026 — Chocadeira, MysticTicket, Name Tag, skins, craft de casas,
+// Quadro de guildas, formações do PvP, alto-falante, curva dos golpes, convites e Tag do Discord. As
+// regras de todas moram em `shared/`, lidas pelo servidor e pela tela; o manual lê do mesmo lugar.
+import {
+  OVOS, CHOCADEIRAS_GRATIS, CHOCADEIRAS_MAX, PRECO_CHOCADEIRA_DIAMANTES, PRECO_BULBO_DIAMANTES, BULBO_FATOR,
+} from '../shared/chocadeira.mjs';
+import {
+  CHANCE_TICKET_PASSO, NIVEL_LENDARIO_MISTICO, MISTICO_QUALIDADE_MIN, MISTICO_IV_SOMA_MIN,
+  MISTICO_POTENCIA_MIN, CAPTURA_MISTICA_POR_BOLA, MISTICO_ESCOLHA_MS,
+} from '../shared/mistico.mjs';
+import { NAME_TAG_PRECO, APELIDO_MAX } from '../shared/apelido-pokemon.mjs';
+import { SKIN_PRECO, SKINS, EVENTOS_SKIN } from '../shared/skins.mjs';
+import { CUSTO_CRAFT_CASA, CRAFT_CASA } from '../shared/casas.mjs';
+import { GUILD_SAIDA_CD_MS, MAX_DESCRICAO_GUILD } from '../shared/guild-recrutamento.mjs';
+import { PVP_FORMACOES_MAX, FORMACAO_NOME_MAX } from '../shared/pvp-formacoes.mjs';
+import { CUSTO_ALTO_FALANTE, ESPERA_ALTO_FALANTE_MS } from '../shared/alto-falante.mjs';
+import {
+  cooldownDoPoder, COOLDOWN_600_MS, COOLDOWN_MEGA_MS, PODER_MINIMO,
+  cooldownGolpeComSpeed, potencialDoSpeed, descontoDoSpeedPct, SPEED_POTENCIAL_TETO_PCT,
+} from '../shared/cooldown-golpes.mjs';
+import { escaparHtml } from '../shared/escapar-html.mjs';
+import { MARCOS as MARCOS_CONVITE, IDADE_MINIMA_MS as IDADE_DISCORD_MS } from '../shared/convites.mjs';
+import { PERIODO_DIAS as DIAS_TAG, DIAMANTES_POR_PERIODO as DIAMANTES_TAG, DIAMANTES_BOAS_VINDAS as DIAMANTES_TAG_1A } from '../shared/tag-discord.mjs';
+import { nivelMinimoDoPar } from '../shared/bosses-lendarios.mjs';
+import { AJUSTE_REVIVE_PCT, REVIVE_ID } from '../shared/ajuste-item-espelho.mjs';
 
 // Os números abaixo NÃO trafegam e não moram em `shared/` — cada um diz de onde saiu.
 /** Teto de tempo simulado da Guerra de Guilds, em minutos: `LIMITE_MS_GUERRA`, em `server/game/guild-pvp-sim.mjs`. */
@@ -100,6 +132,48 @@ const BASE_PENALIDADE_BOSS = 3;
 const LADO_TM_AOE = 11;
 /** O lado do quadrado do golpe do TM Elemental — com o centro no ALVO, não no pokémon do jogador. */
 const LADO_TM_ELEMENTAL = 2 * TM_ELEMENTAL_RAIO + 1;
+/** Nível do treinador para mandar mensagem no chat e usar a Lista de Amigos: `CHAT_NIVEL_MIN`, em `server/protocol.mjs`. */
+const NIVEL_CHAT = 10;
+/** Teto da Lista de Amigos: `MAX_AMIGOS`, em `server/amigos-db.mjs`. */
+const MAX_AMIGOS = 300;
+/** Quantos dias as conversas privadas e o chat da guild ficam guardados: `RETENCAO_DM`, em `server/amigos-db.mjs`. */
+const DIAS_DM = 7;
+/** O que a transferência de Coins entre amigos queima, em %: `TAXA_COINS_AMIGO`, em `server/amigos-db.mjs`. */
+const PCT_ENVIO_COINS = 15;
+/** O mínimo de um envio de Coins entre amigos: `MIN_COINS_AMIGO`, em `server/amigos-db.mjs`. */
+const MIN_ENVIO_COINS = 1000;
+/** A espera do Mapa contra o "reset" da hunt, em segundos: `HUNT_REENTRADA_MS`, em `server/sim.mjs`. */
+const SEG_REENTRADA_HUNT = 10;
+/**
+ * O Bônus Twitch, em pontos percentuais: `TWITCH_BONUS_PCT` e `TWITCH_BONUS_EXTRA_PCT`, em
+ * `server/game/bonus-twitch.mjs`. Com o jogador logado, vale o que veio no snapshot (`eu.twitch`).
+ */
+const PCT_TWITCH = 15;
+const PCT_TWITCH_EXTRA = 2.5;
+/**
+ * O Bônus na Kick: `KICK_BONUS_PCT`, `KICK_BONUS_MS` e o custo das três recompensas
+ * (`RECOMPENSAS_KICK`), em `server/game/bonus-kick.mjs`. Com o jogador logado, vale o snapshot (`eu.kick`).
+ */
+const PCT_KICK = 15;
+const MIN_KICK = 60;
+const CUSTO_KICK = { xp: 300, captura: 500, shiny: 1000 };
+/**
+ * A comissão de indicação: `PCT_DIA_COMISSAO` (diamantes) e `PCT_ORB_COMISSAO` (gemas), e o dia de
+ * VIP do Referral Especial (`HORAS_VIP_REFERRAL`), em `server/game/afiliados.mjs`.
+ */
+const PCT_INDICACAO_DIAMANTE = 10;
+const PCT_INDICACAO_GEMA = 5;
+const HORAS_VIP_REFERRAL = 24;
+/**
+ * O nível-alvo do Boost dos Atrasados que a Wiki usa nos exemplos quando não há jogador logado: a
+ * mediana dos veteranos em 06/10/2026 (`game_meta.atrasados_alvo` na produção, calculada por
+ * `server/game/boost-atrasados.mjs`). Logado, vale o alvo de hoje do snapshot (`eu.loja.alvoAtrasados`).
+ */
+const ALVO_EXEMPLO_ATRASADOS = 639;
+/** Quantos votos no TopIdle valem um diamante: `VOTOS_POR_DIAMANTE`, em `server/game/topidle.mjs`. */
+const VOTOS_POR_DIAMANTE = 2;
+/** Quantas negociações do Comércio um comprador mantém abertas: `MAX_CONVERSAS_COMPRADOR`, em `server/comercio-db.mjs`. */
+const MAX_NEGOCIACOES = 50;
 /**
  * Quantos dos 8 selvagens que cercam o pokémon o golpe do TM Elemental alcança, com o alvo em
  * (ax, ay) relativo ao pokémon. É a conta de `alvosDoGolpe` (`server/game/tm.mjs`): Chebyshev até
@@ -148,7 +222,7 @@ const ROTULOS = {
     nivel: 'Nível', xpTotal: 'XP total', custoNivel: 'Só deste nível',
     regiao: 'Região', nivelTreinador: 'Nv treinador',
     atacante: 'Golpe ↓', base: 'Normal', naHunt: 'Na hunt',
-    tier: 'Tier', porEncontro: 'Por encontro', comIsca: 'Com Secret Lure', especies: 'Espécies',
+    tier: 'Tier', porTentativa: 'Por tentativa de captura', comIsca: 'Com Secret Lure', especies: 'Espécies',
     qualidade: 'Qualidade', rotulo: 'Rótulo',
     naoComprava: 'só com diamante', semLimite: 'sem limite', sim: 'sim', nao: 'não',
     taxa: 'Taxa', ondeIncide: 'Onde incide', quemPaga: 'Quem paga',
@@ -163,7 +237,7 @@ const ROTULOS = {
     nivel: 'Level', xpTotal: 'Total XP', custoNivel: 'This level only',
     regiao: 'Region', nivelTreinador: 'Trainer Lv',
     atacante: 'Move ↓', base: 'Normal', naHunt: 'On the hunt',
-    tier: 'Tier', porEncontro: 'Per encounter', comIsca: 'With Secret Lure', especies: 'Species',
+    tier: 'Tier', porTentativa: 'Per capture attempt', comIsca: 'With Secret Lure', especies: 'Species',
     qualidade: 'Quality', rotulo: 'Label',
     naoComprava: 'diamonds only', semLimite: 'no cap', sim: 'yes', nao: 'no',
     taxa: 'Fee', ondeIncide: 'Where it applies', quemPaga: 'Who pays',
@@ -178,7 +252,7 @@ const ROTULOS = {
     nivel: 'Nivel', xpTotal: 'XP total', custoNivel: 'Solo de este nivel',
     regiao: 'Región', nivelTreinador: 'Nv entrenador',
     atacante: 'Golpe ↓', base: 'Normal', naHunt: 'En la cacería',
-    tier: 'Tier', porEncontro: 'Por encuentro', comIsca: 'Con Secret Lure', especies: 'Especies',
+    tier: 'Tier', porTentativa: 'Por intento de captura', comIsca: 'Con Secret Lure', especies: 'Especies',
     qualidade: 'Calidad', rotulo: 'Etiqueta',
     naoComprava: 'solo con diamantes', semLimite: 'sin tope', sim: 'sí', nao: 'no',
     taxa: 'Comisión', ondeIncide: 'Dónde se aplica', quemPaga: 'Quién paga',
@@ -424,6 +498,17 @@ const NOME_RARIDADE = {
   lendaria: { pt: 'Lendária', en: 'Legendary', es: 'Legendaria' },
 };
 
+/**
+ * As receitas do CRAFT de casas e bicicletas — `CRAFT_CASA` de `shared/casas.mjs`, a mesma tabela
+ * que a bancada usa (a bicicleta reaproveita a da casa): "5× Comum → 1× Incomum · 5× Incomum → 1× Rara".
+ */
+const receitasCraft = (c) => Object.entries(CRAFT_CASA)
+  .map(([de, para]) => `<b>${CUSTO_CRAFT_CASA}× ${NOME_RARIDADE[de]?.[c.lang] ?? de} → 1× ${NOME_RARIDADE[para]?.[c.lang] ?? para}</b>`)
+  .join(' · ');
+
+/** A raridade mais alta que o craft alcança (a última receita). */
+const topoDoCraft = (c) => NOME_RARIDADE[Object.values(CRAFT_CASA).at(-1)]?.[c.lang] ?? '';
+
 /** As cinco raridades: a fatia do XP Share, quantos postos e a chance de sair no sorteio. */
 function tabelaDeCasas(c) {
   const r = ROTULO_CASA[c.lang] ?? ROTULO_CASA.pt;
@@ -651,7 +736,7 @@ function tabelaDeShiny(c) {
   const ch = Number(c.d.chanceShiny ?? 0);
   const n = Object.keys(c.d.shinyLooks ?? {}).length;
   return `<table class="wk-tabela">
-    <thead><tr><th>${c.r.porEncontro}</th><th>${c.r.comIsca}</th></tr></thead>
+    <thead><tr><th>${c.r.porTentativa}</th><th>${c.r.comIsca}</th></tr></thead>
     <tbody><tr>
         <td class="wk-num">${umEm(ch)}</td>
         <td class="wk-num">${umEm(Math.min(1, ch * 2))}</td>
@@ -804,7 +889,26 @@ function tabelaDePedras(c) {
   return tabela([c.r.tipo, c.r.pedra, c.r.assinatura], linhas);
 }
 
-/** Os boosts da loja: um por TIPO, com as sete durações em colunas de preço. */
+/**
+ * A escada do PRÊMIO DO MÊS do Ranking, da MESMA tabela com que o servidor paga
+ * (`shared/ranking-mensal.mjs`): uma linha por faixa, e o selo do chat na do 1º.
+ */
+function tabelaPremioMensal(c) {
+  const txt = {
+    pt: { pos: 'Posição', premio: 'Prêmio', selo: 'selo no chat' },
+    en: { pos: 'Place', premio: 'Prize', selo: 'chat badge' },
+    es: { pos: 'Puesto', premio: 'Premio', selo: 'insignia en el chat' },
+  }[c.lang] ?? { pos: 'Posição', premio: 'Prêmio', selo: 'selo no chat' };
+  let de = 1;
+  const linhas = FAIXAS_RANKING_MENSAL.map((f) => {
+    const rotulo = f.ate === de ? `${de}º` : `${de}º–${f.ate}º`;
+    de = f.ate + 1;
+    return `<tr><td>${rotulo}</td><td>${N(f.diamantes, c.lang)} 💎${f.selo ? ` + ${txt.selo}` : ''}</td></tr>`;
+  }).join('');
+  return tabela([txt.pos, txt.premio], linhas);
+}
+
+/** Os boosts da loja: um por TIPO, com as oito durações em colunas de preço. */
 function tabelaDeBoosts(c) {
   const produtos = (c.d.lojaProdutos ?? []).filter((p) => p.cat === 'boosts');
   if (!produtos.length) return '';
@@ -837,32 +941,6 @@ function tabelaDeBoosts(c) {
     })
     .join('');
   return tabela([c.r.efeito, ...duracoes.map((d) => `${d} ${c.r.diamantes}`)], linhas, 'wk-larga');
-}
-
-/**
- * Os produtos de uma categoria da loja, com preço e descrição.
- *
- * A descrição é a DELES, em português, e sai do catálogo sem passar pelo i18n — é a mesma
- * frase que o card da Loja mostra. Manter as duas telas dizendo exatamente a mesma coisa vale
- * mais aqui do que traduzir uma e deixar a outra: o jogador vai comparar o manual com o botão
- * que ele vai clicar, e uma frase diferente entre os dois vira dúvida sobre qual está certa.
- */
-function tabelaDaLoja(c, cat) {
-  // O catálogo chega do servidor em português, com a chave de tradução ao lado (`i18n`). Quem
-  // traduz é a vitrine (`textoDaLoja`, no app.js), que manda a função junto dos dados; sem ela
-  // (um teste, por exemplo) fica o texto do servidor.
-  const traduzir = (chave, p, pronto) => c.d.textoDaLoja?.(chave, p.i18n?.params, pronto) ?? pronto;
-  const linhas = (c.d.lojaProdutos ?? [])
-    .filter((p) => p.cat === cat)
-    .map(
-      (p) => `<tr>
-        <td>${esc(traduzir(p.i18n?.nome, p, p.nome))}</td>
-        <td class="wk-num">${N(p.preco, c.lang)} ${c.r.diamantes}</td>
-        <td class="wk-desc">${esc(traduzir(p.i18n?.desc, p, p.descricao ?? ''))}</td>
-      </tr>`,
-    )
-    .join('');
-  return tabela([c.r.item, c.r.preco, c.r.efeito], linhas);
 }
 
 /** Os bosses desafiáveis: entrada, nível e o que cai. */
@@ -950,10 +1028,16 @@ function tabelaPenalidadeBoss(c) {
   return tabela(L.cab, linhas);
 }
 
-/** "3º" / "3rd" / "3.º" — o ordinal de uma posição do ranking, no idioma do capítulo. */
-const ORDINAIS_EN = { 1: '1st', 2: '2nd', 3: '3rd' };
+/**
+ * "3º" / "3rd" / "3.º" — o ordinal de uma posição do ranking, no idioma do capítulo. O inglês segue
+ * a regra inteira (21st, 52nd, 113th): a tabela do PvP passa do 20º, e "21th" é erro de inglês.
+ */
 function ordinalDePosicao(n, lang) {
-  if (lang === 'en') return ORDINAIS_EN[n] ?? `${n}th`;
+  if (lang === 'en') {
+    const dezena = n % 100;
+    const sufixo = dezena >= 11 && dezena <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th');
+    return `${n}${sufixo}`;
+  }
   return lang === 'es' ? `${n}.º` : `${n}º`;
 }
 
@@ -975,6 +1059,38 @@ function linhasPremiosGuild(c) {
       <td class="wk-num${i === 0 ? ' destaque' : ''}">+${BONUS_RANKING_GP[k]}%</td>
       <td class="wk-num">${PREMIOS_GLOBAL[k] ? `${N(PREMIOS_GLOBAL[k], c.lang)} 💎` : '—'}</td>
     </tr>`).join('');
+}
+
+/**
+ * A tabela dos prêmios da semana do PvP Ranqueado — uma linha por faixa de `PVP_PREMIOS`: as
+ * posições ("1º", "2º e 3º", "4º ao 10º"), os boosts com a duração e os diamantes. Sai inteira do
+ * shared, inclusive QUANTAS faixas há: era uma frase com três faixas fixas, e a tabela de 04/10/2026
+ * tem seis.
+ */
+function tabelaPremiosPvp(c) {
+  const L = {
+    pt: { cab: ['Posição', 'Boosts', 'Diamantes'], e: 'e', ao: 'ao', por: 'por', dia: 'dia', dias: 'dias', horas: 'horas', loc: 'pt-BR' },
+    en: { cab: ['Place', 'Boosts', 'Diamonds'], e: 'and', ao: 'to', por: 'for', dia: 'day', dias: 'days', horas: 'hours', loc: 'en-US' },
+    es: { cab: ['Posición', 'Boosts', 'Diamantes'], e: 'y', ao: 'al', por: 'por', dia: 'día', dias: 'días', horas: 'horas', loc: 'es-ES' },
+  }[c.lang] ?? { cab: ['Posição', 'Boosts', 'Diamantes'], e: 'e', ao: 'ao', por: 'por', dia: 'dia', dias: 'dias', horas: 'horas', loc: 'pt-BR' };
+  const nomeBoost = {
+    shiny: 'Shiny Secret Lure', captura: 'Capture Boost', xp: 'XP Boost',
+    pokexp: c.lang === 'en' ? 'Pokémon XP Boost' : 'XP Boost Pokémon',
+  };
+  const duracao = (h) => (h === 24 ? `1 ${L.dia}` : h % 24 === 0 ? `${N(h / 24, c.lang)} ${L.dias}` : `${N(h, c.lang)} ${L.horas}`);
+  const lista = new Intl.ListFormat(L.loc, { style: 'long', type: 'conjunction' });
+  let de = 1;
+  const linhas = PVP_PREMIOS.map((f, i) => {
+    const o = (n) => ordinalDePosicao(n, c.lang);
+    const pos = de === f.ate ? o(de) : f.ate === de + 1 ? `${o(de)} ${L.e} ${o(f.ate)}` : `${o(de)} ${L.ao} ${o(f.ate)}`;
+    de = f.ate + 1;
+    const porDuracao = new Map();
+    for (const [k, h] of Object.entries(f.horas)) porDuracao.set(h, [...(porDuracao.get(h) ?? []), nomeBoost[k] ?? k]);
+    const boosts = [...porDuracao].map(([h, nomes]) => `${lista.format(nomes)} ${L.por} ${duracao(h)}`).join(' · ');
+    return `<tr><td>${pos}</td><td>${boosts}</td>`
+      + `<td class="wk-num${i === 0 ? ' destaque' : ''}">${f.diamantes ? `${N(f.diamantes, c.lang)} 💎` : '—'}</td></tr>`;
+  }).join('');
+  return tabela(L.cab, linhas);
 }
 
 /** Quanto rende DOBRAR o nível na Guerra de Guilds, em % — a compressão acima do nível cheio. */
@@ -1019,6 +1135,8 @@ function tabelaDeTaxas(c) {
       ['Mercado da Comunidade — item ou diamante em Gema', `${pctTx(TAXA_ORB_PLANA * 100)}% sobre a venda`, 'o VENDEDOR'],
       ['Mercado da Comunidade — anúncio em Ouro', `${e.taxaMercadoGoldPct ?? 15}% sobre a venda`, 'o VENDEDOR'],
       ['Mercado da Comunidade — pensão do pokémon', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("pt-BR")} Coins por dia (só pokémon)`, 'o VENDEDOR'],
+      ['Mercado da Comunidade — alto-falante (anúncio no chat)', `${N(CUSTO_ALTO_FALANTE, 'pt')} Coins por anúncio`, 'o VENDEDOR'],
+      ['Enviar Coins a um amigo', `${PCT_ENVIO_COINS}% do envio, queimados`, 'quem envia'],
       ['Market (NPC) — comprar', 'nenhuma', '—'],
       ['Market (NPC) — vender', 'nenhuma (paga o valor cheio do catálogo)', '—'],
       ['Gema — compra com USDT', `US$ ${e.orbCompraUsdt} por Gema`, 'o comprador'],
@@ -1032,6 +1150,8 @@ function tabelaDeTaxas(c) {
       ['Community Market — item or diamond in Gems', `${pctTx(TAXA_ORB_PLANA * 100)}% of the sale`, 'the SELLER'],
       ['Community Market — Gold listing', `${e.taxaMercadoGoldPct ?? 15}% of the sale`, 'the SELLER'],
       ['Community Market — pokémon boarding', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("en-US")} Coins a day (pokémon only)`, 'the SELLER'],
+      ['Community Market — loudspeaker (listing in chat)', `${N(CUSTO_ALTO_FALANTE, 'en')} Coins per announcement`, 'the SELLER'],
+      ['Sending Coins to a friend', `${PCT_ENVIO_COINS}% of the transfer, burned`, 'the sender'],
       ['Market (NPC) — buying', 'none', '—'],
       ['Market (NPC) — selling', 'none (pays the full catalogue value)', '—'],
       ['Gem — buying with USDT', `US$ ${e.orbCompraUsdt} per Gem`, 'the buyer'],
@@ -1045,6 +1165,8 @@ function tabelaDeTaxas(c) {
       ['Mercado de la Comunidad — objeto o diamante en Gemas', `${pctTx(TAXA_ORB_PLANA * 100)}% sobre la venta`, 'el VENDEDOR'],
       ['Mercado de la Comunidad — anuncio en Oro', `${e.taxaMercadoGoldPct ?? 15}% sobre la venta`, 'el VENDEDOR'],
       ['Mercado de la Comunidad — pensión del pokémon', `${(e.taxaDiariaMercado ?? 100000).toLocaleString("es-ES")} Coins por día (solo pokémon)`, 'el VENDEDOR'],
+      ['Mercado de la Comunidad — altavoz (anuncio en el chat)', `${N(CUSTO_ALTO_FALANTE, 'es')} Coins por anuncio`, 'el VENDEDOR'],
+      ['Enviar Coins a un amigo', `${PCT_ENVIO_COINS}% del envío, quemado`, 'quien envía'],
       ['Market (NPC) — comprar', 'ninguna', '—'],
       ['Market (NPC) — vender', 'ninguna (paga el valor completo del catálogo)', '—'],
       ['Gema — compra con USDT', `US$ ${e.orbCompraUsdt} por Gema`, 'el comprador'],
@@ -1059,6 +1181,238 @@ function tabelaDeTaxas(c) {
     [c.r.taxa, c.r.quanto, c.r.quemPaga],
     L.map(([a, b, d]) => `<tr><td>${a}</td><td class="wk-num">${b}</td><td>${d}</td></tr>`).join(''),
   );
+}
+
+// ------------------------------------------------- tabelas da leva de setembro/outubro
+
+/** Segundos com a vírgula do idioma: "12,4 s" / "12.4 s". */
+const S = (ms, lang) => `${(ms / 1000).toLocaleString(lang === 'en' ? 'en-US' : 'pt-BR', { maximumFractionDigits: 1 })} s`;
+
+/** Uma nota (3.5) com a vírgula do idioma — o `${3.5}` cru sairia "3.5" no meio de um texto em português. */
+const D = (v, lang) => Number(v).toLocaleString(lang === 'en' ? 'en-US' : 'pt-BR', { maximumFractionDigits: 2 });
+
+/**
+ * A curva de recarga dos golpes, ponto a ponto — `cooldownDoPoder`, a mesma função que o servidor
+ * usa para montar o catálogo. A última linha é o golpe de mega, a única coisa que sai da curva.
+ */
+function tabelaCurvaGolpes(c) {
+  const pontos = [PODER_MINIMO, 40, 60, 80, 100, 120, 150, 300, 600];
+  const linhas = pontos
+    .map((p) => `<tr><td class="wk-num">${N(p, c.lang)}</td><td class="wk-num">${S(cooldownDoPoder(p), c.lang)}</td></tr>`)
+    .join('');
+  const mega = { pt: '600 (golpe de mega)', en: '600 (mega move)', es: '600 (golpe de mega)' }[c.lang];
+  const cab = { pt: ['Poder do golpe', 'Recarga'], en: ['Move power', 'Cooldown'], es: ['Poder del golpe', 'Recarga'] }[c.lang];
+  return tabela(cab, `${linhas}<tr><td class="wk-num">${mega}</td><td class="wk-num destaque">${S(COOLDOWN_MEGA_MS, c.lang)}</td></tr>`);
+}
+
+/**
+ * O desconto do Speed nos golpes, pelos exemplos da proposta de 05/10/2026: o Speed base sai do
+ * catálogo do jogo (`c.d.especies`, o mesmo da Pokédex) e a conta é `cooldownGolpeComSpeed` — a
+ * mesma do servidor — no golpe de 600 (`COOLDOWN_600_MS`) com IV de SPD 32. Espécie que o catálogo
+ * ainda não trouxe fica de fora, em vez de sair com Speed 0.
+ */
+function tabelaSpeedGolpes(c) {
+  const EXEMPLOS = [143, 248, 571, 135, 291]; // Snorlax, Tyranitar, Zoroark, Jolteon, Ninjask
+  const linhas = EXEMPLOS
+    .map((id) => c.d.especies?.get?.(id))
+    .filter((e) => e && Number.isFinite(Number(e.baseSpeed)))
+    .map((e) => `<tr><td>${escaparHtml(e.name)}</td>
+      <td class="wk-num">${N(Number(e.baseSpeed), c.lang)}</td>
+      <td class="wk-num">${D(potencialDoSpeed(e.baseSpeed), c.lang)}%</td>
+      <td class="wk-num destaque">${S(cooldownGolpeComSpeed(COOLDOWN_600_MS, e.baseSpeed, 32), c.lang)}</td></tr>`)
+    .join('');
+  if (!linhas) return '';
+  const g600 = S(COOLDOWN_600_MS, c.lang);
+  const cab = {
+    pt: ['Espécie', 'Speed base', 'Potencial (IV 32)', `Golpe de 600 (${g600})`],
+    en: ['Species', 'Base Speed', 'Potential (IV 32)', `600 move (${g600})`],
+    es: ['Especie', 'Speed base', 'Potencial (IV 32)', `Golpe de 600 (${g600})`],
+  }[c.lang];
+  return tabela(cab, linhas);
+}
+
+/** O exemplo do texto (Jolteon, Speed 130, IV 24, no golpe de 600), calculado e não digitado. */
+const exemploSpeed = (lang) => ({
+  pct: D(descontoDoSpeedPct(130, 24), lang),
+  potencial: D(potencialDoSpeed(130), lang),
+  cd: S(cooldownGolpeComSpeed(COOLDOWN_600_MS, 130, 24), lang),
+  g600: S(COOLDOWN_600_MS, lang),
+  teto: D(SPEED_POTENCIAL_TETO_PCT, lang),
+});
+
+/**
+ * Poções e revives do Market, com o efeito que o CARD mostra: a Golden Potion cura por
+ * porcentagem, as outras um número fixo de HP, e cada revive levanta com a sua fração. Sai de
+ * `estado.itens` — o mesmo catálogo, já com `ajustarItemEspelho`, de onde o Market desenha.
+ */
+function tabelaDeCuras(c) {
+  const itens = [...(c.d.itens?.values?.() ?? [])]
+    .filter((i) => (i.category === 'heal' || i.category === 'revive') && Number(i.npcPrice) > 0)
+    .sort((a, b) => (a.category === b.category ? a.npcPrice - b.npcPrice : a.category === 'heal' ? -1 : 1));
+  if (!itens.length) return '';
+  const efeito = (i) => {
+    if (i.category === 'revive') {
+      const pct = Math.round((i.revivePct ?? 0) * 100);
+      return { pt: `levanta com ${pct}% do HP`, en: `revives with ${pct}% HP`, es: `revive con ${pct}% del HP` }[c.lang];
+    }
+    if (i.healPct > 0) {
+      const pct = Math.round(i.healPct * 100);
+      return { pt: `cura ${pct}% do HP máximo`, en: `heals ${pct}% of max HP`, es: `cura ${pct}% del HP máximo` }[c.lang];
+    }
+    return `+${N(i.healAmount ?? 0, c.lang)} HP`;
+  };
+  const linhas = itens
+    .map((i) => `<tr><td>${esc(i.name)}</td><td>${efeito(i)}</td><td class="wk-num">${N(i.npcPrice, c.lang)} ${c.r.ouro}</td></tr>`)
+    .join('');
+  return tabela([c.r.item, c.r.efeito, c.r.preco], linhas);
+}
+
+/** Os três Mystery Eggs: potência, preço, horas de choca e as horas com o Absorb Bulb. */
+function tabelaDeOvos(c) {
+  const h = (horas) => `${N(horas, c.lang)} h`;
+  const cab = {
+    pt: ['Ovo', 'Potência', 'Preço (Coins)', 'Choca em', 'Aquecido'],
+    en: ['Egg', 'Potency', 'Price (Coins)', 'Hatches in', 'Warmed'],
+    es: ['Huevo', 'Potencia', 'Precio (Coins)', 'Eclosiona en', 'Calentado'],
+  }[c.lang];
+  const linhas = OVOS
+    .map((o) => `<tr>
+        <td>${esc(o.nome)}</td>
+        <td class="wk-num">P${o.potencia}</td>
+        <td class="wk-num">${N(o.preco, c.lang)}</td>
+        <td class="wk-num">${h(o.horas)}</td>
+        <td class="wk-num destaque">${h(o.horas * BULBO_FATOR)}</td>
+      </tr>`)
+    .join('');
+  return tabela(cab, linhas);
+}
+
+/** O Absorb Bulb em %: o que ele TIRA da espera (25%), lido do fator que sobra (0,75). */
+const PCT_BULBO = Math.round((1 - BULBO_FATOR) * 100);
+
+/** Os nomes das cinco bolas, para quando o `welcome` ainda não chegou. */
+const NOME_BOLA = { 1: 'Poké Ball', 2: 'Great Ball', 3: 'Super Ball', 4: 'Ultra Ball', 5: 'Beast Ball' };
+
+/** A captura na Arena Mística, bola por bola, sem e com Capture Boost (×2). */
+function tabelaCapturaMistica(c) {
+  const nome = (id) => (c.d.catalogoBolas ?? []).find((b) => b.id === Number(id))?.nome ?? NOME_BOLA[id] ?? `#${id}`;
+  const linhas = Object.entries(CAPTURA_MISTICA_POR_BOLA)
+    .map(([id, ch]) => `<tr>
+        <td>${esc(nome(id))}</td>
+        <td class="wk-num">${P(ch, c.lang)}</td>
+        <td class="wk-num destaque">${P(Math.min(1, ch * 2), c.lang)}</td>
+      </tr>`)
+    .join('');
+  const boost = { pt: 'Com Capture Boost', en: 'With Capture Boost', es: 'Con Capture Boost' }[c.lang];
+  return tabela([c.r.bola, c.r.chance, boost], linhas);
+}
+
+/** A chance do MysticTicket nos primeiros pares de bosses — a escada de `chanceTicketDoPar`. */
+function tabelaTicketPorPar(c) {
+  const linhas = [0, 1, 2, 3]
+    .map((par) => {
+      const ch = CHANCE_TICKET_PASSO * (par + 1);
+      return `<tr><td>${c.lang === 'en' ? 'Lv' : 'Nv'} ${N(nivelMinimoDoPar(par), c.lang)}</td><td class="wk-num">${P(ch, c.lang)}</td><td class="wk-num">${umEm(ch)}</td></tr>`;
+    })
+    .join('');
+  const cab = {
+    pt: ['Par de bosses', 'Chance por vitória', 'Uma a cada'],
+    en: ['Boss pair', 'Chance per win', 'One in'],
+    es: ['Par de bosses', 'Probabilidad por victoria', 'Una cada'],
+  }[c.lang];
+  return tabela(cab, linhas);
+}
+
+/** Os nomes dos cinco boosts da Loja, pela chave — os mesmos nos três idiomas. */
+const NOME_BOOST = {
+  xp: 'XP Boost', pokexp: 'XP Boost Pokémon', loot: 'Loot Boost', captura: 'Capture Boost', shiny: 'Shiny Secret Lure',
+};
+
+/** "3 h", "3 dias", "7 dias", "30 dias" — horas que caem em dia redondo viram dias. */
+const duracaoHoras = (h, lang) => {
+  if (h % 24 === 0) {
+    const d = h / 24;
+    return { pt: `${N(d, lang)} ${d === 1 ? 'dia' : 'dias'}`, en: `${N(d, lang)} ${d === 1 ? 'day' : 'days'}`, es: `${N(d, lang)} ${d === 1 ? 'día' : 'días'}` }[lang];
+  }
+  return `${N(h, lang)} h`;
+};
+
+/** A escada do Convide & Ganhe, marco por marco — `MARCOS` de `shared/convites.mjs`, a mesma do bot. */
+function tabelaConvites(c) {
+  const premio = (p) => {
+    if (p.tipo === 'diamante') return `${N(p.qtd, c.lang)} 💎`;
+    if (p.tipo === 'bola') return `${N(p.qtd, c.lang)} Beast Balls`;
+    if (p.tipo === 'boost') return `${duracaoHoras(p.horas, c.lang)} ${{ pt: 'de', en: 'of', es: 'de' }[c.lang]} ${NOME_BOOST[p.boost] ?? p.boost}`;
+    if (p.tipo === 'vip') return { pt: `VIP ${p.dias} dias`, en: `${p.dias}-day VIP`, es: `VIP ${p.dias} días` }[c.lang];
+    if (p.tipo === 'vipPermanente') return { pt: '<b>VIP PERMANENTE</b>', en: '<b>PERMANENT VIP</b>', es: '<b>VIP PERMANENTE</b>' }[c.lang];
+    return '';
+  };
+  const linhas = MARCOS_CONVITE
+    .map((m) => `<tr><td class="wk-num">${N(m.amigos, c.lang)}</td><td>${m.premios.map(premio).join(' + ')}</td></tr>`)
+    .join('');
+  const cab = { pt: ['Convidados', 'Prêmio'], en: ['Invited', 'Prize'], es: ['Invitados', 'Premio'] }[c.lang];
+  return tabela(cab, linhas);
+}
+
+/** As três recompensas da Kick: custo em pontos do canal e o bônus que cada resgate liga. */
+function tabelaKick(c) {
+  const k = c.d.eu?.kick ?? {};
+  const pct = k.pct ?? PCT_KICK;
+  const min = k.minutos ?? MIN_KICK;
+  const custo = (tipo) => (k.recompensas ?? []).find((r) => r.tipo === tipo)?.custo ?? CUSTO_KICK[tipo];
+  const efeito = {
+    xp: { pt: `+${pct}% de XP (treinador e pokémon)`, en: `+${pct}% XP (trainer and pokémon)`, es: `+${pct}% de XP (entrenador y pokémon)` },
+    captura: { pt: `+${pct}% na chance de captura`, en: `+${pct}% catch chance`, es: `+${pct}% en la probabilidad de captura` },
+    shiny: { pt: `+${pct}% na chance de shiny`, en: `+${pct}% shiny chance`, es: `+${pct}% en la probabilidad de shiny` },
+  };
+  const nome = { xp: `+${pct}% XP`, captura: `+${pct}% Capture Boost`, shiny: `+${pct}% Secret Lure` };
+  const pontos = { pt: 'pontos', en: 'points', es: 'puntos' }[c.lang];
+  const linhas = ['xp', 'captura', 'shiny']
+    .map((t) => `<tr><td>${nome[t]}</td><td class="wk-num">${N(custo(t), c.lang)} ${pontos}</td><td>${efeito[t][c.lang]}</td><td class="wk-num">${N(min, c.lang)} min</td></tr>`)
+    .join('');
+  const cab = {
+    pt: ['Recompensa', 'Custo', 'Efeito', 'Cada resgate'],
+    en: ['Reward', 'Cost', 'Effect', 'Each redeem'],
+    es: ['Recompensa', 'Costo', 'Efecto', 'Cada canje'],
+  }[c.lang];
+  return tabela(cab, linhas);
+}
+
+/**
+ * Os produtos de UMA seção da vitrine da Loja (`grupo`: utilitarios, vip, personagem, cosmeticos,
+ * pacotes), com preço e descrição — a mesma arrumação do menu lateral da Loja.
+ *
+ * A descrição é a do CARD da Loja: o catálogo chega do servidor em português, com a chave de
+ * tradução ao lado (`i18n`), e quem traduz é a vitrine (`textoDaLoja`, no app.js), que vem junto
+ * dos dados; sem ela (um teste, por exemplo) fica o texto do servidor. Manual e botão dizendo a
+ * mesma frase vale mais do que uma tradução própria: o jogador compara os dois antes de comprar.
+ *
+ * As SKINS saem numa linha só: são dezenas de cards (uma comum e uma shiny por desenho), todos com
+ * o mesmo preço e a mesma regra, e listá-las uma a uma enterraria a Name Tag no meio delas.
+ */
+function tabelaDaLojaGrupo(c, grupo) {
+  const traduzir = (chave, p, pronto) => c.d.textoDaLoja?.(chave, p.i18n?.params, pronto) ?? pronto;
+  // O Boost dos Atrasados tem preço POR JOGADOR — numa tabela de preço fixo ele mentiria; tem seção
+  // própria, com a regra da conta.
+  const produtos = (c.d.lojaProdutos ?? []).filter((p) => (p.grupo ?? p.cat) === grupo && !p.atrasados);
+  const skins = produtos.filter((p) => String(p.id).startsWith('skin_'));
+  const linhas = produtos
+    .filter((p) => !String(p.id).startsWith('skin_'))
+    .map((p) => `<tr>
+        <td>${esc(traduzir(p.i18n?.nome, p, p.nome))}</td>
+        <td class="wk-num">${N(p.preco, c.lang)} ${c.r.diamantes}</td>
+        <td class="wk-desc">${esc(traduzir(p.i18n?.desc, p, p.descricao ?? ''))}</td>
+      </tr>`);
+  if (skins.length) {
+    const desc = {
+      pt: `${N(skins.length, c.lang)} skins de evento, vendidas só durante o evento — as regras estão logo acima.`,
+      en: `${N(skins.length, c.lang)} event skins, sold only while the event lasts — the rules are right above.`,
+      es: `${N(skins.length, c.lang)} skins de evento, vendidas solo mientras dura el evento — las reglas están justo arriba.`,
+    }[c.lang];
+    linhas.push(`<tr><td>Skins</td><td class="wk-num">${N(skins[0].preco, c.lang)} ${c.r.diamantes}</td><td class="wk-desc">${desc}</td></tr>`);
+  }
+  if (!linhas.length) return '';
+  return tabela([c.r.item, c.r.preco, c.r.efeito], linhas.join(''));
 }
 
 // ------------------------------------------------------------- capítulos
@@ -1105,29 +1459,31 @@ export const CAPITULOS = [
         Joy cura de graça; sair de lá é escolher outra área no Mapa. Detalhes em
         <a data-cap="morte">Desmaiar</a>.</p>
 
-        <h4>Chamar alguém pelo nome</h4>
-        <p>Escreva <b>@</b> colado no nick da pessoa — <b>@ash oi</b> ou <b>eaiii @ash</b> — e o
-        nome vira uma etiqueta na fala. Para quem foi chamado, a linha inteira acende no chat: é
-        assim que uma resposta deixa de se perder na rolagem quando a conversa anda depressa.</p>
+        <h4>O menu</h4>
+        <p>Os botões do topo, e o capítulo desta Wiki que explica cada um:</p>
+        ${tabela(
+          ['Botão', 'O que abre'],
+          `<tr><td><b>Pokédex</b></td><td>as espécies, as fichas e o registro de shinys — <a data-cap="pokedex">Pokédex</a></td></tr>
+           <tr><td><b>Mapa</b></td><td>onde caçar — <a data-cap="mapa">Mapa e Hunt Analyser</a></td></tr>
+           <tr><td><b>Market</b></td><td>o balcão do NPC: bolas, poções, caixas e ovos — <a data-cap="market">Market</a></td></tr>
+           <tr><td><b>Passe</b></td><td>a trilha de 30 dias de login — <a data-cap="passe">Passe de Batalha</a></td></tr>
+           <tr><td><b>Ranks</b></td><td>os placares do servidor — <a data-cap="ranking">Ranking</a></td></tr>
+           <tr><td><b>Boss</b></td><td>as arenas de boss — <a data-cap="bosses">Bosses</a></td></tr>
+           <tr><td><b>PvP</b></td><td>Ranqueado, Guild e Treinamento — <a data-cap="pvp">PvP Ranqueado</a></td></tr>
+           <tr><td><b>Ginásio</b></td><td>os 18 pódios por tipo — <a data-cap="ginasios">Ginásios</a></td></tr>
+           <tr><td><b>Torneio</b></td><td>os campeonatos com prêmio em dinheiro — <a data-cap="campeonato">Campeonatos</a></td></tr>
+           <tr><td><b>RMT</b></td><td>o Mercado da Comunidade, o depósito e o saque de Gemas — <a data-cap="comunidade">Mercado da Comunidade</a></td></tr>
+           <tr><td><b>Casa</b></td><td>as suas casas e o XP Share — <a data-cap="casa">Casa e XP Share</a></td></tr>
+           <tr><td><b>Shop</b></td><td>a Loja de diamantes — <a data-cap="loja">Loja de Diamantes</a></td></tr>
+           <tr><td><b>Wiki</b></td><td>este manual</td></tr>`,
+        )}
+        <p>A <b>Bolsa</b> (o inventário) abre pelo ícone dela, e tem as abas <b>Treinador</b> (bolas,
+        poções e revives), <b>Itens Raros</b> (tickets, etiquetas, bicicletas, ovos), <b>Pedras</b>,
+        <b>Loots</b>, <b>Oferenda</b>, <b>Coleção</b>, <b>Skins</b> e <b>Chocadeira</b>.</p>
 
-        <h4>Mensagens privadas</h4>
-        <p>Para conversar em privado com alguém, use a <b>Lista de Amigos</b>. O chat Mundo e
-        Guild continuam públicos. No painel de um amigo, <b>Ver perfil</b> abre a ficha dele por
-        cima da conversa; fechar a ficha devolve você ao papo.</p>
-
-        <h4>O ritmo do chat</h4>
-        <p>O chat Mundo e o da Guild aceitam <b>uma mensagem a cada ${SEG_CHAT} segundos</b>. A
-        espera é da <b>conta</b>: recarregar a página ou reconectar não a zera.</p>
-
-        <h4>Comandos do chat</h4>
-        <p>Digite no chat para receber uma resposta que <b>só você vê</b> — ela não é publicada
-        para ninguém.</p>
-        <ul>
-          <li><b>/site</b> — o site de hunts X4 feito pela comunidade.</li>
-          <li><b>/ticket</b> — o convite do Discord e a sala de suporte, onde se reportam bugs
-          (há recompensa em diamantes por bug bounty e vulnerabilidade).</li>
-          <li><b>/guia</b> — o guia do jogo, para começar e evoluir.</li>
-        </ul>
+        <h4>Conversar</h4>
+        <p>Os quatro canais do chat, a Lista de Amigos, as mensagens privadas e o chat de
+        negociação com vendedores estão em <a data-cap="chat">Chat, amigos e Comércio</a>.</p>
 `,
       en: `
         <p>Pokéidle is an <b>idle game</b>: your pokémon fights on its own. You choose where to
@@ -1160,29 +1516,31 @@ export const CAPITULOS = [
         heals for free; leaving means picking another area on the Map. Details in
         <a data-cap="morte">Fainting</a>.</p>
 
-        <h4>Chat commands</h4>
-        <p>Type them in chat to get an answer <b>only you can see</b> — nothing is published to
-        anyone else.</p>
-        <ul>
-          <li><b>/site</b> — the community-made X4 hunt site.</li>
-          <li><b>/ticket</b> — the Discord invite and the support room, where bugs are reported
-          (there are diamond rewards for bug bounties and vulnerabilities).</li>
-          <li><b>/guia</b> — the game guide, to get started and progress.</li>
-        </ul>
+        <h4>The menu</h4>
+        <p>The top buttons, and the chapter of this Wiki that explains each one:</p>
+        ${tabela(
+          ['Button', 'What it opens'],
+          `<tr><td><b>Pokédex</b></td><td>the species, their sheets and the shiny registry — <a data-cap="pokedex">Pokédex</a></td></tr>
+           <tr><td><b>Map</b></td><td>where to hunt — <a data-cap="mapa">Map and Hunt Analyser</a></td></tr>
+           <tr><td><b>Market</b></td><td>the NPC counter: balls, potions, boxes and eggs — <a data-cap="market">Market</a></td></tr>
+           <tr><td><b>Pass</b></td><td>the 30-day login track — <a data-cap="passe">Battle Pass</a></td></tr>
+           <tr><td><b>Ranks</b></td><td>the server leaderboards — <a data-cap="ranking">Ranking</a></td></tr>
+           <tr><td><b>Boss</b></td><td>the boss arenas — <a data-cap="bosses">Bosses</a></td></tr>
+           <tr><td><b>PvP</b></td><td>Ranked, Guild and Training — <a data-cap="pvp">Ranked PvP</a></td></tr>
+           <tr><td><b>Gym</b></td><td>the 18 podiums by type — <a data-cap="ginasios">Gyms</a></td></tr>
+           <tr><td><b>Tournament</b></td><td>the championships with real-money prizes — <a data-cap="campeonato">Championships</a></td></tr>
+           <tr><td><b>RMT</b></td><td>the Community Market, and Gem deposits and withdrawals — <a data-cap="comunidade">Community Market</a></td></tr>
+           <tr><td><b>House</b></td><td>your houses and XP Share — <a data-cap="casa">House &amp; XP Share</a></td></tr>
+           <tr><td><b>Shop</b></td><td>the diamond Shop — <a data-cap="loja">Diamond Shop</a></td></tr>
+           <tr><td><b>Wiki</b></td><td>this manual</td></tr>`,
+        )}
+        <p>The <b>Bag</b> (your inventory) opens from its icon, with the tabs <b>Trainer</b> (balls,
+        potions and revives), <b>Rare Items</b> (tickets, tags, bicycles, eggs), <b>Stones</b>,
+        <b>Loot</b>, <b>Offering</b>, <b>Collection</b>, <b>Skins</b> and <b>Incubator</b>.</p>
 
-        <h4>Calling someone by name</h4>
-        <p>Write <b>@</b> right before the nick — <b>@ash hi</b> or <b>hey @ash</b> — and the name
-        becomes a tag in the message. For the person called, the whole line lights up in chat:
-        that is how an answer stops getting lost in the scroll when the room is busy.</p>
-
-        <h4>Private messages</h4>
-        <p>To talk privately with someone, use the <b>Friends List</b>. World and Guild chat
-        stay public. In a friend's panel, <b>View profile</b> opens their sheet on top of the
-        conversation; closing the sheet takes you back to the chat.</p>
-
-        <h4>Chat pace</h4>
-        <p>World and Guild chat take <b>one message every ${SEG_CHAT} seconds</b>. The wait belongs
-        to the <b>account</b>: reloading the page or reconnecting does not reset it.</p>
+        <h4>Talking</h4>
+        <p>The four chat channels, the Friends List, private messages and the negotiation chat with
+        sellers are in <a data-cap="chat">Chat, friends and Trade</a>.</p>
 `,
       es: `
         <p>Pokéidle es un <b>idle</b>: tu pokémon pelea solo. Tú eliges dónde cazar, con quién y
@@ -1215,29 +1573,32 @@ export const CAPITULOS = [
         Joy cura gratis; salir de allí es elegir otra zona en el Mapa. Detalles en
         <a data-cap="morte">Debilitarse</a>.</p>
 
-        <h4>Comandos del chat</h4>
-        <p>Escríbelos en el chat para recibir una respuesta que <b>solo tú ves</b> — no se publica
-        para nadie más.</p>
-        <ul>
-          <li><b>/site</b> — el sitio de hunts X4 hecho por la comunidad.</li>
-          <li><b>/ticket</b> — la invitación de Discord y la sala de soporte, donde se reportan
-          bugs (hay recompensas en diamantes por bug bounty y vulnerabilidades).</li>
-          <li><b>/guia</b> — la guía del juego, para empezar y avanzar.</li>
-        </ul>
+        <h4>El menú</h4>
+        <p>Los botones de arriba, y el capítulo de esta Wiki que explica cada uno:</p>
+        ${tabela(
+          ['Botón', 'Qué abre'],
+          `<tr><td><b>Pokédex</b></td><td>las especies, sus fichas y el registro de shinys — <a data-cap="pokedex">Pokédex</a></td></tr>
+           <tr><td><b>Mapa</b></td><td>dónde cazar — <a data-cap="mapa">Mapa y Hunt Analyser</a></td></tr>
+           <tr><td><b>Market</b></td><td>el mostrador del NPC: balls, pociones, cajas y huevos — <a data-cap="market">Market</a></td></tr>
+           <tr><td><b>Pase</b></td><td>el recorrido de 30 días de login — <a data-cap="passe">Pase de Batalla</a></td></tr>
+           <tr><td><b>Ranks</b></td><td>las clasificaciones del servidor — <a data-cap="ranking">Ranking</a></td></tr>
+           <tr><td><b>Boss</b></td><td>las arenas de boss — <a data-cap="bosses">Bosses</a></td></tr>
+           <tr><td><b>PvP</b></td><td>Clasificatorio, Guild y Entrenamiento — <a data-cap="pvp">PvP Clasificatorio</a></td></tr>
+           <tr><td><b>Gimnasio</b></td><td>los 18 podios por tipo — <a data-cap="ginasios">Gimnasios</a></td></tr>
+           <tr><td><b>Torneo</b></td><td>los campeonatos con premio en dinero — <a data-cap="campeonato">Campeonatos</a></td></tr>
+           <tr><td><b>RMT</b></td><td>el Mercado de la Comunidad, el depósito y el retiro de Gemas — <a data-cap="comunidade">Mercado de la Comunidad</a></td></tr>
+           <tr><td><b>Casa</b></td><td>tus casas y el XP Share — <a data-cap="casa">Casa y XP Share</a></td></tr>
+           <tr><td><b>Tienda</b></td><td>la Tienda de diamantes — <a data-cap="loja">Tienda de Diamantes</a></td></tr>
+           <tr><td><b>Wiki</b></td><td>este manual</td></tr>`,
+        )}
+        <p>La <b>Bolsa</b> (el inventario) se abre por su ícono, con las pestañas <b>Entrenador</b>
+        (balls, pociones y revives), <b>Objetos Raros</b> (tickets, etiquetas, bicicletas, huevos),
+        <b>Piedras</b>, <b>Loot</b>, <b>Ofrenda</b>, <b>Colección</b>, <b>Skins</b> e
+        <b>Incubadora</b>.</p>
 
-        <h4>Llamar a alguien por su nombre</h4>
-        <p>Escribe <b>@</b> pegado al nick — <b>@ash hola</b> o <b>ey @ash</b> — y el nombre se
-        convierte en una etiqueta dentro del mensaje. A quien llamaste se le enciende la línea
-        entera en el chat: así una respuesta no se pierde en el scroll cuando la sala va rápido.</p>
-
-        <h4>Mensajes privados</h4>
-        <p>Para hablar en privado con alguien, usa la <b>Lista de Amigos</b>. El chat Mundo y
-        Guild siguen siendo públicos. En el panel de un amigo, <b>Ver perfil</b> abre su ficha
-        encima de la conversación; al cerrar la ficha vuelves a la charla.</p>
-
-        <h4>El ritmo del chat</h4>
-        <p>El chat Mundo y el de Guild aceptan <b>un mensaje cada ${SEG_CHAT} segundos</b>. La
-        espera es de la <b>cuenta</b>: recargar la página o reconectar no la reinicia.</p>
+        <h4>Conversar</h4>
+        <p>Los cuatro canales del chat, la Lista de Amigos, los mensajes privados y el chat de
+        negociación con vendedores están en <a data-cap="chat">Chat, amigos y Comercio</a>.</p>
 `,
     }),
   },
@@ -1272,6 +1633,18 @@ export const CAPITULOS = [
           <li><b>XP Boost</b> — +50% no XP do TREINADOR.</li>
           <li><b>XP Boost Pokémon</b> — +50% no XP do POKÉMON.</li>
           <li><b>VIP</b> — +50% nos dois.</li>
+          <li><b>Boost da Guild</b> — +${BOOST_GUILD.pct}% nos dois, para a guild INTEIRA: os membros enchem
+          juntos o banco da guild. Ver <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Bônus do ranking da guild</b> — de +${BONUS_RANKING_GP.resto}% a +${BONUS_RANKING_GP[1]}%
+          nos dois (e no loot), para os escalados, pela posição da guild no Guild Diário. Ver
+          <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Bônus Twitch</b> — +${D(PCT_TWITCH, 'pt')}% nos dois enquanto você assiste a uma live
+          oficial, e +${D(PCT_TWITCH_EXTRA, 'pt')}% por live a mais aberta junto.</li>
+          <li><b>Bônus na Kick</b> — +${D(PCT_KICK, 'pt')}% nos dois, por hora resgatada com pontos do
+          canal. Os dois em <a data-cap="bonusLive">Bônus de live</a>.</li>
+          <li><b>Boost dos Atrasados</b> — ×${ATRASADOS.mult} nos dois, até o seu treinador chegar ao nível
+          dos veteranos. Ver <a data-cap="atrasados">Boost dos Atrasados</a>.</li>
+          <li><b>Eventos</b> — o buff de XP de um evento entra por cima de tudo isso.</li>
         </ul>
         <p>Eles se <b>multiplicam</b>, não se somam: VIP + XP Boost dá <b>2,25×</b>, e não 2×.
         São compras separadas, e somar faria a segunda valer menos que a primeira justamente
@@ -1300,6 +1673,18 @@ export const CAPITULOS = [
           <li><b>XP Boost</b> — +50% to TRAINER XP.</li>
           <li><b>Pokémon XP Boost</b> — +50% to POKÉMON XP.</li>
           <li><b>VIP</b> — +50% to both.</li>
+          <li><b>Guild Boost</b> — +${BOOST_GUILD.pct}% to both, for the WHOLE guild: the members fill the
+          guild bank together. See <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Guild ranking bonus</b> — from +${BONUS_RANKING_GP.resto}% to +${BONUS_RANKING_GP[1]}% to
+          both (and to loot), for the rostered members, by the guild's place on the Daily Guild board.
+          See <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Twitch Bonus</b> — +${D(PCT_TWITCH, 'en')}% to both while you watch an official live,
+          and +${D(PCT_TWITCH_EXTRA, 'en')}% for each extra live open at the same time.</li>
+          <li><b>Kick Bonus</b> — +${D(PCT_KICK, 'en')}% to both, per hour redeemed with channel points.
+          Both in <a data-cap="bonusLive">Live bonuses</a>.</li>
+          <li><b>Late Joiner Boost</b> — ×${ATRASADOS.mult} to both, until your trainer reaches the
+          veterans' level. See <a data-cap="atrasados">Late Joiner Boost</a>.</li>
+          <li><b>Events</b> — an event's XP buff goes on top of all of this.</li>
         </ul>
         <p>They <b>multiply</b> rather than add: VIP + XP Boost is <b>2.25×</b>, not 2×. They are
         separate purchases, and adding them would make the second one worth less than the first
@@ -1329,11 +1714,544 @@ export const CAPITULOS = [
           <li><b>XP Boost</b> — +50% al XP del ENTRENADOR.</li>
           <li><b>XP Boost Pokémon</b> — +50% al XP del POKÉMON.</li>
           <li><b>VIP</b> — +50% a los dos.</li>
+          <li><b>Boost de la Guild</b> — +${BOOST_GUILD.pct}% a los dos, para TODA la guild: los miembros
+          llenan juntos el banco de la guild. Ver <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Bono del ranking de la guild</b> — de +${BONUS_RANKING_GP.resto}% a +${BONUS_RANKING_GP[1]}%
+          a los dos (y al loot), para los convocados, según la posición de la guild en el Guild Diario.
+          Ver <a data-cap="guild">Guilds</a>.</li>
+          <li><b>Bono Twitch</b> — +${D(PCT_TWITCH, 'es')}% a los dos mientras miras un directo oficial,
+          y +${D(PCT_TWITCH_EXTRA, 'es')}% por cada directo más abierto a la vez.</li>
+          <li><b>Bono en Kick</b> — +${D(PCT_KICK, 'es')}% a los dos, por hora canjeada con puntos del
+          canal. Los dos en <a data-cap="bonusLive">Bonos de directo</a>.</li>
+          <li><b>Boost de los Rezagados</b> — ×${ATRASADOS.mult} en los dos, hasta que tu entrenador
+          alcance el nivel de los veteranos. Ver <a data-cap="atrasados">Boost de los Rezagados</a>.</li>
+          <li><b>Eventos</b> — el buff de XP de un evento va encima de todo esto.</li>
         </ul>
         <p>Se <b>multiplican</b>, no se suman: VIP + XP Boost da <b>2,25×</b>, no 2×. Son compras
         distintas, y sumarlas haría que la segunda valiera menos que la primera justamente para
         quien más gastó. Ver <a data-cap="loja">Tienda de Diamantes</a>.</p>`,
     }),
+  },
+
+  // ------------------------------------------------------ 2b. bônus de live
+  //
+  // Twitch e Kick lado a lado: são dois bônus diferentes (um vale ENQUANTO se assiste, o outro é
+  // hora comprada com pontos do canal), e os dois multiplicam com o resto. Os percentuais vêm do
+  // snapshot do jogador (`eu.twitch`, `eu.kick`) quando ele está logado, e das constantes do topo
+  // do arquivo antes disso.
+  {
+    id: 'bonusLive',
+    titulo: { pt: 'Bônus de live: Twitch e Kick', en: 'Live bonuses: Twitch and Kick', es: 'Bonos de directo: Twitch y Kick' },
+    grupo: 'basico',
+    html: (c) => {
+      const tw = c.d.eu?.twitch ?? {};
+      const pct = Number(tw.pct) || PCT_TWITCH;
+      const extra = Number(tw.extra) || PCT_TWITCH_EXTRA;
+      const pctK = c.d.eu?.kick?.pct ?? PCT_KICK;
+      const d2 = D(pct + extra, c.lang);
+      const d3 = D(pct + 2 * extra, c.lang);
+      const ex = D(extra, c.lang);
+      const comKick = D(2 * (1 + pctK / 100), c.lang);
+      return {
+        pt: `
+        <p>Os <b>Streamers Oficiais</b> do PokéIdle fazem live na <b>Twitch</b> e na <b>Kick</b>, e
+        assistir rende bônus no jogo. São dois bônus diferentes, cada um com a sua linha no
+        <b>painel do treinador</b> (junto do VIP e dos boosts) — e os dois se <b>multiplicam</b> entre
+        si e com VIP, boosts, guild e eventos (ver <a data-cap="niveis">Níveis e XP</a>).</p>
+
+        <h4>Bônus Twitch — enquanto você assiste</h4>
+        <ol class="wk-passos">
+          <li>Clique em <b>Conectar Twitch</b> no painel e vincule a sua conta da Twitch.</li>
+          <li>Abra a live de qualquer canal da lista de <b>Streamers Oficiais</b> (quem está ao vivo
+          aparece em verde, com o número de espectadores) e assista <b>logado</b> na Twitch.</li>
+          <li>Em alguns minutos a linha acende: <b>+${D(pct, c.lang)}% de XP</b> do treinador e do
+          pokémon, enquanto você estiver na live.</li>
+        </ol>
+        <p><b>As lives se somam:</b> cada live oficial a mais aberta ao mesmo tempo soma
+        <b>+${ex}%</b> — duas dão <b>${d2}%</b>, três dão <b>${d3}%</b>. Um ponto vermelho na linha
+        avisa quando há uma live oficial no ar que você ainda não abriu.</p>
+        ${nota(`"Assistir" é estar no <b>chat</b> da live, logado. A Twitch não conta ao jogo quem
+        está vendo — só quem está conectado ao chat, mesmo sem digitar. Quem abre a live deslogado
+        não aparece na lista, e o bônus não liga. A lista é conferida a cada minuto, então o bônus
+        também desliga sozinho alguns minutos depois de você sair.`)}
+
+        <h4>Bônus na Kick — horas compradas com pontos do canal</h4>
+        <p>Na Kick o caminho é outro. Assistindo logado, você junta os <b>pontos do canal</b> que a
+        própria Kick dá (10 a cada 5 minutos; assinante ganha o dobro) e troca os pontos por
+        <b>horas de bônus</b> no jogo, nas recompensas que todo canal oficial tem:</p>
+        ${tabelaKick(c)}
+        <ul>
+          <li><b>Vincule antes:</b> clique na linha <b>Bônus na Kick</b> do painel e em <b>Vincular
+          Kick</b>. O vínculo é <b>para sempre</b> — uma conta da Kick por treinador —, então entre
+          com a sua conta principal da Kick.</li>
+          <li>Na live, abra os pontos do canal e resgate. Em segundos o bônus aparece no painel, com
+          a contagem regressiva.</li>
+          <li>As horas <b>se somam</b>: resgatar o mesmo bônus três vezes (no mesmo canal ou em canais
+          diferentes) dá três horas. O percentual não sobe — o que cresce é o prazo.</li>
+          <li>Resgatou sem ter vinculado? O resgate é recusado e a Kick <b>devolve os pontos</b>.</li>
+        </ul>
+        ${nota(`O +${D(pctK, c.lang)}% de captura e o de shiny da Kick <b>multiplicam</b> o boost da
+        Loja: Capture Boost (×2) mais o da Kick dá <b>×${comKick}</b> na chance de captura, e o mesmo
+        vale para o Shiny Secret Lure. O teto de cada chance continua valendo por cima.`, 'dica')}
+
+        <h4>Quer ser Streamer Oficial?</h4>
+        <p>A sua live entra na lista oficial e passa a render bônus para quem assistir — na Twitch, o
+        +${D(pct, c.lang)}%; na Kick, as recompensas do canal. Chame a gente no Discord.</p>`,
+        en: `
+        <p>PokéIdle's <b>Official Streamers</b> go live on <b>Twitch</b> and <b>Kick</b>, and watching
+        pays a bonus in the game. They are two different bonuses, each with its own line on the
+        <b>trainer panel</b> (next to VIP and the boosts) — and both <b>multiply</b> with each other
+        and with VIP, boosts, guild and events (see <a data-cap="niveis">Levels and XP</a>).</p>
+
+        <h4>Twitch Bonus — while you watch</h4>
+        <ol class="wk-passos">
+          <li>Click <b>Connect Twitch</b> on the panel and link your Twitch account.</li>
+          <li>Open the live of any channel on the <b>Official Streamers</b> list (whoever is live
+          shows in green, with the viewer count) and watch <b>logged in</b> to Twitch.</li>
+          <li>Within a few minutes the line lights up: <b>+${D(pct, c.lang)}% XP</b> for the trainer
+          and the pokémon, while you stay on the live.</li>
+        </ol>
+        <p><b>Lives add up:</b> each extra official live open at the same time adds
+        <b>+${ex}%</b> — two give <b>${d2}%</b>, three give <b>${d3}%</b>. A red dot on the line tells
+        you when an official live is on that you haven't opened yet.</p>
+        ${nota(`"Watching" means being in the live's <b>chat</b>, logged in. Twitch doesn't tell the
+        game who is viewing — only who is connected to the chat, even without typing. Whoever opens
+        the live logged out is not on the list, and the bonus doesn't turn on. The list is checked
+        every minute, so the bonus also turns itself off a few minutes after you leave.`)}
+
+        <h4>Kick Bonus — hours bought with channel points</h4>
+        <p>On Kick it works differently. Watching logged in, you earn the <b>channel points</b> Kick
+        itself hands out (10 every 5 minutes; subscribers get double) and trade them for <b>bonus
+        hours</b> in the game, through the rewards every official channel has:</p>
+        ${tabelaKick(c)}
+        <ul>
+          <li><b>Link first:</b> click the <b>Kick Bonus</b> line on the panel and <b>Link Kick</b>.
+          The link is <b>forever</b> — one Kick account per trainer — so log in with your main Kick
+          account.</li>
+          <li>On the live, open the channel points and redeem. Within seconds the bonus shows on the
+          panel, with its countdown.</li>
+          <li>Hours <b>add up</b>: redeeming the same bonus three times (on the same channel or on
+          different ones) gives three hours. The percentage doesn't grow — the duration does.</li>
+          <li>Redeemed without linking? The redemption is refused and Kick <b>refunds the
+          points</b>.</li>
+        </ul>
+        ${nota(`Kick's +${D(pctK, c.lang)}% catch and shiny bonuses <b>multiply</b> the Shop's boost:
+        Capture Boost (×2) plus Kick's gives <b>×${comKick}</b> on the catch chance, and the same goes
+        for the Shiny Secret Lure. Each chance's cap still applies on top.`, 'dica')}
+
+        <h4>Want to be an Official Streamer?</h4>
+        <p>Your live joins the official list and starts paying a bonus to whoever watches — on
+        Twitch, the +${D(pct, c.lang)}%; on Kick, the channel rewards. Reach out on Discord.</p>`,
+        es: `
+        <p>Los <b>Streamers Oficiales</b> de PokéIdle hacen directo en <b>Twitch</b> y en
+        <b>Kick</b>, y mirar da bonos en el juego. Son dos bonos distintos, cada uno con su línea en
+        el <b>panel del entrenador</b> (junto al VIP y los boosts) — y los dos se <b>multiplican</b>
+        entre sí y con VIP, boosts, guild y eventos (ver <a data-cap="niveis">Niveles y XP</a>).</p>
+
+        <h4>Bono Twitch — mientras miras</h4>
+        <ol class="wk-passos">
+          <li>Pulsa <b>Conectar Twitch</b> en el panel y vincula tu cuenta de Twitch.</li>
+          <li>Abre el directo de cualquier canal de la lista de <b>Streamers Oficiales</b> (quien
+          está en vivo aparece en verde, con el número de espectadores) y mira con la sesión
+          <b>iniciada</b> en Twitch.</li>
+          <li>En unos minutos la línea se enciende: <b>+${D(pct, c.lang)}% de XP</b> del entrenador y
+          del pokémon, mientras sigas en el directo.</li>
+        </ol>
+        <p><b>Los directos se suman:</b> cada directo oficial más abierto a la vez suma
+        <b>+${ex}%</b> — dos dan <b>${d2}%</b>, tres dan <b>${d3}%</b>. Un punto rojo en la línea
+        avisa cuando hay un directo oficial que todavía no abriste.</p>
+        ${nota(`"Mirar" es estar en el <b>chat</b> del directo, con la sesión iniciada. Twitch no le
+        dice al juego quién está viendo — solo quién está conectado al chat, aunque no escriba. Quien
+        abre el directo sin sesión no aparece en la lista, y el bono no se activa. La lista se revisa
+        cada minuto, así que el bono también se apaga solo unos minutos después de que salgas.`)}
+
+        <h4>Bono en Kick — horas compradas con puntos del canal</h4>
+        <p>En Kick el camino es otro. Mirando con la sesión iniciada, juntas los <b>puntos del
+        canal</b> que da la propia Kick (10 cada 5 minutos; los suscriptores, el doble) y los cambias
+        por <b>horas de bono</b> en el juego, en las recompensas que tiene todo canal oficial:</p>
+        ${tabelaKick(c)}
+        <ul>
+          <li><b>Vincula antes:</b> pulsa la línea <b>Bono en Kick</b> del panel y <b>Vincular
+          Kick</b>. El vínculo es <b>para siempre</b> — una cuenta de Kick por entrenador —, así que
+          entra con tu cuenta principal de Kick.</li>
+          <li>En el directo, abre los puntos del canal y canjea. En segundos el bono aparece en el
+          panel, con la cuenta atrás.</li>
+          <li>Las horas <b>se suman</b>: canjear el mismo bono tres veces (en el mismo canal o en
+          canales distintos) da tres horas. El porcentaje no sube — lo que crece es el plazo.</li>
+          <li>¿Canjeaste sin vincular? El canje se rechaza y Kick <b>devuelve los puntos</b>.</li>
+        </ul>
+        ${nota(`El +${D(pctK, c.lang)}% de captura y el de shiny de Kick <b>multiplican</b> el boost de
+        la Tienda: Capture Boost (×2) más el de Kick da <b>×${comKick}</b> en la probabilidad de
+        captura, y lo mismo vale para el Shiny Secret Lure. El tope de cada probabilidad sigue valiendo
+        por encima.`, 'dica')}
+
+        <h4>¿Quieres ser Streamer Oficial?</h4>
+        <p>Tu directo entra en la lista oficial y empieza a dar bonos a quien mire — en Twitch, el
+        +${D(pct, c.lang)}%; en Kick, las recompensas del canal. Escríbenos en Discord.</p>`,
+      };
+    },
+  },
+
+  // ------------------------------------------------ 2c. boost dos atrasados
+  //
+  // As regras inteiras do produto, com o porquê de cada uma — a Loja só resume e aponta para cá. Os
+  // números saem de `shared/boost-atrasados.mjs` (o módulo que a vitrine e o servidor usam para
+  // cobrar), o alvo de hoje do snapshot (`eu.loja.alvoAtrasados`) e, sem login, do exemplo de
+  // `ALVO_EXEMPLO_ATRASADOS`. O exemplo do abate que cruza o alvo é calculado por `ganhoAteOAlvo`, a
+  // mesma conta do servidor.
+  {
+    id: 'atrasados',
+    titulo: { pt: 'Boost dos Atrasados', en: 'Late Joiner Boost', es: 'Boost de los Rezagados' },
+    grupo: 'basico',
+    html: (c) => {
+      const A = ATRASADOS;
+      const n = (v) => N(v, c.lang);
+      const loja = c.d.eu?.loja ?? {};
+      const hoje = Number(loja.alvoAtrasados) || 0;
+      const ativo = loja.atrasados ?? null;
+      const nivel = Number(c.d.eu?.level) || 0;
+      const precoMeu = hoje && nivel < hoje ? precoAtrasados(c.d.eu?.xp, hoje) : null;
+      const alvo = hoje || ALVO_EXEMPLO_ATRASADOS;
+      const xpAlvo = xpTotalDoNivel(alvo);
+      const morte = Math.round(c.d.economia?.xpPerdidoPct ?? 10);
+
+      // "x%" com uma casa abaixo de 10% (a curva cúbica deixa os primeiros níveis em 0,x%) e o
+      // inteiro acima disso, com teto de 99 — 99,8% não vira "100%" num caminho que ainda não acabou.
+      const pc = (v) => {
+        const x = v * 100;
+        if (x <= 0) return '0%';
+        const s = x >= 10 ? String(Math.min(99, Math.round(x))) : x.toFixed(1);
+        return `${c.lang === 'en' ? s : s.replace('.', ',')}%`;
+      };
+      const metade = Math.floor(alvo / 2);
+      const metadeXp = pc(xpTotalDoNivel(metade) / xpAlvo);
+      const marcos = [...new Set([1, Math.floor(alvo / 4), metade, Math.floor((3 * alvo) / 4), Math.floor(alvo * 0.9), alvo - 1])]
+        .filter((L) => L >= 1 && L < alvo);
+      const linhas = marcos.map((L) => `<tr>
+          <td class="wk-num">${n(L)}</td>
+          <td class="wk-num">${pc((L - 1) / (alvo - 1))}</td>
+          <td class="wk-num">${pc(xpTotalDoNivel(L) / xpAlvo)}</td>
+          <td class="wk-num">${n(precoAtrasados(xpTotalDoNivel(L), alvo))} 💎</td>
+        </tr>`).join('');
+      const cab = {
+        pt: ['Seu nível', 'do caminho em níveis', 'do caminho em XP', 'Preço'],
+        en: ['Your level', 'of the way in levels', 'of the way in XP', 'Price'],
+        es: ['Tu nivel', 'del camino en niveles', 'del camino en XP', 'Precio'],
+      }[c.lang];
+      const tabelaPrecos = tabela(cab, linhas);
+
+      // O abate que cruza o alvo: faltando `exFalta` de XP, um selvagem de `exBase` (sem outros bônus).
+      const exFalta = 30;
+      const exBase = 8;
+      const exGanho = ganhoAteOAlvo(exBase, A.mult, A.mult, { alvo: 100, mult: A.mult }, 99, xpTotalDoNivel(100) - exFalta).treinador;
+      const exDentro = exFalta / A.mult;
+      const exFora = exBase - exDentro;
+
+      const meu = {
+        pt: ativo
+          ? `O seu está <b>ligado</b>: XP ×${n(Number(ativo.mult) || A.mult)} até o <b>nv ${n(ativo.alvo)}</b>.`
+          : precoMeu != null
+            ? `Hoje o alvo é o <b>nv ${n(hoje)}</b>. Você está no nv ${n(nivel)}, e o seu preço agora é <b>${n(precoMeu)} 💎</b>.`
+            : hoje ? `Hoje o alvo é o <b>nv ${n(hoje)}</b> — e você já está nele.` : '',
+        en: ativo
+          ? `Yours is <b>on</b>: XP ×${n(Number(ativo.mult) || A.mult)} up to <b>level ${n(ativo.alvo)}</b>.`
+          : precoMeu != null
+            ? `Today's target is <b>level ${n(hoje)}</b>. You are level ${n(nivel)}, and your price right now is <b>${n(precoMeu)} 💎</b>.`
+            : hoje ? `Today's target is <b>level ${n(hoje)}</b> — and you are already there.` : '',
+        es: ativo
+          ? `El tuyo está <b>activo</b>: XP ×${n(Number(ativo.mult) || A.mult)} hasta el <b>nv ${n(ativo.alvo)}</b>.`
+          : precoMeu != null
+            ? `Hoy el objetivo es el <b>nv ${n(hoje)}</b>. Estás en el nv ${n(nivel)}, y tu precio ahora es <b>${n(precoMeu)} 💎</b>.`
+            : hoje ? `Hoy el objetivo es el <b>nv ${n(hoje)}</b> — y ya estás en él.` : '',
+      }[c.lang];
+      const exemploDe = {
+        pt: hoje ? `com o alvo de hoje (nv ${n(alvo)})` : `com o alvo de exemplo (nv ${n(alvo)}, a mediana de 6 de outubro de 2026)`,
+        en: hoje ? `with today's target (level ${n(alvo)})` : `with an example target (level ${n(alvo)}, the median on October 6, 2026)`,
+        es: hoje ? `con el objetivo de hoy (nv ${n(alvo)})` : `con un objetivo de ejemplo (nv ${n(alvo)}, la mediana del 6 de octubre de 2026)`,
+      }[c.lang];
+
+      return {
+        pt: `
+        <p>Quem entra num servidor que já tem meses chega numa conversa em andamento: os veteranos
+        estão centenas de níveis acima, e as hunts deles estão fechadas para quem acabou de chegar. O
+        <b>Boost dos Atrasados</b> encurta esse caminho, e só ele: <b>XP ×${n(A.mult)}</b>
+        (${A.mult * 100}%) no treinador <b>e</b> nos pokémon, até o seu treinador alcançar o
+        <b>nível dos veteranos</b>. Chegou lá, ele acaba sozinho.</p>
+        ${meu ? nota(meu, 'dica') : ''}
+
+        <h4>O nível-alvo: a mediana dos veteranos</h4>
+        <ul>
+          <li>É o nível do meio — a <b>mediana</b> — de quem jogou nos últimos <b>${n(A.diasAtivo)} dias</b>
+          e tem conta há mais de <b>${n(A.diasConta)} dias</b>.</li>
+          <li><b>Mediana, e não média</b>: a média seria puxada para cima pelos poucos jogadores de nível
+          altíssimo.</li>
+          <li><b>Só veteranos</b>: as contas novas da semana puxariam o número para baixo — quem chega
+          quer alcançar quem já está jogando, e não quem chegou junto com ele.</li>
+          <li><b>Recalculada todo dia</b>, às 00:00 de Brasília, numa conta só para o servidor inteiro.
+          Quem chegar daqui a um ano vê o alvo daquele dia, e não um número congelado.</li>
+          <li>Com menos de <b>${n(A.minimoAmostra)}</b> veteranos ativos não há mediana que diga alguma
+          coisa, e o boost sai da Loja até haver.</li>
+          <li>O alvo fica <b>gravado na compra</b>: se a mediana subir amanhã, o seu boost continua
+          acabando no nível que a tela prometeu.</li>
+        </ul>
+
+        <h4>O preço: proporcional ao XP que falta</h4>
+        <p>O caminho inteiro, do nível 1 ao alvo, custa <b>${n(A.precoCheio)} 💎</b>. Quem já andou uma
+        parte paga só o que falta — medido em XP:</p>
+        <pre class="wk-formula">preço = ${A.precoCheio} × (XP do alvo − seu XP) ÷ XP do alvo   (arredondado para cima; mínimo ${A.precoMinimo})</pre>
+        <ul>
+          <li><b>Em XP, e não em níveis</b>, porque a curva é cúbica (ver <a data-cap="niveis">Níveis e
+          XP</a>): na metade do caminho em níveis (nv ${n(metade)} de ${n(alvo)}) você tem só
+          <b>${metadeXp}</b> do XP. Os últimos níveis antes do alvo são a maior parte do tempo de jogo,
+          e é esse tempo que o boost economiza.</li>
+          <li><b>Mínimo de ${n(A.precoMinimo)} 💎</b>: um pedaço pequeno do caminho ainda custa isso — o
+          ×${n(A.mult)} vale também para os pokémon, e por isso ele nunca sai quase de graça perto do
+          alvo.</li>
+          <li><b>O preço cheio não cresce com o tempo</b>: chegar ao nível dos veteranos custa o mesmo
+          hoje e daqui a um ano, mesmo que o alvo de lá seja bem mais alto.</li>
+        </ul>
+        <p>Quanto custa ${exemploDe}:</p>
+        ${tabelaPrecos}
+        <p>O card fica na <a data-cap="loja">Loja de Diamantes</a>, na seção <b>Pacotes</b>, e mostra o
+        alvo de hoje (e de quantos veteranos ativos saiu a mediana), quanto do caminho você já tem e o
+        <b>seu</b> preço. O número do card é o do débito:
+        se ele <b>subir</b> entre o clique e a compra (você desmaiou e perdeu XP, ou virou o dia e o alvo
+        mudou), a compra é recusada e o card pede para conferir de novo; se <b>cair</b> (você caçou
+        enquanto lia), cobra o menor. E se você alcançar o alvo enquanto a compra é processada, os
+        diamantes voltam.</p>
+
+        <h4>Enquanto ele dura</h4>
+        <ul>
+          <li><b>Sem prazo</b>: não é por dias. Acaba sozinho quando o treinador chega ao alvo, com o
+          aviso de que você alcançou os veteranos.</li>
+          <li>Aparece no painel do treinador, logo abaixo das moedas, e em <b>Bônus ativos</b> na
+          Loja, como <b>Atrasados ×${n(A.mult)} → nv …</b>.</li>
+          <li><b>Multiplica</b> com tudo o que multiplica o XP: XP Boost, XP Boost Pokémon, VIP, o
+          bônus do ranking da guild, o Boost da Guild, eventos, Twitch e Kick (ver
+          <a data-cap="niveis">Níveis e XP</a>).</li>
+          <li><b>Um de cada vez</b>: com ele ligado, a Loja não vende outro.</li>
+          <li><b>Desmaiar não tira XP</b>: na hunt, no boss e no PvP, desistindo do combate ou
+          abandonando a arena — nada tira XP do treinador, e a Bless fica guardada para depois (ver
+          <a data-cap="morte">Desmaiar e curar</a>).</li>
+        </ul>
+
+        <h4>Por que não se perde XP até chegar ao alvo</h4>
+        <p>O boost dá ×${n(A.mult)} também no XP dos <b>pokémon</b>, mas quem o desliga é o nível do
+        <b>treinador</b>. Se desmaiar tirasse XP do treinador — os ${n(morte)}% do nível, como acontece
+        sem o boost —, daria para parar logo abaixo do alvo e desmaiar de propósito de tempos em tempos:
+        o treinador nunca chegaria lá, e o time inteiro subiria com ×${n(A.mult)} para sempre, por um
+        boost que foi vendido como uma corrida com linha de chegada.</p>
+        <p>Sem a perda, o treinador <b>só anda para a frente</b> enquanto o boost dura, e ele sempre
+        acaba no nível que a tela prometeu. E, para quem está alcançando os outros, desmaiar enquanto
+        aprende as hunts mais fortes não joga o progresso para trás.</p>
+
+        <h4>Até o alvo, e nem um ponto além</h4>
+        <p>O abate que cruza o alvo leva o ×${n(A.mult)} só até o XP exato do alvo; o resto daquele
+        mesmo abate entra no multiplicador normal — no treinador e, na mesma proporção, no pokémon.
+        Faltando <b>${n(exFalta)} XP</b>, um selvagem que vale <b>${n(exBase)} XP</b> (sem outros
+        bônus) dá <b>${n(exGanho)}</b>, e não ${n(exBase * A.mult)}: ${n(exDentro)} dos ${n(exBase)}
+        cobrem no ×${n(A.mult)} os ${n(exFalta)} que faltavam, e os outros ${n(exFora)} entram no ×1.</p>
+        ${nota(`Ninguém passa do alvo com o boost — nem com todos os bônus empilhados num abate de boss.`, 'dica')}
+
+        <h4>Justo com quem já está lá</h4>
+        <ul>
+          <li>O alvo é a mediana: a <b>metade de cima dos veteranos continua na frente</b>, e o boost
+          não fura ranking nenhum.</li>
+          <li>Só <b>vende</b> para quem está abaixo do alvo de hoje. Quem já chegou vê o card do mesmo
+          jeito, sem o botão de compra: ele fica na Loja para todo mundo acompanhar a mediana do
+          servidor.</li>
+          <li>Chegou ao alvo e a mediana subiu depois? O card volta, e você paga <b>só o pedaço
+          novo</b>, com o mesmo preço proporcional.</li>
+        </ul>`,
+        en: `
+        <p>Joining a server that has been running for months means arriving in the middle of a
+        conversation: the veterans are hundreds of levels ahead, and their hunts are locked for whoever
+        just got here. The <b>Late Joiner Boost</b> shortens that road, and only that: <b>XP
+        ×${n(A.mult)}</b> (${A.mult * 100}%) for your trainer <b>and</b> your pokémon, until your
+        trainer reaches the <b>veterans' level</b>. Once there, it ends by itself.</p>
+        ${meu ? nota(meu, 'dica') : ''}
+
+        <h4>The target level: the veterans' median</h4>
+        <ul>
+          <li>It is the middle level — the <b>median</b> — of players who played in the last
+          <b>${n(A.diasAtivo)} days</b> and have accounts older than <b>${n(A.diasConta)} days</b>.</li>
+          <li><b>Median, not average</b>: the average would be pulled up by the few players at very high
+          levels.</li>
+          <li><b>Veterans only</b>: the week's new accounts would pull the number down — whoever joins
+          wants to catch up with the people already playing, not with the ones who joined alongside
+          them.</li>
+          <li><b>Recalculated every day</b> at 00:00 Brasília time, in a single calculation for the whole
+          server. Whoever joins a year from now sees that day's target, not a frozen number.</li>
+          <li>With fewer than <b>${n(A.minimoAmostra)}</b> active veterans there is no meaningful median,
+          and the boost leaves the Shop until there is one.</li>
+          <li>The target is <b>locked at purchase</b>: if the median rises tomorrow, your boost still ends
+          at the level the screen promised.</li>
+        </ul>
+
+        <h4>The price: proportional to the XP still missing</h4>
+        <p>The whole road, from level 1 to the target, costs <b>${n(A.precoCheio)} 💎</b>. If you have
+        already covered part of it, you only pay for what is left — measured in XP:</p>
+        <pre class="wk-formula">price = ${A.precoCheio} × (target XP − your XP) ÷ target XP   (rounded up; minimum ${A.precoMinimo})</pre>
+        <ul>
+          <li><b>In XP, not in levels</b>, because the curve is cubic (see <a data-cap="niveis">Levels and
+          XP</a>): halfway there in levels (level ${n(metade)} of ${n(alvo)}) you have only
+          <b>${metadeXp}</b> of the XP. The last levels before the target are most of the playing time,
+          and that time is what the boost saves.</li>
+          <li><b>Minimum ${n(A.precoMinimo)} 💎</b>: a small piece of the road still costs that much — the
+          ×${n(A.mult)} also applies to your pokémon, so it is never almost free near the target.</li>
+          <li><b>The full price does not grow over time</b>: reaching the veterans' level costs the same
+          today and a year from now, even if that target is much higher.</li>
+        </ul>
+        <p>What it costs ${exemploDe}:</p>
+        ${tabelaPrecos}
+        <p>The card is in the <a data-cap="loja">Diamond Shop</a>, in the <b>Bundles</b> section, and
+        shows today's target (and how many active veterans the median came from), how much of the road
+        you already have and <b>your</b> price. The number on
+        the card is the one charged: if it <b>goes up</b> between the click and the purchase (you fainted
+        and lost XP, or the day turned and the target changed), the purchase is refused and the card asks
+        you to check again; if it <b>goes down</b> (you hunted while reading), you pay the lower one. And
+        if you reach the target while the purchase is being processed, the diamonds come back.</p>
+
+        <h4>While it lasts</h4>
+        <ul>
+          <li><b>No timer</b>: it is not counted in days. It ends by itself when your trainer reaches the
+          target, with a notice that you caught up with the veterans.</li>
+          <li>It shows up on the trainer panel, right below your coins, and under <b>Active
+          bonuses</b> in the Shop, as <b>Late Joiner ×${n(A.mult)} → lv …</b>.</li>
+          <li>It <b>multiplies</b> with everything that multiplies XP: XP Boost, Pokémon XP Boost, VIP,
+          the guild ranking bonus, the Guild Boost, events, Twitch and Kick (see
+          <a data-cap="niveis">Levels and XP</a>).</li>
+          <li><b>One at a time</b>: while it is on, the Shop does not sell another.</li>
+          <li><b>Fainting costs no XP</b>: in hunts, bosses and PvP, giving up a battle or leaving the
+          arena — nothing takes trainer XP, and your Bless is kept for later (see
+          <a data-cap="morte">Fainting and healing</a>).</li>
+        </ul>
+
+        <h4>Why you lose no XP until you reach the target</h4>
+        <p>The boost also gives ×${n(A.mult)} to <b>pokémon</b> XP, but what switches it off is the
+        <b>trainer's</b> level. If fainting took trainer XP — the ${n(morte)}% of the level, as it does
+        without the boost —, you could stop right below the target and faint on purpose every now and
+        then: the trainer would never get there, and the whole team would level at ×${n(A.mult)}
+        forever, from a boost that was sold as a race with a finish line.</p>
+        <p>Without the loss, your trainer <b>only moves forward</b> while the boost lasts, and it always
+        ends at the level the screen promised. And for whoever is catching up, fainting while learning
+        the tougher hunts does not set the progress back.</p>
+
+        <h4>Up to the target, and not one point past it</h4>
+        <p>The kill that crosses the target gets the ×${n(A.mult)} only up to the exact target XP; the
+        rest of that same kill goes in at the normal multiplier — for the trainer and, in the same
+        proportion, for the pokémon. With <b>${n(exFalta)} XP</b> to go, a wild pokémon worth
+        <b>${n(exBase)} XP</b> (no other bonuses) gives <b>${n(exGanho)}</b>, not ${n(exBase * A.mult)}:
+        ${n(exDentro)} of the ${n(exBase)} cover the missing ${n(exFalta)} at ×${n(A.mult)}, and the other
+        ${n(exFora)} go in at ×1.</p>
+        ${nota(`Nobody goes past the target with the boost — not even with every bonus stacked on a boss kill.`, 'dica')}
+
+        <h4>Fair to those already there</h4>
+        <ul>
+          <li>The target is the median: the <b>top half of the veterans stays ahead</b>, and the boost
+          skips no ranking.</li>
+          <li>It is only <b>sold</b> to players below today's target. Those already there still see
+          the card, without the buy button: it stays in the Shop so everyone can follow the server's
+          median.</li>
+          <li>Reached the target and the median rose afterwards? The card comes back, and you pay
+          <b>only the new stretch</b>, with the same proportional price.</li>
+        </ul>`,
+        es: `
+        <p>Quien entra en un servidor que ya tiene meses llega a una conversación empezada: los
+        veteranos están cientos de niveles arriba, y sus cacerías están cerradas para quien acaba de
+        llegar. El <b>Boost de los Rezagados</b> acorta ese camino, y solo eso: <b>XP ×${n(A.mult)}</b>
+        (${A.mult * 100}%) para el entrenador <b>y</b> los pokémon, hasta que tu entrenador alcance el
+        <b>nivel de los veteranos</b>. Al llegar, termina solo.</p>
+        ${meu ? nota(meu, 'dica') : ''}
+
+        <h4>El nivel objetivo: la mediana de los veteranos</h4>
+        <ul>
+          <li>Es el nivel del medio — la <b>mediana</b> — de quienes jugaron en los últimos
+          <b>${n(A.diasAtivo)} días</b> y tienen cuenta hace más de <b>${n(A.diasConta)} días</b>.</li>
+          <li><b>Mediana, y no promedio</b>: el promedio lo subirían los pocos jugadores de nivel
+          altísimo.</li>
+          <li><b>Solo veteranos</b>: las cuentas nuevas de la semana bajarían el número — quien llega
+          quiere alcanzar a quien ya está jugando, y no a quien llegó con él.</li>
+          <li><b>Se recalcula todos los días</b>, a las 00:00 de Brasilia, en una sola cuenta para todo
+          el servidor. Quien llegue dentro de un año ve el objetivo de ese día, y no un número
+          congelado.</li>
+          <li>Con menos de <b>${n(A.minimoAmostra)}</b> veteranos activos no hay mediana que diga algo, y
+          el boost sale de la Tienda hasta que la haya.</li>
+          <li>El objetivo queda <b>grabado en la compra</b>: si la mediana sube mañana, tu boost sigue
+          terminando en el nivel que la pantalla prometió.</li>
+        </ul>
+
+        <h4>El precio: proporcional al XP que falta</h4>
+        <p>El camino entero, del nivel 1 al objetivo, cuesta <b>${n(A.precoCheio)} 💎</b>. Quien ya
+        recorrió una parte paga solo lo que falta — medido en XP:</p>
+        <pre class="wk-formula">precio = ${A.precoCheio} × (XP del objetivo − tu XP) ÷ XP del objetivo   (redondeado hacia arriba; mínimo ${A.precoMinimo})</pre>
+        <ul>
+          <li><b>En XP, y no en niveles</b>, porque la curva es cúbica (ver <a data-cap="niveis">Niveles
+          y XP</a>): a mitad del camino en niveles (nv ${n(metade)} de ${n(alvo)}) tienes solo
+          <b>${metadeXp}</b> del XP. Los últimos niveles antes del objetivo son la mayor parte del tiempo
+          de juego, y es ese tiempo lo que el boost ahorra.</li>
+          <li><b>Mínimo de ${n(A.precoMinimo)} 💎</b>: un pedazo pequeño del camino todavía cuesta eso —
+          el ×${n(A.mult)} vale también para los pokémon, y por eso nunca sale casi gratis cerca del
+          objetivo.</li>
+          <li><b>El precio completo no crece con el tiempo</b>: llegar al nivel de los veteranos cuesta
+          lo mismo hoy y dentro de un año, aunque el objetivo de entonces sea mucho más alto.</li>
+        </ul>
+        <p>Cuánto cuesta ${exemploDe}:</p>
+        ${tabelaPrecos}
+        <p>La tarjeta está en la <a data-cap="loja">Tienda de Diamantes</a>, en la sección
+        <b>Paquetes</b>, y muestra el objetivo de hoy (y de cuántos veteranos activos salió la mediana),
+        cuánto del camino ya tienes y <b>tu</b> precio. El
+        número de la tarjeta es el que se cobra: si <b>sube</b> entre el clic y la compra (te debilitaste
+        y perdiste XP, o cambió el día y el objetivo), la compra se rechaza y la tarjeta pide revisar de
+        nuevo; si <b>baja</b> (cazaste mientras leías), cobra el menor. Y si alcanzas el objetivo
+        mientras la compra se procesa, los diamantes vuelven.</p>
+
+        <h4>Mientras dura</h4>
+        <ul>
+          <li><b>Sin plazo</b>: no se cuenta en días. Termina solo cuando el entrenador llega al
+          objetivo, con el aviso de que alcanzaste a los veteranos.</li>
+          <li>Aparece en el panel del entrenador, justo debajo de las monedas, y en <b>Bonos
+          activos</b> en la Tienda, como <b>Rezagados ×${n(A.mult)} → nv …</b>.</li>
+          <li><b>Se multiplica</b> con todo lo que multiplica el XP: XP Boost, XP Boost Pokémon, VIP, el
+          bonus del ranking de la guild, el Boost de la Guild, eventos, Twitch y Kick (ver
+          <a data-cap="niveis">Niveles y XP</a>).</li>
+          <li><b>Uno a la vez</b>: con él activo, la Tienda no vende otro.</li>
+          <li><b>Debilitarse no quita XP</b>: en la cacería, en el boss y en el PvP, rindiéndote en el
+          combate o abandonando la arena — nada quita XP del entrenador, y la Bendición queda guardada
+          para después (ver <a data-cap="morte">Debilitarse y curar</a>).</li>
+        </ul>
+
+        <h4>Por qué no se pierde XP hasta llegar al objetivo</h4>
+        <p>El boost da ×${n(A.mult)} también al XP de los <b>pokémon</b>, pero quien lo apaga es el nivel
+        del <b>entrenador</b>. Si debilitarse quitara XP del entrenador — el ${n(morte)}% del nivel, como
+        pasa sin el boost —, se podría parar justo debajo del objetivo y debilitarse a propósito cada
+        tanto: el entrenador nunca llegaría, y el equipo entero subiría con ×${n(A.mult)} para siempre,
+        con un boost que se vendió como una carrera con meta.</p>
+        <p>Sin la pérdida, el entrenador <b>solo avanza</b> mientras dura el boost, y siempre termina en
+        el nivel que la pantalla prometió. Y, para quien está alcanzando a los demás, debilitarse
+        mientras aprende las cacerías más fuertes no le hace retroceder.</p>
+
+        <h4>Hasta el objetivo, y ni un punto más</h4>
+        <p>La derrota que cruza el objetivo lleva el ×${n(A.mult)} solo hasta el XP exacto del objetivo;
+        el resto de esa misma derrota entra con el multiplicador normal — en el entrenador y, en la misma
+        proporción, en el pokémon. Faltando <b>${n(exFalta)} XP</b>, un salvaje que vale
+        <b>${n(exBase)} XP</b> (sin otros bonos) da <b>${n(exGanho)}</b>, y no ${n(exBase * A.mult)}:
+        ${n(exDentro)} de los ${n(exBase)} cubren con ×${n(A.mult)} los ${n(exFalta)} que faltaban, y los
+        otros ${n(exFora)} entran con ×1.</p>
+        ${nota(`Nadie pasa del objetivo con el boost — ni con todos los bonos acumulados en una derrota de boss.`, 'dica')}
+
+        <h4>Justo con quien ya está ahí</h4>
+        <ul>
+          <li>El objetivo es la mediana: la <b>mitad de arriba de los veteranos sigue por delante</b>, y
+          el boost no se salta ningún ranking.</li>
+          <li>Solo se <b>vende</b> a quien está por debajo del objetivo de hoy. Quien ya llegó ve la
+          tarjeta igual, sin el botón de compra: queda en la Tienda para que todos sigan la mediana del
+          servidor.</li>
+          <li>¿Llegaste al objetivo y la mediana subió después? La tarjeta vuelve, y pagas <b>solo el
+          tramo nuevo</b>, con el mismo precio proporcional.</li>
+        </ul>`,
+      };
+    },
   },
 
   // -------------------------------------------------------------- 3. stats
@@ -1354,13 +2272,15 @@ somaStats = hp + atk + def + spAtk + spDef + speed</pre>
         <p>Seis sorteios independentes, de <b>1 a 32</b> cada (máximo somado: 192). Evoluir
         <b>não</b> rerola nada.</p>
 
-        <h4>IV de SPD — cooldown, não corrida</h4>
-        <p>O <b>IV de Velocidade (SPD)</b> é sorteado separado, como os outros cinco. Ele
-        <b>não</b> entra na fórmula de dano nem acelera a corrida na hunt — o pokémon sempre
-        corre um pouco na frente do treinador por design da cena. O que muda é o
-        <b>cooldown</b> de golpes: <b>−0,01 s por ponto de IV</b> (IV 1 → −0,01 s; IV 32 →
-        −0,32 s), fixo no nascimento, em todo cooldown (global e de cada golpe). Sp.ATK e Sp.DEF
-        só entram em golpes <b>especiais</b>.</p>
+        <h4>Speed e IV de SPD — recarga, não corrida</h4>
+        <p>O <b>IV de Velocidade (SPD)</b> é sorteado separado, como os outros cinco. Nem ele nem o
+        stat de SPD entram na fórmula de dano ou aceleram a corrida na hunt — o pokémon sempre
+        corre um pouco na frente do treinador por design da cena. O que muda é a <b>recarga</b>:
+        nos golpes, o <b>Speed base da espécie</b> dá até ${D(SPEED_POTENCIAL_TETO_PCT, 'pt')}% de
+        desconto e o IV de SPD decide quanto disso o pokémon aproveita (IV 32, tudo; IV 16, metade);
+        na Investida e no intervalo entre ataques só o IV conta, <b>−0,01 s por ponto</b> (IV 32 →
+        −0,32 s), fixo no nascimento. A conta inteira está em <a data-cap="combate">Combate</a>.
+        Sp.ATK e Sp.DEF só entram em golpes <b>especiais</b>.</p>
 
         <h4>Qualidade — o número que mais pesa</h4>
         <p>Ela entra em <b>cada stat</b> como expoente (<code>qualidade^expo</code>) — por isso
@@ -1381,7 +2301,7 @@ somaStats = hp + atk + def + spAtk + spDef + speed</pre>
         extra — ele fica mais forte pelo <b>×${c.d.multShinyStats ?? 3} nos stats</b> e pelos IVs rerolados, não por um q
         maior.`)}
         <p>O expoente muda por stat: <b>0,95</b> para HP e Velocidade, <b>0,8</b> para os
-        outros quatro. O efeito do <b>IV de SPD</b> no combate (cooldown, não corrida) está em
+        outros quatro. O efeito do <b>Speed</b> e do <b>IV de SPD</b> no combate (recarga, não corrida) está em
         <a data-cap="combate">Combate</a>.</p>
 
         <h4>HP de combate</h4>
@@ -1398,6 +2318,9 @@ somaStats = hp + atk + def + spAtk + spDef + speed</pre>
         <p>Você paga na <b>pedra de evolução do tipo do próprio pokémon</b> — a mesma com que ele
         evolui, e a comum mesmo se ele for shiny. Forma final também refina: o Dragonite não
         evolui para lugar nenhum, mas usa Ancient Stone como qualquer outro DRAGON.</p>
+        <p>Quem tem <b>dois tipos</b> aceita a pedra de <b>qualquer um deles</b>, e as duas somam: num
+        Charizard, 300 Feather Stone + 200 Fire Stone fecham um degrau de 500. Na tela do refino você
+        <b>escolhe quanto sai de cada pedra</b>.</p>
 <pre class="wk-formula">ter +N num stat  = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × N³ pedras, somando tudo
 custo do degrau N = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3N + 1)</pre>
         ${tabelaDeRefino(c)}
@@ -1409,8 +2332,9 @@ custo do degrau N = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3N +
         primeiro de ATK continua custando ${N(c.d.refino?.custoBase ?? 500, c.lang)}. Refinar é
         <b>escolher</b> onde o bicho vai ser bom, não encher uma barra.`)}
         <p><b>O SPD não refina</b>, e não é esquecimento: o stat de SPD não entra em combate
-        nenhum — quem decide a cadência de ataque é o <b>IV</b> de Speed, ali em cima. Vender
-        “+1 SPD” seria vender um número que não faz nada.</p>
+        nenhum — quem acelera os ataques é o <b>Speed base da espécie</b> com o <b>IV</b> de Speed,
+        ali em cima, e o refino não mexe em nenhum dos dois. Vender “+1 SPD” seria vender um número
+        que não faz nada.</p>
         <p>A <b>nota N=</b> e o <b>⚔</b> sobem com o refino — usam a base atual (espécie + +N).
         TM elemental e held items não entram na nota. O selo <b>+N</b> ao lado do nome mostra
         quanto já foi investido; os stats de verdade sobem na ficha.</p>
@@ -1436,13 +2360,15 @@ statSum = hp + atk + def + spAtk + spDef + speed</pre>
         <p>Six independent rolls, <b>1 to 32</b> each (max total: 192). Evolving does
         <b>not</b> reroll anything.</p>
 
-        <h4>SPD IV — cooldown, not running speed</h4>
-        <p><b>Speed IV (SPD)</b> is rolled separately, like the other five. It does <b>not</b>
-        enter the damage formula or make the pokémon run faster on the hunt map — the active
-        pokémon is always slightly ahead of the trainer by scene design. What it shortens is
-        <b>move cooldowns</b>: <b>−0.01 s per IV point</b> (IV 1 → −0.01 s; IV 32 → −0.32 s),
-        fixed at birth, on every cooldown (global gap and each move). Sp.ATK and Sp.DEF only
-        matter on <b>special</b> moves.</p>
+        <h4>Speed and SPD IV — cooldowns, not running speed</h4>
+        <p><b>Speed IV (SPD)</b> is rolled separately, like the other five. Neither it nor the SPD
+        stat enter the damage formula or make the pokémon run faster on the hunt map — the active
+        pokémon is always slightly ahead of the trainer by scene design. What changes is the
+        <b>cooldown</b>: on moves, the <b>species' base Speed</b> gives up to
+        ${D(SPEED_POTENCIAL_TETO_PCT, 'en')}% off and the SPD IV decides how much of it the pokémon gets
+        (IV 32, all of it; IV 16, half); on Tackle and the gap between attacks only the IV counts,
+        <b>−0.01 s per point</b> (IV 32 → −0.32 s), fixed at birth. The full math is in
+        <a data-cap="combate">Combat</a>. Sp.ATK and Sp.DEF only matter on <b>special</b> moves.</p>
 
         <h4>Quality — the number that weighs most</h4>
         <p>It enters <b>each stat</b> as an exponent (<code>quality^exp</code>) — so it shifts the
@@ -1462,7 +2388,7 @@ statSum = hp + atk + def + spAtk + spDef + speed</pre>
         roll ceiling is exactly <b>1.8</b> (~0.29% chance). Shinies do not get extra quality — they
         are stronger from the <b>×${c.d.multShinyStats ?? 3} stat multiplier</b> and rerolled IVs, not from a higher q.`)}
         <p>The exponent varies per stat: <b>0.95</b> for HP and Speed, <b>0.8</b> for the other
-        four. How <b>SPD IV</b> affects combat (cooldown, not running) is in
+        four. How <b>Speed</b> and the <b>SPD IV</b> affect combat (cooldowns, not running) is in
         <a data-cap="combate">Combat</a>.</p>
 
         <h4>Combat HP</h4>
@@ -1478,6 +2404,9 @@ statSum = hp + atk + def + spAtk + spDef + speed</pre>
         <p>You pay in the <b>evolution stone of the pokémon's own type</b> — the same one it
         evolves with, and the common one even if it is shiny. Final forms refine too: Dragonite
         evolves nowhere, but it uses Ancient Stone like any other DRAGON.</p>
+        <p>A pokémon with <b>two types</b> takes the stone of <b>either one</b>, and both add up: on a
+        Charizard, 300 Feather Stones + 200 Fire Stones close a 500 step. On the refine screen you
+        <b>choose how much comes from each stone</b>.</p>
 <pre class="wk-formula">holding +N on a stat = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × N³ stones, all told
 cost of step N       = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3N + 1)</pre>
         ${tabelaDeRefino(c)}
@@ -1490,8 +2419,9 @@ cost of step N       = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3
         ${N(c.d.refino?.custoBase ?? 500, c.lang)}. Refining is <b>choosing</b> what the creature is
         good at, not filling a bar.`)}
         <p><b>SPD does not refine</b>, and that is not an oversight: the SPD stat never enters
-        combat — attack pace is decided by the Speed <b>IV</b> above. Selling "+1 SPD" would be
-        selling a number that does nothing.</p>
+        combat — attack pace comes from the <b>species' base Speed</b> with the Speed <b>IV</b>
+        above, and refining touches neither. Selling "+1 SPD" would be selling a number that does
+        nothing.</p>
         <p>The <b>score</b> and the <b>⚔</b> do not move with refining: both measure how the
         pokémon was <b>born</b>. What refining shows is the <b>+N</b> badge next to the name and
         the real stats climbing on the card.</p>
@@ -1517,13 +2447,16 @@ sumaStats = hp + atk + def + spAtk + spDef + speed</pre>
         <p>Seis sorteos independientes, de <b>1 a 32</b> cada uno (máximo sumado: 192). Evolucionar
         <b>no</b> vuelve a sortear nada.</p>
 
-        <h4>IV de SPD — cooldown, no velocidad de carrera</h4>
-        <p>El <b>IV de Velocidad (SPD)</b> se sortea aparte, como los otros cinco. <b>No</b> entra
-        en la fórmula de daño ni acelera la carrera en la cacería — el pokémon activo siempre va
-        un poco delante del entrenador por diseño de la escena. Lo que acorta son los
-        <b>cooldowns</b> de golpes: <b>−0,01 s por punto de IV</b> (IV 1 → −0,01 s; IV 32 →
-        −0,32 s), fijo al nacer, en todo cooldown (global y de cada golpe). Sp.ATK y Sp.DEF solo
-        cuentan en golpes <b>especiales</b>.</p>
+        <h4>Speed e IV de SPD — recarga, no velocidad de carrera</h4>
+        <p>El <b>IV de Velocidad (SPD)</b> se sortea aparte, como los otros cinco. Ni él ni el stat
+        de SPD entran en la fórmula de daño ni aceleran la carrera en la cacería — el pokémon activo
+        siempre va un poco delante del entrenador por diseño de la escena. Lo que cambia es la
+        <b>recarga</b>: en los golpes, el <b>Speed base de la especie</b> da hasta
+        ${D(SPEED_POTENCIAL_TETO_PCT, 'es')}% de descuento y el IV de SPD decide cuánto aprovecha el
+        pokémon (IV 32, todo; IV 16, la mitad); en la Embestida y en el intervalo entre ataques solo
+        cuenta el IV, <b>−0,01 s por punto</b> (IV 32 → −0,32 s), fijo al nacer. La cuenta completa
+        está en <a data-cap="combate">Combate</a>. Sp.ATK y Sp.DEF solo cuentan en golpes
+        <b>especiales</b>.</p>
 
         <h4>Calidad — el número que más pesa</h4>
         <p>Entra en <b>cada stat</b> como exponente (<code>calidad^exp</code>) — por eso cambia
@@ -1544,7 +2477,7 @@ sumaStats = hp + atk + def + spAtk + spDef + speed</pre>
         calidad extra — es más fuerte por el <b>×${c.d.multShinyStats ?? 3} en los stats</b> y los IV rerolados, no por un q
         mayor.`)}
         <p>El exponente cambia por stat: <b>0,95</b> para HP y Velocidad, <b>0,8</b> para los otros
-        cuatro. El efecto del <b>IV de SPD</b> en combate (cooldown, no carrera) está en
+        cuatro. El efecto del <b>Speed</b> y del <b>IV de SPD</b> en combate (recarga, no carrera) está en
         <a data-cap="combate">Combate</a>.</p>
 
         <h4>HP de combate</h4>
@@ -1561,6 +2494,9 @@ sumaStats = hp + atk + def + spAtk + spDef + speed</pre>
         <p>Se paga con la <b>piedra de evolución del tipo del propio pokémon</b> — la misma con la
         que evoluciona, y la común incluso si es shiny. Las formas finales también se refinan:
         Dragonite no evoluciona a ninguna parte, pero usa Ancient Stone como cualquier DRAGON.</p>
+        <p>Quien tiene <b>dos tipos</b> acepta la piedra de <b>cualquiera de los dos</b>, y las dos
+        suman: en un Charizard, 300 Feather Stone + 200 Fire Stone cierran un escalón de 500. En la
+        pantalla del refinado <b>eliges cuánto sale de cada piedra</b>.</p>
 <pre class="wk-formula">tener +N en un stat = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × N³ piedras, sumando todo
 costo del escalón N = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3N + 1)</pre>
         ${tabelaDeRefino(c)}
@@ -1572,8 +2508,9 @@ costo del escalón N = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3
         ${N(c.d.refino?.custoBase ?? 500, c.lang)}. Refinar es <b>elegir</b> en qué será bueno el
         bicho, no llenar una barra.`)}
         <p><b>El SPD no se refina</b>, y no es un olvido: el stat de SPD no entra en ningún
-        combate — la cadencia de ataque la decide el <b>IV</b> de Speed, arriba. Vender “+1 SPD”
-        sería vender un número que no hace nada.</p>
+        combate — lo que acelera los ataques es el <b>Speed base de la especie</b> con el <b>IV</b>
+        de Speed, arriba, y el refinado no toca ninguno de los dos. Vender “+1 SPD” sería vender un
+        número que no hace nada.</p>
         <p>La <b>nota N=</b> y el <b>⚔</b> suben con el refinado — usan la base actual (especie + +N).
         TM elemental y held items no entran en la nota. El sello <b>+N</b> al lado del nombre muestra
         cuánto ya se invirtió; los stats reales suben en la ficha.</p>
@@ -1608,25 +2545,42 @@ costo del escalón N = ${N(c.d.refino?.custoBase ?? 500, c.lang)} × (3N² − 3
 nota   = 10 × (score − pior possível) ÷ (melhor − pior)   ← só dentro da espécie</pre>
         <ul>
           <li><b>0</b> = pior nascimento possível <i>daquela</i> espécie; <b>10</b> = P5 + shiny + IV máximo.</li>
-          <li><b>Evoluir não “derruba” a nota</b> se o bicho nasceu bem — IV, qualidade e potência ficam iguais.</li>
+          <li><b>Evoluir sempre SOBE a nota</b> — nunca derruba e nunca empata. Cada espécie tem a
+          sua régua, e a forma nova mede o mesmo nascimento de outro jeito; por isso a nota depois de
+          evoluir é, no mínimo, a da forma anterior <b>+${D(GANHO_MIN_EVOLUCAO, 'pt')}</b> por
+          evolução (o piso da linhagem). Megaevoluir segue a mesma regra. O único limite é o teto: 10
+          continua sendo 10.</li>
           <li>Refino (+N) <b>sobe</b> a nota e o ⚔ — usa a base atual (espécie + refino).</li>
         </ul>
         ${nota(`O <a data-cap="comunidade">Mercado da Comunidade</a> exige faixa mínima de nota na
         calculadora. <b>Shiny e P5 entram</b> mesmo abaixo da faixa.`)}
 
         <h4>A Calculadora na prática</h4>
-        <p>Abra pelo botão <b>Calculadora</b> na ficha ou no menu. Quatro barras mostram quanto
-        cada eixo (IV, qualidade, potência, shiny) pesa na <b>força total</b> — não são 25% fixos:
-        P5 brilhante puxa mais que comum fraco. O número grande (0–10) vem da soma dos seis stats
-        normalizada.</p>
+        <p>Abra pelo quadradinho da <b>calculadora</b>, na coluna do seu retrato, ou pela ficha de
+        um pokémon (aí ela já vem com os números dele). São duas abas.</p>
+        <p><b>Calcular Pokémon.</b> Escolha a <b>espécie primeiro</b> — 0 e 10 são o pior e o melhor
+        nascimento <i>daquela</i> espécie — e preencha o nascimento: o <b>IV de cada stat</b> (seis
+        campos, de 1 a 32), a qualidade, a potência, o shiny e, se quiser, o TM elemental. Sai:</p>
+        <ul>
+          <li>a <b>nota</b> grande, no pedestal com o holofote na <b>cor da faixa</b> (tabela abaixo),
+          e quanto falta para a faixa seguinte;</li>
+          <li><b>De onde vem a nota</b>: quanto cada eixo (IV, qualidade, potência, shiny) pesa na
+          força total — não são 25% fixos, e um P5 brilhante puxa mais que um comum fraco;</li>
+          <li><b>Peso de cada stat na nota</b>: qual stat a espécie mais valoriza. Dois bichos com a
+          mesma soma de IV podem ter notas diferentes se os pontos caírem em stats diferentes;</li>
+          <li><b>Em combate</b>: o multiplicador de stats, o HP de combate, o <b>Poder (ranking)</b> —
+          o ⚔ no nível da ficha — e o <b>Poder (ginásio)</b>;</li>
+          <li><b>Potencial na evolução final</b> e <b>Potencial na Mega Evolução</b>: a nota N= que o
+          mesmo nascimento teria nas formas finais alcançáveis (Eevee e ramificações inclusive) e na
+          Mega, avisando se cada uma atinge a faixa do Mercado.</li>
+        </ul>
+        <p><b>Comparar Pokémons.</b> Monte dois lados (espécie, nível e nascimento) e a calculadora
+        simula um <b>duelo 1×1 de desgaste</b>, com a tabela de tipos, o STAB e o melhor golpe de cada
+        um contra o outro. Sai quem vence e em que fração dos duelos simulados — a faixa varia com a
+        sorte do dano, e por isso dois pokémon parecidos raramente dão 0% ou 100%.</p>
         <p>A cor da caixa sobe um degrau a cada ponto de nota — são dez faixas. Uma nota bem no
         limite fica na faixa de baixo.</p>
         ${tabelaDeFaixasDaNota('pt')}
-        <p>O bloco <b>Poder (ranking)</b> na calculadora estima o ⚔ no nível da ficha (ou nv 1
-        se você abriu só a calculadora) — usa a mesma força da nota, multiplicada pelo nível.</p>
-        <p>Em espécies que evoluem, aparece também <b>Potencial na evolução final</b>: projeta a
-        nota N= nas formas finais alcançáveis (Eevee, ramificações…) com os mesmos IV, qualidade,
-        potência e shiny — e avisa se cada final atinge a faixa do Mercado (nota mínima ou shiny/P5).</p>
 
         <h4>Poder (⚔) — ranking “Pokémon Forte”</h4>
         <p>É um <b>número único</b> no placar e na ficha. <b>Não é a nota</b> e <b>não muda
@@ -1641,12 +2595,30 @@ poder = arred( nível × 10 × score )   → no nv 100: ⚔ ≈ 1000 × score</p
           <li><b>HP de combate</b> = máx(24, arred(hp × 12)). Selvagem leva ×5 por cima.</li>
           <li><b>Dano</b> usa ATK ou Sp.Atk vs DEF ou Sp.Def reais, tipo, STAB e efetividade —
           não usa o número “poder” diretamente.</li>
-          <li><b>IV de SPD</b> encurta cooldowns (−0,01 s a −0,32 s), não a corrida na hunt.</li>
+          <li>O <b>Speed base</b> com o <b>IV de SPD</b> encurta a recarga dos golpes (até
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'pt')}%), e o IV ainda tira −0,01 s a −0,32 s da Investida — nada
+          disso acelera a corrida na hunt.</li>
           <li><b>Defesa</b> reduz o dano recebido na fórmula clássica; mais DEF/Sp.Def = aguenta
           mais hits.</li>
         </ul>
-        <p>Use o botão <b>Calculadora</b> na ficha ou no menu para simular IV, qualidade,
-        potência e shiny.</p>`,
+
+        <h4>A ficha do seu pokémon</h4>
+        <p>Clicar num pokémon seu abre a ficha. O que ela mostra, de cima para baixo:</p>
+        <ul>
+          <li>o pokémon num <b>pedestal com holofote</b> na cor da faixa da nota — o shiny ganha um
+          halo dourado que brilha;</li>
+          <li>o <b>apelido</b> da <a data-cap="loja">Name Tag</a>, quando tem, com a espécie logo
+          abaixo — e a <b>skin</b> que ele estiver vestindo;</li>
+          <li>a fileira <b>Potência · Qualidade · IV</b> e, lado a lado, o <b>Poder</b> e o <b>HP de
+          combate</b>;</li>
+          <li>os selos <b>P · IV · Q · N</b>, que do azul para cima viram metal — o dourado de P5 se lê
+          de relance numa grade cheia;</li>
+          <li><b>quem capturou</b> o pokémon — o nome fica mesmo depois que ele troca de dono;</li>
+          <li>a <b>Medalha de Guerra</b> (<a data-cap="guild">Guilds</a>) e o <b>Troféu</b> de
+          campeonato (<a data-cap="campeonato">Campeonatos</a>), que também vão junto numa venda;</li>
+          <li>a <b>evolução</b> e a <b>Mega</b> da espécie como link para a Pokédex — numa forma final
+          que tem Mega, a ficha mostra a Mega Evolução no lugar do "não evolui".</li>
+        </ul>`,
       en: `
         <p>These are <b>two different metrics</b> on the pokémon sheet — mixing them up is where
         most “good pokémon” confusion comes from.</p>
@@ -1659,25 +2631,42 @@ poder = arred( nível × 10 × score )   → no nv 100: ⚔ ≈ 1000 × score</p
 N=     = 10 × (score − worst) ÷ (best − worst)   ← within species only</pre>
         <ul>
           <li><b>0</b> = worst possible birth <i>for that</i> species; <b>10</b> = P5 + shiny + max IV.</li>
-          <li><b>Evolving does not “drop” the score</b> if the pokémon was born strong — IV, quality and potency stay.</li>
+          <li><b>Evolving always RAISES the score</b> — it never drops it and never ties. Every species
+          has its own scale, and the new form measures the same birth differently; so the score after
+          evolving is at least the previous form's <b>+${D(GANHO_MIN_EVOLUCAO, 'en')}</b> per evolution
+          (the lineage floor). Mega Evolving follows the same rule. The only limit is the ceiling: 10
+          is still 10.</li>
           <li>Refinement (+N) <b>raises</b> both score and ⚔ — uses current base (species + refine).</li>
         </ul>
         ${nota(`The <a data-cap="comunidade">Community Market</a> requires a minimum calculator score.
         <b>Shiny and P5 bypass</b> the bar.`)}
 
         <h4>Using the Calculator</h4>
-        <p>Open it from the <b>Calculator</b> button on the sheet or menu. Four bars show how much
-        each axis (IV, quality, potency, shiny) contributes to <b>total strength</b> — not fixed
-        25%: a shiny P5 weighs more than a weak common. The big number (0–10) comes from the
-        normalized sum of all six birth stats.</p>
+        <p>Open it from the <b>calculator</b> square in your portrait column, or from a pokémon's
+        sheet (then it comes with that pokémon's numbers). It has two tabs.</p>
+        <p><b>Calculate Pokémon.</b> Pick the <b>species first</b> — 0 and 10 are the worst and best
+        birth of <i>that</i> species — and fill in the birth: the <b>IV of each stat</b> (six fields,
+        1 to 32), quality, potency, shiny and, if you want, the elemental TM. You get:</p>
+        <ul>
+          <li>the big <b>score</b>, on the pedestal with the spotlight in the <b>tier colour</b> (table
+          below), and how far it is from the next tier;</li>
+          <li><b>Where the score comes from</b>: how much each axis (IV, quality, potency, shiny)
+          weighs in total strength — not a fixed 25%, and a shiny P5 pulls more than a weak common;</li>
+          <li><b>Weight of each stat in the score</b>: which stat the species values most. Two pokémon
+          with the same IV total can score differently if the points land on different stats;</li>
+          <li><b>In combat</b>: the stat multiplier, combat HP, <b>Power (ranking)</b> — the ⚔ at the
+          sheet's level — and <b>Power (gym)</b>;</li>
+          <li><b>Potential at final evolution</b> and <b>Potential at Mega Evolution</b>: the N= score
+          the same birth would have on every reachable final form (Eevee and branches included) and on
+          the Mega, flagging whether each one meets the Market bar.</li>
+        </ul>
+        <p><b>Compare Pokémon.</b> Set up two sides (species, level and birth) and the calculator
+        simulates a <b>1×1 attrition duel</b>, with the type chart, STAB and each side's best move
+        against the other. You get who wins and in what share of the simulated duels — the range moves
+        with damage luck, which is why two close pokémon rarely give 0% or 100%.</p>
         <p>The box color steps up with every point of score — ten tiers in all. A score right on a
         boundary stays in the lower tier.</p>
         ${tabelaDeFaixasDaNota('en')}
-        <p>The <b>Power (ranking)</b> block estimates ⚔ at the sheet's level (or level 1 if you
-        opened calculator alone) — same strength as N=, multiplied by level.</p>
-        <p>For species that evolve, <b>Potential at final evolution</b> also appears: it projects
-        the N= score onto every reachable final form (Eevee, branches…) with the same IV, quality,
-        potency and shiny — and flags whether each final meets the Market bar (minimum score or shiny/P5).</p>
 
         <h4>Power (⚔) — “Strongest Pokémon” ladder</h4>
         <p>A <b>single ranking number</b> on the sheet and ladder. <b>Not the score</b> and
@@ -1692,10 +2681,29 @@ power = round( level × 10 × score )   → at lv 100: ⚔ ≈ 1000 × score</pr
           <li><b>Combat HP</b> = max(24, round(hp × 12)). Wilds get ×5 on top.</li>
           <li><b>Damage</b> uses real ATK/Sp.Atk vs DEF/Sp.Def, type, STAB and effectiveness —
           not the “power” number directly.</li>
-          <li><b>SPD IV</b> shortens cooldowns (−0.01 s to −0.32 s), not hunt running speed.</li>
+          <li><b>Base Speed</b> with the <b>SPD IV</b> shortens move cooldowns (up to
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'en')}%), and the IV also takes −0.01 s to −0.32 s off Tackle —
+          none of it speeds up running on the hunt map.</li>
           <li><b>Defense</b> lowers damage taken in the classic formula.</li>
         </ul>
-        <p>Use <b>Calculator</b> on the sheet or menu to simulate IV, quality, potency and shiny.</p>`,
+
+        <h4>Your pokémon's sheet</h4>
+        <p>Clicking one of your pokémon opens its sheet. What it shows, top to bottom:</p>
+        <ul>
+          <li>the pokémon on a <b>spotlit pedestal</b> in its score tier's colour — a shiny gets a
+          glowing golden halo;</li>
+          <li>the <b>nickname</b> from a <a data-cap="loja">Name Tag</a>, if it has one, with the species
+          right below — and the <b>skin</b> it is wearing;</li>
+          <li>the <b>Potency · Quality · IV</b> row and, side by side, <b>Power</b> and <b>combat
+          HP</b>;</li>
+          <li>the <b>P · IV · Q · N</b> badges, which turn to metal from blue up — the gold of a P5
+          reads at a glance in a full grid;</li>
+          <li><b>who caught</b> the pokémon — the name stays even after it changes hands;</li>
+          <li>the <b>War Medal</b> (<a data-cap="guild">Guilds</a>) and the championship <b>Trophy</b>
+          (<a data-cap="campeonato">Championships</a>), which also go along in a sale;</li>
+          <li>the species' <b>evolution</b> and <b>Mega</b> as links to the Pokédex — on a final form
+          that has a Mega, the sheet shows Mega Evolution instead of "does not evolve".</li>
+        </ul>`,
       es: `
         <p>Son <b>dos métricas distintas</b> en la ficha — confundirlas es el origen de casi todo
         malentendido sobre “pokémon bueno”.</p>
@@ -1708,25 +2716,42 @@ power = round( level × 10 × score )   → at lv 100: ⚔ ≈ 1000 × score</pr
 nota  = 10 × (score − peor posible) ÷ (mejor − peor)   ← solo dentro de la especie</pre>
         <ul>
           <li><b>0</b> = peor nacimiento posible <i>de esa</i> especie; <b>10</b> = P5 + shiny + IV máximo.</li>
-          <li><b>Evolucionar no “baja” la nota</b> si nació bien — IV, calidad y potencia se mantienen.</li>
+          <li><b>Evolucionar siempre SUBE la nota</b> — nunca la baja y nunca empata. Cada especie
+          tiene su propia regla, y la forma nueva mide el mismo nacimiento de otra manera; por eso la
+          nota después de evolucionar es, como mínimo, la de la forma anterior
+          <b>+${D(GANHO_MIN_EVOLUCAO, 'es')}</b> por evolución (el piso del linaje). Megaevolucionar
+          sigue la misma regla. El único límite es el techo: 10 sigue siendo 10.</li>
           <li>El refinado (+N) <b>sube</b> la nota y el ⚔ — usa la base actual (especie + refino).</li>
         </ul>
         ${nota(`El <a data-cap="comunidade">Mercado de la Comunidad</a> exige nota mínima en la
         calculadora. <b>Shiny y P5 entran</b> aunque estén por debajo.`)}
 
         <h4>La Calculadora en la práctica</h4>
-        <p>Ábrela con el botón <b>Calculadora</b> en la ficha o el menú. Cuatro barras muestran
-        cuánto pesa cada eje (IV, calidad, potencia, shiny) en la <b>fuerza total</b> — no son
-        25% fijos: un P5 shiny pesa más que un común débil. El número grande (0–10) sale de la
-        suma de los seis stats normalizada.</p>
+        <p>Ábrela con el cuadradito de la <b>calculadora</b>, en la columna de tu retrato, o desde la
+        ficha de un pokémon (entonces ya viene con sus números). Tiene dos pestañas.</p>
+        <p><b>Calcular Pokémon.</b> Elige la <b>especie primero</b> — 0 y 10 son el peor y el mejor
+        nacimiento <i>de esa</i> especie — y rellena el nacimiento: el <b>IV de cada stat</b> (seis
+        campos, de 1 a 32), la calidad, la potencia, el shiny y, si quieres, el TM elemental. Sale:</p>
+        <ul>
+          <li>la <b>nota</b> grande, en el pedestal con el foco en el <b>color del rango</b> (tabla
+          abajo), y cuánto falta para el rango siguiente;</li>
+          <li><b>De dónde viene la nota</b>: cuánto pesa cada eje (IV, calidad, potencia, shiny) en la
+          fuerza total — no son 25% fijos, y un P5 shiny pesa más que un común débil;</li>
+          <li><b>Peso de cada stat en la nota</b>: qué stat valora más la especie. Dos pokémon con la
+          misma suma de IV pueden tener notas distintas si los puntos caen en stats distintos;</li>
+          <li><b>En combate</b>: el multiplicador de stats, el HP de combate, el <b>Poder (ranking)</b>
+          — el ⚔ al nivel de la ficha — y el <b>Poder (gimnasio)</b>;</li>
+          <li><b>Potencial en la evolución final</b> y <b>Potencial en la Mega Evolución</b>: la nota
+          N= que el mismo nacimiento tendría en las formas finales alcanzables (Eevee y ramificaciones
+          incluidas) y en la Mega, avisando si cada una alcanza la barra del Mercado.</li>
+        </ul>
+        <p><b>Comparar Pokémon.</b> Arma dos lados (especie, nivel y nacimiento) y la calculadora
+        simula un <b>duelo 1×1 de desgaste</b>, con la tabla de tipos, el STAB y el mejor golpe de cada
+        uno contra el otro. Sale quién gana y en qué parte de los duelos simulados — el rango varía con
+        la suerte del daño, y por eso dos pokémon parecidos rara vez dan 0% o 100%.</p>
         <p>El color de la caja sube un escalón por cada punto de nota — son diez rangos. Una nota
         justo en el límite queda en el rango de abajo.</p>
         ${tabelaDeFaixasDaNota('es')}
-        <p>El bloque <b>Poder (ranking)</b> estima el ⚔ al nivel de la ficha (o nv 1 si abriste
-        solo la calculadora) — la misma fuerza que la nota, multiplicada por el nivel.</p>
-        <p>En especies que evolucionan, también aparece <b>Potencial en la evolución final</b>:
-        proyecta la nota N= en las formas finales alcanzables (Eevee, ramificaciones…) con los mismos
-        IV, calidad, potencia y shiny — y avisa si cada final alcanza la barra del Mercado (nota mínima o shiny/P5).</p>
 
         <h4>Poder (⚔) — ranking “Pokémon Fuerte”</h4>
         <p>Es un <b>número único</b> en el placar y la ficha. <b>No es la nota</b> y <b>no cambia
@@ -1740,10 +2765,29 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         <ul>
           <li><b>HP de combate</b> = máx(24, redond(hp × 12)).</li>
           <li><b>Daño</b> usa ATK/DEF reales — no el número “poder” directamente.</li>
-          <li><b>IV de SPD</b> acorta cooldowns (−0,01 s a −0,32 s), no la carrera en la cacería.</li>
+          <li>El <b>Speed base</b> con el <b>IV de SPD</b> acorta la recarga de los golpes (hasta
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'es')}%), y el IV además quita −0,01 s a −0,32 s a la Embestida —
+          nada de eso acelera la carrera en la cacería.</li>
         </ul>
-        <p>Usa la <b>Calculadora</b> en la ficha o el menú para simular IV, calidad, potencia
-        y shiny.</p>`,
+
+        <h4>La ficha de tu pokémon</h4>
+        <p>Pulsar uno de tus pokémon abre su ficha. Lo que muestra, de arriba abajo:</p>
+        <ul>
+          <li>el pokémon en un <b>pedestal con foco</b> en el color del rango de su nota — el shiny
+          lleva un halo dorado que brilla;</li>
+          <li>el <b>apodo</b> de la <a data-cap="loja">Name Tag</a>, si tiene, con la especie justo
+          debajo — y la <b>skin</b> que lleve puesta;</li>
+          <li>la fila <b>Potencia · Calidad · IV</b> y, lado a lado, el <b>Poder</b> y el <b>HP de
+          combate</b>;</li>
+          <li>los sellos <b>P · IV · Q · N</b>, que del azul para arriba son de metal — el dorado de P5
+          se lee de un vistazo en una cuadrícula llena;</li>
+          <li><b>quién lo capturó</b> — el nombre se queda aunque cambie de dueño;</li>
+          <li>la <b>Medalla de Guerra</b> (<a data-cap="guild">Guilds</a>) y el <b>Trofeo</b> de
+          campeonato (<a data-cap="campeonato">Campeonatos</a>), que también van con él en una
+          venta;</li>
+          <li>la <b>evolución</b> y la <b>Mega</b> de la especie como enlace a la Pokédex — en una forma
+          final que tiene Mega, la ficha muestra la Mega Evolución en lugar de "no evoluciona".</li>
+        </ul>`,
     }),
   },
 
@@ -1818,16 +2862,21 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
     html: (c) => ({
       pt: `
         <p><b>${Object.keys(c.d.shinyLooks ?? {}).length} espécies</b> têm forma shiny. Ela
-        só se revela na <b>captura</b> — com arte própria (não é o mesmo desenho com outra cor)
-        e um selo ✨ no cartão.</p>
+        só se revela na <b>tentativa de captura</b> — com arte própria (não é o mesmo desenho com
+        outra cor) e um selo ✨ no cartão.</p>
 
         <h4>Quanto é raro</h4>
-        <p>A chance é <b>a mesma para todas</b> — <b>1 em ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US').replace(/,/g, '.')}</b> por captura bem-sucedida
-        — sorteada junto com qualidade, IV e potência. Na hunt, todo selvagem parece comum até
-        a bola fechar.</p>
+        <p>A chance é <b>a mesma para todas</b> — <b>1 em ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US').replace(/,/g, '.')}</b> por tentativa de
+        captura. O brilho é sorteado no <b>arremesso</b> da bola, antes de se saber se ela fecha;
+        qualidade, IV e potência só rolam se a captura der certo. Na hunt, todo selvagem parece
+        comum até a bola ser arremessada.</p>
         ${tabelaDeShiny(c)}
         <p>O <b>Shiny Secret Lure</b>, da <a data-cap="loja">Loja</a>, <b>dobra</b> essa chance
-        enquanto estiver ativo (1 em ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US').replace(/,/g, '.')}).</p>
+        enquanto estiver ativo (1 em ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US').replace(/,/g, '.')}).
+        O <a data-cap="bonusLive">Bônus na Kick</a> de Secret Lure soma +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'pt')}%
+        por cima, multiplicando.</p>
+        <p>A mesma chance vale fora da hunt: um <a data-cap="chocadeira">Mystery Egg</a> pode chocar
+        shiny, e o lendário capturado na <a data-cap="mistico">Arena Mística</a> também.</p>
 
         <h4>O que o brilho dá</h4>
         <ul>
@@ -1841,9 +2890,9 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         </ul>
 
         ${nota(`<b>Capturar um shiny usa a mesma pokébola e a mesma chance por arremesso que
-        qualquer outro.</b> O que é raro é o sorteio do brilho na hora em que a captura fecha —
-        não dá para saber antes. Por isso vale gastar a melhor bola em todo corpo; a tabela de
-        cada espécie está na ficha da Pokédex.`, 'aviso')}
+        qualquer outro.</b> O brilho é sorteado no arremesso — não dá para saber antes —, e um
+        shiny que escapa da bola vai embora junto com o corpo. Por isso vale gastar a melhor bola
+        em todo corpo; a tabela de cada espécie está na ficha da Pokédex.`, 'aviso')}
 
         <h4>Evolução shiny</h4>
         <p>Um shiny <b>evolui</b>, mas não com a pedra comum: ele precisa de uma
@@ -1864,16 +2913,21 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
 `,
       en: `
         <p><b>${Object.keys(c.d.shinyLooks ?? {}).length} species</b> have a shiny form. It is
-        only revealed on <b>capture</b> — with its own artwork (not a recolour) and a ✨ badge on
-        the card.</p>
+        only revealed on a <b>capture attempt</b> — with its own artwork (not a recolour) and a ✨
+        badge on the card.</p>
 
         <h4>How rare it is</h4>
-        <p>The chance is <b>the same for every species</b> — <b>1 in ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US')}</b> per successful
-        capture — rolled together with quality, IV and potency. In a hunt, every wild looks common
-        until the ball closes.</p>
+        <p>The chance is <b>the same for every species</b> — <b>1 in ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US')}</b> per capture
+        attempt. The shine is rolled when the ball is <b>thrown</b>, before anyone knows whether it
+        closes; quality, IV and potency only roll if the capture succeeds. In a hunt, every wild
+        looks common until the ball is thrown.</p>
         ${tabelaDeShiny(c)}
         <p>The <b>Shiny Secret Lure</b>, from the <a data-cap="loja">Shop</a>, <b>doubles</b> that
-        chance while active (1 in ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US')}).</p>
+        chance while active (1 in ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US')}).
+        The Secret Lure from the <a data-cap="bonusLive">Kick Bonus</a> adds
+        +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'en')}% on top, multiplying.</p>
+        <p>The same chance applies outside the hunt: a <a data-cap="chocadeira">Mystery Egg</a> can
+        hatch shiny, and so can the legendary caught in the <a data-cap="mistico">Mystic Arena</a>.</p>
 
         <h4>What the shine gives</h4>
         <ul>
@@ -1887,9 +2941,9 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         </ul>
 
         ${nota(`<b>Catching a shiny uses the same ball and the same per-throw chance as any
-        other.</b> What is rare is the shine roll when the capture closes — you cannot tell
-        beforehand. So spend your best ball on every body; the per-species table is on the
-        Pokédex sheet.`, 'aviso')}
+        other.</b> The shine is rolled on the throw — you cannot tell beforehand — and a shiny that
+        breaks out of the ball leaves together with the body. So spend your best ball on every
+        body; the per-species table is on the Pokédex sheet.`, 'aviso')}
 
         <h4>Shiny evolution</h4>
         <p>A shiny <b>can evolve</b>, but not with the ordinary stone: it needs a
@@ -1911,16 +2965,22 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
 `,
       es: `
         <p><b>${Object.keys(c.d.shinyLooks ?? {}).length} especies</b> tienen forma shiny. Solo se
-        revela en la <b>captura</b> — con arte propio (no es el mismo dibujo con otro color) y un
-        sello ✨ en la carta.</p>
+        revela en el <b>intento de captura</b> — con arte propio (no es el mismo dibujo con otro
+        color) y un sello ✨ en la carta.</p>
 
         <h4>Qué tan raro es</h4>
-        <p>La probabilidad es <b>la misma para todas</b> — <b>1 entre ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US').replace(/,/g, '.')}</b> por captura
-        exitosa — sorteada junto con calidad, IV y potencia. En la cacería, todo salvaje parece
-        común hasta que cierra la bola.</p>
+        <p>La probabilidad es <b>la misma para todas</b> — <b>1 entre ${Math.round(1 / Number(c.d.chanceShiny)).toLocaleString('en-US').replace(/,/g, '.')}</b> por intento
+        de captura. El brillo se sortea al <b>lanzar</b> la bola, antes de saber si cierra; calidad,
+        IV y potencia solo se sortean si la captura sale bien. En la cacería, todo salvaje parece
+        común hasta que se lanza la bola.</p>
         ${tabelaDeShiny(c)}
         <p>El <b>Shiny Secret Lure</b>, de la <a data-cap="loja">Tienda</a>, <b>duplica</b> esa
-        probabilidad mientras esté activo (1 entre ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US').replace(/,/g, '.')}).</p>
+        probabilidad mientras esté activo (1 entre ${Math.round(1 / (Number(c.d.chanceShiny) * 2)).toLocaleString('en-US').replace(/,/g, '.')}).
+        El Secret Lure del <a data-cap="bonusLive">Bono en Kick</a> suma
+        +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'es')}% encima, multiplicando.</p>
+        <p>La misma probabilidad vale fuera de la cacería: un <a data-cap="chocadeira">Mystery Egg</a>
+        puede eclosionar shiny, y el legendario capturado en la <a data-cap="mistico">Arena
+        Mística</a> también.</p>
 
         <h4>Qué da el brillo</h4>
         <ul>
@@ -1934,9 +2994,9 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         </ul>
 
         ${nota(`<b>Capturar un shiny usa la misma poké ball y la misma probabilidad por lanzamiento
-        que cualquier otro.</b> Lo raro es el sorteo del brillo cuando cierra la captura — no se
-        puede saber antes. Por eso vale gastar la mejor bola en cada cuerpo; la tabla por especie
-        está en la ficha de la Pokédex.`, 'aviso')}
+        que cualquier otro.</b> El brillo se sortea en el lanzamiento — no se puede saber antes —, y
+        un shiny que escapa de la bola se va junto con el cuerpo. Por eso vale gastar la mejor bola
+        en cada cuerpo; la tabla por especie está en la ficha de la Pokédex.`, 'aviso')}
 
         <h4>Evolución shiny</h4>
         <p>Un shiny <b>evoluciona</b>, pero no con la piedra común: necesita una
@@ -1979,21 +3039,40 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           <li><b>Cartão colorido</b> — já capturou pelo menos uma vez.</li>
         </ul>
 
+        <p>Depois das nove gerações vem a aba <b>Mega</b>, com as Mega Evoluções na faixa
+        <b>#3000</b> (ver <a data-cap="mega">Mega Evolução</a>).</p>
+
         <h4>Busca</h4>
         <p>O campo de busca ignora a aba ativa: digite o nome ou número (#${725} funciona) e
-        a grade mostra qualquer geração que bater.</p>
+        a grade mostra qualquer geração que bater. O filtro <b>só vistos/capturados</b> esconde o
+        que você ainda não encontrou.</p>
 
         <h4>Ficha da espécie</h4>
         <p>Clique num cartão para abrir a ficha completa:</p>
         <ul>
           <li>Stats base, tipos e sprite animado</li>
-          <li><b>Golpes</b> — tabela na ficha (não nos cartões da grade)</li>
+          <li><b>Golpes</b> — a tabela com poder, tipo, categoria, recarga e o nível em que cada um
+          libera (não aparece nos cartões da grade). Nas espécies refeitas pelas planilhas de
+          balanceamento, todos os golpes liberam no nível 1.</li>
           <li>Loot, chance de captura por pokébola e chance de shiny (se a espécie tiver forma shiny —
           hoje são <b>${Object.keys(c.d.shinyLooks ?? {}).length}</b> no catálogo)</li>
+          <li><b>Nível ao capturar</b> — em que nível ela entra na sua equipe (ver
+          <a data-cap="captura">Captura</a>)</li>
           <li><b>Onde encontrar</b> — quando a hunt existir no Mapa</li>
+          <li>A <b>evolução</b> e a <b>Mega</b> dela, quando existem</li>
         </ul>
+        <p>Nos <b>lendários que são boss</b>, a ficha traz o painel <b>Captura com o MysticTicket</b>:
+        de que boss o ticket cai, a chance de a arena sortear <b>aquele</b> lendário, o nível dele na
+        arena e a tabela de captura por bola — e o botão <b>Ir para Boss</b>. Ver
+        <a data-cap="mistico">MysticTicket e Arena Mística</a>.</p>
         ${nota(`A contagem no topo (<i>vistos · capturados · total</i>) usa o mesmo catálogo
-        visível da grade — só espécies com sprite.`, 'dica')}`,
+        visível da grade — só espécies com sprite.`, 'dica')}
+
+        <h4>Shinys do servidor</h4>
+        <p>O botão <b>📋 Shinys</b>, no topo da Pokédex, abre o registro de <b>todos os shinys
+        capturados no servidor</b>: de quem é cada um, com busca pelo nome e o filtro <b>só à
+        venda</b>. Os anunciados mostram o preço e o botão <b>Comprar</b> ali mesmo, e os seus
+        aparecem marcados.</p>`,
       en: `
         <p>The <b>Pokédex</b> tracks what you have seen and caught. Open it from the main menu —
         unlike the Map, it is for browsing species, not picking a hunt.</p>
@@ -2008,21 +3087,40 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           <li><b>Coloured card</b> — caught at least once.</li>
         </ul>
 
+        <p>After the nine generations comes the <b>Mega</b> tab, with the Mega Evolutions in the
+        <b>#3000</b> range (see <a data-cap="mega">Mega Evolution</a>).</p>
+
         <h4>Search</h4>
         <p>The search box ignores the active tab: type a name or number (#725 works) and the
-        grid shows matches from any generation.</p>
+        grid shows matches from any generation. The <b>seen/caught only</b> filter hides what you
+        haven't found yet.</p>
 
         <h4>Species sheet</h4>
         <p>Click a card for the full sheet:</p>
         <ul>
           <li>Base stats, types and animated sprite</li>
-          <li><b>Moves</b> — table on the sheet (not on grid cards)</li>
+          <li><b>Moves</b> — the table with power, type, category, cooldown and the level each one
+          unlocks at (not shown on grid cards). On species reworked by the balance sheets, every move
+          unlocks at level 1.</li>
           <li>Loot, catch rates per ball and shiny chance (when the species has a shiny form —
           <b>${Object.keys(c.d.shinyLooks ?? {}).length}</b> in the catalogue today)</li>
+          <li><b>Level when caught</b> — the level it joins your team at (see
+          <a data-cap="captura">Catching</a>)</li>
           <li><b>Where to find it</b> — when the hunt exists on the Map</li>
+          <li>Its <b>evolution</b> and <b>Mega</b>, when they exist</li>
         </ul>
+        <p>On <b>legendaries that are bosses</b>, the sheet has the <b>Catching it with the
+        MysticTicket</b> panel: which boss drops the ticket, the chance of the arena rolling <b>that</b> legendary, its
+        level in the arena and the per-ball catch table — plus the <b>Go to Boss</b> button. See
+        <a data-cap="mistico">MysticTicket and Mystic Arena</a>.</p>
         ${nota(`The header count (<i>seen · caught · total</i>) uses the same visible catalogue
-        as the grid — sprite-ready species only.`, 'dica')}`,
+        as the grid — sprite-ready species only.`, 'dica')}
+
+        <h4>Server shinies</h4>
+        <p>The <b>📋 Shinies</b> button, at the top of the Pokédex, opens the registry of <b>every
+        shiny caught on the server</b>: who owns each one, with a name search and the <b>for sale
+        only</b> filter. Listed ones show the price and a <b>Buy</b> button right there, and yours
+        show up marked.</p>`,
       es: `
         <p>La <b>Pokédex</b> registra lo que ya viste y capturaste. Ábrela desde el menú principal —
         no es el Mapa: aquí consultas especies, no eliges dónde cazar.</p>
@@ -2037,21 +3135,40 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           <li><b>Carta coloreada</b> — capturada al menos una vez.</li>
         </ul>
 
+        <p>Después de las nueve generaciones viene la pestaña <b>Mega</b>, con las Mega Evoluciones en
+        el rango <b>#3000</b> (ver <a data-cap="mega">Mega Evolución</a>).</p>
+
         <h4>Búsqueda</h4>
         <p>El buscador ignora la pestaña activa: escribe el nombre o número (#725 vale) y la
-        cuadrícula muestra cualquier generación que coincida.</p>
+        cuadrícula muestra cualquier generación que coincida. El filtro <b>solo vistos/capturados</b>
+        oculta lo que aún no encontraste.</p>
 
         <h4>Ficha de la especie</h4>
         <p>Haz clic en una carta para la ficha completa:</p>
         <ul>
           <li>Stats base, tipos y sprite animado</li>
-          <li><b>Movimientos</b> — tabla en la ficha (no en las cartas de la cuadrícula)</li>
+          <li><b>Movimientos</b> — la tabla con poder, tipo, categoría, recarga y el nivel en que cada
+          uno se desbloquea (no aparece en las cartas de la cuadrícula). En las especies rehechas por
+          las planillas de balance, todos los golpes se desbloquean en el nivel 1.</li>
           <li>Loot, probabilidad de captura por poké ball y chance shiny (si la especie tiene forma
           shiny — hoy <b>${Object.keys(c.d.shinyLooks ?? {}).length}</b> en el catálogo)</li>
+          <li><b>Nivel al capturar</b> — en qué nivel entra a tu equipo (ver
+          <a data-cap="captura">Captura</a>)</li>
           <li><b>Dónde encontrarla</b> — cuando la cacería exista en el Mapa</li>
+          <li>Su <b>evolución</b> y su <b>Mega</b>, cuando existen</li>
         </ul>
+        <p>En los <b>legendarios que son boss</b>, la ficha trae el panel <b>Captura con el
+        MysticTicket</b>: de qué boss cae el ticket, la probabilidad de que la arena sortee <b>ese</b>
+        legendario, su nivel en la arena y la tabla de captura por ball — y el botón <b>Ir a
+        Boss</b>. Ver <a data-cap="mistico">MysticTicket y Arena Mística</a>.</p>
         ${nota(`El contador superior (<i>vistos · capturados · total</i>) usa el mismo catálogo
-        visible que la cuadrícula — solo especies con sprite.`, 'dica')}`,
+        visible que la cuadrícula — solo especies con sprite.`, 'dica')}
+
+        <h4>Shinys del servidor</h4>
+        <p>El botón <b>📋 Shinys</b>, arriba en la Pokédex, abre el registro de <b>todos los shinys
+        capturados en el servidor</b>: de quién es cada uno, con búsqueda por nombre y el filtro
+        <b>solo en venta</b>. Los anunciados muestran el precio y el botón <b>Comprar</b> ahí mismo,
+        y los tuyos aparecen marcados.</p>`,
     }),
   },
 
@@ -2370,6 +3487,22 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           Stone.</li>
           <li>Ele só enche as casas. O giro continua pedindo a sua confirmação.</li>
         </ul>
+
+        <h4>Oferendar tudo do Depot</h4>
+        <p>Para limpar o Depot de uma vez, o botão <b>Oferendar tudo do Depot</b> gira <b>de
+        ${OFERENDA_CASAS} em ${OFERENDA_CASAS}</b> com a mesma peneira do Auto Selecionar: só o que
+        está abaixo da nota do seu Auto Coleção N, do pior para o melhor, e nunca shiny, P5, a
+        Coleção, a vitrine, as equipes, quem segura item, tem refino ou TM, nem o starter.</p>
+        <ul>
+          <li>A confirmação diz quantos pokémon vão, em quantos giros, e <b>quem ficou de fora e
+          por quê</b>.</li>
+          <li>O último giro pode sair com menos de ${OFERENDA_CASAS} casas — a confirmação mostra a
+          chance de ele não dar nada, a mesma de uma roleta incompleta.</li>
+          <li>São até <b>${OFERENDA_LOTE_GIROS_MAX} giros</b> por clique; o que sobrar fica para a
+          próxima, e a tela diz quantos.</li>
+          <li>O lote <b>não escolhe o tipo</b>: ele leva o que vier. Quem quer uma pedra
+          específica continua montando as casas à mão — é isso que faz o garimpo valer.</li>
+        </ul>
         ${nota(`O sorteio é feito no <b>servidor</b>. A roleta que gira na tela só mostra o
         resultado que já saiu.`)}`,
         en: `
@@ -2455,6 +3588,22 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           <li>In the picker, the same button chooses <b>only among what the list shows</b>: search
           "charmander" (or filter FIRE) and click to build a Fire Stone-only wheel.</li>
           <li>It only fills the slots. The spin still asks for your confirmation.</li>
+        </ul>
+
+        <h4>Offer the whole Depot</h4>
+        <p>To clear the Depot in one go, the <b>Offer the whole Depot</b> button spins <b>in groups
+        of ${OFERENDA_CASAS}</b> with the same filter as Auto Select: only what is below your Auto
+        Collection N score, worst first, and never a shiny, a P5, the Collection, the showcase, your
+        teams, anything holding an item, refined or with a TM, nor the starter.</p>
+        <ul>
+          <li>The confirmation says how many pokémon go, in how many spins, and <b>who was left out
+          and why</b>.</li>
+          <li>The last spin may have fewer than ${OFERENDA_CASAS} slots — the confirmation shows the
+          chance of it giving nothing, the same as any incomplete wheel.</li>
+          <li>It does up to <b>${OFERENDA_LOTE_GIROS_MAX} spins</b> per click; whatever is left waits
+          for the next one, and the screen says how many.</li>
+          <li>The batch <b>does not pick the type</b>: it takes what comes. Whoever wants a specific
+          stone still fills the slots by hand — that is what makes hand-picking worth it.</li>
         </ul>
         ${nota(`The draw happens on the <b>server</b>. The wheel spinning on screen only shows the
         result that already came out.`)}`,
@@ -2545,6 +3694,23 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           Stone.</li>
           <li>Solo llena las casillas. El giro sigue pidiendo tu confirmación.</li>
         </ul>
+
+        <h4>Ofrendar todo el Depósito</h4>
+        <p>Para vaciar el Depósito de una vez, el botón <b>Ofrendar todo el Depósito</b> gira <b>de
+        ${OFERENDA_CASAS} en ${OFERENDA_CASAS}</b> con el mismo filtro de Autoseleccionar: solo lo
+        que está por debajo de la nota de tu Auto Colección N, del peor al mejor, y nunca shiny, P5,
+        la Colección, la vitrina, los equipos, quien sostiene un objeto, tiene refinado o TM, ni el
+        inicial.</p>
+        <ul>
+          <li>La confirmación dice cuántos pokémon van, en cuántos giros, y <b>quién quedó fuera y
+          por qué</b>.</li>
+          <li>El último giro puede salir con menos de ${OFERENDA_CASAS} casillas — la confirmación
+          muestra la probabilidad de que no dé nada, la misma de una ruleta incompleta.</li>
+          <li>Son hasta <b>${OFERENDA_LOTE_GIROS_MAX} giros</b> por clic; lo que sobre queda para la
+          próxima, y la pantalla dice cuántos.</li>
+          <li>El lote <b>no elige el tipo</b>: lleva lo que venga. Quien quiere una piedra concreta
+          sigue armando las casillas a mano — eso es lo que hace que buscar valga la pena.</li>
+        </ul>
         ${nota(`El sorteo se hace en el <b>servidor</b>. La ruleta que gira en pantalla solo
         muestra el resultado que ya salió.`)}`,
       };
@@ -2572,7 +3738,10 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           animação. No lugar do palco fica um painel com o que se acompanha num idle — XP, Coins,
           abates e capturas por hora, o tempo de sessão e o histórico de capturas. A caça continua
           no servidor e você segue online. O botão da área abre o <a data-cap="mapa">Mapa</a> para
-          trocar de hunt, e <b>Ligar a cena</b> volta ao normal. Feito para celular e PC fraco.</li>
+          trocar de hunt, e <b>Ligar a cena</b> volta ao normal. Feito para celular e PC fraco.
+          O painel tem ainda a <b>janelinha flutuante</b>: só os números, por cima dos outros apps, para
+          acompanhar a caça com o jogo minimizado. E a <b>bateria</b>, ao lado da Escape Rope durante a
+          hunt, liga o Modo Economia num toque, sem abrir as Configurações.</li>
           <li><b>Tela sempre acesa</b> (celular) — impede a tela de apagar sozinha com o jogo
           aberto: tela apagada suspende a página e tira você do mundo. Gasta a bateria da tela, então
           ligue junto com o Modo Economia e abaixe o brilho. Funciona no Chrome e no Samsung
@@ -2614,6 +3783,18 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         picture-in-picture quando você aperta Home. Para trazer o jogo de volta, feche a
         janelinha ou clique de novo no ícone.</p>
 
+        <h4>Janelas</h4>
+        <ul>
+          <li>Toda janela aberta de <b>dentro de outra</b> (a ficha de um pokémon aberta pelo Depot,
+          o perfil aberto pelo ranking…) ganha o <b>‹</b> ao lado do ×: ele volta para a janela de
+          antes, na mesma aba, com os filtros e a rolagem de onde você estava.</li>
+          <li>Clicar <b>fora</b> da janela fecha. Soltar o mouse fora dela — selecionando um texto para
+          copiar, por exemplo — <b>não</b> fecha.</li>
+          <li>As confirmações (evoluir, Mega, refino, Mercado, Loja, guild, Casa…) mostram a cena:
+          o pokémon no palco, a pedra ou a moeda, os requisitos com ✓/✗ e o preço com o seu saldo
+          antes e depois.</li>
+        </ul>
+
         <h4>Novidades</h4>
         <p>O <b>!</b>, ao lado das bandeiras de idioma (no celular, na gaveta <b>Menu</b>), abre as
         <b>Novidades no PokéIdle</b>. Depois de uma atualização elas abrem sozinhas, uma vez, na
@@ -2631,7 +3812,10 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           XP, Coins, kills and catches per hour, session time and the catch history. Hunting goes
           on in the server and you stay online. The area button opens the
           <a data-cap="mapa">Map</a> to switch hunts, and <b>Turn the scene on</b> goes back to
-          normal. Made for phones and weak PCs.</li>
+          normal. Made for phones and weak PCs. The panel also has the <b>floating mini-window</b>:
+          just the numbers, on top of other apps, to follow the hunt with the game minimised. And the
+          <b>battery</b>, next to the Escape Rope during a hunt, turns Battery Saver on in one tap,
+          without opening the Settings.</li>
           <li><b>Keep screen on</b> (phone) — stops the screen from turning off by itself with the
           game open: a dark screen suspends the page and takes you out of the world. It spends
           screen battery, so turn it on together with Battery Saver and lower the brightness. Works
@@ -2672,6 +3856,18 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         picture-in-picture when you press Home. To bring the game back, close the window or click
         the icon again.</p>
 
+        <h4>Windows</h4>
+        <ul>
+          <li>Every window opened from <b>inside another</b> (a pokémon's sheet opened from the Depot,
+          a profile opened from the ranking…) gets the <b>‹</b> next to the ×: it goes back to the
+          previous window, on the same tab, with the filters and scroll where you left them.</li>
+          <li>Clicking <b>outside</b> a window closes it. Releasing the mouse outside it — while
+          selecting text to copy, for example — does <b>not</b>.</li>
+          <li>Confirmations (evolving, Mega, refining, Market, Shop, guild, House…) show the scene: the
+          pokémon on stage, the stone or the coin, the requirements with ✓/✗ and the price with your
+          balance before and after.</li>
+        </ul>
+
         <h4>What's new</h4>
         <p>The <b>!</b>, next to the language flags (on a phone, in the <b>Menu</b> drawer), opens
         <b>What's new in PokéIdle</b>. After an update it opens by itself, once, the next time you
@@ -2689,7 +3885,10 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
           Coins, derrotas y capturas por hora, el tiempo de sesión y el historial de capturas. La
           cacería sigue en el servidor y tú sigues en línea. El botón de la zona abre el
           <a data-cap="mapa">Mapa</a> para cambiar de cacería, y <b>Encender la escena</b> vuelve a
-          lo normal. Pensado para móvil y PC flojo.</li>
+          lo normal. Pensado para móvil y PC flojo. El panel tiene además la <b>mini ventana
+          flotante</b>: solo los números, encima de las otras apps, para seguir la cacería con el juego
+          minimizado. Y la <b>batería</b>, junto a la Escape Rope durante la cacería, enciende el
+          Modo Ahorro de un toque, sin abrir los Ajustes.</li>
           <li><b>Pantalla siempre encendida</b> (móvil) — evita que la pantalla se apague sola con
           el juego abierto: con la pantalla apagada la página se suspende y sales del mundo. Gasta
           la batería de la pantalla, así que enciéndela junto con el Modo Ahorro y baja el brillo.
@@ -2731,11 +3930,353 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         puede seguir en picture-in-picture al pulsar Inicio. Para traer el juego de vuelta, cierra
         la ventanita o pulsa de nuevo el icono.</p>
 
+        <h4>Ventanas</h4>
+        <ul>
+          <li>Toda ventana abierta <b>desde otra</b> (la ficha de un pokémon abierta desde el
+          Depósito, un perfil abierto desde el ranking…) gana la <b>‹</b> junto a la ×: vuelve a la
+          ventana anterior, en la misma pestaña, con los filtros y el desplazamiento donde estabas.</li>
+          <li>Pulsar <b>fuera</b> de la ventana la cierra. Soltar el ratón fuera de ella —
+          seleccionando un texto para copiar, por ejemplo — <b>no</b> la cierra.</li>
+          <li>Las confirmaciones (evolucionar, Mega, refinado, Mercado, Tienda, guild, Casa…) muestran
+          la escena: el pokémon en el escenario, la piedra o la moneda, los requisitos con ✓/✗ y el
+          precio con tu saldo antes y después.</li>
+        </ul>
+
         <h4>Novedades</h4>
         <p>El <b>!</b>, junto a las banderas de idioma (en el móvil, en el cajón <b>Menú</b>), abre
         las <b>Novedades en PokéIdle</b>. Tras una actualización se abren solas, una vez, la
         próxima vez que entres; las flechas llevan a las ediciones anteriores.</p>`,
     }),
+  },
+
+  // ------------------------------------------------------ chat, amigos e comércio
+  //
+  // Tudo o que é CONVERSA num lugar só: os quatro canais, a Lista de Amigos e o Comércio (o chat
+  // de negociação preso a um anúncio). Os tetos saem das constantes do topo do arquivo, cada uma
+  // com o arquivo do servidor de onde veio; o alto-falante, de `shared/alto-falante.mjs`.
+  {
+    id: 'chat',
+    titulo: { pt: 'Chat, amigos e Comércio', en: 'Chat, friends and Trade', es: 'Chat, amigos y Comercio' },
+    grupo: 'basico',
+    html: (c) => {
+      const minAlto = Math.round(ESPERA_ALTO_FALANTE_MS / 60_000);
+      const alto = N(CUSTO_ALTO_FALANTE, c.lang);
+      const envioMin = N(MIN_ENVIO_COINS, c.lang);
+      return {
+        pt: `
+        <p>O chat fica na coluna da direita, e mandar mensagem pede <b>nível ${NIVEL_CHAT}</b> de
+        treinador. São <b>quatro canais</b>, cada um com o seu assunto — troque no seletor em cima
+        da conversa:</p>
+        ${tabela(
+          ['Canal', 'Para quê'],
+          `<tr><td><b>Mundo</b></td><td>conversa geral com todo mundo — e onde saem os avisos do jogo (shiny capturado, lendário, resultado da guerra)</td></tr>
+           <tr><td><b>Comércio</b></td><td>compra, venda e os anúncios do Market</td></tr>
+           <tr><td><b>Dúvidas</b></td><td>perguntas sobre o jogo — a comunidade e os tutores 🎓 respondem</td></tr>
+           <tr><td><b>Guild</b></td><td>só a sua guild</td></tr>`,
+        )}
+        <p>O <b>idioma</b> é uma escolha à parte: a bandeira do chat decide em que língua você
+        escreve e lê (português, inglês ou espanhol). "Mundo em espanhol" é o mesmo canal Mundo,
+        filtrado pelo idioma — quem fala duas línguas troca a bandeira sem perder o canal.</p>
+
+        <h4>O ritmo</h4>
+        <p>Uma mensagem a cada <b>${SEG_CHAT} segundos</b>, somando os quatro canais. A espera é da
+        conta: recarregar a página ou reconectar não a zera.</p>
+
+        <h4>Chamar, responder e fixar</h4>
+        <ul>
+          <li><b>Chamar pelo nome:</b> escreva <b>@</b> colado no nick — <code>@ash oi</code> ou
+          <code>eaiii @ash</code> — e o nome vira uma etiqueta. Para quem foi chamado, a linha
+          inteira acende: é assim que uma resposta não se perde quando a conversa anda depressa.</li>
+          <li><b>Responder:</b> a setinha ao lado de uma mensagem começa a sua fala já com o
+          <b>@nick</b> de quem você está respondendo. No anúncio do alto-falante ela marca o
+          vendedor.</li>
+          <li><b>Mensagem fixada:</b> admins e moderadores fixam um aviso no <b>topo do canal</b>,
+          por cima da conversa. Dá para recolher e abrir de novo.</li>
+          <li><b>Clique no nick</b> de alguém para <b>ver o perfil</b>, <b>adicionar amigo</b> ou
+          <b>ignorar</b>. Quem você ignora some do seu chat; a lista de ignorados desfaz isso.</li>
+        </ul>
+
+        <h4>Quem é quem</h4>
+        <p>A equipe do jogo (admin, moderador e helper) leva um <b>escudo roxo</b> logo depois do
+        horário, e o cargo se lê pela <b>cor do nick</b>. O nick do <b>VIP</b> é azul-claro, com
+        brilho. A <b>TAG da guild</b> vem antes do nick, na cor que o dono escolheu (ver
+        <a data-cap="guild">Guilds</a>).</p>
+
+        <h4>Anúncios do Market no chat</h4>
+        <p>No <a data-cap="comunidade">Mercado da Comunidade</a>, o botão <b>📢 Anunciar no chat
+        global</b> manda UM anúncio seu para os canais <b>Mundo</b> e <b>Comércio</b>, com um link
+        que leva direto a ele. Custa <b>${alto} Coins</b>, e a conta espera <b>${minAlto} minutos</b>
+        até o próximo — a espera é da conta, não do anúncio.</p>
+        <p>Não quer ver anúncio? A setinha ao lado do emoji abre as opções do chat:
+        <b>Esconder anúncios da comunidade</b> tira os anúncios do alto-falante do seu Mundo (no
+        Comércio eles continuam). Vale só neste navegador.</p>
+
+        <h4>Comandos</h4>
+        <p>Digite no chat para receber uma resposta que só você vê — ela não é publicada para
+        ninguém.</p>
+        <ul>
+          <li><b>/site</b> — o site de hunts X4 feito pela comunidade.</li>
+          <li><b>/ticket</b> — o convite do Discord e a sala de suporte, onde se reportam bugs
+          (há recompensa em diamantes por bug bounty e vulnerabilidade).</li>
+          <li><b>/guia</b> — o guia do jogo, para começar e evoluir.</li>
+          <li><b>/resgatar &lt;código&gt;</b> — resgata o código de um prêmio do Discord (convites e
+          Tag IDLE, ver <a data-cap="recompensas">Ganhe diamantes</a>). Só <b>/resgatar</b> mostra
+          a escada de convites.</li>
+        </ul>
+
+        <h4>Lista de Amigos</h4>
+        <p>O botão de <b>Amigos</b>, na coluna do seu retrato, abre a lista — ela também pede nível
+        ${NIVEL_CHAT}. Cabem <b>${N(MAX_AMIGOS, c.lang)} amigos</b>.</p>
+        <ul>
+          <li><b>Adicionar</b> é uma busca: digite 3 letras ou mais do nick e veja os treinadores,
+          com <b>Ver perfil</b> antes de pedir. O pedido espera na aba <b>Pendentes</b> do outro
+          lado.</li>
+          <li>A ordem da lista: primeiro quem tem mensagem <b>não lida</b>, depois quem conversou
+          com você na semana, depois quem está <b>online</b>, e o resto pelo <b>visto por último</b>
+          ("visto há 3h").</li>
+          <li>As conversas ficam guardadas por <b>${DIAS_DM} dias</b>. As suas mensagens levam dois
+          tracinhos: <b>cinza-escuro</b> = enviada, <b>azul-claro</b> = lida.</li>
+          <li>Na conversa dá para <b>anexar um pokémon</b> (o amigo abre a ficha), <b>enviar
+          Coins</b> e desafiar para um <a data-cap="amistoso">PvP amistoso</a>. Ver perfil abre a
+          ficha do amigo por cima da conversa; fechar devolve você ao papo.</li>
+          <li>O chat da sua <b>guild</b> também aparece ali, guardado pelos mesmos ${DIAS_DM} dias.</li>
+        </ul>
+        ${nota(`<b>Enviar Coins</b> queima <b>${PCT_ENVIO_COINS}%</b> do valor: o amigo recebe o
+        resto, e a parte queimada não vai para ninguém. O mínimo é <b>${envioMin} Coins</b> por envio.
+        É a mesma comissão do Mercado em Ouro, de propósito — as duas portas para passar ouro custam
+        o mesmo (ver <a data-cap="taxas">Todas as taxas</a>).`)}
+
+        <h4>Comércio: negociar com o vendedor</h4>
+        <p>Cada anúncio do Mercado da Comunidade tem o botão <b>Enviar DM</b>: ele abre uma
+        conversa com o vendedor, presa àquele anúncio. As negociações ficam na própria Lista de
+        Amigos, no modo <b>Comércio</b>, em duas abas — <b>Minhas Ofertas</b> (os vendedores que
+        você chamou) e <b>Meus Produtos</b> (os compradores que chamaram você).</p>
+        <ul>
+          <li>É para <b>combinar</b>. A compra continua sendo feita no Mercado, pelo anúncio, com a
+          trava de preço e a comissão de sempre.</li>
+          <li>A conversa some quando o anúncio é vendido ou retirado.</li>
+          <li>Cada comprador mantém até <b>${N(MAX_NEGOCIACOES, c.lang)}</b> negociações abertas ao
+          mesmo tempo.</li>
+        </ul>
+        ${nota(`Vender conta ou pokémon <b>por fora</b> do Mercado da Comunidade (PIX, outro site,
+        "passa o pokémon que eu te pago") é <b>proibido</b> e pode dar <b>banimento</b>. O jogo não
+        tem como proteger ninguém numa troca externa: quem é lesado ali não tem a quem recorrer.`, 'aviso')}
+
+        <h4>Uma sessão por conta</h4>
+        <p>A conta joga em <b>um lugar por vez</b>. Abrir o jogo em outro aparelho ou aba
+        <b>pausa</b> a sessão antiga, que mostra "Conta aberta em outro lugar" e o botão <b>Jogar
+        aqui</b> — ele traz o jogo de volta e pausa a outra. Nada se perde: a hunt e o progresso
+        seguem na sessão que estiver jogando.</p>`,
+        en: `
+        <p>Chat lives in the right-hand column, and sending messages requires trainer
+        <b>level ${NIVEL_CHAT}</b>. There are <b>four channels</b>, each with its own subject — switch
+        in the selector above the conversation:</p>
+        ${tabela(
+          ['Channel', 'What for'],
+          `<tr><td><b>World</b></td><td>general talk with everyone — and where the game's notices show up (shiny caught, legendary, war result)</td></tr>
+           <tr><td><b>Trade</b></td><td>buying, selling and the Market's listings</td></tr>
+           <tr><td><b>Help</b></td><td>questions about the game — the community and the 🎓 tutors answer</td></tr>
+           <tr><td><b>Guild</b></td><td>your guild only</td></tr>`,
+        )}
+        <p>The <b>language</b> is a separate choice: the chat flag decides which language you write
+        and read (Portuguese, English or Spanish). "World in Spanish" is the same World channel,
+        filtered by language — anyone who speaks two languages switches the flag without leaving
+        the channel.</p>
+
+        <h4>The pace</h4>
+        <p>One message every <b>${SEG_CHAT} seconds</b>, across all four channels. The wait belongs to
+        the account: reloading the page or reconnecting does not reset it.</p>
+
+        <h4>Mention, reply and pin</h4>
+        <ul>
+          <li><b>Mention by name:</b> type <b>@</b> right before the nick — <code>@ash hi</code> or
+          <code>heyyy @ash</code> — and the name turns into a tag. For the person mentioned, the
+          whole line lights up: that is how a reply does not get lost when the chat moves fast.</li>
+          <li><b>Reply:</b> the little arrow next to a message starts your line with the
+          <b>@nick</b> of whoever you are answering. On a loudspeaker listing it tags the seller.</li>
+          <li><b>Pinned message:</b> admins and moderators pin a notice to the <b>top of the
+          channel</b>, above the conversation. You can collapse it and open it again.</li>
+          <li><b>Click someone's nick</b> to <b>View profile</b>, <b>Add friend</b> or
+          <b>ignore</b>. Whoever you ignore disappears from your chat; the ignored list undoes it.</li>
+        </ul>
+
+        <h4>Who is who</h4>
+        <p>The game staff (admin, moderator and helper) carries a <b>purple shield</b> right after
+        the time, and the role shows in the <b>nick colour</b>. A <b>VIP</b> nick is light blue,
+        with a glow. The <b>guild TAG</b> comes before the nick, in the colour the owner picked (see
+        <a data-cap="guild">Guilds</a>).</p>
+
+        <h4>Market listings in chat</h4>
+        <p>In the <a data-cap="comunidade">Community Market</a>, the <b>📢 Announce in global
+        chat</b> button sends ONE of your listings to the <b>World</b> and <b>Trade</b> channels,
+        with a link straight to it. It costs <b>${alto} Coins</b>, and the account waits
+        <b>${minAlto} minutes</b> before the next one — the wait belongs to the account, not to the
+        listing.</p>
+        <p>Don't want to see listings? The little arrow next to the emoji button opens the chat
+        options: <b>Hide community listings</b> removes loudspeaker listings from your World (they
+        stay in Trade). It only applies to this browser.</p>
+
+        <h4>Commands</h4>
+        <p>Type them in chat to get an answer only you see — it is not posted for anyone.</p>
+        <ul>
+          <li><b>/site</b> — the X4 hunts website made by the community.</li>
+          <li><b>/ticket</b> — the Discord invite and the support room, where bugs are reported
+          (there are diamond rewards for bug bounties and vulnerabilities).</li>
+          <li><b>/guia</b> — the game guide, to get started and grow.</li>
+          <li><b>/resgatar &lt;code&gt;</b> — redeems the code of a Discord prize (invites and the
+          IDLE Tag, see <a data-cap="recompensas">Earn diamonds</a>). Just <b>/resgatar</b> shows the
+          invite ladder.</li>
+        </ul>
+
+        <h4>Friends List</h4>
+        <p>The <b>Friends</b> button, in your portrait column, opens the list — it also requires
+        level ${NIVEL_CHAT}. It holds <b>${N(MAX_AMIGOS, c.lang)} friends</b>.</p>
+        <ul>
+          <li><b>Adding</b> is a search: type 3 or more letters of the nick and see the trainers, with
+          <b>View profile</b> before you ask. The request waits in the other side's <b>Pending</b>
+          tab.</li>
+          <li>The list order: first whoever has an <b>unread</b> message, then whoever talked to you
+          this week, then who is <b>online</b>, and the rest by <b>last seen</b> ("seen 3h ago").</li>
+          <li>Conversations are kept for <b>${DIAS_DM} days</b>. Your messages carry two ticks:
+          <b>dark grey</b> = sent, <b>light blue</b> = read.</li>
+          <li>In the chat you can <b>attach a pokémon</b> (your friend opens its sheet), <b>send
+          Coins</b> and challenge them to a <a data-cap="amistoso">Friendly PvP</a>. View profile opens
+          your friend's sheet on top of the chat; closing it brings you back.</li>
+          <li>Your <b>guild</b> chat shows up there too, kept for the same ${DIAS_DM} days.</li>
+        </ul>
+        ${nota(`<b>Sending Coins</b> burns <b>${PCT_ENVIO_COINS}%</b> of the amount: your friend gets
+        the rest, and the burned part goes to no one. The minimum is <b>${envioMin} Coins</b> per
+        transfer. It is the same fee as the Market in Gold, on purpose — both ways of moving gold cost
+        the same (see <a data-cap="taxas">All fees</a>).`)}
+
+        <h4>Trade: negotiating with the seller</h4>
+        <p>Every Community Market listing has a <b>Send DM</b> button: it opens a chat with the
+        seller, tied to that listing. Negotiations live in the Friends List itself, in <b>Trade</b>
+        mode, in two tabs — <b>My Offers</b> (sellers you contacted) and <b>My Products</b> (buyers
+        who contacted you).</p>
+        <ul>
+          <li>It is for <b>agreeing</b>. The purchase is still made in the Market, through the
+          listing, with the usual price lock and fee.</li>
+          <li>The chat disappears when the listing is sold or withdrawn.</li>
+          <li>Each buyer keeps up to <b>${N(MAX_NEGOCIACOES, c.lang)}</b> negotiations open at the same
+          time.</li>
+        </ul>
+        ${nota(`Selling an account or a pokémon <b>outside</b> the Community Market (PIX, another
+        website, "send me the pokémon and I'll pay you") is <b>forbidden</b> and can get you
+        <b>banned</b>. The game has no way to protect anyone in an external trade: whoever gets
+        scammed there has nowhere to turn.`, 'aviso')}
+
+        <h4>One session per account</h4>
+        <p>The account plays in <b>one place at a time</b>. Opening the game on another device or
+        tab <b>pauses</b> the old session, which shows "Account opened elsewhere" and a <b>Play
+        here</b> button — it brings the game back and pauses the other one. Nothing is lost: the hunt
+        and your progress carry on in whichever session is playing.</p>`,
+        es: `
+        <p>El chat está en la columna de la derecha, y enviar mensajes pide <b>nivel
+        ${NIVEL_CHAT}</b> de entrenador. Hay <b>cuatro canales</b>, cada uno con su tema — cámbialos
+        en el selector encima de la conversación:</p>
+        ${tabela(
+          ['Canal', 'Para qué'],
+          `<tr><td><b>Mundo</b></td><td>conversación general con todos — y donde salen los avisos del juego (shiny capturado, legendario, resultado de la guerra)</td></tr>
+           <tr><td><b>Comercio</b></td><td>compra, venta y los anuncios del Market</td></tr>
+           <tr><td><b>Dudas</b></td><td>preguntas sobre el juego — la comunidad y los tutores 🎓 responden</td></tr>
+           <tr><td><b>Guild</b></td><td>solo tu guild</td></tr>`,
+        )}
+        <p>El <b>idioma</b> es otra elección: la bandera del chat decide en qué lengua escribes y
+        lees (portugués, inglés o español). "Mundo en español" es el mismo canal Mundo, filtrado por
+        idioma — quien habla dos lenguas cambia la bandera sin perder el canal.</p>
+
+        <h4>El ritmo</h4>
+        <p>Un mensaje cada <b>${SEG_CHAT} segundos</b>, sumando los cuatro canales. La espera es de la
+        cuenta: recargar la página o reconectar no la reinicia.</p>
+
+        <h4>Llamar, responder y fijar</h4>
+        <ul>
+          <li><b>Llamar por el nombre:</b> escribe <b>@</b> pegado al nick — <code>@ash hola</code> o
+          <code>eyyy @ash</code> — y el nombre se vuelve una etiqueta. Para quien fue llamado, la línea
+          entera se ilumina: así una respuesta no se pierde cuando la conversación va rápido.</li>
+          <li><b>Responder:</b> la flechita junto a un mensaje empieza tu frase con el <b>@nick</b>
+          de quien respondes. En el anuncio del altavoz marca al vendedor.</li>
+          <li><b>Mensaje fijado:</b> admins y moderadores fijan un aviso en la <b>parte de arriba del
+          canal</b>, encima de la conversación. Se puede recoger y volver a abrir.</li>
+          <li><b>Pulsa el nick</b> de alguien para <b>ver el perfil</b>, <b>añadir amigo</b> o
+          <b>ignorar</b>. A quien ignoras desaparece de tu chat; la lista de ignorados lo deshace.</li>
+        </ul>
+
+        <h4>Quién es quién</h4>
+        <p>El equipo del juego (admin, moderador y helper) lleva un <b>escudo morado</b> justo
+        después de la hora, y el cargo se lee por el <b>color del nick</b>. El nick del <b>VIP</b> es
+        celeste, con brillo. La <b>TAG de la guild</b> va antes del nick, en el color que eligió el
+        dueño (ver <a data-cap="guild">Guilds</a>).</p>
+
+        <h4>Anuncios del Market en el chat</h4>
+        <p>En el <a data-cap="comunidade">Mercado de la Comunidad</a>, el botón <b>📢 Anunciar en el
+        chat global</b> manda UNO de tus anuncios a los canales <b>Mundo</b> y <b>Comercio</b>, con
+        un enlace directo. Cuesta <b>${alto} Coins</b>, y la cuenta espera <b>${minAlto} minutos</b>
+        hasta el siguiente — la espera es de la cuenta, no del anuncio.</p>
+        <p>¿No quieres ver anuncios? La flechita junto al emoji abre las opciones del chat:
+        <b>Ocultar anuncios de la comunidad</b> quita los anuncios del altavoz de tu Mundo (en
+        Comercio siguen). Vale solo en este navegador.</p>
+
+        <h4>Comandos</h4>
+        <p>Escríbelos en el chat para recibir una respuesta que solo tú ves — no se publica para
+        nadie.</p>
+        <ul>
+          <li><b>/site</b> — la web de cacerías X4 hecha por la comunidad.</li>
+          <li><b>/ticket</b> — la invitación al Discord y la sala de soporte, donde se reportan bugs
+          (hay recompensa en diamantes por bug bounty y vulnerabilidades).</li>
+          <li><b>/guia</b> — la guía del juego, para empezar y progresar.</li>
+          <li><b>/resgatar &lt;código&gt;</b> — canjea el código de un premio del Discord
+          (invitaciones y Tag IDLE, ver <a data-cap="recompensas">Gana diamantes</a>). Solo
+          <b>/resgatar</b> muestra la escalera de invitaciones.</li>
+        </ul>
+
+        <h4>Lista de Amigos</h4>
+        <p>El botón de <b>Amigos</b>, en la columna de tu retrato, abre la lista — también pide nivel
+        ${NIVEL_CHAT}. Caben <b>${N(MAX_AMIGOS, c.lang)} amigos</b>.</p>
+        <ul>
+          <li><b>Añadir</b> es una búsqueda: escribe 3 letras o más del nick y ve a los entrenadores,
+          con <b>Ver perfil</b> antes de pedir. La solicitud espera en la pestaña <b>Pendientes</b>
+          del otro lado.</li>
+          <li>El orden de la lista: primero quien tiene un mensaje <b>sin leer</b>, después quien
+          habló contigo en la semana, después quien está <b>en línea</b>, y el resto por la
+          <b>última conexión</b> ("visto hace 3h").</li>
+          <li>Las conversaciones se guardan <b>${DIAS_DM} días</b>. Tus mensajes llevan dos rayitas:
+          <b>gris oscuro</b> = enviado, <b>celeste</b> = leído.</li>
+          <li>En la conversación puedes <b>adjuntar un pokémon</b> (tu amigo abre la ficha),
+          <b>enviar Coins</b> y desafiarlo a un <a data-cap="amistoso">PvP amistoso</a>. Ver perfil
+          abre la ficha del amigo encima de la conversación; al cerrarla vuelves a la charla.</li>
+          <li>El chat de tu <b>guild</b> también aparece ahí, guardado los mismos ${DIAS_DM} días.</li>
+        </ul>
+        ${nota(`<b>Enviar Coins</b> quema el <b>${PCT_ENVIO_COINS}%</b> del valor: tu amigo recibe el
+        resto, y la parte quemada no va a nadie. El mínimo es <b>${envioMin} Coins</b> por envío. Es la
+        misma comisión del Mercado en Oro, a propósito — las dos puertas para pasar oro cuestan lo
+        mismo (ver <a data-cap="taxas">Todas las comisiones</a>).`)}
+
+        <h4>Comercio: negociar con el vendedor</h4>
+        <p>Cada anuncio del Mercado de la Comunidad tiene el botón <b>Enviar DM</b>: abre una
+        conversación con el vendedor, atada a ese anuncio. Las negociaciones quedan en la propia
+        Lista de Amigos, en el modo <b>Comercio</b>, en dos pestañas — <b>Mis Ofertas</b> (los
+        vendedores que contactaste) y <b>Mis Productos</b> (los compradores que te contactaron).</p>
+        <ul>
+          <li>Es para <b>acordar</b>. La compra se sigue haciendo en el Mercado, por el anuncio, con
+          el bloqueo de precio y la comisión de siempre.</li>
+          <li>La conversación desaparece cuando el anuncio se vende o se retira.</li>
+          <li>Cada comprador mantiene hasta <b>${N(MAX_NEGOCIACOES, c.lang)}</b> negociaciones abiertas
+          a la vez.</li>
+        </ul>
+        ${nota(`Vender una cuenta o un pokémon <b>por fuera</b> del Mercado de la Comunidad (PIX, otra
+        web, "pásame el pokémon que te pago") está <b>prohibido</b> y puede costar un <b>baneo</b>. El
+        juego no tiene cómo proteger a nadie en un intercambio externo: quien es estafado ahí no
+        tiene a quién recurrir.`, 'aviso')}
+
+        <h4>Una sesión por cuenta</h4>
+        <p>La cuenta juega en <b>un lugar a la vez</b>. Abrir el juego en otro dispositivo o pestaña
+        <b>pausa</b> la sesión anterior, que muestra "Cuenta abierta en otro lugar" y el botón
+        <b>Jugar aquí</b> — trae el juego de vuelta y pausa la otra. No se pierde nada: la cacería y
+        el progreso siguen en la sesión que esté jugando.</p>`,
+      };
+    },
   },
 
   {
@@ -2751,11 +4292,32 @@ poder = redond( nivel × 10 × score )   → en nv 100: ⚔ ≈ 1000 × score</p
         <pre class="wk-formula">base  = ((2 × nível/5 + 2) × power × atk/def) / 50 + 2
 final = base × STAB × efetividade × aleatório(0,85–1,00)</pre>
         <ul>
-          <li><b>power</b> é o do golpe usado. Cada golpe tem o próprio <b>cooldown</b> (de 2 a
-          60 segundos) e um <b>nível mínimo</b> para ser aprendido.</li>
+          <li><b>power</b> é o do golpe usado — ver <b>Os golpes</b>, logo abaixo.</li>
           <li><b>STAB</b> é <b>×1,5</b> quando o golpe é de um dos tipos do próprio pokémon.</li>
           <li><b>atk/def</b> usa Ataque e Defesa em golpe físico, e Sp.Atk / Sp.Def em especial.</li>
           <li><b>efetividade</b> vem da <a data-cap="tipos">tabela de tipos</a>, já amplificada.</li>
+        </ul>
+
+        <h4>Os golpes</h4>
+        <p>O pokémon escolhe sozinho, a cada ataque, o golpe de <b>maior dano esperado</b> contra
+        aquele alvo entre os que já recarregaram — pesando o poder, o STAB, a efetividade de tipo e o
+        Ataque (ou Sp.Atk) dele contra a defesa do alvo. Enquanto todos recarregam, vem a Investida
+        (abaixo).</p>
+        <p>A <b>recarga</b> de cada golpe sai do <b>poder</b> dele, numa curva única para o catálogo
+        inteiro. Até 100 de poder o golpe paga a recarga quase na proporção; acima disso o golpe caro
+        fica cada vez mais barato — é o que mantém o golpe de 600 valendo a pena.</p>
+        ${tabelaCurvaGolpes(c)}
+        <ul>
+          <li><b>Toda última evolução tem dois golpes de 600</b> — um de cada tipo nas de tipo duplo,
+          dois do mesmo tipo nas de tipo único —, com ${S(COOLDOWN_600_MS, 'pt')} de recarga. A
+          categoria (física ou especial) segue o lado de ataque mais forte da espécie, a não ser que a
+          planilha dela escolha outra. A Mega ganha um terceiro, na metade da recarga (ver
+          <a data-cap="mega">Mega Evolução</a>).</li>
+          <li>Cada golpe libera num <b>nível</b>; nas espécies refeitas pelas planilhas de
+          balanceamento, todos liberam no nível 1. A ficha da <a data-cap="pokedex">Pokédex</a> mostra
+          a lista inteira.</li>
+          <li>O <b>Speed</b> encurta a recarga dos golpes em até ${D(SPEED_POTENCIAL_TETO_PCT, 'pt')}%: o
+          Speed base da espécie com o IV de SPD (abaixo).</li>
         </ul>
 
         <h4>O ataque básico</h4>
@@ -2772,20 +4334,47 @@ final = base × STAB × efetividade × aleatório(0,85–1,00)</pre>
           <b>30</b> de power rendem como 45.</li>
           <li>Em pokémon de dois tipos ela tenta o <b>primeiro</b>, e só passa para o segundo se
           o alvo for <b>imune</b> ao primeiro — não é o melhor dos dois contra aquele alvo.</li>
-          <li>Os <b>2 s</b> encurtam com o <b>IV de SPD</b>, como qualquer cooldown (abaixo).</li>
+          <li>Os <b>2 s</b> encurtam só com o <b>IV de SPD</b>: −10 ms por ponto, até 1,68 s com
+          IV 32 (abaixo).</li>
         </ul>
 
-        <h4>IV de SPD — cooldown</h4>
-        <p>O stat <b>SPD</b> na ficha <b>não</b> entra na fórmula de dano. O <b>IV de SPD</b>
-        (1–32, sorteado na captura) encurta cooldowns: <b>10 ms por ponto</b> (até −320 ms),
-        com piso de 400 ms. Vale no intervalo global entre golpes, no cooldown de cada golpe e
-        na <a data-cap="pvp">PvP Ranqueado</a> — mesma regra. <b>Não</b> acelera a corrida na hunt.</p>
-        ${tabela(
-          [c.r.regra, c.r.valor],
-          `<tr><td>Intervalo global base (seus golpes)</td><td class="wk-num">0,9 s</td></tr>
-           <tr><td>Com IV SPD 32 (piso)</td><td class="wk-num destaque">0,4 s</td></tr>
-           <tr><td>Cooldown de cada golpe</td><td class="wk-num">também encurta (−0,01 s / IV)</td></tr>`,
-        )}
+        <h4>Speed — a recarga dos golpes e o ataque básico</h4>
+        <p>O stat <b>SPD</b> da ficha <b>não</b> entra na fórmula de dano nem acelera a corrida na
+        hunt. Quem acelera os ataques são o <b>Speed base da espécie</b> e o <b>IV de SPD</b>
+        (1–32, sorteado na captura), cada um no seu lugar:</p>
+        <ul>
+          <li><b>Golpes</b> (skills e ultimates): o Speed base dá um <b>potencial</b> de desconto —
+          cada 20 de Speed vale 1%, até 6% no 120; acima disso, cada 40 vale mais 1%, até o teto de
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'pt')}%. O IV de SPD decide quanto desse potencial o pokémon
+          aproveita: IV 32 aproveita tudo; IV 16, metade.</li>
+          <li><b>Investida e intervalo entre ataques</b>: só o IV de SPD, <b>10 ms por ponto</b> (até
+          −320 ms), com piso de 400 ms — a Investida de 2 s vira 1,68 s com IV 32, e o intervalo
+          entre os seus golpes, de 0,9 s, vira 0,58 s.</li>
+        </ul>
+        <pre class="wk-formula">potencial = Speed ÷ 20                (Speed até 120)
+          = 6 + (Speed − 120) ÷ 40     (acima de 120; teto de ${D(SPEED_POTENCIAL_TETO_PCT, 'pt')}%)
+desconto  = potencial × IV de SPD ÷ 32
+recarga   = recarga × (1 − desconto ÷ 100)</pre>
+        <p>Um Jolteon (Speed 130) tem ${exemploSpeed('pt').potencial}% de potencial; com IV 24 ele
+        aproveita 75% disso — ${exemploSpeed('pt').pct}% a menos —, e o golpe de
+        ${exemploSpeed('pt').g600} recarrega em ${exemploSpeed('pt').cd}. Com IV 32:</p>
+        ${tabelaSpeedGolpes(c)}
+        <p>A regra é a mesma na hunt, nos bosses, no <a data-cap="pvp">PvP Ranqueado</a> e na
+        Guerra de Guildas.</p>
+
+        <h4>A recarga é do pokémon</h4>
+        <p>A recarga de um golpe só corre com o pokémon <b>em campo</b>. Trocar o ativo <b>pausa</b>
+        o que falta, guardado com ele; quando ele volta, a recarga continua de onde parou. Trocar por
+        tática (tipo contra tipo) não custa nem rende um décimo de segundo — o que deixou de existir
+        foi soltar o golpe de 600 de cinco pokémon seguidos e voltar ao primeiro com a recarga já
+        vencida.</p>
+        <ul>
+          <li>A cura da Enfermeira, no Centro, <b>não</b> zera a recarga.</li>
+          <li>Só as arenas pagas zeram: entrar num <a data-cap="bosses">Boss</a> ou na
+          <a data-cap="mistico">Arena Mística</a> começa com tudo pronto.</li>
+          <li>PvP, Guerra de Guilds, ginásio e campeonato são lutas simuladas à parte: todo mundo
+          entra com a recarga limpa.</li>
+        </ul>
 
         <h4>Movimento na hunt</h4>
         <p>O pokémon ativo corre um pouco <b>na frente</b> do treinador — é ritmo da cena (260 ms
@@ -2842,13 +4431,33 @@ final = base × STAB × efetividade × aleatório(0,85–1,00)</pre>
         <pre class="wk-formula">base  = ((2 × level/5 + 2) × power × atk/def) / 50 + 2
 final = base × STAB × effectiveness × random(0.85–1.00)</pre>
         <ul>
-          <li><b>power</b> is the move's. Every move has its own <b>cooldown</b> (2 to 60 seconds)
-          and a <b>minimum level</b> to be learned.</li>
+          <li><b>power</b> is the move's — see <b>The moves</b>, right below.</li>
           <li><b>STAB</b> is <b>×1.5</b> when the move matches one of the pokémon's own types.</li>
           <li><b>atk/def</b> uses Attack and Defence for physical moves, Sp.Atk / Sp.Def for
           special ones.</li>
           <li><b>effectiveness</b> comes from the <a data-cap="tipos">type chart</a>, already
           amplified.</li>
+        </ul>
+
+        <h4>The moves</h4>
+        <p>On every attack the pokémon picks, by itself, the move with the <b>highest expected
+        damage</b> against that target among the ones off cooldown — weighing power, STAB, type
+        effectiveness and its Attack (or Sp.Atk) against the target's defence. While everything is
+        recharging, it uses Tackle (below).</p>
+        <p>Each move's <b>cooldown</b> comes from its <b>power</b>, on a single curve for the whole
+        catalogue. Up to 100 power a move pays its cooldown almost in proportion; above that, an
+        expensive move gets cheaper and cheaper — which is what keeps the 600 move worth it.</p>
+        ${tabelaCurvaGolpes(c)}
+        <ul>
+          <li><b>Every final evolution has two 600 moves</b> — one of each type for dual types, two of
+          the same type for single types — with a ${S(COOLDOWN_600_MS, 'en')} cooldown. The category
+          (physical or special) follows the species' stronger attack side, unless its balance sheet
+          picks otherwise. A Mega gets a third one, at half the cooldown (see
+          <a data-cap="mega">Mega Evolution</a>).</li>
+          <li>Each move unlocks at a <b>level</b>; on species reworked by the balance sheets, every
+          move unlocks at level 1. The <a data-cap="pokedex">Pokédex</a> sheet shows the full list.</li>
+          <li><b>Speed</b> shortens move cooldowns by up to ${D(SPEED_POTENCIAL_TETO_PCT, 'en')}%: the
+          species' base Speed together with the SPD IV (below).</li>
         </ul>
 
         <h4>The basic attack</h4>
@@ -2866,21 +4475,47 @@ final = base × STAB × effectiveness × random(0.85–1.00)</pre>
           <li>On a dual-type pokémon it tries the <b>first</b> type, and only falls back to the
           second if the target is <b>immune</b> to the first — it is not the better of the
           two.</li>
-          <li>The <b>2 s</b> shorten with the <b>SPD IV</b>, like any cooldown (below).</li>
+          <li>The <b>2 s</b> shorten only with the <b>SPD IV</b>: −10 ms per point, down to 1.68 s
+          at IV 32 (below).</li>
         </ul>
 
-        <h4>SPD IV — cooldown</h4>
-        <p>The <b>SPD</b> stat on the sheet does <b>not</b> enter the damage formula. <b>SPD IV</b>
-        (1–32, rolled at capture) shortens cooldowns: <b>10 ms per point</b> (up to −320 ms),
-        with a 400 ms floor. Applies to the global gap between attacks, each move's cooldown and
-        the <a data-cap="pvp">Ranked PvP</a> — same rule. It does <b>not</b> speed up running on
-        the hunt map.</p>
-        ${tabela(
-          [c.r.regra, c.r.valor],
-          `<tr><td>Base global gap (your attacks)</td><td class="wk-num">0.9 s</td></tr>
-           <tr><td>With SPD IV 32 (floor)</td><td class="wk-num destaque">0.4 s</td></tr>
-           <tr><td>Each move's cooldown</td><td class="wk-num">also shortens (−0.01 s / IV)</td></tr>`,
-        )}
+        <h4>Speed — move cooldowns and the basic attack</h4>
+        <p>The <b>SPD</b> stat on the sheet does <b>not</b> enter the damage formula nor speed up
+        running on the hunt map. What speeds up attacks is the <b>species' base Speed</b> and the
+        <b>SPD IV</b> (1–32, rolled at capture), each in its own place:</p>
+        <ul>
+          <li><b>Moves</b> (skills and ultimates): base Speed gives a discount <b>potential</b> —
+          every 20 Speed is worth 1%, up to 6% at 120; above that, every 40 adds 1%, up to a cap of
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'en')}%. The SPD IV decides how much of that potential the
+          pokémon gets: IV 32 gets all of it; IV 16, half.</li>
+          <li><b>Tackle and the gap between attacks</b>: only the SPD IV, <b>10 ms per point</b>
+          (up to −320 ms), with a 400 ms floor — the 2 s Tackle becomes 1.68 s at IV 32, and the
+          0.9 s gap between your attacks becomes 0.58 s.</li>
+        </ul>
+        <pre class="wk-formula">potential = Speed ÷ 20                (Speed up to 120)
+          = 6 + (Speed − 120) ÷ 40     (above 120; capped at ${D(SPEED_POTENCIAL_TETO_PCT, 'en')}%)
+discount  = potential × SPD IV ÷ 32
+cooldown  = cooldown × (1 − discount ÷ 100)</pre>
+        <p>A Jolteon (Speed 130) has ${exemploSpeed('en').potencial}% potential; at IV 24 it gets
+        75% of it — ${exemploSpeed('en').pct}% off —, and its ${exemploSpeed('en').g600} move
+        recharges in ${exemploSpeed('en').cd}. At IV 32:</p>
+        ${tabelaSpeedGolpes(c)}
+        <p>The rule is the same on the hunt, against bosses, in <a data-cap="pvp">Ranked PvP</a>
+        and in the Guild War.</p>
+
+        <h4>Cooldowns belong to the pokémon</h4>
+        <p>A move's cooldown only runs while the pokémon is <b>on the field</b>. Switching the active
+        one <b>pauses</b> what is left, stored with it; when it comes back, the cooldown carries on
+        from where it stopped. Switching for tactics (type against type) neither costs nor earns a
+        tenth of a second — what no longer works is firing the 600 move of five pokémon in a row and
+        coming back to the first one with its cooldown already done.</p>
+        <ul>
+          <li>Nurse Joy's healing, at the Center, does <b>not</b> reset cooldowns.</li>
+          <li>Only the paid arenas reset them: entering a <a data-cap="bosses">Boss</a> or the
+          <a data-cap="mistico">Mystic Arena</a> starts with everything ready.</li>
+          <li>PvP, Guild War, gyms and championships are separate simulated battles: everyone goes in
+          with clean cooldowns.</li>
+        </ul>
 
         <h4>Movement on the hunt</h4>
         <p>The active pokémon runs slightly <b>ahead</b> of the trainer — scene pacing (260 ms vs
@@ -2937,13 +4572,34 @@ final = base × STAB × effectiveness × random(0.85–1.00)</pre>
         <pre class="wk-formula">base  = ((2 × nivel/5 + 2) × power × atk/def) / 50 + 2
 final = base × STAB × efectividad × aleatorio(0,85–1,00)</pre>
         <ul>
-          <li><b>power</b> es el del movimiento. Cada uno tiene su propio <b>cooldown</b> (de 2 a
-          60 segundos) y un <b>nivel mínimo</b> para aprenderse.</li>
+          <li><b>power</b> es el del movimiento — ver <b>Los golpes</b>, justo abajo.</li>
           <li><b>STAB</b> es <b>×1,5</b> cuando el movimiento es de uno de los tipos del pokémon.</li>
           <li><b>atk/def</b> usa Ataque y Defensa en movimientos físicos, y Sp.Atk / Sp.Def en
           especiales.</li>
           <li><b>efectividad</b> viene de la <a data-cap="tipos">tabla de tipos</a>, ya
           amplificada.</li>
+        </ul>
+
+        <h4>Los golpes</h4>
+        <p>En cada ataque el pokémon elige solo el golpe de <b>mayor daño esperado</b> contra ese
+        objetivo entre los que ya se recargaron — pesando el poder, el STAB, la efectividad de tipo y
+        su Ataque (o Sp.Atk) contra la defensa del objetivo. Mientras todos se recargan, usa la
+        Embestida (abajo).</p>
+        <p>La <b>recarga</b> de cada golpe sale de su <b>poder</b>, en una curva única para todo el
+        catálogo. Hasta 100 de poder el golpe paga la recarga casi en proporción; por encima, el golpe
+        caro sale cada vez más barato — es lo que mantiene el golpe de 600 valiendo la pena.</p>
+        ${tabelaCurvaGolpes(c)}
+        <ul>
+          <li><b>Toda última evolución tiene dos golpes de 600</b> — uno de cada tipo en las de tipo
+          doble, dos del mismo tipo en las de tipo único —, con ${S(COOLDOWN_600_MS, 'es')} de recarga.
+          La categoría (física o especial) sigue el lado de ataque más fuerte de la especie, salvo que
+          su planilla elija otra. La Mega gana un tercero, con la mitad de recarga (ver
+          <a data-cap="mega">Mega Evolución</a>).</li>
+          <li>Cada golpe se desbloquea en un <b>nivel</b>; en las especies rehechas por las planillas
+          de balance, todos se desbloquean en el nivel 1. La ficha de la
+          <a data-cap="pokedex">Pokédex</a> muestra la lista entera.</li>
+          <li>El <b>Speed</b> acorta la recarga de los golpes hasta un ${D(SPEED_POTENCIAL_TETO_PCT, 'es')}%:
+          el Speed base de la especie con el IV de SPD (abajo).</li>
         </ul>
 
         <h4>El ataque básico</h4>
@@ -2960,21 +4616,47 @@ final = base × STAB × efectividad × aleatorio(0,85–1,00)</pre>
           esos <b>30</b> de power rinden como 45.</li>
           <li>En un pokémon de dos tipos prueba el <b>primero</b>, y solo pasa al segundo si el
           objetivo es <b>inmune</b> al primero — no es el mejor de los dos.</li>
-          <li>Los <b>2 s</b> se acortan con el <b>IV de SPD</b>, como cualquier cooldown
-          (abajo).</li>
+          <li>Los <b>2 s</b> se acortan solo con el <b>IV de SPD</b>: −10 ms por punto, hasta
+          1,68 s con IV 32 (abajo).</li>
         </ul>
 
-        <h4>IV de SPD — cooldown</h4>
-        <p>El stat <b>SPD</b> en la ficha <b>no</b> entra en la fórmula de daño. El <b>IV de SPD</b>
-        (1–32, sorteado al capturar) acorta cooldowns: <b>10 ms por punto</b> (hasta −320 ms),
-        con piso de 400 ms. Vale en el intervalo global, en el cooldown de cada golpe y en el
-        <a data-cap="pvp">PvP Clasificatorio</a> — misma regla. <b>No</b> acelera la carrera en la cacería.</p>
-        ${tabela(
-          [c.r.regra, c.r.valor],
-          `<tr><td>Intervalo global base (tus golpes)</td><td class="wk-num">0,9 s</td></tr>
-           <tr><td>Con IV SPD 32 (piso)</td><td class="wk-num destaque">0,4 s</td></tr>
-           <tr><td>Cooldown de cada golpe</td><td class="wk-num">también acorta (−0,01 s / IV)</td></tr>`,
-        )}
+        <h4>Speed — la recarga de los golpes y el ataque básico</h4>
+        <p>El stat <b>SPD</b> de la ficha <b>no</b> entra en la fórmula de daño ni acelera la
+        carrera en la cacería. Lo que acelera los ataques es el <b>Speed base de la especie</b> y el
+        <b>IV de SPD</b> (1–32, sorteado al capturar), cada uno en su lugar:</p>
+        <ul>
+          <li><b>Golpes</b> (skills y ultimates): el Speed base da un <b>potencial</b> de descuento —
+          cada 20 de Speed vale 1%, hasta 6% en 120; por encima, cada 40 suma 1%, hasta el tope de
+          ${D(SPEED_POTENCIAL_TETO_PCT, 'es')}%. El IV de SPD decide cuánto de ese potencial aprovecha
+          el pokémon: IV 32 lo aprovecha todo; IV 16, la mitad.</li>
+          <li><b>Embestida e intervalo entre ataques</b>: solo el IV de SPD, <b>10 ms por punto</b>
+          (hasta −320 ms), con piso de 400 ms — la Embestida de 2 s pasa a 1,68 s con IV 32, y el
+          intervalo entre tus golpes, de 0,9 s, pasa a 0,58 s.</li>
+        </ul>
+        <pre class="wk-formula">potencial = Speed ÷ 20                (Speed hasta 120)
+          = 6 + (Speed − 120) ÷ 40     (por encima de 120; tope de ${D(SPEED_POTENCIAL_TETO_PCT, 'es')}%)
+descuento = potencial × IV de SPD ÷ 32
+recarga   = recarga × (1 − descuento ÷ 100)</pre>
+        <p>Un Jolteon (Speed 130) tiene ${exemploSpeed('es').potencial}% de potencial; con IV 24
+        aprovecha el 75% — ${exemploSpeed('es').pct}% menos —, y su golpe de
+        ${exemploSpeed('es').g600} se recarga en ${exemploSpeed('es').cd}. Con IV 32:</p>
+        ${tabelaSpeedGolpes(c)}
+        <p>La regla es la misma en la cacería, contra los bosses, en el
+        <a data-cap="pvp">PvP Clasificatorio</a> y en la Guerra de Guilds.</p>
+
+        <h4>La recarga es del pokémon</h4>
+        <p>La recarga de un golpe solo corre con el pokémon <b>en el campo</b>. Cambiar el activo
+        <b>pausa</b> lo que falta, guardado con él; cuando vuelve, la recarga sigue desde donde se
+        quedó. Cambiar por táctica (tipo contra tipo) no cuesta ni rinde una décima de segundo — lo
+        que ya no funciona es soltar el golpe de 600 de cinco pokémon seguidos y volver al primero con
+        la recarga ya cumplida.</p>
+        <ul>
+          <li>La cura de la Enfermera, en el Centro, <b>no</b> reinicia la recarga.</li>
+          <li>Solo las arenas de pago la reinician: entrar en un <a data-cap="bosses">Boss</a> o en la
+          <a data-cap="mistico">Arena Mística</a> empieza con todo listo.</li>
+          <li>PvP, Guerra de Guilds, gimnasio y campeonato son combates simulados aparte: todos
+          entran con la recarga limpia.</li>
+        </ul>
 
         <h4>Movimiento en la cacería</h4>
         <p>El pokémon activo corre un poco <b>delante</b> del entrenador — ritmo de la escena (260 ms
@@ -3150,9 +4832,14 @@ não evolui (Spinda, variantes de Outland)              100</pre>
         <ul>
           <li><b>Capture Boost</b> (Loja) — <b>dobra</b> a chance por arremesso, respeitando o
           teto de ${P(c.d.captura?.teto ?? 0.1, c.lang)}.</li>
+          <li><b>Bônus na Kick</b> — +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'pt')}% por hora resgatada
+          com pontos do canal, multiplicando com o boost da Loja (ver
+          <a data-cap="bonusLive">Bônus de live</a>).</li>
           <li><b>Bola melhor</b> — a Poké Ball é a mais barata <i>por arremesso</i>, mas a Ultra
           e a Beast gastam menos tempo.</li>
         </ul>
+        ${nota(`O lendário da <a data-cap="mistico">Arena Mística</a> não segue esta fórmula: lá a
+        chance é uma tabela por bola, igual para todos, e a tentativa é uma só.`)}
 
         <h4>Automação</h4>
         <p>A opção <b>Lançar pokébola</b> arremessa sozinha nos corpos caídos, respeitando um
@@ -3211,9 +4898,15 @@ no evolution (Spinda, Outland variants)                  100</pre>
         <ul>
           <li><b>Capture Boost</b> (Shop) — <b>doubles</b> the per-throw chance, still respecting
           the ${P(c.d.captura?.teto ?? 0.1, c.lang)} ceiling.</li>
+          <li><b>Kick Bonus</b> — +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'en')}% per hour redeemed with
+          channel points, multiplying with the Shop boost (see
+          <a data-cap="bonusLive">Live bonuses</a>).</li>
           <li><b>A better ball</b> — the Poké Ball is the cheapest <i>per throw</i>, but the Ultra
           and the Beast spend less of your time.</li>
         </ul>
+        ${nota(`The legendary in the <a data-cap="mistico">Mystic Arena</a> does not follow this
+        formula: there the chance is a per-ball table, the same for every legendary, and you get a
+        single try.`)}
 
         <h4>Automation</h4>
         <p>The <b>Throw poké ball</b> option throws at fallen bodies on its own, respecting a 1.2 s
@@ -3272,9 +4965,14 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <ul>
           <li><b>Capture Boost</b> (Tienda) — <b>duplica</b> la probabilidad por lanzamiento,
           respetando el tope de ${P(c.d.captura?.teto ?? 0.1, c.lang)}.</li>
+          <li><b>Bono en Kick</b> — +${D(c.d.eu?.kick?.pct ?? PCT_KICK, 'es')}% por hora canjeada con
+          puntos del canal, multiplicando con el boost de la Tienda (ver
+          <a data-cap="bonusLive">Bonos de directo</a>).</li>
           <li><b>Una bola mejor</b> — la Poké Ball es la más barata <i>por lanzamiento</i>, pero la
           Ultra y la Beast gastan menos tiempo.</li>
         </ul>
+        ${nota(`El legendario de la <a data-cap="mistico">Arena Mística</a> no sigue esta fórmula:
+        ahí la probabilidad es una tabla por ball, igual para todos, y el intento es uno solo.`)}
 
         <h4>Automatización</h4>
         <p>La opción <b>Lanzar poké ball</b> lanza sola a los cuerpos caídos, respetando un
@@ -3293,8 +4991,9 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
       pt: `
         <h4>Quando UM pokémon cai</h4>
         <ol class="wk-passos">
-          <li>Se a automação de <b>Revive</b> estiver ligada e você tiver o item, ele levanta com
-          <b>50% do HP</b> (e a de +HP completa em seguida, se estiver ligada).</li>
+          <li>Se a automação de <b>Revive</b> estiver ligada e você tiver o item, ele levanta — com
+          <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% do HP</b> no Revive comum e com tudo no Max Revive (e a automação de poção
+          completa em seguida, se estiver ligada).</li>
           <li>Senão, o <b>próximo da equipe que estiver de pé</b> entra no lugar,
           automaticamente.</li>
         </ol>
@@ -3302,11 +5001,13 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <h4>Quando o TIME INTEIRO cai</h4>
         <p>A hunt é suspensa e você aparece na praça do <b>Centro Pokémon</b> — uma área comum,
         com os outros jogadores andando por lá (WASD para andar). A <b>Enfermeira Joy</b> cura a
-        equipe inteira de graça, quantas vezes for preciso.</p>
+        equipe inteira de graça, quantas vezes for preciso. A cura devolve o HP, mas <b>não</b> zera
+        a recarga dos golpes (ver <a data-cap="combate">Combate</a>).</p>
         <p><b>Curar não tira você de lá.</b> Sair é escolher outra área no Mapa — a hunt em que
         você estava fica guardada.</p>
         ${nota(`<b>Desmaiar contra selvagens custa ${Math.round((c.d.economia?.xpPerdidoPct ?? 10))}% do XP do nível atual</b> do treinador
-        (bênção da loja reduz ou zera). O custo extra é o tempo: a volta ao Centro, a cura e o
+        (bênção da loja reduz ou zera; com o <a data-cap="atrasados">Boost dos Atrasados</a> ligado não custa nada — nem
+        desmaiar, nem desistir do combate). O custo extra é o tempo: a volta ao Centro, a cura e o
         caminho de novo. No <a data-cap="pvp">PvP Ranqueado</a> é diferente: perder <b>não</b>
         cobra XP — o que se perde ali é <b>PR</b>.`)}
 
@@ -3319,11 +5020,16 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
 
         <h4>Os itens</h4>
         <ul>
-          <li><b>Revive</b> — levanta um pokémon desmaiado com <b>50%</b> do HP.</li>
-          <li><b>Poção (+HP)</b> — recupera <b>40%</b> do HP máximo.</li>
+          <li><b>Revive</b> — levanta um pokémon desmaiado com <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}%</b> do HP: ele tira o
+          bicho do chão, e a poção recompõe a barra depois. O <b>Max Revive</b> levanta com o HP
+          inteiro.</li>
+          <li><b>Poções</b> — as do Market curam um valor <b>fixo</b> de HP, da mais barata à mais cara;
+          a <b>Golden Potion</b> é a única que cura por <b>porcentagem</b> do HP máximo, e por isso é a
+          que acompanha um pokémon de nível alto.</li>
           <li><b>Bless</b> (Loja) — reduz (Bless Plus e Bless Ultra) ou zera (Bless Max) a perda de
           XP da <b>próxima</b> vez que o time cair.</li>
         </ul>
+        ${tabelaDeCuras(c)}
         <p>Poções e revives se compram no <a data-cap="market">Market</a>, em quantidade
         ilimitada e a preço fixo.</p>
 
@@ -3341,19 +5047,22 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
       en: `
         <h4>When ONE pokémon falls</h4>
         <ol class="wk-passos">
-          <li>If the <b>Revive</b> automation is on and you own the item, it gets up with
-          <b>50% HP</b> (and the +HP automation tops it off right after, if enabled).</li>
+          <li>If the <b>Revive</b> automation is on and you own the item, it gets up — with
+          <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% HP</b> on a regular Revive and fully on a Max Revive (and the potion
+          automation tops it off right after, if enabled).</li>
           <li>Otherwise, the <b>next team member still standing</b> steps in automatically.</li>
         </ol>
 
         <h4>When the WHOLE TEAM falls</h4>
         <p>The hunt is suspended and you appear in the <b>Pokémon Center</b> square — a shared
         area, with other players walking around (WASD to move). <b>Nurse Joy</b> heals the whole
-        team for free, as many times as needed.</p>
+        team for free, as many times as needed. Healing restores HP but does <b>not</b> reset move
+        cooldowns (see <a data-cap="combate">Combat</a>).</p>
         <p><b>Healing does not take you out.</b> Leaving means picking another area on the Map —
         the hunt you were in is remembered.</p>
         ${nota(`<b>Fainting against wilds costs ${Math.round((c.d.economia?.xpPerdidoPct ?? 10))}% of your current level's trainer XP</b>
-        (shop blessings reduce or cancel it). The extra cost is time: the trip back, the heal and
+        (shop blessings reduce or cancel it; with the <a data-cap="atrasados">Late Joiner Boost</a> on it costs nothing —
+        neither fainting nor giving up a battle). The extra cost is time: the trip back, the heal and
         the walk out again. <a data-cap="pvp">Ranked PvP</a> is different: losing costs <b>no</b>
         XP — what you lose there is <b>PR</b>.`)}
 
@@ -3366,11 +5075,16 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
 
         <h4>The items</h4>
         <ul>
-          <li><b>Revive</b> — brings a fainted pokémon back at <b>50%</b> HP.</li>
-          <li><b>Potion (+HP)</b> — restores <b>40%</b> of max HP.</li>
+          <li><b>Revive</b> — brings a fainted pokémon back at <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}%</b> HP: it gets the
+          pokémon off the ground, and a potion refills the bar afterwards. The <b>Max Revive</b> brings
+          it back at full HP.</li>
+          <li><b>Potions</b> — the Market ones heal a <b>fixed</b> amount of HP, from the cheapest to the
+          priciest; the <b>Golden Potion</b> is the only one that heals a <b>percentage</b> of max HP,
+          which is why it keeps up with a high-level pokémon.</li>
           <li><b>Bless</b> (Shop) — reduces (Bless Plus and Bless Ultra) or zeroes (Bless Max) the
           XP loss the <b>next</b> time your team falls.</li>
         </ul>
+        ${tabelaDeCuras(c)}
         <p>Potions and revives are bought at the <a data-cap="market">Market</a>, unlimited and at
         a fixed price.</p>
 
@@ -3389,19 +5103,22 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
       es: `
         <h4>Cuando cae UN pokémon</h4>
         <ol class="wk-passos">
-          <li>Si la automatización de <b>Revivir</b> está activa y tienes el objeto, se levanta con
-          el <b>50% del HP</b> (y la de +HP lo completa después, si está activa).</li>
+          <li>Si la automatización de <b>Revivir</b> está activa y tienes el objeto, se levanta — con
+          el <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% del HP</b> en el Revive común y con todo en el Max Revive (y la
+          automatización de pociones lo completa después, si está activa).</li>
           <li>Si no, entra automáticamente el <b>siguiente del equipo que siga en pie</b>.</li>
         </ol>
 
         <h4>Cuando cae el EQUIPO ENTERO</h4>
         <p>La cacería se suspende y apareces en la plaza del <b>Centro Pokémon</b> — una zona
         común, con otros jugadores caminando por allí (WASD para moverte). La <b>Enfermera Joy</b>
-        cura al equipo entero gratis, tantas veces como haga falta.</p>
+        cura al equipo entero gratis, tantas veces como haga falta. La cura devuelve el HP, pero
+        <b>no</b> reinicia la recarga de los golpes (ver <a data-cap="combate">Combate</a>).</p>
         <p><b>Curar no te saca de allí.</b> Salir es elegir otra zona en el Mapa — la cacería en la
         que estabas queda guardada.</p>
         ${nota(`<b>Debilitarse contra salvajes cuesta el ${Math.round((c.d.economia?.xpPerdidoPct ?? 10))}% del XP del nivel actual</b> del entrenador
-        (las bendiciones de la tienda lo reducen o anulan). El coste extra es el tiempo: la vuelta
+        (las bendiciones de la tienda lo reducen o anulan; con el <a data-cap="atrasados">Boost de los Rezagados</a> activo
+        no cuesta nada — ni debilitarse ni rendirse en un combate). El coste extra es el tiempo: la vuelta
         al Centro, la cura y el camino de nuevo. En el <a data-cap="pvp">PvP Clasificatorio</a> es
         distinto: perder <b>no</b> cuesta XP — allí lo que se pierde es <b>PR</b>.`)}
 
@@ -3414,11 +5131,16 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
 
         <h4>Los objetos</h4>
         <ul>
-          <li><b>Revivir</b> — levanta a un pokémon debilitado con el <b>50%</b> del HP.</li>
-          <li><b>Poción (+HP)</b> — recupera el <b>40%</b> del HP máximo.</li>
+          <li><b>Revivir</b> — levanta a un pokémon debilitado con el <b>${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}%</b> del HP: lo
+          saca del suelo, y la poción rellena la barra después. El <b>Max Revive</b> lo levanta con el HP
+          completo.</li>
+          <li><b>Pociones</b> — las del Market curan un valor <b>fijo</b> de HP, de la más barata a la
+          más cara; la <b>Golden Potion</b> es la única que cura un <b>porcentaje</b> del HP máximo, y
+          por eso es la que acompaña a un pokémon de nivel alto.</li>
           <li><b>Bless</b> (Tienda) — reduce (Bless Plus y Bless Ultra) o anula (Bless Max) la
           pérdida de XP de la <b>próxima</b> vez que cae tu equipo.</li>
         </ul>
+        ${tabelaDeCuras(c)}
         <p>Pociones y revivires se compran en el <a data-cap="market">Market</a>, en cantidad
         ilimitada y a precio fijo.</p>
 
@@ -3460,7 +5182,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         sozinha (a sua escolha de bolas fica guardada).`, 'aviso')}
 
         <h4>Usar Revive ao desmaiar</h4>
-        <p>Levanta o pokémon ativo com 50% do HP em vez de trocar por outro da equipe. Clique nos
+        <p>Levanta o pokémon ativo — com ${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% do HP no Revive comum, com tudo no Max Revive — em
+        vez de trocar por outro da equipe. Clique nos
         ícones para escolher <b>quais revives</b> gastar; a <b>ordem dos cliques é a ordem de
         gasto</b>. A automação <b>para</b> quando acaba tudo o que está marcado — ela não gasta o
         que você não pediu —, e por isso a conta já nasce com todos marcados. Nada escolhido =
@@ -3520,7 +5243,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         stops by itself (your ball choice is kept).`, 'aviso')}
 
         <h4>Use Revive on faint</h4>
-        <p>Brings the active pokémon back at 50% HP instead of swapping to another team member.
+        <p>Brings the active pokémon back — at ${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% HP with a regular Revive, at full HP with a
+        Max Revive — instead of swapping to another team member.
         Click the icons to choose <b>which revives</b> to spend; the <b>click order is the spend
         order</b>. Nothing chosen = any of them.</p>
 
@@ -3579,7 +5303,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         se detiene sola (tu elección de bolas queda guardada).`, 'aviso')}
 
         <h4>Usar Revivir al debilitarse</h4>
-        <p>Levanta al pokémon activo con el 50% del HP en vez de cambiarlo por otro del equipo. Haz
+        <p>Levanta al pokémon activo — con el ${Math.round((AJUSTE_REVIVE_PCT.get(REVIVE_ID) ?? 0.1) * 100)}% del HP en el Revive común, con todo en el
+        Max Revive — en vez de cambiarlo por otro del equipo. Haz
         clic en los iconos para elegir <b>qué revivires</b> gastar; el <b>orden de los clics es el
         orden de gasto</b>. Nada elegido = cualquiera.</p>
 
@@ -3670,7 +5395,30 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         buscar a área pelo nome, limitar o intervalo de nível da hunt, marcar <b>só liberadas</b>
         — útil quando você sobe de nível e quer ver o que abriu — e filtrar por <b>tipo</b>. Com
         um tipo marcado, <b>Fraco contra</b> mostra as hunts cujos selvagens levam ×2 ou mais de
-        um golpe desse tipo, e <b>Forte contra</b> as que resistem a ele (×0,5 ou menos).</p>`,
+        um golpe desse tipo, e <b>Forte contra</b> as que resistem a ele (×0,5 ou menos).</p>
+
+        <h4>Trocar de área: ${SEG_REENTRADA_HUNT} segundos</h4>
+        <p>Entrar numa área pelo Mapa monta o campo com a onda cheia. Por isso existem duas esperas,
+        as duas de <b>${SEG_REENTRADA_HUNT} s</b>:</p>
+        <ul>
+          <li>depois de entrar numa área, você só escolhe outra (ou a mesma) ${SEG_REENTRADA_HUNT} s
+          depois — o aviso diz quanto falta;</li>
+          <li>quem chega a uma área até ${SEG_REENTRADA_HUNT} s depois de trocar dano — vindo de outra
+          hunt ou do Centro — a encontra <b>vazia</b> até completar o tempo.</li>
+        </ul>
+        <p>A onda normal volta em menos de 3 s, então sair e entrar de novo para ganhar uma onda cheia
+        nunca compensa. A volta automática depois de um nocaute não paga essa espera.</p>
+
+        <h4>A Sessão (a prancheta)</h4>
+        <p>Durante a hunt, o painel <b>Sessão</b> soma o que aconteceu desde o último <b>Reset</b>, em
+        quatro seções: <b>Treinador</b> (tempo, XP do treinador e do pokémon, Gold, abates e
+        capturas, cada um também por hora), <b>Shiny</b> (vistos e capturados), <b>Drops raros</b>
+        (Boss Token, fragmentos de Chave, Shiny Stone, Bicicleta e Mega, peças de TM e MysticTicket)
+        e <b>Custos</b> — as bolas, poções e revives que a automação gastou, ao preço do Market, com o
+        <b>Gold gasto</b> e o <b>Lucro líquido</b>, também por hora.</p>
+        <p>Os números são deste navegador e sobrevivem a recarregar a página. <b>Copiar</b> leva um
+        resumo de uma linha — ⏱️ tempo, 🎮 XP/h, 🪙 Gold/h e 💫 shinies vistos e capturados —, para
+        colar no chat.</p>`,
       en: `
         <p>The <b>Map</b> is where you pick a hunt. Each marker shows the area's recommended level;
         locked ones stay grey until your trainer reaches it.</p>
@@ -3707,7 +5455,29 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         also search an area by name, limit the hunt level range, toggle <b>unlocked only</b> —
         handy after a level-up to see what opened — and filter by <b>type</b>. With a type
         selected, <b>Weak against</b> shows the hunts whose wilds take ×2 or more from a move of
-        that type, and <b>Strong against</b> the ones that resist it (×0.5 or less).</p>`,
+        that type, and <b>Strong against</b> the ones that resist it (×0.5 or less).</p>
+
+        <h4>Switching areas: ${SEG_REENTRADA_HUNT} seconds</h4>
+        <p>Entering an area from the Map builds the field with a full wave. That is why there are two
+        waits, both of <b>${SEG_REENTRADA_HUNT} s</b>:</p>
+        <ul>
+          <li>after entering an area, you can only pick another one (or the same) ${SEG_REENTRADA_HUNT} s
+          later — the notice says how long is left;</li>
+          <li>whoever reaches an area within ${SEG_REENTRADA_HUNT} s of trading damage — from another
+          hunt or from the Center — finds it <b>empty</b> until the time is up.</li>
+        </ul>
+        <p>The normal wave comes back in under 3 s, so leaving and coming back for a full wave never
+        pays off. The automatic return after a knockout does not pay this wait.</p>
+
+        <h4>The Session (the clipboard)</h4>
+        <p>During the hunt, the <b>Session</b> panel adds up what happened since the last
+        <b>Reset</b>, in four sections: <b>Trainer</b> (time, trainer and pokémon XP, Gold, kills and
+        catches, each also per hour), <b>Shiny</b> (seen and caught), <b>Rare drops</b> (Boss Token,
+        Key, Shiny Stone, Bicycle and Mega fragments, TM pieces and MysticTicket) and <b>Costs</b> — the
+        balls, potions and revives the automation spent, at Market price, with <b>Gold spent</b> and
+        <b>Net profit</b>, also per hour.</p>
+        <p>The numbers belong to this browser and survive a page reload. <b>Copy</b> takes a one-line
+        summary — ⏱️ time, 🎮 XP/h, 🪙 Gold/h and 💫 shinies seen and caught — to paste in chat.</p>`,
       es: `
         <p>El <b>Mapa</b> es donde eliges la cacería. Cada marcador muestra el nivel recomendado;
         las bloqueadas quedan grises hasta que tu entrenador alcance ese nivel.</p>
@@ -3746,7 +5516,31 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         puedes buscar la zona por nombre, limitar el rango de nivel de la cacería, marcar
         <b>solo liberadas</b> y filtrar por <b>tipo</b>. Con un tipo marcado, <b>Débil contra</b>
         muestra las cacerías cuyos salvajes reciben ×2 o más de un golpe de ese tipo, y
-        <b>Fuerte contra</b> las que lo resisten (×0,5 o menos).</p>`,
+        <b>Fuerte contra</b> las que lo resisten (×0,5 o menos).</p>
+
+        <h4>Cambiar de zona: ${SEG_REENTRADA_HUNT} segundos</h4>
+        <p>Entrar en una zona por el Mapa arma el campo con la oleada llena. Por eso hay dos esperas,
+        las dos de <b>${SEG_REENTRADA_HUNT} s</b>:</p>
+        <ul>
+          <li>después de entrar en una zona, solo eliges otra (o la misma) ${SEG_REENTRADA_HUNT} s
+          después — el aviso dice cuánto falta;</li>
+          <li>quien llega a una zona hasta ${SEG_REENTRADA_HUNT} s después de intercambiar daño —
+          desde otra cacería o desde el Centro — la encuentra <b>vacía</b> hasta completar el
+          tiempo.</li>
+        </ul>
+        <p>La oleada normal vuelve en menos de 3 s, así que salir y entrar de nuevo para ganar una
+        oleada llena nunca compensa. La vuelta automática después de un nocaut no paga esta espera.</p>
+
+        <h4>La Sesión (la planilla)</h4>
+        <p>Durante la cacería, el panel <b>Sesión</b> suma lo que pasó desde el último <b>Reset</b>,
+        en cuatro secciones: <b>Entrenador</b> (tiempo, XP del entrenador y del pokémon, Gold,
+        derrotas y capturas, cada uno también por hora), <b>Shiny</b> (vistos y capturados), <b>Drops
+        raros</b> (Boss Token, fragmentos de Llave, Shiny Stone, Bicicleta y Mega, piezas de TM y
+        MysticTicket) y <b>Costos</b> — las balls, pociones y revivires que gastó la automatización, al
+        precio del Market, con el <b>Gold gastado</b> y la <b>Ganancia neta</b>, también por hora.</p>
+        <p>Los números son de este navegador y sobreviven a recargar la página. <b>Copiar</b> lleva un
+        resumen de una línea — ⏱️ tiempo, 🎮 XP/h, 🪙 Gold/h y 💫 shinies vistos y capturados —, para
+        pegar en el chat.</p>`,
     }),
   },
 
@@ -3764,8 +5558,46 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <ul>
           <li>Custo de criação: <b>${N(c.d.guildCusto ?? 250_000, c.lang)}</b> de ouro</li>
           <li>Escolha nome, formato do escudo, emblema e cores (mesmo vocabulário visual do outfit)</li>
-          <li>O dono convida por nick, expulsa membros ou apaga a guild</li>
+          <li>O dono convida por nick, expulsa membros, escala o time ou apaga a guild — e pode
+          nomear <b>sub-donos</b> para dividir o trabalho</li>
           <li><b>Não há teto de membros</b> — o teto é do <b>TIME</b>, logo abaixo</li>
+        </ul>
+
+        <h4>Sub-donos</h4>
+        <p>Na ficha de um membro, o dono pode <b>Tornar sub-dono</b> — quantos quiser. O sub-dono
+        convida, expulsa membros, responde às candidaturas, escala o time, registra a guild na guerra
+        e troca o brasão e a TAG: tudo o que o dono faz, menos <b>apagar a guild</b>, <b>passar a
+        liderança</b> e <b>nomear outro sub-dono</b>. Um sub-dono não expulsa outro. E quem passa a
+        liderança vira sub-dono, em vez de membro comum.</p>
+
+        <h4>O painel da guild</h4>
+        <p>Quatro abas: <b>Membros</b> (busca, convite e, ao lado de cada nick, a tag <b>no time</b>
+        ou <b>reserva</b>; clicar no membro abre a ficha dele, com a equipe e as ações de dono),
+        <b>Guerra</b> (a sua equipe de guerra, o Time da Guild e o atalho para o PvP Guild),
+        <b>Guild</b> (brasão, TAG, recrutamento e a saída) e <b>Boost</b> (o banco da guild, mais
+        abaixo).</p>
+
+        <h4>Entrar numa guild: o Quadro</h4>
+        <p>Quem não tem guild abre o botão e encontra o <b>Quadro</b>: a lista de todas as guilds,
+        com busca por nome ou TAG, o filtro <b>só as que posso entrar</b> e três ordens — <b>Maior GP</b>,
+        <b>Mais membros</b> e <b>⚔ Maior força</b> (a equipe de guerra dos escalados, somada; o ⚔ aparece
+        em cada guild). Cada guild diz como recebe
+        gente nova — o dono escolhe em <b>Guild → Quem pode entrar</b>:</p>
+        ${tabela(
+          ['Política', 'Como se entra'],
+          `<tr><td><b>Aberta</b></td><td>qualquer treinador entra na hora, sem pedir nada</td></tr>
+           <tr><td><b>Aberta com requisitos</b></td><td>entra na hora quem tiver o nível e o PR (do PvP Ranqueado) mínimos que o dono exigir</td></tr>
+           <tr><td><b>Fechada</b></td><td>só por convite — mas qualquer um pode <b>Candidatar-se</b>, e o dono ou um sub-dono responde</td></tr>`,
+        )}
+        <ul>
+          <li>O <b>cartaz</b> de recrutamento, uma linha de até ${MAX_DESCRICAO_GUILD} caracteres
+          ("guerra todo dia às 22h"), aparece no Quadro.</li>
+          <li>Os convites que você recebe ficam na aba <b>Convites</b>; as candidaturas para a sua
+          guild, em <b>Pedidos para entrar</b>.</li>
+          <li><b>Quem sai de uma guild espera ${Math.round(GUILD_SAIDA_CD_MS / 3_600_000)} horas</b> para entrar em outra. Só quem sai por
+          vontade própria: quem foi <b>expulso</b>, ou perdeu a guild porque o dono a apagou, entra em
+          outra na hora. É o que impede pular toda manhã para a guild que está em primeiro no
+          bônus.</li>
         </ul>
 
 
@@ -3787,8 +5619,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
 
         <h4>O TIME da guild (a escalação)</h4>
         <p>A guild cresce sem limite, mas quem vai à <b>Guerra de Guilds</b> é o <b>time</b>:
-        <b>${N(c.d.guildMaxTime ?? 10, c.lang)} jogadores</b>, escolhidos pelo <b>dono</b> em
-        <b>Guild → Time da Guild</b>. É a decisão que define a força da guild no dia.</p>
+        <b>${N(c.d.guildMaxTime ?? 10, c.lang)} jogadores</b>, escolhidos pelo <b>dono</b> (ou um
+        sub-dono) em <b>Guild → Guerra → Time da Guild</b>. É a decisão que define a força da guild no dia.</p>
         <ul>
           <li><b>Guild com ${N(c.d.guildMaxTime ?? 10, c.lang)} membros ou menos está toda escalada.</b>
           Se você é oito, os oito entram — não há nada a escolher. O editor só passa a valer
@@ -3825,13 +5657,50 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>O botão <b>🏆 Recompensas</b>, na aba <b>Guild</b> do PvP (embaixo do replay), mostra as
         duas tabelas, quanto falta para cada virada e onde a sua guild está.</p>
 
+        <h4>Boost da Guild: o banco</h4>
+        <p>Na aba <b>Boost</b> do painel da guild fica o <b>banco da guild</b>: qualquer membro doa
+        diamantes, de 1 até o que falta. Quando o banco junta <b>${N(BANCO_GUILD.meta, c.lang)} 💎</b>, a
+        guild <b>inteira</b> ganha <b>+${BOOST_GUILD.pct}% de XP</b> do treinador e do pokémon por
+        <b>${BOOST_GUILD.dias} dias</b> — e o banco zera para a próxima rodada.</p>
+        <ul>
+          <li>Encher o banco com o boost ainda ligado <b>soma mais ${BOOST_GUILD.dias} dias</b> ao que falta.</li>
+          <li>A doação é cortada no que falta: com 950 no banco, quem doa 100 paga só 50.</li>
+          <li>Vale para quem está na guild <b>agora</b>: quem entra enquanto ele dura também recebe, e quem
+          sai perde na hora.</li>
+          <li><b>Multiplica</b> com XP Boost, VIP, o bônus do ranking, eventos, Twitch e Kick.</li>
+          <li>A doação é da guild: <b>não volta</b> se você sair ou for <b>expulso</b> — ela fica no banco
+          para o próximo boost. Se a guild for <b>apagada</b> antes de o banco encher, o que estiver nele
+          volta para quem doou, mesmo para quem já saiu. O que já encheu um banco virou boost e não volta.</li>
+          <li>A aba mostra quem já doou no banco atual e o histórico, ao vivo; o chat da guild avisa quando
+          o boost liga.</li>
+        </ul>
+
         <h4>Guerra de Guilds (diária)</h4>
         <p>Uma vez por dia, às <b>22h UTC</b> (19h de Brasília), todas as guilds registradas se
         enfrentam numa arena só. Quanto mais guilds inscritas, mais GP o 1º lugar leva
-        (N guilds → 1º ganha N GP, 2º ganha N−1, …). Só o <b>dono</b> registra, uma vez só — a
-        guild entra <b>automaticamente todo dia</b> —, na aba <b>Guild</b> do painel de
-        <a data-cap="pvp">PvP</a>.</p>
+        (N guilds → 1º ganha N GP, 2º ganha N−1, …). O <b>dono</b> (ou um sub-dono) registra uma
+        vez só — a guild entra <b>automaticamente todo dia</b> —, na aba <b>Guild</b> do painel de
+        <a data-cap="pvp">PvP</a>. Registrou depois da guerra do dia? Vale para a de amanhã.</p>
         <ul>
+          <li><b>A colocação é por uma nota de 0 a 100: ${N(PESO_SOBREVIVENCIA, c.lang)} de ficar de pé e ${N(PESO_COMBATE, c.lang)} de briga.</b>
+          <ul>
+            <li><b>Sobrevivência — até ${N(PESO_SOBREVIVENCIA, c.lang)}:</b> ${N(PESO_SOBREVIVENCIA, c.lang)} ÷ √ da posição em que a guild caiu, contando da
+            última de pé. A última leva <b>${N(PESO_SOBREVIVENCIA, c.lang)}</b>; a 2ª, ${D(Math.round(notaSobrevivencia(2) * 10) / 10, c.lang)}; a 3ª, ${D(Math.round(notaSobrevivencia(3) * 10) / 10, c.lang)}; a 10ª,
+            ${D(Math.round(notaSobrevivencia(10) * 10) / 10, c.lang)}; a 20ª, ${D(Math.round(notaSobrevivencia(20) * 10) / 10, c.lang)}. O peso está no topo: sobreviver à penúltima vale muito,
+            e no meio da tabela quem decide é a briga.</li>
+            <li><b>Combate — até ${N(PESO_COMBATE, c.lang)}:</b> um contador de pokémon inimigos derrubados pela guild — o
+            abate de qualquer membro soma —, na mesma conta da sobrevivência: ${N(PESO_COMBATE, c.lang)} ÷ √ da posição da
+            guild nesse contador. A que mais derrubou leva <b>${N(PESO_COMBATE, c.lang)}</b>; a 2ª, ${D(Math.round(notaCombate(2, 1) * 10) / 10, c.lang)}; a 3ª, ${D(Math.round(notaCombate(3, 1) * 10) / 10, c.lang)}; a
+            10ª, ${D(Math.round(notaCombate(10, 1) * 10) / 10, c.lang)}. Quem não derrubou nenhum leva 0, e guilds com o mesmo número de abates dividem
+            a posição. O dano não entra na nota (a análise da guerra continua mostrando).</li>
+            <li>A <b>nota</b> é a soma das duas, com uma casa, e decide a colocação. Empate: leva quem
+            caiu por último, depois quem derrubou mais.</li>
+          </ul>
+          Por que assim: só a ordem de queda punha no top 20 guilds de dois membros que passavam a
+          guerra longe da briga, e só os pontos deixavam a última guild viva perder a guerra. Com a
+          nota, a última de pé leva os ${N(PESO_SOBREVIVENCIA, c.lang)} e quase sempre vence, e quem só se escondeu não passa de
+          quem brigou. A aba <b>Última guerra</b> mostra a nota de cada guild — o escudinho é a posição
+          de sobrevivência, e parando o mouse na nota a conta inteira aparece.</li>
           <li><b>Ninguém precisa estar acordado.</b> A guerra é <b>simulada no servidor</b> com o
           <b>time</b> de quem se registrou — até ${N(c.d.guildMaxTime ?? 10, c.lang)} jogadores por guild,
           e não a guild inteira. Você não entra em arena nenhuma no horário.</li>
@@ -3846,8 +5715,10 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           4-5-12-13 —, para toda região ter a mesma força. Dentro da região, a mais fraca nasce mais
           perto da cabeça de chave e as fortes ficam na divisa: as favoritas só se cruzam no fim.
           A força é o <b>GP Global</b> da temporada, depois o GP do dia anterior e, empatando, a
-          força das equipes. A ponta da 1ª muda a cada guerra, porque o terreno da arena não é
-          simétrico.</li>
+          força das equipes. A ponta da 1ª é sorteada a cada guerra.</li>
+          <li>A arena é um <b>quadrado liso de grama</b>, sem pedra nem corredor no meio, e só os
+          <b>pokémon</b> estão em campo: ninguém fica preso atrás de obstáculo nem esperando na fila
+          — o que a fita mostra é a briga.</li>
           <li>O nível conta <b>inteiro até ${N(ARENA_NIVEL_CHEIO, c.lang)}</b> e <b>comprimido</b> daí
           para cima — mais do que no <a data-cap="ginasios">ginásio</a>: nv ${N(1000, c.lang)} conta
           ${N(nivelNaGuerra(1000), c.lang)}, nv ${N(3000, c.lang)} conta ${N(nivelNaGuerra(3000), c.lang)}
@@ -3857,14 +5728,20 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           dano é sempre num alvo só. O <b>+25% de líder de ginásio</b> vale só na hunt (ver
           <a data-cap="ginasios">Ginásios</a>).</li>
           <li><b>A guerra dura até ${MIN_GUERRA} minutos simulados.</b> Ela acaba quando sobra uma
-          guild de pé. Se passar do teto, decide a <b>fração de HP</b> que cada guild ainda tem.
-          Os duelos de ginásio, do PvP Ranqueado e do Campeonato têm teto próprio, mais curto.</li>
+          guild de pé ou quando bate o teto — e, nos dois casos, a colocação sai da nota (no teto, as
+          que ainda estão de pé contam como as últimas a cair, na ordem da saúde). Os
+          duelos de ginásio, do PvP Ranqueado e do Campeonato têm teto próprio, mais curto, e neles
+          vence quem fica de pé.</li>
         </ul>
         <p>Depois é só clicar em <b>assistir ao replay</b>: a guerra inteira gravada, com os
         golpes, os efeitos de tipo, os números de dano, as trocas de pokémon, o placar e o feed de
-        abates (<b>jogador</b> ⚔ <b>pokémon</b> de <b>donor</b>). Dá para acelerar até 8×, afastar
-        a câmera e acompanhar um lutador específico.</p>
-        <p>Ao lado das Recompensas, o botão <b>📊 Análise da última guerra</b> abre os números da guerra
+        abates (<b>jogador</b> ⚔ <b>pokémon</b> de <b>dono</b>). Dá para acelerar até 8×, afastar
+        a câmera e acompanhar um lutador específico — o painel lateral tem <b>busca por nick ou
+        guild</b>, para achar alguém no meio de centenas.</p>
+        ${nota(`<b>Medalha de Guerra.</b> O <b>Pokémon da guerra</b> — o destaque de dano — ganha a
+        Medalha de Guerra para sempre, numerada. Ela aparece na ficha e numa cápsula dourada no
+        Mercado da Comunidade, e vai junto quando ele troca de dono.`, 'dica')}
+        <p>Ao lado das Recompensas, o botão <b>📊 Análise</b> abre os números da última guerra
         inteira: <b>dano causado e recebido, abates e pokémon perdidos</b> de cada jogador, os pokémon
         que cada um pôs em campo (e quanto cada um fez), os destaques — maior dano, mais abates, o
         Pokémon da guerra, o maior golpe, o primeiro abate, o último de pé — e o placar de todas as
@@ -3878,8 +5755,47 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <ul>
           <li>Creation cost: <b>${N(c.d.guildCusto ?? 250_000, c.lang)}</b> gold</li>
           <li>Pick name, shield shape, emblem and colours</li>
-          <li>The owner invites by nick, kicks members or deletes the guild</li>
+          <li>The owner invites by nick, kicks members, sets the roster or deletes the guild — and can
+          appoint <b>co-owners</b> to share the work</li>
           <li><b>No member cap</b> — the cap is on the <b>ROSTER</b>, just below</li>
+        </ul>
+
+        <h4>Co-owners</h4>
+        <p>On a member's sheet, the owner can <b>Make co-owner</b> — as many as they like. A co-owner
+        invites, kicks members, answers applications, sets the roster, registers the guild for the
+        war and changes the crest and the TAG: everything the owner does, except <b>deleting the
+        guild</b>, <b>handing over leadership</b> and <b>appointing another co-owner</b>. A co-owner
+        cannot kick another one. And whoever hands over leadership becomes a co-owner, not a plain
+        member.</p>
+
+        <h4>The guild panel</h4>
+        <p>Four tabs: <b>Members</b> (search, invite and, next to each nick, the <b>on roster</b> or
+        <b>reserve</b> tag; clicking a member opens their sheet, with their team and the owner
+        actions), <b>War</b> (your war team, the Guild Roster and the shortcut to Guild PvP),
+        <b>Guild</b> (crest, TAG, recruiting and leaving) and <b>Boost</b> (the guild bank, further
+        down).</p>
+
+        <h4>Joining a guild: the Board</h4>
+        <p>Anyone without a guild opens the button and finds the <b>Board</b>: the list of every
+        guild, with a search by name or TAG, the <b>only ones I can join</b> filter and three orders —
+        <b>Most GP</b>, <b>Most members</b> and <b>⚔ Strongest</b> (the lineup's war teams, summed; the ⚔
+        shows on every guild). Each guild
+        says how it takes new people — the owner picks it in <b>Guild → Who can join</b>:</p>
+        ${tabela(
+          ['Policy', 'How you get in'],
+          `<tr><td><b>Open</b></td><td>any trainer joins right away, no questions asked</td></tr>
+           <tr><td><b>Open with requirements</b></td><td>joins right away whoever has the minimum level and PR (Ranked PvP) the owner set</td></tr>
+           <tr><td><b>Closed</b></td><td>invite only — but anyone can <b>Apply</b>, and the owner or a co-owner answers</td></tr>`,
+        )}
+        <ul>
+          <li>The recruiting <b>poster</b>, one line of up to ${MAX_DESCRICAO_GUILD} characters ("war every
+          day at 10 PM"), shows on the Board.</li>
+          <li>Invites you receive go to the <b>Invites</b> tab; applications to your guild, to
+          <b>Join requests</b>.</li>
+          <li><b>Whoever leaves a guild waits ${Math.round(GUILD_SAIDA_CD_MS / 3_600_000)} hours</b> before joining another. Only those who
+          leave by choice: whoever was <b>kicked</b>, or lost the guild because the owner deleted it,
+          joins another right away. It is what stops people hopping every morning to the guild that
+          is first on the bonus.</li>
         </ul>
 
 
@@ -3901,8 +5817,8 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
 
         <h4>The guild roster</h4>
         <p>The guild grows without limit, but what goes to the <b>Guild War</b> is the
-        <b>roster</b>: <b>${N(c.d.guildMaxTime ?? 10, c.lang)} players</b>, picked by the <b>owner</b> in
-        <b>Guild → Guild Roster</b>. That choice is what the guild's strength is made of.</p>
+        <b>roster</b>: <b>${N(c.d.guildMaxTime ?? 10, c.lang)} players</b>, picked by the <b>owner</b> (or
+        a co-owner) in <b>Guild → War → Guild Roster</b>. That choice is what the guild's strength is made of.</p>
         <ul>
           <li><b>A guild with ${N(c.d.guildMaxTime ?? 10, c.lang)} members or fewer is fully rostered.</b>
           If you are eight, all eight fight — there is nothing to pick. The editor only starts to
@@ -3939,12 +5855,51 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>The <b>🏆 Rewards</b> button, on the PvP <b>Guild</b> tab (below the replay), shows both
         tables, the time left until each reset and where your guild stands.</p>
 
+        <h4>Guild Boost: the bank</h4>
+        <p>The guild panel's <b>Boost</b> tab holds the <b>guild bank</b>: any member donates diamonds,
+        from 1 up to what is missing. When the bank reaches <b>${N(BANCO_GUILD.meta, c.lang)} 💎</b>, the
+        <b>whole</b> guild gets <b>+${BOOST_GUILD.pct}% trainer and pokémon XP</b> for
+        <b>${BOOST_GUILD.dias} days</b> — and the bank empties for the next round.</p>
+        <ul>
+          <li>Filling the bank while the boost is still on <b>adds ${BOOST_GUILD.dias} more days</b> to what is left.</li>
+          <li>Donations are capped at what is missing: with 950 in the bank, donating 100 costs only 50.</li>
+          <li>It applies to whoever is in the guild <b>now</b>: anyone who joins while it lasts gets it too,
+          and anyone who leaves loses it at once.</li>
+          <li>It <b>multiplies</b> with XP Boost, VIP, the ranking bonus, events, Twitch and Kick.</li>
+          <li>Donations belong to the guild: they <b>don't come back</b> if you leave or get <b>kicked</b> —
+          they stay in the bank for the next boost. If the guild is <b>deleted</b> before the bank fills,
+          whatever is in it goes back to the donors, even those who already left. What already filled a
+          bank became a boost and never comes back.</li>
+          <li>The tab shows who donated to the current bank and the history, live; the guild chat tells
+          everyone when the boost turns on.</li>
+        </ul>
+
         <h4>Guild War (daily)</h4>
         <p>Once a day, at <b>22:00 UTC</b>, every registered guild fights in a single arena. More
-        registrations mean more GP for 1st place (N guilds → 1st gets N GP, 2nd gets N−1, …). Only
-        the <b>owner</b> registers, just once — the guild joins <b>automatically every day</b> — on
-        the <b>Guild</b> tab of the <a data-cap="pvp">PvP</a> panel.</p>
+        registrations mean more GP for 1st place (N guilds → 1st gets N GP, 2nd gets N−1, …). The
+        <b>owner</b> (or a co-owner) registers just once — the guild joins <b>automatically every
+        day</b> — on the <b>Guild</b> tab of the <a data-cap="pvp">PvP</a> panel. Registered after
+        the day's war? It counts for tomorrow's.</p>
         <ul>
+          <li><b>Placing is by a score from 0 to 100: ${N(PESO_SOBREVIVENCIA, c.lang)} for staying alive and ${N(PESO_COMBATE, c.lang)} for fighting.</b>
+          <ul>
+            <li><b>Survival — up to ${N(PESO_SOBREVIVENCIA, c.lang)}:</b> ${N(PESO_SOBREVIVENCIA, c.lang)} ÷ √ of the position the guild fell in, counting from
+            the last one standing. The last one gets <b>${N(PESO_SOBREVIVENCIA, c.lang)}</b>; 2nd, ${D(Math.round(notaSobrevivencia(2) * 10) / 10, c.lang)}; 3rd, ${D(Math.round(notaSobrevivencia(3) * 10) / 10, c.lang)};
+            10th, ${D(Math.round(notaSobrevivencia(10) * 10) / 10, c.lang)}; 20th, ${D(Math.round(notaSobrevivencia(20) * 10) / 10, c.lang)}. The weight sits at the top: outlasting the
+            runner-up is worth a lot, and in the middle of the table fighting decides.</li>
+            <li><b>Combat — up to ${N(PESO_COMBATE, c.lang)}:</b> a counter of enemy Pokémon knocked out by the guild — any
+            member's knockout counts —, with the same math as survival: ${N(PESO_COMBATE, c.lang)} ÷ √ of the guild's position
+            on that counter. The one with the most knockouts gets <b>${N(PESO_COMBATE, c.lang)}</b>; 2nd, ${D(Math.round(notaCombate(2, 1) * 10) / 10, c.lang)}; 3rd, ${D(Math.round(notaCombate(3, 1) * 10) / 10, c.lang)};
+            10th, ${D(Math.round(notaCombate(10, 1) * 10) / 10, c.lang)}. No knockouts gets 0, and guilds tied on knockouts share the position. Damage
+            does not count toward the score (the war analysis still shows it).</li>
+            <li>The <b>score</b> is the sum of both, with one decimal, and decides the placing. Ties go
+            to whoever fell last, then to whoever knocked out more.</li>
+          </ul>
+          Why: the order of elimination alone put two-member guilds that spent the war away from the
+          fight in the top 20, and points alone let the last guild alive lose the war. With the score,
+          the last one standing gets the ${N(PESO_SOBREVIVENCIA, c.lang)} and almost always wins, and a guild that only hid does
+          not pass the ones that fought. The <b>Last war</b> tab shows each guild's score — the little
+          shield is the survival position, and hovering the score shows the full math.</li>
           <li><b>Nobody has to be awake.</b> The war is <b>simulated on the server</b> with the
           <b>roster</b> of everyone who registered — up to ${N(c.d.guildMaxTime ?? 10, c.lang)} players per
           guild, not the whole guild. You do not enter any arena at that hour.</li>
@@ -3960,8 +5915,11 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           2-7-10-15, 3-6-11-14 and 4-5-12-13 —, so every region has the same strength. Inside a
           region the weakest guild spawns closest to the top seed and the strong ones sit on the
           border: the favourites only meet at the end. Strength is the season's <b>Global GP</b>,
-          then the previous day's GP and, on a tie, the teams' strength. The 1st seed's corner
-          changes every war, because the arena's terrain is not symmetric.</li>
+          then the previous day's GP and, on a tie, the teams' strength. The 1st seed's corner is
+          drawn every war.</li>
+          <li>The arena is a <b>flat square of grass</b>, with no rock or corridor in the middle, and
+          only the <b>pokémon</b> are on the field: nobody gets stuck behind an obstacle or waiting in
+          line — what the replay shows is the fight.</li>
           <li>Level counts <b>in full up to ${N(ARENA_NIVEL_CHEIO, c.lang)}</b> and <b>compressed</b>
           above that — harder than in the <a data-cap="ginasios">gyms</a>: lv ${N(1000, c.lang)}
           counts as ${N(nivelNaGuerra(1000), c.lang)}, lv ${N(3000, c.lang)} as
@@ -3972,14 +5930,20 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           damage is always single-target. The <b>+25% gym leader</b> bonus applies only in the hunt
           (see <a data-cap="ginasios">Gyms</a>).</li>
           <li><b>The war lasts up to ${MIN_GUERRA} simulated minutes.</b> It ends when only one guild
-          is left standing. Past that cap, the <b>share of HP</b> each guild still has decides.
-          Gym, Ranked PvP and Championship duels have their own, shorter cap.</li>
+          is left standing or when it hits the cap — either way, placing comes from the score (at the cap,
+          the guilds still standing count as the last to fall, in order of health). Gym,
+          Ranked PvP and Championship duels have their own, shorter cap, and there whoever stays
+          standing wins.</li>
         </ul>
         <p>Afterwards just hit <b>watch the replay</b>: the whole war recorded, with the moves,
         the type effects, the damage numbers, the pokémon swaps, the scoreboard and the kill feed
         (<b>player</b> ⚔ <b>pokémon</b> of <b>owner</b>). You can speed it up to 8×, zoom the
-        camera out and follow one specific fighter.</p>
-        <p>Next to Rewards, the <b>📊 Last war analysis</b> button opens the numbers of the whole war:
+        camera out and follow one specific fighter — the side panel has a <b>search by nick or
+        guild</b>, to find someone among hundreds.</p>
+        ${nota(`<b>War Medal.</b> The <b>Pokémon of the war</b> — the top damage dealer — earns the War
+        Medal for good, numbered. It shows on its sheet and as a golden capsule in the Community
+        Market, and goes along when it changes hands.`, 'dica')}
+        <p>Next to Rewards, the <b>📊 Analysis</b> button opens the numbers of the whole last war:
         <b>damage dealt and taken, knockouts and pokémon lost</b> for every player, the pokémon each one
         put on the field (and how much each did), the highlights — most damage, most knockouts, the
         Pokémon of the war, the biggest hit, first blood, last one standing — and every guild's
@@ -3993,8 +5957,47 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <ul>
           <li>Costo de creación: <b>${N(c.d.guildCusto ?? 250_000, c.lang)}</b> de oro</li>
           <li>Elige nombre, forma del escudo, emblema y colores</li>
-          <li>El dueño invita por nick, expulsa o borra la guild</li>
+          <li>El dueño invita por nick, expulsa, arma el equipo o borra la guild — y puede nombrar
+          <b>sub-dueños</b> para repartir el trabajo</li>
           <li><b>No hay límite de miembros</b> — el límite es del <b>EQUIPO</b>, aquí abajo</li>
+        </ul>
+
+        <h4>Sub-dueños</h4>
+        <p>En la ficha de un miembro, el dueño puede <b>Hacer sub-dueño</b> — a cuantos quiera. El
+        sub-dueño invita, expulsa miembros, responde a las postulaciones, arma el equipo, registra la
+        guild en la guerra y cambia el escudo y la TAG: todo lo que hace el dueño, menos <b>borrar la
+        guild</b>, <b>pasar el liderazgo</b> y <b>nombrar otro sub-dueño</b>. Un sub-dueño no expulsa
+        a otro. Y quien pasa el liderazgo se vuelve sub-dueño, en vez de miembro común.</p>
+
+        <h4>El panel de la guild</h4>
+        <p>Cuatro pestañas: <b>Miembros</b> (búsqueda, invitación y, junto a cada nick, la etiqueta
+        <b>en el equipo</b> o <b>reserva</b>; pulsar el miembro abre su ficha, con su equipo y las
+        acciones de dueño), <b>Guerra</b> (tu equipo de guerra, el Equipo de la Guild y el atajo al
+        PvP Guild), <b>Guild</b> (escudo, TAG, reclutamiento y la salida) y <b>Boost</b> (el banco de
+        la guild, más abajo).</p>
+
+        <h4>Entrar en una guild: el Tablón</h4>
+        <p>Quien no tiene guild abre el botón y encuentra el <b>Tablón</b>: la lista de todas las
+        guilds, con búsqueda por nombre o TAG, el filtro <b>solo en las que puedo entrar</b> y tres
+        órdenes — <b>Más GP</b>, <b>Más miembros</b> y <b>⚔ Mayor fuerza</b> (los equipos de guerra de los
+        alineados, sumados; el ⚔ aparece en cada guild). Cada
+        guild dice cómo recibe gente nueva — el dueño lo elige en <b>Guild → Quién puede
+        entrar</b>:</p>
+        ${tabela(
+          ['Política', 'Cómo se entra'],
+          `<tr><td><b>Abierta</b></td><td>cualquier entrenador entra al instante, sin pedir nada</td></tr>
+           <tr><td><b>Abierta con requisitos</b></td><td>entra al instante quien tenga el nivel y el PR (del PvP Clasificatorio) mínimos que pida el dueño</td></tr>
+           <tr><td><b>Cerrada</b></td><td>solo por invitación — pero cualquiera puede <b>Postularse</b>, y el dueño o un sub-dueño responde</td></tr>`,
+        )}
+        <ul>
+          <li>El <b>cartel</b> de reclutamiento, una línea de hasta ${MAX_DESCRICAO_GUILD} caracteres
+          ("guerra todos los días a las 22h"), aparece en el Tablón.</li>
+          <li>Las invitaciones que recibes quedan en la pestaña <b>Invitaciones</b>; las postulaciones
+          a tu guild, en <b>Solicitudes de entrada</b>.</li>
+          <li><b>Quien sale de una guild espera ${Math.round(GUILD_SAIDA_CD_MS / 3_600_000)} horas</b> para entrar en otra. Solo quien sale
+          por voluntad propia: quien fue <b>expulsado</b>, o perdió la guild porque el dueño la borró,
+          entra en otra al instante. Es lo que impide saltar cada mañana a la guild que va primera en el
+          bono.</li>
         </ul>
 
 
@@ -4017,7 +6020,7 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <h4>El EQUIPO de la guild (la convocatoria)</h4>
         <p>La guild crece sin límite, pero quien va a la <b>Guerra de Guilds</b> es el
         <b>equipo</b>: <b>${N(c.d.guildMaxTime ?? 10, c.lang)} jugadores</b>, elegidos por el <b>dueño</b>
-        en <b>Guild → Equipo de la Guild</b>. Es la decisión que define la fuerza de la guild.</p>
+        (o un sub-dueño) en <b>Guild → Guerra → Equipo de la Guild</b>. Es la decisión que define la fuerza de la guild.</p>
         <ul>
           <li><b>Una guild con ${N(c.d.guildMaxTime ?? 10, c.lang)} miembros o menos está toda
           convocada.</b> Si sois ocho, entran los ocho — no hay nada que elegir. El editor empieza
@@ -4054,13 +6057,55 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>El botón <b>🏆 Recompensas</b>, en la pestaña <b>Guild</b> del PvP (debajo del replay),
         muestra las dos tablas, cuánto falta para cada cambio y dónde está tu guild.</p>
 
+        <h4>Boost de la Guild: el banco</h4>
+        <p>En la pestaña <b>Boost</b> del panel de la guild está el <b>banco de la guild</b>: cualquier
+        miembro dona diamantes, de 1 hasta lo que falta. Cuando el banco junta
+        <b>${N(BANCO_GUILD.meta, c.lang)} 💎</b>, <b>toda</b> la guild gana <b>+${BOOST_GUILD.pct}% de XP</b>
+        del entrenador y del pokémon durante <b>${BOOST_GUILD.dias} días</b> — y el banco vuelve a cero para
+        la próxima ronda.</p>
+        <ul>
+          <li>Llenar el banco con el boost todavía activo <b>suma ${BOOST_GUILD.dias} días más</b> a lo que falta.</li>
+          <li>La donación se corta en lo que falta: con 950 en el banco, quien dona 100 paga solo 50.</li>
+          <li>Vale para quien está en la guild <b>ahora</b>: quien entra mientras dura también lo recibe, y
+          quien sale lo pierde al instante.</li>
+          <li>Se <b>multiplica</b> con el XP Boost, el VIP, el bonus del ranking, los eventos, Twitch y Kick.</li>
+          <li>La donación es de la guild: <b>no vuelve</b> si sales o te <b>expulsan</b> — se queda en el
+          banco para el próximo boost. Si la guild se <b>borra</b> antes de que el banco se llene, lo que
+          haya en él vuelve a quienes donaron, incluso a quien ya salió. Lo que ya llenó un banco se
+          convirtió en boost y no vuelve.</li>
+          <li>La pestaña muestra quién donó al banco actual y el historial, en vivo; el chat de la guild
+          avisa cuando el boost se activa.</li>
+        </ul>
+
         <h4>Guerra de Guilds (diaria)</h4>
         <p>Una vez al día, a las <b>22:00 UTC</b>, todas las guilds registradas se enfrentan en una
         sola arena. Cuantas más guilds inscritas, más GP se lleva el 1º lugar (N guilds → 1º gana
-        N GP, 2º gana N−1, …). Solo el <b>dueño</b> registra, una sola vez — la guild entra
-        <b>automáticamente cada día</b> —, en la pestaña <b>Guild</b> del panel de
-        <a data-cap="pvp">PvP</a>.</p>
+        N GP, 2º gana N−1, …). El <b>dueño</b> (o un sub-dueño) registra una sola vez — la guild
+        entra <b>automáticamente cada día</b> —, en la pestaña <b>Guild</b> del panel de
+        <a data-cap="pvp">PvP</a>. ¿Registraste después de la guerra del día? Vale para la de
+        mañana.</p>
         <ul>
+          <li><b>La posición es por una nota de 0 a 100: ${N(PESO_SOBREVIVENCIA, c.lang)} por quedar en pie y ${N(PESO_COMBATE, c.lang)} por pelear.</b>
+          <ul>
+            <li><b>Supervivencia — hasta ${N(PESO_SOBREVIVENCIA, c.lang)}:</b> ${N(PESO_SOBREVIVENCIA, c.lang)} ÷ √ de la posición en que cayó la guild,
+            contando desde la última en pie. La última lleva <b>${N(PESO_SOBREVIVENCIA, c.lang)}</b>; la 2.ª, ${D(Math.round(notaSobrevivencia(2) * 10) / 10, c.lang)}; la 3.ª,
+            ${D(Math.round(notaSobrevivencia(3) * 10) / 10, c.lang)}; la 10.ª, ${D(Math.round(notaSobrevivencia(10) * 10) / 10, c.lang)}; la 20.ª, ${D(Math.round(notaSobrevivencia(20) * 10) / 10, c.lang)}. El peso está arriba: sobrevivir a
+            la penúltima vale mucho, y en el medio de la tabla decide la pelea.</li>
+            <li><b>Combate — hasta ${N(PESO_COMBATE, c.lang)}:</b> un contador de pokémon enemigos derrotados por la guild —
+            la derrota de cualquier miembro suma —, con la misma cuenta de la supervivencia: ${N(PESO_COMBATE, c.lang)} ÷ √ de
+            la posición de la guild en ese contador. La que más derrotó lleva <b>${N(PESO_COMBATE, c.lang)}</b>; la 2.ª, ${D(Math.round(notaCombate(2, 1) * 10) / 10, c.lang)};
+            la 3.ª, ${D(Math.round(notaCombate(3, 1) * 10) / 10, c.lang)}; la 10.ª, ${D(Math.round(notaCombate(10, 1) * 10) / 10, c.lang)}. La que no derrotó ninguno lleva 0, y las guilds con el mismo
+            número de derrotas dividen la posición. El daño no entra en la nota (el análisis de la guerra
+            lo sigue mostrando).</li>
+            <li>La <b>nota</b> es la suma de las dos, con un decimal, y decide la posición. Empate: gana
+            quien cayó último, después quien derrotó más.</li>
+          </ul>
+          Por qué así: solo el orden de caída ponía en el top 20 guilds de dos miembros que pasaban la
+          guerra lejos de la pelea, y solo los puntos dejaban que la última guild viva perdiera la
+          guerra. Con la nota, la última en pie lleva los ${N(PESO_SOBREVIVENCIA, c.lang)} y casi siempre gana, y quien solo se
+          escondió no pasa a quien peleó. La pestaña <b>Última guerra</b> muestra la nota de cada guild —
+          el escudito es la posición de supervivencia, y al pasar el ratón por la nota aparece la cuenta
+          entera.</li>
           <li><b>Nadie necesita estar despierto.</b> La guerra se <b>simula en el servidor</b> con
           el <b>equipo</b> de quien se registró — hasta ${N(c.d.guildMaxTime ?? 10, c.lang)}
           jugadores por guild, no la guild entera. No entras a ninguna arena a esa hora.</li>
@@ -4077,8 +6122,10 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           Dentro de la región, la más débil nace más cerca de la cabeza de serie y las fuertes quedan
           en la frontera: las favoritas solo se cruzan al final. La fuerza es el <b>GP Global</b> de
           la temporada, después el GP del día anterior y, si empatan, la fuerza de los equipos. La
-          esquina de la 1ª cambia en cada guerra, porque el terreno de la arena no es
-          simétrico.</li>
+          esquina de la 1ª se sortea en cada guerra.</li>
+          <li>La arena es un <b>cuadrado liso de césped</b>, sin piedra ni pasillo en el medio, y solo
+          los <b>pokémon</b> están en el campo: nadie se queda atascado detrás de un obstáculo ni
+          esperando en fila — lo que muestra la grabación es la pelea.</li>
           <li>El nivel cuenta <b>entero hasta ${N(ARENA_NIVEL_CHEIO, c.lang)}</b> y <b>comprimido</b>
           por encima — más que en el <a data-cap="ginasios">gimnasio</a>: nv ${N(1000, c.lang)}
           cuenta ${N(nivelNaGuerra(1000), c.lang)}, nv ${N(3000, c.lang)} cuenta
@@ -4089,15 +6136,19 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
           el daño siempre es a un solo objetivo. El <b>+25% de líder de gimnasio</b> vale solo en la
           cacería (ver <a data-cap="ginasios">Gimnasios</a>).</li>
           <li><b>La guerra dura hasta ${MIN_GUERRA} minutos simulados.</b> Termina cuando queda una
-          sola guild en pie. Si pasa del tope, decide la <b>fracción de HP</b> que le queda a cada
-          guild. Los duelos de gimnasio, del PvP Clasificatorio y del Campeonato tienen su propio
-          tope, más corto.</li>
+          sola guild en pie o cuando llega al tope — en los dos casos, la posición sale de la nota (en el
+          tope, las que siguen en pie cuentan como las últimas en caer, en el orden de la salud). Los duelos de gimnasio, del PvP Clasificatorio y del Campeonato tienen su propio
+          tope, más corto, y en ellos gana quien queda en pie.</li>
         </ul>
         <p>Después basta con pulsar <b>ver el replay</b>: la guerra entera grabada, con los
         golpes, los efectos de tipo, los números de daño, los cambios de pokémon, el marcador y el
         feed de derrotas (<b>jugador</b> ⚔ <b>pokémon</b> de <b>dueño</b>). Se puede acelerar hasta
-        8×, alejar la cámara y seguir a un luchador concreto.</p>
-        <p>Junto a Recompensas, el botón <b>📊 Análisis de la última guerra</b> abre los números de la
+        8×, alejar la cámara y seguir a un luchador concreto — el panel lateral tiene <b>búsqueda por
+        nick o guild</b>, para encontrar a alguien entre cientos.</p>
+        ${nota(`<b>Medalla de Guerra.</b> El <b>Pokémon de la guerra</b> — el que más daño hizo — gana
+        la Medalla de Guerra para siempre, numerada. Aparece en su ficha y en una cápsula dorada en el
+        Mercado de la Comunidad, y va con él cuando cambia de dueño.`, 'dica')}
+        <p>Junto a Recompensas, el botón <b>📊 Análisis</b> abre los números de la última
         guerra entera: <b>daño causado y recibido, derrotas y pokémon perdidos</b> de cada jugador, los
         pokémon que cada uno puso en campo (y cuánto hizo cada uno), los destacados — mayor daño, más
         derrotas, el Pokémon de la guerra, el mayor golpe, la primera derrota, el último en pie — y el
@@ -4129,11 +6180,22 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         ${tabelaDeCasas(c)}
 
         <h4>Como conseguir uma</h4>
-        <p>Um caminho só: <b>${N(custoFragCasa(c), c.lang)} Fragmentos de Chave</b> na bancada
-        <b>Fabricar Casa</b> do <b>Professor Carvalho</b>, no Centro Pokémon. A raridade é
-        <b>sorteada</b> — não se escolhe qual casa vem.</p>
+        <p>Dois caminhos, os dois na bancada <b>Fabricar Casa</b> do <b>Professor Carvalho</b>, no
+        Centro Pokémon:</p>
+        <ul>
+          <li><b>Sorteio:</b> <b>${N(custoFragCasa(c), c.lang)} Fragmentos de Chave</b> viram uma casa
+          de raridade <b>sorteada</b>, com as chances da tabela — não se escolhe qual vem. É o único
+          caminho para a Mítica e a Lendária.</li>
+          <li><b>Craft de Casas:</b> casas da mesma raridade viram uma da raridade seguinte —
+          ${receitasCraft(c)}. O craft vai <b>só até a ${topoDoCraft(c)}</b>. Você escolhe <b>quais</b>
+          entram, pelo número; a casa em uso também serve, menos aquela em que você está dentro e a
+          que estiver anunciada no Mercado. As escolhidas somem (no Registro ficam como fundidas), a
+          nova nasce com <b>número novo</b> e os postos vazios, e os pokémon que estavam no XP Share
+          delas voltam para a sua <b>Coleção</b> — nenhum se perde.</li>
+        </ul>
 
-        <p>A Casa <b>não se compra pronta</b> — só se fabrica com fragmentos dropados na Outland.
+        <p>A Casa <b>não se compra pronta</b> — nasce de fragmentos dropados na Outland, ou do craft
+        de outras casas.
         Cada casa sai com um <b>número do servidor</b> — quem tirou a primeira ficou com a
         <b>#000001</b> — e você pode ter <b>quantas quiser</b>. O teto é de <b>uso</b>: até
         <b>${N(maxCasasEmUso(c), c.lang)} casas</b> ficam em uso ao mesmo tempo, cada uma com os seus
@@ -4245,12 +6307,22 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         ${tabelaDeCasas(c)}
 
         <h4>How to get one</h4>
-        <p>One path only: <b>${N(custoFragCasa(c), c.lang)} Key Fragments</b> at the
-        <b>Craft House</b> bench at <b>Professor Oak</b>, in the Pokémon Center. The rarity is
-        <b>rolled</b> — you don't pick which house you get.</p>
+        <p>Two paths, both at the <b>Craft House</b> bench at <b>Professor Oak</b>, in the Pokémon
+        Center:</p>
+        <ul>
+          <li><b>Roll:</b> <b>${N(custoFragCasa(c), c.lang)} Key Fragments</b> become a house of
+          <b>rolled</b> rarity, with the odds in the table — you don't pick which one you get. It is the
+          only path to Mythic and Legendary.</li>
+          <li><b>House Craft:</b> houses of the same rarity become one of the next rarity —
+          ${receitasCraft(c)}. Crafting goes <b>only up to ${topoDoCraft(c)}</b>. You choose
+          <b>which</b> ones go in, by number; the house in use counts too, except the one you are
+          inside and one listed on the Market. The chosen ones are gone (the registry marks them as
+          merged), the new one is born with a <b>new number</b> and empty posts, and the pokémon that
+          were on their XP Share go back to your <b>Collection</b> — none is lost.</li>
+        </ul>
 
-        <p>A House <b>cannot be bought ready-made</b> — you craft it only with fragments dropped
-        in Outland. Every house comes with a <b>server number</b> — whoever rolled the first one got
+        <p>A House <b>cannot be bought ready-made</b> — it comes from fragments dropped in Outland,
+        or from crafting other houses. Every house comes with a <b>server number</b> — whoever rolled the first one got
         <b>#000001</b> — and you can own <b>as many as you like</b>. The cap is on <b>use</b>: up to
         <b>${N(maxCasasEmUso(c), c.lang)} houses</b> are in use at the same time, each with its own
         posts, and only they share XP. The rest stay <b>stored</b> — you pick which ones to use from
@@ -4358,11 +6430,22 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         ${tabelaDeCasas(c)}
 
         <h4>Cómo conseguir una</h4>
-        <p>Un solo camino: <b>${N(custoFragCasa(c), c.lang)} Fragmentos de Llave</b> en el banco
-        <b>Fabricar Casa</b> del <b>Profesor Oak</b>, en el Centro Pokémon. La rareza se
-        <b>sortea</b> — no se elige qué casa sale.</p>
+        <p>Dos caminos, los dos en el banco <b>Fabricar Casa</b> del <b>Profesor Oak</b>, en el
+        Centro Pokémon:</p>
+        <ul>
+          <li><b>Sorteo:</b> <b>${N(custoFragCasa(c), c.lang)} Fragmentos de Llave</b> se vuelven una
+          casa de rareza <b>sorteada</b>, con las probabilidades de la tabla — no se elige cuál sale.
+          Es el único camino a la Mítica y la Legendaria.</li>
+          <li><b>Craft de Casas:</b> casas de la misma rareza se vuelven una de la rareza siguiente —
+          ${receitasCraft(c)}. El craft llega <b>solo hasta la ${topoDoCraft(c)}</b>. Tú eliges
+          <b>cuáles</b> entran, por el número; la casa en uso también sirve, menos aquella en la que
+          estás dentro y la que esté anunciada en el Mercado. Las elegidas desaparecen (en el Registro
+          quedan como fundidas), la nueva nace con <b>número nuevo</b> y los puestos vacíos, y los
+          pokémon que estaban en su XP Share vuelven a tu <b>Colección</b> — ninguno se pierde.</li>
+        </ul>
 
-        <p>La Casa <b>no se compra hecha</b> — solo se fabrica con fragmentos que caen en Outland.
+        <p>La Casa <b>no se compra hecha</b> — nace de fragmentos que caen en Outland, o del craft de
+        otras casas.
         Cada casa sale con un <b>número del servidor</b> — quien sacó la primera se quedó con la
         <b>#000001</b> — y puedes tener <b>todas las que quieras</b>. El tope es de <b>uso</b>: hasta
         <b>${N(maxCasasEmUso(c), c.lang)} casas</b> están en uso al mismo tiempo, cada una con sus
@@ -4493,6 +6576,11 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>Com <b>${N(custoFragBike(c), c.lang)} fragmentos</b>, a bancada <b>Fabricar Bicicleta</b> do
         <b>Professor Carvalho</b>, no Centro Pokémon, monta uma bicicleta. A raridade é
         <b>sorteada</b>, com as chances da tabela acima — as mesmas da <a data-cap="casa">Casa</a>.</p>
+        <p>Na mesma bancada fica o <b>Craft de Bicicletas</b>, com a receita da Casa:
+        ${receitasCraft(c)} — só até a ${topoDoCraft(c)}; Mítica e Lendária saem apenas do sorteio.
+        Você escolhe as bicicletas pelo número (a equipada também serve; a anunciada no Mercado,
+        não), elas somem e nasce uma com número novo. Se a equipada entrou no craft, a nova já sai
+        <b>equipada</b>.</p>
 
         <p>Cada bicicleta sai com um <b>número do servidor</b> — a primeira tirada é a <b>#000001</b> —,
         e é por ele que ela se equipa e se anuncia. O <b>Registro de Bikes</b>, no botão <b>Casa</b>,
@@ -4548,6 +6636,11 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>With <b>${N(custoFragBike(c), c.lang)} fragments</b>, the <b>Craft Bicycle</b> bench at
         <b>Professor Oak</b>, in the Pokémon Center, builds a bicycle. The rarity is <b>rolled</b>,
         with the odds in the table above — the same as the <a data-cap="casa">House</a>.</p>
+        <p>The same bench holds the <b>Bicycle Craft</b>, with the House's recipe: ${receitasCraft(c)}
+        — only up to ${topoDoCraft(c)}; Mythic and Legendary come only from the roll. You pick the
+        bicycles by number (the equipped one counts; one listed on the Market does not), they are
+        gone and one with a new number is born. If the equipped one went into the craft, the new one
+        comes out <b>already equipped</b>.</p>
 
         <p>Every bicycle comes with a <b>server number</b> — the first one rolled is <b>#000001</b> —,
         and that number is how you equip and list it. The <b>Bike registry</b>, under the <b>House</b>
@@ -4602,6 +6695,11 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         <p>Con <b>${N(custoFragBike(c), c.lang)} fragmentos</b>, el banco <b>Fabricar Bicicleta</b> del
         <b>Profesor Oak</b>, en el Centro Pokémon, arma una bicicleta. La rareza se <b>sortea</b>, con
         las probabilidades de la tabla — las mismas de la <a data-cap="casa">Casa</a>.</p>
+        <p>En el mismo banco está el <b>Craft de Bicicletas</b>, con la receta de la Casa:
+        ${receitasCraft(c)} — solo hasta la ${topoDoCraft(c)}; la Mítica y la Legendaria salen solo
+        del sorteo. Eliges las bicicletas por el número (la equipada también sirve; la anunciada en el
+        Mercado, no), desaparecen y nace una con número nuevo. Si la equipada entró en el craft, la
+        nueva ya sale <b>equipada</b>.</p>
 
         <p>Cada bicicleta sale con un <b>número del servidor</b> — la primera es la <b>#000001</b> —, y
         por ese número se equipa y se anuncia. El <b>Registro de Bicis</b>, en el botón <b>Casa</b>,
@@ -4641,6 +6739,144 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
     }),
   },
 
+  // ------------------------------------------------------- 13c. chocadeira e ovos
+  //
+  // Os três ovos, as chocadeiras e o Absorb Bulb saem de `shared/chocadeira.mjs` — a mesma tabela
+  // que o Market NPC vende e que o servidor choca. Mudou preço ou hora lá, muda aqui.
+  {
+    id: 'chocadeira',
+    titulo: { pt: 'Chocadeira e Mystery Eggs', en: 'Incubator and Mystery Eggs', es: 'Incubadora y Mystery Eggs' },
+    grupo: 'mundo',
+    html: (c) => ({
+      pt: `
+        <p>O <a data-cap="market">Market</a> vende <b>Mystery Eggs</b>, e a <b>Chocadeira</b> choca: em
+        algumas horas — contadas <b>mesmo com você offline</b> — o ovo abre e nasce um <b>pokémon
+        surpresa</b>, direto na sua <b>Coleção</b>, com a <b>potência do ovo garantida</b>.</p>
+
+        <h4>Os três ovos</h4>
+        ${tabelaDeOvos(c)}
+        <p>Ficam no <b>Market → Ovos</b>. Comprado, o ovo vai para <b>Bolsa → Itens Raros</b>; de lá, um
+        clique o leva a uma chocadeira livre (<b>Bolsa → Chocadeira</b>). O ovo é da sua conta: <b>não
+        vai ao Mercado da Comunidade</b>.</p>
+
+        <h4>O que pode nascer</h4>
+        <ul>
+          <li>Uma espécie sorteada entre <b>todas as que têm hunt no Mapa</b>, de qualquer região, com a
+          <b>mesma chance</b> para cada uma — um Magikarp e um pokémon de hunt alta saem igual.</li>
+          <li><b>Nunca</b> sai da Outland, nem <b>Lendário</b>, <b>Mítico</b> ou <b>Mega</b> — esses
+          têm os caminhos deles (a <a data-cap="mistico">Arena Mística</a> e a
+          <a data-cap="mega">Mega Stone</a>).</li>
+          <li>A <b>potência</b> é a do ovo. <b>Qualidade, IV e shiny</b> rolam como numa captura — o
+          shiny inclusive, com a mesma chance.</li>
+          <li>O <b>nível</b> é o da hunt da espécie, com o mesmo teto da captura (ver
+          <a data-cap="captura">Captura</a>).</li>
+        </ul>
+        <p>O canal 🥚┃radar-do-ovo do nosso Discord anuncia quem chocou, qual ovo e o pokémon que
+        saiu.</p>
+
+        <h4>As chocadeiras</h4>
+        <p>Toda conta tem <b>${CHOCADEIRAS_GRATIS}</b>, e dá para ter até <b>${CHOCADEIRAS_MAX}</b>: cada uma a
+        mais custa <b>${PRECO_CHOCADEIRA_DIAMANTES} 💎</b> na <a data-cap="loja">Loja</a> e fica na
+        conta <b>para sempre</b> — não é item, não vai à bolsa e não se vende. Cada chocadeira choca um
+        ovo por vez.</p>
+
+        <h4>Absorb Bulb — aquecer um ovo</h4>
+        <p>Por <b>${PRECO_BULBO_DIAMANTES} 💎</b>, a lamparina <b>aquece UM ovo</b> que já está chocando: ele
+        abre <b>${PCT_BULBO}% mais rápido</b> (a coluna "Aquecido" da tabela). Quando o ovo choca, a
+        lamparina <b>quebra junto</b> — o próximo ovo pede outra.</p>
+        <ul>
+          <li>Só se acende <b>com o ovo dentro</b>: não dá para comprar antes e guardar.</li>
+          <li>Um ovo já aquecido não aceita outra, e um que já vai abrir também não — seria pagar por um
+          desconto que não existe.</li>
+        </ul>`,
+      en: `
+        <p>The <a data-cap="market">Market</a> sells <b>Mystery Eggs</b>, and the <b>Incubator</b>
+        hatches them: in a few hours — counted <b>even while you are offline</b> — the egg opens and a
+        <b>surprise pokémon</b> is born, straight into your <b>Collection</b>, with the <b>egg's potency
+        guaranteed</b>.</p>
+
+        <h4>The three eggs</h4>
+        ${tabelaDeOvos(c)}
+        <p>They are in <b>Market → Eggs</b>. Once bought, the egg goes to <b>Bag → Rare Items</b>; from
+        there, one click takes it to a free incubator (<b>Bag → Incubator</b>). The egg belongs to your
+        account: it <b>does not go to the Community Market</b>.</p>
+
+        <h4>What can hatch</h4>
+        <ul>
+          <li>A species drawn from <b>every species with a hunt on the Map</b>, from any region, with the
+          <b>same chance</b> for each — a Magikarp and a high-level hunt pokémon come out alike.</li>
+          <li>It <b>never</b> comes from Outland, and is never a <b>Legendary</b>, <b>Mythical</b> or
+          <b>Mega</b> — those have their own paths (the <a data-cap="mistico">Mystic Arena</a> and the
+          <a data-cap="mega">Mega Stone</a>).</li>
+          <li>The <b>potency</b> is the egg's. <b>Quality, IV and shiny</b> roll as in a catch — shiny
+          included, at the same chance.</li>
+          <li>The <b>level</b> is the species' hunt level, with the same cap as catching (see
+          <a data-cap="captura">Catching</a>).</li>
+        </ul>
+        <p>The 🥚┃radar-do-ovo channel on our Discord announces who hatched, which egg and the
+        pokémon that came out.</p>
+
+        <h4>The incubators</h4>
+        <p>Every account has <b>${CHOCADEIRAS_GRATIS}</b>, and you can have up to <b>${CHOCADEIRAS_MAX}</b>:
+        each extra one costs <b>${PRECO_CHOCADEIRA_DIAMANTES} 💎</b> in the <a data-cap="loja">Shop</a> and
+        stays on the account <b>forever</b> — it is not an item, does not go to the bag and cannot be
+        sold. Each incubator hatches one egg at a time.</p>
+
+        <h4>Absorb Bulb — warming an egg</h4>
+        <p>For <b>${PRECO_BULBO_DIAMANTES} 💎</b>, the bulb <b>warms ONE egg</b> that is already hatching: it
+        opens <b>${PCT_BULBO}% faster</b> (the "Warmed" column in the table). When the egg hatches, the
+        bulb <b>burns out with it</b> — the next egg needs another.</p>
+        <ul>
+          <li>It only lights <b>with the egg inside</b>: you can't buy it ahead and keep it.</li>
+          <li>An egg that is already warmed doesn't take another, and neither does one that is about
+          to open — that would be paying for a discount that doesn't exist.</li>
+        </ul>`,
+      es: `
+        <p>El <a data-cap="market">Market</a> vende <b>Mystery Eggs</b>, y la <b>Incubadora</b> los
+        incuba: en unas horas — contadas <b>aunque estés desconectado</b> — el huevo se abre y nace un
+        <b>pokémon sorpresa</b>, directo en tu <b>Colección</b>, con la <b>potencia del huevo
+        garantizada</b>.</p>
+
+        <h4>Los tres huevos</h4>
+        ${tabelaDeOvos(c)}
+        <p>Están en <b>Market → Huevos</b>. Comprado, el huevo va a <b>Bolsa → Objetos Raros</b>; desde
+        ahí, un clic lo lleva a una incubadora libre (<b>Bolsa → Incubadora</b>). El huevo es de tu
+        cuenta: <b>no va al Mercado de la Comunidad</b>.</p>
+
+        <h4>Qué puede nacer</h4>
+        <ul>
+          <li>Una especie sorteada entre <b>todas las que tienen cacería en el Mapa</b>, de cualquier
+          región, con la <b>misma probabilidad</b> para cada una — un Magikarp y un pokémon de cacería
+          alta salen igual.</li>
+          <li><b>Nunca</b> sale de Outland, ni un <b>Legendario</b>, <b>Singular</b> o <b>Mega</b> —
+          esos tienen sus caminos (la <a data-cap="mistico">Arena Mística</a> y la
+          <a data-cap="mega">Mega Stone</a>).</li>
+          <li>La <b>potencia</b> es la del huevo. <b>Calidad, IV y shiny</b> se sortean como en una
+          captura — el shiny incluido, con la misma probabilidad.</li>
+          <li>El <b>nivel</b> es el de la cacería de la especie, con el mismo tope de la captura (ver
+          <a data-cap="captura">Captura</a>).</li>
+        </ul>
+        <p>El canal 🥚┃radar-do-ovo de nuestro Discord anuncia quién eclosionó, qué huevo y el
+        pokémon que salió.</p>
+
+        <h4>Las incubadoras</h4>
+        <p>Toda cuenta tiene <b>${CHOCADEIRAS_GRATIS}</b>, y puedes tener hasta <b>${CHOCADEIRAS_MAX}</b>:
+        cada una más cuesta <b>${PRECO_CHOCADEIRA_DIAMANTES} 💎</b> en la <a data-cap="loja">Tienda</a> y
+        queda en la cuenta <b>para siempre</b> — no es un objeto, no va a la bolsa y no se vende. Cada
+        incubadora incuba un huevo a la vez.</p>
+
+        <h4>Absorb Bulb — calentar un huevo</h4>
+        <p>Por <b>${PRECO_BULBO_DIAMANTES} 💎</b>, la lámpara <b>calienta UN huevo</b> que ya está
+        incubando: se abre un <b>${PCT_BULBO}% más rápido</b> (la columna "Calentado" de la tabla). Cuando
+        el huevo eclosiona, la lámpara <b>se rompe con él</b> — el siguiente huevo pide otra.</p>
+        <ul>
+          <li>Solo se enciende <b>con el huevo dentro</b>: no se puede comprar antes y guardar.</li>
+          <li>Un huevo ya calentado no acepta otra, y uno que ya va a abrirse tampoco — sería pagar por
+          un descuento que no existe.</li>
+        </ul>`,
+    }),
+  },
+
   // ---------------------------------------------------- 14. Professor Carvalho
   {
     id: 'tm',
@@ -4652,10 +6888,13 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         como ele luta. No <b>Centro Pokémon</b>, fale com o <b>Professor Carvalho</b> (botão na
         praça). Lá tem um botão <b>[i]</b> com o guia completo.</p>
 
-        ${nota(`O balcão do Professor tem <b>cinco bancadas</b>: as duas dos TMs (trocar peças e
-        aplicar disco), <b>Fabricar Casa</b> (ver <a data-cap="casa">Casa e XP Share</a>),
-        <b>Fabricar Bicicleta</b> (ver <a data-cap="bicicletas">Bicicletas</a>) e
-        <b>Fabricar Shiny Stone</b> (ver <a data-cap="shiny">Shiny</a>).`)}
+        ${nota(`O balcão do Professor tem <b>seis bancadas</b>: as duas dos TMs (<b>Trocar peças</b> e
+        <b>Aplicar disco</b>), <b>Fabricar Casa</b> — com o Craft de Casas dentro — (ver
+        <a data-cap="casa">Casa e XP Share</a>), <b>Fabricar Bicicleta</b> — com o Craft de
+        Bicicletas — (ver <a data-cap="bicicletas">Bicicletas</a>), <b>Fabricar Shiny Stone</b> (ver
+        <a data-cap="shiny">Shiny</a>) e <b>Fabricar Mega Stone</b> (ver
+        <a data-cap="mega">Mega Evolução</a>). Antes de gastar fragmento, peça ou disco, ele sempre
+        mostra o que sai e o que entra e pede a sua confirmação.`)}
 
         <h4>Quando aplicado</h4>
         <ul>
@@ -4722,10 +6961,13 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         how it fights. At the <b>Pokémon Center</b>, talk to <b>Professor Oak</b> (button in the
         square). There is an <b>[i]</b> button with the full guide.</p>
 
-        ${nota(`The Professor's counter has <b>five benches</b>: the two TM ones (trade pieces and
-        apply disk), <b>Craft House</b> (see <a data-cap="casa">House &amp; XP Share</a>),
-        <b>Craft Bicycle</b> (see <a data-cap="bicicletas">Bicycles</a>) and
-        <b>Craft Shiny Stone</b> (see <a data-cap="shiny">Shiny</a>).`)}
+        ${nota(`The Professor's counter has <b>six benches</b>: the two TM ones (<b>Trade pieces</b>
+        and <b>Apply disk</b>), <b>Craft House</b> — with the House Craft inside — (see
+        <a data-cap="casa">House &amp; XP Share</a>), <b>Craft Bicycle</b> — with the Bicycle Craft —
+        (see <a data-cap="bicicletas">Bicycles</a>), <b>Craft Shiny Stone</b> (see
+        <a data-cap="shiny">Shiny</a>) and <b>Craft Mega Stone</b> (see
+        <a data-cap="mega">Mega Evolution</a>). Before spending a fragment, a piece or a disk, he
+        always shows what goes out and what comes in, and asks you to confirm.`)}
 
         <h4>When applied</h4>
         <ul>
@@ -4788,10 +7030,13 @@ no evoluciona (Spinda, variantes de Outland)           100</pre>
         cambian cómo pelea. En el <b>Centro Pokémon</b>, habla con el <b>Profesor Oak</b>. Hay un
         botón <b>[i]</b> con la guía completa.</p>
 
-        ${nota(`El mostrador del Profesor tiene <b>cinco bancos</b>: los dos de TM (cambiar piezas
-        y aplicar disco), <b>Fabricar Casa</b> (ver <a data-cap="casa">Casa y XP Share</a>),
-        <b>Fabricar Bicicleta</b> (ver <a data-cap="bicicletas">Bicicletas</a>) y
-        <b>Fabricar Shiny Stone</b> (ver <a data-cap="shiny">Shiny</a>).`)}
+        ${nota(`El mostrador del Profesor tiene <b>seis bancos</b>: los dos de TM (<b>Cambiar
+        piezas</b> y <b>Aplicar disco</b>), <b>Fabricar Casa</b> — con el Craft de Casas dentro — (ver
+        <a data-cap="casa">Casa y XP Share</a>), <b>Fabricar Bicicleta</b> — con el Craft de
+        Bicicletas — (ver <a data-cap="bicicletas">Bicicletas</a>), <b>Fabricar Shiny Stone</b> (ver
+        <a data-cap="shiny">Shiny</a>) y <b>Fabricar Mega Stone</b> (ver
+        <a data-cap="mega">Mega Evolución</a>). Antes de gastar un fragmento, una pieza o un disco,
+        siempre muestra lo que sale y lo que entra y pide tu confirmación.`)}
 
         <h4>Al aplicar</h4>
         <ul>
@@ -4900,7 +7145,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           dele já vêm com power de boss.</li>
           <li>Todo boss é <b>neutro</b>: a tabela de tipos não vale contra ele nem a favor dele —
           nada é super-efetivo nem resistido, nos dois sentidos.</li>
-          <li>Não dá para capturar um boss. O prêmio é a tabela de drops.</li>
+          <li>Não dá para capturar um boss. O prêmio é a tabela de drops — onde estão a peça de TM,
+          os dois fragmentos de <a data-cap="mega">Mega Stone</a> e o
+          <a data-cap="mistico">MysticTicket</a>, todos com a chance subindo par a par.</li>
+          <li>A recarga dos golpes começa <b>zerada</b>: a arena é paga, e é uma das duas lutas que
+          começam com tudo pronto (a outra é a <a data-cap="mistico">Arena Mística</a>).</li>
         </ul>
 
         <h4>Se você vencer</h4>
@@ -4909,7 +7158,22 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
 
         <h4>Se você perder</h4>
         <p>Você sai da arena e vai para o Centro Pokémon. <b>A entrada não volta</b> — nem se você
-        abandonar por vontade própria.</p>`,
+        abandonar por vontade própria.</p>
+
+        <h4>Repetir automaticamente</h4>
+        <p>Na tela do boss, <b>Repetir automaticamente</b> emenda uma luta na outra: ao fim de cada
+        uma — ganhando ou perdendo —, você cai no Centro, a Enfermeira cura o time e o jogo entra de
+        novo na <b>mesma</b> arena, gastando outro token. Ela desliga sozinha, com aviso, quando os
+        tokens acabam, quando o seu nível não alcança mais o boss ou quando a equipe não tem quem
+        lute — e também se você abandonar a arena ou sair do Centro para caçar.</p>
+        <ul>
+          <li>Durante a série, as telas de drop <b>se empilham</b> em vez de sumir, e um botão fecha
+          todas de uma vez.</li>
+          <li>Quando a repetição termina, aparece o <b>resumo da série</b>: em quantas vitórias, e tudo
+          o que caiu.</li>
+          <li>A escolha fica guardada na conta: uma queda de conexão no meio da madrugada não desliga
+          a série.</li>
+        </ul>`,
       en: `
         <p>Challenge arenas: you spend a <b>Bronze Boss Token</b>, enter a dedicated map and face
         a giant pokémon. It stands still — it does not chase — and it hits VERY hard. To
@@ -4950,7 +7214,12 @@ multiplier = ${BASE_PENALIDADE_BOSS} ^ deficit</pre>
           its moves already come with boss-grade power.</li>
           <li>Every boss is <b>neutral</b>: the type chart does not apply against it or for it —
           nothing is super effective or resisted, either way.</li>
-          <li>You cannot catch a boss. The prize is the drop table.</li>
+          <li>You cannot catch a boss. The prize is the drop table — which holds the TM piece, the
+          two <a data-cap="mega">Mega Stone</a> fragments and the
+          <a data-cap="mistico">MysticTicket</a>, all with chances rising pair by pair.</li>
+          <li>Move cooldowns start <b>reset</b>: the arena is paid, and it is one of the two fights
+          that start with everything ready (the other is the <a data-cap="mistico">Mystic
+          Arena</a>).</li>
         </ul>
 
         <h4>If you win</h4>
@@ -4959,7 +7228,22 @@ multiplier = ${BASE_PENALIDADE_BOSS} ^ deficit</pre>
 
         <h4>If you lose</h4>
         <p>You leave the arena and go to the Pokémon Center. <b>The entry fee is not refunded</b> —
-        not even if you leave voluntarily.</p>`,
+        not even if you leave voluntarily.</p>
+
+        <h4>Auto-repeat</h4>
+        <p>On the boss screen, <b>Auto-repeat</b> chains one fight into the next: at the end of each
+        — win or lose — you land in the Center, Nurse Joy heals the team and the game enters the
+        <b>same</b> arena again, spending another token. It turns itself off, with a notice, when the
+        tokens run out, when your level no longer reaches the boss or when the team has no one left
+        to fight — and also if you abandon the arena or leave the Center to hunt.</p>
+        <ul>
+          <li>During the series, the drop screens <b>stack up</b> instead of disappearing, and one
+          button closes them all.</li>
+          <li>When the repetition ends, the <b>series summary</b> shows up: over how many wins, and
+          everything that dropped.</li>
+          <li>The choice is saved on the account: a dropped connection in the middle of the night does
+          not turn the series off.</li>
+        </ul>`,
       es: `
         <p>Arenas de desafío: gastas un <b>Bronze Boss Token</b>, entras en un mapa propio y te
         enfrentas a un pokémon gigante. Se queda quieto — no persigue — y pega MUY fuerte. Para
@@ -5000,7 +7284,12 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           movimientos ya vienen con power de boss.</li>
           <li>Todo boss es <b>neutro</b>: la tabla de tipos no vale contra él ni a su favor — nada
           es supereficaz ni resistido, en ninguno de los dos sentidos.</li>
-          <li>No se puede capturar a un boss. El premio es la tabla de drops.</li>
+          <li>No se puede capturar a un boss. El premio es la tabla de drops — donde están la pieza de
+          TM, los dos fragmentos de <a data-cap="mega">Mega Stone</a> y el
+          <a data-cap="mistico">MysticTicket</a>, todos con la probabilidad subiendo par a par.</li>
+          <li>La recarga de los golpes empieza <b>reiniciada</b>: la arena es de pago, y es una de las
+          dos peleas que empiezan con todo listo (la otra es la <a data-cap="mistico">Arena
+          Mística</a>).</li>
         </ul>
 
         <h4>Si ganas</h4>
@@ -5008,8 +7297,214 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
 
         <h4>Si pierdes</h4>
         <p>Sales de la arena y vas al Centro Pokémon. <b>La entrada no se devuelve</b> — ni siquiera
-        si abandonas por voluntad propia.</p>`,
+        si abandonas por voluntad propia.</p>
+
+        <h4>Repetir automáticamente</h4>
+        <p>En la pantalla del boss, <b>Repetir automáticamente</b> encadena una pelea con la otra: al
+        final de cada una — ganando o perdiendo —, caes en el Centro, la Enfermera cura al equipo y el
+        juego entra de nuevo en la <b>misma</b> arena, gastando otro token. Se apaga sola, con aviso,
+        cuando se acaban los tokens, cuando tu nivel ya no alcanza el boss o cuando el equipo no tiene
+        quién luche — y también si abandonas la arena o sales del Centro a cazar.</p>
+        <ul>
+          <li>Durante la serie, las pantallas de drop <b>se apilan</b> en vez de desaparecer, y un
+          botón las cierra todas.</li>
+          <li>Cuando la repetición termina, aparece el <b>resumen de la serie</b>: en cuántas
+          victorias, y todo lo que cayó.</li>
+          <li>La elección queda guardada en la cuenta: una caída de conexión en plena madrugada no
+          apaga la serie.</li>
+        </ul>`,
     }),
+  },
+
+  // ------------------------------------------------------------ 12a. arena mística
+  //
+  // Logo depois de Bosses: o ticket CAI do boss, e o jogador chega aqui pela pergunta "o que é
+  // esse drop roxo?". Tudo sai de `shared/mistico.mjs` — a escada do ticket, a tabela de captura,
+  // o piso do capturado e o prazo da bola —, e o tamanho do sorteio vem do `welcome` (`misticoPool`).
+  {
+    id: 'mistico',
+    titulo: { pt: 'MysticTicket e Arena Mística', en: 'MysticTicket and Mystic Arena', es: 'MysticTicket y Arena Mística' },
+    grupo: 'mundo',
+    html: (c) => {
+      const pool = (c.d.misticoPool ?? []).length;
+      const passo = P(CHANCE_TICKET_PASSO, c.lang);
+      const nv = N(NIVEL_LENDARIO_MISTICO, c.lang);
+      const seg = Math.round(MISTICO_ESCOLHA_MS / 1000);
+      const multSelv = D(c.d.multDanoSelvagem ?? 1.8, c.lang);
+      const q = D(MISTICO_QUALIDADE_MIN, c.lang);
+      const iv = N(MISTICO_IV_SOMA_MIN, c.lang);
+      const umEmPool = pool ? P(1 / pool, c.lang) : null;
+      return {
+        pt: `
+        <p>O <b>MysticTicket</b> é o drop mais raro dos <a data-cap="bosses">Bosses</a>. Usado, ele
+        abre a <b>Arena Mística</b>: uma sala roxa com <b>um Pokémon Lendário ou Mítico de nível
+        ${nv}</b>, sorteado${pool ? ` entre os <b>${N(pool, c.lang)}</b> que o jogo desenha — cada um com
+        ${umEmPool} de chance` : ''}. Derrubou, você tem <b>uma bola</b> para tentar a captura.</p>
+
+        <h4>De onde vem o ticket</h4>
+        <p>Cai na <b>vitória</b> contra qualquer boss, como a peça de TM e o fragmento de Mega — e
+        segue a mesma escada: <b>${passo}</b> no primeiro par de bosses, e mais ${passo} a cada par
+        acima.</p>
+        ${tabelaTicketPorPar(c)}
+        <p>Ele aparece em <b>Boss → Recompensas</b> e na ficha de cada boss na
+        <a data-cap="pokedex">Pokédex</a>, e é <b>negociável</b> no
+        <a data-cap="comunidade">Mercado da Comunidade</a> (aba Boss): quem não quer arriscar a
+        tentativa vende.</p>
+
+        <h4>Entrar na arena</h4>
+        <ul>
+          <li>Use em <b>Bolsa → Itens Raros → MysticTicket</b>. Entra-se do <b>Centro Pokémon</b>, fora
+          de combate, fora da fila do PvP, com a equipe de pé e pelo menos <b>uma pokébola</b> na
+          bolsa.</li>
+          <li>O ticket é <b>gasto na entrada</b>. Se a equipe cair ou você abandonar a arena, ele
+          <b>não volta</b>.</li>
+          <li>A recarga dos golpes começa <b>zerada</b>, como na arena de boss.</li>
+          <li>O lendário luta como um selvagem de hunt: com os golpes da espécie e o ×${multSelv} de dano
+          de selvagem. Não há penalidade de equipe, e ele não solta loot nem Coins — o prêmio é a
+          chance da captura.</li>
+        </ul>
+
+        <h4>Uma bola, uma chance</h4>
+        <p>Derrubado, o lendário fica no chão e a tela pede a pokébola. A chance é uma <b>tabela por
+        bola</b>, a mesma para todo lendário: o Articuno e o Arceus custam o mesmo ticket, então saem
+        com a mesma chance.</p>
+        ${tabelaCapturaMistica(c)}
+        <ul>
+          <li>Você tem <b>${seg} segundos</b> para escolher. Passado isso, o jogo arremessa sozinho a
+          <b>melhor bola</b> que você tiver — a tentativa é uma só, e perdê-la para uma aba em segundo
+          plano seria perder o ticket.</li>
+          <li>Capturou ou não, a arena fecha logo depois e você volta ao Centro.</li>
+          <li>O <b>shiny</b> rola com a chance cheia do jogo.</li>
+        </ul>
+
+        <h4>O lendário capturado</h4>
+        <p>Nasce no nível ${nv} e com <b>piso</b> — o ticket é raro demais para entregar um bicho de
+        nascimento fraco:</p>
+        <ul>
+          <li><b>qualidade ${q} ou mais</b>;</li>
+          <li><b>IV somado ${iv} ou mais</b> (de 192);</li>
+          <li><b>potência P${MISTICO_POTENCIA_MIN} ou mais</b> — P4 e P5 continuam com a chance de
+          sempre.</li>
+        </ul>
+        <p>O <b>chat Mundo inteiro</b> fica sabendo da captura, e o canal 🔮┃radar-lendario do nosso
+        Discord conta quem dropou um ticket, quem entrou na arena e como terminou.</p>
+        ${nota(`A ficha de cada boss na <a data-cap="pokedex">Pokédex</a> tem o painel <b>Captura com o
+        MysticTicket</b>: de onde o ticket cai, a chance de sair <b>aquele</b> lendário, o nível dele na
+        arena e a tabela de captura por bola.`, 'dica')}`,
+        en: `
+        <p>The <b>MysticTicket</b> is the rarest drop of the <a data-cap="bosses">Bosses</a>. Used, it
+        opens the <b>Mystic Arena</b>: a purple room with <b>one level ${nv} Legendary or Mythical
+        Pokémon</b>, drawn${pool ? ` from the <b>${N(pool, c.lang)}</b> the game can draw — each with a
+        ${umEmPool} chance` : ''}. Knock it down and you get <b>one ball</b> to try the catch.</p>
+
+        <h4>Where the ticket comes from</h4>
+        <p>It drops on a <b>win</b> against any boss, like the TM piece and the Mega fragment — and
+        follows the same ladder: <b>${passo}</b> on the first pair of bosses, and ${passo} more for each
+        pair above.</p>
+        ${tabelaTicketPorPar(c)}
+        <p>It shows in <b>Boss → Rewards</b> and on each boss's sheet in the
+        <a data-cap="pokedex">Pokédex</a>, and it is <b>tradeable</b> on the
+        <a data-cap="comunidade">Community Market</a> (Boss tab): whoever doesn't want to risk the
+        attempt sells it.</p>
+
+        <h4>Entering the arena</h4>
+        <ul>
+          <li>Use it from <b>Bag → Rare Items → MysticTicket</b>. You enter from the <b>Pokémon
+          Center</b>, out of combat, out of the PvP queue, with your team standing and at least <b>one
+          poké ball</b> in the bag.</li>
+          <li>The ticket is <b>spent on entry</b>. If your team falls or you abandon the arena, it
+          <b>does not come back</b>.</li>
+          <li>Move cooldowns start <b>reset</b>, as in a boss arena.</li>
+          <li>The legendary fights like a hunt wild: with its species' moves and the ×${multSelv} wild
+          damage. There is no team penalty, and it drops no loot or Coins — the prize is the catch
+          chance.</li>
+        </ul>
+
+        <h4>One ball, one chance</h4>
+        <p>Once down, the legendary stays on the ground and the screen asks for a poké ball. The
+        chance is a <b>per-ball table</b>, the same for every legendary: Articuno and Arceus cost the
+        same ticket, so they come out with the same chance.</p>
+        ${tabelaCapturaMistica(c)}
+        <ul>
+          <li>You have <b>${seg} seconds</b> to choose. After that, the game throws the <b>best ball</b>
+          you have by itself — there is only one try, and losing it to a background tab would mean
+          losing the ticket.</li>
+          <li>Caught or not, the arena closes right after and you go back to the Center.</li>
+          <li><b>Shiny</b> rolls with the game's full chance.</li>
+        </ul>
+
+        <h4>The caught legendary</h4>
+        <p>It is born at level ${nv} and with a <b>floor</b> — the ticket is too rare to hand over a
+        poorly born pokémon:</p>
+        <ul>
+          <li><b>quality ${q} or more</b>;</li>
+          <li><b>IV total ${iv} or more</b> (out of 192);</li>
+          <li><b>potency P${MISTICO_POTENCIA_MIN} or more</b> — P4 and P5 keep their usual chance.</li>
+        </ul>
+        <p>The <b>whole World chat</b> hears about the catch, and the 🔮┃radar-lendario channel on our
+        Discord tells who dropped a ticket, who entered the arena and how it ended.</p>
+        ${nota(`Each boss's sheet in the <a data-cap="pokedex">Pokédex</a> has the <b>Catching it with
+        the MysticTicket</b> panel: where the ticket drops, the chance of getting <b>that</b>
+        legendary, its level in the arena and the per-ball catch table.`, 'dica')}`,
+        es: `
+        <p>El <b>MysticTicket</b> es el drop más raro de los <a data-cap="bosses">Bosses</a>. Usado,
+        abre la <b>Arena Mística</b>: una sala morada con <b>un Pokémon Legendario o Singular de nivel
+        ${nv}</b>, sorteado${pool ? ` entre los <b>${N(pool, c.lang)}</b> que el juego dibuja — cada uno con
+        ${umEmPool} de probabilidad` : ''}. Si lo derribas, tienes <b>una ball</b> para intentar la
+        captura.</p>
+
+        <h4>De dónde sale el ticket</h4>
+        <p>Cae al <b>vencer</b> a cualquier boss, como la pieza de TM y el fragmento de Mega — y sigue
+        la misma escalera: <b>${passo}</b> en el primer par de bosses, y ${passo} más por cada par por
+        encima.</p>
+        ${tabelaTicketPorPar(c)}
+        <p>Aparece en <b>Boss → Recompensas</b> y en la ficha de cada boss en la
+        <a data-cap="pokedex">Pokédex</a>, y es <b>negociable</b> en el
+        <a data-cap="comunidade">Mercado de la Comunidad</a> (pestaña Boss): quien no quiere arriesgar
+        el intento lo vende.</p>
+
+        <h4>Entrar en la arena</h4>
+        <ul>
+          <li>Úsalo desde <b>Bolsa → Objetos Raros → MysticTicket</b>. Se entra desde el <b>Centro
+          Pokémon</b>, fuera de combate, fuera de la cola del PvP, con el equipo en pie y al menos
+          <b>una poké ball</b> en la bolsa.</li>
+          <li>El ticket se <b>gasta al entrar</b>. Si tu equipo cae o abandonas la arena, <b>no
+          vuelve</b>.</li>
+          <li>La recarga de los golpes empieza <b>reiniciada</b>, como en la arena de boss.</li>
+          <li>El legendario pelea como un salvaje de cacería: con los golpes de la especie y el
+          ×${multSelv} de daño de salvaje. No hay penalización de equipo, y no suelta loot ni Coins — el
+          premio es la probabilidad de captura.</li>
+        </ul>
+
+        <h4>Una ball, una oportunidad</h4>
+        <p>Derribado, el legendario queda en el suelo y la pantalla pide la poké ball. La probabilidad
+        es una <b>tabla por ball</b>, la misma para todo legendario: Articuno y Arceus cuestan el mismo
+        ticket, así que salen con la misma probabilidad.</p>
+        ${tabelaCapturaMistica(c)}
+        <ul>
+          <li>Tienes <b>${seg} segundos</b> para elegir. Pasado ese tiempo, el juego lanza solo la
+          <b>mejor ball</b> que tengas — el intento es uno solo, y perderlo por una pestaña en segundo
+          plano sería perder el ticket.</li>
+          <li>Lo captures o no, la arena se cierra enseguida y vuelves al Centro.</li>
+          <li>El <b>shiny</b> se sortea con la probabilidad completa del juego.</li>
+        </ul>
+
+        <h4>El legendario capturado</h4>
+        <p>Nace en el nivel ${nv} y con <b>piso</b> — el ticket es demasiado raro para entregar un
+        pokémon de nacimiento flojo:</p>
+        <ul>
+          <li><b>calidad ${q} o más</b>;</li>
+          <li><b>IV sumado ${iv} o más</b> (de 192);</li>
+          <li><b>potencia P${MISTICO_POTENCIA_MIN} o más</b> — P4 y P5 siguen con la probabilidad de
+          siempre.</li>
+        </ul>
+        <p><b>Todo el chat Mundo</b> se entera de la captura, y el canal 🔮┃radar-lendario de nuestro
+        Discord cuenta quién dropeó un ticket, quién entró en la arena y cómo terminó.</p>
+        ${nota(`La ficha de cada boss en la <a data-cap="pokedex">Pokédex</a> tiene el panel <b>Captura
+        con el MysticTicket</b>: de dónde cae el ticket, la probabilidad de que salga <b>ese</b>
+        legendario, su nivel en la arena y la tabla de captura por ball.`, 'dica')}`,
+      };
+    },
   },
 
   // ------------------------------------------------------------ 12b. mega evolução
@@ -5042,10 +7537,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
         qualidade e a potência continuam valendo <b>por cima</b> disso.`, 'dica')}
 
         <h4>Um terceiro golpe de 600, na METADE da recarga</h4>
-        <p>A mega herda o <b>mesmo moveset</b> da espécie base — cópia exata, nada sai — e ganha
-        <b>um golpe a mais</b>: 600 de poder, do <b>tipo primário dela</b> (logo, sempre com STAB)
-        e com <b>30 s</b> de recarga. Como toda última evolução já tem dois golpes de 600, a mega
-        fica com <b>três</b>.</p>
+        <p>A mega tem um <b>moveset próprio</b>, montado para os tipos <b>dela</b> — a Mega
+        Gyarados, que é WATER/DARK, bate de DARK —, e as poucas que não precisaram de ajuste
+        herdam o da espécie base. Todas têm o <b>golpe de mega</b>: 600 de poder, de um dos
+        <b>tipos dela</b> (logo, sempre com STAB) e com <b>30 s</b> de recarga. Somado aos dois
+        golpes de 600 de toda última evolução, a mega fica com <b>três</b>.</p>
         ${nota(`Os 30 s são a única coisa do catálogo que sai da curva de cooldown de propósito
         — todo outro golpe de 600 recarrega em 60 s. É o que a mega de fato entrega: o golpe
         dispara <b>duas vezes</b> no tempo em que os outros dois disparam uma. O gargalo de um
@@ -5096,8 +7592,10 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           <li><b>Os tipos podem mudar.</b> Mega Gyarados vira WATER/DARK, Mega Ampharos ganha
           DRAGON, Mega Sceptile ganha DRAGON. Isso mexe no STAB, na
           <a data-cap="tipos">efetividade</a> e até na pedra de <a data-cap="stats">refino</a>.</li>
-          <li><b>Não tem volta</b>, como toda evolução aqui — e por isso megaevoluir
-          <b>tranca o pokémon na venda</b> (destravar é um clique).</li>
+          <li><b>Não tem volta</b>, como toda evolução aqui — e por isso o pokémon megaevoluído vai
+          para a sua <b>Coleção</b>, fora da venda ao NPC (devolver ao Depot é um clique).</li>
+          <li>A <a data-cap="nota">Calculadora</a> mostra o <b>Potencial na Mega Evolução</b>: a nota
+          que o mesmo nascimento teria na forma Mega, antes de você gastar a pedra.</li>
           <li><b>A nota nunca cai.</b> Megaevoluir sempre <b>sobe</b> o N=, pela mesma regra que
           vale para evoluir (ver <a data-cap="nota">A nota</a>).</li>
           <li>Uma mega <b>não evolui de novo</b>, e variantes de <b>Outland não megaevoluem</b>.
@@ -5126,10 +7624,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
         and potency still stack <b>on top</b> of that.`, 'dica')}
 
         <h4>A third 600 move, at HALF the cooldown</h4>
-        <p>A mega inherits the <b>same moveset</b> as the base species — an exact copy, nothing
-        is dropped — and gains <b>one extra move</b>: 600 power, of <b>its own primary type</b>
-        (so always with STAB) and with a <b>30 s</b> cooldown. Since every final evolution
-        already has two 600 moves, a mega ends up with <b>three</b>.</p>
+        <p>A mega has <b>its own moveset</b>, built for <b>its</b> types — Mega Gyarados, which
+        is WATER/DARK, hits with DARK — and the few that needed no change inherit the base
+        species' one. Every mega has the <b>mega move</b>: 600 power, of one of <b>its types</b>
+        (so always with STAB) and with a <b>30 s</b> cooldown. Added to the two 600 moves every
+        final evolution has, a mega ends up with <b>three</b>.</p>
         ${nota(`Those 30 s are the only thing in the catalogue that leaves the cooldown curve on
         purpose — every other 600 move recharges in 60 s. It is what the mega actually delivers:
         the move fires <b>twice</b> in the time the other two fire once. The bottleneck for an
@@ -5185,8 +7684,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           DRAGON, Mega Sceptile gains DRAGON. That changes STAB,
           <a data-cap="tipos">effectiveness</a> and even the <a data-cap="stats">refine</a>
           stone.</li>
-          <li><b>There is no going back</b>, like every evolution here — which is why mega
-          evolving <b>locks the pokémon from selling</b> (one click unlocks it).</li>
+          <li><b>There is no going back</b>, like every evolution here — which is why the mega
+          evolved pokémon goes to your <b>Collection</b>, out of NPC selling (sending it back to the
+          Depot is one click).</li>
+          <li>The <a data-cap="nota">Calculator</a> shows the <b>Potential at Mega Evolution</b>: the
+          score the same birth would have in Mega form, before you spend the stone.</li>
           <li><b>The grade never drops.</b> Mega evolving always <b>raises</b> the N=, by the
           same rule that applies to evolving (see <a data-cap="nota">The grade</a>).</li>
           <li>A mega <b>does not evolve again</b>, and <b>Outland variants do not mega
@@ -5216,10 +7718,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
         calidad y la potencia siguen sumando <b>encima</b> de eso.`, 'dica')}
 
         <h4>Un tercer golpe de 600, a la MITAD de la recarga</h4>
-        <p>La mega hereda el <b>mismo moveset</b> de la especie base — copia exacta, no se pierde
-        nada — y gana <b>un golpe más</b>: 600 de poder, de <b>su tipo primario</b> (o sea,
-        siempre con STAB) y con <b>30 s</b> de recarga. Como toda última evolución ya tiene dos
-        golpes de 600, la mega queda con <b>tres</b>.</p>
+        <p>La mega tiene un <b>moveset propio</b>, armado para los tipos <b>de ella</b> — la Mega
+        Gyarados, que es WATER/DARK, pega de DARK —, y las pocas que no necesitaron ajuste heredan
+        el de la especie base. Todas tienen el <b>golpe de mega</b>: 600 de poder, de uno de
+        <b>sus tipos</b> (o sea, siempre con STAB) y con <b>30 s</b> de recarga. Sumado a los dos
+        golpes de 600 de toda última evolución, la mega queda con <b>tres</b>.</p>
         ${nota(`Esos 30 s son lo único del catálogo que sale de la curva de cooldown a propósito
         — todo otro golpe de 600 recarga en 60 s. Es lo que la mega entrega de verdad: el golpe
         dispara <b>dos veces</b> en el tiempo en que los otros dos disparan una. El cuello de
@@ -5275,8 +7778,11 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           gana DRAGON, Mega Sceptile gana DRAGON. Eso afecta el STAB, la
           <a data-cap="tipos">efectividad</a> y hasta la piedra de
           <a data-cap="stats">refinado</a>.</li>
-          <li><b>No tiene vuelta atrás</b>, como toda evolución aquí — por eso mega evolucionar
-          <b>bloquea el pokémon para la venta</b> (se desbloquea con un clic).</li>
+          <li><b>No tiene vuelta atrás</b>, como toda evolución aquí — por eso el pokémon mega
+          evolucionado va a tu <b>Colección</b>, fuera de la venta al NPC (devolverlo al Depósito es un
+          clic).</li>
+          <li>La <a data-cap="nota">Calculadora</a> muestra el <b>Potencial en la Mega Evolución</b>:
+          la nota que el mismo nacimiento tendría en la forma Mega, antes de gastar la piedra.</li>
           <li><b>La nota nunca baja.</b> Mega evolucionar siempre <b>sube</b> el N=, por la misma
           regla que vale para evolucionar (ver <a data-cap="nota">La nota</a>).</li>
           <li>Una mega <b>no evoluciona de nuevo</b>, y las variantes de <b>Outland no mega
@@ -5308,26 +7814,9 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
       const teto = N(PVP_TETO_POSICIONAMENTO, c.lang);
       const elite = N(PVP_PR_ELITE, c.lang);
       const revancheMin = 10; // REVANCHE_MS, em `server/game/pvp-ranqueado.mjs`
-      // O que cada faixa leva, escrito a partir da MESMA tabela com que o servidor paga
-      // (`PVP_PREMIOS`): o prêmio mudou de dias para horas uma vez, e texto escrito à mão
-      // teria ficado prometendo os sete dias da era mensal.
-      const L = {
-        pt: ['e', 'por', 'dias', 'horas'],
-        en: ['and', 'for', 'days', 'hours'],
-        es: ['y', 'por', 'días', 'horas'],
-      }[c.lang] ?? ['e', 'por', 'dias', 'horas'];
-      const nomeBoostPvp = {
-        shiny: 'Shiny Secret Lure', captura: 'Capture Boost', xp: 'XP Boost',
-        pokexp: c.lang === 'en' ? 'Pokémon XP Boost' : 'XP Boost Pokémon',
-      };
-      const duracaoPvp = (h) => (h % 24 === 0 ? `${N(h / 24, c.lang)} ${L[2]}` : `${N(h, c.lang)} ${L[3]}`);
-      const premiosPvp = PVP_PREMIOS.map(({ horas }) => {
-        const pares = Object.entries(horas);
-        const mesma = pares.every(([, h]) => h === pares[0][1]);
-        return mesma
-          ? `<b>${pares.map(([k]) => nomeBoostPvp[k] ?? k).join(` ${L[0]} `)}</b> ${L[1]} ${duracaoPvp(pares[0][1])}`
-          : pares.map(([k, h]) => `<b>${nomeBoostPvp[k] ?? k}</b> ${L[1]} ${duracaoPvp(h)}`).join(` ${L[0]} `);
-      });
+      // O que cada faixa leva sai da MESMA tabela com que o servidor paga (`PVP_PREMIOS`), na
+      // `tabelaPremiosPvp`: o prêmio já mudou de dias para horas e de três para seis faixas, e texto
+      // escrito à mão teria ficado prometendo o de antes.
       return {
         pt: `
         <p><b>Um contra um, contra alguém do seu rank.</b> Você monta a equipe, entra na fila e
@@ -5404,12 +7893,15 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           quanto falta — e toda partida ranqueada o zera.</li>
           <li><b>Toda segunda-feira, 00:00 (horário de Brasília), a tabela zera:</b> todo mundo
           volta a 0 PR e ao posicionamento. É o que faz o número voltar a valer o que vale.</li>
-          <li>Na virada, as primeiras posições levam <b>prêmio</b> (boosts): o pódio leva
-          ${premiosPvp[0]}; o resto do Challenger, ${premiosPvp[1]}; e o Mestre, ${premiosPvp[2]}.
-          Só entra quem jogou nas últimas ${N(PVP_DECAIMENTO_HORAS, c.lang)} horas.</li>
+          <li>Na virada, as <b>${N(PVP_POSICOES_PREMIADAS, c.lang)} primeiras posições</b> levam
+          <b>prêmio</b>: boosts e, até o ${ordinalDePosicao(PVP_VAGAS_MESTRE, c.lang)}, <b>diamantes</b>
+          (a tabela está logo abaixo). Os boosts chegam sozinhos, e o diamante entra no saldo — vale na
+          Loja e no banco da guild, mas não se vende no Mercado. Só entra quem jogou nas últimas
+          ${N(PVP_DECAIMENTO_HORAS, c.lang)} horas.</li>
           <li>O botão <b>🏆 Recompensas</b>, logo abaixo da <b>Fila automática</b>, abre essa tabela
           com quanto falta para a virada e em que faixa você está.</li>
         </ul>
+        ${tabelaPremiosPvp(c)}
 
         <h4>Fila automática (VIP)</h4>
         <p>Assinantes podem deixar a fila ligada: acabou uma partida, a próxima busca começa
@@ -5422,9 +7914,39 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           e o <b>PR</b> — no seu perfil e no de quem você abrir pelo ranking, pelo chat ou pela
           lista de amigos. Quem ainda está no posicionamento aparece como <b>Não
           classificado</b>, sem emblema e sem PR.</li>
-          <li>A <b>equipe do PvP Ranqueado é pública</b>: qualquer um vê no seu perfil.</li>
+          <li>A <b>composição</b> da equipe do PvP Ranqueado é pública — quem abre a sua ficha vê
+          <b>quais</b> pokémon você leva —, mas a <b>ordem de entrada é secreta</b>: na ficha dos
+          outros (e no Tracker) a equipe aparece na ordem da Pokédex, com o aviso <b>ordem de entrada
+          oculta</b>. Só você vê e edita a sua ordem, e a luta segue a ordem que você montou. Assim dá
+          para estudar o adversário, mas não montar a resposta exata para a escalação dele.</li>
           <li>Para o <a data-cap="campeonato">Campeonato</a> dá para escolher outra equipe, que
           <b>não aparece</b> no perfil de ninguém.</li>
+        </ul>
+
+        <h4>Formações salvas</h4>
+        <p>Embaixo da equipe de PvP fica o armário de <b>formações</b>: até <b>${PVP_FORMACOES_MAX}</b>
+        escalações salvas, cada uma com nome (até ${FORMACAO_NOME_MAX} caracteres) e o <b>placar</b>
+        dela. <b>Usar</b> troca a equipe de PvP pela formação num clique.</p>
+        <ul>
+          <li>O placar conta as partidas em que <b>aquela escalação exata</b> — os mesmos pokémon, na
+          mesma ordem — lutou, no Ranqueado e no Campeonato. Não importa se você clicou em Usar ou
+          remontou à mão.</li>
+          <li>Mudar a escalação de uma formação <b>zera</b> o placar (era de outro time); renomear não
+          zera.</li>
+          <li>O lápis abre o editor da formação inteira: nome e escalação.</li>
+          <li>Formações, nomes e placares são <b>só seus</b> — nenhuma ficha pública mostra.</li>
+        </ul>
+
+        <h4>Histórico e Tracker</h4>
+        <ul>
+          <li>Clique numa partida do seu <b>histórico</b> para ver ali mesmo a equipe do adversário e o
+          resumo da luta.</li>
+          <li>Se o servidor reiniciar com você na fila, você <b>volta para ela</b> com o tempo de espera
+          que já tinha.</li>
+          <li>O <b>Tracker</b> (<a href="https://pokeidle.io/tracker" target="_blank" rel="noopener">pokeidle.io/tracker</a>)
+          é o site público do PvP: o meta por rank (Low elo, High elo e cada tier), o relatório de cada
+          pokémon, o ranking de cada temporada e as últimas partidas de cada treinador, com o combate
+          turno a turno.</li>
         </ul>`,
         en: `
         <p><b>One versus one, against someone of your rank.</b> You set up a team, join the
@@ -5501,12 +8023,15 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           and every ranked match resets it.</li>
           <li><b>Every Monday, 00:00 (Brasília time), the ladder resets:</b> everyone goes back to
           0 PR and to placement. That is what makes the number mean what it means again.</li>
-          <li>At the turn the top places get a <b>prize</b> (boosts): the podium takes
-          ${premiosPvp[0]}; the rest of Challenger, ${premiosPvp[1]}; and Master, ${premiosPvp[2]}.
-          Only players who played in the last ${N(PVP_DECAIMENTO_HORAS, c.lang)} hours count.</li>
+          <li>At the turn the <b>top ${N(PVP_POSICOES_PREMIADAS, c.lang)} places</b> get a <b>prize</b>:
+          boosts and, down to ${ordinalDePosicao(PVP_VAGAS_MESTRE, c.lang)}, <b>diamonds</b> (the table is
+          right below). The boosts arrive on their own, and the diamonds go into your balance — they work
+          in the Shop and the guild bank, but can't be sold on the Market. Only players who played in the
+          last ${N(PVP_DECAIMENTO_HORAS, c.lang)} hours count.</li>
           <li>The <b>🏆 Rewards</b> button, right below <b>Auto queue</b>, opens this table with the
           time left until the reset and which bracket you are in.</li>
         </ul>
+        ${tabelaPremiosPvp(c)}
 
         <h4>Auto-queue (VIP)</h4>
         <p>Subscribers can leave the queue on: when a match ends, the next search starts by itself
@@ -5519,9 +8044,39 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           division and the <b>PR</b> — on your profile and on anyone's you open from the rankings,
           the chat or the friends list. Players still in placement show as <b>Unranked</b>, with no
           emblem and no PR.</li>
-          <li>Your <b>Ranked PvP team is public</b>: anyone sees it on your profile.</li>
+          <li>Your Ranked PvP team's <b>line-up</b> is public — whoever opens your sheet sees
+          <b>which</b> pokémon you bring —, but the <b>entry order is secret</b>: on other people's view
+          (and on the Tracker) the team shows in Pokédex order, with the <b>entry order hidden</b> note.
+          Only you see and edit your order, and the battle follows the order you set. That way you can
+          study an opponent, but not build the exact answer to their line-up.</li>
           <li>For the <a data-cap="campeonato">Championship</a> you can pick another team, which
           <b>never shows</b> on anyone's profile.</li>
+        </ul>
+
+        <h4>Saved formations</h4>
+        <p>Below the PvP team sits the <b>formations</b> locker: up to <b>${PVP_FORMACOES_MAX}</b>
+        saved line-ups, each with a name (up to ${FORMACAO_NOME_MAX} characters) and its own
+        <b>record</b>. <b>Use</b> swaps your PvP team for the formation in one click.</p>
+        <ul>
+          <li>The record counts the matches in which <b>that exact line-up</b> — the same pokémon, in
+          the same order — fought, in Ranked and in the Championship. It doesn't matter whether you
+          clicked Use or rebuilt it by hand.</li>
+          <li>Changing a formation's line-up <b>resets</b> its record (it belonged to another team);
+          renaming doesn't.</li>
+          <li>The pencil opens the editor for the whole formation: name and line-up.</li>
+          <li>Formations, names and records are <b>yours only</b> — no public sheet shows them.</li>
+        </ul>
+
+        <h4>History and Tracker</h4>
+        <ul>
+          <li>Click a match in your <b>history</b> to see the opponent's team and the battle summary
+          right there.</li>
+          <li>If the server restarts while you are in the queue, you <b>go back into it</b> with the
+          waiting time you already had.</li>
+          <li>The <b>Tracker</b> (<a href="https://pokeidle.io/tracker" target="_blank" rel="noopener">pokeidle.io/tracker</a>)
+          is the public PvP site: the meta by rank (Low elo, High elo and each tier), each pokémon's
+          report, each season's ranking and every trainer's latest matches, with the turn-by-turn
+          combat.</li>
         </ul>`,
         es: `
         <p><b>Uno contra uno, contra alguien de tu rango.</b> Armas el equipo, entras a la cola y
@@ -5599,12 +8154,15 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           tarjeta muestra cuánto falta — y cada partida clasificatoria lo reinicia.</li>
           <li><b>Cada lunes, 00:00 (hora de Brasilia), la tabla se reinicia:</b> todos vuelven a 0
           PR y a la colocación. Es lo que hace que el número vuelva a valer lo que vale.</li>
-          <li>En el cambio los primeros puestos llevan <b>premio</b> (boosts): el podio se lleva
-          ${premiosPvp[0]}; el resto del Challenger, ${premiosPvp[1]}; y el Maestro, ${premiosPvp[2]}.
-          Solo cuenta quien jugó en las últimas ${N(PVP_DECAIMENTO_HORAS, c.lang)} horas.</li>
+          <li>En el cambio los <b>${N(PVP_POSICOES_PREMIADAS, c.lang)} primeros puestos</b> llevan
+          <b>premio</b>: boosts y, hasta el ${ordinalDePosicao(PVP_VAGAS_MESTRE, c.lang)}, <b>diamantes</b>
+          (la tabla está justo debajo). Los boosts llegan solos, y los diamantes entran en tu saldo — sirven
+          en la Tienda y en el banco de la guild, pero no se venden en el Mercado. Solo cuenta quien jugó en
+          las últimas ${N(PVP_DECAIMENTO_HORAS, c.lang)} horas.</li>
           <li>El botón <b>🏆 Recompensas</b>, justo debajo de la <b>Cola automática</b>, abre esta
           tabla con cuánto falta para el cambio y en qué franja estás.</li>
         </ul>
+        ${tabelaPremiosPvp(c)}
 
         <h4>Cola automática (VIP)</h4>
         <p>Los suscriptores pueden dejar la cola encendida: al terminar una partida, la siguiente
@@ -5617,10 +8175,42 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           con la división y los <b>PR</b> — en tu perfil y en el de quien abras desde la
           clasificación, el chat o la lista de amigos. Quien sigue en la colocación aparece como
           <b>Sin clasificar</b>, sin emblema y sin PR.</li>
-          <li>El <b>equipo del PvP Clasificatorio es público</b>: cualquiera lo ve en tu
-          perfil.</li>
+          <li>La <b>composición</b> del equipo del PvP Clasificatorio es pública — quien abre tu
+          ficha ve <b>qué</b> pokémon llevas —, pero el <b>orden de entrada es secreto</b>: en la ficha
+          que ven los demás (y en el Tracker) el equipo aparece en el orden de la Pokédex, con el aviso
+          <b>orden de entrada oculto</b>. Solo tú ves y editas tu orden, y la pelea sigue el orden que
+          armaste. Así se puede estudiar al rival, pero no armar la respuesta exacta a su
+          alineación.</li>
           <li>Para el <a data-cap="campeonato">Campeonato</a> puedes elegir otro equipo, que
           <b>no aparece</b> en el perfil de nadie.</li>
+        </ul>
+
+        <h4>Formaciones guardadas</h4>
+        <p>Debajo del equipo de PvP está el armario de <b>formaciones</b>: hasta
+        <b>${PVP_FORMACOES_MAX}</b> alineaciones guardadas, cada una con nombre (hasta
+        ${FORMACAO_NOME_MAX} caracteres) y su <b>marcador</b>. <b>Usar</b> cambia tu equipo de PvP por
+        la formación de un clic.</p>
+        <ul>
+          <li>El marcador cuenta las partidas en que <b>esa alineación exacta</b> — los mismos pokémon,
+          en el mismo orden — peleó, en el Clasificatorio y en el Campeonato. No importa si pulsaste
+          Usar o la armaste a mano.</li>
+          <li>Cambiar la alineación de una formación <b>reinicia</b> su marcador (era de otro equipo);
+          renombrarla no.</li>
+          <li>El lápiz abre el editor de la formación entera: nombre y alineación.</li>
+          <li>Formaciones, nombres y marcadores son <b>solo tuyos</b> — ninguna ficha pública los
+          muestra.</li>
+        </ul>
+
+        <h4>Historial y Tracker</h4>
+        <ul>
+          <li>Pulsa una partida de tu <b>historial</b> para ver ahí mismo el equipo del rival y el
+          resumen de la pelea.</li>
+          <li>Si el servidor se reinicia contigo en la cola, <b>vuelves a ella</b> con el tiempo de
+          espera que ya tenías.</li>
+          <li>El <b>Tracker</b> (<a href="https://pokeidle.io/tracker" target="_blank" rel="noopener">pokeidle.io/tracker</a>)
+          es la web pública del PvP: el meta por rango (Low elo, High elo y cada tier), el informe de
+          cada pokémon, la clasificación de cada temporada y las últimas partidas de cada entrenador,
+          con el combate turno a turno.</li>
         </ul>`,
       };
     },
@@ -5941,6 +8531,15 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           lugar. <b>Ver minha chave</b> leva direto ao seu caminho.</li>
           <li>Cada inscrito aparece como invicto, na chave dos perdedores ou eliminado. No fim, a
           <b>Premiação</b> mostra os três colocados.</li>
+          <li>Numa chave grande, o seletor <b>Bracket inteira / Top 32 / Top 16 / Top 8 / Top 4</b>
+          mostra só o trecho que interessa. Segure e arraste para navegar, como num mapa.</li>
+        </ul>
+
+        <h4>Troféus</h4>
+        <ul>
+          <li>Os pokémon da <b>equipe campeã</b> ganham o <b>Troféu</b> do campeonato (Mundial ou
+          Amador) na ficha — e ele vai junto se o pokémon for vendido.</li>
+          <li>O pódio ganha no <b>perfil</b> o troféu do campeão e as medalhas de 2º e 3º lugar.</li>
         </ul>
 
         <h4>Até quando dá para assistir</h4>
@@ -6043,6 +8642,16 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           title and 3rd place. <b>View my bracket</b> jumps to your path.</li>
           <li>Each entrant shows as unbeaten, in the losers' bracket or eliminated. At the end, the
           <b>Prizes</b> tab shows the top three.</li>
+          <li>In a big bracket, the <b>Full bracket / Top 32 / Top 16 / Top 8 / Top 4</b> selector
+          shows only the part that matters. Hold and drag to move around, like a map.</li>
+        </ul>
+
+        <h4>Trophies</h4>
+        <ul>
+          <li>The pokémon on the <b>champion team</b> earn the championship's <b>Trophy</b> (World or
+          Amateur) on their sheet — and it goes along if the pokémon is sold.</li>
+          <li>The podium gets the champion's trophy and the 2nd and 3rd place medals on their
+          <b>profile</b>.</li>
         </ul>
 
         <h4>How long replays stay up</h4>
@@ -6145,6 +8754,17 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
           3.er puesto. <b>Ver mi cuadro</b> lleva directo a tu camino.</li>
           <li>Cada inscrito aparece como invicto, en el cuadro de perdedores o eliminado. Al final,
           la pestaña <b>Premios</b> muestra a los tres primeros.</li>
+          <li>En un cuadro grande, el selector <b>Cuadro completo / Top 32 / Top 16 / Top 8 / Top 4</b>
+          muestra solo el tramo que interesa. Mantén pulsado y arrastra para moverte, como en un
+          mapa.</li>
+        </ul>
+
+        <h4>Trofeos</h4>
+        <ul>
+          <li>Los pokémon del <b>equipo campeón</b> ganan el <b>Trofeo</b> del campeonato (Mundial o
+          Amateur) en su ficha — y va con ellos si el pokémon se vende.</li>
+          <li>El podio gana en el <b>perfil</b> el trofeo del campeón y las medallas de 2.º y 3.er
+          puesto.</li>
         </ul>
 
         <h4>Hasta cuándo se puede ver</h4>
@@ -6348,13 +8968,32 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
            <tr><td>Top Catch</td><td><b>espécies diferentes</b> já capturadas, não capturas totais</td></tr>
            <tr><td>Top Coins</td><td>ouro acumulado na conta</td></tr>
            <tr><td>PvP Ranqueado</td><td>o rank e o PR (ver <a data-cap="pvp">PvP Ranqueado</a>)</td></tr>
-           <tr><td>Bosses</td><td>vitórias contra o boss que você escolher na aba</td></tr>
+           <tr><td>Bosses</td><td>vitórias em boss: em <b>Todos</b> (o padrão da aba), a soma de todos os bosses; ou as de um boss só, escolhido no seletor</td></tr>
            <tr><td>Guild Diário</td><td>GP da guild, que dá o bônus de XP e loot (ver <a data-cap="guild">Guilds</a>)</td></tr>
            <tr><td>Guild Global</td><td>GP somado das guerras do mês, com prêmio em diamantes; zera todo mês</td></tr>`,
         )}
         <p>Clicar num nome abre o perfil público do treinador — stats, Pokédex, o rank do PvP
         Ranqueado e a equipe dele no PvP, sem dados de conta. O mesmo perfil abre pelo chat e pela
         lista de amigos.</p>
+
+        <h4>Prêmio do mês: Treinadores, Top Catch, Top Coins e Bosses</h4>
+        <p>No dia 1º de cada mês, às <b>00:00 de Brasília</b> (o relógio da Temporada Global de guilds),
+        quem estiver nesses quatro placares ganha diamante pela posição — no de Bosses, vale o
+        <b>Todos</b>, a soma das vitórias em todos os bosses:</p>
+        ${tabelaPremioMensal(c)}
+        <ul>
+          <li>Quem está em <b>1º</b> em cada placar usa um <b>selo ao lado do nick no chat</b>: o
+          <b>Ash</b> (a primeira logo do jogo) no Top Treinadores, a <b>Poké Ball</b> no Top Catch, a
+          <b>moeda</b> no Top Coins e a <b>coroa de boss</b> no Top Bosses. O selo é <b>ao vivo</b>: passa
+          para quem ultrapassar (o jogo confere a cada 2 minutos).</li>
+          <li>Vale a posição <b>na hora do fechamento</b>. Os placares não zeram — nível, Pokédex e vitórias
+          não têm como zerar —, então o prêmio é de quem segue no topo quando o mês vira.</li>
+          <li>Os quatro mostram até o <b>100º</b>. Conta banida no fechamento não recebe, e a posição
+          dela não passa para o seguinte.</li>
+          <li>O diamante do prêmio é para usar na Loja: como os outros brindes, ele não vai para o
+          Mercado da Comunidade. No máximo ${N(TETO_DIAMANTES_MES, 'pt')} 💎 por mês, somando os quatro
+          placares.</li>
+        </ul>
 
         <h4>Pokémon Forte — como o ⚔ é calculado</h4>
         <p>Usa a <b>mesma força de nascimento</b> da calculadora (soma dos seis stats, normalizada),
@@ -6364,6 +9003,9 @@ multiplicador = ${BASE_PENALIDADE_BOSS} ^ déficit</pre>
         <pre class="wk-formula">score = mesma força da nota (0–1)
 poder = arred( nível × 10 × score )</pre>
         <p>A aba mostra essa fórmula no topo do placar.</p>
+        <p><b>A coroa.</b> O 1º do Pokémon Forte leva a <b>coroa do Ranks</b> antes do nome — na placa em
+        cima dele no campo (na hunt do dono e na arena do PvP, para os dois lados), na Equipe e na ficha.
+        É só a coroa, sem outro prêmio, e ela passa para quem ultrapassar em até 2 minutos.</p>
 
         ${nota(`O placar sai do banco, não da memória do jogo: o que você vê pode estar até
         <b>5 segundos</b> atrasado. Para um ranking, é irrelevante.`)}`,
@@ -6376,13 +9018,32 @@ poder = arred( nível × 10 × score )</pre>
            <tr><td>Top Catch</td><td><b>distinct species</b> caught, not total catches</td></tr>
            <tr><td>Top Coins</td><td>gold held</td></tr>
            <tr><td>Ranked PvP</td><td>rank and PR (see <a data-cap="pvp">Ranked PvP</a>)</td></tr>
-           <tr><td>Bosses</td><td>wins against the boss you pick in the tab</td></tr>
+           <tr><td>Bosses</td><td>boss wins: in <b>All</b> (the tab's default), the sum over every boss; or the wins against one boss, picked in the selector</td></tr>
            <tr><td>Guild Daily</td><td>guild GP, which grants the XP and loot bonus (see <a data-cap="guild">Guilds</a>)</td></tr>
            <tr><td>Guild Global</td><td>GP added up from the month's wars, with a diamond prize; resets every month</td></tr>`,
         )}
         <p>Clicking a name opens that trainer's public profile — stats, Pokédex progress, their
         Ranked PvP rank and PvP team, without account details. The same profile opens from the
         chat and the friends list.</p>
+
+        <h4>Monthly prize: Trainers, Top Catch, Top Coins and Bosses</h4>
+        <p>On the 1st of every month, at <b>00:00 Brasília time</b> (the Global Guild Season clock),
+        whoever is on these four ladders gets diamonds by place — for Bosses, the <b>All</b> ladder
+        counts, the sum of wins over every boss:</p>
+        ${tabelaPremioMensal(c)}
+        <ul>
+          <li>Whoever is <b>#1</b> on each ladder wears a <b>badge next to their name in chat</b>:
+          <b>Ash</b> (the game's first logo) for Top Trainers, the <b>Poké Ball</b> for Top Catch, the
+          <b>coin</b> for Top Coins and the <b>boss crown</b> for Top Bosses. The badge is <b>live</b>: it
+          moves to whoever overtakes them (the game checks every 2 minutes).</li>
+          <li>What counts is your place <b>when it closes</b>. The ladders do not reset — levels, Pokédex
+          and wins cannot be reset —, so the prize goes to whoever is still on top when the month turns.</li>
+          <li>All four show up to <b>#100</b>. A banned account gets nothing at the close, and its
+          place does not pass to the next player.</li>
+          <li>The prize diamonds are for the Shop: like the other gifts, they cannot go to the
+          Community Market. At most ${N(TETO_DIAMANTES_MES, 'en')} 💎 per month across the four
+          ladders.</li>
+        </ul>
 
         <h4>Strongest Pokémon — how ⚔ is calculated</h4>
         <p>Uses the <b>same birth strength</b> as the calculator (sum of six stats, normalized),
@@ -6392,6 +9053,10 @@ poder = arred( nível × 10 × score )</pre>
         <pre class="wk-formula">score = same strength as the calculator (0–1)
 power = round( level × 10 × score )</pre>
         <p>The tab shows this formula at the top of the ladder.</p>
+        <p><b>The crown.</b> The #1 Strongest Pokémon wears the <b>Ranks crown</b> before its name — on
+        the tag above it in the field (in its owner's hunt and in the PvP arena, for both sides), in the
+        Team and in its details sheet. It is just the crown, with no other prize, and it moves to whoever
+        overtakes it within 2 minutes.</p>
 
         ${nota(`The ladder comes from the database, not from live memory: what you see may be up to
         <b>5 seconds</b> behind. For a ranking, that is irrelevant.`)}`,
@@ -6404,13 +9069,33 @@ power = round( level × 10 × score )</pre>
            <tr><td>Top Captura</td><td><b>especies distintas</b> capturadas, no capturas totales</td></tr>
            <tr><td>Top Coins</td><td>oro acumulado</td></tr>
            <tr><td>PvP Clasificatorio</td><td>el rango y los PR del PvP Clasificatorio (ver <a data-cap="pvp">PvP Clasificatorio</a>)</td></tr>
-           <tr><td>Jefes</td><td>victorias contra el jefe que elijas en la pestaña</td></tr>
+           <tr><td>Jefes</td><td>victorias contra jefes: en <b>Todos</b> (lo que abre la pestaña), la suma de todos los jefes; o las de un jefe solo, elegido en el selector</td></tr>
            <tr><td>Guild Diaria</td><td>GP de la guild, que da el bonus de XP y loot (ver <a data-cap="guild">Guilds</a>)</td></tr>
            <tr><td>Guild Global</td><td>GP sumado de las guerras del mes, con premio en diamantes; se reinicia cada mes</td></tr>`,
         )}
         <p>Hacer clic en un nombre abre el perfil público del entrenador — stats, progreso de
         Pokédex, el rango del PvP Clasificatorio y su equipo de PvP, sin datos de cuenta. El mismo
         perfil se abre desde el chat y la lista de amigos.</p>
+
+        <h4>Premio del mes: Entrenadores, Top Captura, Top Coins y Jefes</h4>
+        <p>El día 1 de cada mes, a las <b>00:00 de Brasilia</b> (el reloj de la Temporada Global de
+        guilds), quien esté en estas cuatro clasificaciones gana diamantes según el puesto — en Jefes,
+        cuenta <b>Todos</b>, la suma de las victorias contra todos los jefes:</p>
+        ${tabelaPremioMensal(c)}
+        <ul>
+          <li>Quien está <b>1º</b> en cada clasificación lleva una <b>insignia junto a su nombre en el
+          chat</b>: <b>Ash</b> (el primer logo del juego) en Top Entrenadores, la <b>Poké Ball</b> en Top
+          Captura, la <b>moneda</b> en Top Coins y la <b>corona de jefe</b> en Top Jefes. La insignia es
+          <b>en vivo</b>: pasa a quien lo supere (el juego revisa cada 2 minutos).</li>
+          <li>Cuenta el puesto <b>a la hora del cierre</b>. Las clasificaciones no se reinician — el nivel,
+          la Pokédex y las victorias no se pueden reiniciar —, así que el premio es de quien sigue arriba
+          cuando cambia el mes.</li>
+          <li>Las cuatro muestran hasta el <b>100º</b>. Una cuenta baneada en el cierre no recibe, y su
+          puesto no pasa al siguiente.</li>
+          <li>Los diamantes del premio son para la Tienda: como los otros regalos, no van al Mercado de la
+          Comunidad. Como máximo ${N(TETO_DIAMANTES_MES, 'es')} 💎 por mes, sumando las cuatro
+          clasificaciones.</li>
+        </ul>
 
         <h4>Pokémon Fuerte — cómo se calcula el ⚔</h4>
         <p>Usa la <b>misma fuerza al nacer</b> que la calculadora (suma de los seis stats,
@@ -6420,6 +9105,10 @@ power = round( level × 10 × score )</pre>
         <pre class="wk-formula">score = misma fuerza que la nota (0–1)
 poder = redond( nivel × 10 × score )</pre>
         <p>La pestaña muestra esta fórmula arriba del placar.</p>
+        <p><b>La corona.</b> El 1º de Pokémon Fuerte lleva la <b>corona de Ranks</b> antes del nombre —
+        en la placa encima de él en el campo (en la cacería de su dueño y en la arena del PvP, para los dos
+        lados), en el Equipo y en la ficha. Es solo la corona, sin otro premio, y pasa a quien lo supere en
+        hasta 2 minutos.</p>
 
         ${nota(`La clasificación sale de la base de datos, no de la memoria del juego: lo que ves
         puede estar hasta <b>5 segundos</b> atrasado. Para un ranking, es irrelevante.`)}`,
@@ -6442,13 +9131,20 @@ poder = redond( nivel × 10 × score )</pre>
           <li><b>Poções</b> e <b>Revives</b> — todas as variantes, ao preço de catálogo.</li>
           <li><b>Caixas</b> — um prêmio sorteado por caixa (ver
           <a data-cap="caixas">Caixas do Market</a>).</li>
+          <li><b>Ovos</b> — os três Mystery Eggs da <a data-cap="chocadeira">Chocadeira</a>.</li>
         </ul>
         <p>O <b>Bronze Boss Token</b> (entrada de <a data-cap="bosses">boss</a>) <b>não</b> se
         compra aqui — é drop raro na Outland (${pctBossToken(c)} por kill) e prêmio das Caixas.${dicaOutlandTiers(c, 'bosses')}</p>
 
         <h4>Venda</h4>
         <p>Tudo que os pokémon dropam, pelo valor de catálogo (<b>100%</b> do preço de NPC — não
-        há desconto). Há um botão de <b>vender tudo</b> para o inventário inteiro.</p>
+        há desconto). Há um botão de <b>vender todo o loot</b> para o inventário inteiro.</p>
+        <ul>
+          <li>O <b>cadeado</b> no card <b>tranca</b> um item: ele fica fora do "vender todo" até você
+          destrancar.</li>
+          <li>A <b>Venda Automática</b>, ao lado do botão, vende sozinha o loot que cai na hunt —
+          e, ao ligar, já vende o que está na bolsa. Os itens trancados ficam de fora.</li>
+        </ul>
         ${nota(`<b>Consumível que o NPC vende, o NPC não recompra.</b> Poção e revive entram nessa
         regra. O Bronze Boss Token também <b>não</b> pode ser vendido ao NPC — anuncie no
         <a data-cap="comunidade">Mercado da Comunidade</a> se quiser passar adiante.`, 'aviso')}
@@ -6466,11 +9162,13 @@ poder = redond( nivel × 10 × score )</pre>
           jogador.</li>
         </ul>
         <p>O <b>Ordenar por</b> da lista arruma por nível, qualidade, potência, nota da
-        calculadora, <b>Maior IV Total</b> (a soma dos seis IVs), cada IV separado, tipo ou
-        captura mais recente. A mesma lista serve à escolha da <a data-cap="oferenda">Oferenda</a>
+        calculadora, <b>Maior IV Total</b> (a soma dos seis IVs), cada IV separado, tipo,
+        <b>Nº da Pokédex</b> ou captura mais recente. A mesma lista serve à escolha da <a data-cap="oferenda">Oferenda</a>
         e ao anexo do chat.</p>
         <p>Não dá para vender quem está lutando, nem o último pokémon. "Vender todo o Depot" nunca
-        toca em quem está na equipe.</p>
+        toca em quem está na equipe. Com um filtro ligado (tipo ou IV mínimo), o botão vira
+        <b>Vender todo o Depot (Filtrado)</b> e vende só o que a lista está mostrando — a confirmação
+        avisa quem não está na Coleção e seria perdido.</p>
 
         <h4>A Coleção</h4>
         <p>Os pokémon que você quer <b>guardar</b> vão para a <b>Coleção</b>: eles saem desta lista
@@ -6500,12 +9198,19 @@ poder = redond( nivel × 10 × score )</pre>
           <li><b>Potions</b> and <b>Revives</b> — every variant, at catalogue price.</li>
           <li><b>Boxes</b> — one prize drawn per box (see
           <a data-cap="caixas">Market Boxes</a>).</li>
+          <li><b>Eggs</b> — the three Mystery Eggs for the <a data-cap="chocadeira">Incubator</a>.</li>
         </ul>
         <p>The <b>Bronze Boss Token</b> is <b>not</b> sold here — it is a rare Outland drop (${pctBossToken(c)} per kill) and a Box prize.${dicaOutlandTiers(c, 'bosses')}</p>
 
         <h4>Sell</h4>
         <p>Everything pokémon drop, at catalogue value (<b>100%</b> of the NPC price — no
-        discount). There is a <b>sell all</b> button for the whole inventory.</p>
+        discount). There is a <b>sell all loot</b> button for the whole inventory.</p>
+        <ul>
+          <li>The <b>padlock</b> on a card <b>locks</b> an item: it stays out of "sell all" until you
+          unlock it.</li>
+          <li><b>Auto-Sell</b>, next to the button, sells the loot that drops in the hunt by itself —
+          and, when switched on, sells what is already in the bag. Locked items stay out.</li>
+        </ul>
         ${nota(`<b>What the NPC sells, the NPC does not buy back.</b> Potions and revives follow
         that rule. The Bronze Boss Token also <b>cannot</b> be sold to the NPC — list it on the
         <a data-cap="comunidade">Community Market</a> instead.`, 'aviso')}
@@ -6523,11 +9228,13 @@ poder = redond( nivel × 10 × score )</pre>
           another player.</li>
         </ul>
         <p>The list's <b>Sort by</b> orders by level, quality, potency, calculator score,
-        <b>Highest Total IV</b> (the sum of the six IVs), each IV on its own, type or most recent
-        catch. The same list powers the <a data-cap="oferenda">Offering</a> picker and the chat
+        <b>Highest Total IV</b> (the sum of the six IVs), each IV on its own, type, <b>Pokédex
+        No.</b> or most recent catch. The same list powers the <a data-cap="oferenda">Offering</a> picker and the chat
         attachment.</p>
         <p>You cannot sell whoever is fighting, nor your last pokémon. "Sell the whole Depot" never
-        touches anyone on the team.</p>
+        touches anyone on the team. With a filter on (type or minimum IV), the button becomes <b>Sell
+        entire Depot (Filtered)</b> and sells only what the list is showing — the confirmation warns
+        about anyone who is not in the Collection and would be lost.</p>
 
         <h4>The Collection</h4>
         <p>The pokémon you want to <b>keep</b> go to your <b>Collection</b>: they leave this list
@@ -6557,12 +9264,19 @@ poder = redond( nivel × 10 × score )</pre>
           <li><b>Pociones</b> y <b>Revivires</b> — todas las variantes, a precio de catálogo.</li>
           <li><b>Cajas</b> — un premio sorteado por caja (ver
           <a data-cap="caixas">Cajas del Market</a>).</li>
+          <li><b>Huevos</b> — los tres Mystery Eggs de la <a data-cap="chocadeira">Incubadora</a>.</li>
         </ul>
         <p>El <b>Bronze Boss Token</b> <b>no</b> se compra aquí — es drop raro en Outland (${pctBossToken(c)} por kill) y premio de las Cajas.${dicaOutlandTiers(c, 'bosses')}</p>
 
         <h4>Venta</h4>
         <p>Todo lo que sueltan los pokémon, al valor de catálogo (<b>100%</b> del precio de NPC —
-        sin descuento). Hay un botón de <b>vender todo</b> para el inventario entero.</p>
+        sin descuento). Hay un botón de <b>vender todo el loot</b> para el inventario entero.</p>
+        <ul>
+          <li>El <b>candado</b> de la carta <b>bloquea</b> un objeto: queda fuera del "vender todo"
+          hasta que lo desbloquees.</li>
+          <li>La <b>Venta automática</b>, junto al botón, vende sola el loot que cae en la cacería — y,
+          al activarla, vende lo que ya está en la bolsa. Los objetos bloqueados quedan fuera.</li>
+        </ul>
         ${nota(`<b>Lo que el NPC vende, el NPC no recompra.</b> Pociones y revivires entran en esa
         regla. El Bronze Boss Token tampoco se vende al NPC — anúncialo en el
         <a data-cap="comunidade">Mercado de la Comunidad</a>.`, 'aviso')}
@@ -6581,11 +9295,13 @@ poder = redond( nivel × 10 × score )</pre>
           jugador.</li>
         </ul>
         <p>El <b>Ordenar por</b> de la lista ordena por nivel, calidad, potencia, nota de la
-        calculadora, <b>Mayor IV Total</b> (la suma de los seis IV), cada IV por separado, tipo o
-        captura más reciente. La misma lista sirve a la selección de la
+        calculadora, <b>Mayor IV Total</b> (la suma de los seis IV), cada IV por separado, tipo,
+        <b>N.º de Pokédex</b> o captura más reciente. La misma lista sirve a la selección de la
         <a data-cap="oferenda">Ofrenda</a> y al adjunto del chat.</p>
         <p>No se puede vender a quien está peleando ni al último pokémon. "Vender todo el Depot"
-        nunca toca a los del equipo.</p>
+        nunca toca a los del equipo. Con un filtro activo (tipo o IV mínimo), el botón pasa a ser
+        <b>Vender todo el Depósito (Filtrado)</b> y vende solo lo que muestra la lista — la
+        confirmación avisa de quien no está en la Colección y se perdería.</p>
 
         <h4>La Colección</h4>
         <p>Los pokémon que quieres <b>guardar</b> van a la <b>Colección</b>: salen de esta lista y
@@ -6837,7 +9553,7 @@ poder = redond( nivel × 10 × score )</pre>
           e o resto da Loja VIP não vão à vitrine. O que se negocia é o próprio <b>diamante</b>,
           que compra tudo isso na Loja.</li>
           <li><b>Pokémon precisa passar na faixa mínima</b>: <b>nível ${m.pokemonMin?.level ?? 50}+</b> e
-          <b>nota ${m.pokemonMin?.nota ?? 3.0}+</b> na calculadora (força de nascimento — IV,
+          <b>nota ${D(m.pokemonMin?.nota ?? 3, 'pt')}+</b> na calculadora (força de nascimento — IV,
           qualidade, potência e shiny). <b>Shiny e P5</b> entram em qualquer nível/nota.</li>
           <li>O preço é <b>por unidade</b>. Um lote de 100 Water Stone pode ser comprado em
           fatias.</li>
@@ -6848,6 +9564,10 @@ poder = redond( nivel × 10 × score )</pre>
         não ir embora num "vender todo o depot" do <a data-cap="market">Market</a>. Devolva ao
         Depot se quiser mesmo revendê-lo ao NPC.</p>
         <ul>
+          <li><b>Itens</b> e <b>Diamantes</b> não têm <b>Ordenar por</b>: quem vende aparece sempre do
+          <b>menor preço</b> para o maior e, no mesmo preço, quem anunciou <b>antes</b> vem primeiro — a
+          fila é de quem chegou primeiro. Só a aba de <b>Pokémon</b> escolhe a ordem (Adicionados
+          recentemente, Menor preço, Maior preço), porque ali se escolhe um exemplar.</li>
           <li>A <b>★</b> no card de um pokémon à venda guarda o anúncio na aba <b>Favoritos</b>. Se
           alguém comprar ou o vendedor retirar, o card continua lá por alguns dias, apagado e com o
           aviso, até você limpar.</li>
@@ -6857,7 +9577,29 @@ poder = redond( nivel × 10 × score )</pre>
           cada pokémon, e clicar na linha abre a ficha dele.</li>
           <li>O filtro <b>Omitir Pokémon de Outland</b> (grupo <b>Espécie</b>) tira da vitrine as
           variantes #2001+: buscar "pupitar" passa a trazer só o Pupitar, sem o Ancient Pupitar.</li>
+          <li>O card de um pokémon à venda mostra <b>quantas pessoas favoritaram</b> o anúncio — e no
+          seu anúncio, quantas favoritaram o seu.</li>
+          <li><b>Enviar DM</b> abre uma conversa com o vendedor, presa àquele anúncio, para combinar
+          antes de comprar (ver <a data-cap="chat">Comércio</a>).</li>
         </ul>
+
+        <h4>A vitrine de pokémon</h4>
+        <p>A aba de pokémon abre como uma <b>grade de espécies</b>: um card por espécie, com quantas
+        ofertas ela tem e se há shiny ou TM à venda entre elas. O clique abre as ofertas daquela
+        espécie, nas duas moedas juntas. Quem prefere varrer a feira inteira atrás de pechincha
+        desliga <b>Agregar espécies</b> (no grupo <b>Espécie</b>) e tem de volta a lista de anúncios,
+        um card por pokémon.</p>
+
+        <h4>Anunciar com referência</h4>
+        <p>Ao pôr preço, dois atalhos preenchem o campo: <b>Menor anúncio</b> (o mais barato à venda
+        agora) e <b>Média vendida</b> (o preço médio vendido nos últimos 7 dias, com quantas unidades).
+        A confirmação mostra o recibo — a comissão e o que cai para você —, e os cards usam o preço
+        curto (20M, 1,5B).</p>
+        <p>O botão <b>📢 Anunciar no chat global</b> manda o anúncio para os chats Mundo e Comércio
+        (custa ${N(CUSTO_ALTO_FALANTE, 'pt')} Coins; ver <a data-cap="chat">Chat</a>).</p>
+        ${nota(`O pokémon vai para o comprador com o que é <b>dele</b>: o <b>apelido</b> da Name Tag, a
+        <b>Medalha de Guerra</b>, o <b>Troféu</b> de campeonato e o nome de <b>quem capturou</b>. A
+        <b>skin</b>, não: ela é do dono, e volta a ficar livre na bolsa de quem vendeu.`)}
 
         <h4>Filtros de pokémon</h4>
         <p>Na aba de pokémon, além do tipo, dos selos e do <b>Filtrar por</b>, o grupo
@@ -6886,9 +9628,10 @@ poder = redond( nivel × 10 × score )</pre>
         <p>A terceira aba do mercado vende <b>diamante</b> — a moeda que se compra com dinheiro de
         verdade. É o caminho para quem tem diamante e quer Coins ou Gemas, e para quem tem Coins e
         quer diamante sem passar pelo cartão.</p>
-        ${nota(`<b>Só o diamante COMPRADO pode ser vendido.</b> Entram os que você pagou com PIX ou
-        cartão e os que recebeu como <b>comissão de indicação</b>. Os que vieram de <b>voto no
-        TopIdle</b>, do <b>pódio de guilds</b> ou de um <b>ajuste da administração</b> ficam de
+        ${nota(`<b>APENAS DIAMANTES COMPRADOS podem ser vendidos</b> — os que você pagou com PIX ou
+        cartão. Os de <b>comissão de indicação</b> (desde 03/10/2026), os de <b>voto no
+        TopIdle</b>, dos <b>convites do Discord</b> e da <b>Tag IDLE</b>, do <b>pódio de guilds</b>
+        ou de um <b>ajuste da administração</b> ficam de
         fora — eles existem para gastar na Loja, e deixá-los virar Coin transformaria um prêmio
         numa torneira de economia. A tela de anunciar mostra quantos você pode vender antes de
         pedir o preço.`, 'atencao')}
@@ -6915,6 +9658,9 @@ poder = redond( nivel × 10 × score )</pre>
           dias que cuidaram.</li>
           <li>Ninguém levou? No fim do prazo o pokémon <b>volta para o seu Depot</b> sozinho —
           na hora, mesmo com o jogo aberto, e com um aviso na tela dizendo o que voltou.</li>
+          <li>Quer mais tempo? Em <b>Editar</b>, o <b>Aumentar a estadia</b> soma dias ao mesmo
+          anúncio, pagos à vista na mesma diária — até ${m.diasMax ?? 30} dias à frente. O preço, a
+          retenção, as estrelas dos Favoritos e as conversas do Comércio continuam como estavam.</li>
         </ul>
 
         <h4>A comissão</h4>
@@ -6982,7 +9728,7 @@ poder = redond( nivel × 10 × score )</pre>
           the rest of the VIP Shop stay off the shelf. What gets traded is the <b>diamond</b>
           itself, which buys all of it in the Shop.</li>
           <li><b>Pokémon must clear the minimum bar</b>: <b>level ${m.pokemonMin?.level ?? 50}+</b> and
-          <b>calculator score ${m.pokemonMin?.nota ?? 3.0}+</b> (birth strength — IV, quality,
+          <b>calculator score ${D(m.pokemonMin?.nota ?? 3, 'en')}+</b> (birth strength — IV, quality,
           potency and shiny). <b>Shiny and P5 bypass</b> the minimum.</li>
           <li>The price is <b>per unit</b>. A lot of 100 Water Stones can be bought in slices.</li>
         </ul>
@@ -6992,6 +9738,10 @@ poder = redond( nivel × 10 × score )</pre>
         cannot leave in a "sell the whole depot" at the <a data-cap="market">Market</a>. Return it
         to the Depot if you really want to sell it back to the NPC.</p>
         <ul>
+          <li><b>Items</b> and <b>Diamonds</b> have no <b>Sort by</b>: sellers always show up from the
+          <b>lowest price</b> to the highest and, at the same price, whoever listed <b>first</b> comes
+          first — the line belongs to whoever got there first. Only the <b>Pokémon</b> tab picks an order
+          (Recently listed, Lowest price, Highest price), because there you are choosing one specimen.</li>
           <li>The <b>★</b> on the card of a pokémon for sale keeps the listing in the <b>Favorites</b>
           tab. If someone buys it or the seller withdraws it, the card stays there for a few days,
           greyed out with a notice, until you clear it.</li>
@@ -7001,7 +9751,30 @@ poder = redond( nivel × 10 × score )</pre>
           badges, and clicking the row opens its card.</li>
           <li>The <b>Hide Outland Pokémon</b> filter (<b>Species</b> group) removes the #2001+ variants
           from the listings: searching "pupitar" now brings only Pupitar, without Ancient Pupitar.</li>
+          <li>The card of a pokémon for sale shows <b>how many people favourited</b> the listing — and
+          on your own listing, how many favourited yours.</li>
+          <li><b>Send DM</b> opens a chat with the seller, tied to that listing, to agree before buying
+          (see <a data-cap="chat">Trade</a>).</li>
         </ul>
+
+        <h4>The pokémon showcase</h4>
+        <p>The pokémon tab opens as a <b>grid of species</b>: one card per species, with how many
+        offers it has and whether there is a shiny or a TM for sale among them. Clicking opens that
+        species' offers, in both currencies together. Whoever prefers to sweep the whole market for
+        bargains switches off <b>Group by species</b> (in the <b>Species</b> group) and gets the
+        listing list back, one card per pokémon.</p>
+
+        <h4>Listing with a reference</h4>
+        <p>When setting a price, two shortcuts fill the field: <b>Lowest listing</b> (the cheapest one
+        for sale right now) and <b>Average sold</b> (the average price sold over the last 7 days, with
+        how many units). The confirmation shows the receipt — the fee and what lands with you —, and
+        the cards use the short price (20M, 1.5B).</p>
+        <p>The <b>📢 Announce in global chat</b> button sends the listing to the World and Trade chats
+        (it costs ${N(CUSTO_ALTO_FALANTE, 'en')} Coins; see <a data-cap="chat">Chat</a>).</p>
+        ${nota(`The pokémon goes to the buyer with what is <b>its own</b>: the Name Tag
+        <b>nickname</b>, the <b>War Medal</b>, the championship <b>Trophy</b> and the name of <b>who
+        caught it</b>. The <b>skin</b> does not: it belongs to the owner, and goes back to being free
+        in the seller's bag.`)}
 
         <h4>Pokémon filters</h4>
         <p>On the pokémon tab, besides type, badges and <b>Filter by</b>, the <b>Ranges</b> group
@@ -7030,11 +9803,12 @@ poder = redond( nivel × 10 × score )</pre>
         <p>The market's third tab sells <b>diamonds</b> — the currency you buy with real money. It
         is the way out for someone holding diamonds who wants Coins or Gems, and the way in for
         someone holding Coins who wants diamonds without a card.</p>
-        ${nota(`<b>Only PURCHASED diamonds can be sold.</b> That means the ones you paid for with
-        PIX or a card, and the ones you received as a <b>referral commission</b>. The ones from a
-        <b>TopIdle vote</b>, the <b>guild podium</b> or a <b>staff adjustment</b> stay out — those
-        exist to be spent in the Shop, and letting them become Coins would turn a prize into an
-        economy tap. The listing screen shows how many you can sell before it asks for a price.`,
+        ${nota(`<b>PURCHASED DIAMONDS ONLY can be sold</b> — the ones you paid for with PIX or a
+        card. The ones from a <b>referral commission</b> (since Oct 3, 2026), a <b>TopIdle
+        vote</b>, the <b>Discord invites</b> and the <b>IDLE Tag</b>, the <b>guild podium</b> or a
+        <b>staff adjustment</b> stay out — those exist to be
+        spent in the Shop, and letting them become Coins would turn a prize into an economy tap.
+        The listing screen shows how many you can sell before it asks for a price.`,
         'atencao')}
         <ul>
           <li>The price is <b>per diamond</b>; the buyer can take a <b>slice</b> of the lot.</li>
@@ -7058,6 +9832,9 @@ poder = redond( nivel × 10 × score )</pre>
           days they cared for.</li>
           <li>Nobody took it? When the term ends the pokémon <b>returns to your Depot</b> on its
           own — right away, even with the game open, and with a notice saying what came back.</li>
+          <li>Need more time? In <b>Edit</b>, <b>Extend the stay</b> adds days to the same listing,
+          paid up front at the same daily fee — up to ${m.diasMax ?? 30} days ahead. The price, the
+          hold, the Favorites stars and the Trade conversations stay as they were.</li>
         </ul>
 
         <h4>The commission</h4>
@@ -7123,7 +9900,7 @@ poder = redond( nivel × 10 × score )</pre>
           <b>Beast Ball</b> y el resto de la Tienda VIP no llegan a la vitrina. Lo que se negocia es
           el propio <b>diamante</b>, que compra todo eso en la Tienda.</li>
           <li><b>El pokémon debe pasar el mínimo</b>: <b>nivel ${m.pokemonMin?.level ?? 50}+</b> y
-          <b>nota ${m.pokemonMin?.nota ?? 3.0}+</b> en la calculadora (fuerza al nacer — IV,
+          <b>nota ${D(m.pokemonMin?.nota ?? 3, 'es')}+</b> en la calculadora (fuerza al nacer — IV,
           calidad, potencia y shiny). <b>Shiny y P5 entran</b> en cualquier nivel/nota.</li>
           <li>El precio es <b>por unidad</b>. Un lote de 100 Water Stone se puede comprar por
           partes.</li>
@@ -7134,6 +9911,10 @@ poder = redond( nivel × 10 × score )</pre>
         que no se vaya en un "vender todo el depósito" del <a data-cap="market">Market</a>.
         Devuélvelo al Depósito si de verdad quieres revenderlo al NPC.</p>
         <ul>
+          <li><b>Objetos</b> y <b>Diamantes</b> no tienen <b>Ordenar por</b>: quien vende aparece siempre
+          del <b>menor precio</b> al mayor y, al mismo precio, quien anunció <b>antes</b> va primero — la
+          fila es de quien llegó primero. Solo la pestaña de <b>Pokémon</b> elige el orden (Añadidos
+          recientemente, Menor precio, Mayor precio), porque ahí se elige un ejemplar.</li>
           <li>La <b>★</b> en la tarjeta de un pokémon en venta guarda el anuncio en la pestaña
           <b>Favoritos</b>. Si alguien lo compra o el vendedor lo retira, la tarjeta sigue ahí unos
           días, apagada y con el aviso, hasta que la limpies.</li>
@@ -7143,7 +9924,30 @@ poder = redond( nivel × 10 × score )</pre>
           cada pokémon, y al pulsar la fila se abre su ficha.</li>
           <li>El filtro <b>Ocultar Pokémon de Outland</b> (grupo <b>Especie</b>) quita del escaparate las
           variantes #2001+: buscar "pupitar" trae solo el Pupitar, sin el Ancient Pupitar.</li>
+          <li>La tarjeta de un pokémon en venta muestra <b>cuántas personas lo marcaron como
+          favorito</b> — y en tu anuncio, cuántas marcaron el tuyo.</li>
+          <li><b>Enviar DM</b> abre una conversación con el vendedor, atada a ese anuncio, para acordar
+          antes de comprar (ver <a data-cap="chat">Comercio</a>).</li>
         </ul>
+
+        <h4>El escaparate de pokémon</h4>
+        <p>La pestaña de pokémon se abre como una <b>cuadrícula de especies</b>: una tarjeta por
+        especie, con cuántas ofertas tiene y si hay shiny o TM en venta entre ellas. El clic abre las
+        ofertas de esa especie, en las dos monedas juntas. Quien prefiere recorrer el mercado entero
+        buscando gangas desactiva <b>Agrupar por especie</b> (en el grupo <b>Especie</b>) y recupera la
+        lista de anuncios, una tarjeta por pokémon.</p>
+
+        <h4>Anunciar con referencia</h4>
+        <p>Al poner el precio, dos atajos rellenan el campo: <b>Anuncio más bajo</b> (el más barato en
+        venta ahora) y <b>Promedio vendido</b> (el precio medio vendido en los últimos 7 días, con
+        cuántas unidades). La confirmación muestra el recibo — la comisión y lo que te llega —, y las
+        tarjetas usan el precio corto (20M, 1,5B).</p>
+        <p>El botón <b>📢 Anunciar en el chat global</b> manda el anuncio a los chats Mundo y Comercio
+        (cuesta ${N(CUSTO_ALTO_FALANTE, 'es')} Coins; ver <a data-cap="chat">Chat</a>).</p>
+        ${nota(`El pokémon va al comprador con lo que es <b>suyo</b>: el <b>apodo</b> de la Name Tag,
+        la <b>Medalla de Guerra</b>, el <b>Trofeo</b> de campeonato y el nombre de <b>quien lo
+        capturó</b>. La <b>skin</b> no: es del dueño, y vuelve a quedar libre en la bolsa de quien
+        vendió.`)}
 
         <h4>Filtros de pokémon</h4>
         <p>En la pestaña de pokémon, además del tipo, los sellos y el <b>Filtrar por</b>, el grupo
@@ -7172,12 +9976,13 @@ poder = redond( nivel × 10 × score )</pre>
         <p>La tercera pestaña del mercado vende <b>diamantes</b> — la moneda que se compra con
         dinero de verdad. Es la salida para quien tiene diamantes y quiere Coins o Gemas, y la
         entrada para quien tiene Coins y quiere diamantes sin pasar por la tarjeta.</p>
-        ${nota(`<b>Solo se puede vender el diamante COMPRADO.</b> Entran los que pagaste con PIX o
-        tarjeta y los que recibiste como <b>comisión de recomendación</b>. Los que vinieron de
-        <b>votar en TopIdle</b>, del <b>podio de guilds</b> o de un <b>ajuste de la
-        administración</b> quedan fuera — existen para gastar en la Tienda, y dejar que se
-        convirtieran en Coins transformaría un premio en un grifo de economía. La pantalla de
-        anunciar muestra cuántos puedes vender antes de pedirte el precio.`, 'atencao')}
+        ${nota(`<b>SOLO DIAMANTES COMPRADOS se pueden vender</b> — los que pagaste con PIX o
+        tarjeta. Los de <b>comisión de recomendación</b> (desde el 03/10/2026), los de <b>votar en
+        TopIdle</b>, de las <b>invitaciones al Discord</b> y de la <b>Tag IDLE</b>, del <b>podio de
+        guilds</b> o de un <b>ajuste de la administración</b> quedan
+        fuera — existen para gastar en la Tienda, y dejar que se convirtieran en Coins
+        transformaría un premio en un grifo de economía. La pantalla de anunciar muestra cuántos
+        puedes vender antes de pedirte el precio.`, 'atencao')}
         <ul>
           <li>El precio es <b>por diamante</b>; el comprador puede llevarse una <b>parte</b> del
           lote.</li>
@@ -7202,6 +10007,10 @@ poder = redond( nivel × 10 × score )</pre>
           los días que lo atendieron.</li>
           <li>¿Nadie se lo llevó? Al terminar el plazo el pokémon <b>vuelve a tu Depot</b> solo —
           al instante, aun con el juego abierto, y con un aviso en pantalla.</li>
+          <li>¿Quieres más tiempo? En <b>Editar</b>, <b>Extender la estadía</b> suma días al mismo
+          anuncio, pagados por adelantado a la misma diaria — hasta ${m.diasMax ?? 30} días por
+          delante. El precio, la retención, las estrellas de Favoritos y las conversaciones del
+          Comercio siguen como estaban.</li>
         </ul>
 
         <h4>La comisión</h4>
@@ -7247,12 +10056,57 @@ poder = redond( nivel × 10 × score )</pre>
     id: 'loja',
     titulo: { pt: 'Loja de Diamantes', en: 'Diamond Shop', es: 'Tienda de Diamantes' },
     grupo: 'economia',
+    // As tabelas de produto saem de `lojaProdutos` (o catálogo que o servidor manda), uma por SEÇÃO
+    // da vitrine — a mesma arrumação do menu lateral da Loja. As regras da Name Tag e das skins
+    // vêm de `shared/apelido-pokemon.mjs` e `shared/skins.mjs`.
     html: (c) => {
+      const precoOutfit = (c.d.lojaProdutos ?? []).find((p) => p.cat === 'outfits')?.preco ?? 30;
+      const evento = EVENTOS_SKIN[SKINS[0]?.evento];
+      const agora = Date.now();
+      const dataBr = (ms) => new Date(ms).toLocaleDateString(
+        c.lang === 'en' ? 'en-US' : c.lang === 'es' ? 'es-ES' : 'pt-BR',
+        { timeZone: 'America/Sao_Paulo', day: 'numeric', month: 'long' },
+      );
+      const abre = evento ? dataBr(evento.abreEm) : '';
+      const fecha = evento ? dataBr(evento.fechaEm - 1) : '';
+      const janela = !evento ? 'sem' : agora < evento.abreEm ? 'antes' : agora < evento.fechaEm ? 'aberta' : 'fechada';
+      const vendaSkins = {
+        pt: {
+          sem: '',
+          antes: `A venda das skins de Halloween abre em <b>${abre}</b> e vai até <b>${fecha}</b>.`,
+          aberta: `As skins de Halloween estão à venda até <b>${fecha}</b>.`,
+          fechada: 'A venda das skins de Halloween acabou: quem comprou fica com elas para sempre, e as unidades livres seguem no Mercado da Comunidade.',
+        },
+        en: {
+          sem: '',
+          antes: `The Halloween skins go on sale on <b>${abre}</b> and stay until <b>${fecha}</b>.`,
+          aberta: `The Halloween skins are on sale until <b>${fecha}</b>.`,
+          fechada: 'The Halloween skins sale is over: whoever bought them keeps them forever, and the free units are still on the Community Market.',
+        },
+        es: {
+          sem: '',
+          antes: `La venta de las skins de Halloween abre el <b>${abre}</b> y dura hasta el <b>${fecha}</b>.`,
+          aberta: `Las skins de Halloween están a la venta hasta el <b>${fecha}</b>.`,
+          fechada: 'La venta de las skins de Halloween terminó: quien las compró se queda con ellas para siempre, y las unidades libres siguen en el Mercado de la Comunidad.',
+        },
+      }[c.lang][janela];
       return {
         pt: `
         <p>A loja do JOGO. Paga-se em <b>Diamante</b>, que se compra com dinheiro de verdade
         (PIX ou cartão) e <b>acaba ao ser gasto</b>. Não confunda com a <b>Gema</b>, que é do
-        <a data-cap="comunidade">Mercado da Comunidade</a> e volta em USDT.</p>
+        <a data-cap="comunidade">Mercado da Comunidade</a> e volta em USDT. A vitrine é dividida em
+        seções — as mesmas desta página.</p>
+
+        <h4>Comprar diamantes</h4>
+        <p>O botão <b>Comprar Diamantes</b>, no topo da Loja, abre os pacotes (ou outra quantidade),
+        pagos por <b>PIX</b> — que pede o CPF, só para o registro fiscal — ou <b>cartão</b>. O saldo
+        entra sozinho assim que o pagamento é confirmado. O preço por diamante <b>cai com a
+        quantidade</b>: os pacotes grandes mostram o desconto no próprio card. Faltou diamante para
+        um produto? O botão dele já abre a compra com o que falta.</p>
+        ${nota(`Diamante é consumo: ele é gasto na Loja e não pode ser sacado nem transferido. A
+        desistência da compra pode ser pedida em até 7 dias, e cobre só os diamantes comprados que
+        ainda estão na conta. Também dá para ganhar diamante sem pagar — ver
+        <a data-cap="recompensas">Ganhe diamantes</a>.`)}
 
         <h4>VIP</h4>
         ${tabela(
@@ -7262,11 +10116,12 @@ poder = redond( nivel × 10 × score )</pre>
            <tr><td>Outfit exclusiva</td><td>o Trainer VIP</td></tr>
            <tr><td>Emojis VIP</td><td>no chat</td></tr>`,
         )}
+        ${tabelaDaLojaGrupo(c, 'vip')}
         <p>Renovar <b>estende</b> em vez de reiniciar: comprar 30 dias faltando 10 dá 40. O tempo
         restante aparece no seu painel, em dias, com a tag azul.</p>
 
         <h4>Boosts</h4>
-        <p>Cinco tipos, sete durações cada. Preço em diamante:</p>
+        <p>Cinco tipos, oito durações cada (de 1 hora a 30 dias). Preço em diamante:</p>
         ${tabelaDeBoosts(c)}
         <ul>
           <li><b>Não acumulam</b>: comprar o mesmo tipo de novo <b>estende</b> o que está
@@ -7274,21 +10129,86 @@ poder = redond( nivel × 10 × score )</pre>
           <li>Sem limite diário: compre quantos quiser, quando quiser.</li>
           <li>Tipos diferentes rodam juntos — três boosts ativos aparecem como três linhas no seu
           painel, cada uma com o próprio contador.</li>
+          <li>O <b>Boost da Guild</b> não se compra aqui: ele liga quando os membros enchem o banco da
+          guild (ver <a data-cap="guild">Guilds</a>).</li>
         </ul>
 
-        <h4>Mercado</h4>
-        ${tabelaDaLoja(c, 'mercado')}
+        <h4>Pacotes</h4>
+        <p>Dois ou três boosts juntos, por <b>um dia</b>, <b>uma semana</b> ou <b>um mês</b>, mais barato
+        que a soma — o card mostra quanto sairia avulso, e os de 7 e 30 dias também quanto sairiam os
+        dias soltos. O <b>Pacote Treinador</b> de 7 e o de 30 dias vêm com <b>1 Exp. Share</b> de
+        brinde.</p>
+        ${tabelaDaLojaGrupo(c, 'pacotes')}
+
+        <h4>Boost dos Atrasados</h4>
+        <p>Para quem chegou depois: <b>XP ×${ATRASADOS.mult}</b> (${ATRASADOS.mult * 100}%) no treinador
+        e nos pokémon até o seu treinador alcançar o <b>nível dos veteranos</b> — a mediana de quem joga
+        há mais de ${ATRASADOS.diasConta} dias, recalculada todo dia. O preço é proporcional ao XP que
+        falta (${N(ATRASADOS.precoCheio, 'pt')} 💎 o caminho inteiro, mínimo de
+        ${N(ATRASADOS.precoMinimo, 'pt')} 💎), não tem prazo, e enquanto ele dura desmaiar não tira XP.
+        As regras inteiras, com o porquê de cada uma, em <a data-cap="atrasados">Boost dos
+        Atrasados</a>.</p>
+
+        <h4>Utilitários</h4>
+        <p>Os consumíveis e as utilidades: os pacotes de <b>Beast Ball</b> (com o selo de desconto nos
+        maiores), a <b>Escape Rope</b> (ver <a data-cap="morte">Desmaiar</a>), o <b>Exp. Share</b> (ver
+        <a data-cap="casa">Casa e XP Share</a>), as <b>chocadeiras</b> a mais e o <b>Absorb Bulb</b>
+        (ver <a data-cap="chocadeira">Chocadeira</a>).</p>
+        ${tabelaDaLojaGrupo(c, 'utilitarios')}
         ${nota(`O <b>Pacote de Suprimentos</b> é o melhor negócio em bolas por diamante, mas só
         pode ser comprado <b>uma vez por semana</b>. O contador aparece no próprio botão quando
         ainda está em espera.`, 'dica')}
 
+        <h4>Personagem</h4>
+        <p>O que mexe no <b>treinador</b>: a troca de nome e as bênçãos (Bless) que reduzem ou zeram a
+        perda de XP do próximo nocaute. Trocar de nome <b>reconecta</b> você ao jogo em um segundo (o
+        nick é a chave da sessão), e o nome antigo fica livre para outro jogador. Na fila ou no meio de
+        uma partida do PvP a troca é recusada antes de cobrar.</p>
+        ${tabelaDaLojaGrupo(c, 'personagem')}
+
+        <h4>Cosméticos: Name Tag e skins</h4>
+        <p>Enfeites de <b>pokémon</b> — só aparência. Espécie, stats, tipo, evolução e combate não mudam
+        em nada.</p>
+        <ul>
+          <li><b>Name Tag</b> (${NAME_TAG_PRECO} 💎): dá um <b>nome</b> ao seu pokémon. Comprada, ela
+          espera na bolsa; use em <b>Bolsa → Itens Raros → Name Tag</b>, escolha o pokémon (equipe,
+          Depot ou Coleção) e escreva até <b>${APELIDO_MAX} letras</b>. É de <b>uso único</b>: trocar o
+          nome de novo pede outra etiqueta.</li>
+          <li>O nome aparece na ficha (com a espécie logo abaixo), em campo, na praça do Centro, no
+          chat, na equipe, no Depot, na Coleção e no Mercado — e <b>vai junto</b> quando o pokémon troca
+          de dono. Na arena de PvP o adversário continua vendo a espécie.</li>
+          <li><b>Skins</b> (${SKIN_PRECO} 💎 cada): a fantasia que troca o <b>desenho</b> de um pokémon.
+          Cada skin veste <b>uma espécie e uma cor</b> — a comum só veste o comum e a shiny só o shiny —,
+          e a skin de uma Mega é outra skin, da Mega. Ela fica para sempre na aba <b>Skins</b> da bolsa:
+          vista e tire quando quiser, e cada unidade veste um pokémon.</li>
+          <li>A skin é do <b>dono</b>, não do pokémon: vendê-lo não leva a skin junto, e megaevoluir um
+          pokémon vestido tira a fantasia (a skin volta a ficar livre). A unidade livre se vende no
+          <a data-cap="comunidade">Mercado da Comunidade</a>.</li>
+          <li>As skins são <b>de evento</b>, vendidas só na janela dele. ${vendaSkins}</li>
+        </ul>
+        ${nota(`Nome com <b>racismo, preconceito ou qualquer ofensa</b> pode fazer o pokémon ser
+        excluído sem aviso e o jogador banido. Toda troca de nome fica registrada.`, 'aviso')}
+        ${tabelaDaLojaGrupo(c, 'cosmeticos')}
+
         <h4>Outfits</h4>
-        <p>Aparência para o seu treinador, ${(c.d.lojaProdutos ?? []).find((p) => p.cat === 'outfits')?.preco ?? 30}
+        <p>Aparência para o seu treinador, ${precoOutfit}
         💎 cada. Comprar já equipa, e você troca entre as suas quando quiser.</p>`,
         en: `
         <p>The GAME's shop. You pay in <b>Diamonds</b>, bought with real money (card or PIX), and
         they are <b>gone once spent</b>. Do not confuse them with <b>Gems</b>, which belong to the
-        <a data-cap="comunidade">Community Market</a> and come back as USDT.</p>
+        <a data-cap="comunidade">Community Market</a> and come back as USDT. The shop is split into
+        sections — the same ones on this page.</p>
+
+        <h4>Buying diamonds</h4>
+        <p>The <b>Buy Diamonds</b> button, at the top of the Shop, opens the packs (or any other
+        amount), paid by <b>PIX</b> — which asks for a CPF, for tax records only — or <b>card</b>. The
+        balance comes in by itself as soon as the payment is confirmed. The price per diamond <b>drops
+        with quantity</b>: the big packs show the discount on the card itself. Short of diamonds for a
+        product? Its button opens the purchase with what is missing.</p>
+        ${nota(`Diamonds are consumed: they are spent in the Shop and cannot be withdrawn or
+        transferred. A purchase can be cancelled within 7 days, and that covers only the purchased
+        diamonds still on the account. You can also earn diamonds without paying — see
+        <a data-cap="recompensas">Earn diamonds</a>.`)}
 
         <h4>VIP</h4>
         ${tabela(
@@ -7298,11 +10218,12 @@ poder = redond( nivel × 10 × score )</pre>
            <tr><td>Exclusive outfit</td><td>the VIP Trainer</td></tr>
            <tr><td>VIP emojis</td><td>in chat</td></tr>`,
         )}
+        ${tabelaDaLojaGrupo(c, 'vip')}
         <p>Renewing <b>extends</b> rather than restarts: buying 30 days with 10 left gives you 40.
         The remaining time shows on your panel, in days, with the blue tag.</p>
 
         <h4>Boosts</h4>
-        <p>Five types, seven durations each. Price in diamonds:</p>
+        <p>Five types, eight durations each (from 1 hour to 30 days). Price in diamonds:</p>
         ${tabelaDeBoosts(c)}
         <ul>
           <li>They <b>do not stack</b>: buying the same type again <b>extends</b> the running
@@ -7310,22 +10231,89 @@ poder = redond( nivel × 10 × score )</pre>
           <li>No daily limit: buy as many as you want, whenever you want.</li>
           <li>Different types run together — three active boosts show as three rows on your panel,
           each with its own countdown.</li>
+          <li>The <b>Guild Boost</b> is not sold here: it turns on when the members fill the guild bank
+          (see <a data-cap="guild">Guilds</a>).</li>
         </ul>
 
-        <h4>Market</h4>
-        ${tabelaDaLoja(c, 'mercado')}
+        <h4>Bundles</h4>
+        <p>Two or three boosts together, for <b>one day</b>, <b>one week</b> or <b>one month</b>,
+        cheaper than their sum — the card shows what they would cost separately, and the 7- and 30-day
+        ones also what the loose days would cost. The 7-day and the 30-day <b>Trainer Pack</b> come with
+        <b>1 Exp. Share</b> as a gift.</p>
+        ${tabelaDaLojaGrupo(c, 'pacotes')}
+
+        <h4>Late Joiner Boost</h4>
+        <p>For whoever joined late: <b>XP ×${ATRASADOS.mult}</b> (${ATRASADOS.mult * 100}%) for your
+        trainer and pokémon until your trainer reaches the <b>veterans' level</b> — the median of players
+        with more than ${ATRASADOS.diasConta} days in the game, recalculated every day. The price is
+        proportional to the XP still missing (${N(ATRASADOS.precoCheio, 'en')} 💎 for the whole road,
+        minimum ${N(ATRASADOS.precoMinimo, 'en')} 💎), there is no timer, and while it lasts fainting
+        costs no XP. The full rules, with the reason behind each one, in
+        <a data-cap="atrasados">Late Joiner Boost</a>.</p>
+
+        <h4>Consumables</h4>
+        <p>The consumables and utilities: the <b>Beast Ball</b> packs (with the discount badge on the
+        bigger ones), the <b>Escape Rope</b> (see <a data-cap="morte">Fainting</a>), the <b>Exp.
+        Share</b> (see <a data-cap="casa">House &amp; XP Share</a>), extra <b>incubators</b> and the
+        <b>Absorb Bulb</b> (see <a data-cap="chocadeira">Incubator</a>).</p>
+        ${tabelaDaLojaGrupo(c, 'utilitarios')}
         ${nota(`The <b>Supply Pack</b> is the best balls-per-diamond deal, but it can only be bought
         <b>once a week</b>. The countdown shows on the button itself while it is still on
         cooldown.`, 'dica')}
 
+        <h4>Character</h4>
+        <p>What changes the <b>trainer</b>: the name change and the blessings (Bless) that reduce or
+        cancel the XP loss of the next knockout. Changing your name <b>reconnects</b> you to the game
+        within a second (the nick is the session key), and the old name becomes free for another
+        player. In the PvP queue or in the middle of a match the change is refused before charging.</p>
+        ${tabelaDaLojaGrupo(c, 'personagem')}
+
+        <h4>Cosmetics: Name Tag and skins</h4>
+        <p>Decorations for a <b>pokémon</b> — looks only. Species, stats, type, evolution and combat
+        don't change at all.</p>
+        <ul>
+          <li><b>Name Tag</b> (${NAME_TAG_PRECO} 💎): gives your pokémon a <b>name</b>. Once bought, it
+          waits in the bag; use it from <b>Bag → Rare Items → Name Tag</b>, pick the pokémon (team,
+          Depot or Collection) and write up to <b>${APELIDO_MAX} letters</b>. It is <b>single-use</b>:
+          renaming again takes another tag.</li>
+          <li>The name shows on the sheet (with the species right below), on the field, in the Center
+          square, in chat, on the team, in the Depot, the Collection and the Market — and it <b>goes
+          along</b> when the pokémon changes hands. In the PvP arena your opponent still sees the
+          species.</li>
+          <li><b>Skins</b> (${SKIN_PRECO} 💎 each): the costume that changes a pokémon's
+          <b>sprite</b>. Each skin fits <b>one species and one colour</b> — the regular one only fits a
+          regular pokémon and the shiny one only a shiny —, and a Mega's skin is a separate skin, for
+          the Mega. It stays forever on the bag's <b>Skins</b> tab: put it on and take it off whenever
+          you want, and each unit dresses one pokémon.</li>
+          <li>The skin belongs to the <b>owner</b>, not the pokémon: selling it doesn't take the skin
+          along, and mega evolving a dressed pokémon takes the costume off (the skin is free again).
+          A free unit can be sold on the <a data-cap="comunidade">Community Market</a>.</li>
+          <li>Skins are <b>event</b> items, sold only during the event window. ${vendaSkins}</li>
+        </ul>
+        ${nota(`A name with <b>racism, prejudice or any offence</b> can get the pokémon deleted
+        without notice and the player banned. Every rename is logged.`, 'aviso')}
+        ${tabelaDaLojaGrupo(c, 'cosmeticos')}
+
         <h4>Outfits</h4>
-        <p>Looks for your trainer, ${(c.d.lojaProdutos ?? []).find((p) => p.cat === 'outfits')?.preco ?? 30}
+        <p>Looks for your trainer, ${precoOutfit}
         💎 each. Buying equips it right away, and you switch between the ones you own whenever you
-        like.</p>`,
+        want.</p>`,
         es: `
         <p>La tienda del JUEGO. Se paga en <b>Diamantes</b>, que se compran con dinero real (PIX o
         tarjeta) y <b>se acaban al gastarse</b>. No los confundas con las <b>Gemas</b>, que son del
-        <a data-cap="comunidade">Mercado de la Comunidad</a> y vuelven en USDT.</p>
+        <a data-cap="comunidade">Mercado de la Comunidad</a> y vuelven en USDT. El escaparate está
+        dividido en secciones — las mismas de esta página.</p>
+
+        <h4>Comprar diamantes</h4>
+        <p>El botón <b>Comprar Diamantes</b>, arriba en la Tienda, abre los paquetes (u otra
+        cantidad), pagados por <b>PIX</b> — que pide el CPF, solo para el registro fiscal — o
+        <b>tarjeta</b>. El saldo entra solo en cuanto se confirma el pago. El precio por diamante
+        <b>baja con la cantidad</b>: los paquetes grandes muestran el descuento en la propia tarjeta.
+        ¿Te faltan diamantes para un producto? Su botón ya abre la compra con lo que falta.</p>
+        ${nota(`El diamante es consumo: se gasta en la Tienda y no se puede retirar ni transferir.
+        El desistimiento de la compra se puede pedir en hasta 7 días, y cubre solo los diamantes
+        comprados que sigan en la cuenta. También se pueden ganar diamantes sin pagar — ver
+        <a data-cap="recompensas">Gana diamantes</a>.`)}
 
         <h4>VIP</h4>
         ${tabela(
@@ -7335,11 +10323,12 @@ poder = redond( nivel × 10 × score )</pre>
            <tr><td>Outfit exclusiva</td><td>el Trainer VIP</td></tr>
            <tr><td>Emojis VIP</td><td>en el chat</td></tr>`,
         )}
+        ${tabelaDaLojaGrupo(c, 'vip')}
         <p>Renovar <b>extiende</b> en vez de reiniciar: comprar 30 días faltando 10 da 40. El tiempo
         restante aparece en tu panel, en días, con la etiqueta azul.</p>
 
         <h4>Boosts</h4>
-        <p>Cinco tipos, siete duraciones cada uno. Precio en diamantes:</p>
+        <p>Cinco tipos, ocho duraciones cada uno (de 1 hora a 30 días). Precio en diamantes:</p>
         ${tabelaDeBoosts(c)}
         <ul>
           <li><b>No se acumulan</b>: comprar el mismo tipo otra vez <b>extiende</b> el que está
@@ -7347,17 +10336,256 @@ poder = redond( nivel × 10 × score )</pre>
           <li>Sin límite diario: compra cuantos quieras, cuando quieras.</li>
           <li>Tipos distintos corren juntos — tres boosts activos aparecen como tres líneas en tu
           panel, cada una con su propio contador.</li>
+          <li>El <b>Boost de la Guild</b> no se compra aquí: se activa cuando los miembros llenan el
+          banco de la guild (ver <a data-cap="guild">Guilds</a>).</li>
         </ul>
 
-        <h4>Mercado</h4>
-        ${tabelaDaLoja(c, 'mercado')}
+        <h4>Paquetes</h4>
+        <p>Dos o tres boosts juntos, por <b>un día</b>, <b>una semana</b> o <b>un mes</b>, más baratos que
+        la suma — la tarjeta muestra cuánto costarían sueltos, y los de 7 y 30 días también cuánto
+        costarían los días sueltos. El <b>Paquete Entrenador</b> de 7 y el de 30 días traen
+        <b>1 Exp. Share</b> de regalo.</p>
+        ${tabelaDaLojaGrupo(c, 'pacotes')}
+
+        <h4>Boost de los Rezagados</h4>
+        <p>Para quien llegó después: <b>XP ×${ATRASADOS.mult}</b> (${ATRASADOS.mult * 100}%) para el
+        entrenador y los pokémon hasta que tu entrenador alcance el <b>nivel de los veteranos</b> — la
+        mediana de quienes juegan hace más de ${ATRASADOS.diasConta} días, recalculada todos los días.
+        El precio es proporcional al XP que falta (${N(ATRASADOS.precoCheio, 'es')} 💎 el camino entero,
+        mínimo de ${N(ATRASADOS.precoMinimo, 'es')} 💎), no tiene plazo, y mientras dura debilitarse no
+        quita XP. Las reglas completas, con el porqué de cada una, en <a data-cap="atrasados">Boost de
+        los Rezagados</a>.</p>
+
+        <h4>Consumibles</h4>
+        <p>Los consumibles y las utilidades: los paquetes de <b>Beast Ball</b> (con el sello de
+        descuento en los mayores), la <b>Escape Rope</b> (ver <a data-cap="morte">Debilitarse</a>), el
+        <b>Exp. Share</b> (ver <a data-cap="casa">Casa y XP Share</a>), las <b>incubadoras</b> extra y
+        el <b>Absorb Bulb</b> (ver <a data-cap="chocadeira">Incubadora</a>).</p>
+        ${tabelaDaLojaGrupo(c, 'utilitarios')}
         ${nota(`El <b>Paquete de Suministros</b> es el mejor negocio en bolas por diamante, pero
         solo se puede comprar <b>una vez por semana</b>. El contador aparece en el propio botón
         mientras sigue en espera.`, 'dica')}
 
+        <h4>Personaje</h4>
+        <p>Lo que cambia al <b>entrenador</b>: el cambio de nombre y las bendiciones (Bless) que
+        reducen o anulan la pérdida de XP del próximo nocaut. Cambiar de nombre te <b>reconecta</b>
+        al juego en un segundo (el nick es la llave de la sesión), y el nombre antiguo queda libre
+        para otro jugador. En la cola o en medio de una partida del PvP el cambio se rechaza antes de
+        cobrar.</p>
+        ${tabelaDaLojaGrupo(c, 'personagem')}
+
+        <h4>Cosméticos: Name Tag y skins</h4>
+        <p>Adornos de <b>pokémon</b> — solo apariencia. Especie, stats, tipo, evolución y combate no
+        cambian en nada.</p>
+        <ul>
+          <li><b>Name Tag</b> (${NAME_TAG_PRECO} 💎): le da un <b>nombre</b> a tu pokémon. Comprada,
+          espera en la bolsa; úsala en <b>Bolsa → Objetos Raros → Name Tag</b>, elige el pokémon
+          (equipo, Depósito o Colección) y escribe hasta <b>${APELIDO_MAX} letras</b>. Es de <b>un solo
+          uso</b>: cambiar el nombre otra vez pide otra etiqueta.</li>
+          <li>El nombre aparece en la ficha (con la especie justo debajo), en el campo, en la plaza del
+          Centro, en el chat, en el equipo, en el Depósito, en la Colección y en el Mercado — y <b>va
+          con él</b> cuando el pokémon cambia de dueño. En la arena de PvP el rival sigue viendo la
+          especie.</li>
+          <li><b>Skins</b> (${SKIN_PRECO} 💎 cada una): el disfraz que cambia el <b>dibujo</b> de un
+          pokémon. Cada skin viste <b>una especie y un color</b> — la común solo viste al común y la
+          shiny solo al shiny —, y la skin de una Mega es otra skin, de la Mega. Queda para siempre en
+          la pestaña <b>Skins</b> de la bolsa: póntela y quítatela cuando quieras, y cada unidad viste a
+          un pokémon.</li>
+          <li>La skin es del <b>dueño</b>, no del pokémon: venderlo no se lleva la skin, y
+          megaevolucionar un pokémon disfrazado le quita el disfraz (la skin vuelve a quedar libre). La
+          unidad libre se vende en el <a data-cap="comunidade">Mercado de la Comunidad</a>.</li>
+          <li>Las skins son <b>de evento</b>, vendidas solo en su ventana. ${vendaSkins}</li>
+        </ul>
+        ${nota(`Un nombre con <b>racismo, prejuicio o cualquier ofensa</b> puede hacer que el pokémon
+        se elimine sin aviso y que el jugador sea baneado. Todo cambio de nombre queda registrado.`, 'aviso')}
+        ${tabelaDaLojaGrupo(c, 'cosmeticos')}
+
         <h4>Outfits</h4>
-        <p>Apariencia para tu entrenador, ${(c.d.lojaProdutos ?? []).find((p) => p.cat === 'outfits')?.preco ?? 30}
+        <p>Apariencia para tu entrenador, ${precoOutfit}
         💎 cada una. Comprarla la equipa al momento, y cambias entre las tuyas cuando quieras.</p>`,
+      };
+    },
+  },
+
+  // ------------------------------------------------------ 17a. diamantes sem pagar
+  //
+  // Os quatro caminhos de diamante que não passam pelo caixa. A escada de convites e a régua da
+  // Tag do Discord saem de `shared/convites.mjs` e `shared/tag-discord.mjs` — as mesmas que o bot
+  // e o servidor usam; as porcentagens da indicação e o voto, das constantes do topo do arquivo.
+  {
+    id: 'recompensas',
+    titulo: { pt: 'Ganhe diamantes: indicação, votos e Discord', en: 'Earn diamonds: referrals, votes and Discord', es: 'Gana diamantes: referidos, votos y Discord' },
+    grupo: 'economia',
+    html: (c) => {
+      const anos = Math.round(IDADE_DISCORD_MS / (365 * 24 * 3_600_000));
+      return {
+        pt: `
+        <p>Diamante se compra — mas também se ganha. São quatro caminhos, e nenhum depende de
+        sorte. Os diamantes que vêm daqui são <b>brinde</b>: valem na Loja e no banco da guild, mas
+        <b>não se vendem</b> no Mercado da Comunidade (só diamante comprado se vende).</p>
+
+        <h4>Indique & Ganhe</h4>
+        <p>O botão <b>Indique & Ganhe</b>, ao lado das suas moedas no painel do treinador, mostra o
+        <b>seu link</b> e o seu código. Quem cria a conta pelo seu link vira seu <b>indicado</b>, para
+        sempre:</p>
+        <ul>
+          <li>você recebe <b>${PCT_INDICACAO_DIAMANTE}%</b> em diamantes de tudo o que ele <b>comprar</b>
+          de diamante, e <b>${PCT_INDICACAO_GEMA}%</b> das <b>Gemas</b> que ele depositar;</li>
+          <li>a comissão só nasce de pagamento real confirmado, e fica <b>A recolher</b> até você clicar
+          em <b>Recolher lucro dos afiliados</b>;</li>
+          <li>quem entrou sem link pode digitar o código de quem o trouxe, mas só <b>antes da primeira
+          compra</b> de diamantes.</li>
+        </ul>
+        <p><b>Referral Especial.</b> Streamers e parceiros com acordo têm link próprio e o selo
+        <b>★ Influenciador Oficial</b>, às vezes com outra porcentagem. Quem <b>cria a conta</b> por um
+        desses links ganha <b>${HORAS_VIP_REFERRAL} horas de VIP</b> no primeiro login.</p>
+
+        <h4>Vote & Ganhe</h4>
+        <p>O quadradinho da <b>estrela</b>, na coluna do seu retrato, leva ao <b>TopIdle</b> com o seu
+        nick já preenchido. O TopIdle libera <b>um voto por dia</b>, e a cada <b>${VOTOS_POR_DIAMANTE}
+        votos</b> cai <b>1 💎</b> na conta, sozinho, em segundos. A conta Google pedida lá é do
+        TopIdle, só para provar que o voto é de uma pessoa — não precisa ser a do jogo.</p>
+
+        <h4>Convide & Ganhe (Discord)</h4>
+        <p>Cada pessoa que entra no nosso <b>Discord pelo SEU link de convite</b> vira ponto. Não é
+        sorteio, é contagem — e cada marco paga uma vez: quem chega a 20 já levou os de 1, 5 e 10 pelo
+        caminho.</p>
+        ${tabelaConvites(c)}
+        <ul>
+          <li>Crie o seu link no Discord (botão direito no canal → <b>Convidar Pessoas</b> → <b>Editar
+          link</b> → <b>Nunca expirar</b> e <b>Usos ilimitados</b>). O link geral do servidor não conta
+          para ninguém.</li>
+          <li>Só vale ponto quem entra com <b>conta de Discord de mais de ${anos} ano</b>, e quem sai do
+          servidor deixa de contar.</li>
+          <li>O prêmio sai como <b>código</b>: no canal <b>#reedem-codes</b>, o botão <b>Resgatar
+          Recompensa de Referral</b> mostra o seu (só você vê). No jogo, digite
+          <b>/resgatar &lt;código&gt;</b> no chat — cada código vale uma vez.</li>
+        </ul>
+
+        <h4>Tag IDLE no Discord</h4>
+        <p>Ponha a tag <b>IDLE</b> do nosso servidor no seu perfil do Discord: <b>${DIAMANTES_TAG_1A} 💎
+        na hora</b> na primeira vez (uma vez por conta de Discord) e mais <b>${DIAMANTES_TAG} 💎 a cada
+        ${DIAS_TAG} dias seguidos</b> com ela.</p>
+        <ul>
+          <li>Tirou a tag (trocou pela de outro servidor, ou saiu do servidor)? O relógio <b>zera</b>, e a
+          sequência recomeça quando ela voltar.</li>
+          <li>Vale a mesma régua da conta de Discord com mais de ${anos} ano.</li>
+          <li>No #reedem-codes, o botão <b>Resgatar Recompensa de TAG</b> mostra o seu relógio e o
+          código que liga o Discord à sua conta do jogo — o vínculo é um para um, para sempre.</li>
+        </ul>`,
+        en: `
+        <p>Diamonds can be bought — but they can also be earned. There are four paths, and none of
+        them depends on luck. The diamonds from here are a <b>gift</b>: they work in the Shop and the
+        guild bank, but <b>cannot be sold</b> on the Community Market (only purchased diamonds
+        can).</p>
+
+        <h4>Refer & Earn</h4>
+        <p>The <b>Refer & Earn</b> button, next to your coins on the trainer panel, shows <b>your
+        link</b> and your code. Whoever creates an account through your link becomes your
+        <b>referral</b>, forever:</p>
+        <ul>
+          <li>you get <b>${PCT_INDICACAO_DIAMANTE}%</b> in diamonds of every diamond they <b>buy</b>, and
+          <b>${PCT_INDICACAO_GEMA}%</b> of the <b>Gems</b> they deposit;</li>
+          <li>the commission only comes from a real, confirmed payment, and waits as <b>To collect</b>
+          until you click <b>Collect affiliate earnings</b>;</li>
+          <li>whoever joined without a link can type the code of whoever brought them, but only
+          <b>before their first</b> diamond purchase.</li>
+        </ul>
+        <p><b>Special Referral.</b> Streamers and partners with a deal have their own link and the
+        <b>★ Official Influencer</b> badge, sometimes with a different percentage. Whoever <b>creates an
+        account</b> through one of those links gets <b>${HORAS_VIP_REFERRAL} hours of VIP</b> on their
+        first login.</p>
+
+        <h4>Vote & Earn</h4>
+        <p>The <b>star</b> square, in your portrait column, takes you to <b>TopIdle</b> with your nick
+        already filled in. TopIdle allows <b>one vote a day</b>, and every <b>${VOTOS_POR_DIAMANTE}
+        votes</b> drop <b>1 💎</b> into your account, on their own, within seconds. The Google account it
+        asks for belongs to TopIdle, just to prove the vote comes from a person — it doesn't have to be
+        your game account.</p>
+
+        <h4>Invite & Earn (Discord)</h4>
+        <p>Everyone who joins our <b>Discord through YOUR invite link</b> counts as a point. It is not a
+        draw, it is a count — and each milestone pays once: reaching 20 means you already collected 1, 5
+        and 10 along the way.</p>
+        ${tabelaConvites(c)}
+        <ul>
+          <li>Create your link on Discord (right-click the channel → <b>Invite People</b> → <b>Edit
+          invite link</b> → <b>Never expire</b> and <b>No limit</b>). The server's general link counts
+          for no one.</li>
+          <li>A point only counts for people joining with a <b>Discord account over ${anos} year
+          old</b>, and whoever leaves the server stops counting.</li>
+          <li>The prize comes as a <b>code</b>: in the <b>#reedem-codes</b> channel, the <b>Resgatar
+          Recompensa de Referral</b> button shows yours (only you see it). In the game, type
+          <b>/resgatar &lt;code&gt;</b> in chat — each code works once.</li>
+        </ul>
+
+        <h4>IDLE Tag on Discord</h4>
+        <p>Put our server's <b>IDLE</b> tag on your Discord profile: <b>${DIAMANTES_TAG_1A} 💎 right
+        away</b> the first time (once per Discord account) and <b>${DIAMANTES_TAG} 💎 more every
+        ${DIAS_TAG} days in a row</b> with it.</p>
+        <ul>
+          <li>Took the tag off (switched to another server's, or left the server)? The clock
+          <b>resets</b>, and the streak starts again when it comes back.</li>
+          <li>The same rule of a Discord account over ${anos} year old applies.</li>
+          <li>In #reedem-codes, the <b>Resgatar Recompensa de TAG</b> button shows your clock and the
+          code that links Discord to your game account — the link is one to one, forever.</li>
+        </ul>`,
+        es: `
+        <p>El diamante se compra — pero también se gana. Hay cuatro caminos, y ninguno depende de la
+        suerte. Los diamantes que salen de aquí son <b>regalo</b>: valen en la Tienda y en el banco de
+        la guild, pero <b>no se venden</b> en el Mercado de la Comunidad (solo se vende diamante
+        comprado).</p>
+
+        <h4>Invita y Gana</h4>
+        <p>El botón <b>Invita y Gana</b>, junto a tus monedas en el panel del entrenador, muestra
+        <b>tu enlace</b> y tu código. Quien crea la cuenta por tu enlace se vuelve tu <b>referido</b>,
+        para siempre:</p>
+        <ul>
+          <li>recibes el <b>${PCT_INDICACAO_DIAMANTE}%</b> en diamantes de todo lo que <b>compre</b> de
+          diamante, y el <b>${PCT_INDICACAO_GEMA}%</b> de las <b>Gemas</b> que deposite;</li>
+          <li>la comisión solo nace de un pago real confirmado, y queda <b>Por recoger</b> hasta que
+          pulses <b>Recoger ganancias de referidos</b>;</li>
+          <li>quien entró sin enlace puede escribir el código de quien lo trajo, pero solo <b>antes de
+          su primera compra</b> de diamantes.</li>
+        </ul>
+        <p><b>Referral Especial.</b> Streamers y socios con acuerdo tienen enlace propio y el sello
+        <b>★ Influenciador Oficial</b>, a veces con otro porcentaje. Quien <b>crea la cuenta</b> por uno
+        de esos enlaces gana <b>${HORAS_VIP_REFERRAL} horas de VIP</b> en su primer inicio de
+        sesión.</p>
+
+        <h4>Vota & Gana</h4>
+        <p>El cuadradito de la <b>estrella</b>, en la columna de tu retrato, lleva a <b>TopIdle</b> con
+        tu nick ya rellenado. TopIdle permite <b>un voto al día</b>, y cada <b>${VOTOS_POR_DIAMANTE}
+        votos</b> cae <b>1 💎</b> en la cuenta, solo, en segundos. La cuenta de Google que pide es de
+        TopIdle, solo para probar que el voto es de una persona — no tiene que ser la del juego.</p>
+
+        <h4>Invita y Gana (Discord)</h4>
+        <p>Cada persona que entra en nuestro <b>Discord por TU enlace de invitación</b> cuenta como
+        punto. No es sorteo, es conteo — y cada hito paga una vez: quien llega a 20 ya cobró los de 1, 5
+        y 10 por el camino.</p>
+        ${tabelaConvites(c)}
+        <ul>
+          <li>Crea tu enlace en Discord (clic derecho en el canal → <b>Invitar gente</b> → <b>Editar
+          enlace</b> → <b>Nunca caduca</b> y <b>Sin límite de usos</b>). El enlace general del servidor
+          no cuenta para nadie.</li>
+          <li>Solo suma punto quien entra con una <b>cuenta de Discord de más de ${anos} año</b>, y quien
+          sale del servidor deja de contar.</li>
+          <li>El premio sale como <b>código</b>: en el canal <b>#reedem-codes</b>, el botón <b>Resgatar
+          Recompensa de Referral</b> muestra el tuyo (solo tú lo ves). En el juego, escribe
+          <b>/resgatar &lt;código&gt;</b> en el chat — cada código vale una vez.</li>
+        </ul>
+
+        <h4>Tag IDLE en Discord</h4>
+        <p>Pon la tag <b>IDLE</b> de nuestro servidor en tu perfil de Discord: <b>${DIAMANTES_TAG_1A} 💎
+        al instante</b> la primera vez (una vez por cuenta de Discord) y <b>${DIAMANTES_TAG} 💎 más cada
+        ${DIAS_TAG} días seguidos</b> con ella.</p>
+        <ul>
+          <li>¿Te quitaste la tag (la cambiaste por la de otro servidor, o saliste del servidor)? El
+          reloj <b>vuelve a cero</b>, y la racha empieza de nuevo cuando vuelva.</li>
+          <li>Vale la misma regla de la cuenta de Discord con más de ${anos} año.</li>
+          <li>En #reedem-codes, el botón <b>Resgatar Recompensa de TAG</b> muestra tu reloj y el código
+          que une Discord con tu cuenta del juego — el vínculo es uno a uno, para siempre.</li>
+        </ul>`,
       };
     },
   },
@@ -7495,7 +10723,7 @@ poder = redond( nivel × 10 × score )</pre>
 
         <h4>Como DEPOSITAR</h4>
         <ol class="wk-passos">
-          <li>Abra <b>Comunidade → Depósito</b>. O jogo mostra um <b>endereço só seu</b>, na rede
+          <li>Abra <b>RMT → ↓ Depósito</b>: o RMT fica no menu do topo, e o <b>↓ Depósito</b>, ao lado do seu saldo de Gemas. O jogo mostra um <b>endereço só seu</b>, na rede
           ${redes}.</li>
           <li>Mande <b>USDT</b> desse endereço a partir da sua carteira ou corretora.
           <b>Confira a rede</b> — USDT existe em várias, e mandar pela errada perde o dinheiro.</li>
@@ -7510,7 +10738,7 @@ poder = redond( nivel × 10 × score )</pre>
         <ol class="wk-passos">
           <li>Na sua corretora, vá em <b>Depositar → USDT</b> e escolha a rede
           <b>${redes}</b>. Copie o endereço de depósito que ela gerar.</li>
-          <li>No jogo, abra <b>Comunidade → Withdraw</b>, cole esse endereço, escolha a mesma rede
+          <li>No jogo, abra <b>RMT → ↑ Withdraw</b>, cole esse endereço, escolha a mesma rede
           e diga quantas Gemas quer sacar (mínimo ${N(e.saqueMinimo, c.lang)}).</li>
           <li>Confira o endereço <b>caractere por caractere</b> na tela de confirmação. Uma
           transferência enviada <b>não tem como ser desfeita</b>.</li>
@@ -7547,7 +10775,7 @@ poder = redond( nivel × 10 × score )</pre>
 
         <h4>How to DEPOSIT</h4>
         <ol class="wk-passos">
-          <li>Open <b>Community → Deposit</b>. The game shows an <b>address that is yours alone</b>,
+          <li>Open <b>RMT → ↓ Deposit</b>: RMT is on the top menu, and <b>↓ Deposit</b> sits next to your Gem balance. The game shows an <b>address that is yours alone</b>,
           on the ${redes} network.</li>
           <li>Send <b>USDT</b> to that address from your wallet or exchange. <b>Check the
           network</b> — USDT exists on several, and sending on the wrong one loses the money.</li>
@@ -7562,7 +10790,7 @@ poder = redond( nivel × 10 × score )</pre>
         <ol class="wk-passos">
           <li>On your exchange, go to <b>Deposit → USDT</b> and pick the <b>${redes}</b>
           network. Copy the deposit address it generates.</li>
-          <li>In the game, open <b>Community → Withdraw</b>, paste that address, choose the same
+          <li>In the game, open <b>RMT → ↑ Withdraw</b>, paste that address, choose the same
           network and say how many Gems to withdraw (minimum ${N(e.saqueMinimo, c.lang)}).</li>
           <li>Check the address <b>character by character</b> on the confirmation screen. A sent
           transfer <b>cannot be undone</b>.</li>
@@ -7600,7 +10828,7 @@ poder = redond( nivel × 10 × score )</pre>
 
         <h4>Cómo DEPOSITAR</h4>
         <ol class="wk-passos">
-          <li>Abre <b>Comunidad → Depósito</b>. El juego muestra una <b>dirección solo tuya</b>, en
+          <li>Abre <b>RMT → ↓ Depósito</b>: el RMT está en el menú de arriba, y el <b>↓ Depósito</b>, junto a tu saldo de Gemas. El juego muestra una <b>dirección solo tuya</b>, en
           la red ${redes}.</li>
           <li>Envía <b>USDT</b> a esa dirección desde tu cartera o exchange. <b>Verifica la red</b> —
           USDT existe en varias, y enviar por la equivocada pierde el dinero.</li>
@@ -7615,7 +10843,7 @@ poder = redond( nivel × 10 × score )</pre>
         <ol class="wk-passos">
           <li>En tu exchange, ve a <b>Depositar → USDT</b> y elige la red
           <b>${redes}</b>. Copia la dirección de depósito que genere.</li>
-          <li>En el juego, abre <b>Comunidad → Withdraw</b>, pega esa dirección, elige la misma red y
+          <li>En el juego, abre <b>RMT → ↑ Withdraw</b>, pega esa dirección, elige la misma red y
           di cuántas Gemas quieres retirar (mínimo ${N(e.saqueMinimo, c.lang)}).</li>
           <li>Revisa la dirección <b>carácter por carácter</b> en la pantalla de confirmación. Una
           transferencia enviada <b>no se puede deshacer</b>.</li>

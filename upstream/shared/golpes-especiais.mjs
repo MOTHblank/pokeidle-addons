@@ -101,10 +101,10 @@ export function ehUltimaEvolucao(c) {
  * Últimas evoluções do dex nacional, Orre e Outland — fantasma do espelho (10xxx) não, e MEGA
  * também não.
  *
- * A mega fica de fora porque o moveset dela já nasce FECHADO: é o da espécie base, cópia
- * exata, mais o golpe de mega (ver `criarEspeciesMega` em `megas.mjs`). Deixar o injetor rodar
- * aqui quebraria isso de um jeito silencioso, porque ele deriva o golpe de 600 dos TIPOS — e
- * os tipos da mega mudam. Medido antes da trava: Mega Gyarados (WATER/DARK contra o
+ * A mega fica de fora porque o moveset dela já nasce FECHADO: o da planilha "Megas 03-10", ou o
+ * da espécie base, cópia exata, mais o golpe de mega (ver `criarEspeciesMega` em `megas.mjs`).
+ * Deixar o injetor rodar aqui quebraria isso de um jeito silencioso, porque ele deriva o golpe
+ * de 600 dos TIPOS — e os tipos da mega mudam. Medido antes da trava: Mega Gyarados (WATER/DARK contra o
  * WATER/FLYING do Gyarados) ganhava um `Endless Hollow` de DARK na ficha que não existia no
  * catálogo; o mesmo acontecia com Mega Pinsir, Mega Ampharos e Mega Sceptile. A ficha e o
  * servidor mostravam golpes diferentes para o mesmo bicho.

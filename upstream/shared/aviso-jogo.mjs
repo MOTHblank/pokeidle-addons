@@ -39,6 +39,21 @@
  *   ok      a chave do texto do botão de fechar, enquanto ela está na tela
  */
 export const NOVIDADES = [
+  // A GUERRA DE GUILDS POR PONTOS (v1.234.0): a colocação deixa de ser a ordem de queda — +10 por
+  // abate e +1 a cada 1.000 de dano real, e ficar de pé só desempata —, com a aba Guild do PvP nova
+  // (relógio, "Sua guild na última guerra", pódio, placar com barra). Junto, a leva de 06/10
+  // (v1.235.0): o Boost dos Atrasados, com a conta inteira (a mediana dos veteranos e o preço pelo XP
+  // que falta) para quem chegou depois não se sentir sem chance; os boosts e pacotes de 30 dias; o
+  // Prêmio do mês do Ranking com selo no chat; e o painel do chat que abre só no nick.
+  { aviso: 24, versao: '1.236.0', data: '2026-10-06', ok: 'aviso.v24Ok' },
+  // O BOOST DA GUILD pelo BANCO DA GUILD (aba Boost do painel): os membros doam e, a cada 1.000 💎,
+  // a guild INTEIRA ganha +10% de XP do treinador e do pokémon por 7 dias — quem entra enquanto dura
+  // leva junto, e encher de novo soma mais 7. (Nasceu como compra individual na Loja e virou banco
+  // antes de ir ao ar, na v1.226.0.) Logo abaixo, o Mercado de Diamantes só com diamante COMPRADO (a
+  // indicação anunciada voltou para a conta). Junto: as 45 megas com moveset próprio, o radar
+  // lendário no Discord, o Bônus Twitch a +2,5% por live a mais, a estadia no Mercado, o ‹ entre
+  // janelas e o resto da leva de 03/10.
+  { aviso: 23, versao: '1.226.0', data: '2026-10-03', ok: 'aviso.v23Ok' },
   // O BÔNUS NA KICK: vincular a Kick (para sempre — uma conta da Kick por treinador) e trocar os
   // PONTOS DO CANAL dos Streamers Oficiais por horas de +15% em XP, Capture Boost e Secret Lure,
   // que se somam. Com o convite de Streamer Parceiro da Kick no meio do slide, como o da Twitch
