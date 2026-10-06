@@ -441,18 +441,18 @@ internal sealed class UserscriptLoader
             }
           };
 
-          const GM_addElement = (tagOrParent, attributes, textContent) => {
+          const GM_addElement = (...args) => {
             try {
               let parent = document.body || document.documentElement;
-              let tag = tagOrParent;
-              let attrs = attributes;
-              let text = textContent;
+              let tag = args[0];
+              let attrs = args[1];
+              let text = args[2];
 
-              if (tagOrParent && tagOrParent.nodeType === 1) {
-                parent = tagOrParent;
-                tag = attributes;
-                attrs = textContent;
-                text = arguments[3];
+              if (args[0] && args[0].nodeType === 1) {
+                parent = args[0];
+                tag = args[1];
+                attrs = args[2];
+                text = args[3];
               }
 
               const element = document.createElement(String(tag));
@@ -768,7 +768,10 @@ internal sealed class UserscriptLoader
 
           const __idleshellRun = () => {
             try {
-              (0, eval)(__idleshellScriptSource);
+              // Direct eval is intentional: the userscript must see the GM_*
+              // bindings and GM metadata defined by this wrapper. Indirect eval
+              // would execute in the global scope and make those bindings vanish.
+              eval(__idleshellScriptSource);
               console.info('[IdleShell] userscript loaded:', __idleshellMeta.name);
             } catch (error) {
               console.error('[IdleShell] userscript failed:', __idleshellMeta.name, error);
