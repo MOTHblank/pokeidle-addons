@@ -1,3 +1,6 @@
+# .NET / C# Build Artifacts
+obj/
+bin/
 (empty)
 /IdleShell/bin
 /IdleShell/obj
