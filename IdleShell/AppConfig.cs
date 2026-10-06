@@ -15,7 +15,6 @@ internal static class AppConfig
 
     // Stream environment: default Chromium throttling, autoplay allowed.
     public const string StreamBrowserArguments = GameBrowserArguments;
-        "--autoplay-policy=no-user-gesture-required";
 
     private static string Root =>
         Path.Combine(
@@ -25,7 +24,8 @@ internal static class AppConfig
     public static string GameUserDataFolder => Path.Combine(Root, "PokeIdle");
     public static string StreamUserDataFolder => Path.Combine(Root, "Streams");
     public static string SessionFile => Path.Combine(Root, "session.json");
-
+	public static string TampermonkeyProvisioningFolder =>
+		Path.Combine(Root, "TampermonkeyProvisioning");
     // Put unpacked extensions (e.g. Tampermonkey) in subfolders here.
     public static string ExtensionsFolder =>
         Path.Combine(AppContext.BaseDirectory, "extensions");
