@@ -88,17 +88,16 @@ internal sealed class AccountManager
 
     public static AccountService? ServiceForUrl(string? url)
     {
-        if (url is null) return null;
-        if (Uri.TryCreate(url, UriKind.Absolute, out var u))
+        if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var u))
+            return null;
+
+        return u.Host.ToLowerInvariant() switch
         {
-            if (u.Host.Contains("twitch", StringComparison.OrdinalIgnoreCase))
-                return AccountService.Twitch;
-            if (u.Host.Contains("kick", StringComparison.OrdinalIgnoreCase))
-                return AccountService.Kick;
-            if (u.Host.Contains("pokeidle", StringComparison.OrdinalIgnoreCase))
-                return AccountService.PokeIdle;
-        }
-        return null;
+            "twitch.tv" or "www.twitch.tv" or "m.twitch.tv" => AccountService.Twitch,
+            "kick.com" or "www.kick.com" or "m.kick.com" => AccountService.Kick,
+            "pokeidle.io" or "www.pokeidle.io" => AccountService.PokeIdle,
+            _ => null
+        };
     }
 
     // Landing pages for logging an account in. Twitch goes straight to its
