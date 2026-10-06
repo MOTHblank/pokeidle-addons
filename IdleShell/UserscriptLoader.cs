@@ -1,20 +1,18 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 
 namespace Moth.PokeIdle.IdleShell;
 
-// Native userscript injector used when Tampermonkey is unavailable (or as a
-// fallback alongside it). It parses each addons/*.user.js header block, and
-// registers a document-start bootstrap per pane that decodes and evaluates
-// every script whose @match/@include patterns cover the page URL.
+// Builds a tiny unpacked MV3 extension from the repository's ordinary *.user.js
+// files. This is deliberately not Tampermonkey and never requires a CRX.
 //
-// Scripts are evaluated inside the MAIN world wrapped in an IIFE, so they
-// observe and hook the real page (the addons feature-detect `unsafeWindow`
-// and fall back to `window`). A minimal GM_* compatibility surface is defined
-// first: storage over localStorage, menu/no-op APIs, and a fetch-based
-// GM_xmlhttpRequest shim.
+// The generated content scripts run in the MAIN world at the userscript's
+// requested run_at, which is important for addons that patch WebSocket,
+// window.open, timers, or other page-owned globals.
 internal sealed class UserscriptLoader
 {
     private static readonly Regex MetadataBlock = new(
@@ -26,40 +24,50 @@ internal sealed class UserscriptLoader
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private readonly List<Userscript> _scripts = [];
+    private readonly HashSet<string> _installedProfiles = new(StringComparer.OrdinalIgnoreCase);
 
     public UserscriptLoader(string addonsFolder)
     {
         Folder = Path.GetFullPath(addonsFolder);
-
         Load();
     }
 
     public string Folder { get; }
-
     public IReadOnlyList<Userscript> Scripts => _scripts;
 
-    // Registers (or re-registers) the injection bootstrap on a pane's view.
-    // Safe to call repeatedly; AddScriptToExecuteOnDocumentCreatedAsync
-    // persists for the lifetime of the CoreWebView2 instance.
-    public async Task AttachAsync(CoreWebView2 view)
+    public async Task<CoreWebView2BrowserExtension?> InstallAsync(CoreWebView2Profile profile)
     {
-        var bootstrap = BuildBootstrap();
+        if (_scripts.Count == 0)
+            return null;
 
-        await view.AddScriptToExecuteOnDocumentCreatedAsync(bootstrap);
+        var profileKey = profile.ProfilePath;
+        if (_installedProfiles.Contains(profileKey))
+            return null;
+
+        var extensions = await profile.GetBrowserExtensionsAsync();
+        foreach (var extension in extensions.Where(e =>
+                     e.Name.StartsWith(ExtensionNamePrefix, StringComparison.Ordinal)))
+        {
+            try { await extension.RemoveAsync(); }
+            catch { /* stale extension cleanup is best-effort */ }
+        }
+
+        var extensionFolder = BuildExtensionFolder();
+        var installed = await profile.AddBrowserExtensionAsync(extensionFolder);
+        _installedProfiles.Add(profileKey);
+        return installed;
     }
+
+    private const string ExtensionNamePrefix = "PokéIdle Idle Shell Userscripts";
 
     private void Load()
     {
         _scripts.Clear();
-
         if (!Directory.Exists(Folder))
             return;
 
-        var files = Directory
-            .EnumerateFiles(Folder, "*.user.js", SearchOption.TopDirectoryOnly)
-            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var file in files)
+        foreach (var file in Directory.EnumerateFiles(Folder, "*.user.js", SearchOption.TopDirectoryOnly)
+                     .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
@@ -68,8 +76,7 @@ internal sealed class UserscriptLoader
             catch (Exception ex)
             {
                 Console.Error.WriteLine(
-                    $"[IdleShell] userscript {Path.GetFileName(file)} " +
-                    $"skipped: {ex.Message}");
+                    $"[IdleShell] userscript {Path.GetFileName(file)} skipped: {ex.Message}");
             }
         }
     }
@@ -77,11 +84,9 @@ internal sealed class UserscriptLoader
     private static Userscript Parse(string path)
     {
         var source = File.ReadAllText(path);
-
         var body = MetadataBlock.Match(source) is { Success: true } m
             ? m.Groups["body"].Value
-            : throw new InvalidDataException(
-                "no ==UserScript== metadata block");
+            : throw new InvalidDataException("no ==UserScript== metadata block");
 
         var name = Path.GetFileNameWithoutExtension(path);
         var runAt = "document-end";
@@ -115,208 +120,361 @@ internal sealed class UserscriptLoader
         }
 
         if (matches.Count == 0 && includes.Count == 0)
-        {
-            throw new InvalidDataException(
-                "no @match or @include metadata");
-        }
+            throw new InvalidDataException("no @match or @include metadata");
 
-        return new Userscript(name, source, matches, runAt, path)
+        return new Userscript(name, source, matches, NormalizeRunAt(runAt), path)
         {
             Includes = includes,
             Grants = grants
         };
     }
 
-    private string BuildBootstrap()
+    private string BuildExtensionFolder()
     {
-        var payload = _scripts.Select(script => new InjectedScript(
-            script.Name,
-            script.Matches,
-            script.Includes,
-            Convert.ToBase64String(
-                Encoding.UTF8.GetBytes(script.Source))));
+        var fingerprintInput = string.Join(
+            "\n",
+            _scripts.Select(s => s.Name + "\n" + s.RunAt + "\n" + s.Source));
+        var hash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput))).ToLowerInvariant();
 
-        var json = JsonSerializer.Serialize(payload);
+        var root = Path.Combine(AppConfig.Root, "UserscriptExtension", hash);
+        Directory.CreateDirectory(root);
 
-        // The generated JS must not contain a literal </script> sequence.
-        json = json.Replace("</", "<\\/");
+        var contentScripts = new List<ManifestContentScript>();
 
+        for (var i = 0; i < _scripts.Count; i++)
+        {
+            var script = _scripts[i];
+            var fileName = $"script-{i:D3}.js";
+            var path = Path.Combine(root, fileName);
+
+            File.WriteAllText(path, BuildScriptWrapper(script), new UTF8Encoding(false));
+
+            contentScripts.Add(new ManifestContentScript
+            {
+                Matches = script.Matches.Count > 0 ? script.Matches : ["https://*/*"],
+                IncludeGlobs = script.Includes.Count > 0 ? script.Includes : null,
+                Js = [fileName],
+                RunAt = ToManifestRunAt(script.RunAt),
+                World = "MAIN",
+                AllFrames = false
+            });
+        }
+
+        var manifest = new
+        {
+            manifest_version = 3,
+            name = "PokéIdle Idle Shell Userscripts",
+            version = "1.0.0",
+            description = "Locally generated userscript host for PokéIdle Idle Shell.",
+            content_scripts = contentScripts
+        };
+
+        var manifestJson = JsonSerializer.Serialize(
+            manifest,
+            new JsonSerializerOptions { WriteIndented = true });
+
+        File.WriteAllText(
+            Path.Combine(root, "manifest.json"),
+            manifestJson,
+            new UTF8Encoding(false));
+
+        return root;
+    }
+
+    private static string BuildScriptWrapper(Userscript script)
+    {
+        var scriptName = JsonSerializer.Serialize(script.Name);
+        var source = script.Source;
+
+        // The wrapper is deliberately an outer lexical scope. Each userscript
+        // gets its own GM_* bindings even though all scripts share the page MAIN
+        // world, so asynchronous callbacks never accidentally use another
+        // script's storage namespace.
         return $$"""
             (() => {
               'use strict';
-              const SCRIPTS = {{json}};
-              const NS = '__idleshell_native_' + Math.random().toString(36).slice(2);
 
-              try { Object.defineProperty(window, NS, { value: window }); } catch (e) {}
+              const __idleshellScriptName = {{scriptName}};
+              const __idleshellStoragePrefix =
+                'idleshell.userscript.' + __idleshellScriptName + '.';
+              const __idleshellMemory = new Map();
 
-              function idleshellMatch(pattern, url) {
+              const __idleshellStorage = (() => {
                 try {
-                  const prefix = pattern.split('*')[0];
-                  const u = new URL(url);
-                  const candidate = u.origin + u.pathname;
-                  if (!candidate.startsWith(prefix)) return false;
-                  if (pattern.endsWith('*')) return true;
-                  const last = pattern[pattern.length - 1];
-                  if ('/?=&#'.includes(last)) return true;
-                  return candidate === pattern || u.href === pattern;
-                } catch (e) { return false; }
-              }
-
-              function idleshellGM() {
-                const storeMem = new Map();
-                const raw = (k) => 'userscript.' + k;
-                let ls = null;
-                try { ls = window.localStorage; ls.getItem('__probe__'); }
-                catch (e) { ls = null; }
-                const getItem = (k) => {
-                  try { return ls ? ls.getItem(raw(k)) : (storeMem.has(k) ? storeMem.get(k) : null); }
-                  catch (e) { return storeMem.has(k) ? storeMem.get(k) : null; }
-                };
-                const setItem = (k, v) => {
-                  v = String(v);
-                  try { if (ls) ls.setItem(raw(k), v); else storeMem.set(k, v); }
-                  catch (e) { storeMem.set(k, v); }
-                };
-                const delItem = (k) => {
-                  try { if (ls) ls.removeItem(raw(k)); else storeMem.delete(k); }
-                  catch (e) { storeMem.delete(k); }
-                };
-                const noop = () => {};
-                const api = {
-                  GM_getValue: (k, d) => {
-                    const v = getItem(k);
-                    if (v === null) return d;
-                    try { return JSON.parse(v); } catch (e) { return v; }
-                  },
-                  GM_setValue: (k, v) => setItem(k, JSON.stringify(v)),
-                  GM_deleteValue: (k) => delItem(k),
-                  GM_listValues: () => {
-                    try {
-                      if (!ls) return [...storeMem.keys()];
-                      const out = [];
-                      for (let i = 0; i < ls.length; i++) {
-                        const key = ls.key(i);
-                        if (key && key.startsWith('userscript.')) out.push(key.slice(11));
-                      }
-                      return out;
-                    } catch (e) { return [...storeMem.keys()]; }
-                  },
-                  GM_getResourceText: () => null,
-                  GM_getResourceURL: () => null,
-                  GM_addStyle: (css) => {
-                    try {
-                      const s = document.createElement('style');
-                      s.textContent = css;
-                      (document.head || document.documentElement).appendChild(s);
-                      return s;
-                    } catch (e) { return null; }
-                  },
-                  GM_registerMenuCommand: noop,
-                  GM_unregisterMenuCommand: noop,
-                  GM_setClipboard: (text) => {
-                    try { navigator.clipboard.writeText(String(text)); } catch (e) {}
-                  },
-                  GM_openInTab: (url) => {
-                    try { window.open(url, '_blank'); } catch (e) {}
-                  },
-                  GM_notification: noop,
-                  unsafeWindow: window
-                };
-                api.GM_xmlhttpRequest = (details) => {
-                  details = details || {};
-                  const done = (fn, arg) => { try { if (typeof fn === 'function') fn(arg); } catch (e) {} };
-                  const headers = {};
-                  try {
-                    (String(details.headers || '') ? [] : Object.entries(details.headers || {}))
-                      .forEach(([k, v]) => { headers[k] = String(v); });
-                  } catch (e) {}
-                  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-                  const request = {
-                    abort: () => { try { controller && controller.abort(); } catch (e) {} }
-                  };
-                  done(details.onabort, request);
-                  fetch(details.url, {
-                    method: details.method || (details.data !== undefined ? 'POST' : 'GET'),
-                    headers,
-                    body: details.data !== undefined ? details.data : undefined,
-                    redirect: 'follow',
-                    credentials: details.anonymous ? 'omit' : 'same-origin',
-                    signal: controller ? controller.signal : undefined
-                  }).then(async (res) => {
-                    const text = await res.text();
-                    const xml = (() => {
-                      try {
-                        return /xml/i.test(res.headers.get('content-type') || '') ||
-                               /^\s*<\?xml/.test(text)
-                          ? new DOMParser().parseFromString(text, 'text/xml') : null;
-                      } catch (e) { return null; }
-                    })();
-                    const resp = {
-                      readyState: 4, status: res.status, statusText: res.statusText,
-                      responseHeaders: (() => {
-                        let out = '';
-                        try { res.headers.forEach((v, k) => { out += k + ': ' + v + '\r\n'; }); } catch (e) {}
-                        return out;
-                      })(),
-                      responseText: text, response: text, responseXML: xml,
-                      finalUrl: res.url, context: details.context
-                    };
-                    if (res.ok) done(details.onload, resp);
-                    else done(details.onerror, { ...resp, status: res.status });
-                    done(details.onloadend, resp);
-                  }).catch((err) => {
-                    done(details.onerror, {
-                      readyState: 4, status: 0, statusText: String(err && err.name || 'error'),
-                      responseText: '', response: null, responseXML: null,
-                      finalUrl: details.url, context: details.context, error: err
-                    });
-                    done(details.onloadend, null);
-                  });
-                  return request;
-                };
-                return api;
-              }
-
-              function idleshellInstall() {
-                const gm = idleshellGM();
-                for (const key of Object.keys(gm)) {
-                  try {
-                    if (window[key] === undefined) {
-                      Object.defineProperty(window, key,
-                        { value: gm[key], configurable: true, writable: true });
-                    }
-                  } catch (e) {}
+                  const storage = window.localStorage;
+                  storage.getItem('__idleshell_probe__');
+                  return storage;
+                } catch (_) {
+                  return null;
                 }
-                for (const entry of SCRIPTS) {
-                  let hit = entry.matches.some((p) => idleshellMatch(p, location.href));
-                  if (!hit) hit = entry.includes.some((p) => {
-                    try { return location.href.includes(new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).source.replace(/\\\*/g, '.*')); }
-                    catch (e) { return location.href.includes(p); }
-                  });
-                  if (!hit) continue;
-                  try {
-                    const src = decodeURIComponent(escape(atob(entry.code)));
-                    const fn = new Function('"use strict";\n' + src +
-                      '\n//# sourceURL=idleshell://' + encodeURIComponent(entry.name) + '.user.js');
-                    fn.call(window);
-                  } catch (err) {
-                    try {
-                      console.error('[IdleShell] userscript failed: ' + entry.name, err);
-                    } catch (e) {}
+              })();
+
+              const __idleshellRead = (key) => {
+                try {
+                  return __idleshellStorage
+                    ? __idleshellStorage.getItem(__idleshellStoragePrefix + key)
+                    : (__idleshellMemory.has(key)
+                      ? __idleshellMemory.get(key)
+                      : null);
+                } catch (_) {
+                  return __idleshellMemory.has(key)
+                    ? __idleshellMemory.get(key)
+                    : null;
+                }
+              };
+
+              const __idleshellWrite = (key, value) => {
+                const text = String(value);
+                try {
+                  if (__idleshellStorage)
+                    __idleshellStorage.setItem(__idleshellStoragePrefix + key, text);
+                  else
+                    __idleshellMemory.set(key, text);
+                } catch (_) {
+                  __idleshellMemory.set(key, text);
+                }
+              };
+
+              const __idleshellDelete = (key) => {
+                try {
+                  if (__idleshellStorage)
+                    __idleshellStorage.removeItem(__idleshellStoragePrefix + key);
+                  else
+                    __idleshellMemory.delete(key);
+                } catch (_) {
+                  __idleshellMemory.delete(key);
+                }
+              };
+
+              const GM_getValue = (key, fallback) => {
+                const value = __idleshellRead(String(key));
+                if (value === null) return fallback;
+                try { return JSON.parse(value); } catch (_) { return value; }
+              };
+
+              const GM_setValue = (key, value) =>
+                __idleshellWrite(String(key), JSON.stringify(value));
+
+              const GM_deleteValue = (key) =>
+                __idleshellDelete(String(key));
+
+              const GM_listValues = () => {
+                try {
+                  if (!__idleshellStorage)
+                    return [...__idleshellMemory.keys()];
+
+                  const out = [];
+                  for (let i = 0; i < __idleshellStorage.length; i++) {
+                    const key = __idleshellStorage.key(i);
+                    if (key && key.startsWith(__idleshellStoragePrefix))
+                      out.push(key.slice(__idleshellStoragePrefix.length));
                   }
+                  return out;
+                } catch (_) {
+                  return [...__idleshellMemory.keys()];
                 }
-              }
+              };
 
-              try { idleshellInstall(); } catch (e) {
-                try { console.error('[IdleShell] userscript bootstrap failed', e); } catch (x) {}
+              const GM_addStyle = (css) => {
+                try {
+                  const style = document.createElement('style');
+                  style.textContent = String(css);
+                  (document.head || document.documentElement).appendChild(style);
+                  return style;
+                } catch (_) {
+                  return null;
+                }
+              };
+
+              const GM_registerMenuCommand = () => null;
+              const GM_unregisterMenuCommand = () => null;
+              const GM_notification = () => null;
+
+              const GM_setClipboard = (value) => {
+                try {
+                  return navigator.clipboard?.writeText(String(value));
+                } catch (_) {
+                  return null;
+                }
+              };
+
+              const GM_openInTab = (url) => {
+                try {
+                  return window.open(String(url), '_blank');
+                } catch (_) {
+                  return null;
+                }
+              };
+
+              const GM_getResourceText = () => null;
+              const GM_getResourceURL = () => null;
+
+              const unsafeWindow = window;
+
+              const GM_xmlhttpRequest = (details = {}) => {
+                let settled = false;
+                const controller =
+                  typeof AbortController !== 'undefined'
+                    ? new AbortController()
+                    : null;
+
+                const finish = (callback, value) => {
+                  try {
+                    if (typeof callback === 'function')
+                      callback(value);
+                  } catch (_) {}
+                };
+
+                const headers = {};
+                try {
+                  if (details.headers &&
+                      typeof details.headers === 'object') {
+                    for (const [key, value] of Object.entries(details.headers))
+                      headers[key] = String(value);
+                  }
+                } catch (_) {}
+
+                const request = {
+                  abort() {
+                    if (settled) return;
+                    settled = true;
+                    try { controller?.abort(); } catch (_) {}
+                    finish(details.onabort, request);
+                    finish(details.onloadend, request);
+                  }
+                };
+
+                const timeoutId = details.timeout > 0
+                  ? setTimeout(() => request.abort(), Number(details.timeout))
+                  : null;
+
+                fetch(String(details.url), {
+                  method: String(
+                    details.method ||
+                    (details.data !== undefined ? 'POST' : 'GET')
+                  ).toUpperCase(),
+                  headers,
+                  body: details.data !== undefined
+                    ? details.data
+                    : undefined,
+                  redirect: 'follow',
+                  credentials: 'omit',
+                  mode: 'cors',
+                  signal: controller?.signal
+                }).then(async (response) => {
+                  if (settled) return;
+
+                  const text = await response.text();
+                  let parsed = text;
+
+                  if (details.responseType === 'json') {
+                    try { parsed = JSON.parse(text); } catch (_) {}
+                  }
+
+                  const responseHeaders = [];
+                  try {
+                    response.headers.forEach((value, key) =>
+                      responseHeaders.push(key + ': ' + value));
+                  } catch (_) {}
+
+                  const result = {
+                    readyState: 4,
+                    status: response.status,
+                    statusText: response.statusText,
+                    responseHeaders: responseHeaders.join('\r\n'),
+                    responseText: text,
+                    response: parsed,
+                    responseXML: null,
+                    finalUrl: response.url,
+                    context: details.context
+                  };
+
+                  settled = true;
+                  if (timeoutId) clearTimeout(timeoutId);
+
+                  if (response.ok)
+                    finish(details.onload, result);
+                  else
+                    finish(details.onerror, result);
+
+                  finish(details.onloadend, result);
+                }).catch((error) => {
+                  if (settled) return;
+
+                  settled = true;
+                  if (timeoutId) clearTimeout(timeoutId);
+
+                  if (error?.name === 'AbortError') {
+                    finish(details.onabort, request);
+                  } else {
+                    finish(details.onerror, {
+                      readyState: 4,
+                      status: 0,
+                      statusText: String(error?.name || 'error'),
+                      responseText: '',
+                      response: null,
+                      responseXML: null,
+                      finalUrl: String(details.url || ''),
+                      context: details.context,
+                      error
+                    });
+                  }
+
+                  finish(details.onloadend, request);
+                });
+
+                return request;
+              };
+
+              try {
+                (function () {
+            {{source}}
+                })();
+              } catch (error) {
+                try {
+                  console.error(
+                    '[IdleShell] userscript failed: ' + __idleshellScriptName,
+                    error
+                  );
+                } catch (_) {}
               }
             })();
             """;
     }
 
-    private sealed record InjectedScript(
-        string Name,
-        IReadOnlyList<string> Matches,
-        IReadOnlyList<string> Includes,
-        string Code);
+    private static string NormalizeRunAt(string value) =>
+        value is "document-start" or "document-end" or "document-idle"
+            ? value
+            : "document-end";
+
+    private static string ToManifestRunAt(string value) =>
+        value switch
+        {
+            "document-start" => "document_start",
+            "document-idle" => "document_idle",
+            _ => "document_end"
+        };
+
+    private sealed class ManifestContentScript
+    {
+        [JsonPropertyName("matches")]
+        public IReadOnlyList<string> Matches { get; init; } = [];
+
+        [JsonPropertyName("include_globs")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<string>? IncludeGlobs { get; init; }
+
+        [JsonPropertyName("js")]
+        public IReadOnlyList<string> Js { get; init; } = [];
+
+        [JsonPropertyName("run_at")]
+        public string RunAt { get; init; } = "document_end";
+
+        [JsonPropertyName("world")]
+        public string World { get; init; } = "MAIN";
+
+        [JsonPropertyName("all_frames")]
+        public bool AllFrames { get; init; }
+    }
 }

@@ -39,7 +39,6 @@ internal sealed class Pane
 
     public static async Task<Pane> CreateAsync(
         CoreWebView2Environment env, IntPtr hwnd, PaneSpec spec,
-        ExtensionManager? extensions = null,
         UserscriptLoader? nativeScripts = null)
     {
         var options = env.CreateCoreWebView2ControllerOptions();
@@ -50,65 +49,9 @@ internal sealed class Pane
         var pane = new Pane(spec, controller, nativeScripts);
         await pane.ConfigureAsync();
 
-        // Install/enable Tampermonkey in this pane's profile before the first
-        // navigation so its content script is registered for the game page.
-        if (extensions is not null)
-        {
-            try
-            {
-                await extensions.EnsureTampermonkeyAsync(pane.View.Profile);
-                pane.TampermonkeyReady = true;
-            }
-            catch (Exception ex)
-            {
-                pane.TampermonkeyError = ex.Message;
-                Console.Error.WriteLine(
-                    $"[IdleShell] Tampermonkey unavailable in profile " +
-                    $"{spec.Profile}: {ex}");
-            }
-        }
-
         pane.View.Navigate(spec.Url);
         return pane;
     }
-
-    // Attaches the native userscript bootstrap to an already-created pane
-    // (used when Tampermonkey turns out to be unavailable mid-session).
-    public async Task AttachUserscriptFallback()
-    {
-        if (_nativeScripts is null || !IsAttached) return;
-        await _nativeScripts.AttachAsync(View);
-    }
-
-    // Bootstrap injected into EVERY isolated world (including Tampermonkey's)
-    // before any page script runs. It only defines helpers; the link-router
-    // userscript does the interception. Because it lands in all worlds, pages
-    // can call __idleshell_openLink directly even without a userscript.
-    private static string BootstrapScript(PaneSpec spec) => $$"""
-        (() => {
-          try {
-            const post = (payload) => {
-              try { window.chrome.webview.postMessage(JSON.stringify(payload)); } catch (e) {}
-            };
-            Object.defineProperty(window, '__idleshell_hostInfo',
-              { value: Object.freeze({ title: {{JsonSerializer.Serialize(spec.Title)}},
-                                      profile: {{JsonSerializer.Serialize(spec.Profile)}} }),
-                configurable: false, writable: false });
-            window.__idleshell_post = post;
-            window.__idleshell_openLink = (url) => {
-              post({ type: 'link', url: String(url), source: 'bootstrap',
-                     pane: window.__idleshell_hostInfo.title,
-                     profile: window.__idleshell_hostInfo.profile });
-            };
-          } catch (e) {}
-        })();
-        """;
-
-    // Tampermonkey installation result for this pane's profile (game panes
-    // only). Null error + true ready means the extension is installed and
-    // enabled.
-    public bool TampermonkeyReady { get; private set; }
-    public string? TampermonkeyError { get; private set; }
 
     private readonly UserscriptLoader? _nativeScripts;
 
@@ -122,7 +65,7 @@ internal sealed class Pane
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
 
         if (_nativeScripts is not null)
-            await _nativeScripts.AttachAsync(View);
+            await _nativeScripts.InstallAsync(View.Profile);
 
         View.WebMessageReceived += (_, e) =>
         {
@@ -153,12 +96,16 @@ internal sealed class Pane
             View.IsMuted = true;
         }
 
-        await LoadExtensionsAsync();
     }
 
     // Low-memory target must be set on a *visible* webview (setting it while
     // suspended/hidden is ignored per docs), so Show() applies Normal and
     // Hide()/Park() apply Low. Never mix with TrySuspend.
+    public async Task AttachUserscriptAsync(UserscriptLoader loader)
+    {
+        await loader.InstallAsync(View.Profile);
+    }
+
     public void Show(Rectangle bounds)
     {
         Controller.Bounds = bounds;
@@ -190,22 +137,6 @@ internal sealed class Pane
         Controller.IsVisible = true;
         IsForeground = false;
         try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
-    }
-
-    private async Task LoadExtensionsAsync()
-    {
-        if (!Directory.Exists(AppConfig.ExtensionsFolder)) return;
-
-        foreach (var dir in Directory.EnumerateDirectories(AppConfig.ExtensionsFolder))
-        {
-            if (!File.Exists(Path.Combine(dir, "manifest.json"))) continue;
-            try { await View.Profile.AddBrowserExtensionAsync(dir); }
-            catch (Exception ex)
-            {
-                // Already installed in this profile, or unsupported manifest.
-                Console.Error.WriteLine($"[IdleShell] extension {dir}: {ex.Message}");
-            }
-        }
     }
 
     // One-shot probe script: reads visibilityState/hasFocus and measures how much
