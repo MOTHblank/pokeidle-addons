@@ -246,8 +246,6 @@ internal sealed class AccountManager
                 if (doc?.Accounts is { Count: > 0 } list)
                 {
                     mgr._accounts.AddRange(list.Where(IsValid));
-                    mgr.VisibleStreamCount =
-                        Math.Clamp(doc.VisibleStreams ?? DefaultVisibleStreams, 1, MaxStreamSlots);
                 }
             }
         }
@@ -329,14 +327,14 @@ internal sealed class AccountManager
         try
         {
             Directory.CreateDirectory(AppConfig.Root);
-            var doc = new AccountFile(_accounts, VisibleStreamCount);
+            var doc = new AccountFile(_accounts);
             File.WriteAllText(AppConfig.AccountsFile,
                 JsonSerializer.Serialize(doc, JsonOptions));
         }
         catch { }
     }
 
-    private sealed record AccountFile(List<Account> Accounts, int? VisibleStreams);
+    private sealed record AccountFile(List<Account> Accounts);
 }
 
 file static class AccountServiceExtensions
