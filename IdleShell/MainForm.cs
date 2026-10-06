@@ -17,7 +17,7 @@ internal sealed class MainForm : Form
     private readonly AccountManager _accounts = AccountManager.Load();
     private readonly List<Pane> _games = [];
     private readonly List<GameWorkspace> _workspaces = [new(0), new(1)];
-    private UserscriptLoader? _userscripts;
+    private ViolentmonkeyManager? _userscripts;
     private readonly System.Windows.Forms.Timer _statsTimer = new() { Interval = 5000 };
     private readonly System.Windows.Forms.Timer _probeTimer = new() { Interval = 30000 };
     private readonly CheckBox _probeToggle = new()
@@ -328,8 +328,8 @@ internal sealed class MainForm : Form
             Directory.CreateDirectory(AppConfig.StreamUserDataFolder);
 
             var addonsFolder = ResolveAddonsFolder();
-            _userscripts = new UserscriptLoader(addonsFolder);
-            Log($"WebView2 userscript extension: {_userscripts.Scripts.Count} script(s) packaged from {addonsFolder}; browser-native execution enabled");
+            _userscripts = new ViolentmonkeyManager(addonsFolder);
+            Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.Scripts.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
 
@@ -882,7 +882,7 @@ internal sealed class MainForm : Form
         try
         {
             var folder = _userscripts?.Folder ?? ResolveAddonsFolder();
-            _userscripts = new UserscriptLoader(folder);
+            _userscripts = new ViolentmonkeyManager(folder);
             RefreshAddonsPicker();
 
             foreach (var pane in AllPanes().ToList())
