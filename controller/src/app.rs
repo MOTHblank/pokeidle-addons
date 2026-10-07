@@ -9,6 +9,8 @@ use std::rc::Rc;
 struct State {
     game1: Option<Child>,
     game2: Option<Child>,
+    game1_monitor: Option<monitor::MonitorHandle>,
+    game2_monitor: Option<monitor::MonitorHandle>,
     accounts: Option<AccountsWindow>,
 }
 
@@ -31,6 +33,7 @@ pub fn run() -> Result<(), String> {
     let mut profiles_button = nwg::Button::default();
     let mut close_button = nwg::Button::default();
     let mut status = nwg::Label::default();
+    let mut health_timer = nwg::Timer::default();
 
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
@@ -142,6 +145,12 @@ pub fn run() -> Result<(), String> {
         .build(&mut close_button)
         .map_err(|error| format!("could not create Close button: {error}"))?;
 
+    nwg::Timer::builder()
+        .interval(2000)
+        .parent(&window)
+        .build(&mut health_timer)
+        .map_err(|error| format!("could not create health timer: {error}"))?;
+
     nwg::Label::builder()
         .text("Starting…")
         .flags(nwg::LabelFlags::VISIBLE)
@@ -154,6 +163,8 @@ pub fn run() -> Result<(), String> {
     let state = Rc::new(RefCell::new(State {
         game1: None,
         game2: None,
+        game1_monitor: None,
+        game2_monitor: None,
         accounts: None,
     }));
 
@@ -167,9 +178,11 @@ pub fn run() -> Result<(), String> {
     let accounts_button_handle = accounts_button.handle;
     let profiles_button_handle = profiles_button.handle;
     let close_button_handle = close_button.handle;
+    let health_timer_handle = health_timer.handle;
     let window_handle = window.handle;
 
     let state_for_events = state.clone();
+    let state_for_health = state.clone();
 
     let event_handler = nwg::full_bind_event_handler(
         &window.handle,
@@ -177,6 +190,11 @@ pub fn run() -> Result<(), String> {
             use nwg::Event;
 
             match event {
+                Event::OnTimer if handle == health_timer_handle => {
+                    let state = state_for_health.borrow();
+                    update_health_label(state.game1_monitor.as_ref(), &game1_status);
+                    update_health_label(state.game2_monitor.as_ref(), &game2_status);
+                }
                 Event::OnWindowClose => {
                     if handle == window_handle {
                         nwg::stop_thread_dispatch();
@@ -188,6 +206,7 @@ pub fn run() -> Result<(), String> {
                         launch_one(
                             GameProfile::Game1,
                             &mut state.game1,
+                            &mut state.game1_monitor,
                             &game1_status,
                             &status,
                         );
@@ -196,6 +215,7 @@ pub fn run() -> Result<(), String> {
                         launch_one(
                             GameProfile::Game2,
                             &mut state.game2,
+                            &mut state.game2_monitor,
                             &game2_status,
                             &status,
                         );
@@ -250,6 +270,7 @@ pub fn run() -> Result<(), String> {
 fn launch_one(
     profile: GameProfile,
     child_slot: &mut Option<Child>,
+    monitor_slot: &mut Option<monitor::MonitorHandle>,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
 ) {
@@ -262,6 +283,7 @@ fn launch_one(
             }
             Ok(Some(_)) | Err(_) => {
                 *child_slot = None;
+                *monitor_slot = None;
                 profile_status.set_text("Stopped");
             }
         }
@@ -277,11 +299,12 @@ fn launch_one(
     };
 
     match firefox::launch(&config) {
-        Ok(child) => {
+        Ok((child, monitor)) => {
             *child_slot = Some(child);
-            profile_status.set_text("Running");
+            *monitor_slot = Some(monitor);
+            profile_status.set_text("Headless · connecting");
             global_status.set_text(&format!(
-                "Started {} · one Firefox process/profile",
+                "Started {} · headless Firefox + Rust BiDi monitor",
                 profile.label()
             ));
         }
@@ -290,6 +313,22 @@ fn launch_one(
             global_status.set_text(&format!("{}: {error}", profile.label()));
         }
     }
+}
+
+fn update_health_label(
+    monitor: Option<&monitor::MonitorHandle>,
+    label: &nwg::Label,
+) {
+    let Some(monitor) = monitor else {
+        return;
+    };
+
+    let health = monitor.health();
+    label.set_text(&format!(
+        "{} · {}",
+        health.state,
+        health.summary()
+    ));
 }
 
 fn open_profiles_folder(status: &nwg::Label) {
