@@ -190,6 +190,22 @@ struct BrowserSession {
     next_id: u64,
 }
 
+#[derive(Default)]
+struct RuntimeProbe {
+    pokemon_level: String,
+    pokemon_xp: String,
+    ball_stock: Vec<String>,
+    autocatch_on: bool,
+    autocatch_captures: u32,
+    autocatch_balls_used: u32,
+    autocatch_rate: String,
+    autocatch_restock: String,
+    stream_scan_status: String,
+    stream_scan_live: u32,
+    stream_scan_opened: u32,
+    xp_bonuses: Vec<String>,
+}
+
 struct Probe {
     url: String,
     title: String,
@@ -383,7 +399,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     session.next_id += 1;
 
     let expression = r#"(() => {
-        try {
         const text = (selector) => {
             const el = document.querySelector(selector);
             return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
@@ -403,106 +418,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             ativo && !ativo.classList.contains('vazio')
                 ? text('#ativo-card').slice(0, 48)
                 : '';
-
-        const levelMatch = activePokemon.match(/\bLv\.?\s*(\d+)/i);
-        const pokemonLevel = levelMatch ? levelMatch[1] : '';
-
-        const readXpText = () => {
-            const nodes = [
-                ...document.querySelectorAll(
-                    '#ativo-card [aria-valuenow][aria-valuemax], #ativo-card [data-xp], #ativo-card [id*="xp"], #ativo-card [class*="xp"], #ativo-card [id*="exper"], #ativo-card [class*="exper"]'
-                )
-            ];
-
-            for (const el of nodes) {
-                const candidate = [
-                    el.getAttribute('aria-label') || '',
-                    el.getAttribute('title') || '',
-                    el.getAttribute('data-xp') || '',
-                    el.textContent || ''
-                ].join(' ').replace(/\s+/g, ' ').trim();
-
-                const now = el.getAttribute('aria-valuenow');
-                const max = el.getAttribute('aria-valuemax');
-                if (now && max) return now + '/' + max;
-
-                const match = candidate.match(/(?:xp|exp(?:eri[eê]ncia)?)\s*[:：]?\s*([\d.,]+\s*(?:\/|de)\s*[\d.,]+)/i);
-                if (match) return match[1];
-
-                if (/\b(?:xp|exp)\b/i.test(candidate) && /\d/.test(candidate)) {
-                    return candidate.slice(0, 80);
-                }
-            }
-            return '';
-        };
-
-        const parseCount = (value) => {
-            const match = String(value || '').match(/(?:você\s+tem|voce\s+tem|you\s+have|tienes)\s+([\d.,]+)/i);
-            if (!match) return null;
-            const digits = match[1].replace(/\D/g, '');
-            return digits ? Number(digits) : null;
-        };
-
-        const ballStock = [...document.querySelectorAll('#caidos-bolas button.caidos-bola')]
-            .map(button => {
-                const title = button.title || button.getAttribute('aria-label') || '';
-                const count = parseCount(title);
-                const name = (title.split('—')[0] || button.getAttribute('aria-label') || 'Ball')
-                    .replace(/\s+/g, ' ').trim().slice(0, 18);
-                return count === null ? null : name + ' ' + count;
-            })
-            .filter(Boolean);
-
-        const parseUInt = (selector) => {
-            const value = text(selector);
-            const match = value.match(/\d[\d.,]*/);
-            return match ? Number(match[0].replace(/\D/g, '')) : 0;
-        };
-
-        const autoOn = (text('#moth-ac-toggle') || '').toUpperCase() === 'ON';
-        const autocatchCaptures = parseUInt('#moth-ac-captures');
-        const autocatchBallsUsed = parseUInt('#moth-ac-balls-used');
-        const autocatchRate = text('#moth-ac-rate');
-        const autocatchRestock = text('#moth-ac-restock-status');
-
-        const scanner = document.querySelector('#moth-scan-live-streams');
-        const streamScanStatus = scanner?.dataset?.mothScanStatus || '';
-        const streamScanLive = Number(scanner?.dataset?.mothScanLive || 0) || 0;
-        const streamScanOpened = Number(scanner?.dataset?.mothScanOpened || 0) || 0;
-
-        const xpBonuses = [];
-        const appTextLines = (app?.innerText || '')
-            .split(/\n+/)
-            .map(value => value.replace(/\s+/g, ' ').trim())
-            .filter(Boolean);
-
-        for (const line of appTextLines) {
-            if (/\bXP\b|experi/i.test(line) && /\+\s*\d+\s*%/i.test(line)) {
-                xpBonuses.push(line.slice(0, 100));
-            }
-
-            if (xpBonuses.length >= 8) break;
-        }
-
-        const bonusNodes = document.querySelectorAll(
-            '[id*="bonus"], [class*="bonus"], [id*="buff"], [class*="buff"], [id*="xp"], [class*="xp"]'
-        );
-
-        for (const el of bonusNodes) {
-            if (!visible(el)) continue;
-            const raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!raw || raw.length > 100 || !/\bXP\b|experi/i.test(raw) || !/\+\s*\d+\s*%/i.test(raw)) {
-                continue;
-            }
-
-            const match = raw.match(/(?:[^|]{0,55}?\+\s*\d+\s*%\s*(?:XP|exper[^|]*)|\+\s*\d+\s*%\s*[^|]{0,55}?\bXP\b)/i);
-            xpBonuses.push((match ? match[0] : raw).trim());
-            if (xpBonuses.length >= 8) break;
-        }
-
-        const xpBonusUnique = [...new Set(
-            xpBonuses.map(value => value.replace(/\s+/g, ' ').trim())
-        )];
 
         const huntSelected =
             huntText.length > 0 &&
@@ -538,25 +453,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
             addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
             performanceFps: text('#mpp-browser-fps'),
-            performanceSceneRuns: text('#mpp-scene-runs'),
-            pokemonLevel,
-            pokemonXp: readXpText(),
-            ballStock,
-            autocatchOn: autoOn,
-            autocatchCaptures,
-            autocatchBallsUsed,
-            autocatchRate,
-            autocatchRestock,
-            streamScanStatus,
-            streamScanLive,
-            streamScanOpened,
-            xpBonuses: xpBonusUnique
+            performanceSceneRuns: text('#mpp-scene-runs')
         });
-        } catch (error) {
-            return JSON.stringify({
-                probeError: String(error?.stack || error)
-            });
-        }    })()"#;
+    })()"#;
 
     let result = send_and_wait(
         &mut session.socket,
@@ -572,28 +471,12 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         }),
     )?;
 
-    let remote_result = result
+    let raw = result
         .get("result")
         .and_then(|v| v.get("result"))
-        .ok_or_else(|| "Firefox returned no page probe result".to_string())?;
-
-    let raw = remote_result
-        .get("value")
+        .and_then(|v| v.get("value"))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            let result_type = remote_result
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            format!("Firefox returned no string page probe value (type={result_type})")
-        })?;
-
-    let page: Value =
-        serde_json::from_str(raw).map_err(|error| format!("invalid page probe: {error}"))?;
-
-    if let Some(error) = page.get("probeError").and_then(Value::as_str) {
-        return Err(format!("page probe JavaScript exception: {error}"));
-    }
+        .ok_or_else(|| "Firefox returned no page probe value".to_string())?;
 
     let addon_missing = page
         .get("addonMissing")
@@ -675,6 +558,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_bonuses.push("Twitch stream · +15% XP (chat open)".to_string());
     }
 
+    let runtime = probe_runtime_details(session, &game.id).unwrap_or_default();
+
     Ok(Probe {
         url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
         title: page.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -692,18 +577,156 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         twitch_low_resource_ok,
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
         performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),
-        pokemon_level: page.get("pokemonLevel").and_then(Value::as_str).unwrap_or_default().to_string(),
-        pokemon_xp: page.get("pokemonXp").and_then(Value::as_str).unwrap_or_default().to_string(),
-        ball_stock: page.get("ballStock").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
-        autocatch_on: page.get("autocatchOn").and_then(Value::as_bool).unwrap_or(false),
-        autocatch_captures: page.get("autocatchCaptures").and_then(Value::as_u64).unwrap_or(0) as u32,
-        autocatch_balls_used: page.get("autocatchBallsUsed").and_then(Value::as_u64).unwrap_or(0) as u32,
-        autocatch_rate: page.get("autocatchRate").and_then(Value::as_str).unwrap_or_default().to_string(),
-        autocatch_restock: page.get("autocatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
-        stream_scan_status: page.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
-        stream_scan_live: page.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
-        stream_scan_opened,
-        xp_bonuses,
+        pokemon_level: runtime.pokemon_level,
+        pokemon_xp: runtime.pokemon_xp,
+        ball_stock: runtime.ball_stock,
+        autocatch_on: runtime.autocatch_on,
+        autocatch_captures: runtime.autocatch_captures,
+        autocatch_balls_used: runtime.autocatch_balls_used,
+        autocatch_rate: runtime.autocatch_rate,
+        autocatch_restock: runtime.autocatch_restock,
+        stream_scan_status: runtime.stream_scan_status,
+        stream_scan_live: runtime.stream_scan_live,
+        stream_scan_opened: runtime.stream_scan_opened,
+        xp_bonuses: runtime.xp_bonuses,
+    })
+fn probe_runtime_details(
+    session: &mut BrowserSession,
+    context_id: &str,
+) -> Result<RuntimeProbe, String> {
+    let id = session.next_id;
+    session.next_id += 1;
+
+    let expression = r#"(() => {
+        try {
+            const text = (selector) => {
+                const el = document.querySelector(selector);
+                return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+            };
+
+            const active = text('#ativo-card').slice(0, 80);
+            const level = (active.match(/\bLv\.?\s*(\d+)/i) || [])[1] || '';
+
+            const xpNodes = [
+                ...document.querySelectorAll(
+                    '#ativo-card [aria-valuenow][aria-valuemax], #ativo-card [data-xp], #ativo-card [id*="xp"], #ativo-card [class*="xp"], #ativo-card [id*="exper"], #ativo-card [class*="exper"]'
+                )
+            ];
+
+            let xp = '';
+            for (const el of xpNodes) {
+                const now = el.getAttribute('aria-valuenow');
+                const max = el.getAttribute('aria-valuemax');
+                if (now && max) {
+                    xp = now + '/' + max;
+                    break;
+                }
+
+                const candidate = [
+                    el.getAttribute('aria-label') || '',
+                    el.getAttribute('title') || '',
+                    el.getAttribute('data-xp') || '',
+                    el.textContent || ''
+                ].join(' ').replace(/\s+/g, ' ').trim();
+
+                const match = candidate.match(/(?:xp|exp(?:eri[eê]ncia)?)\s*[:：]?\s*([\d.,]+\s*(?:\/|de)\s*[\d.,]+)/i);
+                if (match) {
+                    xp = match[1];
+                    break;
+                }
+            }
+
+            const ballStock = [...document.querySelectorAll('#caidos-bolas button.caidos-bola')]
+                .map(button => {
+                    const raw = button.title || button.getAttribute('aria-label') || '';
+                    const match = raw.match(/(?:você\s+tem|voce\s+tem|you\s+have|tienes)\s+([\d.,]+)/i);
+                    if (!match) return null;
+                    const count = match[1].replace(/\D/g, '');
+                    const name = (raw.split('—')[0] || 'Ball').replace(/\s+/g, ' ').trim().slice(0, 16);
+                    return name + ' ' + count;
+                })
+                .filter(Boolean);
+
+            const numberFrom = (selector) => {
+                const raw = text(selector);
+                const match = raw.match(/\d[\d.,]*/);
+                return match ? Number(match[0].replace(/\D/g, '')) || 0 : 0;
+            };
+
+            const scanner = document.querySelector('#moth-scan-live-streams');
+            const bonusLines = [];
+            const lines = (document.body?.innerText || '')
+                .split(/\n+/)
+                .map(v => v.replace(/\s+/g, ' ').trim())
+                .filter(Boolean);
+
+            for (const line of lines) {
+                if (/\bXP\b|experi/i.test(line) && /\+\s*\d+\s*%/i.test(line)) {
+                    bonusLines.push(line.slice(0, 100));
+                    if (bonusLines.length >= 6) break;
+                }
+            }
+
+            return JSON.stringify({
+                pokemonLevel: level,
+                pokemonXp: xp,
+                ballStock,
+                autocatchOn: String(text('#moth-ac-toggle')).toUpperCase() === 'ON',
+                autocatchCaptures: numberFrom('#moth-ac-captures'),
+                autocatchBallsUsed: numberFrom('#moth-ac-balls-used'),
+                autocatchRate: text('#moth-ac-rate'),
+                autocatchRestock: text('#moth-ac-restock-status'),
+                streamScanStatus: scanner?.dataset?.mothScanStatus || '',
+                streamScanLive: Number(scanner?.dataset?.mothScanLive || 0) || 0,
+                streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0,
+                xpBonuses: [...new Set(bonusLines)]
+            });
+        } catch (error) {
+            return JSON.stringify({ error: String(error?.stack || error) });
+        }
+    })()"#;
+
+    let result = send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": expression,
+                "target": { "context": context_id },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+
+    let raw = result
+        .get("result")
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Firefox returned no runtime diagnostics value".to_string())?;
+
+    let value: Value =
+        serde_json::from_str(raw).map_err(|error| format!("invalid runtime diagnostics: {error}"))?;
+
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        return Err(format!("runtime diagnostics exception: {error}"));
+    }
+
+    Ok(RuntimeProbe {
+        pokemon_level: value.get("pokemonLevel").and_then(Value::as_str).unwrap_or_default().to_string(),
+        pokemon_xp: value.get("pokemonXp").and_then(Value::as_str).unwrap_or_default().to_string(),
+        ball_stock: value.get("ballStock").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
+        autocatch_on: value.get("autocatchOn").and_then(Value::as_bool).unwrap_or(false),
+        autocatch_captures: value.get("autocatchCaptures").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_balls_used: value.get("autocatchBallsUsed").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_rate: value.get("autocatchRate").and_then(Value::as_str).unwrap_or_default().to_string(),
+        autocatch_restock: value.get("autocatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_status: value.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_live: value.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
+        stream_scan_opened: value.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
+        xp_bonuses: value.get("xpBonuses").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
     })
 }
 
