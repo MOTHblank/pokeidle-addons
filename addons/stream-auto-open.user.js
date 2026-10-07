@@ -513,6 +513,13 @@
         }
 
         buttonObserver = new MutationObserver(() => {
+            try {
+                document.documentElement?.setAttribute(
+                    'data-idleshell-stream-scanner',
+                    'started'
+                );
+            } catch (_) {}
+
             scheduleButtonInstall();
         });
 
