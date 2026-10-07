@@ -98,15 +98,13 @@ internal sealed class AccountManager
         };
     }
 
-    // Landing pages for logging an account in. Twitch goes straight to its
-    // authorize page (the "Log in with Twitch" button on twitch.tv only works
-    // from a page that requested scopes); Kick's front page has the login link.
+    // Login is deliberately handled by the normal first-party website
+    // inside the account's persistent browser profile. Stream presence uses
+    // the authenticated chat surface, so no separate OAuth token store is
+    // needed for Twitch.
     public static string LoginUrl(AccountService service) => service switch
     {
-        AccountService.Twitch =>
-            "https://www.twitch.tv/authorize?client_id=kimdg7e24uc9nkkn2h3t43j1uwrcd2" +
-            "&redirect_uri=https%3A%2F%2Fwww.twitch.tv%2F&response_type=token" +
-            "&scope=user%3Aread%3Aemail&force_verify=true",
+        AccountService.Twitch => "https://www.twitch.tv/login",
         AccountService.Kick => "https://kick.com/",
         AccountService.PokeIdle => AppConfig.GameUrl,
         _ => AppConfig.GameUrl
