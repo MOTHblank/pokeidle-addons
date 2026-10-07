@@ -805,10 +805,13 @@ fn draw_game_card(
 
                 if !health.addon_missing.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!("Missing: {}", health.addon_missing.join(" · ")))
-                            .size(10.0)
-                            .color(WARN),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("Missing: {}", health.addon_missing.join(" · ")))
+                                .size(10.0)
+                                .color(WARN),
+                        )
+                        .truncate(),
                     );
                 }
 
