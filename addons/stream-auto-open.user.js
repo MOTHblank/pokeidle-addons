@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.2.0
+// @version      4.3.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -392,9 +392,38 @@
         return false;
     }
 
-    function collectLiveChannels() {
-        const candidates = new Map();
+    function collectRenderedOfficialChannels(selectors) {
+        const channels = [];
+        const seen = new Set();
 
+        for (const selector of selectors) {
+            for (const anchor of qa(selector)) {
+                const url = normalizeChannelUrl(anchor.href || anchor.getAttribute('href'));
+                if (!url || seen.has(url)) continue;
+
+                seen.add(url);
+                channels.push({
+                    url,
+                    anchor
+                });
+            }
+        }
+
+        return channels;
+    }
+
+    function collectLiveChannels() {
+        const direct = collectRenderedOfficialChannels([
+            'a.tw-canal.ao-vivo[href]',
+            'a.kk-canal.ao-vivo[href]'
+        ]);
+
+        const candidates = new Map(
+            direct.map((channel) => [channel.url, channel])
+        );
+
+        // Keep the generic fallback for other PokéIdle builds/pages that expose
+        // live stream links directly in the DOM.
         for (const anchor of qa('a[href]')) {
             const url = normalizeChannelUrl(
                 anchor.href ||
@@ -412,6 +441,63 @@
         }
 
         return Array.from(candidates.values());
+    }
+
+    function sleep(ms) {
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    async function collectLiveChannelsFromOfficialModals() {
+        const collected = new Map(
+            collectLiveChannels().map((channel) => [channel.url, channel])
+        );
+
+        const modalTriggers = [
+            '.tr-ativo.twitch',
+            '.tr-ativo.kick'
+        ];
+
+        for (const selector of modalTriggers) {
+            const trigger = document.querySelector(selector);
+
+            if (!trigger) {
+                continue;
+            }
+
+            try {
+                trigger.click();
+            } catch (_) {
+                continue;
+            }
+
+            for (let attempt = 0; attempt < 12; attempt += 1) {
+                await sleep(100);
+
+                const found = collectRenderedOfficialChannels(
+                    selector.includes('.twitch')
+                        ? ['#tw-corpo a.tw-canal.ao-vivo[href]']
+                        : ['#kk-corpo a.kk-canal.ao-vivo[href]']
+                );
+
+                for (const channel of found) {
+                    collected.set(channel.url, channel);
+                }
+
+                if (found.length) {
+                    break;
+                }
+            }
+
+            const close = document.getElementById('modal-fechar');
+            if (close) {
+                try {
+                    close.click();
+                } catch (_) {}
+                await sleep(50);
+            }
+        }
+
+        return Array.from(collected.values());
     }
 
     function openStream(url) {
@@ -584,55 +670,91 @@
         document.body.appendChild(panel);
     }
 
-    function scanLiveStreams(button) {
+    async function runLiveScan() {
+        const channels = await collectLiveChannelsFromOfficialModals();
+        let queued = 0;
+
+        for (const channel of channels) {
+            if (openStream(channel.url)) {
+                queued += 1;
+            }
+        }
+
+        console.info(
+            '[Moth] live chat scan:',
+            channels.length,
+            'live channel(s),',
+            queued,
+            'opened/queued'
+        );
+
+        return {
+            channels,
+            queued
+        };
+    }
+
+    async function scanLiveStreams(button) {
         if (scanInProgress) {
             return;
         }
 
         scanInProgress = true;
 
-        const originalLabel = button.textContent.trim();
+        const originalLabel = button?.querySelector('span')?.textContent?.trim() ||
+            'Open Live Streams';
 
         try {
-            button.disabled = true;
-            button.querySelector('span').textContent =
-                'Scanning…';
-
-            const channels = collectLiveChannels();
-            let queued = 0;
-
-            for (const channel of channels) {
-                if (openStream(channel.url)) {
-                    queued += 1;
+            if (button) {
+                button.disabled = true;
+                const label = button.querySelector('span');
+                if (label) {
+                    label.textContent = 'Scanning…';
                 }
             }
 
-            button.querySelector('span').textContent =
-                queued > 0
-                    ? 'Scanned ' + queued + ' live'
-                    : 'No live streams found';
+            const result = await runLiveScan();
 
-            console.info(
-                '[Moth] manual live chat scan:',
-                channels.length,
-                'live channel(s),',
-                queued,
-                'opened/queued'
-            );
+            if (button) {
+                const label = button.querySelector('span');
+                if (label) {
+                    label.textContent = result.queued > 0
+                        ? 'Scanned ' + result.queued + ' live'
+                        : 'No live streams found';
+                }
+            }
+
+            return result;
         } catch (error) {
             console.error(
-                '[Moth] manual live chat scan failed:',
+                '[Moth] live chat scan failed:',
                 error
             );
-            button.querySelector('span').textContent =
-                'Scan failed';
+
+            if (button) {
+                const label = button.querySelector('span');
+                if (label) {
+                    label.textContent = 'Scan failed';
+                }
+            }
+
+            return {
+                channels: [],
+                queued: 0
+            };
         } finally {
-            window.setTimeout(() => {
-                button.disabled = false;
-                button.querySelector('span').textContent =
-                    originalLabel || 'Open Live Streams';
-                scanInProgress = false;
-            }, 1600);
+            if (button) {
+                window.setTimeout(() => {
+                    button.disabled = false;
+                    const label = button.querySelector('span');
+                    if (label) {
+                        label.textContent =
+                            originalLabel || 'Open Live Streams';
+                    }
+                }, 1600);
+            }
+
+            scanInProgress = false;
         }
     }
 
@@ -713,36 +835,59 @@
         inventory.insertAdjacentElement('afterend', managerButton);
     }
 
+    function readStartupAction() {
+        try {
+            const url = new URL(location.href);
+            const fromQuery = url.searchParams.get('moth-stream-action');
+
+            if (fromQuery === 'manager' || fromQuery === 'scan') {
+                url.searchParams.delete('moth-stream-action');
+                history.replaceState(null, '', url.pathname + url.search + url.hash);
+                return fromQuery;
+            }
+
+            const match = /^#moth-stream-action=(manager|scan)$/.exec(location.hash);
+            if (match) {
+                history.replaceState(null, '', url.pathname + url.search);
+                return match[1];
+            }
+        } catch (_) {}
+
+        return null;
+    }
+
     function consumeStartupAction() {
-        if (startupActionHandled || !location.search) {
+        if (startupActionHandled) {
             return;
         }
 
-        const url = new URL(location.href);
-        const action = url.searchParams.get('moth-stream-action');
-
-        if (action !== 'manager' && action !== 'scan') {
+        const action = readStartupAction();
+        if (!action) {
             return;
         }
 
         startupActionHandled = true;
-        url.searchParams.delete('moth-stream-action');
-        history.replaceState(null, '', url.pathname + url.search + url.hash);
 
-        const run = () => {
+        const run = async () => {
             if (action === 'manager') {
+                if (!document.body) {
+                    startupActionHandled = false;
+                    window.setTimeout(consumeStartupAction, 250);
+                    return;
+                }
+
                 renderManager();
                 return;
             }
 
-            const button = document.getElementById(BUTTON_ID);
-            if (!button) {
-                startupActionHandled = false;
-                window.setTimeout(consumeStartupAction, 750);
-                return;
-            }
-
-            scanLiveStreams(button);
+            const result = await runLiveScan();
+            console.info(
+                '[Moth] controller-triggered scan completed:',
+                result.channels.length,
+                'live channel(s),',
+                result.queued,
+                'opened/queued'
+            );
         };
 
         window.setTimeout(run, 1200);
