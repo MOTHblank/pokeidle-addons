@@ -1394,22 +1394,41 @@
             return true;
         }
 
-        const WrappedWebSocket = new Proxy(NativeWebSocket, {
-            construct(target, args) {
-                const socket = Reflect.construct(target, args, target);
-                attachSocket(socket);
-                return socket;
+        try {
+            const WrappedWebSocket = new Proxy(NativeWebSocket, {
+                construct(target, args) {
+                    const socket = Reflect.construct(target, args, target);
+                    attachSocket(socket);
+                    return socket;
+                }
+            });
+
+            for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+                try {
+                    Object.defineProperty(
+                        WrappedWebSocket,
+                        key,
+                        { value: NativeWebSocket[key] }
+                    );
+                } catch {}
             }
-        });
 
-        for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
-            try { Object.defineProperty(WrappedWebSocket, key, { value: NativeWebSocket[key] }); } catch {}
+            page.WebSocket = WrappedWebSocket;
+            page.__mothMarketWatchWebSocket = WrappedWebSocket;
+            state.hookInstalled = true;
+            return true;
+        } catch (error) {
+            /*
+             * A hostile/non-writable page WebSocket must not kill the market UI.
+             * The watch panel remains usable for manual inspection and can still
+             * render cached/reference data.
+             */
+            state.hookInstalled = false;
+            state.itemStatus = 'socket hook unavailable';
+            state.pokemonStatus = 'socket hook unavailable';
+            try { console.warn('[Moth Watch] WebSocket hook unavailable', error); } catch {}
+            return false;
         }
-
-        page.WebSocket = WrappedWebSocket;
-        page.__mothMarketWatchWebSocket = WrappedWebSocket;
-        state.hookInstalled = true;
-        return true;
     }
 
     function injectStyle() {
@@ -1897,9 +1916,16 @@
     }
 
     function bootstrap() {
+        try {
+            document.documentElement?.setAttribute(
+                'data-idleshell-market-bot',
+                'started'
+            );
+        } catch {}
+
         reportReady();
-        installSocketHook();
-        injectStyle();
+        try { installSocketHook(); } catch {}
+        try { injectStyle(); } catch {}
 
         state.scanTimer = setInterval(() => {
             ensureUi();
