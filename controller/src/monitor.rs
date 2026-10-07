@@ -96,7 +96,6 @@ pub struct Health {
     pub orbs: u64,
     pub stream_bonus: String,
     pub stream_bonus_last: String,
-    pub stream_bonus_last_at: u64,
     pub stream_bonus_pct: f32,
     pub stream_watching: Vec<String>,
     pub stream_live_bonus: Vec<String>,
@@ -312,7 +311,6 @@ struct RuntimeProbe {
     stream_scan_opened: u32,
     stream_bonus: String,
     stream_bonus_last: String,
-    stream_bonus_last_at: u64,
     stream_bonus_pct: f32,
     stream_watching: Vec<String>,
     stream_live_bonus: Vec<String>,
@@ -462,7 +460,7 @@ fn monitor_loop(
                         current.stream_bonus = probe.stream_bonus.clone();
                         if !probe.stream_bonus.is_empty() {
                             current.stream_bonus_last = probe.stream_bonus.clone();
-                            current.stream_bonus_last_at = probe.stream_bonus_last_at.max(probe.last_game_message_ms);
+                            current.stream_bonus_last_at = probe.last_game_message_ms;
                         }
                         current.stream_bonus_pct = probe.stream_bonus_pct;
                         current.stream_watching = probe.stream_watching;
@@ -757,7 +755,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         } else {
             runtime.stream_bonus_last.clone()
         },
-        stream_bonus_last_at: runtime.stream_bonus_last_at,
         stream_bonus_pct: runtime.stream_bonus_pct,
         stream_watching: runtime.stream_watching,
         stream_live_bonus: runtime.stream_live_bonus,
@@ -1401,7 +1398,6 @@ fn probe_runtime_details(
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
         stream_bonus_last,
-        stream_bonus_last_at: last_game_message_ms,
         stream_bonus_pct,
         stream_watching,
         stream_live_bonus: live_names,
