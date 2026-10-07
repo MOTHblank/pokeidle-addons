@@ -784,9 +784,11 @@
             if (button) {
                 const label = button.querySelector('span');
                 if (label) {
-                    label.textContent = result.queued > 0
-                        ? 'Scanned ' + result.queued + ' live'
-                        : 'No live streams found';
+                    label.textContent = result.notReady
+                        ? 'Game not ready'
+                        : result.queued > 0
+                            ? 'Scanned ' + result.queued + ' live'
+                            : 'No live streams found';
                 }
             }
 
@@ -969,9 +971,7 @@
             return;
         }
 
-        startupActionHandled = true;
         startupActionRunning = true;
-        clearStartupAction();
 
         try {
             const ready = await waitForGameUi();
@@ -984,6 +984,9 @@
                 );
                 return;
             }
+
+            startupActionHandled = true;
+            clearStartupAction();
 
             if (action === 'manager') {
                 renderManager();
