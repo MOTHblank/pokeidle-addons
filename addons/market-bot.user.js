@@ -1935,6 +1935,13 @@
         try { injectStyle(); } catch {}
 
         state.scanTimer = setInterval(() => {
+            try {
+                document.documentElement?.setAttribute(
+                    'data-idleshell-market-bot',
+                    'started'
+                );
+            } catch {}
+
             ensureUi();
             runScan(false);
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
