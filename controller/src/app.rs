@@ -171,13 +171,13 @@ pub fn run() -> Result<(), String> {
                     } else if handle == launch_both_button {
                         let mut state = state_for_events.borrow_mut();
                         launch_one(
-                            "AccountA",
+                            GameProfile::Game1,
                             &mut state.game1,
                             &game1_status_for_events,
                             &status_for_events,
                         );
                         launch_one(
-                            "AccountB",
+                            GameProfile::Game2,
                             &mut state.game2,
                             &game2_status_for_events,
                             &status_for_events,
