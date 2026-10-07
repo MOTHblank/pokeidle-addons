@@ -469,6 +469,7 @@ internal sealed class TwitchChatClient : IAsyncDisposable
 
     private ClientWebSocket? _socket;
     private Task? _receiveTask;
+    private volatile bool _authenticationFailed;
 
     public TwitchChatClient(
         Uri uri,
@@ -484,25 +485,26 @@ internal sealed class TwitchChatClient : IAsyncDisposable
 
     public event Action? AuthenticationFailed;
 
+    public bool IsAuthenticationFailed => _authenticationFailed;
+
     public async Task StartAsync()
     {
-        if (_socket is not null)
+        if (_receiveTask is not null)
             return;
 
-        _socket = new ClientWebSocket();
-        await _socket.ConnectAsync(_uri, _stop.Token);
-
-        await SendRawAsync($"PASS oauth:{_token}");
-        await SendRawAsync($"NICK {_login}");
-        await SendRawAsync("CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands");
+        await ConnectAsync();
 
         _receiveTask = Task.Run(ReceiveLoopAsync);
     }
 
     public async Task JoinAsync(string channel)
     {
-        if (_socket is null || _socket.State != WebSocketState.Open)
+        if (_receiveTask is null || _socket?.State != WebSocketState.Open)
             await StartAsync();
+
+        if (_authenticationFailed)
+            throw new AuthenticationRequiredException(
+                $"Twitch account '{_login}' is no longer authenticated.");
 
         if (_channels.Add(channel))
             await SendRawAsync($"JOIN #{channel}");
@@ -510,11 +512,29 @@ internal sealed class TwitchChatClient : IAsyncDisposable
 
     public async Task LeaveAsync(string channel)
     {
-        if (!_channels.Remove(channel) || _socket is null ||
-            _socket.State != WebSocketState.Open)
+        if (!_channels.Remove(channel) ||
+            _socket?.State != WebSocketState.Open)
             return;
 
         await SendRawAsync($"PART #{channel}");
+    }
+
+    private async Task ConnectAsync()
+    {
+        var socket = new ClientWebSocket();
+        await socket.ConnectAsync(_uri, _stop.Token);
+        _socket?.Dispose();
+        _socket = socket;
+
+        await SendRawAsync($"PASS oauth:{_token}");
+        await SendRawAsync($"NICK {_login}");
+        await SendRawAsync(
+            "CAP REQ :twitch.tv/membership twitch.tv/tags twitch.tv/commands");
+
+        _log($"Twitch chat connected as {_login}; {_channels.Count} channel(s) pending/active");
+
+        foreach (var channel in _channels.ToArray())
+            await SendRawAsync($"JOIN #{channel}");
     }
 
     private async Task SendRawAsync(string line)
@@ -542,14 +562,15 @@ internal sealed class TwitchChatClient : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         var buffer = new byte[16 * 1024];
+        var reconnectDelay = TimeSpan.FromSeconds(2);
 
-        try
+        while (!_stop.IsCancellationRequested)
         {
-            while (!_stop.IsCancellationRequested)
+            try
             {
                 var socket = _socket;
                 if (socket is null)
-                    return;
+                    throw new InvalidOperationException("Twitch chat socket disappeared.");
 
                 using var ms = new MemoryStream();
                 WebSocketReceiveResult result;
@@ -560,8 +581,8 @@ internal sealed class TwitchChatClient : IAsyncDisposable
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        await TryCloseSocketAsync();
-                        return;
+                        await TryCloseSocketAsync(socket);
+                        break;
                     }
 
                     if (result.MessageType != WebSocketMessageType.Text)
@@ -569,9 +590,15 @@ internal sealed class TwitchChatClient : IAsyncDisposable
 
                     ms.Write(buffer, 0, result.Count);
                 }
-                while (!result.EndOfMessage);
+                while (!result.EndOfMessage && result.MessageType != WebSocketMessageType.Close);
 
-                var message = Encoding.UTF8.GetString(ms.GetBuffer(), 0, checked((int)ms.Length));
+                if (result.MessageType == WebSocketMessageType.Close)
+                    throw new WebSocketException("Twitch requested connection close.");
+
+                var message = Encoding.UTF8.GetString(
+                    ms.GetBuffer(),
+                    0,
+                    checked((int)ms.Length));
 
                 foreach (var line in message.Split(
                              new[] { "\r\n", "\n" },
@@ -580,51 +607,89 @@ internal sealed class TwitchChatClient : IAsyncDisposable
                     if (line.StartsWith("PING", StringComparison.OrdinalIgnoreCase))
                     {
                         await SendRawAsync("PONG :tmi.twitch.tv");
+                        continue;
                     }
-                    else if (line.Contains("Login authentication failed", StringComparison.OrdinalIgnoreCase) ||
-                             line.Contains("Improperly formatted auth", StringComparison.OrdinalIgnoreCase) ||
-                             line.StartsWith(":tmi.twitch.tv NOTICE", StringComparison.OrdinalIgnoreCase) &&
-                             line.Contains("authentication", StringComparison.OrdinalIgnoreCase))
+
+                    if (line.Contains("Login authentication failed", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("Improperly formatted auth", StringComparison.OrdinalIgnoreCase) ||
+                        (line.StartsWith(":tmi.twitch.tv NOTICE", StringComparison.OrdinalIgnoreCase) &&
+                         line.Contains("authentication", StringComparison.OrdinalIgnoreCase)))
                     {
+                        _authenticationFailed = true;
                         AuthenticationFailed?.Invoke();
-                        await TryCloseSocketAsync();
+                        await TryCloseSocketAsync(socket);
                         return;
                     }
                 }
+
+                reconnectDelay = TimeSpan.FromSeconds(2);
             }
-        }
-        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
-        catch (WebSocketException ex)
-        {
-            _log($"Twitch chat socket closed for {_login}: {ex.Message}");
-        }
-        catch (Exception ex)
-        {
-            _log($"Twitch chat receive error for {_login}: {ex.Message}");
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (_stop.IsCancellationRequested || _authenticationFailed)
+                    return;
+
+                _log($"Twitch chat disconnected for {_login}: {ex.Message}");
+            }
+
+            if (_stop.IsCancellationRequested || _authenticationFailed)
+                return;
+
+            try
+            {
+                await Task.Delay(reconnectDelay, _stop.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            reconnectDelay = TimeSpan.FromSeconds(
+                Math.Min(30, reconnectDelay.TotalSeconds * 2));
+
+            try
+            {
+                await ConnectAsync();
+            }
+            catch (Exception ex)
+            {
+                _log($"Twitch chat reconnect failed for {_login}: {ex.Message}");
+            }
         }
     }
 
-    private async Task TryCloseSocketAsync()
+    private async Task TryCloseSocketAsync(ClientWebSocket socket)
     {
-        var socket = _socket;
-        if (socket is null)
-            return;
-
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
                 await socket.CloseAsync(
                     WebSocketCloseStatus.NormalClosure,
-                    "IdleShell closing",
+                    "IdleShell reconnecting",
                     CancellationToken.None);
+            }
         }
         catch { }
+        finally
+        {
+            if (ReferenceEquals(_socket, socket))
+                _socket = null;
+            socket.Dispose();
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
         _stop.Cancel();
-        await TryCloseSocketAsync();
+
+        var socket = _socket;
+        if (socket is not null)
+            await TryCloseSocketAsync(socket);
 
         if (_receiveTask is not null)
         {
@@ -632,7 +697,6 @@ internal sealed class TwitchChatClient : IAsyncDisposable
             catch { }
         }
 
-        _socket?.Dispose();
         _sendGate.Dispose();
         _stop.Dispose();
     }
