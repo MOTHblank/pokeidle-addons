@@ -1306,18 +1306,17 @@ fn game_selector(
 }
 
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    let viewport = ctx.content_rect();
-    let width = (viewport.width() - 48.0).min(900.0).max(420.0);
-    let height = (viewport.height() - 48.0).min(620.0).max(360.0);
-    let size = egui::vec2(width, height);
-    let pos = viewport.center() - size * 0.5;
+    let screen = ctx.viewport_rect();
+    let width = (screen.width() - 48.0).clamp(420.0, 900.0);
+    let height = (screen.height() - 48.0).clamp(360.0, 620.0);
+    let pos = screen.center() - egui::vec2(width, height) * 0.5;
 
     egui::Area::new(egui::Id::new("hunt_atlas_overlay"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos)
         .show(ctx, |ui| {
-            ui.set_min_size(size);
-            ui.set_max_size(size);
+            ui.set_width(width);
+            ui.set_height(height);
             egui::Frame::new()
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0, BORDER))
@@ -1331,26 +1330,23 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .strong()
                         .color(TEXT),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("× Close").clicked() {
-                        app.show_atlas = false;
-                    }
-                });
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new("Map intelligence + observed XP/hour")
                         .size(12.0)
                         .color(MUTED),
                 );
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new("Select a hunt to travel · XP rates are measured from battle events")
-                            .size(10.0)
-                            .color(DIM),
-                    );
-                });
+                ui.add_space(16.0);
+                if ui.button("× Close").clicked() {
+                    app.show_atlas = false;
+                }
             });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("Select a hunt to travel · XP rates are measured from battle events")
+                    .size(10.0)
+                    .color(DIM),
+            );
 
             ui.add_space(14.0);
             game_selector(ui, &mut app.atlas_profile);
