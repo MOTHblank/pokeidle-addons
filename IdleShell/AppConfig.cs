@@ -15,7 +15,9 @@ internal static class AppConfig
 
     // Stream environment: keeps the unthrottled flags (hidden panes must not have
     // their timers clipped) plus autoplay allowed.
-    public const string StreamBrowserArguments = GameBrowserArguments;
+    // Stream WebViews are chat-only and are hidden. Do not disable Chromium
+    // background throttling here; that would waste CPU on inactive chat hosts.
+    public const string StreamBrowserArguments = "";
 
     // Probe CSV: logs visibilityState + timer drift per pane, one row per tick.
     public static string ProbeCsvFile => Path.Combine(Root, "probe.csv");
