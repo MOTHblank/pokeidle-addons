@@ -1038,7 +1038,7 @@ internal sealed class MainForm : Form
                     continue;
                 }
 
-                await EnsureStreamPaneAsync(workspace, slot, canonical);
+                await JoinStreamSlotAsync(workspace, slot, canonical);
                 SelectTab(workspace, workspace.Slots.IndexOf(slot));
                 routed++;
             }
@@ -1387,15 +1387,17 @@ internal sealed class MainForm : Form
             if (_gameEnv is null) return;
 
             var infos = _gameEnv.GetProcessInfos();
-            var streamInfos = _streamEnv?.GetProcessInfos();
-            var open = AllStreamSlots().Count(s => s.Pane is not null);
-            var fg = _workspaces.Sum(w => ForegroundCandidates(w).Count);
+            var open = AllStreamSlots().Count(s => s.Url is not null);
+            var joined = _streams?.JoinedChannelCount ?? 0;
+            var twitchAccounts = _streams?.ConnectedTwitchAccounts ?? 0;
+            var kickAccounts = _streams?.ConnectedKickAccounts ?? 0;
             var enabled = _accounts.EnabledStreamAccounts.Count();
 
             _status.Text =
-                $"Games: {_games.Count}/2 · Game procs: {infos.Count} · Stream procs: {streamInfos?.Count ?? 0}" +
-                $" · Streams: {fg} fg / {Math.Max(0, open - fg)} bg" +
-                $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()} · 10 Twitch + 10 Kick/game" +
+                $"Games: {_games.Count}/2 · Game procs: {infos.Count}" +
+                $" · Chats: {joined} joined / {open} slots" +
+                $" · Sessions: T{twitchAccounts} K{kickAccounts}" +
+                $" · Routing accounts: {enabled}/{_accounts.StreamAccounts.Count()}" +
                 $" · Health: {GameHealthSummary()}" +
                 $" · Addons: {_userscripts?.ScriptNames.Count ?? 0} userscripts";
         }
@@ -1407,6 +1409,7 @@ internal sealed class MainForm : Form
             Log($"status update failed: {ex.Message}");
         }
     }
+
     private void SaveSession()
     {
         var specs = new List<PaneSpec>();
