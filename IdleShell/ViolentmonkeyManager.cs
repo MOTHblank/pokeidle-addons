@@ -125,18 +125,17 @@ internal sealed class ViolentmonkeyManager
             await RemoveLegacyRouterAsync(view);
 
             foreach (var script in _scripts)
-                await ImportScriptAsync(view, script);
-
-            foreach (var script in _scripts)
             {
-                var status = await GetScriptStatusAsync(view, script);
+                var scriptId = await ImportScriptAsync(view, script);
+                var status = await GetScriptStatusAsync(view, scriptId);
                 if (!status.Found)
                     throw new InvalidOperationException(
-                        $"Violentmonkey imported '{script.Name}' but could not verify it in the installed script database.");
+                        $"Violentmonkey imported '{script.Name}' as script #{scriptId}, " +
+                        "but could not verify that exact script in the installed script database.");
 
                 Console.Error.WriteLine(
-                    $"[IdleShell] verified userscript '{script.Name}' in profile " +
-                    $"{profile.ProfileName}: {(status.Enabled ? "enabled" : "DISABLED")}");
+                    $"[IdleShell] verified userscript '{script.Name}' as VM script #{scriptId} " +
+                    $"in profile {profile.ProfileName}: {(status.Enabled ? "enabled" : "DISABLED")}");
             }
 
             Console.Error.WriteLine(
@@ -237,18 +236,15 @@ internal sealed class ViolentmonkeyManager
 
     private static async Task<(bool Found, bool Enabled)> GetScriptStatusAsync(
         CoreWebView2 view,
-        LocalScript script)
+        int scriptId)
     {
-        var request = $$"""
+        var request = $"""
 (() => {
   return Promise.resolve(
     chrome.runtime.sendMessage({
       cmd: 'GetScript',
       data: {
-        meta: {
-          name: {{JsonSerializer.Serialize(script.Name)}},
-          namespace: {{JsonSerializer.Serialize("moth.pokeidle")}}
-        }
+        id: {{scriptId}}
       }
     })
   ).then(value => JSON.stringify({
@@ -290,7 +286,7 @@ internal sealed class ViolentmonkeyManager
         }
     }
 
-    private static async Task ImportScriptAsync(CoreWebView2 view, LocalScript script)
+    private static async Task<int> ImportScriptAsync(CoreWebView2 view, LocalScript script)
     {
         var id = Guid.NewGuid().ToString("N");
         var code = JsonSerializer.Serialize(script.Source);
@@ -367,7 +363,21 @@ internal sealed class ViolentmonkeyManager
                     continue;
 
                 if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean())
-                    return;
+                {
+                    if (!root.TryGetProperty("result", out var result) ||
+                        result.ValueKind != JsonValueKind.Object ||
+                        !result.TryGetProperty("where", out var where) ||
+                        where.ValueKind != JsonValueKind.Object ||
+                        !where.TryGetProperty("id", out var idValue) ||
+                        idValue.ValueKind != JsonValueKind.Number ||
+                        !idValue.TryGetInt32(out var scriptId))
+                    {
+                        throw new InvalidOperationException(
+                            $"Violentmonkey imported '{script.Name}' but did not return its script ID.");
+                    }
+
+                    return scriptId;
+                }
 
                 var error = root.TryGetProperty("error", out var errorValue)
                     ? errorValue.GetString()
