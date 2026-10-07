@@ -1429,47 +1429,134 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.add_space(10.0);
 
             let search = app.market_search.to_lowercase();
-            let catalog: Vec<_> = health
-                .market_catalog
-                .iter()
-                .filter(|item| search.is_empty() || item.name.to_lowercase().contains(&search))
-                .take(35)
-                .cloned()
-                .collect();
 
             egui::ScrollArea::vertical()
                 .id_salt("market_catalog")
-                .max_height(180.0)
+                .max_height(250.0)
                 .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for item in catalog {
-                            let label = compact_text(&item.name, 22);
-                            if ui.button(label).clicked() {
-                                let profile_label = app.market_profile.label();
-                                let monitor = app.games[index].monitor.clone();
-                                if let Some(monitor) = monitor {
-                                    let item_id = item.id;
-                                    let item_name = item.name.clone();
-                                    let currency = app.market_currency.clone();
+                    if health.market_summary.is_empty() {
+                        ui.label(
+                            RichText::new("No market summary loaded. Press Refresh market.")
+                                .size(11.0)
+                                .color(DIM),
+                        );
 
-                                    monitor.send(json!({
-                                        "t": "market.item",
-                                        "itemId": item_id,
-                                        "moeda": currency
-                                    }));
-                                    app.set_status(
-                                        format!("{} · inspecting {}", profile_label, item_name),
-                                        false,
-                                    );
-                                } else {
-                                    app.set_status(
-                                        format!("{} is not running.", profile_label),
-                                        true,
-                                    );
+                        ui.add_space(6.0);
+
+                        let catalog: Vec<_> = health
+                            .market_catalog
+                            .iter()
+                            .filter(|item| {
+                                search.is_empty()
+                                    || item.name.to_lowercase().contains(&search)
+                            })
+                            .take(35)
+                            .cloned()
+                            .collect();
+
+                        ui.horizontal_wrapped(|ui| {
+                            for item in catalog {
+                                let label = compact_text(&item.name, 22);
+                                if ui.button(label).clicked() {
+                                    let profile_label = app.market_profile.label();
+                                    let monitor = app.games[index].monitor.clone();
+                                    if let Some(monitor) = monitor {
+                                        let item_id = item.id;
+                                        let item_name = item.name.clone();
+                                        let currency = app.market_currency.clone();
+
+                                        monitor.send(json!({
+                                            "t": "market.item",
+                                            "itemId": item_id,
+                                            "moeda": currency
+                                        }));
+                                        app.set_status(
+                                            format!("{} · inspecting {}", profile_label, item_name),
+                                            false,
+                                        );
+                                    } else {
+                                        app.set_status(
+                                            format!("{} is not running.", profile_label),
+                                            true,
+                                        );
+                                    }
                                 }
                             }
+                        });
+                    } else {
+                        for item in health.market_summary.iter().filter(|item| {
+                            search.is_empty()
+                                || item.name.to_lowercase().contains(&search)
+                        }).take(50) {
+                            egui::Frame::new()
+                                .fill(PANEL_ALT)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0)
+                                .inner_margin(9.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(compact_text(&item.name, 32))
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(TEXT),
+                                            );
+
+                                            let gold = if item.gold_min > 0 {
+                                                format!("{} gold", format_number(item.gold_min))
+                                            } else {
+                                                "— gold".to_string()
+                                            };
+                                            let gems = if item.orb_min > 0 {
+                                                format!("{} gems", format_number(item.orb_min))
+                                            } else {
+                                                "— gems".to_string()
+                                            };
+
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} · {} · {} listings",
+                                                    gold,
+                                                    gems,
+                                                    item.listings
+                                                ))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                            );
+                                        });
+
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            let profile_label = app.market_profile.label();
+                                            let monitor = app.games[index].monitor.clone();
+                                            if ui.button("Inspect").clicked() {
+                                                if let Some(monitor) = monitor {
+                                                    let item_id = item.item_id;
+                                                    let item_name = item.name.clone();
+                                                    let currency = app.market_currency.clone();
+                                                    monitor.send(json!({
+                                                        "t": "market.item",
+                                                        "itemId": item_id,
+                                                        "moeda": currency
+                                                    }));
+                                                    app.set_status(
+                                                        format!("{} · inspecting {}", profile_label, item_name),
+                                                        false,
+                                                    );
+                                                } else {
+                                                    app.set_status(
+                                                        format!("{} is not running.", profile_label),
+                                                        true,
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+
+                            ui.add_space(5.0);
                         }
-                    });
+                    }
                 });
 
             ui.add_space(12.0);
