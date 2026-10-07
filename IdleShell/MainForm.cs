@@ -509,7 +509,16 @@ internal sealed class MainForm : Form
     private static string StreamTabText(StreamSlot slot)
     {
         var service = slot.Account.Service == AccountService.Twitch ? "T" : "K";
-        var state = slot.Pane is null ? "○" : "●";
+        var state = slot.Url is null
+            ? "○"
+            : slot.State switch
+            {
+                StreamConnectionState.Connected => "●",
+                StreamConnectionState.Connecting => "…",
+                StreamConnectionState.AuthenticationRequired => "!",
+                StreamConnectionState.Error => "×",
+                _ => "○"
+            };
         return $"{state} {service}{slot.SlotNumber}";
     }
 
@@ -539,7 +548,7 @@ internal sealed class MainForm : Form
     private void SelectFirstOpenSlotForService(GameWorkspace workspace)
     {
         var index = workspace.Slots.FindIndex(s =>
-            s.Account.Service == workspace.ActiveStreamService && s.Pane is not null);
+            s.Account.Service == workspace.ActiveStreamService && s.Url is not null);
         workspace.ActiveTabIndex = index;
     }
 
@@ -550,19 +559,24 @@ internal sealed class MainForm : Form
         {
             foreach (var workspace in _workspaces)
                 foreach (var slot in workspace.Slots)
+                {
                     slot.Tab.Text = StreamTabText(slot);
+                    slot.Tab.AccessibleName =
+                        $"{slot.Account.Service} slot {slot.SlotNumber} · " +
+                        $"{slot.Account.DisplayLabel} · " +
+                        $"{slot.Url ?? "not joined"}";
+                }
         }
         finally { _suppressTabEvent = false; }
     }
 
     private void UpdateWorkspaceHeader(GameWorkspace workspace)
     {
-        var open = workspace.Slots.Count(s => s.Pane is not null);
+        var open = workspace.Slots.Count(s => s.Url is not null);
         var openTwitch = workspace.Slots.Count(s =>
-            s.Pane is not null && s.Account.Service == AccountService.Twitch);
+            s.Url is not null && s.Account.Service == AccountService.Twitch);
         var openKick = workspace.Slots.Count(s =>
-            s.Pane is not null && s.Account.Service == AccountService.Kick);
-        var visible = ForegroundCandidates(workspace).Count;
+            s.Url is not null && s.Account.Service == AccountService.Kick);
         var state = workspace.GameForeground ? "FOREGROUND" : "BACKGROUND";
         workspace.Header.Text =
             $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
@@ -575,8 +589,8 @@ internal sealed class MainForm : Form
         };
         workspace.GameToggle.Text = workspace.GameForeground ? "Background" : "Foreground";
         workspace.StreamHeader.Text =
-            $"{(workspace.StreamsExpanded ? "▾" : "▸")} Streams · {open} open · T {openTwitch}/{AccountManager.MaxStreamsPerService} · K {openKick}/{AccountManager.MaxStreamsPerService} · {visible} visible";
-        workspace.StreamOpen.Text = "+ Open stream";
+            $"{(workspace.StreamsExpanded ? "▾" : "▸")} Streams · {open} joined · T {openTwitch}/{AccountManager.MaxStreamsPerService} · K {openKick}/{AccountManager.MaxStreamsPerService}";
+        workspace.StreamOpen.Text = "+ Join chat";
         var serviceIndex = workspace.ActiveStreamService == AccountService.Kick ? 1 : 0;
         if (workspace.StreamServicePicker.SelectedIndex != serviceIndex)
         {
@@ -600,7 +614,7 @@ internal sealed class MainForm : Form
         var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
         if (workspace.ActiveTabIndex < 0 || workspace.ActiveTabIndex >= workspace.Slots.Count)
             return;
-        CloseStream(workspace, workspace.Slots[workspace.ActiveTabIndex]);
+        _ = CloseStreamAsync(workspace, workspace.Slots[workspace.ActiveTabIndex]);
     }
 
     private void ShowStreamContextMenu(GameWorkspace workspace, Point location)
@@ -628,75 +642,80 @@ internal sealed class MainForm : Form
         workspace.ActiveTabIndex = workspace.Slots.IndexOf(slot);
 
         var menu = new ContextMenuStrip();
-
         menu.Items.Add(new ToolStripMenuItem
         {
             Text = $"{slot.Account.Service} {slot.SlotNumber} · {slot.Account.DisplayLabel}",
             Enabled = false
         });
 
-        menu.Items.Add(new ToolStripSeparator());
+        var joinText = slot.Url is null ? "Join chat…" : "Rejoin chat…";
         menu.Items.Add(
-            slot.Pane is null ? "Open / log in" : "Reload stream",
+            joinText,
             null,
             async (_, _) =>
             {
-                var url = slot.Url ?? AccountManager.LoginUrl(slot.Account.Service);
-                if (slot.Pane is null)
-                    await EnsureStreamPaneAsync(workspace, slot, url);
-                else
-                    slot.Pane.View.Reload();
-                SelectTab(workspace, hit);
+                var initial = slot.Url ?? AccountManager.LoginUrl(slot.Account.Service);
+                await JoinStreamSlotAsync(workspace, slot, initial);
             });
 
         menu.Items.Add(
-            slot.Pane?.View.IsMuted == true ? "Unmute" : "Mute",
+            "Log in…",
             null,
-            (_, _) =>
+            async (_, _) =>
             {
-                if (slot.Pane is not null)
-                    slot.Pane.View.IsMuted = !slot.Pane.View.IsMuted;
+                await ShowAccountForLoginAsync(slot.Account);
             });
+
+        if (slot.Url is not null)
+        {
+            menu.Items.Add(
+                "Open channel in browser",
+                null,
+                async (_, _) => await _streams!.OpenExternallyAsync(slot.Url));
+
+            menu.Items.Add(
+                "Leave chat",
+                null,
+                async (_, _) => await CloseStreamAsync(workspace, slot));
+        }
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(
             $"Close {slot.Account.Service} {slot.SlotNumber}",
             null,
-            (_, _) => CloseStream(workspace, slot));
+            async (_, _) => await CloseStreamAsync(workspace, slot));
         menu.Items.Add(
-            $"Close all open streams for Game {workspace.Index + 1}",
+            $"Close all joined chats for Game {workspace.Index + 1}",
             null,
-            (_, _) => CloseAllStreams(workspace));
+            async (_, _) => await CloseAllStreamsAsync(workspace));
 
         menu.Show(workspace.StreamTabs, location);
     }
 
-    private void CloseStream(GameWorkspace workspace, StreamSlot slot)
+    private async Task CloseStreamAsync(GameWorkspace workspace, StreamSlot slot)
     {
         var wasActive = workspace.ActiveTabIndex >= 0 &&
                         workspace.ActiveTabIndex < workspace.Slots.Count &&
                         ReferenceEquals(workspace.Slots[workspace.ActiveTabIndex], slot);
 
-        if (slot.Pane is { } pane)
-            DetachAndClose(pane);
+        if (_streams is not null && slot.Url is not null)
+            await _streams.LeaveAsync(slot.Account, slot.Url);
 
-        slot.Pane = null;
         slot.Url = null;
+        slot.State = StreamConnectionState.Disconnected;
         slot.Tab.Text = StreamTabText(slot);
 
         if (wasActive)
         {
             var next = workspace.Slots.FirstOrDefault(s =>
                 s.Account.Service == workspace.ActiveStreamService &&
-                s.Pane is not null &&
+                s.Url is not null &&
                 !ReferenceEquals(s, slot))
                 ?? workspace.Slots.FirstOrDefault(s =>
-                    s.Pane is not null && !ReferenceEquals(s, slot));
+                    s.Url is not null && !ReferenceEquals(s, slot));
 
             if (next is not null)
-            {
                 SelectTab(workspace, workspace.Slots.IndexOf(next));
-            }
             else
             {
                 workspace.ActiveTabIndex = -1;
@@ -707,18 +726,19 @@ internal sealed class MainForm : Form
             }
         }
 
+        RebuildTabTitles();
         LayoutPanes();
         SaveSession();
     }
 
-    private void CloseAllStreams(GameWorkspace workspace)
+    private async Task CloseAllStreamsAsync(GameWorkspace workspace)
     {
-        foreach (var slot in workspace.Slots)
+        foreach (var slot in workspace.Slots.ToArray())
         {
-            if (slot.Pane is { } pane)
-                DetachAndClose(pane);
-            slot.Pane = null;
+            if (_streams is not null && slot.Url is not null)
+                await _streams.LeaveAsync(slot.Account, slot.Url);
             slot.Url = null;
+            slot.State = StreamConnectionState.Disconnected;
         }
 
         workspace.ActiveTabIndex = -1;
@@ -726,6 +746,7 @@ internal sealed class MainForm : Form
         workspace.StreamTabs.SelectedIndex = -1;
         _suppressTabEvent = false;
 
+        RebuildTabTitles();
         LayoutPanes();
         SaveSession();
     }
@@ -759,14 +780,26 @@ internal sealed class MainForm : Form
     {
         if (acc.IsStream)
         {
-            var workspace = _workspaces[Math.Clamp(_activeWorkspaceIndex, 0, _workspaces.Count - 1)];
-            var slot = FirstSlotForAccount(workspace, acc.Id);
-            if (slot is not null)
+            try
             {
-                await EnsureStreamPaneAsync(
-                    workspace, slot, slot.Url ?? AccountManager.LoginUrl(acc.Service));
-                SelectTab(workspace, workspace.Slots.IndexOf(slot));
+                if (_streams is null)
+                    throw new InvalidOperationException("Stream subsystem is not initialized.");
+
+                await _streams.LoginAsync(acc);
+                RebuildTabTitles();
+                UpdateWorkspaceHeaders();
             }
+            catch (Exception ex)
+            {
+                Log($"stream login failed for {acc.DisplayLabel}: {ex}");
+                MessageBox.Show(
+                    this,
+                    ex.Message,
+                    $"{acc.Service} login",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+
             return;
         }
 
@@ -787,14 +820,13 @@ internal sealed class MainForm : Form
     {
         var canonical = CanonicalStreamUrl(url);
         return workspace.Slots.FirstOrDefault(s =>
-            s.Pane is not null &&
-            (string.Equals(CanonicalStreamUrl(s.Url ?? ""), canonical, StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(CanonicalStreamUrl(s.Pane.View.Source ?? ""), canonical, StringComparison.OrdinalIgnoreCase)));
+            s.Url is not null &&
+            string.Equals(CanonicalStreamUrl(s.Url), canonical, StringComparison.OrdinalIgnoreCase));
     }
 
     private StreamSlot? FindFreeStreamSlot(GameWorkspace workspace, AccountService service) =>
         workspace.Slots
-            .Where(s => s.Account.Enabled && s.Account.Service == service && s.Pane is null)
+            .Where(s => s.Account.Enabled && s.Account.Service == service && s.Url is null)
             .OrderBy(s => s.SlotNumber)
             .ThenBy(s => s.Account.Id, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
