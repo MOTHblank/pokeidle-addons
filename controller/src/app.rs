@@ -34,7 +34,7 @@ pub fn run() -> Result<(), String> {
     let mut profiles_button = nwg::Button::default();
     let mut close_button = nwg::Button::default();
     let mut status = nwg::Label::default();
-    let mut health_timer = nwg::Timer::default();
+    let mut health_timer = nwg::AnimationTimer::default();
 
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
@@ -146,7 +146,7 @@ pub fn run() -> Result<(), String> {
         .build(&mut close_button)
         .map_err(|error| format!("could not create Close button: {error}"))?;
 
-    nwg::Timer::builder()
+    nwg::AnimationTimer::builder()
         .interval(2000)
         .parent(&window)
         .build(&mut health_timer)
@@ -191,7 +191,7 @@ pub fn run() -> Result<(), String> {
             use nwg::Event;
 
             match event {
-                Event::OnTimer if handle == health_timer_handle => {
+                Event::OnAnimationTimer if handle == health_timer_handle => {
                     let state = state_for_health.borrow();
                     update_health_label(state.game1_monitor.as_ref(), &game1_status);
                     update_health_label(state.game2_monitor.as_ref(), &game2_status);
