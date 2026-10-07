@@ -1,3 +1,4 @@
+use crate::logging;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -73,6 +74,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>) {
                 }
             }
             Err(error) => {
+                logging::warn(&format!("BiDi probe on port {} failed: {}", port, error));
                 if let Ok(mut current) = health.lock() {
                     current.state = "Connecting".to_string();
                     current.last_error = Some(error);
@@ -92,6 +94,7 @@ struct Probe {
 }
 
 fn probe_browser(port: u16) -> Result<Probe, String> {
+    logging::info(&format!("connecting to Firefox BiDi on 127.0.0.1:{port}"));
     let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
         .map_err(|error| error.to_string())?;
 
