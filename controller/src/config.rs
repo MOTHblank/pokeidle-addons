@@ -30,6 +30,7 @@ impl GameProfile {
             Self::Game2 => "AccountB",
         }
     }
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
