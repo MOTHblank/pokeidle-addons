@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      3.1.0
+// @version      3.2.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
-// @grant        unsafeWindow
 // @run-at       document-start
 // @noframes
 // ==/UserScript==
