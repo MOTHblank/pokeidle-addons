@@ -1505,7 +1505,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let mut open = app.show_market;
     egui::Window::new("Moth Watch")
-        .open(&mut app.show_market)
+        .open(&mut open)
         .collapsible(false)
         .resizable(true)
         .default_width(1000.0)
@@ -1608,11 +1608,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if health.market_summary.is_empty() {
                         ui.label(
-                            RichText::new(if health.market_summary.is_empty() {
-                                "No market summary loaded. Press Refresh market."
-                            } else {
-                                "No listings in the selected currency match your search."
-                            })
+                            RichText::new("No market summary loaded. Press Refresh market.")
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -1738,6 +1734,23 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 });
 
                             ui.add_space(5.0);
+                        }
+
+                        if !health.market_summary.iter().any(|item| {
+                            let currency_available = match app.market_currency.as_str() {
+                                "gold" => item.gold_min > 0,
+                                "orb" => item.orb_min > 0,
+                                _ => true,
+                            };
+                            currency_available
+                                && (search.is_empty()
+                                    || item.name.to_lowercase().contains(&search))
+                        }) {
+                            ui.label(
+                                RichText::new("No listings in the selected currency match your search.")
+                                    .size(11.0)
+                                    .color(DIM),
+                            );
                         }
                     }
                 });
