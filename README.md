@@ -1,28 +1,34 @@
 # pokeidle-addons
 
-PokéIdle userscripts plus a lightweight Windows WebView2 shell for running two
-persistent game accounts with lightweight Twitch/KICK chat presence.
+PokéIdle userscripts plus a lightweight native controller for running dedicated browser profiles.
 
-## Stream architecture
+## Repository layout
 
-Idle Shell does not create a WebView2 instance for every stream. It keeps the two
-PokéIdle game WebViews, while Twitch and KICK chat presence is handled separately.
-Each configured login owns at most one hidden chat-only WebView2 host, and that host
-can keep multiple channel chats connected. Video is not loaded by the resident
-stream subsystem; an explicit external-browser action is required to watch video.
-
-
-- `addons/` — installable Tampermonkey-compatible userscripts.
-- `IdleShell/` — native .NET 10/WebView2 host.
+- `addons/` — installable Tampermonkey/Violentmonkey-compatible userscripts.
+- `controller/` — native Rust launcher/controller for dedicated PokéIdle browser profiles.
 - `upstream/` — captured upstream PokéIdle client data.
 
-Idle Shell uses a browser-native WebView2 extension userscript engine, so the shipped addons work
-without installing Tampermonkey or any browser extension. The same `*.user.js`
-files remain usable in a normal userscript manager.
+## Runtime architecture
 
-The upstream snapshot currently tracked in this repository is PokéIdle v1.240.1.
-The live-stream addon adds a manual scan button under PokéIdle's **Abrir Inventário** button.
-It scans the currently rendered Twitch/KICK channel links only when clicked, then routes
-those live/online channels through Idle Shell's chat-presence system.
+The controller does **not** embed a browser and does **not** implement a userscript engine.
 
-See `IdleShell/README.md` for build and runtime details.
+PokéIdle runs in a normal installed browser with an isolated profile per game account. The existing userscripts remain ordinary `*.user.js` files and are executed by an existing userscript manager such as Violentmonkey or Tampermonkey.
+
+The controller is responsible for browser/profile lifecycle and desktop orchestration only.
+
+## Controller
+
+The Rust controller currently provides the foundation for:
+
+- finding a local Firefox installation;
+- creating isolated Moth/PokéIdle profile directories;
+- launching Firefox with a selected profile;
+- opening PokéIdle in that profile.
+
+The implementation intentionally contains no WebView2, Chromium embedding, C#, or custom userscript runtime.
+
+See `controller/README.md` for the current development scope.
+
+## Upstream snapshot
+
+The tracked upstream snapshot is retained separately under `upstream/` and is not part of the Rust controller runtime.
