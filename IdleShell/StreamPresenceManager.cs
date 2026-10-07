@@ -1,21 +1,3 @@
-using System.Net.WebSockets;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using Microsoft.Web.WebView2.Core;
-
-namespace Moth.PokeIdle.IdleShell;
-
-internal enum StreamConnectionState
-{
-    Disconnected,
-    Connecting,
-    Connected,
-    AuthenticationRequired,
-    Error
-}
-
 internal sealed class StreamPresenceManager : IAsyncDisposable
 {
     private const string TwitchClientId = "kimdg7e24uc9nkkn2h3t43j1uwrcd2";
@@ -995,164 +977,520 @@ internal sealed class KickChatHost : IAsyncDisposable
     }
 }
 
-internal sealed class AuthenticationRequiredException(string message)
-    : Exception(message);
-
-internal static class TwitchCredentialStore
+internal sealed class StreamPresenceManager : IAsyncDisposable
 {
-    private static readonly byte[] Entropy =
-        Encoding.UTF8.GetBytes("Moth.PokeIdle.IdleShell.TwitchToken.v1");
+    private readonly CoreWebView2Environment _environment;
+    private readonly IntPtr _ownerHwnd;
+    private readonly Action<string> _log;
+    private readonly Dictionary<string, ChatPresenceHost> _hosts =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<string, int>> _channels =
+        new(StringComparer.OrdinalIgnoreCase);
 
-    private static string Root =>
-        Path.Combine(AppConfig.Root, "secrets");
-
-    private static string PathFor(string accountId) =>
-        Path.Combine(Root, accountId + ".bin");
-
-    public static string? Load(string accountId)
+    public StreamPresenceManager(
+        CoreWebView2Environment environment,
+        IntPtr ownerHwnd,
+        Action<string> log)
     {
-        try
+        _environment = environment;
+        _ownerHwnd = ownerHwnd;
+        _log = log;
+    }
+
+    public int JoinedChannelCount =>
+        _channels.Values.Sum(c => c.Count);
+
+    public int ConnectedAccountCount =>
+        _channels.Count(p => p.Value.Count > 0);
+
+    public int ConnectedTwitchAccounts =>
+        _hosts.Values.Count(h => h.Service == AccountService.Twitch);
+
+    public int ConnectedKickAccounts =>
+        _hosts.Values.Count(h => h.Service == AccountService.Kick);
+
+    public bool IsAccountConnected(string accountId) =>
+        _channels.TryGetValue(accountId, out var set) && set.Count > 0;
+
+    public bool IsChannelJoined(Account account, string url)
+    {
+        var channel = ChannelSlug(url);
+        return channel is not null &&
+               _channels.TryGetValue(account.Id, out var set) &&
+               set.ContainsKey(channel);
+    }
+
+    public async Task JoinAsync(Account account, string url)
+    {
+        if (!account.IsStream)
+            throw new ArgumentException(
+                "Only Twitch/Kick accounts can join stream chats.",
+                nameof(account));
+
+        var channel = ChannelSlug(url);
+        if (channel is null)
+            throw new ArgumentException(
+                "The URL does not contain a valid Twitch/Kick channel.",
+                nameof(url));
+
+        if (!_channels.TryGetValue(account.Id, out var refs))
         {
-            var protectedBytes = File.ReadAllBytes(PathFor(accountId));
-            return Encoding.UTF8.GetString(Unprotect(protectedBytes));
+            refs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _channels[account.Id] = refs;
         }
-        catch { return null; }
-    }
 
-    public static void Save(string accountId, string token)
-    {
-        Directory.CreateDirectory(Root);
-        File.WriteAllBytes(
-            PathFor(accountId),
-            Protect(Encoding.UTF8.GetBytes(token)));
-    }
+        if (refs.TryGetValue(channel, out var current))
+        {
+            refs[channel] = current + 1;
+            return;
+        }
 
-    public static void Delete(string accountId)
-    {
-        try { File.Delete(PathFor(accountId)); } catch { }
-    }
-
-    private static byte[] Protect(byte[] data)
-    {
-        return CryptProtectData(data, Entropy);
-    }
-
-    private static byte[] Unprotect(byte[] data)
-    {
-        return CryptUnprotectData(data, Entropy);
-    }
-
-    private static byte[] CryptProtectData(byte[] plain, byte[] entropy)
-    {
-        return CryptApi(
-            plain,
-            entropy,
-            protect: true);
-    }
-
-    private static byte[] CryptUnprotectData(byte[] encrypted, byte[] entropy)
-    {
-        return CryptApi(
-            encrypted,
-            entropy,
-            protect: false);
-    }
-
-    private static byte[] CryptApi(byte[] input, byte[] entropy, bool protect)
-    {
-        var inBlob = new DataBlob(input);
-        var entropyBlob = new DataBlob(entropy);
         try
         {
-            DataBlob outBlob = default;
-            var ok = protect
-                ? CryptProtectData(
-                    ref inBlob,
-                    null,
-                    ref entropyBlob,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    0,
-                    ref outBlob)
-                : CryptUnprotectData(
-                    ref inBlob,
-                    IntPtr.Zero,
-                    ref entropyBlob,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    0,
-                    ref outBlob);
+            if (!_hosts.TryGetValue(account.Id, out var host))
+            {
+                host = new ChatPresenceHost(
+                    _environment,
+                    account.Id,
+                    account.Service,
+                    _ownerHwnd,
+                    _log);
 
-            if (!ok)
-                throw new InvalidOperationException(
-                    $"Windows DPAPI failed: {Marshal.GetLastWin32Error()}.");
+                _hosts[account.Id] = host;
+            }
 
+            await host.JoinAsync(channel);
+            refs[channel] = 1;
+
+            _log(
+                $"stream chat joined {account.Service} {account.DisplayLabel}: {channel}");
+        }
+        catch
+        {
+            if (refs.Count == 0)
+                _channels.Remove(account.Id);
+
+            if (_channels.Count == 0 || !_channels.ContainsKey(account.Id))
+            {
+                if (_hosts.Remove(account.Id, out var host))
+                    await host.DisposeAsync();
+            }
+
+            throw;
+        }
+    }
+
+    public async Task LoginAsync(Account account)
+    {
+        if (!account.IsStream)
+            return;
+
+        await BrowserLoginDialog.ShowAsync(
+            _environment,
+            account.Id,
+            AccountManager.LoginUrl(account.Service),
+            $"{account.Service} login",
+            _ownerHwnd,
+            account.Service == AccountService.Twitch
+                ? "https://www.twitch.tv/"
+                : "https://kick.com/");
+
+        if (_hosts.TryGetValue(account.Id, out var host))
+            await host.ReloadAsync();
+
+        _log($"{account.Service} login flow completed for {account.DisplayLabel}");
+    }
+
+    public Task OpenExternallyAsync(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+        }
+        catch (Exception ex)
+        {
+            _log($"external stream open failed: {ex.Message}");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task LeaveAsync(Account account, string url)
+    {
+        var channel = ChannelSlug(url);
+        if (channel is null)
+            return;
+
+        if (!_channels.TryGetValue(account.Id, out var refs) ||
+            !refs.TryGetValue(channel, out var current))
+            return;
+
+        if (current > 1)
+        {
+            refs[channel] = current - 1;
+            return;
+        }
+
+        refs.Remove(channel);
+
+        if (_hosts.TryGetValue(account.Id, out var host))
+            await host.LeaveAsync(channel);
+
+        if (refs.Count == 0)
+        {
+            _channels.Remove(account.Id);
+
+            if (_hosts.Remove(account.Id, out host))
+                await host.DisposeAsync();
+        }
+
+        _log(
+            $"stream chat left {account.Service} {account.DisplayLabel}: {channel}");
+    }
+
+    public async Task ResetAsync()
+    {
+        foreach (var host in _hosts.Values.ToArray())
+            await host.DisposeAsync();
+
+        _hosts.Clear();
+        _channels.Clear();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await ResetAsync();
+    }
+
+    private static string? ChannelSlug(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return null;
+
+        var service = AccountManager.ServiceForUrl(url);
+        if (service is not (AccountService.Twitch or AccountService.Kick))
+            return null;
+
+        var segment = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(segment))
+            return null;
+
+        if (service == AccountService.Twitch)
+        {
+            var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "directory", "downloads", "jobs", "p", "search", "settings",
+                "subscriptions", "wallet", "videos", "video", "popout", "embed"
+            };
+            if (excluded.Contains(segment))
+                return null;
+        }
+        else
+        {
+            var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "categories", "browse", "directory", "following", "search",
+                "settings", "auth", "login", "register", "signup",
+                "video", "videos", "popout"
+            };
+            if (excluded.Contains(segment))
+                return null;
+        }
+
+        return Uri.UnescapeDataString(segment);
+    }
+}
+
+internal sealed class ChatPresenceHost : IAsyncDisposable
+{
+    private readonly CoreWebView2Environment _environment;
+    private readonly string _profileId;
+    private readonly AccountService _service;
+    private readonly IntPtr _ownerHwnd;
+    private readonly Action<string> _log;
+    private readonly HashSet<string> _channels =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private CoreWebView2Controller? _controller;
+    private CoreWebView2? _view;
+    private string? _primaryChannel;
+    private TaskCompletionSource<bool>? _pageReady;
+
+    public AccountService Service => _service;
+
+    public ChatPresenceHost(
+        CoreWebView2Environment environment,
+        string profileId,
+        AccountService service,
+        IntPtr ownerHwnd,
+        Action<string> log)
+    {
+        _environment = environment;
+        _profileId = profileId;
+        _service = service;
+        _ownerHwnd = ownerHwnd;
+        _log = log;
+    }
+
+    public async Task JoinAsync(string channel)
+    {
+        if (_channels.Contains(channel))
+            return;
+
+        if (_controller is null)
+        {
+            _channels.Add(channel);
             try
             {
-                var bytes = new byte[outBlob.cbData];
-                Marshal.Copy(outBlob.pbData, bytes, 0, checked((int)outBlob.cbData));
-                return bytes;
+                await StartAsync(channel);
             }
-            finally
+            catch
             {
-                if (outBlob.pbData != IntPtr.Zero)
-                    LocalFree(outBlob.pbData);
+                _channels.Remove(channel);
+                throw;
             }
+            return;
         }
-        finally
+
+        _channels.Add(channel);
+        try
         {
-            inBlob.Dispose();
-            entropyBlob.Dispose();
+            if (string.Equals(channel, _primaryChannel, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await AddFrameAsync(channel);
+        }
+        catch
+        {
+            _channels.Remove(channel);
+            throw;
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DataBlob
+    public async Task LeaveAsync(string channel)
     {
-        public int cbData;
-        public IntPtr pbData;
+        if (!_channels.Remove(channel))
+            return;
 
-        public DataBlob(byte[] data)
-        {
-            cbData = data.Length;
-            pbData = Marshal.AllocHGlobal(data.Length);
-            Marshal.Copy(data, 0, pbData, data.Length);
-        }
+        if (_controller is null)
+            return;
 
-        public void Dispose()
+        if (string.Equals(channel, _primaryChannel, StringComparison.OrdinalIgnoreCase))
         {
-            if (pbData != IntPtr.Zero)
+            var next = _channels.FirstOrDefault();
+            if (next is null)
             {
-                Marshal.FreeHGlobal(pbData);
-                pbData = IntPtr.Zero;
-                cbData = 0;
+                _primaryChannel = null;
+                return;
             }
+
+            _primaryChannel = next;
+            await NavigatePrimaryAsync(next);
+
+            foreach (var remaining in _channels.Where(x =>
+                         !string.Equals(x, _primaryChannel, StringComparison.OrdinalIgnoreCase)))
+                await AddFrameAsync(remaining);
+
+            return;
         }
+
+        await RemoveFrameAsync(channel);
     }
 
-    [DllImport("crypt32.dll", SetLastError = true)]
-    private static extern bool CryptProtectData(
-        ref DataBlob pDataIn,
-        string? szDataDescr,
-        ref DataBlob pOptionalEntropy,
-        IntPtr pvReserved,
-        IntPtr pPromptStruct,
-        int dwFlags,
-        ref DataBlob pDataOut);
+    public async Task ReloadAsync()
+    {
+        if (_view is null || _primaryChannel is null)
+            return;
 
-    [DllImport("crypt32.dll", SetLastError = true)]
-    private static extern bool CryptUnprotectData(
-        ref DataBlob pDataIn,
-        IntPtr ppszDataDescr,
-        ref DataBlob pOptionalEntropy,
-        IntPtr pReserved,
-        IntPtr pvVerify,
-        int dwFlags,
-        ref DataBlob pDataOut);
+        await NavigatePrimaryAsync(_primaryChannel);
 
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr hMem);
+        foreach (var channel in _channels.Where(x =>
+                     !string.Equals(x, _primaryChannel, StringComparison.OrdinalIgnoreCase)))
+            await AddFrameAsync(channel);
+    }
+
+    private async Task StartAsync(string primaryChannel)
+    {
+        if (_controller is not null)
+            return;
+
+        _primaryChannel = primaryChannel;
+
+        var options = _environment.CreateCoreWebView2ControllerOptions();
+        options.ProfileName = _profileId;
+        options.IsInPrivateModeEnabled = false;
+
+        _controller = await _environment.CreateCoreWebView2ControllerAsync(
+            _ownerHwnd,
+            options);
+
+        _controller.IsVisible = false;
+        _controller.Bounds = new System.Drawing.Rectangle(-10000, -10000, 1, 1);
+
+        _view = _controller.CoreWebView2;
+        _view.Settings.AreDevToolsEnabled = false;
+        _view.Settings.IsStatusBarEnabled = false;
+        _view.Settings.IsZoomControlEnabled = false;
+
+        _view.ProcessFailed += (_, e) =>
+            _log(
+                $"{_service} chat WebView process failed for profile " +
+                $"{_profileId}: {e.ProcessFailedKind}");
+
+        _pageReady = NewReadySource();
+        _view.NavigationCompleted += OnNavigationCompleted;
+
+        _view.Navigate(ChatUrl(_primaryChannel));
+        await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            _view.MemoryUsageTargetLevel =
+                CoreWebView2MemoryUsageTargetLevel.Low;
+        }
+        catch { }
+
+        _log(
+            $"{_service} chat presence host started for {_profileId}; " +
+            $"primary channel {_primaryChannel}");
+    }
+
+    private async Task NavigatePrimaryAsync(string channel)
+    {
+        if (_view is null)
+            return;
+
+        _primaryChannel = channel;
+        _pageReady = NewReadySource();
+        _view.Navigate(ChatUrl(channel));
+        await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    private async Task AddFrameAsync(string channel)
+    {
+        if (_view is null)
+            return;
+
+        var js = $$"""
+(() => {
+  const slug = {{JsonSerializer.Serialize(channel)}};
+  const map = globalThis.__idleshellChatFrames ??= Object.create(null);
+
+  if (map[slug]) return true;
+
+  const frame = document.createElement('iframe');
+  frame.src = {{JsonSerializer.Serialize(ChatUrl(_service, channel))}};
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText =
+    'position:absolute;left:-10000px;top:-10000px;' +
+    'width:1px;height:1px;border:0;opacity:0.01;' +
+    'pointer-events:none;';
+
+  frame.addEventListener('load', () => {
+    try {
+      window.chrome?.webview?.postMessage(JSON.stringify({
+        type: 'chat-presence',
+        service: {{JsonSerializer.Serialize(_service.ToString())}},
+        profile: {{JsonSerializer.Serialize(_profileId)}},
+        channel: slug,
+        state: 'connected'
+      }));
+    } catch (_) {}
+  });
+
+  frame.addEventListener('error', () => {
+    try {
+      window.chrome?.webview?.postMessage(JSON.stringify({
+        type: 'chat-presence',
+        service: {{JsonSerializer.Serialize(_service.ToString())}},
+        profile: {{JsonSerializer.Serialize(_profileId)}},
+        channel: slug,
+        state: 'error'
+      }));
+    } catch (_) {}
+  });
+
+  document.body.appendChild(frame);
+  map[slug] = frame;
+  return true;
+})()
+""";
+
+        await _view.ExecuteScriptAsync(js);
+    }
+
+    private async Task RemoveFrameAsync(string channel)
+    {
+        if (_view is null)
+            return;
+
+        var js = $"globalThis.__idleshellRemoveChatFrame?.({JsonSerializer.Serialize(channel)});";
+        await _view.ExecuteScriptAsync(js);
+    }
+
+    private static string ChatUrl(AccountService service, string channel) =>
+        service switch
+        {
+            AccountService.Twitch =>
+                "https://www.twitch.tv/popout/" +
+                Uri.EscapeDataString(channel) + "/chat",
+            AccountService.Kick =>
+                "https://kick.com/popout/" +
+                Uri.EscapeDataString(channel) + "/chat",
+            _ => throw new ArgumentOutOfRangeException(nameof(service))
+        };
+
+    private static TaskCompletionSource<bool> NewReadySource() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void OnNavigationCompleted(
+        object? sender,
+        CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (_pageReady is null)
+            return;
+
+        if (!e.IsSuccess)
+        {
+            _pageReady.TrySetException(
+                new InvalidOperationException(
+                    $"{_service} chat navigation failed: HTTP {e.HttpStatusCode}."));
+            return;
+        }
+
+        _pageReady.TrySetResult(true);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_view is not null)
+                _view.NavigationCompleted -= OnNavigationCompleted;
+        }
+        catch { }
+
+        try { _controller?.Close(); } catch { }
+
+        _view = null;
+        _controller = null;
+        _channels.Clear();
+        _primaryChannel = null;
+
+        await Task.CompletedTask;
+    }
 }
+
+internal sealed class AuthenticationRequiredException(string message)
+    : Exception(message);
 
 internal sealed class BrowserLoginDialog : Form
 {
