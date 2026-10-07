@@ -338,7 +338,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         json!({
             "id": tree_id,
             "method": "browsingContext.getTree",
-            "params": { "maxDepth": -1 }
+            "params": { "maxDepth": 10 }
         }),
     )?;
 
