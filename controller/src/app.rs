@@ -162,6 +162,7 @@ pub fn run() -> Result<(), String> {
     nwg::AnimationTimer::builder()
         .interval(Duration::from_millis(2000))
         .parent(&window)
+        .active(true)
         .build(&mut health_timer)
         .map_err(|error| format!("could not create health timer: {error}"))?;
 
