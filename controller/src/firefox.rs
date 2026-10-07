@@ -31,9 +31,9 @@ pub fn launch(config: &Config) -> Result<Child, String> {
     provision_profile(&config.profile_dir)?;
 
     Command::new(&config.firefox_executable)
-        .arg("-no-remote")
         .arg("--profile")
         .arg(&config.profile_dir)
+        .arg("--new-window")
         .arg(&config.url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -78,4 +78,30 @@ fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
 
 fn format_spawn_error(error: io::Error) -> String {
     format!("could not start Firefox: {error}")
+}
+
+
+pub fn open_url(config: &Config, url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("refusing to open a non-HTTPS URL".to_string());
+    }
+
+    fs::create_dir_all(&config.profile_dir).map_err(|error| {
+        format!(
+            "could not create profile directory {}: {error}",
+            config.profile_dir.display()
+        )
+    })?;
+
+    Command::new(&config.firefox_executable)
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-tab")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(format_spawn_error)
 }
