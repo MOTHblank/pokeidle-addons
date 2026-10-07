@@ -76,7 +76,12 @@
     }
 
     function channelName(raw) {
-        const url = normalizeChannelUrl(raw);
+        const value = String(raw || '').trim();
+        if (/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+            return value;
+        }
+
+        const url = normalizeChannelUrl(value);
         if (!url) return '';
         return decodeURIComponent(new URL(url).pathname.slice(1));
     }
