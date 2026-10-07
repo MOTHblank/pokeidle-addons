@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      5.1.0
+// @version      5.2.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -540,35 +540,75 @@
 
     async function collectLiveChannelsFromOfficialModals() {
         const collected = new Map(
-            collectLiveChannels().map((channel) => [channel.url, channel])
+            collectRenderedOfficialChannels([
+                'a.tw-canal.ao-vivo[href]',
+                'a.kk-canal.ao-vivo[href]'
+            ]).map((channel) => [channel.url, channel])
         );
 
-        const modalTriggers = [
-            '.tr-ativo.twitch',
-            '.tr-ativo.kick'
+        const targets = [
+            {
+                trigger: 'button.tr-ativo.twitch',
+                body: '#tw-corpo',
+                links: '#tw-corpo a.tw-canal.ao-vivo[href]'
+            },
+            {
+                trigger: 'button.tr-ativo.kick',
+                body: '#kk-corpo',
+                links: '#kk-corpo a.kk-canal.ao-vivo[href]'
+            }
         ];
 
-        for (const selector of modalTriggers) {
-            const trigger = document.querySelector(selector);
+        for (const target of targets) {
+            const trigger = document.querySelector(target.trigger);
 
             if (!trigger) {
                 continue;
             }
 
-            try {
-                trigger.click();
-            } catch (_) {
+            // The Twitch/KICK row itself tells us whether that service has a live
+            // state right now. Skip opening the modal when it is definitely offline.
+            if (
+                target.trigger.includes('.twitch') &&
+                !trigger.classList.contains('tw-aovivo') &&
+                !trigger.classList.contains('tw-ativo')
+            ) {
                 continue;
             }
 
-            for (let attempt = 0; attempt < 12; attempt += 1) {
-                await sleep(100);
+            if (
+                target.trigger.includes('.kick') &&
+                !trigger.classList.contains('kk-aovivo') &&
+                !trigger.classList.contains('kk-ativo')
+            ) {
+                continue;
+            }
 
-                const found = collectRenderedOfficialChannels(
-                    selector.includes('.twitch')
-                        ? ['#tw-corpo a.tw-canal.ao-vivo[href]']
-                        : ['#kk-corpo a.kk-canal.ao-vivo[href]']
-                );
+            let body = document.querySelector(target.body);
+
+            if (!body) {
+                try {
+                    trigger.click();
+                } catch (_) {
+                    continue;
+                }
+
+                for (let attempt = 0; attempt < 20; attempt += 1) {
+                    await sleep(100);
+                    body = document.querySelector(target.body);
+
+                    if (body) {
+                        break;
+                    }
+                }
+            }
+
+            if (!body) {
+                continue;
+            }
+
+            for (let attempt = 0; attempt < 20; attempt += 1) {
+                const found = collectRenderedOfficialChannels([target.links]);
 
                 for (const channel of found) {
                     collected.set(channel.url, channel);
@@ -577,14 +617,18 @@
                 if (found.length) {
                     break;
                 }
+
+                await sleep(150);
             }
 
             const close = document.getElementById('modal-fechar');
-            if (close) {
+
+            if (close && !document.querySelector('#modal')?.classList.contains('hidden')) {
                 try {
                     close.click();
                 } catch (_) {}
-                await sleep(50);
+
+                await sleep(100);
             }
         }
 
@@ -867,7 +911,9 @@
                         ? 'Game not ready'
                         : result.queued > 0
                             ? 'Scanned ' + result.queued + ' live'
-                            : 'No live streams found';
+                            : result.channels.length > 0
+                                ? 'Found live, open failed'
+                                : 'No live streams found';
                 }
             }
 
