@@ -372,7 +372,7 @@ internal sealed class ViolentmonkeyManager
         data: {
           url: __PAGE_URL__,
           top: true,
-          ids: { __SCRIPT_ID__: 1 }
+          ids: {}
         }
       })
     ).then(
@@ -412,10 +412,7 @@ internal sealed class ViolentmonkeyManager
                 "__PAGE_URL__",
                 JsonSerializer.Serialize(pageUrl),
                 StringComparison.Ordinal)
-            .Replace(
-                "__SCRIPT_ID__",
-                scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                StringComparison.Ordinal);
+            ;
 
         await view.ExecuteScriptAsync(request);
 
