@@ -1257,8 +1257,8 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .max_height(410.0)
                 .show(ui, |ui| {
                     for hunt in hunts {
-                        let current = hunt.name.eq_ignore_ascii_case(&health.hunt)
-                            || hunt.slug.eq_ignore_ascii_case(&health.hunt);
+                        let current = !health.hunt_slug.is_empty()
+                            && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug);
 
                         egui::Frame::new()
                             .fill(if current { ACCENT.linear_multiply(0.08) } else { PANEL_ALT })
