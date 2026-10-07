@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.1.1
-// @description  Opens current official Twitch/KICK live chats in background tabs and refreshes the list once per hour.
+// @version      6.2.0
+// @description  Opens current official Twitch chats as lightweight popouts and current KICK streams as regular watch pages in background tabs; refreshes once per hour.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -23,7 +23,7 @@
     const UI_RECHECK_INTERVAL_MS = 30 * 1000;
 
     let scanInProgress = false;
-    const openChats = new Map();
+    const openStreams = new Map();
 
     const excludedTwitch = new Set([
         'directory', 'downloads', 'jobs', 'p', 'search',
@@ -285,13 +285,17 @@
         });
     }
 
-    function openChat(item) {
-        if (!item.chat) {
+    function openStream(item) {
+        // Twitch only needs its popout chat. KICK needs the actual channel page
+        // because its Channel Points are tied to real watch time on the stream.
+        const targetUrl = item.service === 'kick' ? item.url : item.chat;
+
+        if (!targetUrl) {
             return false;
         }
 
         const key = item.service + ':' + text(item.name);
-        const current = openChats.get(key);
+        const current = openStreams.get(key);
 
         if (current && !current.closed) {
             return true;
@@ -303,7 +307,7 @@
                 return false;
             }
 
-            const tab = GM_openInTab(item.chat, {
+            const tab = GM_openInTab(targetUrl, {
                 active: false,
                 insert: true,
                 setParent: true
@@ -313,12 +317,12 @@
                 return false;
             }
 
-            openChats.set(key, tab);
+            openStreams.set(key, tab);
             return true;
         } catch (error) {
             console.error(
                 '[Moth] failed to open chat:',
-                item.chat,
+                targetUrl,
                 error
             );
             return false;
@@ -326,7 +330,7 @@
     }
 
     function closeChatsNotLive(liveKeys) {
-        for (const [key, tab] of [...openChats.entries()]) {
+        for (const [key, tab] of [...openStreams.entries()]) {
             if (tab?.closed || !liveKeys.has(key)) {
                 try {
                     if (!tab?.closed) {
@@ -334,7 +338,7 @@
                     }
                 } catch (_) {}
 
-                openChats.delete(key);
+                openStreams.delete(key);
             }
         }
     }
@@ -356,7 +360,7 @@
             return {
                 channels: [],
                 opened: 0,
-                tracked: openChats.size,
+                tracked: openStreams.size,
                 skipped: true
             };
         }
@@ -368,11 +372,11 @@
             if (!(await waitForGameUi())) {
                 console.info('[Moth] live scan skipped: game UI not ready');
 
-                setScanDiagnostics({ status: 'not-ready', reason, tracked: openChats.size });
+                setScanDiagnostics({ status: 'not-ready', reason, tracked: openStreams.size });
                 return {
                     channels: [],
                     opened: 0,
-                    tracked: openChats.size,
+                    tracked: openStreams.size,
                     notReady: true
                 };
             }
@@ -412,7 +416,7 @@
                 liveKeys.add(key);
                 perService[item.service] += 1;
 
-                if (openChat(item)) {
+                if (openStream(item)) {
                     opened += 1;
                 }
             }
@@ -428,33 +432,33 @@
                 reason,
                 live: live.size,
                 opened,
-                tracked: openChats.size
+                tracked: openStreams.size
             });
 
             console.info(
-                '[Moth] live chat scan:',
+                '[Moth] live stream scan:',
                 reason,
                 live.size,
                 'live channel(s),',
                 opened,
                 'opened/kept,',
-                openChats.size,
+                openStreams.size,
                 'tracked'
             );
 
             return {
                 channels: [...live.values()],
                 opened,
-                tracked: openChats.size
+                tracked: openStreams.size
             };
         } catch (error) {
-            setScanDiagnostics({ status: 'failed', reason, tracked: openChats.size });
-            console.error('[Moth] live chat scan failed:', error);
+            setScanDiagnostics({ status: 'failed', reason, tracked: openStreams.size });
+            console.error('[Moth] live stream scan failed:', error);
 
             return {
                 channels: [],
                 opened: 0,
-                tracked: openChats.size,
+                tracked: openStreams.size,
                 failed: true
             };
         } finally {
@@ -477,10 +481,10 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.title = 'Open current live Twitch/KICK chats';
+        button.title = 'Open current live Twitch streams/KICK watch pages';
         button.setAttribute(
             'aria-label',
-            'Open current live Twitch and KICK chats'
+            'Open current live Twitch and KICK streams'
         );
 
         const style = window.getComputedStyle(inventory);
@@ -553,7 +557,7 @@
             window.addEventListener('load', scheduleInitialScan, { once: true });
         }
 
-        console.info('[Moth] live chat scanner ready · first scan 30s after page load · hourly thereafter');
+        console.info('[Moth] live stream scanner ready · first scan 30s after page load · hourly thereafter');
     }
 
     start();
