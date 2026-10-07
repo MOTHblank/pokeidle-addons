@@ -1006,8 +1006,8 @@ fn draw_game_card(
                             .color(TEXT),
                         );
                     } else if !health.stream_bonus_last.is_empty() {
-                        let last_seen = if health.stream_bonus_last > 0 {
-                            format!(" · {}", format_time(health.stream_bonus_last))
+                        let last_seen = if health.last_game_message_ms > 0 {
+                            format!(" · {}", format_time(health.last_game_message_ms))
                         } else {
                             String::new()
                         };
