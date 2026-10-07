@@ -564,10 +564,10 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     },
                 );
             });
-        });
 
-    ui.add_space(16.0);
-    draw_runtime_section(app, ui);
+            ui.add_space(16.0);
+            draw_runtime_section(app, ui);
+        });
 }
 
 fn draw_game_card(
