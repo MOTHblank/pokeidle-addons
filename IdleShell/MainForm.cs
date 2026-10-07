@@ -345,9 +345,9 @@ internal sealed class MainForm : Form
                     AreBrowserExtensionsEnabled = true
                 });
 
-            // The stream environment is not a video environment anymore. It is
-            // used only for Kick's single chat host per login and temporary
-            // interactive login windows. Twitch chat is native WebSocket/IRC.
+            // The chat environment is not a video environment. It is used only
+            // for one hidden chat host per login and temporary interactive login
+            // windows; no stream video is loaded by Idle Shell.
             _streamEnv = await CoreWebView2Environment.CreateAsync(
                 null, AppConfig.StreamUserDataFolder,
                 new CoreWebView2EnvironmentOptions
@@ -360,8 +360,7 @@ internal sealed class MainForm : Form
             foreach (var spec in session.Where(s => s.Kind == PaneKind.Game))
                 await AddGamePaneAsync(spec);
 
-            // Each game column gets up to 10 Twitch + 10 Kick stream slots.
-            // Each workspace exposes 10 Twitch + 10 Kick slots. Slot numbers are
+            // Each game workspace gets up to 10 Twitch + 10 KICK chat slots. Slot numbers are
             // per service and are UI identities; login profiles are implementation
             // details shown in the tab context menu instead of being tab names.
             _accounts.EnsureStreamAccount(AccountService.Twitch);
@@ -379,7 +378,7 @@ internal sealed class MainForm : Form
             _streams = new StreamPresenceManager(_streamEnv, Handle, Log);
             UpdateWorkspaceHeaders();
 
-            // Stream slots are intentionally fresh each shell session and are not
+            // Chat slots are intentionally fresh each shell session and are not
             // restored; game profiles remain persistent.
             _accounts.Changed += OnAccountsChanged;
 
@@ -389,10 +388,10 @@ internal sealed class MainForm : Form
             if (_probeToggle.Checked) _probeTimer.Start();
             UpdateStatus();
             Log($"startup: {_games.Count} game workspace(s), " +
-                $"{_accounts.StreamAccounts.Count()} stream login(s) × 2 workspaces " +
+                $"{_accounts.StreamAccounts.Count()} chat login(s) × 2 workspaces " +
                 $"({_accounts.EnabledStreamAccounts.Count()} enabled; up to " +
-                $"{AccountManager.MaxStreamsPerService} Twitch + {AccountManager.MaxStreamsPerService} Kick streams per game; " +
-                $"{AccountManager.MaxStreamSlotsPerAccount} streams per login); " +
+                $"{AccountManager.MaxStreamsPerService} Twitch + {AccountManager.MaxStreamsPerService} KICK chats per game; " +
+                $"{AccountManager.MaxStreamSlotsPerAccount} chats per login); " +
                 $"accounts file: {AppConfig.AccountsFile}");
         }
         catch (Exception ex)
