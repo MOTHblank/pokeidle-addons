@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      5.0.0
+// @version      5.1.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -735,12 +735,14 @@
                 save.textContent = 'Save';
                 save.style.cssText = 'padding:4px 7px;cursor:pointer';
 
-                const chat = document.createElement('button');
-                chat.type = 'button';
+                const chat = document.createElement('a');
                 chat.textContent = 'Chat';
-                chat.style.cssText = 'padding:4px 7px;cursor:pointer';
+                chat.target = '_blank';
+                chat.rel = 'noopener noreferrer';
+                chat.style.cssText = 'display:inline-block;box-sizing:border-box;padding:4px 7px;cursor:pointer;text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:2px';
 
-                const close = document.createElement('button');
+                chat.href = chatUrl(config[service][index]) || '#';
+                                const close = document.createElement('button');
                 close.type = 'button';
                 close.textContent = '×';
                 close.title = 'Close chat';
@@ -754,7 +756,9 @@
                     saveStreamConfig(config);
                 });
 
-                chat.addEventListener('click', async () => {
+                chat.addEventListener('mousedown', (event) => {
+                    if (event.button !== 0) return;
+
                     const value = channelName(input.value);
 
                     if (!value) {
@@ -766,31 +770,10 @@
                     config[service][index] = value;
                     input.value = value;
                     saveStreamConfig(config);
-
-                    chat.disabled = true;
-
-                    const result = await openChat(service, index, value, true);
-
-                    chat.textContent = result.opened
-                        ? (result.alreadyOpen ? 'Already open' : 'Opened')
-                        : 'Failed';
-
-                    if (!result.opened && result.error) {
-                        console.error(
-                            '[Moth] chat open failed:',
-                            service,
-                            value,
-                            result.error
-                        );
-                    }
-
-                    window.setTimeout(() => {
-                        chat.textContent = 'Chat';
-                        chat.disabled = false;
-                    }, 1600);
+                    chat.href = chatUrl(value) || '#';
                 });
 
-                close.addEventListener('click', () => {
+                                close.addEventListener('click', () => {
                     closeChat(service, index);
                 });
 
