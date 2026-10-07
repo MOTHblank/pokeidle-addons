@@ -38,15 +38,17 @@ Do not create separate stream-login profiles. Keeping the sessions together is d
 
 The controller does not create hidden stream windows or background browser engines.
 
-When the live-stream userscript finds Twitch/KICK channels, it opens normal browser pages in the already-running game profile. Twitch pages are then reduced by the repository's low-resource userscript. Twitch chat pop-outs continue to use the same profile and login but are not suppressed by the low-resource video rules.
+The stream userscript provides 10 Twitch + 10 KICK chat slots for each game. Those slots open the official chat-only pop-out URLs in the already-running game profile, so the profile's existing Twitch/KICK login is reused. The manager can open or close slots individually or all at once.
 
-The goal is approximately one Firefox instance per game account, with stream resource usage added only while stream tabs are actually open.
+The actual video pages are separate and optional. The normal stream path is chat-only, so 20 configured channels do not mean 20 video decoders.
+
+The goal is approximately one Firefox instance per game account, with stream resource usage coming from chat connections only until video is explicitly requested.
 
 ## Architecture
 
 The controller does not embed a browser, use WebView2, or implement a userscript engine.
 
-PokéIdle runs in normal Firefox processes. An existing userscript manager such as Violentmonkey or Tampermonkey owns the repository's ordinary `*.user.js` files.
+PokéIdle runs in normal Firefox processes. The **official Violentmonkey Firefox extension** owns the repository's ordinary `*.user.js` files; Tampermonkey is also compatible.
 
 The controller is responsible for desktop/process/profile orchestration only.
 
