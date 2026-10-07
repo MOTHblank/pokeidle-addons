@@ -12,6 +12,13 @@
 (() => {
     'use strict';
 
+    try {
+        document.documentElement?.setAttribute(
+            'data-idleshell-stream-scanner',
+            'started'
+        );
+    } catch (_) {}
+
     const page =
         typeof unsafeWindow !== 'undefined'
             ? unsafeWindow
