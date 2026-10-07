@@ -11,6 +11,8 @@ path = "src/main.rs"
 [dependencies]
 native-windows-gui = "1.0.13"
 winapi = { version = "0.3.9", features = ["winuser"] }
+serde_json = "1.0"
+tungstenite = "0.30"
 
 [profile.release]
 lto = true
