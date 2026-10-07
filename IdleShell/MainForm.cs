@@ -8,6 +8,15 @@ internal sealed class MainForm : Form
     private readonly Panel _toolbar;
     private readonly Label _status = new()
         { AutoSize = true, Padding = new Padding(3, 4, 3, 0), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+    private readonly Label _userscriptStatus = new()
+    {
+        AutoSize = false,
+        Width = 235,
+        Height = 28,
+        Text = "Userscripts: starting…",
+        TextAlign = ContentAlignment.MiddleLeft,
+        Padding = new Padding(3, 0, 3, 0)
+    };
     private readonly ComboBox _addonsPicker = new()
         { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
 
@@ -274,6 +283,7 @@ internal sealed class MainForm : Form
             Button("Collapse streams", (_, _) => SetAllStreamsBackground()),
             _addonsPicker,
             _probeToggle,
+            _userscriptStatus,
             _status
         };
 
@@ -321,6 +331,8 @@ internal sealed class MainForm : Form
 
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new ViolentmonkeyManager(addonsFolder);
+            _userscriptStatus.Text =
+                $"Userscripts: VM {_userscripts.ScriptNames.Count} bundled script(s), waiting…";
             Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.ScriptNames.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
@@ -396,6 +408,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
+            _userscriptStatus.Text = "Userscripts: startup failed";
             _status.Text = "Startup failed";
             MessageBox.Show(this, ex.ToString(), "Idle Shell startup failure",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -966,7 +979,8 @@ internal sealed class MainForm : Form
     {
         if (msg.Type == "userscript-ready")
         {
-            Log($"userscript ready: {msg.Source} ({pane.Spec.Profile})");
+            _userscriptStatus.Text =
+                $"Userscripts: running · {msg.Source} · Game {WorkspaceForPane(pane)?.Index + 1 ?? 0}";
             return;
         }
 
