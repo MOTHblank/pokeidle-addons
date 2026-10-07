@@ -308,11 +308,11 @@
         return candidates;
     }
 
-    function openThroughIdleShell(url) {
+    function joinThroughIdleShell(url) {
         try {
             if (
                 typeof page.__idleshell_openLink === 'function' &&
-                page.__idleshell_openLink(url, 'stream-auto-open')
+                page.__idleshell_openLink(url, 'live-chat-presence')
             ) {
                 return true;
             }
@@ -324,7 +324,7 @@
                     JSON.stringify({
                         type: 'link',
                         url,
-                        source: 'stream-auto-open'
+                        source: 'live-chat-presence'
                     })
                 );
                 return true;
@@ -334,8 +334,8 @@
         return false;
     }
 
-    function openStream(url) {
-        if (openThroughIdleShell(url)) {
+    function joinChat(url) {
+        if (joinThroughIdleShell(url)) {
             return true;
         }
 
@@ -357,7 +357,7 @@
 
         const now = Date.now();
         const candidates = collectCandidates();
-        let opened = 0;
+        let joined = 0;
 
         for (const [url, candidate] of candidates) {
             const previous = streamState.get(url) || {
@@ -375,7 +375,7 @@
 
             if (!candidate.live) {
                 previous.live = false;
-                previous.opened = false;
+                previous.joined = false;
                 streamState.set(url, previous);
                 continue;
             }
@@ -384,12 +384,12 @@
 
             if (
                 (!wasLive || isNewOrReset) &&
-                !previous.opened &&
-                opened < MAX_AUTO_OPEN_PER_SCAN
+                !previous.joined &&
+                joined < MAX_AUTO_OPEN_PER_SCAN
             ) {
-                if (openStream(url)) {
+                if (joinChat(url)) {
                     previous.opened = true;
-                    opened += 1;
+                    joined += 1;
                     console.info(
                         '[IdleShell] joined live chat:',
                         url
@@ -411,11 +411,11 @@
             }
         }
 
-        if (opened > 0) {
+        if (joined > 0) {
             console.info(
                 '[IdleShell] live chat scan joined',
-                opened,
-                'stream(s)'
+                joined,
+                'chat(s)'
             );
         }
     }
