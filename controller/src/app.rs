@@ -28,9 +28,11 @@ pub fn run() -> Result<(), String> {
     let mut subtitle = nwg::Label::default();
     let mut game1_label = nwg::Label::default();
     let mut game1_status = nwg::Label::default();
+    let mut game1_details = nwg::Label::default();
     let mut game1_button = nwg::Button::default();
     let mut game2_label = nwg::Label::default();
     let mut game2_status = nwg::Label::default();
+    let mut game2_details = nwg::Label::default();
     let mut game2_button = nwg::Button::default();
     let mut launch_both_button = nwg::Button::default();
     let mut accounts_button = nwg::Button::default();
@@ -42,7 +44,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-        .size((520, 390))
+        .size((820, 560))
         .position((500, 300))
         .title("Moth · PokéIdle")
         .build(&mut window)
@@ -52,7 +54,7 @@ pub fn run() -> Result<(), String> {
         .text("Moth · PokéIdle")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 20))
-        .size((470, 34))
+        .size((760, 34))
         .parent(&window)
         .build(&mut title)
         .map_err(|error| format!("could not create title: {error}"))?;
@@ -61,7 +63,7 @@ pub fn run() -> Result<(), String> {
         .text("2 isolated profiles · shared Twitch/KICK logins · low overhead")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 56))
-        .size((470, 28))
+        .size((760, 28))
         .parent(&window)
         .build(&mut subtitle)
         .map_err(|error| format!("could not create subtitle: {error}"))?;
@@ -79,15 +81,24 @@ pub fn run() -> Result<(), String> {
         .text("Not running")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((116, 104))
-        .size((180, 28))
+        .size((430, 28))
         .parent(&window)
         .build(&mut game1_status)
         .map_err(|error| format!("could not create Game 1 status: {error}"))?;
 
+    nwg::Label::builder()
+        .text("Game details")
+        .flags(nwg::LabelFlags::VISIBLE)
+        .position((116, 132))
+        .size((430, 22))
+        .parent(&window)
+        .build(&mut game1_details)
+        .map_err(|error| format!("could not create Game 1 details: {error}"))?;
+
     nwg::Button::builder()
         .text("Launch Game 1")
-        .position((315, 98))
-        .size((160, 36))
+        .position((610, 98))
+        .size((180, 36))
         .parent(&window)
         .build(&mut game1_button)
         .map_err(|error| format!("could not create Game 1 button: {error}"))?;
@@ -95,7 +106,7 @@ pub fn run() -> Result<(), String> {
     nwg::Label::builder()
         .text("GAME 2")
         .flags(nwg::LabelFlags::VISIBLE)
-        .position((24, 160))
+        .position((24, 194))
         .size((90, 28))
         .parent(&window)
         .build(&mut game2_label)
@@ -104,23 +115,32 @@ pub fn run() -> Result<(), String> {
     nwg::Label::builder()
         .text("Not running")
         .flags(nwg::LabelFlags::VISIBLE)
-        .position((116, 160))
-        .size((180, 28))
+        .position((116, 194))
+        .size((430, 28))
         .parent(&window)
         .build(&mut game2_status)
         .map_err(|error| format!("could not create Game 2 status: {error}"))?;
 
     nwg::Button::builder()
         .text("Launch Game 2")
-        .position((315, 154))
-        .size((160, 36))
+        .position((610, 188))
+        .size((180, 36))
         .parent(&window)
         .build(&mut game2_button)
         .map_err(|error| format!("could not create Game 2 button: {error}"))?;
 
+    nwg::Label::builder()
+        .text("Game details")
+        .flags(nwg::LabelFlags::VISIBLE)
+        .position((116, 222))
+        .size((430, 22))
+        .parent(&window)
+        .build(&mut game2_details)
+        .map_err(|error| format!("could not create Game 2 details: {error}"))?;
+
     nwg::Button::builder()
         .text("Launch Both")
-        .position((24, 220))
+        .position((24, 278))
         .size((145, 38))
         .parent(&window)
         .build(&mut launch_both_button)
@@ -128,7 +148,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Button::builder()
         .text("Open Logs")
-        .position((180, 220))
+        .position((180, 278))
         .size((145, 38))
         .parent(&window)
         .build(&mut logs_button)
@@ -136,7 +156,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Button::builder()
         .text("Accounts")
-        .position((24, 268))
+        .position((24, 326))
         .size((145, 38))
         .parent(&window)
         .build(&mut accounts_button)
@@ -144,7 +164,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Button::builder()
         .text("Open Profiles")
-        .position((180, 268))
+        .position((180, 326))
         .size((145, 38))
         .parent(&window)
         .build(&mut profiles_button)
@@ -152,7 +172,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Button::builder()
         .text("Close")
-        .position((336, 268))
+        .position((336, 326))
         .size((139, 38))
         .parent(&window)
         .build(&mut close_button)
@@ -166,8 +186,8 @@ pub fn run() -> Result<(), String> {
     nwg::Label::builder()
         .text("Starting…")
         .flags(nwg::LabelFlags::VISIBLE)
-        .position((24, 328))
-        .size((450, 40))
+        .position((24, 470))
+        .size((760, 40))
         .parent(&window)
         .build(&mut status)
         .map_err(|error| format!("could not create status: {error}"))?;
@@ -207,8 +227,8 @@ pub fn run() -> Result<(), String> {
             match event {
                 Event::OnNotice if handle == health_notice_handle => {
                     let state = state_for_health.borrow();
-                    update_health_label(state.game1_monitor.as_ref(), &game1_status);
-                    update_health_label(state.game2_monitor.as_ref(), &game2_status);
+                    update_health_label(state.game1_monitor.as_ref(), &game1_status, &game1_details);
+                    update_health_label(state.game2_monitor.as_ref(), &game2_status, &game2_details);
                 }
                 Event::OnWindowClose => {
                     if handle == window_handle {
@@ -416,17 +436,15 @@ fn stop_one(
 fn update_health_label(
     monitor: Option<&monitor::MonitorHandle>,
     label: &nwg::Label,
+    details: &nwg::Label,
 ) {
     let Some(monitor) = monitor else {
         return;
     };
 
     let health = monitor.health();
-    label.set_text(&format!(
-        "{} · {}",
-        health.state,
-        health.summary()
-    ));
+    label.set_text(&health.summary());
+    details.set_text(&health.details());
 }
 
 fn open_logs(status: &nwg::Label) {
