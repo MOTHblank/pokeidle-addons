@@ -88,6 +88,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
         }
 
         ChatPresenceHost? host = null;
+        var createdHost = false;
         try
         {
             if (!_hosts.TryGetValue(account.Id, out host))
@@ -99,6 +100,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
                     _ownerHwnd,
                     _log);
                 _hosts[account.Id] = host;
+                createdHost = true;
             }
 
             await host.JoinAsync(channel);
@@ -112,7 +114,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
             if (refs.Count == 0)
                 _channels.Remove(account.Id);
 
-            if (_hosts.Remove(account.Id, out host))
+            if (createdHost && _hosts.Remove(account.Id, out host))
                 await host.DisposeAsync();
 
             throw;
@@ -136,6 +138,10 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
 
         if (_hosts.TryGetValue(account.Id, out var host))
             await host.ReloadAsync();
+        else
+            _log(
+                $"{account.Service} login completed for {account.DisplayLabel}; " +
+                "no active chat host needed a reload.");
 
         _log(
             $"{account.Service} login flow completed for {account.DisplayLabel}; " +
