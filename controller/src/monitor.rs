@@ -1,11 +1,16 @@
 use crate::logging;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::TcpStream;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 use std::time::Duration;
-use tungstenite::{connect, Message, WebSocket};
+use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
+
+type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[derive(Clone, Debug)]
 pub struct Health {
@@ -33,11 +38,26 @@ impl Health {
         match self.state.as_str() {
             "Running" => format!(
                 "{} · {} · {}",
-                if self.game_ready { "game UI OK" } else { "game UI waiting" },
-                if self.title.is_empty() { "no title" } else { &self.title },
-                if self.url.is_empty() { "no URL" } else { &self.url }
+                if self.game_ready {
+                    "game UI OK"
+                } else {
+                    "game UI waiting"
+                },
+                if self.title.is_empty() {
+                    "no title"
+                } else {
+                    &self.title
+                },
+                if self.url.is_empty() {
+                    "no URL"
+                } else {
+                    &self.url
+                }
             ),
-            _ => self.last_error.clone().unwrap_or_else(|| self.state.clone()),
+            _ => self
+                .last_error
+                .clone()
+                .unwrap_or_else(|| self.state.clone()),
         }
     }
 }
@@ -69,53 +89,90 @@ impl MonitorHandle {
     }
 }
 
+struct BrowserSession {
+    socket: BrowserSocket,
+    context: String,
+}
+
 fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
+    let mut session: Option<BrowserSession> = None;
+
     loop {
         if stop.load(Ordering::Relaxed) {
-            logging::info(&format!("BiDi monitor on port {} stopped", port));
+            logging::info(&format!("BiDi monitor on port {} stopping", port));
+            end_session(&mut session);
             break;
         }
 
-        match probe_browser(port) {
-            Ok(probe) => {
-                if let Ok(mut current) = health.lock() {
-                    current.state = "Running".to_string();
-                    current.url = probe.url;
-                    current.title = probe.title;
-                    current.game_ready = probe.game_ready;
-                    current.last_error = None;
+        if session.is_none() {
+            match open_session(port) {
+                Ok(browser_session) => {
+                    logging::info(&format!("BiDi session established on port {}", port));
+                    session = Some(browser_session);
+
+                    if let Ok(mut current) = health.lock() {
+                        current.state = "Running".to_string();
+                        current.last_error = None;
+                    }
+                }
+                Err(error) => {
+                    logging::warn(&format!(
+                        "BiDi session setup on port {} failed: {}",
+                        port, error
+                    ));
+
+                    if let Ok(mut current) = health.lock() {
+                        current.state = "Connecting".to_string();
+                        current.last_error = Some(error);
+                        current.game_ready = false;
+                    }
                 }
             }
-            Err(error) => {
-                logging::warn(&format!("BiDi probe on port {} failed: {}", port, error));
-                if let Ok(mut current) = health.lock() {
-                    current.state = "Connecting".to_string();
-                    current.last_error = Some(error);
-                    current.game_ready = false;
+        }
+
+        if let Some(browser_session) = session.as_mut() {
+            match probe_page(browser_session) {
+                Ok(probe) => {
+                    if let Ok(mut current) = health.lock() {
+                        current.state = "Running".to_string();
+                        current.url = probe.url;
+                        current.title = probe.title;
+                        current.game_ready = probe.game_ready;
+                        current.last_error = None;
+                    }
+                }
+                Err(error) => {
+                    logging::warn(&format!(
+                        "BiDi page probe on port {} failed: {}",
+                        port, error
+                    ));
+
+                    if let Ok(mut current) = health.lock() {
+                        current.state = "Reconnecting".to_string();
+                        current.last_error = Some(error);
+                        current.game_ready = false;
+                    }
+
+                    end_session(&mut session);
                 }
             }
         }
 
         for _ in 0..50 {
-            if stop.load(Ordering::Relaxed) { break; }
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
             thread::sleep(Duration::from_millis(100));
-        }
-
-        if stop.load(Ordering::Relaxed) {
-            logging::info(&format!("BiDi monitor on port {} stopping", port));
-            break;
         }
     }
 }
 
-struct Probe {
-    url: String,
-    title: String,
-    game_ready: bool,
-}
+fn open_session(port: u16) -> Result<BrowserSession, String> {
+    logging::info(&format!(
+        "connecting to Firefox BiDi on 127.0.0.1:{}",
+        port
+    ));
 
-fn probe_browser(port: u16) -> Result<Probe, String> {
-    logging::info(&format!("connecting to Firefox BiDi on 127.0.0.1:{port}"));
     let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
         .map_err(|error| error.to_string())?;
 
@@ -146,8 +203,13 @@ fn probe_browser(port: u16) -> Result<Probe, String> {
         .and_then(|v| v.first())
         .and_then(|v| v.get("context"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "Firefox returned no browsing context".to_string())?;
+        .ok_or_else(|| "Firefox returned no browsing context".to_string())?
+        .to_string();
 
+    Ok(BrowserSession { socket, context })
+}
+
+fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     let expression = r#"JSON.stringify({
         url: location.href,
         title: document.title,
@@ -155,14 +217,14 @@ fn probe_browser(port: u16) -> Result<Probe, String> {
     })"#;
 
     let result = send_and_wait(
-        &mut socket,
+        &mut session.socket,
         3,
         json!({
             "id": 3,
             "method": "script.evaluate",
             "params": {
                 "expression": expression,
-                "target": { "context": context },
+                "target": { "context": session.context },
                 "awaitPromise": false
             }
         }),
@@ -179,10 +241,45 @@ fn probe_browser(port: u16) -> Result<Probe, String> {
         serde_json::from_str(raw).map_err(|error| format!("invalid page probe: {error}"))?;
 
     Ok(Probe {
-        url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
-        title: page.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-        game_ready: page.get("gameReady").and_then(Value::as_bool).unwrap_or(false),
+        url: page
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        title: page
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        game_ready: page
+            .get("gameReady")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
+}
+
+fn end_session(session: &mut Option<BrowserSession>) {
+    let Some(mut session) = session.take() else {
+        return;
+    };
+
+    let _ = send_and_wait(
+        &mut session.socket,
+        4,
+        json!({
+            "id": 4,
+            "method": "session.end",
+            "params": {}
+        }),
+    );
+
+    let _ = session.socket.close(None);
+}
+
+struct Probe {
+    url: String,
+    title: String,
+    game_ready: bool,
 }
 
 fn send_and_wait<S>(
@@ -204,8 +301,8 @@ where
             continue;
         };
 
-        let value: Value =
-            serde_json::from_str(text.as_ref()).map_err(|error| format!("invalid BiDi JSON: {error}"))?;
+        let value: Value = serde_json::from_str(text.as_ref())
+            .map_err(|error| format!("invalid BiDi JSON: {error}"))?;
 
         if value.get("id").and_then(Value::as_u64) != Some(expected_id) {
             continue;
