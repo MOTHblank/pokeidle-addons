@@ -13,6 +13,21 @@
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
+    function reportReady() {
+        try {
+            if (page.chrome?.webview?.postMessage) {
+                page.chrome.webview.postMessage(
+                    JSON.stringify({
+                        type: 'userscript-ready',
+                        source: 'PokéIdle Moth Watch',
+                        pane: String(page.__idleshell_hostInfo?.title || ''),
+                        profile: String(page.__idleshell_hostInfo?.profile || '')
+                    })
+                );
+            }
+        } catch {}
+    }
+
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
@@ -1882,6 +1897,7 @@
     }
 
     function bootstrap() {
+        reportReady();
         installSocketHook();
         injectStyle();
 
