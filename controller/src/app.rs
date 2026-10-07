@@ -504,7 +504,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         );
         ui.add_space(8.0);
         ui.label(
-            RichText::new("Two isolated browser profiles")
+            RichText::new("Live state for both isolated Firefox profiles")
                 .size(11.0)
                 .color(DIM),
         );
@@ -512,20 +512,20 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     ui.add_space(12.0);
 
-    let available = ui.available_width();
-    let gap = 14.0;
-    let card_width = ((available - gap) / 2.0).max(320.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.columns(2, |columns| {
+                draw_game_card(app, &mut columns[0], 0);
+                draw_game_card(app, &mut columns[1], 1);
+            });
 
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
-
-        for index in 0..2 {
-            draw_game_card(app, ui, index, card_width);
-        }
-    });
+            ui.add_space(16.0);
+            draw_runtime_section(app, ui);
+        });
 }
 
-fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
+fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     let profile = app.games[index].profile;
     let health = app.games[index].health();
     let running = app.games[index].is_running();
@@ -534,28 +534,26 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, widt
         .fill(PANEL)
         .stroke(Stroke::new(1.0, BORDER))
         .corner_radius(12.0)
-        .inner_margin(15.0)
+        .inner_margin(16.0)
         .show(ui, |ui| {
-            ui.set_width(width - 30.0);
-
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(profile.label())
-                        .font(FontId::proportional(13.0))
+                        .size(14.0)
                         .strong()
                         .color(TEXT),
                 );
-                ui.add_space(7.0);
+
+                ui.add_space(8.0);
                 status_badge(ui, &health, running);
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
+                    let button_text = if running { "Stop" } else { "Launch" };
+                    let clicked = ui
                         .add_sized(
-                            [78.0, 28.0],
+                            [84.0, 30.0],
                             egui::Button::new(
-                                RichText::new(if running { "Stop" } else { "Launch" })
-                                    .size(11.0)
-                                    .strong(),
+                                RichText::new(button_text).size(11.0).strong(),
                             )
                             .fill(if running {
                                 BAD.linear_multiply(0.18)
@@ -564,16 +562,13 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, widt
                             })
                             .stroke(Stroke::new(
                                 1.0,
-                                if running {
-                                    BAD.linear_multiply(0.55)
-                                } else {
-                                    ACCENT
-                                },
+                                if running { BAD.linear_multiply(0.55) } else { ACCENT },
                             ))
                             .corner_radius(7.0),
                         )
-                        .clicked()
-                    {
+                        .clicked();
+
+                    if clicked {
                         if running {
                             app.stop_one(profile);
                         } else {
@@ -583,57 +578,204 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, widt
                 });
             });
 
-            ui.add_space(12.0);
-
-            ui.label(
-                RichText::new(compact_text(&health.summary(), 60))
-                    .font(FontId::proportional(21.0))
-                    .strong()
-                    .color(TEXT),
-            );
-
-            ui.add_space(3.0);
-
-            ui.label(
-                RichText::new(compact_text(&health.details(), 76))
-                    .size(11.0)
-                    .color(MUTED),
-            );
-
-            ui.add_space(15.0);
+            ui.add_space(14.0);
 
             egui::Frame::new()
                 .fill(PANEL_ALT)
-                .corner_radius(9.0)
-                .inner_margin(10.0)
+                .corner_radius(10.0)
+                .inner_margin(Margin::symmetric(12, 10))
                 .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            if health.activity == "Hunting" {
+                                "CURRENT ACTIVITY"
+                            } else {
+                                "STATE"
+                            },
+                        )
+                        .size(9.0)
+                        .strong()
+                        .color(DIM),
+                    );
+
+                    ui.add_space(3.0);
+
+                    let headline = match health.activity.as_str() {
+                        "Hunting" if !health.hunt.is_empty() => {
+                            format!("{} · {}", profile_label(&health), compact_text(&health.hunt, 30))
+                        }
+                        "Hunting" => "Hunting".to_string(),
+                        "Center" => "Online · Center".to_string(),
+                        "Login" => "Waiting for login".to_string(),
+                        _ => health.summary(),
+                    };
+
+                    ui.label(
+                        RichText::new(compact_text(&headline, 52))
+                            .size(18.0)
+                            .strong()
+                            .color(TEXT),
+                    );
+
+                    if !health.active_pokemon.is_empty() {
+                        ui.add_space(3.0);
+                        ui.label(
+                            RichText::new(compact_text(&health.active_pokemon, 54))
+                                .size(11.0)
+                                .color(MUTED),
+                        );
+                    }
+
+                    ui.add_space(9.0);
+
                     ui.horizontal(|ui| {
-                        metric(ui, "HUNT", if health.hunt.is_empty() { "—" } else { &health.hunt });
-                        metric(ui, "FALLEN", &health.fallen_count.to_string());
-                        metric(ui, "FPS", if health.performance_fps.is_empty() { "—" } else { &health.performance_fps });
-                        metric(ui, "SCENE", if health.performance_scene_runs.is_empty() { "—" } else { &health.performance_scene_runs });
+                        mini_metric(ui, "LEVEL", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
+                        mini_metric(ui, "XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
+                        mini_metric(ui, "FALLEN", &health.fallen_count.to_string());
                     });
                 });
 
             ui.add_space(12.0);
 
-            let addon_fraction = if health.addon_total == 0 {
-                0.0
-            } else {
-                f32::from(health.addon_ok) / f32::from(health.addon_total)
-            };
+            ui.label(
+                RichText::new("RESOURCES")
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
+
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .corner_radius(10.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    if health.ball_stock.is_empty() {
+                        ui.label(RichText::new("Pokéballs: unavailable").size(11.0).color(MUTED));
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            for item in &health.ball_stock {
+                                resource_chip(ui, item);
+                            }
+                        });
+                    }
+
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        resource_value(
+                            ui,
+                            "AUTO CATCH",
+                            if health.autocatch_on { "ON" } else { "OFF" },
+                            if health.autocatch_on { GOOD } else { MUTED },
+                        );
+                        resource_value(
+                            ui,
+                            "USED",
+                            &health.autocatch_balls_used.to_string(),
+                            TEXT,
+                        );
+                        resource_value(
+                            ui,
+                            "CAPTURES",
+                            &health.autocatch_captures.to_string(),
+                            TEXT,
+                        );
+                        resource_value(
+                            ui,
+                            "SUCCESS",
+                            if health.autocatch_rate.is_empty() { "—" } else { &health.autocatch_rate },
+                            TEXT,
+                        );
+                    });
+                });
+
+            ui.add_space(12.0);
+
+            ui.label(
+                RichText::new("AUTOMATION")
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
+
+            ui.horizontal_wrapped(|ui| {
+                automation_badge(ui, "Auto Catch", if health.autocatch_on { "Active" } else { "Off" }, health.autocatch_on);
+                automation_badge(
+                    ui,
+                    "Restock",
+                    if health.autocatch_restock.is_empty() { "Off" } else { &health.autocatch_restock },
+                    health.autocatch_on && !health.autocatch_restock.eq_ignore_ascii_case("off"),
+                );
+                automation_badge(
+                    ui,
+                    "Stream scanner",
+                    if health.stream_scan_status.is_empty() {
+                        "Waiting"
+                    } else {
+                        &health.stream_scan_status
+                    },
+                    health.stream_scan_status.eq_ignore_ascii_case("ok"),
+                );
+                if health.stream_scan_live > 0 || health.stream_scan_opened > 0 {
+                    automation_badge(
+                        ui,
+                        "Streams",
+                        &format!("{} live · {} opened", health.stream_scan_live, health.stream_scan_opened),
+                        true,
+                    );
+                }
+                automation_badge(ui, "Performance+", if health.performance_fps.is_empty() { "Loaded" } else { &format!("{} FPS", health.performance_fps) }, true);
+            });
+
+            if !health.xp_bonuses.is_empty() {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new("XP BONUSES")
+                        .size(9.0)
+                        .strong()
+                        .color(DIM),
+                );
+                ui.add_space(6.0);
+
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .corner_radius(10.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for bonus in &health.xp_bonuses {
+                                bonus_chip(ui, bonus);
+                            }
+                        });
+                    });
+            }
+
+            ui.add_space(12.0);
 
             ui.horizontal(|ui| {
+                let addon_color = if health.addon_ok == health.addon_total {
+                    GOOD
+                } else {
+                    WARN
+                };
+
                 ui.label(
-                    RichText::new(format!("Addons {}/{}", health.addon_ok, health.addon_total))
-                        .size(11.0)
+                    RichText::new(format!("ADDONS {}/{}", health.addon_ok, health.addon_total))
+                        .size(10.0)
                         .strong()
-                        .color(if health.addon_ok == health.addon_total {
-                            GOOD
-                        } else {
-                            WARN
-                        }),
+                        .color(addon_color),
                 );
+
+                if !health.addon_missing.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Missing: {}", health.addon_missing.join(" · ")))
+                            .size(10.0)
+                            .color(WARN),
+                    );
+                }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if health.twitch_tabs > 0 {
@@ -648,40 +790,75 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, widt
                     }
                 });
             });
-
-            ui.add(
-                egui::ProgressBar::new(addon_fraction)
-                    .desired_height(5.0)
-                    .fill(if health.addon_ok == health.addon_total {
-                        GOOD
-                    } else {
-                        WARN
-                    })
-                    .show_percentage(),
-            );
-
-            if !health.addon_missing.is_empty() {
-                ui.add_space(5.0);
-                ui.label(
-                    RichText::new(format!(
-                        "Missing: {}",
-                        health.addon_missing.join(" · ")
-                    ))
-                    .size(10.0)
-                    .color(WARN),
-                );
-            }
-
-            if !health.active_pokemon.is_empty() {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(compact_text(&health.active_pokemon, 78))
-                        .size(10.0)
-                        .color(DIM),
-                );
-            }
         });
 }
+
+fn profile_label(health: &Health) -> String {
+    if !health.active_pokemon.is_empty() {
+        compact_text(&health.active_pokemon, 30)
+    } else {
+        "Hunting".to_string()
+    }
+}
+
+fn mini_metric(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.vertical(|ui| {
+        ui.label(RichText::new(label).size(8.0).strong().color(DIM));
+        ui.label(RichText::new(compact_text(value, 18)).size(11.0).strong().color(TEXT));
+    });
+    ui.add_space(16.0);
+}
+
+fn resource_chip(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(7.0)
+        .inner_margin(Margin::symmetric(9, 6))
+        .show(ui, |ui| {
+            ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT));
+        });
+}
+
+fn resource_value(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
+    ui.vertical(|ui| {
+        ui.label(RichText::new(label).size(8.0).strong().color(DIM));
+        ui.label(RichText::new(compact_text(value, 18)).size(10.0).strong().color(color));
+    });
+    ui.add_space(14.0);
+}
+
+fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
+    egui::Frame::new()
+        .fill(if good { GOOD.linear_multiply(0.08) } else { PANEL_ALT })
+        .stroke(Stroke::new(1.0, if good { GOOD.linear_multiply(0.28) } else { BORDER }))
+        .corner_radius(7.0)
+        .inner_margin(Margin::symmetric(9, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("● {}", label))
+                        .size(9.0)
+                        .strong()
+                        .color(if good { GOOD } else { MUTED }),
+                );
+                ui.add_space(4.0);
+                ui.label(RichText::new(compact_text(value, 24)).size(9.0).color(TEXT));
+            });
+        });
+}
+
+fn bonus_chip(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new()
+        .fill(ACCENT.linear_multiply(0.10))
+        .stroke(Stroke::new(1.0, ACCENT.linear_multiply(0.28)))
+        .corner_radius(7.0)
+        .inner_margin(Margin::symmetric(9, 6))
+        .show(ui, |ui| {
+            ui.label(RichText::new(compact_text(text, 38)).size(10.0).strong().color(TEXT));
+        });
+}
+
 
 fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
@@ -720,7 +897,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, "Firefox", "Headless", GOOD);
                 runtime_chip(ui, "BiDi", "Active", GOOD);
                 runtime_chip(ui, "Profiles", "2 isolated", MUTED);
-                runtime_chip(ui, "Stream chat", "Auto-open hourly", MUTED);
+                runtime_chip(ui, "Stream chat", "First scan 30s · hourly", MUTED);
                 runtime_chip(ui, "UI repaint", "1 sec", MUTED);
             });
         });
