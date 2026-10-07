@@ -174,7 +174,7 @@ internal sealed class ViolentmonkeyManager
         const string legacyName = "IdleShell Link Router (pokeidle.io)";
         const string legacyNamespace = "moth.pokeidle";
 
-        var request = $"""
+        var request = """
 (() => {
   const state = { removed: false, id: null };
   return Promise.resolve(
