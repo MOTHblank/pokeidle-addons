@@ -7,6 +7,9 @@
 **/out/
 **/publish/
 
+# Rust build output
+**/target/
+
 # Local IDE files
 *.user
 *.suo
