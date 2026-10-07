@@ -602,7 +602,7 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
 
                     let headline = match health.activity.as_str() {
                         "Hunting" if !health.hunt.is_empty() => {
-                            format!("{} · {}", profile_label(&health), compact_text(&health.hunt, 30))
+                            format!("Hunting · {}", compact_text(&health.hunt, 34))
                         }
                         "Hunting" => "Hunting".to_string(),
                         "Center" => "Online · Center".to_string(),
@@ -791,14 +791,6 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 });
             });
         });
-}
-
-fn profile_label(health: &Health) -> String {
-    if !health.active_pokemon.is_empty() {
-        compact_text(&health.active_pokemon, 30)
-    } else {
-        "Hunting".to_string()
-    }
 }
 
 fn mini_metric(ui: &mut egui::Ui, label: &str, value: &str) {
