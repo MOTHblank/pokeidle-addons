@@ -329,9 +329,39 @@
         }
     }
 
-    function closeStreamsNotLive(liveKeys) {
+    function rewardedTwitchKeys() {
+        // A stream can be actively rewarding even when the current live-stream
+        // list does not contain it (for example while PokéIdle is refreshing
+        // its stream data). Never close a Twitch tab that the game reports as
+        // currently being watched for rewards.
+        try {
+            const bridge = window.__mothControllerBridgeV1;
+            const snapshot = bridge && typeof bridge.snapshot === 'function'
+                ? bridge.snapshot()
+                : null;
+            const watching = snapshot?.state?.twitch?.assistindoEm;
+
+            if (!Array.isArray(watching)) {
+                return new Set();
+            }
+
+            return new Set(
+                watching
+                    .map(channelName)
+                    .filter(Boolean)
+                    .map(name => 'twitch:' + text(name))
+            );
+        } catch (_) {
+            return new Set();
+        }
+    }
+
+    function closeStreamsNotLive(liveKeys, protectedKeys = new Set()) {
         for (const [key, tab] of [...openStreams.entries()]) {
-            if (tab?.closed || !liveKeys.has(key)) {
+            if (
+                tab?.closed ||
+                (!liveKeys.has(key) && !protectedKeys.has(key))
+            ) {
                 try {
                     if (!tab?.closed) {
                         tab.close();
@@ -424,7 +454,8 @@
             // Only close old streams when PokéIdle actually exposed its stream
             // state. A transient server/UI delay must never wipe valid chats.
             if (streamStateIsAvailable) {
-                closeStreamsNotLive(liveKeys);
+                const protectedKeys = rewardedTwitchKeys();
+                closeStreamsNotLive(liveKeys, protectedKeys);
             }
 
             setScanDiagnostics({
