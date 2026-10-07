@@ -13,9 +13,8 @@ internal static class AppConfig
         "--disable-features=CalculateNativeWinOcclusion " +
         "--autoplay-policy=no-user-gesture-required";
 
-    // Stream environment: keeps the unthrottled flags (hidden panes must not have
-    // their timers clipped) plus autoplay allowed.
-    // Stream WebViews are chat-only and are hidden. Do not disable Chromium
+    // Chat environment: chat-only WebViews are hidden and should use Chromium's
+    // normal background throttling. No video is ever loaded by this environment.
     // background throttling here; that would waste CPU on inactive chat hosts.
     public const string StreamBrowserArguments = "";
 
