@@ -200,7 +200,6 @@ impl ControllerApp {
             return;
         }
 
-        self.games[index].headless = headless;
         self.set_status(
             format!(
                 "{}: switching Firefox to {} mode...",
@@ -209,11 +208,12 @@ impl ControllerApp {
             ),
             false,
         );
-        self.stop_one(profile);
-        self.launch_one_mode(profile, headless);
+        if self.stop_one(profile) {
+            self.launch_one_mode(profile, headless);
+        }
     }
 
-    fn stop_one(&mut self, profile: GameProfile) {
+    fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         let slot = &mut self.games[index];
 
@@ -224,7 +224,7 @@ impl ControllerApp {
         let Some(mut child) = slot.child.take() else {
             slot.monitor = None;
             self.set_status(format!("{} is already stopped.", profile.label()), false);
-            return;
+            return true;
         };
 
         logging::info(&format!(
@@ -238,6 +238,7 @@ impl ControllerApp {
                 let _ = child.wait();
                 slot.monitor = None;
                 self.set_status(format!("{} Firefox closed.", profile.label()), false);
+                true
             }
             Err(error) => {
                 logging::error(&format!(
@@ -251,6 +252,7 @@ impl ControllerApp {
                     format!("{}: could not close Firefox: {}", profile.label(), error),
                     true,
                 );
+                false
             }
         }
     }
