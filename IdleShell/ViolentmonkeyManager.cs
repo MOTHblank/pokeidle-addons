@@ -238,13 +238,13 @@ internal sealed class ViolentmonkeyManager
         CoreWebView2 view,
         int scriptId)
     {
-        var request = $"""
+        var request = """
 (() => {
   return Promise.resolve(
     chrome.runtime.sendMessage({
       cmd: 'GetScript',
       data: {
-        id: {{scriptId}}
+        id: __SCRIPT_ID__
       }
     })
   ).then(value => JSON.stringify({
@@ -252,7 +252,9 @@ internal sealed class ViolentmonkeyManager
     enabled: !!value?.config?.enabled
   }));
 })()
-""";
+"""
+            .Replace("__SCRIPT_ID__", scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
 
         var raw = await view.ExecuteScriptAsync(request);
         try
