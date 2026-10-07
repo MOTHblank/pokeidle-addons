@@ -729,28 +729,34 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 automation_badge(ui, "Performance+", if health.performance_fps.is_empty() { "Loaded" } else { &format!("{} FPS", health.performance_fps) }, true);
             });
 
-            if !health.xp_bonuses.is_empty() {
-                ui.add_space(12.0);
-                ui.label(
-                    RichText::new("XP BONUSES")
-                        .size(9.0)
-                        .strong()
-                        .color(DIM),
-                );
-                ui.add_space(6.0);
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("XP BONUS SOURCES")
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
 
-                egui::Frame::new()
-                    .fill(PANEL_ALT)
-                    .corner_radius(10.0)
-                    .inner_margin(10.0)
-                    .show(ui, |ui| {
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .corner_radius(10.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    if health.xp_bonuses.is_empty() {
+                        ui.label(
+                            RichText::new("No active XP bonus detected in the game HUD")
+                                .size(10.0)
+                                .color(DIM),
+                        );
+                    } else {
                         ui.horizontal_wrapped(|ui| {
                             for bonus in &health.xp_bonuses {
                                 bonus_chip(ui, bonus);
                             }
                         });
-                    });
-            }
+                    }
+                });
 
             ui.add_space(12.0);
 
