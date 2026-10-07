@@ -155,7 +155,7 @@ internal sealed class MainForm : Form
         foreach (var workspace in _workspaces)
         {
             workspace.Header.Text = $"GAME {workspace.Index + 1}  ·  starting…";
-            workspace.StreamHeader.Text = $"Streams · Game {workspace.Index + 1}";
+            workspace.StreamHeader.Text = $"Chat · Game {workspace.Index + 1}";
 
             // WebView2 controllers are child HWNDs of the form. A full-size
             // workspace panel can otherwise cover the WebView surface.
@@ -270,7 +270,7 @@ internal sealed class MainForm : Form
             _game2Button = Button("Game 2: foreground", (_, _) => ToggleGameForeground(_workspaces[1])),
             _foregroundBothButton = Button("Games: foreground both", (_, _) => SetGamesForeground(true)),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
-            Button("Streams…", (_, _) => OpenStreamsForActiveWorkspace()),
+            Button("Chat…", (_, _) => OpenStreamsForActiveWorkspace()),
             Button("Collapse streams", (_, _) => SetAllStreamsBackground()),
             _addonsPicker,
             _probeToggle,
