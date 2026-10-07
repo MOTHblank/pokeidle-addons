@@ -31,6 +31,18 @@ pub struct Health {
     pub twitch_low_resource_ok: u8,
     pub performance_fps: String,
     pub performance_scene_runs: String,
+    pub pokemon_level: String,
+    pub pokemon_xp: String,
+    pub ball_stock: Vec<String>,
+    pub autocatch_on: bool,
+    pub autocatch_captures: u32,
+    pub autocatch_balls_used: u32,
+    pub autocatch_rate: String,
+    pub autocatch_restock: String,
+    pub stream_scan_status: String,
+    pub stream_scan_live: u32,
+    pub stream_scan_opened: u32,
+    pub xp_bonuses: Vec<String>,
     pub last_error: Option<String>,
 }
 
@@ -54,6 +66,18 @@ impl Default for Health {
             twitch_low_resource_ok: 0,
             performance_fps: String::new(),
             performance_scene_runs: String::new(),
+            pokemon_level: String::new(),
+            pokemon_xp: String::new(),
+            ball_stock: Vec::new(),
+            autocatch_on: false,
+            autocatch_captures: 0,
+            autocatch_balls_used: 0,
+            autocatch_rate: String::new(),
+            autocatch_restock: String::new(),
+            stream_scan_status: String::new(),
+            stream_scan_live: 0,
+            stream_scan_opened: 0,
+            xp_bonuses: Vec::new(),
             last_error: None,
         }
     }
@@ -183,6 +207,18 @@ struct Probe {
     twitch_low_resource_ok: u8,
     performance_fps: String,
     performance_scene_runs: String,
+    pokemon_level: String,
+    pokemon_xp: String,
+    ball_stock: Vec<String>,
+    autocatch_on: bool,
+    autocatch_captures: u32,
+    autocatch_balls_used: u32,
+    autocatch_rate: String,
+    autocatch_restock: String,
+    stream_scan_status: String,
+    stream_scan_live: u32,
+    stream_scan_opened: u32,
+    xp_bonuses: Vec<String>,
 }
 
 fn monitor_loop(
@@ -247,6 +283,18 @@ fn monitor_loop(
                         current.twitch_low_resource_ok = probe.twitch_low_resource_ok;
                         current.performance_fps = probe.performance_fps;
                         current.performance_scene_runs = probe.performance_scene_runs;
+                        current.pokemon_level = probe.pokemon_level;
+                        current.pokemon_xp = probe.pokemon_xp;
+                        current.ball_stock = probe.ball_stock;
+                        current.autocatch_on = probe.autocatch_on;
+                        current.autocatch_captures = probe.autocatch_captures;
+                        current.autocatch_balls_used = probe.autocatch_balls_used;
+                        current.autocatch_rate = probe.autocatch_rate;
+                        current.autocatch_restock = probe.autocatch_restock;
+                        current.stream_scan_status = probe.stream_scan_status;
+                        current.stream_scan_live = probe.stream_scan_live;
+                        current.stream_scan_opened = probe.stream_scan_opened;
+                        current.xp_bonuses = probe.xp_bonuses;
                         current.last_error = None;
                     }
                 }
@@ -355,6 +403,93 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
                 ? text('#ativo-card').slice(0, 48)
                 : '';
 
+        const levelMatch = activePokemon.match(/\bLv\.?\s*(\d+)/i);
+        const pokemonLevel = levelMatch ? levelMatch[1] : '';
+
+        const readXpText = () => {
+            const nodes = [
+                ...document.querySelectorAll(
+                    '#ativo-card [aria-valuenow][aria-valuemax], #ativo-card [data-xp], #ativo-card [id*="xp"], #ativo-card [class*="xp"], #ativo-card [id*="exper"], #ativo-card [class*="exper"]'
+                )
+            ];
+
+            for (const el of nodes) {
+                const candidate = [
+                    el.getAttribute('aria-label') || '',
+                    el.getAttribute('title') || '',
+                    el.getAttribute('data-xp') || '',
+                    el.textContent || ''
+                ].join(' ').replace(/\s+/g, ' ').trim();
+
+                const now = el.getAttribute('aria-valuenow');
+                const max = el.getAttribute('aria-valuemax');
+                if (now && max) return now + '/' + max;
+
+                const match = candidate.match(/(?:xp|exp(?:eri[eê]ncia)?)\s*[:：]?\s*([\d.,]+\s*(?:\/|de)\s*[\d.,]+)/i);
+                if (match) return match[1];
+
+                if (/\b(?:xp|exp)\b/i.test(candidate) && /\d/.test(candidate)) {
+                    return candidate.slice(0, 80);
+                }
+            }
+            return '';
+        };
+
+        const parseCount = (value) => {
+            const match = String(value || '').match(/(?:você\s+tem|voce\s+tem|you\s+have|tienes)\s+([\d.,]+)/i);
+            if (!match) return null;
+            const digits = match[1].replace(/\D/g, '');
+            return digits ? Number(digits) : null;
+        };
+
+        const ballStock = [...document.querySelectorAll('#caidos-bolas button.caidos-bola')]
+            .map(button => {
+                const title = button.title || button.getAttribute('aria-label') || '';
+                const count = parseCount(title);
+                const name = (title.split('—')[0] || button.getAttribute('aria-label') || 'Ball')
+                    .replace(/\s+/g, ' ').trim().slice(0, 18);
+                return count === null ? null : name + ' ' + count;
+            })
+            .filter(Boolean);
+
+        const parseUInt = (selector) => {
+            const value = text(selector);
+            const match = value.match(/\d[\d.,]*/);
+            return match ? Number(match[0].replace(/\D/g, '')) : 0;
+        };
+
+        const autoOn = (text('#moth-ac-toggle') || '').toUpperCase() === 'ON';
+        const autocatchCaptures = parseUInt('#moth-ac-captures');
+        const autocatchBallsUsed = parseUInt('#moth-ac-balls-used');
+        const autocatchRate = text('#moth-ac-rate');
+        const autocatchRestock = text('#moth-ac-restock-status');
+
+        const scanner = document.querySelector('#moth-scan-live-streams');
+        const streamScanStatus = scanner?.dataset?.mothScanStatus || '';
+        const streamScanLive = Number(scanner?.dataset?.mothScanLive || 0) || 0;
+        const streamScanOpened = Number(scanner?.dataset?.mothScanOpened || 0) || 0;
+
+        const xpBonuses = [];
+        const bonusNodes = document.querySelectorAll(
+            '[id*="bonus"], [class*="bonus"], [id*="buff"], [class*="buff"], [id*="xp"], [class*="xp"]'
+        );
+
+        for (const el of bonusNodes) {
+            if (!visible(el)) continue;
+            const raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!raw || raw.length > 100 || !/\bXP\b|experi/i.test(raw) || !/\+\s*\d+\s*%/i.test(raw)) {
+                continue;
+            }
+
+            const match = raw.match(/(?:[^|]{0,55}?\+\s*\d+\s*%\s*(?:XP|exper[^|]*)|\+\s*\d+\s*%\s*[^|]{0,55}?\bXP\b)/i);
+            xpBonuses.push((match ? match[0] : raw).trim());
+            if (xpBonuses.length >= 8) break;
+        }
+
+        const xpBonusUnique = [...new Set(
+            xpBonuses.map(value => value.replace(/\s+/g, ' ').trim())
+        )];
+
         const huntSelected =
             huntText.length > 0 &&
             !/^escolha um mapa\s*[→›-]?\s*$/i.test(huntText);
@@ -389,8 +524,20 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
             addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
             performanceFps: text('#mpp-browser-fps'),
-            performanceSceneRuns: text('#mpp-scene-runs')
-        });
+            performanceSceneRuns: text('#mpp-scene-runs'),
+            pokemonLevel,
+            pokemonXp: readXpText(),
+            ballStock,
+            autocatchOn: autoOn,
+            autocatchCaptures,
+            autocatchBallsUsed,
+            autocatchRate,
+            autocatchRestock,
+            streamScanStatus,
+            streamScanLive,
+            streamScanOpened,
+            xpBonuses: xpBonusUnique
+        });;
     })()"#;
 
     let result = send_and_wait(
@@ -495,6 +642,18 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         twitch_low_resource_ok,
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
         performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),
+        pokemon_level: page.get("pokemonLevel").and_then(Value::as_str).unwrap_or_default().to_string(),
+        pokemon_xp: page.get("pokemonXp").and_then(Value::as_str).unwrap_or_default().to_string(),
+        ball_stock: page.get("ballStock").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
+        autocatch_on: page.get("autocatchOn").and_then(Value::as_bool).unwrap_or(false),
+        autocatch_captures: page.get("autocatchCaptures").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_balls_used: page.get("autocatchBallsUsed").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_rate: page.get("autocatchRate").and_then(Value::as_str).unwrap_or_default().to_string(),
+        autocatch_restock: page.get("autocatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_status: page.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_live: page.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
+        stream_scan_opened: page.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
+        xp_bonuses: page.get("xpBonuses").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
     })
 }
 
