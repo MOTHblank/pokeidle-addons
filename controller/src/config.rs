@@ -82,11 +82,37 @@ fn find_firefox() -> Option<PathBuf> {
         }
     }
 
-    firefox_candidates().into_iter().find(|path| path.is_file())
+    // Prefer the official Firefox Developer Edition when installed. Moth
+    // supplies an explicit profile path, so changing the browser executable
+    // does not move, recreate, or delete the existing Game1/Game2 profiles.
+    firefox_developer_candidates()
+        .into_iter()
+        .chain(firefox_standard_candidates())
+        .find(|path| path.is_file())
 }
 
 #[cfg(windows)]
-fn firefox_candidates() -> Vec<PathBuf> {
+fn firefox_developer_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    for env_name in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+        if let Some(root) = env::var_os(env_name) {
+            let root = PathBuf::from(root);
+            for folder in [
+                "Firefox Developer Edition",
+                "Mozilla Firefox Developer Edition",
+                "Firefox Developer",
+            ] {
+                paths.push(root.join(folder).join("firefox.exe"));
+            }
+        }
+    }
+
+    paths
+}
+
+#[cfg(windows)]
+fn firefox_standard_candidates() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     if let Some(program_files) = env::var_os("PROGRAMFILES") {
@@ -117,6 +143,11 @@ fn firefox_candidates() -> Vec<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn firefox_candidates() -> Vec<PathBuf> {
+fn firefox_developer_candidates() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(not(windows))]
+fn firefox_standard_candidates() -> Vec<PathBuf> {
     Vec::new()
 }
