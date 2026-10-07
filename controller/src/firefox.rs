@@ -91,16 +91,68 @@ fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
 fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
     let user_js = profile_dir.join("user.js");
 
-    if user_js.exists() {
+    if !user_js.exists() {
+        fs::write(&user_js, USER_PREFS).map_err(|error| {
+            format!(
+                "could not create browser defaults {}: {error}",
+                user_js.display()
+            )
+        })?;
+
         return Ok(());
     }
 
-    fs::write(&user_js, USER_PREFS).map_err(|error| {
+    // Existing Moth profiles may have been created by an older controller.
+    // Add only preferences that are not already present so user changes to
+    // existing prefs are left untouched.
+    let mut current = fs::read_to_string(&user_js).map_err(|error| {
         format!(
-            "could not create browser defaults {}: {error}",
+            "could not read browser defaults {}: {error}",
             user_js.display()
         )
-    })
+    })?;
+
+    const PREFS_TO_ENSURE: &[(&str, &str)] = &[
+        ("browser.newtabpage.preload", r#"user_pref("browser.newtabpage.preload", false);"#),
+        ("browser.sessionstore.restore_on_demand", r#"user_pref("browser.sessionstore.restore_on_demand", true);"#),
+        ("browser.pagethumbnails.capturing_disabled", r#"user_pref("browser.pagethumbnails.capturing_disabled", true);"#),
+        ("browser.uitour.enabled", r#"user_pref("browser.uitour.enabled", false);"#),
+        ("browser.shell.checkDefaultBrowser", r#"user_pref("browser.shell.checkDefaultBrowser", false);"#),
+        ("browser.urlbar.suggest.searches", r#"user_pref("browser.urlbar.suggest.searches", false);"#),
+        ("network.dns.disablePrefetch", r#"user_pref("network.dns.disablePrefetch", true);"#),
+        ("dom.ipc.processPrelaunch.fission.number", r#"user_pref("dom.ipc.processPrelaunch.fission.number", 0);"#),
+        ("dom.ipc.processCount", r#"user_pref("dom.ipc.processCount", 1);"#),
+        ("media.autoplay.default", r#"user_pref("media.autoplay.default", 5);"#),
+        ("media.autoplay.blocking_policy", r#"user_pref("media.autoplay.blocking_policy", 1);"#),
+        ("media.autoplay.ask-permission", r#"user_pref("media.autoplay.ask-permission", false);"#),
+        ("media.block-autoplay-until-in-foreground", r#"user_pref("media.block-autoplay-until-in-foreground", true);"#),
+        ("media.suspend-background-video.enabled", r#"user_pref("media.suspend-background-video.enabled", true);"#),
+    ];
+
+    let mut added = false;
+
+    for (pref, line) in PREFS_TO_ENSURE {
+        if !current.contains(&format!(r#"user_pref("{}""#, pref)) {
+            if !current.ends_with('\n') {
+                current.push('\n');
+            }
+
+            current.push_str(line);
+            current.push('\n');
+            added = true;
+        }
+    }
+
+    if added {
+        fs::write(&user_js, current).map_err(|error| {
+            format!(
+                "could not update browser defaults {}: {error}",
+                user_js.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn format_spawn_error(error: io::Error) -> String {
