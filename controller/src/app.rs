@@ -1306,8 +1306,9 @@ fn game_selector(
 }
 
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    let mut open = app.show_atlas;
     egui::Window::new("Hunt Atlas")
-        .open(&mut app.show_atlas)
+        .open(&mut open)
         .collapsible(false)
         .resizable(true)
         .default_width(900.0)
@@ -1498,9 +1499,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
+    app.show_atlas = open;
 }
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    let mut open = app.show_market;
     egui::Window::new("Moth Watch")
         .open(&mut app.show_market)
         .collapsible(false)
@@ -1825,6 +1828,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
+    app.show_market = open;
 }
 
 fn chrono_like_now_ms() -> u64 {
