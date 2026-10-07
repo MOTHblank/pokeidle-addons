@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.3.0
+// @version      4.4.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -54,6 +54,10 @@
 
     let scanInProgress = false;
     let startupActionHandled = false;
+    let startupActionRunning = false;
+    let startupActionPoll = 0;
+    const STARTUP_ACTION_TIMEOUT_MS = 30_000;
+    const APP_READY_TIMEOUT_MS = 15_000;
     const MAX_STREAMS_PER_SERVICE = 10;
     const STREAMS_KEY = 'moth-pokeidle-streams-v1';
     const openChats = new Map();
@@ -447,6 +451,50 @@
         return new Promise((resolve) => window.setTimeout(resolve, ms));
     }
 
+    async function waitForGameUi(timeoutMs = APP_READY_TIMEOUT_MS) {
+        const started = Date.now();
+
+        while (Date.now() - started < timeoutMs) {
+            if (
+                document.body &&
+                (
+                    document.getElementById('tr-ativos') ||
+                    document.querySelector('.menu-topo') ||
+                    document.getElementById(INVENTORY_ID)
+                )
+            ) {
+                return true;
+            }
+
+            await sleep(250);
+        }
+
+        return false;
+    }
+
+    async function waitForStreamUi(timeoutMs = APP_READY_TIMEOUT_MS) {
+        const started = Date.now();
+
+        while (Date.now() - started < timeoutMs) {
+            if (
+                document.querySelector(
+                    '#tr-ativos .tr-ativo.twitch, ' +
+                    '#tr-ativos .tr-ativo.kick, ' +
+                    '#tw-corpo a.tw-canal[href], ' +
+                    '#kk-corpo a.kk-canal[href], ' +
+                    'a.tw-canal[href], ' +
+                    'a.kk-canal[href]'
+                )
+            ) {
+                return true;
+            }
+
+            await sleep(400);
+        }
+
+        return false;
+    }
+
     async function collectLiveChannelsFromOfficialModals() {
         const collected = new Map(
             collectLiveChannels().map((channel) => [channel.url, channel])
@@ -670,7 +718,25 @@
         document.body.appendChild(panel);
     }
 
-    async function runLiveScan() {
+    async function runLiveScan(options = {}) {
+        const waitForStreams = options.waitForStreams !== false;
+
+        if (waitForStreams) {
+            const ready = await waitForStreamUi();
+
+            if (!ready) {
+                console.info(
+                    '[Moth] live chat scan: PokéIdle stream UI did not become ready'
+                );
+
+                return {
+                    channels: [],
+                    queued: 0,
+                    notReady: true
+                };
+            }
+        }
+
         const channels = await collectLiveChannelsFromOfficialModals();
         let queued = 0;
 
@@ -713,7 +779,7 @@
                 }
             }
 
-            const result = await runLiveScan();
+            const result = await runLiveScan({ waitForStreams: true });
 
             if (button) {
                 const label = button.querySelector('span');
@@ -835,29 +901,66 @@
         inventory.insertAdjacentElement('afterend', managerButton);
     }
 
+    function parseAction(value) {
+        return value === 'manager' || value === 'scan' ? value : null;
+    }
+
     function readStartupAction() {
         try {
             const url = new URL(location.href);
-            const fromQuery = url.searchParams.get('moth-stream-action');
 
-            if (fromQuery === 'manager' || fromQuery === 'scan') {
-                url.searchParams.delete('moth-stream-action');
-                history.replaceState(null, '', url.pathname + url.search + url.hash);
+            const fromQuery = parseAction(
+                url.searchParams.get('moth-stream-action')
+            );
+
+            if (fromQuery) {
                 return fromQuery;
             }
 
-            const match = /^#moth-stream-action=(manager|scan)$/.exec(location.hash);
-            if (match) {
-                history.replaceState(null, '', url.pathname + url.search);
-                return match[1];
-            }
-        } catch (_) {}
+            const hash = url.hash.startsWith('#')
+                ? url.hash.slice(1)
+                : url.hash;
 
-        return null;
+            const hashParams = new URLSearchParams(hash);
+            const fromHashParams = parseAction(
+                hashParams.get('moth-stream-action')
+            );
+
+            if (fromHashParams) {
+                return fromHashParams;
+            }
+
+            const match = /^moth-stream-action=(manager|scan)$/.exec(hash);
+            return match ? match[1] : null;
+        } catch (_) {
+            return null;
+        }
     }
 
-    function consumeStartupAction() {
-        if (startupActionHandled) {
+    function clearStartupAction() {
+        try {
+            const url = new URL(location.href);
+            url.searchParams.delete('moth-stream-action');
+
+            if (url.hash) {
+                const hash = url.hash.slice(1);
+                const params = new URLSearchParams(hash);
+                params.delete('moth-stream-action');
+
+                const nextHash = params.toString();
+                url.hash = nextHash ? nextHash : '';
+            }
+
+            history.replaceState(
+                null,
+                '',
+                url.pathname + url.search + url.hash
+            );
+        } catch (_) {}
+    }
+
+    async function consumeStartupAction() {
+        if (startupActionHandled || startupActionRunning) {
             return;
         }
 
@@ -867,30 +970,67 @@
         }
 
         startupActionHandled = true;
+        startupActionRunning = true;
+        clearStartupAction();
 
-        const run = async () => {
+        try {
+            const ready = await waitForGameUi();
+
+            if (!ready) {
+                console.info(
+                    '[Moth] controller action:',
+                    action,
+                    '— PokéIdle UI did not become ready'
+                );
+                return;
+            }
+
             if (action === 'manager') {
-                if (!document.body) {
-                    startupActionHandled = false;
-                    window.setTimeout(consumeStartupAction, 250);
-                    return;
-                }
-
                 renderManager();
                 return;
             }
 
-            const result = await runLiveScan();
+            const result = await runLiveScan({ waitForStreams: true });
+
             console.info(
                 '[Moth] controller-triggered scan completed:',
                 result.channels.length,
                 'live channel(s),',
                 result.queued,
-                'opened/queued'
+                'opened/queued',
+                result.notReady ? '(stream UI not ready)' : ''
             );
-        };
+        } catch (error) {
+            console.error('[Moth] controller action failed:', error);
+        } finally {
+            startupActionRunning = false;
+        }
+    }
 
-        window.setTimeout(run, 1200);
+    function watchStartupAction() {
+        consumeStartupAction();
+
+        if (startupActionPoll) {
+            return;
+        }
+
+        const started = Date.now();
+
+        startupActionPoll = window.setInterval(() => {
+            if (startupActionHandled) {
+                window.clearInterval(startupActionPoll);
+                startupActionPoll = 0;
+                return;
+            }
+
+            if (Date.now() - started > STARTUP_ACTION_TIMEOUT_MS) {
+                window.clearInterval(startupActionPoll);
+                startupActionPoll = 0;
+                return;
+            }
+
+            consumeStartupAction();
+        }, 500);
     }
 
     function start() {
@@ -898,10 +1038,13 @@
 
         window.setInterval(() => {
             ensureButton();
-            consumeStartupAction();
         }, 3000);
 
-        consumeStartupAction();
+        window.addEventListener('hashchange', watchStartupAction);
+        window.addEventListener('popstate', watchStartupAction);
+        window.addEventListener('pageshow', watchStartupAction);
+
+        watchStartupAction();
 
         console.info(
             '[Moth] live chat scanner ready'
