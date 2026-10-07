@@ -1020,7 +1020,7 @@ fn probe_runtime_details(
                     item.get("login")
                         .or_else(|| item.get("nome"))
                         .and_then(Value::as_str)
-                        .map(str::to_string)
+                        .map(|name| name.to_ascii_lowercase())
                 })
                 .collect::<std::collections::HashSet<_>>()
         })
@@ -1033,7 +1033,8 @@ fn probe_runtime_details(
             items.iter()
                 .filter_map(|item| {
                     let login = item.get("login").and_then(Value::as_str)?;
-                    if official_bonus.contains(login) {
+                    let login_key = login.to_ascii_lowercase();
+                    if official_bonus.contains(&login_key) {
                         Some(login.to_string())
                     } else {
                         None
@@ -1045,29 +1046,52 @@ fn probe_runtime_details(
 
     let stream_missing = live_names
         .iter()
-        .filter(|name| !stream_watching.iter().any(|watching| watching.eq_ignore_ascii_case(name)))
+        .filter(|name| {
+            !stream_watching
+                .iter()
+                .any(|watching| watching.eq_ignore_ascii_case(name))
+        })
         .cloned()
         .collect::<Vec<_>>();
 
-    let mut xp_sources = Vec::new();
-
-    if stream_bonus_pct > 0.0 && !stream_watching.is_empty() {
-        xp_sources.push(format!(
-            "Twitch +{}% XP · watching {}",
+    let stream_bonus = if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
+        format!(
+            "+{}% XP · watching {}",
             trim_pct(stream_bonus_pct),
             stream_watching.join(", ")
-        ));
+        )
+    } else {
+        String::new()
+    };
+
+    let stream_bonus_last = state
+        .get("lastStreamBonus")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let mut xp_sources = Vec::new();
+
+    if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
+        xp_sources.push(stream_bonus.clone());
     } else if !stream_missing.is_empty() {
         xp_sources.push(format!(
-            "Twitch +{}% available · chat missing: {}",
+            "+{}% Twitch XP available · chat not open: {}",
             trim_pct(stream_bonus_pct.max(15.0)),
             stream_missing.join(", ")
         ));
     }
 
     let event = state.get("evento").cloned().unwrap_or(Value::Null);
-    let event_trainer = event.get("xpTreinadorPct").and_then(Value::as_f64).unwrap_or(0.0);
-    let event_pokemon = event.get("xpPokemonPct").and_then(Value::as_f64).unwrap_or(0.0);
+    let event_trainer = event
+        .get("xpTreinadorPct")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let event_pokemon = event
+        .get("xpPokemonPct")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
     if event_trainer > 0.0 || event_pokemon > 0.0 {
         xp_sources.push(format!(
             "Event +{}% trainer / +{}% Pokémon XP",
@@ -1076,7 +1100,11 @@ fn probe_runtime_details(
         ));
     }
 
-    let guild_bonus = state.get("guildBonusPct").and_then(Value::as_f64).unwrap_or(0.0);
+    let guild_bonus = state
+        .get("guildBonusPct")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
     if guild_bonus > 0.0 {
         xp_sources.push(format!("Guild +{}% XP", trim_pct(guild_bonus as f32)));
     }
@@ -1097,6 +1125,12 @@ fn probe_runtime_details(
         .unwrap_or(false)
     {
         xp_sources.push("Shop XP boost active".to_string());
+    }
+
+    if !stream_bonus_last.is_empty()
+        && !xp_sources.iter().any(|item| item == &stream_bonus_last)
+    {
+        xp_sources.push(format!("Last seen: {}", stream_bonus_last));
     }
 
     for bonus in [stream_bonus.clone(), stream_bonus_last.clone()] {
