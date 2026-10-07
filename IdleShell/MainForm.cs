@@ -1143,6 +1143,10 @@ internal sealed class MainForm : Form
     {
         foreach (var workspace in _workspaces)
         {
+            // "Hide all" now actually collapses the stream dock. The panes are
+            // retained and moved to WebView2's low-memory target, so reopening
+            // the dock does not require recreating the streams.
+            workspace.StreamsExpanded = false;
             workspace.ActiveTabIndex = -1;
             _suppressTabEvent = true;
             workspace.StreamTabs.SelectedIndex = -1;
