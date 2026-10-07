@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         PokéIdle Live Stream Auto-Open+
+// @name         PokéIdle Live Chat Presence
 // @namespace    moth.pokeidle
-// @version      1.0.1
-// @description  Automatically opens every Twitch/Kick channel that PokéIdle currently marks as live, including streams added by the SPA after load.
+// @version      2.0.0
+// @description  Joins every Twitch/Kick channel that PokéIdle currently marks as live so the configured account is present in chat.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
 // @run-at       document-start
@@ -391,7 +391,7 @@
                     previous.opened = true;
                     opened += 1;
                     console.info(
-                        '[IdleShell] auto-opened live stream:',
+                        '[IdleShell] joined live chat:',
                         url
                     );
                 }
@@ -413,7 +413,7 @@
 
         if (opened > 0) {
             console.info(
-                '[IdleShell] live stream scan opened',
+                '[IdleShell] live chat scan joined',
                 opened,
                 'stream(s)'
             );
@@ -472,7 +472,7 @@
         }
 
         console.info(
-            '[IdleShell] live-stream auto-open active (PokéIdle upstream 1.240.1)'
+            '[IdleShell] live chat presence active (PokéIdle upstream 1.240.1)'
         );
     }
 
