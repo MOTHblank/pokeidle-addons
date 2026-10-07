@@ -65,9 +65,12 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     logging::info(&format!("starting Firefox: executable={} profile={} port={} mode={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, if headless { "headless" } else { "visible" }, config.url));
 
     let mut command = Command::new(&config.firefox_executable);
+    if headless {
+        command.arg("--headless");
+    }
+
     command
         .arg("--no-remote")
-        .arg("--headless")
         .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
         .arg("--profile")
         .arg(&config.profile_dir)
@@ -76,15 +79,6 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-
-    if !headless {
-        let mut args = command.get_args().map(|arg| arg.to_os_string()).collect::<Vec<_>>();
-        args.retain(|arg| arg != "--headless");
-        command = Command::new(&config.firefox_executable);
-        for arg in args {
-            command.arg(arg);
-        }
-    }
 
     let child = command
         .spawn()
