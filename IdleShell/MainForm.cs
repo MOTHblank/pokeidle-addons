@@ -1307,36 +1307,57 @@ internal sealed class MainForm : Form
         try
         {
             EnsureProbeHeader();
-            foreach (var p in AllPanes())
+            foreach (var p in _games.ToArray())
             {
                 var raw = await p.ProbeAsync();
                 var fields = ParseProbeJson(raw ?? "");
 
-                if (p.Spec.Kind == PaneKind.Game)
+                var workspace = WorkspaceForGroup(p.Spec.Profile);
+                if (workspace is not null)
                 {
-                    var workspace = WorkspaceForGroup(p.Spec.Profile);
-                    if (workspace is not null)
-                    {
-                        workspace.LastProbeAt = DateTime.Now;
-                        workspace.LastProbeHealthy =
-                            ProbeHealthy(fields.vis, fields.hidden, fields.drift);
-                        var label = workspace.GameForeground ? "Healthy" : "BG healthy";
-                        workspace.LastProbeSummary = workspace.LastProbeHealthy == true
+                    workspace.LastProbeAt = DateTime.Now;
+                    workspace.LastProbeHealthy =
+                        ProbeHealthy(fields.vis, fields.hidden, fields.drift);
+
+                    var label = workspace.GameForeground
+                        ? "Healthy"
+                        : "BG healthy";
+
+                    workspace.LastProbeSummary =
+                        workspace.LastProbeHealthy == true
                             ? $"● {label} · {fields.drift} ms"
                             : $"● Check · {fields.drift} ms";
-                        UpdateWorkspaceHeader(workspace);
-                    }
+
+                    UpdateWorkspaceHeader(workspace);
                 }
 
-                    Csv(fields.vis), Csv(fields.hidden), Csv(fields.focus), Csv(fields.drift));
-                File.AppendAllText(AppConfig.ProbeCsvFile, line + Environment.NewLine);
+                var state = workspace?.GameForeground == true
+                    ? "Foreground"
+                    : "Background";
+
+                var line = string.Join(',',
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    Csv(p.Spec.Title),
+                    Csv(p.Spec.Kind.ToString()),
+                    Csv(state),
+                    Csv(fields.vis),
+                    Csv(fields.hidden),
+                    Csv(fields.focus),
+                    Csv(fields.drift));
+
+                File.AppendAllText(
+                    AppConfig.ProbeCsvFile,
+                    line + Environment.NewLine);
             }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[IdleShell] probe: {ex.Message}");
         }
-        finally { _probing = false; }
+        finally
+        {
+            _probing = false;
+        }
     }
 
     private static bool ProbeHealthy(string vis, string hidden, string drift)
