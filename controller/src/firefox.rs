@@ -54,6 +54,10 @@ pub fn launch(config: &Config) -> Result<Child, String> {
     provision_profile(&config.profile_dir)?;
 
     Command::new(&config.firefox_executable)
+        // Each Moth game profile must be a genuinely separate Firefox
+        // instance so Game 1 and Game 2 cannot inherit each other's cookies,
+        // logins, or session state. --no-remote implies --new-instance.
+        .arg("--no-remote")
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
