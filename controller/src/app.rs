@@ -224,7 +224,7 @@ pub fn run() -> Result<(), String> {
                             &game1_button,
                             &game1_status,
                             &status,
-                            notice_sender,
+                            notice_sender.clone(),
                         );
                     } else if handle == game2_button_handle {
                         let mut state = state_for_events.borrow_mut();
