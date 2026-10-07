@@ -744,9 +744,20 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         stream_bonus: if runtime.stream_bonus.is_empty() {
             page.get("streamBonus").and_then(Value::as_str).unwrap_or_default().to_string()
         } else {
-            runtime.stream_bonus
+            runtime.stream_bonus.clone()
         },
+        stream_bonus_last: if runtime.stream_bonus_last.is_empty() {
+            page.get("streamBonus").and_then(Value::as_str).unwrap_or_default().to_string()
+        } else {
+            runtime.stream_bonus_last.clone()
+        },
+        stream_bonus_pct: runtime.stream_bonus_pct,
+        stream_watching: runtime.stream_watching,
+        stream_live_bonus: runtime.stream_live_bonus,
+        stream_missing: runtime.stream_missing,
+        xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
+        last_game_message_ms: runtime.last_game_message_ms,
         tabs,
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
@@ -754,6 +765,15 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         market_summary: runtime.market_summary,
     })
 }
+fn trim_pct(value: f32) -> String {
+    if (value.fract().abs() < 0.01 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+
 fn build_tab_infos(
     contexts: &[ContextInfo],
     socket: &mut BrowserSocket,
@@ -882,12 +902,27 @@ fn probe_runtime_details(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let player_xp = snapshot
-        .get("state")
-        .and_then(|s| s.get("playerXp"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let last_game_message_ms = snapshot
+        .get("lastMessageAt")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let player_xp = {
+        let current = state.get("xp").and_then(Value::as_u64).unwrap_or(0);
+        let floor = state.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
+        let next = state.get("xpProximo").and_then(Value::as_u64).unwrap_or(0);
+
+        if next > floor && current >= floor {
+            format!("{}/{}", current.saturating_sub(floor), next.saturating_sub(floor))
+        } else {
+            snapshot
+                .get("state")
+                .and_then(|s| s.get("playerXp"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        }
+    };
     let fallen_count =
         state.get("fallen").and_then(Value::as_u64).unwrap_or(0) as u32;
     let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
@@ -906,11 +941,20 @@ fn probe_runtime_details(
         .map(|v| v.to_string())
         .unwrap_or_default();
 
-    let pokemon_xp = state
-        .get("activePokemonXp")
-        .and_then(Value::as_u64)
-        .map(|v| v.to_string())
-        .unwrap_or_default();
+    let pokemon_xp = {
+        let current = active.get("xp").and_then(Value::as_u64).unwrap_or(0);
+        let floor = active.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
+        let next = active.get("xpProximo").and_then(Value::as_u64).unwrap_or(0);
+
+        if next > floor && current >= floor {
+            format!("{}/{}", current.saturating_sub(floor), next.saturating_sub(floor))
+        } else {
+            state.get("activePokemonXp")
+                .and_then(Value::as_u64)
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+        }
+    };
 
     let mut ball_stock = Vec::new();
     if let Some(items) = state.get("domBalls").and_then(Value::as_array) {
@@ -947,6 +991,114 @@ fn probe_runtime_details(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+
+    let twitch = state.get("twitch").cloned().unwrap_or(Value::Null);
+
+    let stream_bonus_pct = twitch
+        .get("pctAtual")
+        .or_else(|| twitch.get("pct"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as f32;
+
+    let stream_watching = twitch
+        .get("assistindoEm")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let official_bonus = twitch
+        .get("oficiais")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter(|item| item.get("bonus").and_then(Value::as_bool).unwrap_or(false))
+                .filter_map(|item| {
+                    item.get("login")
+                        .or_else(|| item.get("nome"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let live_names = twitch
+        .get("lives")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(|item| {
+                    let login = item.get("login").and_then(Value::as_str)?;
+                    if official_bonus.contains(login) {
+                        Some(login.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let stream_missing = live_names
+        .iter()
+        .filter(|name| !stream_watching.iter().any(|watching| watching.eq_ignore_ascii_case(name)))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut xp_sources = Vec::new();
+
+    if stream_bonus_pct > 0.0 && !stream_watching.is_empty() {
+        xp_sources.push(format!(
+            "Twitch +{}% XP · watching {}",
+            trim_pct(stream_bonus_pct),
+            stream_watching.join(", ")
+        ));
+    } else if !stream_missing.is_empty() {
+        xp_sources.push(format!(
+            "Twitch +{}% available · chat missing: {}",
+            trim_pct(stream_bonus_pct.max(15.0)),
+            stream_missing.join(", ")
+        ));
+    }
+
+    let event = state.get("evento").cloned().unwrap_or(Value::Null);
+    let event_trainer = event.get("xpTreinadorPct").and_then(Value::as_f64).unwrap_or(0.0);
+    let event_pokemon = event.get("xpPokemonPct").and_then(Value::as_f64).unwrap_or(0.0);
+    if event_trainer > 0.0 || event_pokemon > 0.0 {
+        xp_sources.push(format!(
+            "Event +{}% trainer / +{}% Pokémon XP",
+            trim_pct(event_trainer as f32),
+            trim_pct(event_pokemon as f32)
+        ));
+    }
+
+    let guild_bonus = state.get("guildBonusPct").and_then(Value::as_f64).unwrap_or(0.0);
+    if guild_bonus > 0.0 {
+        xp_sources.push(format!("Guild +{}% XP", trim_pct(guild_bonus as f32)));
+    }
+
+    if state
+        .get("loja")
+        .and_then(|value| value.get("atrasados"))
+        .is_some()
+    {
+        xp_sources.push("Delayed XP boost active".to_string());
+    }
+
+    if state
+        .get("loja")
+        .and_then(|value| value.get("boosts"))
+        .and_then(Value::as_object)
+        .map(|boosts| !boosts.is_empty())
+        .unwrap_or(false)
+    {
+        xp_sources.push("Shop XP boost active".to_string());
+    }
 
     for bonus in [stream_bonus.clone(), stream_bonus_last.clone()] {
         if !bonus.is_empty() && !xp_bonuses.iter().any(|item| item == &bonus) {
@@ -1203,6 +1355,12 @@ fn probe_runtime_details(
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
         stream_bonus_last,
+        stream_bonus_pct,
+        stream_watching,
+        stream_live_bonus: live_names,
+        stream_missing,
+        xp_sources,
+        last_game_message_ms,
         xp_bonuses,
         hunts,
         market_listings,
