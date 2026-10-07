@@ -904,13 +904,14 @@ internal sealed class MainForm : Form
         catch (AuthenticationRequiredException ex)
         {
             slot.State = StreamConnectionState.AuthenticationRequired;
-            slot.Url = canonical;
+            slot.Url = null;
             throw new InvalidOperationException(
                 ex.Message + " Use Accounts → Log in… and then join the channel again.");
         }
         catch
         {
             slot.State = StreamConnectionState.Error;
+            slot.Url = null;
             throw;
         }
         finally
