@@ -4,14 +4,28 @@ use native_windows_gui as nwg;
 
 const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 const KICK_LOGIN: &str = "https://kick.com/";
-const VIOLENTMONKEY: &str = "https://addons.mozilla.org/firefox/addon/violentmonkey/";
+const POKEIDLE_APP: &str = "https://pokeidle.io/app";
+const STREAM_MANAGER_URL: &str = "https://pokeidle.io/app?moth-stream-action=manager";
+const SCAN_LIVE_URL: &str = "https://pokeidle.io/app?moth-stream-action=scan";
+
+const ADDONS: &[(&str, &str)] = &[
+    ("Auto Catch+", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/autocatch.user.js"),
+    ("Hunt Atlas", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/hunt-atlas.user.js"),
+    ("Moth Watch", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js"),
+    ("Performance+", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js"),
+    ("Upstream Scraper", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js"),
+    ("Live Stream Scanner", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js"),
+    ("Twitch Low Resource", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js"),
+];
 
 enum Action {
     Game(GameProfile),
     Twitch(GameProfile),
     Kick(GameProfile),
+    Streams(GameProfile),
+    ScanLive(GameProfile),
+    Addons(GameProfile),
     Folder(GameProfile),
-    Userscripts(GameProfile),
 }
 
 pub fn show() {
@@ -24,8 +38,8 @@ fn build() -> Result<(), String> {
     let mut window = nwg::Window::default();
     let mut title = nwg::Label::default();
 
-    let mut g1: [nwg::Button; 5] = std::array::from_fn(|_| nwg::Button::default());
-    let mut g2: [nwg::Button; 5] = std::array::from_fn(|_| nwg::Button::default());
+    let mut g1: [nwg::Button; 7] = std::array::from_fn(|_| nwg::Button::default());
+    let mut g2: [nwg::Button; 7] = std::array::from_fn(|_| nwg::Button::default());
 
     build_window(&mut window, &mut title)?;
     build_game_row(&window, &mut g1, GameProfile::Game1, "Game 1", 30)?;
@@ -44,13 +58,17 @@ fn build() -> Result<(), String> {
         (g1[0].handle, Action::Game(GameProfile::Game1)),
         (g1[1].handle, Action::Twitch(GameProfile::Game1)),
         (g1[2].handle, Action::Kick(GameProfile::Game1)),
-        (g1[3].handle, Action::Folder(GameProfile::Game1)),
-        (g1[4].handle, Action::Userscripts(GameProfile::Game1)),
+        (g1[3].handle, Action::Streams(GameProfile::Game1)),
+        (g1[4].handle, Action::ScanLive(GameProfile::Game1)),
+        (g1[5].handle, Action::Addons(GameProfile::Game1)),
+        (g1[6].handle, Action::Folder(GameProfile::Game1)),
         (g2[0].handle, Action::Game(GameProfile::Game2)),
         (g2[1].handle, Action::Twitch(GameProfile::Game2)),
         (g2[2].handle, Action::Kick(GameProfile::Game2)),
-        (g2[3].handle, Action::Folder(GameProfile::Game2)),
-        (g2[4].handle, Action::Userscripts(GameProfile::Game2)),
+        (g2[3].handle, Action::Streams(GameProfile::Game2)),
+        (g2[4].handle, Action::ScanLive(GameProfile::Game2)),
+        (g2[5].handle, Action::Addons(GameProfile::Game2)),
+        (g2[6].handle, Action::Folder(GameProfile::Game2)),
     ];
 
     let window_handle = window.handle;
@@ -78,8 +96,10 @@ fn build() -> Result<(), String> {
                             Action::Game(profile) => open_game(*profile),
                             Action::Twitch(profile) => open_login(*profile, TWITCH_LOGIN, "Twitch"),
                             Action::Kick(profile) => open_login(*profile, KICK_LOGIN, "KICK"),
+                            Action::Streams(profile) => open_profile_url(*profile, STREAM_MANAGER_URL),
+                            Action::ScanLive(profile) => open_profile_url(*profile, SCAN_LIVE_URL),
+                            Action::Addons(profile) => open_addons(*profile),
                             Action::Folder(profile) => open_profile_folder(*profile),
-                            Action::Userscripts(profile) => open_login(*profile, VIOLENTMONKEY, "official Violentmonkey"),
                         };
 
                         if let Err(error) = result {
@@ -118,7 +138,7 @@ fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), 
 
 fn build_game_row(
     window: &nwg::Window,
-    buttons: &mut [nwg::Button; 5],
+    buttons: &mut [nwg::Button; 7],
     _profile: GameProfile,
     title: &str,
     y: i32,
@@ -151,12 +171,24 @@ fn build_game_row(
         .build(&mut description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
 
-    let labels = ["Open Game", "Twitch Login", "KICK Login", "Profile Folder", "Violentmonkey"];
+    let labels = [
+        "Open Game",
+        "Twitch",
+        "KICK",
+        "Streams",
+        "Scan Live",
+        "Addons",
+        "Profile",
+    ];
+
     for (index, label) in labels.into_iter().enumerate() {
+        let row = if index < 4 { 0 } else { 1 };
+        let column = if index < 4 { index } else { index - 4 };
+
         nwg::Button::builder()
             .text(label)
-            .position((18 + (index as i32) * 108, 72))
-            .size((100, 32))
+            .position((18 + (column as i32) * 124, 68 + row * 38))
+            .size((116, 32))
             .parent(&frame)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
@@ -169,6 +201,41 @@ fn open_game(profile: GameProfile) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
     let _ = firefox::launch(&config)?;
     Ok(())
+}
+
+fn open_profile_url(profile: GameProfile, url: &str) -> Result<(), String> {
+    let config = Config::for_profile(profile)?;
+    firefox::open_url(&config, url)
+}
+
+fn open_addons(profile: GameProfile) -> Result<(), String> {
+    let config = Config::for_profile(profile)?;
+
+    let mut opened = 0usize;
+    let mut failures = Vec::new();
+
+    for &(name, url) in ADDONS {
+        match firefox::open_url(&config, url) {
+            Ok(()) => opened += 1,
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+
+    if failures.is_empty() {
+        nwg::simple_message(
+            "Moth",
+            &format!(
+                "Opened {opened} addon installers in {}. Violentmonkey will show the normal install/update page for each script.",
+                profile.label()
+            ),
+        );
+        return Ok(());
+    }
+
+    Err(format!(
+        "Opened {opened} addon installers, but some failed:\n{}",
+        failures.join("\n")
+    ))
 }
 
 fn open_login(profile: GameProfile, url: &str, service: &str) -> Result<(), String> {
