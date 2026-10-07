@@ -10,14 +10,6 @@ pub const ADDONS: &[(&str, &str)] = &[
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/autocatch.user.js",
     ),
     (
-        "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/hunt-atlas.user.js",
-    ),
-    (
-        "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js",
-    ),
-    (
         "Performance+",
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js",
     ),
@@ -30,9 +22,14 @@ pub const ADDONS: &[(&str, &str)] = &[
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js?v=6.1.1",
     ),
     (
+        "Controller Bridge",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/controller-bridge.user.js",
+    ),
+    (
         "Twitch Low Resource",
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js",
     ),
+
 ];
 
 pub fn open_game(profile: GameProfile) -> Result<(), String> {
