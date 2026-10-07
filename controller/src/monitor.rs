@@ -77,6 +77,7 @@ pub struct Health {
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
+    pub bridge_connected: bool,
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
     pub market_listings: Vec<MarketListing>,
@@ -120,6 +121,7 @@ impl Default for Health {
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
+            bridge_connected: false,
             tabs: Vec::new(),
             hunts: Vec::new(),
             market_listings: Vec::new(),
@@ -249,6 +251,7 @@ struct BrowserSession {
 
 #[derive(Default)]
 struct RuntimeProbe {
+    bridge_connected: bool,
     player_level: u32,
     player_xp: String,
     gold: u64,
@@ -306,6 +309,7 @@ struct Probe {
     gold: u64,
     orbs: u64,
     stream_bonus: String,
+    bridge_connected: bool,
     tabs: Vec<TabInfo>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
@@ -393,6 +397,7 @@ fn monitor_loop(
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
                         current.stream_bonus = probe.stream_bonus;
+                        current.bridge_connected = probe.bridge_connected;
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
                         current.market_listings = probe.market_listings;
@@ -673,20 +678,26 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         logged_in: page.get("loggedIn").and_then(Value::as_bool).unwrap_or(false),
         activity: page.get("activity").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
         hunt: page.get("hunt").and_then(Value::as_str).unwrap_or_default().to_string(),
-        active_pokemon: runtime.pokemon_level.is_empty()
-            .then(|| page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string())
-            .unwrap_or_else(|| {
-                let bridge_name = runtime.pokemon_xp.clone();
-                if bridge_name.is_empty() {
-                    page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string()
-                } else {
-                    page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string()
-                }
-            }),
-        fallen_count: runtime.fallen_count,
+        active_pokemon: if runtime.active_pokemon.is_empty() {
+            page.get("activePokemon")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        } else if runtime.pokemon_level.is_empty() {
+            runtime.active_pokemon.clone()
+        } else {
+            format!("{} · Lv {}", runtime.active_pokemon, runtime.pokemon_level)
+        },
+        fallen_count: if runtime.bridge_connected {
+            runtime.fallen_count
+        } else {
+            page.get("fallenCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32
+        },
         economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
         addon_ok,
-        addon_total: 6,
+        addon_total: 5,
         addon_missing,
         twitch_tabs,
         twitch_low_resource_ok,
@@ -707,7 +718,11 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         player_level: page.get("playerLevel").and_then(Value::as_str)
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(runtime.player_level),
-        player_xp: page.get("playerXp").and_then(Value::as_str).unwrap_or_default().to_string(),
+        player_xp: if page.get("playerXp").and_then(Value::as_str).unwrap_or_default().is_empty() {
+            runtime.player_xp
+        } else {
+            page.get("playerXp").and_then(Value::as_str).unwrap_or_default().to_string()
+        },
         gold: runtime.gold,
         orbs: runtime.orbs,
         stream_bonus: if runtime.stream_bonus.is_empty() {
@@ -837,6 +852,11 @@ fn probe_runtime_details(
 
     let player_level =
         state.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let bridge_connected = snapshot
+        .get("connected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     let player_xp = snapshot
         .get("state")
         .and_then(|s| s.get("playerXp"))
@@ -847,6 +867,13 @@ fn probe_runtime_details(
         state.get("fallen").and_then(Value::as_u64).unwrap_or(0) as u32;
     let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
     let orbs = state.get("orbs").and_then(Value::as_u64).unwrap_or(0);
+
+    let active_pokemon = active
+        .get("nome")
+        .or_else(|| active.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
 
     let pokemon_level = active
         .get("level")
@@ -1024,11 +1051,13 @@ fn probe_runtime_details(
     market_listings.truncate(100);
 
     Ok(RuntimeProbe {
+        bridge_connected,
         player_level,
         player_xp,
         gold,
         orbs,
         fallen_count,
+        active_pokemon,
         pokemon_level,
         pokemon_xp,
         ball_stock,
