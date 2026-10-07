@@ -58,6 +58,7 @@ pub struct Health {
     pub logged_in: bool,
     pub activity: String,
     pub hunt: String,
+    pub hunt_slug: String,
     pub active_pokemon: String,
     pub fallen_count: u32,
     pub economy_mode: bool,
@@ -104,6 +105,7 @@ impl Default for Health {
             logged_in: false,
             activity: "Starting".to_string(),
             hunt: String::new(),
+            hunt_slug: String::new(),
             active_pokemon: String::new(),
             fallen_count: 0,
             economy_mode: false,
@@ -264,6 +266,7 @@ struct BrowserSession {
 #[derive(Default)]
 struct RuntimeProbe {
     bridge_connected: bool,
+    hunt_slug: String,
     player_level: u32,
     player_xp: String,
     gold: u64,
@@ -297,6 +300,7 @@ struct Probe {
     logged_in: bool,
     activity: String,
     hunt: String,
+    hunt_slug: String,
     active_pokemon: String,
     fallen_count: u32,
     economy_mode: bool,
@@ -386,6 +390,7 @@ fn monitor_loop(
                         current.logged_in = probe.logged_in;
                         current.activity = probe.activity;
                         current.hunt = probe.hunt;
+                        current.hunt_slug = probe.hunt_slug;
                         current.active_pokemon = probe.active_pokemon;
                         current.fallen_count = probe.fallen_count;
                         current.economy_mode = probe.economy_mode;
@@ -644,6 +649,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         logged_in: page.get("loggedIn").and_then(Value::as_bool).unwrap_or(false),
         activity: page.get("activity").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
         hunt: page.get("hunt").and_then(Value::as_str).unwrap_or_default().to_string(),
+        hunt_slug: runtime.hunt_slug.clone(),
         active_pokemon: if runtime.active_pokemon.is_empty() {
             page.get("activePokemon")
                 .and_then(Value::as_str)
@@ -818,6 +824,12 @@ fn probe_runtime_details(
 
     let player_level =
         state.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+
+    let hunt_slug = state
+        .get("huntSlug")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let bridge_connected = snapshot
         .get("connected")
         .and_then(Value::as_bool)
@@ -1076,6 +1088,7 @@ fn probe_runtime_details(
 
     Ok(RuntimeProbe {
         bridge_connected,
+        hunt_slug,
         player_level,
         player_xp,
         gold,
