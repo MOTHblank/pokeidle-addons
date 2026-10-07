@@ -156,7 +156,11 @@ internal sealed class MainForm : Form
         };
         Shown += async (_, _) => await InitializeAsync();
 
-        _statsTimer.Tick += (_, _) => UpdateStatus();
+        _statsTimer.Tick += async (_, _) =>
+        {
+            UpdateStatus();
+            await UpdateUserscriptStatusAsync();
+        };
         _probeTimer.Tick += async (_, _) => await ProbeTickAsync();
     }
 
@@ -407,6 +411,7 @@ internal sealed class MainForm : Form
 
             _activeWorkspaceIndex = 0;
             LayoutPanes();
+            await UpdateUserscriptStatusAsync();
             _statsTimer.Start();
             if (_probeToggle.Checked) _probeTimer.Start();
             UpdateStatus();
@@ -982,6 +987,62 @@ internal sealed class MainForm : Form
             MessageBox.Show(this, ex.ToString(), "Addon reload failure",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private async Task UpdateUserscriptStatusAsync()
+    {
+        if (_games.Count == 0)
+        {
+            _userscriptStatus.Text =
+                $"Userscripts: VM ready · {_userscripts?.ScriptNames.Count ?? 0} bundled · no game";
+            return;
+        }
+
+        var stream = false;
+        var market = false;
+        var checkedPanes = 0;
+
+        foreach (var pane in _games)
+        {
+            try
+            {
+                var raw = await pane.View.ExecuteScriptAsync(
+                    """
+                    (() => JSON.stringify({
+                        stream: document.documentElement?.getAttribute('data-idleshell-stream-scanner') === 'started',
+                        market: document.documentElement?.getAttribute('data-idleshell-market-bot') === 'started'
+                    }))()
+                    """
+                );
+
+                using var outer = JsonDocument.Parse(raw);
+                var inner = outer.RootElement.GetString();
+                if (string.IsNullOrWhiteSpace(inner))
+                    continue;
+
+                using var state = JsonDocument.Parse(inner);
+                var root = state.RootElement;
+                stream |= root.TryGetProperty("stream", out var streamValue) &&
+                          streamValue.ValueKind == JsonValueKind.True &&
+                          streamValue.GetBoolean();
+                market |= root.TryGetProperty("market", out var marketValue) &&
+                          marketValue.ValueKind == JsonValueKind.True &&
+                          marketValue.GetBoolean();
+                checkedPanes++;
+            }
+            catch { }
+        }
+
+        if (checkedPanes == 0)
+        {
+            _userscriptStatus.Text =
+                $"Userscripts: VM ready · {_userscripts?.ScriptNames.Count ?? 0} bundled · checking…";
+            return;
+        }
+
+        _userscriptStatus.Text =
+            $"Userscripts: VM ready · Stream Scanner {(stream ? "running" : "not running")} · " +
+            $"Moth Watch {(market ? "running" : "not running")}";
     }
 
     // --- Stream link routing -------------------------------------------------
