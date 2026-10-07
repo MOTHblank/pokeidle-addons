@@ -19,7 +19,7 @@
 
     const MAX_LIVE_CHATS_PER_SERVICE = 10;
     const LIVE_SCAN_INTERVAL_MS = 60 * 60 * 1000;
-    const INITIAL_SCAN_DELAY_MS = 20 * 1000;
+    const INITIAL_SCAN_DELAY_MS = 30 * 1000;
     const UI_RECHECK_INTERVAL_MS = 30 * 1000;
 
     let scanInProgress = false;
@@ -339,6 +339,18 @@
         }
     }
 
+    function setScanDiagnostics(data) {
+        const button = document.getElementById(BUTTON_ID);
+        if (!button) return;
+
+        button.dataset.mothScanStatus = data.status || '';
+        button.dataset.mothScanReason = data.reason || '';
+        button.dataset.mothScanLive = String(data.live ?? 0);
+        button.dataset.mothScanOpened = String(data.opened ?? 0);
+        button.dataset.mothScanTracked = String(data.tracked ?? 0);
+        button.dataset.mothScanAt = String(Date.now());
+    }
+
     async function runLiveScan(reason = 'manual') {
         if (scanInProgress) {
             return {
@@ -350,11 +362,13 @@
         }
 
         scanInProgress = true;
+        setScanDiagnostics({ status: 'scanning', reason });
 
         try {
             if (!(await waitForGameUi())) {
                 console.info('[Moth] live scan skipped: game UI not ready');
 
+                setScanDiagnostics({ status: 'not-ready', reason, tracked: openChats.size });
                 return {
                     channels: [],
                     opened: 0,
@@ -409,6 +423,14 @@
                 closeChatsNotLive(liveKeys);
             }
 
+            setScanDiagnostics({
+                status: 'ok',
+                reason,
+                live: live.size,
+                opened,
+                tracked: openChats.size
+            });
+
             console.info(
                 '[Moth] live chat scan:',
                 reason,
@@ -426,6 +448,7 @@
                 tracked: openChats.size
             };
         } catch (error) {
+            setScanDiagnostics({ status: 'failed', reason, tracked: openChats.size });
             console.error('[Moth] live chat scan failed:', error);
 
             return {
