@@ -98,13 +98,13 @@ struct WindowSearch {
 
 #[cfg(windows)]
 unsafe extern "system" fn find_process_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let search = &mut *(lparam as *mut WindowSearch);
+    let search = unsafe { &mut *(lparam as *mut WindowSearch) };
     let mut window_pid: DWORD = 0;
 
-    GetWindowThreadProcessId(hwnd, &mut window_pid);
+    unsafe { GetWindowThreadProcessId(hwnd, &mut window_pid); }
 
-    if window_pid == search.pid && IsWindowVisible(hwnd) != 0 {
-        ShowWindow(hwnd, SW_MINIMIZE);
+    if window_pid == search.pid && unsafe { IsWindowVisible(hwnd) } != 0 {
+        unsafe { ShowWindow(hwnd, SW_MINIMIZE);
         search.minimized = true;
         return 0;
     }
