@@ -19,7 +19,7 @@ PokéIdle runs in normal installed Firefox with one isolated profile per game ac
 
 The game and both streaming services deliberately share the same browser profile. That means a stream opened for Game 1 uses Game 1's Twitch/KICK sessions, while Game 2 uses Game 2's sessions.
 
-The existing userscripts remain ordinary `*.user.js` files and are executed by an existing userscript manager such as Violentmonkey or Tampermonkey.
+The existing userscripts remain ordinary `*.user.js` files and are executed by the **official Violentmonkey Firefox extension** (or another normal browser userscript manager such as Tampermonkey). The controller never implements the userscript engine itself.
 
 ## Resource policy
 
@@ -27,13 +27,15 @@ The controller keeps the native side tiny and lets Firefox do the actual web wor
 
 Stream handling is intentionally simple:
 
-- live channels are opened as normal Firefox tabs/windows in the **same game profile**;
+- live channels are opened as **chat-only** Twitch/KICK pop-outs in the **same game profile**;
+- each game has 10 Twitch + 10 KICK chat slots;
+- the stream manager remembers those slots in the game's localStorage and can open/close them individually or all at once;
 - there are no hidden browser instances or background WebViews;
-- Twitch stream pages use the low-resource addon to target the lowest advertised video quality (preferring 160p) and hide nonessential UI;
-- Twitch chat pop-outs are left alone so they remain usable without restoring the old hidden-chat architecture;
+- actual video is only loaded when the user deliberately opens a normal stream page;
+- Twitch chat pop-outs are left alone by the low-resource video addon;
 - the live-stream scanner uses a low-frequency existence check instead of a whole-document mutation observer.
 
-This keeps the process count at roughly one Firefox instance per game account, with extra cost only when live stream tabs are actually open.
+This keeps the process count at roughly one Firefox instance per game account. The normal stream path adds chat connections only, not video decoders for every followed channel.
 
 ## Controller
 
