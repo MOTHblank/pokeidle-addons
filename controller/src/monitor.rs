@@ -458,7 +458,6 @@ fn monitor_loop(
                         current.stream_bonus = probe.stream_bonus.clone();
                         if !probe.stream_bonus.is_empty() {
                             current.stream_bonus_last = probe.stream_bonus.clone();
-                            current.stream_bonus_last = probe.last_game_message_ms;
                         }
                         current.stream_bonus_pct = probe.stream_bonus_pct;
                         current.stream_watching = probe.stream_watching;
