@@ -378,7 +378,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
         const activePokemon =
             ativo && !ativo.classList.contains('vazio')
-                ? text('#ativo-card').slice(0, 100)
+                ? text('#ativo-card').slice(0, 48)
                 : '';
 
         const huntSelected =
