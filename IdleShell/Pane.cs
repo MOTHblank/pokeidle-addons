@@ -270,12 +270,23 @@ internal sealed class Pane
         manager.InstallForProfileAsync(
             View.Profile, _environment);
 
-    public void Show(Rectangle bounds)
+    public void Show(Rectangle bounds, bool normalMemory = true)
     {
         Controller.Bounds = bounds;
         Controller.IsVisible = true;
         IsForeground = true;
-        try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Normal; } catch { }
+
+        // Visible stream panes continue playing, but only the selected stream
+        // needs the full normal memory target. Other simultaneously visible
+        // streams can use WebView2's low-memory target without being suspended;
+        // scripts and network connections continue to run.
+        try
+        {
+            View.MemoryUsageTargetLevel = normalMemory
+                ? CoreWebView2MemoryUsageTargetLevel.Normal
+                : CoreWebView2MemoryUsageTargetLevel.Low;
+        }
+        catch { }
     }
 
     // Background mode: IsVisible=false stops compositing (the big cost) while the
