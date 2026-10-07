@@ -2,7 +2,7 @@
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
 // @version      1.0.0
-// @description  Keeps Twitch streams at the lowest available quality and trims nonessential page rendering to reduce bandwidth, decode and UI overhead.
+// @description  Keeps Twitch streams at the lowest available quality and trims nonessential page rendering to reduce bandwidth, decode and UI overhead while leaving chat pop-outs untouched.
 // @match        https://www.twitch.tv/*
 // @match        https://www.twitch.tv/*/*
 // @match        https://player.twitch.tv/*
@@ -22,7 +22,10 @@
 
     let qualityBusy = false;
     let lastQualityAttempt = 0;
+    let qualityConfiguredAt = 0;
     let lastUrl = location.href;
+
+    const isChatPopout = /\/popout\/[^/]+\/chat(?:[/?]|$)/i.test(location.pathname);
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -61,8 +64,10 @@
     };
 
     const forceLowestQuality = async () => {
+        if (isChatPopout) return;
         if (qualityBusy) return;
-        if (Date.now() - lastQualityAttempt < 2500) return;
+        if (Date.now() - qualityConfiguredAt < 60000) return;
+        if (Date.now() - lastQualityAttempt < 15000) return;
 
         const gear = document.querySelector('[data-a-target="player-settings-button"]');
         if (!gear) return;
@@ -126,9 +131,10 @@
             label.click();
             await sleep(250);
 
-            console.info('[IdleShell] Twitch low-resource quality:', textOf(target));
+            qualityConfiguredAt = Date.now();
+            console.info('[Moth] Twitch low-resource quality:', textOf(target));
         } catch (error) {
-            console.warn('[IdleShell] Twitch low-resource quality failed:', error);
+            console.warn('[Moth] Twitch low-resource quality failed:', error);
         } finally {
             await closeQualityMenu();
             qualityBusy = false;
@@ -136,10 +142,11 @@
     };
 
     const addResourceSavingCss = () => {
-        if (document.getElementById('idleshell-twitch-low-resource-css')) return;
+        if (isChatPopout) return;
+        if (document.getElementById('moth-twitch-low-resource-css')) return;
 
         const style = document.createElement('style');
-        style.id = 'idleshell-twitch-low-resource-css';
+        style.id = 'moth-twitch-low-resource-css';
         style.textContent = [
             // Chat is not needed for drop farming and can be a sizeable DOM/render cost.
             '[data-a-target="chat-room-component-layout"] { display:none !important; }',
@@ -159,6 +166,7 @@
         if (location.href !== lastUrl) {
             lastUrl = location.href;
             lastQualityAttempt = 0;
+            qualityConfiguredAt = 0;
         }
 
         void forceLowestQuality();
@@ -171,7 +179,7 @@
     // creates a callback for a very large number of unrelated DOM mutations.
     // Re-checking on a fixed interval is materially cheaper and still repairs
     // the player after SPA navigation, ads, and player recreation.
-    setInterval(tick, 5000);
+    setInterval(tick, 15000);
 
-    console.info('[IdleShell] Twitch low-resource addon active');
+    console.info('[Moth] Twitch low-resource addon active');
 })();
