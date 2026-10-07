@@ -345,6 +345,7 @@ struct Probe {
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
     market_catalog: Vec<MarketItem>,
+    market_summary: Vec<MarketSummary>,
 }
 
 fn monitor_loop(
@@ -720,6 +721,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
         market_catalog: runtime.market_catalog,
+        market_summary: runtime.market_summary,
     })
 }
 fn build_tab_infos(
