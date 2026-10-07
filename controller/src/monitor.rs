@@ -261,6 +261,7 @@ struct RuntimeProbe {
     gold: u64,
     orbs: u64,
     fallen_count: u32,
+    active_pokemon: String,
 
     pokemon_level: String,
     pokemon_xp: String,
