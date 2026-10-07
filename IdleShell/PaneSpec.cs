@@ -3,19 +3,16 @@ using System.Text.Json.Serialization;
 
 namespace Moth.PokeIdle.IdleShell;
 
-internal enum PaneKind { Game, Stream, ActiveStreamMarker }
-
-// How an inactive stream pane behaves. Background = IsVisible=false (no compositing,
-// timers kept alive via browser flags). Parked = off-screen but still rendering
-// (fallback if platforms pause when hidden).
-internal enum StreamMode { Background, Parked }
+internal enum PaneKind { Game }
 
 // Profile names must be alphanumeric (WebView2 restriction).
-// Group identifies the game workspace that owns a stream pane. Older session files
-// omit Group and are migrated into Game 1 by MainForm.
+// Group identifies the game workspace owning a game pane.
+// Stream presence is not a PaneSpec and is intentionally not persisted.
 internal sealed record PaneSpec(
-    string Title, string Url, string Profile, PaneKind Kind,
-    StreamMode Mode = StreamMode.Background,
+    string Title,
+    string Url,
+    string Profile,
+    PaneKind Kind,
     string Group = "",
     bool Background = false);
 
@@ -35,11 +32,21 @@ internal static class SessionStore
             {
                 var list = JsonSerializer.Deserialize<List<PaneSpec>>(
                     File.ReadAllText(AppConfig.SessionFile), Options);
-                if (list is { Count: > 0 } && list.Count(p => p.Kind == PaneKind.Game) == 2)
-                    return list;
+
+                var games = list?
+                    .Where(p => p.Kind == PaneKind.Game)
+                    .Take(2)
+                    .ToList();
+
+                if (games is { Count: 2 })
+                    return games;
             }
         }
-        catch { /* fall through to defaults */ }
+        catch
+        {
+            // Old sessions containing stream PaneSpecs are intentionally
+            // discarded after the stream subsystem redesign.
+        }
 
         return
         [
@@ -53,7 +60,9 @@ internal static class SessionStore
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(AppConfig.SessionFile)!);
-            File.WriteAllText(AppConfig.SessionFile, JsonSerializer.Serialize(specs, Options));
+            File.WriteAllText(
+                AppConfig.SessionFile,
+                JsonSerializer.Serialize(specs, Options));
         }
         catch { }
     }
