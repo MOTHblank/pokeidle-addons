@@ -335,7 +335,8 @@
         // its stream data). Never close a Twitch tab that the game reports as
         // currently being watched for rewards.
         try {
-            const bridge = window.__mothControllerBridgeV1;
+            const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const bridge = page.__mothControllerBridgeV1;
             const snapshot = bridge && typeof bridge.snapshot === 'function'
                 ? bridge.snapshot()
                 : null;
