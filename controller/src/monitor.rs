@@ -783,7 +783,7 @@ fn xp_progress(value: &Value, fallback: &str) -> String {
 
 
 fn trim_pct(value: f32) -> String {
-    if (value.fract().abs() < 0.01 {
+    if value.fract().abs() < 0.01 {
         format!("{:.0}", value)
     } else {
         format!("{:.1}", value)
