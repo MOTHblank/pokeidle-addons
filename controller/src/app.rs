@@ -5,6 +5,7 @@ use crate::monitor;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::process::Child;
+use std::time::Duration;
 use std::rc::Rc;
 
 struct State {
@@ -147,7 +148,7 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not create Close button: {error}"))?;
 
     nwg::AnimationTimer::builder()
-        .interval(2000)
+        .interval(Duration::from_millis(2000))
         .parent(&window)
         .build(&mut health_timer)
         .map_err(|error| format!("could not create health timer: {error}"))?;
