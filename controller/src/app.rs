@@ -683,7 +683,7 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, widt
         });
 }
 
-fn draw_runtime_section(app: &ControllerApp, ui: &mut egui::Ui) {
+fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("Runtime")
@@ -967,36 +967,35 @@ fn compact_text(text: &str, max_chars: usize) -> String {
 }
 
 fn configure_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    ctx.set_theme(egui::Theme::Dark);
+    ctx.global_style_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(12.0, 7.0);
+        style.spacing.interact_size.y = 30.0;
 
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(12.0, 7.0);
-    style.spacing.interact_size.y = 30.0;
+        style.text_styles = [
+            (TextStyle::Heading, FontId::proportional(22.0)),
+            (TextStyle::Body, FontId::proportional(13.0)),
+            (TextStyle::Button, FontId::proportional(12.0)),
+            (TextStyle::Small, FontId::proportional(10.0)),
+            (TextStyle::Monospace, FontId::monospace(11.0)),
+        ]
+        .into();
 
-    style.text_styles = [
-        (TextStyle::Heading, FontId::proportional(22.0)),
-        (TextStyle::Body, FontId::proportional(13.0)),
-        (TextStyle::Button, FontId::proportional(12.0)),
-        (TextStyle::Small, FontId::proportional(10.0)),
-        (TextStyle::Monospace, FontId::monospace(11.0)),
-    ]
-    .into();
-
-    style.visuals.window_fill = PANEL;
-    style.visuals.panel_fill = BG;
-    style.visuals.faint_bg_color = PANEL_ALT;
-    style.visuals.extreme_bg_color = BG;
-    style.visuals.override_text_color = Some(TEXT);
-    style.visuals.widgets.noninteractive.bg_fill = PANEL;
-    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-    style.visuals.widgets.inactive.bg_fill = PANEL_ALT;
-    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(28, 33, 43);
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(31, 36, 46);
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
-
-    ctx.set_style(style);
+        style.visuals.window_fill = PANEL;
+        style.visuals.panel_fill = BG;
+        style.visuals.faint_bg_color = PANEL_ALT;
+        style.visuals.extreme_bg_color = BG;
+        style.visuals.override_text_color = Some(TEXT);
+        style.visuals.widgets.noninteractive.bg_fill = PANEL;
+        style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
+        style.visuals.widgets.inactive.bg_fill = PANEL_ALT;
+        style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(28, 33, 43);
+        style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
+        style.visuals.widgets.active.bg_fill = Color32::from_rgb(31, 36, 46);
+        style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
+    });
 }
 
 pub fn run() -> Result<(), String> {
