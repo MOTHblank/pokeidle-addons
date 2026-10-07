@@ -37,29 +37,28 @@ internal sealed class ViolentmonkeyManager
 
     public IReadOnlyList<string> LastMatchDiagnostics { get; private set; } = [];
 
-    public string LastMatchSummary =>
-        LastMatchDiagnostics.Count == 0
-            ? "not checked"
-            : string.Join(
-                " · ",
-                LastMatchDiagnostics.Select(d =>
-                {
-                    var parts = d.Split(new[] { ": " }, 2, StringSplitOptions.None);
-                    if (parts.Length != 2)
-                        return d;
+    public string LastMatchSummary
+    {
+        get
+        {
+            static string State(IReadOnlyList<string> diagnostics, string scriptName)
+            {
+                var entry = diagnostics.FirstOrDefault(
+                    d => d.StartsWith(scriptName + ": ", StringComparison.OrdinalIgnoreCase));
 
-                    var name = Path.GetFileNameWithoutExtension(parts[0]);
-                    var match = parts[1].Contains("MATCHES app", StringComparison.Ordinal);
-                    var interesting =
-                        name.Contains("stream-auto-open", StringComparison.OrdinalIgnoreCase) ||
-                        name.Contains("market-bot", StringComparison.OrdinalIgnoreCase);
+                if (entry is null)
+                    return "?";
 
-                    return interesting
-                        ? (name.Contains("stream-auto-open", StringComparison.OrdinalIgnoreCase) ? "Stream" : "Market") +
-                          (match ? " MATCH" : " MISS")
-                        : "";
-                })
-                .Where(s => !string.IsNullOrWhiteSpace(s)));
+                return entry.Contains("MATCHES app", StringComparison.Ordinal)
+                    ? "MATCH"
+                    : "MISS";
+            }
+
+            return
+                $"Stream {State(LastMatchDiagnostics, "stream-auto-open.user")} · " +
+                $"Market {State(LastMatchDiagnostics, "market-bot.user")}";
+        }
+    }
 
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
