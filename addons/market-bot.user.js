@@ -13,6 +13,9 @@
 (() => {
     'use strict';
 
+    if (new URLSearchParams(location.search).has('moth-controller')) return;
+
+
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
