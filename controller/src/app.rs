@@ -50,7 +50,7 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not create title: {error}"))?;
 
     nwg::Label::builder()
-        .text("2 game profiles · shared Twitch/KICK logins · low overhead")
+        .text("2 isolated profiles · shared Twitch/KICK logins · low overhead")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 56))
         .size((470, 28))
@@ -157,22 +157,9 @@ pub fn run() -> Result<(), String> {
         accounts: None,
     }));
 
-    {
-        let mut state = state.borrow_mut();
-
-        launch_one(
-            GameProfile::Game1,
-            &mut state.game1,
-            &game1_status,
-            &status,
-        );
-        launch_one(
-            GameProfile::Game2,
-            &mut state.game2,
-            &game2_status,
-            &status,
-        );
-    }
+    game1_status.set_text("Stopped");
+    game2_status.set_text("Stopped");
+    status.set_text("Ready · launch only the profiles you need");
 
     let game1_button_handle = game1_button.handle;
     let game2_button_handle = game2_button.handle;
