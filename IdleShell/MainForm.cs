@@ -835,14 +835,10 @@ internal sealed class MainForm : Form
         _workspaces.FirstOrDefault(w =>
             string.Equals(w.GameProfile, group, StringComparison.OrdinalIgnoreCase));
 
-    private GameWorkspace? WorkspaceForPane(Pane pane)
-    {
-        if (pane.Spec.Kind == PaneKind.Game)
-            return WorkspaceForGroup(pane.Spec.Profile);
-
-        return _workspaces.FirstOrDefault(w =>
-            w.Slots.Any(s => ReferenceEquals(s.Pane, pane)));
-    }
+    private GameWorkspace? WorkspaceForPane(Pane pane) =>
+        pane.Spec.Kind == PaneKind.Game
+            ? WorkspaceForGroup(pane.Spec.Profile)
+            : null;
 
     // --- Panes -----------------------------------------------------------------
 
