@@ -383,6 +383,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     session.next_id += 1;
 
     let expression = r#"(() => {
+        try {
         const text = (selector) => {
             const el = document.querySelector(selector);
             return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
@@ -550,8 +551,12 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             streamScanLive,
             streamScanOpened,
             xpBonuses: xpBonusUnique
-        });;
-    })()"#;
+
+        } catch (error) {
+            return JSON.stringify({
+                probeError: String(error?.stack || error)
+            });
+        }    })()"#;
 
     let result = send_and_wait(
         &mut session.socket,
@@ -585,6 +590,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
     let page: Value =
         serde_json::from_str(raw).map_err(|error| format!("invalid page probe: {error}"))?;
+
+    if let Some(error) = page.get("probeError").and_then(Value::as_str) {
+        return Err(format!("page probe JavaScript exception: {error}"));
+    }
 
     let addon_missing = page
         .get("addonMissing")
