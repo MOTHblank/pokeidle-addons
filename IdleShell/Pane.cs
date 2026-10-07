@@ -226,11 +226,21 @@ internal sealed class Pane
         if (Spec.Kind == PaneKind.Game)
             await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
 
-        // Install the real upstream Violentmonkey extension before the first
-        // navigation, and synchronize repository scripts through VM's own API.
-        if (_userscripts is not null)
+        // The full Violentmonkey extension is only needed by PokéIdle game
+        // pages. Stream pages use the Twitch low-resource addon directly when
+        // applicable, avoiding a persistent extension background stack in every
+        // stream profile.
+        if (Spec.Kind == PaneKind.Game && _userscripts is not null)
+        {
             await _userscripts.InstallForProfileAsync(
                 View.Profile, _environment);
+        }
+        else if (Spec.Kind == PaneKind.Stream &&
+                 AccountManager.ServiceForUrl(Spec.Url) == AccountService.Twitch &&
+                 _userscripts?.FindScriptSource("Twitch Low Resource Mode") is { } lowResourceScript)
+        {
+            await View.AddScriptToExecuteOnDocumentCreatedAsync(lowResourceScript);
+        }
 
         View.WebMessageReceived += (_, e) =>
         {
