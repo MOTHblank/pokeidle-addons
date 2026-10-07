@@ -2,7 +2,7 @@
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
 // @version      3.1.0
-// @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and routes them to IdleShell.
+// @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
 // @run-at       document-start
@@ -12,12 +12,7 @@
 (() => {
     'use strict';
 
-    const page =
-        typeof unsafeWindow !== 'undefined'
-            ? unsafeWindow
-            : window;
-
-    const BUTTON_ID = 'idleshell-scan-live-streams';
+    const BUTTON_ID = 'moth-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';
 
     const LIVE_VALUE_RE =
@@ -386,7 +381,7 @@
         button.type = 'button';
         button.id = BUTTON_ID;
         button.title =
-            'Open all live Twitch/KICK streams';
+'Open all live Twitch/KICK streams';
         button.setAttribute(
             'aria-label',
             'Open all live Twitch and KICK streams'
@@ -430,10 +425,6 @@
             'afterend',
             button
         );
-    }
-
-    function scheduleButtonInstall() {
-        window.setTimeout(ensureButton, 100);
     }
 
     function start() {
