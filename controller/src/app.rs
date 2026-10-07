@@ -234,7 +234,7 @@ pub fn run() -> Result<(), String> {
                             &game2_button,
                             &game2_status,
                             &status,
-                            notice_sender,
+                            notice_sender.clone(),
                         );
                     } else if handle == launch_both_button_handle {
                         let mut state = state_for_events.borrow_mut();
@@ -245,7 +245,7 @@ pub fn run() -> Result<(), String> {
                             &game1_button,
                             &game1_status,
                             &status,
-                            notice_sender,
+                            notice_sender.clone(),
                         );
                         launch_one(
                             GameProfile::Game2,
@@ -253,7 +253,7 @@ pub fn run() -> Result<(), String> {
                             &game2_button,
                             &game2_status,
                             &status,
-                            notice_sender,
+                            notice_sender.clone(),
                         );
                     } else if handle == accounts_button_handle {
                         let mut state = state_for_events.borrow_mut();
@@ -306,7 +306,7 @@ fn toggle_one(
     if running {
         stop_one(profile, state, button, profile_status, global_status);
     } else {
-        launch_one(profile, state, button, profile_status, global_status, notice_sender);
+        launch_one(profile, state, button, profile_status, global_status, notice_sender.clone());
     }
 }
 
