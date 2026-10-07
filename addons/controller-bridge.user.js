@@ -266,6 +266,8 @@
                     pokemon,
                     new Set(['xp','exp','experiencia','experience','xpAtual','expAtual'])
                 ),
+                activePokemonXpNivel: Number(pokemon?.xpNivel) || 0,
+                activePokemonXpProximo: Number(pokemon?.xpProximo) || 0,
                 fallen: fallen(),
                 playerXp,
                 visibleStreamBonus: currentStreamBonus,
@@ -300,6 +302,12 @@
                     }))
                     : []
             })),
+            stream: {
+                twitch: copy(state?.twitch),
+                kick: copy(state?.kick),
+                bonusCurrent: currentStreamBonus,
+                bonusLast: lastStreamBonus
+            },
             catalog: copy(catalog) || [],
             market: copy(market) || [],
             battleEvents: copy(events) || []
