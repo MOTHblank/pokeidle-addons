@@ -638,7 +638,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_bonuses.push("Twitch stream · +15% XP (chat open)".to_string());
     }
 
-    let runtime = RuntimeProbe::default();
+    let runtime = probe_runtime_details(session, &game.id).unwrap_or_default();
 
     Ok(Probe {
         url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -671,6 +671,304 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_bonuses: runtime.xp_bonuses,
     })
 }
+fn probe_runtime_details(
+    session: &mut BrowserSession,
+    context_id: &str,
+) -> Result<RuntimeProbe, String> {
+    let id = session.next_id;
+    session.next_id += 1;
+
+    let expression = r#"(() => {
+        const bridge = window.__mothControllerBridgeV1;
+        if (!bridge || typeof bridge.snapshot !== 'function') {
+            return JSON.stringify({ error: 'controller bridge is not installed' });
+        }
+        return JSON.stringify(bridge.snapshot());
+    })()"#;
+
+    let result = send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": expression,
+                "target": { "context": context_id },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+
+    let raw = result
+        .get("result")
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Firefox returned no controller bridge snapshot".to_string())?;
+
+    let snapshot: Value =
+        serde_json::from_str(raw)
+            .map_err(|error| format!("invalid controller bridge snapshot: {error}"))?;
+
+    if let Some(error) = snapshot.get("error").and_then(Value::as_str) {
+        return Err(error.to_string());
+    }
+
+    let state = snapshot.get("state").cloned().unwrap_or(Value::Null);
+    let active = state.get("activePokemon").cloned().unwrap_or(Value::Null);
+
+    let player_level =
+        state.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
+    let orbs = state.get("orbs").and_then(Value::as_u64).unwrap_or(0);
+
+    let pokemon_level = active
+        .get("level")
+        .and_then(Value::as_u64)
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
+    let pokemon_xp = state
+        .get("activePokemonXp")
+        .and_then(Value::as_u64)
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
+    let mut ball_stock = Vec::new();
+    if let Some(items) = state.get("domBalls").and_then(Value::as_array) {
+        for item in items {
+            let name = item.get("name").and_then(Value::as_str).unwrap_or("Ball");
+            let count = item.get("count").and_then(Value::as_u64).unwrap_or(0);
+            ball_stock.push(format!("{} {}", name, count));
+        }
+    }
+
+    if ball_stock.is_empty() {
+        if let Some(object) = state.get("balls").and_then(Value::as_object) {
+            for (id, count) in object {
+                ball_stock.push(format!("Ball {} {}", id, count));
+            }
+        }
+    }
+
+    let mut xp_bonuses = snapshot
+        .get("state")
+        .and_then(|s| s.get("xpBonuses"))
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let stream_bonus = state
+        .get("visibleStreamBonus")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    if !stream_bonus.is_empty()
+        && !xp_bonuses.iter().any(|item| item == &stream_bonus)
+    {
+        xp_bonuses.push(stream_bonus.clone());
+    }
+
+    let current_hunt = state
+        .get("huntSlug")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let battle_events = snapshot
+        .get("battleEvents")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut kill_times: std::collections::HashMap<String, Vec<u64>> =
+        std::collections::HashMap::new();
+
+    for entry in battle_events {
+        if entry.get("event").and_then(|e| e.get("k")).and_then(Value::as_str) != Some("morte") {
+            continue;
+        }
+
+        let hunt = entry
+            .get("hunt")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        if hunt.is_empty() {
+            continue;
+        }
+
+        let at = entry.get("at").and_then(Value::as_u64).unwrap_or(0);
+        kill_times.entry(hunt.to_string()).or_default().push(at);
+    }
+
+    let hunts = snapshot
+        .get("hunts")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values.iter().map(|hunt| {
+                let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
+                let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
+                let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let species = hunt.get("species").and_then(Value::as_array).map(|values| {
+                    values.iter()
+                        .filter_map(|species| species.get("name").and_then(Value::as_str).map(str::to_string))
+                        .collect::<Vec<_>>()
+                }).unwrap_or_default();
+
+                let kills = kill_times.get(&slug).cloned().unwrap_or_default();
+                let xp_per_hour = if kills.len() >= 2 {
+                    let first = *kills.first().unwrap_or(&0);
+                    let last = *kills.last().unwrap_or(&first);
+                    let elapsed_ms = last.saturating_sub(first);
+                    if elapsed_ms >= 1000 {
+                        let kills_per_hour = (kills.len() as f64) * 3_600_000.0 / elapsed_ms as f64;
+                        let base_xp = (0.6_f64 * (level as f64).powi(2) + 8.0).floor();
+                        (kills_per_hour * base_xp).round() as u64
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+
+                HuntInfo {
+                    slug,
+                    name,
+                    level,
+                    species,
+                    xp_per_hour,
+                }
+            }).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let catalog = snapshot
+        .get("catalog")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut names = std::collections::HashMap::new();
+    for item in catalog {
+        if let Some(id) = item.get("id").and_then(Value::as_u64) {
+            let name = item.get("nome")
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("Item")
+                .to_string();
+            names.insert(id, name);
+        }
+    }
+
+    let mut market_listings = Vec::new();
+    if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
+        for entry in messages {
+            let Some(message) = entry.get("message") else { continue; };
+            if message.get("aba").and_then(Value::as_str) != Some("item") {
+                continue;
+            }
+
+            let item_id = message.get("itemId").and_then(Value::as_u64).unwrap_or(0);
+            let currency = message.get("moeda").and_then(Value::as_str).unwrap_or("gold").to_string();
+            let name = names.get(&item_id).cloned().unwrap_or_else(|| format!("Item {}", item_id));
+
+            if let Some(lines) = message.get("linhas").and_then(Value::as_array) {
+                for listing in lines {
+                    let id = listing.get("id").and_then(Value::as_u64).unwrap_or(0);
+                    let price = listing.get("preco").and_then(Value::as_u64).unwrap_or(0);
+                    if id == 0 || price == 0 { continue; }
+
+                    market_listings.push(MarketListing {
+                        id,
+                        item_id,
+                        name: name.clone(),
+                        currency: currency.clone(),
+                        price,
+                        quantity: listing.get("qtd").and_then(Value::as_u64).unwrap_or(1),
+                        seller: listing.get("vendedor").and_then(Value::as_str).unwrap_or("—").to_string(),
+                        retained_until: listing.get("compravelEm").and_then(Value::as_u64).unwrap_or(0),
+                    });
+                }
+            }
+        }
+    }
+
+    market_listings.sort_by_key(|listing| listing.price);
+    market_listings.truncate(100);
+
+    Ok(RuntimeProbe {
+        player_level,
+        gold,
+        orbs,
+        pokemon_level,
+        pokemon_xp,
+        ball_stock,
+        autocatch_on: false,
+        autocatch_captures: 0,
+        autocatch_balls_used: 0,
+        autocatch_rate: String::new(),
+        autocatch_restock: String::new(),
+        stream_scan_status: String::new(),
+        stream_scan_live: 0,
+        stream_scan_opened: 0,
+        stream_bonus,
+        xp_bonuses,
+        hunts,
+        market_listings,
+    })
+}
+
+fn flush_commands(
+    session: &mut BrowserSession,
+    commands: &Arc<Mutex<Vec<Value>>>,
+) {
+    let pending = match commands.lock() {
+        Ok(mut commands) => std::mem::take(&mut *commands),
+        Err(_) => Vec::new(),
+    };
+
+    for payload in pending {
+        let id = session.next_id;
+        session.next_id += 1;
+
+        let expression = "JSON.stringify(window.__mothControllerBridgeV1 ? window.__mothControllerBridgeV1.send(ARG) : {ok:false,error:'controller bridge missing'})";
+        let arg = match serde_json::to_string(&payload) {
+            Ok(value) => value,
+            Err(error) => {
+                logging::warn(&format!("failed to serialize controller command: {}", error));
+                continue;
+            }
+        };
+
+        let expression = format!(
+            "(payload => {})({})",
+            expression,
+            arg
+        );
+
+        match send_and_wait(
+            &mut session.socket,
+            id,
+            json!({
+                "id": id,
+                "method": "script.evaluate",
+                "params": {
+                    "expression": expression,
+                    "target": { "context": "" },
+                    "awaitPromise": false
+                }
+            }),
+        ) {
+            Ok(_) => {}
+            Err(error) => {
+                logging::warn(&format!("controller command failed: {}", error));
+            }
+        }
+    }
+}
+
 
 struct ContextInfo {
     id: String,
