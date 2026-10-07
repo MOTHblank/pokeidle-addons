@@ -13,6 +13,35 @@ use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[derive(Clone, Debug)]
+pub struct TabInfo {
+    pub kind: String,
+    pub title: String,
+    pub url: String,
+    pub low_resource: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct HuntInfo {
+    pub slug: String,
+    pub name: String,
+    pub level: u32,
+    pub species: Vec<String>,
+    pub xp_per_hour: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MarketListing {
+    pub id: u64,
+    pub item_id: u64,
+    pub name: String,
+    pub currency: String,
+    pub price: u64,
+    pub quantity: u64,
+    pub seller: String,
+    pub retained_until: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct Health {
     pub state: String,
     pub url: String,
@@ -43,6 +72,13 @@ pub struct Health {
     pub stream_scan_live: u32,
     pub stream_scan_opened: u32,
     pub xp_bonuses: Vec<String>,
+    pub player_level: u32,
+    pub gold: u64,
+    pub orbs: u64,
+    pub stream_bonus: String,
+    pub tabs: Vec<TabInfo>,
+    pub hunts: Vec<HuntInfo>,
+    pub market_listings: Vec<MarketListing>,
     pub last_error: Option<String>,
 }
 
@@ -78,6 +114,13 @@ impl Default for Health {
             stream_scan_live: 0,
             stream_scan_opened: 0,
             xp_bonuses: Vec::new(),
+            player_level: 0,
+            gold: 0,
+            orbs: 0,
+            stream_bonus: String::new(),
+            tabs: Vec::new(),
+            hunts: Vec::new(),
+            market_listings: Vec::new(),
             last_error: None,
         }
     }
@@ -162,18 +205,29 @@ impl Health {
 pub struct MonitorHandle {
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
+    commands: Arc<Mutex<Vec<Value>>>,
 }
 
 impl MonitorHandle {
     pub fn start(port: u16) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let commands = Arc::new(Mutex::new(Vec::new()));
         let shared = Arc::clone(&health);
         let stop_worker = Arc::clone(&stop);
+        let command_queue = Arc::clone(&commands);
 
-        thread::spawn(move || monitor_loop(port, shared, stop_worker));
+        thread::spawn(move || {
+            monitor_loop(port, shared, stop_worker, command_queue);
+        });
 
-        Self { health, stop }
+        Self { health, stop, commands }
+    }
+
+    pub fn send(&self, payload: Value) {
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.push(payload);
+        }
     }
 
     pub fn health(&self) -> Health {
@@ -192,6 +246,9 @@ struct BrowserSession {
 
 #[derive(Default)]
 struct RuntimeProbe {
+    player_level: u32,
+    gold: u64,
+    orbs: u64,
     pokemon_level: String,
     pokemon_xp: String,
     ball_stock: Vec<String>,
@@ -203,7 +260,10 @@ struct RuntimeProbe {
     stream_scan_status: String,
     stream_scan_live: u32,
     stream_scan_opened: u32,
+    stream_bonus: String,
     xp_bonuses: Vec<String>,
+    hunts: Vec<HuntInfo>,
+    market_listings: Vec<MarketListing>,
 }
 
 struct Probe {
@@ -235,12 +295,20 @@ struct Probe {
     stream_scan_live: u32,
     stream_scan_opened: u32,
     xp_bonuses: Vec<String>,
+    player_level: u32,
+    gold: u64,
+    orbs: u64,
+    stream_bonus: String,
+    tabs: Vec<TabInfo>,
+    hunts: Vec<HuntInfo>,
+    market_listings: Vec<MarketListing>,
 }
 
 fn monitor_loop(
     port: u16,
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
+    commands: Arc<Mutex<Vec<Value>>>,
 ) {
     let mut session: Option<BrowserSession> = None;
 
@@ -279,6 +347,8 @@ fn monitor_loop(
         }
 
         if let Some(browser_session) = session.as_mut() {
+            flush_commands(browser_session, &commands);
+
             match probe_page(browser_session) {
                 Ok(probe) => {
                     if let Ok(mut current) = health.lock() {
@@ -311,6 +381,13 @@ fn monitor_loop(
                         current.stream_scan_live = probe.stream_scan_live;
                         current.stream_scan_opened = probe.stream_scan_opened;
                         current.xp_bonuses = probe.xp_bonuses;
+                        current.player_level = probe.player_level;
+                        current.gold = probe.gold;
+                        current.orbs = probe.orbs;
+                        current.stream_bonus = probe.stream_bonus;
+                        current.tabs = probe.tabs;
+                        current.hunts = probe.hunts;
+                        current.market_listings = probe.market_listings;
                         current.last_error = None;
                     }
                 }
@@ -561,7 +638,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_bonuses.push("Twitch stream · +15% XP (chat open)".to_string());
     }
 
-    let runtime = probe_runtime_details(session, &game.id).unwrap_or_default();
+    let runtime = RuntimeProbe::default();
 
     Ok(Probe {
         url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -592,146 +669,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         stream_scan_live: runtime.stream_scan_live,
         stream_scan_opened: runtime.stream_scan_opened,
         xp_bonuses: runtime.xp_bonuses,
-    })
-}
-
-fn probe_runtime_details(
-    session: &mut BrowserSession,
-    context_id: &str,
-) -> Result<RuntimeProbe, String> {
-    let id = session.next_id;
-    session.next_id += 1;
-
-    let expression = r#"(() => {
-        try {
-            const text = (selector) => {
-                const el = document.querySelector(selector);
-                return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
-            };
-
-            const active = text('#ativo-card').slice(0, 80);
-            const level = (active.match(/\bLv\.?\s*(\d+)/i) || [])[1] || '';
-
-            const xpNodes = [
-                ...document.querySelectorAll(
-                    '#ativo-card [aria-valuenow][aria-valuemax], #ativo-card [data-xp], #ativo-card [id*="xp"], #ativo-card [class*="xp"], #ativo-card [id*="exper"], #ativo-card [class*="exper"]'
-                )
-            ];
-
-            let xp = '';
-            for (const el of xpNodes) {
-                const now = el.getAttribute('aria-valuenow');
-                const max = el.getAttribute('aria-valuemax');
-                if (now && max) {
-                    xp = now + '/' + max;
-                    break;
-                }
-
-                const candidate = [
-                    el.getAttribute('aria-label') || '',
-                    el.getAttribute('title') || '',
-                    el.getAttribute('data-xp') || '',
-                    el.textContent || ''
-                ].join(' ').replace(/\s+/g, ' ').trim();
-
-                const match = candidate.match(/(?:xp|exp(?:eri[eê]ncia)?)\s*[:：]?\s*([\d.,]+\s*(?:\/|de)\s*[\d.,]+)/i);
-                if (match) {
-                    xp = match[1];
-                    break;
-                }
-            }
-
-            const ballStock = [...document.querySelectorAll('#caidos-bolas button.caidos-bola')]
-                .map(button => {
-                    const raw = button.title || button.getAttribute('aria-label') || '';
-                    const match = raw.match(/(?:você\s+tem|voce\s+tem|you\s+have|tienes)\s+([\d.,]+)/i);
-                    if (!match) return null;
-                    const count = match[1].replace(/\D/g, '');
-                    const name = (raw.split('—')[0] || 'Ball').replace(/\s+/g, ' ').trim().slice(0, 16);
-                    return name + ' ' + count;
-                })
-                .filter(Boolean);
-
-            const numberFrom = (selector) => {
-                const raw = text(selector);
-                const match = raw.match(/\d[\d.,]*/);
-                return match ? Number(match[0].replace(/\D/g, '')) || 0 : 0;
-            };
-
-            const scanner = document.querySelector('#moth-scan-live-streams');
-            const bonusLines = [];
-            const lines = (document.body?.innerText || '')
-                .split(/\n+/)
-                .map(v => v.replace(/\s+/g, ' ').trim())
-                .filter(Boolean);
-
-            for (const line of lines) {
-                if (/\bXP\b|experi/i.test(line) && /\+\s*\d+\s*%/i.test(line)) {
-                    bonusLines.push(line.slice(0, 100));
-                    if (bonusLines.length >= 6) break;
-                }
-            }
-
-            return JSON.stringify({
-                pokemonLevel: level,
-                pokemonXp: xp,
-                ballStock,
-                autocatchOn: String(text('#moth-ac-toggle')).toUpperCase() === 'ON',
-                autocatchCaptures: numberFrom('#moth-ac-captures'),
-                autocatchBallsUsed: numberFrom('#moth-ac-balls-used'),
-                autocatchRate: text('#moth-ac-rate'),
-                autocatchRestock: text('#moth-ac-restock-status'),
-                streamScanStatus: scanner?.dataset?.mothScanStatus || '',
-                streamScanLive: Number(scanner?.dataset?.mothScanLive || 0) || 0,
-                streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0,
-                xpBonuses: [...new Set(bonusLines)]
-            });
-        } catch (error) {
-            return JSON.stringify({ error: String(error?.stack || error) });
-        }
-    })()"#;
-
-    let result = send_and_wait(
-        &mut session.socket,
-        id,
-        json!({
-            "id": id,
-            "method": "script.evaluate",
-            "params": {
-                "expression": expression,
-                "target": { "context": context_id },
-                "awaitPromise": false
-            }
-        }),
-    )?;
-
-    let raw = result
-        .get("result")
-        .and_then(|v| v.get("result"))
-        .and_then(|v| v.get("value"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Firefox returned no runtime diagnostics value".to_string())?;
-
-    let value: Value =
-        serde_json::from_str(raw).map_err(|error| format!("invalid runtime diagnostics: {error}"))?;
-
-    if let Some(error) = value.get("error").and_then(Value::as_str) {
-        return Err(format!("runtime diagnostics exception: {error}"));
-    }
-
-    Ok(RuntimeProbe {
-        pokemon_level: value.get("pokemonLevel").and_then(Value::as_str).unwrap_or_default().to_string(),
-        pokemon_xp: value.get("pokemonXp").and_then(Value::as_str).unwrap_or_default().to_string(),
-        ball_stock: value.get("ballStock").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
-        autocatch_on: value.get("autocatchOn").and_then(Value::as_bool).unwrap_or(false),
-        autocatch_captures: value.get("autocatchCaptures").and_then(Value::as_u64).unwrap_or(0) as u32,
-        autocatch_balls_used: value.get("autocatchBallsUsed").and_then(Value::as_u64).unwrap_or(0) as u32,
-        autocatch_rate: value.get("autocatchRate").and_then(Value::as_str).unwrap_or_default().to_string(),
-        autocatch_restock: value.get("autocatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
-        stream_scan_status: value.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
-        stream_scan_live: value.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
-        stream_scan_opened: value.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
-        xp_bonuses: value.get("xpBonuses").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
     })
 }
 
