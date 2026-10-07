@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.5.0
+// @version      4.6.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -136,8 +136,7 @@
         try {
             const options = {
                 active: false,
-                insert: true,
-                setParent: true
+                insert: true
             };
 
             let control;
@@ -761,13 +760,40 @@
                     saveStreamConfig(config);
                 });
 
-                chat.addEventListener('click', () => {
+                chat.addEventListener('click', async () => {
                     const value = channelName(input.value);
-                    if (!value) return;
+
+                    if (!value) {
+                        chat.textContent = 'Invalid';
+                        window.setTimeout(() => { chat.textContent = 'Chat'; }, 1200);
+                        return;
+                    }
+
                     config[service][index] = value;
                     input.value = value;
                     saveStreamConfig(config);
-                    void openChat(service, index, value);
+
+                    chat.disabled = true;
+
+                    const result = await openChat(service, index, value);
+
+                    chat.textContent = result.opened
+                        ? (result.alreadyOpen ? 'Already open' : 'Opened')
+                        : 'Failed';
+
+                    if (!result.opened && result.error) {
+                        console.error(
+                            '[Moth] chat open failed:',
+                            service,
+                            value,
+                            result.error
+                        );
+                    }
+
+                    window.setTimeout(() => {
+                        chat.textContent = 'Chat';
+                        chat.disabled = false;
+                    }, 1600);
                 });
 
                 close.addEventListener('click', () => {
