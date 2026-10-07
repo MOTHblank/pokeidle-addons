@@ -39,13 +39,15 @@ This keeps the process count at roughly one Firefox instance per game account. T
 
 ## Controller
 
-The Rust controller currently provides:
+The Rust controller provides:
 
 - finding a local Firefox installation;
 - creating isolated Game 1/Game 2 profile directories;
 - seeding conservative, one-time Firefox low-overhead defaults;
 - launching Firefox with the selected game profile;
-- opening PokéIdle in that profile.
+- opening Twitch/KICK login pages in the matching profile;
+- opening all repository addon installer/update URLs in the matching profile;
+- opening the stream manager or triggering the live-chat scanner in the matching profile.
 
 The controller intentionally contains no WebView2, Chromium embedding, C#, or custom userscript runtime.
 
