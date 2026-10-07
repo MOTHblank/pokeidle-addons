@@ -1307,6 +1307,8 @@ fn game_selector(
 
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     egui::Window::new("Hunt Atlas")
+        .open(&mut app.show_atlas)
+        .collapsible(false)
         .resizable(true)
         .default_width(900.0)
         .default_height(620.0)
@@ -1336,9 +1338,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
-                        app.show_atlas = false;
-                    }
+                    ui.label(
+                        RichText::new("Select a hunt to travel · XP rates are measured from battle events")
+                            .size(10.0)
+                            .color(DIM),
+                    );
                 });
             });
 
@@ -1397,9 +1401,9 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .collect();
 
             hunts.sort_by(|a, b| {
-                if a.slug == health.hunt {
+                if a.slug.eq_ignore_ascii_case(&health.hunt_slug) && !health.hunt_slug.is_empty() {
                     std::cmp::Ordering::Less
-                } else if b.slug == health.hunt {
+                } else if b.slug.eq_ignore_ascii_case(&health.hunt_slug) && !health.hunt_slug.is_empty() {
                     std::cmp::Ordering::Greater
                 } else {
                     b.xp_per_hour.cmp(&a.xp_per_hour).then(a.level.cmp(&b.level))
@@ -1432,6 +1436,13 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             .size(9.0)
                                             .color(MUTED),
                                         );
+                                        if !hunt.species.is_empty() {
+                                            ui.label(
+                                                RichText::new(compact_text(&hunt.species.join(" · "), 58))
+                                                    .size(9.0)
+                                                    .color(DIM),
+                                            );
+                                        }
                                     });
 
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1491,6 +1502,8 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     egui::Window::new("Moth Watch")
+        .open(&mut app.show_market)
+        .collapsible(false)
         .resizable(true)
         .default_width(1000.0)
         .default_height(650.0)
@@ -1520,9 +1533,11 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
-                        app.show_market = false;
-                    }
+                    ui.label(
+                        RichText::new("Select an item, then buy from the live listings below")
+                            .size(10.0)
+                            .color(DIM),
+                    );
                 });
             });
 
@@ -1590,7 +1605,11 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if health.market_summary.is_empty() {
                         ui.label(
-                            RichText::new("No market summary loaded. Press Refresh market.")
+                            RichText::new(if health.market_summary.is_empty() {
+                                "No market summary loaded. Press Refresh market."
+                            } else {
+                                "No listings in the selected currency match your search."
+                            })
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -1625,7 +1644,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             "moeda": currency
                                         }));
                                         app.set_status(
-                                            format!("{} · inspecting {}", profile_label, item_name),
+                                            format!("{} · loading listings to buy {}", profile_label, item_name),
                                             false,
                                         );
                                     } else {
@@ -1639,8 +1658,15 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         });
                     } else {
                         for item in health.market_summary.iter().filter(|item| {
-                            search.is_empty()
-                                || item.name.to_lowercase().contains(&search)
+                            let currency_available = match app.market_currency.as_str() {
+                                "gold" => item.gold_min > 0,
+                                "orb" => item.orb_min > 0,
+                                _ => true,
+                            };
+
+                            currency_available
+                                && (search.is_empty()
+                                    || item.name.to_lowercase().contains(&search))
                         }).take(50) {
                             egui::Frame::new()
                                 .fill(PANEL_ALT)
@@ -1657,12 +1683,13 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     .color(TEXT),
                                             );
 
-                                            let gold = if item.gold_min > 0 {
-                                                format!("{} gold", format_number(item.gold_min))
-                                            } else {
-                                                "— gold".to_string()
-                                            };
-                                            let gems = if item.orb_min > 0 {
+                                            let price = if app.market_currency == "gold" {
+                                                if item.gold_min > 0 {
+                                                    format!("{} gold", format_number(item.gold_min))
+                                                } else {
+                                                    "— gold".to_string()
+                                                }
+                                            } else if item.orb_min > 0 {
                                                 format!("{} gems", format_number(item.orb_min))
                                             } else {
                                                 "— gems".to_string()
@@ -1670,9 +1697,8 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                             ui.label(
                                                 RichText::new(format!(
-                                                    "{} · {} · {} listings",
-                                                    gold,
-                                                    gems,
+                                                    "{} · {} listings",
+                                                    price,
                                                     item.listings
                                                 ))
                                                 .size(9.0)
@@ -1683,7 +1709,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             let profile_label = app.market_profile.label();
                                             let monitor = app.games[index].monitor.clone();
-                                            if ui.button("Inspect").clicked() {
+                                            if ui.button("Buy").clicked() {
                                                 if let Some(monitor) = monitor {
                                                     let item_id = item.item_id;
                                                     let item_name = item.name.clone();
@@ -1715,7 +1741,16 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
             ui.add_space(12.0);
 
-            ui.label(RichText::new("LISTINGS").size(9.0).strong().color(DIM));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("LISTINGS").size(9.0).strong().color(DIM));
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(if app.market_currency == "gold" { "GOLD ONLY" } else { "GEMS ONLY" })
+                        .size(8.0)
+                        .strong()
+                        .color(if app.market_currency == "gold" { WARN } else { ACCENT }),
+                );
+            });
             ui.add_space(6.0);
 
             egui::ScrollArea::vertical()
@@ -1724,7 +1759,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if health.market_listings.is_empty() {
                         ui.label(
-                            RichText::new("No item listings loaded. Pick an item above to inspect its RMT listings.")
+                            RichText::new("No item listings loaded. Pick an item above to load listings you can buy.")
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -1756,7 +1791,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            if ui.button("Buy 1").clicked() {
+                                            if ui.button("Buy").clicked() {
                                                 let profile_label = app.market_profile.label();
                                                 let monitor = app.games[index].monitor.clone();
 
