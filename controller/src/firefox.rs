@@ -11,11 +11,34 @@ const USER_PREFS: &str = r#"
 user_pref("browser.newtabpage.enabled", false);
 user_pref("browser.newtabpage.activity-stream.feeds.snippets", false);
 user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("browser.newtabpage.preload", false);
 user_pref("browser.startup.page", 0);
+user_pref("browser.sessionstore.restore_on_demand", true);
 user_pref("browser.sessionstore.restore_tabs_lazily", true);
+user_pref("browser.pagethumbnails.capturing_disabled", true);
+user_pref("browser.uitour.enabled", false);
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.urlbar.suggest.searches", false);
 user_pref("network.prefetch-next", false);
 user_pref("network.predictor.enabled", false);
 user_pref("network.predictor.enable-prefetch", false);
+user_pref("network.dns.disablePrefetch", true);
+
+// Firefox keeps preallocated content processes ready for future tabs.
+// Moth does not need that background process reserve.
+user_pref("dom.ipc.processPrelaunch.fission.number", 0);
+
+// Keep the shared web-content pool at its minimum. Fission remains enabled
+// for browser security; isolated sites may still receive their own process.
+user_pref("dom.ipc.processCount", 1);
+
+// Moth never intentionally plays stream video. Blocking autoplay and
+// suspending background media prevents accidental decode/work from a tab.
+user_pref("media.autoplay.default", 5);
+user_pref("media.autoplay.blocking_policy", 1);
+user_pref("media.autoplay.ask-permission", false);
+user_pref("media.block-autoplay-until-in-foreground", true);
+user_pref("media.suspend-background-video.enabled", true);
 "#;
 
 pub fn launch(config: &Config) -> Result<Child, String> {
