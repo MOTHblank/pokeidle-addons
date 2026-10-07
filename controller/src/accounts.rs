@@ -47,6 +47,7 @@ fn build() -> Result<(), String> {
     let mut close = nwg::Button::default();
     nwg::Button::builder()
         .text("Close")
+        .flags(nwg::ButtonFlags::VISIBLE)
         .position((470, 374))
         .size((120, 34))
         .parent(&window)
@@ -128,6 +129,7 @@ fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), 
 
     nwg::Label::builder()
         .text("Account Manager")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 18))
         .size((560, 32))
         .parent(window)
@@ -155,6 +157,7 @@ fn build_game_row(
     let mut heading = nwg::Label::default();
     nwg::Label::builder()
         .text(title)
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((18, 4))
         .size((180, 24))
         .parent(&frame)
@@ -164,6 +167,7 @@ fn build_game_row(
     let mut description = nwg::Label::default();
     nwg::Label::builder()
         .text("PokéIdle + one Twitch login + one KICK login share this profile.")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((18, 30))
         .size((530, 26))
         .parent(&frame)
@@ -186,6 +190,7 @@ fn build_game_row(
 
         nwg::Button::builder()
             .text(label)
+            .flags(nwg::ButtonFlags::VISIBLE)
             .position((18 + (column as i32) * 124, 68 + row * 38))
             .size((116, 32))
             .parent(&frame)
