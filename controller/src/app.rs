@@ -6,7 +6,6 @@ use crate::logging;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::process::Child;
-use std::time::Duration;
 use std::rc::Rc;
 
 struct State {
@@ -39,7 +38,7 @@ pub fn run() -> Result<(), String> {
     let mut profiles_button = nwg::Button::default();
     let mut close_button = nwg::Button::default();
     let mut status = nwg::Label::default();
-    let mut health_timer = nwg::AnimationTimer::default();
+    let mut health_notice = nwg::Notice::default();
 
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
@@ -159,12 +158,10 @@ pub fn run() -> Result<(), String> {
         .build(&mut close_button)
         .map_err(|error| format!("could not create Close button: {error}"))?;
 
-    nwg::AnimationTimer::builder()
-        .interval(Duration::from_millis(2000))
+    nwg::Notice::builder()
         .parent(&window)
-        .active(true)
-        .build(&mut health_timer)
-        .map_err(|error| format!("could not create health timer: {error}"))?;
+        .build(&mut health_notice)
+        .map_err(|error| format!("could not create health notice: {error}"))?;
 
     nwg::Label::builder()
         .text("Starting…")
@@ -194,11 +191,13 @@ pub fn run() -> Result<(), String> {
     let logs_button_handle = logs_button.handle;
     let profiles_button_handle = profiles_button.handle;
     let close_button_handle = close_button.handle;
-    let health_timer_handle = health_timer.handle;
+    let health_notice_handle = health_notice.handle;
     let window_handle = window.handle;
 
     let state_for_events = state.clone();
     let state_for_health = state.clone();
+
+    let notice_sender = health_notice.sender();
 
     let event_handler = nwg::full_bind_event_handler(
         &window.handle,
@@ -206,7 +205,7 @@ pub fn run() -> Result<(), String> {
             use nwg::Event;
 
             match event {
-                Event::OnTimerTick if handle == health_timer_handle => {
+                Event::OnNotice if handle == health_notice_handle => {
                     let state = state_for_health.borrow();
                     update_health_label(state.game1_monitor.as_ref(), &game1_status);
                     update_health_label(state.game2_monitor.as_ref(), &game2_status);
@@ -225,6 +224,7 @@ pub fn run() -> Result<(), String> {
                             &game1_button,
                             &game1_status,
                             &status,
+                            notice_sender,
                         );
                     } else if handle == game2_button_handle {
                         let mut state = state_for_events.borrow_mut();
@@ -234,6 +234,7 @@ pub fn run() -> Result<(), String> {
                             &game2_button,
                             &game2_status,
                             &status,
+                            notice_sender,
                         );
                     } else if handle == launch_both_button_handle {
                         let mut state = state_for_events.borrow_mut();
@@ -244,6 +245,7 @@ pub fn run() -> Result<(), String> {
                             &game1_button,
                             &game1_status,
                             &status,
+                            notice_sender,
                         );
                         launch_one(
                             GameProfile::Game2,
@@ -251,6 +253,7 @@ pub fn run() -> Result<(), String> {
                             &game2_button,
                             &game2_status,
                             &status,
+                            notice_sender,
                         );
                     } else if handle == accounts_button_handle {
                         let mut state = state_for_events.borrow_mut();
@@ -291,6 +294,7 @@ fn toggle_one(
     profile: GameProfile,
     state: &mut State,
     button: &nwg::Button,
+    notice_sender: nwg::NoticeSender,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
 ) {
@@ -302,7 +306,7 @@ fn toggle_one(
     if running {
         stop_one(profile, state, button, profile_status, global_status);
     } else {
-        launch_one(profile, state, button, profile_status, global_status);
+        launch_one(profile, state, button, profile_status, global_status, notice_sender);
     }
 }
 
@@ -312,6 +316,7 @@ fn launch_one(
     button: &nwg::Button,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
+    notice_sender: nwg::NoticeSender,
 ) {
     let (child_slot, monitor_slot): (&mut Option<Child>, &mut Option<monitor::MonitorHandle>) =
         match profile {
@@ -346,7 +351,7 @@ fn launch_one(
 
     logging::info(&format!("launching {} with Firefox profile {} on BiDi port {}", profile.label(), config.profile_dir.display(), config.remote_debug_port));
 
-    match firefox::launch(&config) {
+    match firefox::launch(&config, notice_sender) {
         Ok((child, monitor)) => {
             logging::info(&format!("{} Firefox spawned with PID {}", profile.label(), child.id()));
             *child_slot = Some(child);
