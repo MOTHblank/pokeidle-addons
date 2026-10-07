@@ -200,7 +200,7 @@ impl ControllerApp {
     fn launch_both(&mut self) {
         self.launch_one(GameProfile::Game1);
         self.launch_one(GameProfile::Game2);
-        self.set_status("Both profiles started · monitoring will update as Firefox becomes ready", false);
+        self.set_status("Launch Both requested · monitoring will update as Firefox becomes ready", false);
     }
 
     fn stop_all(&mut self) {
@@ -370,14 +370,6 @@ impl eframe::App for ControllerApp {
                 });
             });
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
-            .show(ui, |ui| {
-                draw_instance_section(self, ui);
-                ui.add_space(16.0);
-                draw_runtime_section(self, ui);
-            });
-
         egui::Panel::bottom("status")
             .frame(
                 egui::Frame::new()
@@ -396,6 +388,14 @@ impl eframe::App for ControllerApp {
                             .color(if self.status_error { TEXT } else { MUTED }),
                     );
                 });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
+            .show(ui, |ui| {
+                draw_instance_section(self, ui);
+                ui.add_space(16.0);
+                draw_runtime_section(self, ui);
             });
 
         if self.show_profiles {
@@ -727,7 +727,7 @@ fn draw_runtime_section(app: &ControllerApp, ui: &mut egui::Ui) {
 }
 
 fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    egui::Window::new("profiles_window")
+    egui::Window::new("Profiles")
         .title_bar(true)
         .resizable(true)
         .default_width(700.0)
