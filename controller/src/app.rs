@@ -178,35 +178,52 @@ pub fn run() -> Result<(), String> {
                 Event::OnButtonClick => {
                     if handle == game1_button_handle {
                         let mut state = state_for_events.borrow_mut();
+                        let child_slot = &mut state.game1;
+                        let profile_status = &state.game1_status;
+                        let global_status = &state.status;
                         launch_one(
                             GameProfile::Game1,
-                            &mut state.game1,
-                            &state.game1_status,
-                            &state.status,
+                            child_slot,
+                            profile_status,
+                            global_status,
                         );
                     } else if handle == game2_button_handle {
                         let mut state = state_for_events.borrow_mut();
+                        let child_slot = &mut state.game2;
+                        let profile_status = &state.game2_status;
+                        let global_status = &state.status;
                         launch_one(
                             GameProfile::Game2,
-                            &mut state.game2,
-                            &state.game2_status,
-                            &state.status,
+                            child_slot,
+                            profile_status,
+                            global_status,
                         );
                     } else if handle == launch_both_button_handle {
                         let mut state = state_for_events.borrow_mut();
 
-                        launch_one(
-                            GameProfile::Game1,
-                            &mut state.game1,
-                            &state.game1_status,
-                            &state.status,
-                        );
-                        launch_one(
-                            GameProfile::Game2,
-                            &mut state.game2,
-                            &state.game2_status,
-                            &state.status,
-                        );
+                        {
+                            let child_slot = &mut state.game1;
+                            let profile_status = &state.game1_status;
+                            let global_status = &state.status;
+                            launch_one(
+                                GameProfile::Game1,
+                                child_slot,
+                                profile_status,
+                                global_status,
+                            );
+                        }
+
+                        {
+                            let child_slot = &mut state.game2;
+                            let profile_status = &state.game2_status;
+                            let global_status = &state.status;
+                            launch_one(
+                                GameProfile::Game2,
+                                child_slot,
+                                profile_status,
+                                global_status,
+                            );
+                        }
                     } else if handle == accounts_button_handle {
                         show_accounts();
                     } else if handle == profiles_button_handle {
@@ -224,18 +241,29 @@ pub fn run() -> Result<(), String> {
     {
         let mut state = state.borrow_mut();
 
-        launch_one(
-            GameProfile::Game1,
-            &mut state.game1,
-            &state.game1_status,
-            &state.status,
-        );
-        launch_one(
-            GameProfile::Game2,
-            &mut state.game2,
-            &state.game2_status,
-            &state.status,
-        );
+        {
+            let child_slot = &mut state.game1;
+            let profile_status = &state.game1_status;
+            let global_status = &state.status;
+            launch_one(
+                GameProfile::Game1,
+                child_slot,
+                profile_status,
+                global_status,
+            );
+        }
+
+        {
+            let child_slot = &mut state.game2;
+            let profile_status = &state.game2_status;
+            let global_status = &state.status;
+            launch_one(
+                GameProfile::Game2,
+                child_slot,
+                profile_status,
+                global_status,
+            );
+        }
     }
 
     nwg::dispatch_thread_events();
