@@ -126,16 +126,20 @@ internal sealed class ViolentmonkeyManager
 
             foreach (var script in _scripts)
             {
-                var scriptId = await ImportScriptAsync(view, script);
-                var status = await GetScriptStatusAsync(view, scriptId);
-                if (!status.Found)
+                var imported = await ImportScriptAsync(view, script);
+                var verified = await VerifyImportedScriptAsync(
+                    view,
+                    imported.ScriptId,
+                    script.Source);
+
+                if (!verified)
                     throw new InvalidOperationException(
-                        $"Violentmonkey imported '{script.Name}' as script #{scriptId}, " +
-                        "but could not verify that exact script in the installed script database.");
+                        $"Violentmonkey imported '{script.Name}' as script #{imported.ScriptId}, " +
+                        "but the persisted script code could not be verified.");
 
                 Console.Error.WriteLine(
-                    $"[IdleShell] verified userscript '{script.Name}' as VM script #{scriptId} " +
-                    $"in profile {profile.ProfileName}: {(status.Enabled ? "enabled" : "DISABLED")}");
+                    $"[IdleShell] verified userscript '{script.Name}' as VM script #{imported.ScriptId} " +
+                    $"in profile {profile.ProfileName}: {(imported.Enabled ? "enabled" : "DISABLED")}");
             }
 
             Console.Error.WriteLine(
@@ -234,27 +238,29 @@ internal sealed class ViolentmonkeyManager
         }
     }
 
-    private static async Task<(bool Found, bool Enabled)> GetScriptStatusAsync(
+    private static async Task<bool> VerifyImportedScriptAsync(
         CoreWebView2 view,
-        int scriptId)
+        int scriptId,
+        string expectedSource)
     {
         var request = """
 (() => {
   return Promise.resolve(
     chrome.runtime.sendMessage({
-      cmd: 'GetScript',
-      data: {
-        id: __SCRIPT_ID__
-      }
+      cmd: 'GetScriptCode',
+      data: __SCRIPT_ID__
     })
   ).then(value => JSON.stringify({
-    found: !!value,
-    enabled: !!value?.config?.enabled
+    found: typeof value === 'string',
+    code: value ?? null
   }));
 })()
 """
             .Replace("__SCRIPT_ID__", scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
+        var expectedHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(expectedSource)));
 
         var raw = await view.ExecuteScriptAsync(request);
         try
@@ -266,29 +272,40 @@ internal sealed class ViolentmonkeyManager
             {
                 var inner = root.GetString();
                 if (string.IsNullOrWhiteSpace(inner))
-                    return (false, false);
+                    return false;
 
                 using var result = JsonDocument.Parse(inner);
                 root = result.RootElement.Clone();
             }
 
-            var found = root.ValueKind == JsonValueKind.Object &&
-                        root.TryGetProperty("found", out var foundValue) &&
-                        foundValue.ValueKind == JsonValueKind.True &&
-                        foundValue.GetBoolean();
-            var enabled = root.ValueKind == JsonValueKind.Object &&
-                          root.TryGetProperty("enabled", out var enabledValue) &&
-                          enabledValue.ValueKind == JsonValueKind.True &&
-                          enabledValue.GetBoolean();
-            return (found, enabled);
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("found", out var foundValue) ||
+                !foundValue.GetBoolean() ||
+                !root.TryGetProperty("code", out var codeValue) ||
+                codeValue.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var actualCode = codeValue.GetString();
+            if (actualCode is null)
+                return false;
+
+            var actualHash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(actualCode)));
+
+            return string.Equals(actualHash, expectedHash, StringComparison.Ordinal);
         }
         catch (JsonException)
         {
-            return (false, false);
+            return false;
         }
     }
 
-    private static async Task<int> ImportScriptAsync(CoreWebView2 view, LocalScript script)
+    private static async Task<(int ScriptId, bool Enabled)> ImportScriptAsync(
+        CoreWebView2 view,
+        LocalScript script)
     {
         var id = Guid.NewGuid().ToString("N");
         var code = JsonSerializer.Serialize(script.Source);
@@ -378,7 +395,14 @@ internal sealed class ViolentmonkeyManager
                             $"Violentmonkey imported '{script.Name}' but did not return its script ID.");
                     }
 
-                    return scriptId;
+                    var enabled = result.TryGetProperty("config", out var config) &&
+                                      config.ValueKind == JsonValueKind.Object &&
+                                      config.TryGetProperty("enabled", out var enabledValue) &&
+                                      enabledValue.ValueKind == JsonValueKind.Number
+                        ? enabledValue.GetInt32() != 0
+                        : true;
+
+                    return (scriptId, enabled);
                 }
 
                 var error = root.TryGetProperty("error", out var errorValue)
