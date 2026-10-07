@@ -112,11 +112,10 @@ Twitch/KICK links inside PokéIdle are intercepted natively by the WebView2 host
 Game anchor clicks, `window.open`, popup requests, navigation backstops, and the
 live-chat userscript all feed the same routing path.
 
-`addons/stream-auto-open.user.js` watches the v1.240.1 upstream SPA for Twitch/KICK
-channel links marked live/online. When a channel becomes live, it joins that
-channel's chat using the configured account instead of opening a video page.
-The addon reacts to DOM changes as well as a periodic rescan and deduplicates
-channel URLs.
+`addons/stream-auto-open.user.js` adds **Scan Live Streams** directly under
+PokéIdle's **Abrir Inventário** button. Clicking it scans the currently rendered
+Twitch/KICK channel links for live/online markers and sends every detected channel
+through Idle Shell's chat-presence router. There is no background stream scan.
 
 The stream dock exposes ten stable slots per service: T1-T10 for Twitch and
 K1-K10 for KICK. The slots are management identities, not browser instances.
