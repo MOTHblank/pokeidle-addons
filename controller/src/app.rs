@@ -218,17 +218,19 @@ pub fn run() -> Result<(), String> {
                 Event::OnButtonClick => {
                     if handle == game1_button_handle {
                         let mut state = state_for_events.borrow_mut();
-                        launch_one(
+                        toggle_one(
                             GameProfile::Game1,
                             &mut state,
+                            &game1_button,
                             &game1_status,
                             &status,
                         );
                     } else if handle == game2_button_handle {
                         let mut state = state_for_events.borrow_mut();
-                        launch_one(
+                        toggle_one(
                             GameProfile::Game2,
                             &mut state,
+                            &game2_button,
                             &game2_status,
                             &status,
                         );
@@ -238,12 +240,14 @@ pub fn run() -> Result<(), String> {
                         launch_one(
                             GameProfile::Game1,
                             &mut state,
+                            &game1_button,
                             &game1_status,
                             &status,
                         );
                         launch_one(
                             GameProfile::Game2,
                             &mut state,
+                            &game2_button,
                             &game2_status,
                             &status,
                         );
@@ -282,9 +286,29 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn toggle_one(
+    profile: GameProfile,
+    state: &mut State,
+    button: &nwg::Button,
+    profile_status: &nwg::Label,
+    global_status: &nwg::Label,
+) {
+    let running = match profile {
+        GameProfile::Game1 => state.game1.as_mut().and_then(|child| child.try_wait().ok()).flatten().is_none() && state.game1.is_some(),
+        GameProfile::Game2 => state.game2.as_mut().and_then(|child| child.try_wait().ok()).flatten().is_none() && state.game2.is_some(),
+    };
+
+    if running {
+        stop_one(profile, state, button, profile_status, global_status);
+    } else {
+        launch_one(profile, state, button, profile_status, global_status);
+    }
+}
+
 fn launch_one(
     profile: GameProfile,
     state: &mut State,
+    button: &nwg::Button,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
 ) {
@@ -296,6 +320,7 @@ fn launch_one(
     if let Some(child) = child_slot.as_mut() {
         match child.try_wait() {
             Ok(None) => {
+                button.set_text(&format!("Stop {}", profile.label()));
                 profile_status.set_text("Running");
                 global_status.set_text(&format!("{} is already running.", profile.label()));
                 return;
@@ -304,6 +329,7 @@ fn launch_one(
                 *child_slot = None;
                 *monitor_slot = None;
                 profile_status.set_text("Stopped");
+                button.set_text(&format!("Launch {}", profile.label()));
             }
         }
     }
@@ -324,6 +350,7 @@ fn launch_one(
             logging::info(&format!("{} Firefox spawned with PID {}", profile.label(), child.id()));
             *child_slot = Some(child);
             *monitor_slot = Some(monitor);
+            button.set_text(&format!("Stop {}", profile.label()));
             profile_status.set_text("Headless · connecting");
             global_status.set_text(&format!(
                 "Started {} · headless Firefox + Rust BiDi monitor",
@@ -336,6 +363,48 @@ fn launch_one(
             global_status.set_text(&format!("{}: {error}", profile.label()));
         }
     }
+}
+
+fn stop_one(
+    profile: GameProfile,
+    state: &mut State,
+    button: &nwg::Button,
+    profile_status: &nwg::Label,
+    global_status: &nwg::Label,
+) {
+    let (child_slot, monitor_slot): (&mut Option<Child>, &mut Option<monitor::MonitorHandle>) =
+        match profile {
+            GameProfile::Game1 => (&mut state.game1, &mut state.game1_monitor),
+            GameProfile::Game2 => (&mut state.game2, &mut state.game2_monitor),
+        };
+
+    if let Some(monitor) = monitor_slot.as_ref() {
+        monitor.stop();
+    }
+
+    if let Some(mut child) = child_slot.take() {
+        logging::info(&format!("stopping {} Firefox PID {}", profile.label(), child.id()));
+        match child.kill() {
+            Ok(()) => {
+                let _ = child.wait();
+                profile_status.set_text("Stopped");
+                global_status.set_text(&format!("{} Firefox closed.", profile.label()));
+            }
+            Err(error) => {
+                logging::error(&format!("failed to stop {} Firefox PID {}: {}", profile.label(), child.id(), error));
+                profile_status.set_text("Stop failed");
+                global_status.set_text(&format!("{}: could not close Firefox: {}", profile.label(), error));
+                *child_slot = Some(child);
+                return;
+            }
+        }
+    } else {
+        profile_status.set_text("Stopped");
+        global_status.set_text(&format!("{} is already stopped.", profile.label()));
+    }
+
+    *monitor_slot = None;
+    button.set_text(&format!("Launch {}", profile.label()));
 }
 
 fn update_health_label(
