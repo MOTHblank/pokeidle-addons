@@ -2,6 +2,17 @@
 name = "moth-controller"
 version = "0.1.0"
 edition = "2024"
-description = "Native controller for dedicated PokéIdle browser profiles"
+description = "Native Windows controller for dedicated PokéIdle browser profiles"
+
+[[bin]]
+name = "moth-controller"
+path = "src/main.rs"
 
 [dependencies]
+native-windows-gui = "1.0.13"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
