@@ -24,6 +24,7 @@ internal sealed class MainForm : Form
         TextAlign = ContentAlignment.MiddleLeft,
         Padding = new Padding(3, 0, 3, 0)
     };
+    private readonly ToolTip _userscriptToolTip = new();
     private readonly ComboBox _addonsPicker = new()
         { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
 
@@ -340,9 +341,12 @@ internal sealed class MainForm : Form
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new ViolentmonkeyManager(addonsFolder);
             _userscriptStatus.Text =
-                $"VM ready · {_userscripts.ScriptNames.Count} bundled · {Path.GetFileName(Path.TrimEndingDirectorySeparator(addonsFolder))}";
+                $"VM ready · {_userscripts.ScriptNames.Count} bundled · addons";
             _userscriptStatus.AccessibleName =
                 $"Userscript source folder: {addonsFolder}";
+            _userscriptToolTip.SetToolTip(
+                _userscriptStatus,
+                $"Userscript source folder:\n{addonsFolder}");
             Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.ScriptNames.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
