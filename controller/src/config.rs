@@ -1,29 +1,50 @@
 use std::env;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameProfile {
+    Game1,
+    Game2,
+}
+
+impl GameProfile {
+    pub const ALL: [Self; 2] = [Self::Game1, Self::Game2];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Game1 => "Game1",
+            Self::Game2 => "Game2",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Game1 => "Game 1",
+            Self::Game2 => "Game 2",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub firefox_executable: PathBuf,
-    pub profile_name: String,
+    pub profile: GameProfile,
     pub profile_dir: PathBuf,
     pub url: String,
 }
 
 impl Config {
-    pub fn for_profile(profile_name: &str) -> Result<Self, String> {
-        validate_profile_name(profile_name)?;
+    pub fn for_profile(profile: GameProfile) -> Result<Self, String> {
+        let firefox_executable = find_firefox().ok_or_else(|| {
+            "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe."
+                .to_string()
+        })?;
 
-        let firefox_executable = find_firefox()
-            .ok_or_else(|| {
-                "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe."
-                    .to_string()
-            })?;
-
-        let profile_dir = data_root()?.join("Profiles").join(profile_name);
+        let profile_dir = data_root()?.join("Profiles").join(profile.name());
 
         Ok(Self {
             firefox_executable,
-            profile_name: profile_name.to_string(),
+            profile,
             profile_dir,
             url: "https://pokeidle.io/app".to_string(),
         })
@@ -32,20 +53,6 @@ impl Config {
     pub fn profiles_dir() -> Result<PathBuf, String> {
         Ok(data_root()?.join("Profiles"))
     }
-}
-
-fn validate_profile_name(name: &str) -> Result<(), String> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(
-            "profile name must contain only ASCII letters, digits, '-' or '_'.".to_string(),
-        );
-    }
-
-    Ok(())
 }
 
 fn data_root() -> Result<PathBuf, String> {
@@ -96,4 +103,9 @@ fn firefox_candidates() -> Vec<PathBuf> {
     }
 
     paths
+}
+
+#[cfg(not(windows))]
+fn firefox_candidates() -> Vec<PathBuf> {
+    Vec::new()
 }
