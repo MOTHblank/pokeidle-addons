@@ -1209,7 +1209,11 @@ internal sealed class MainForm : Form
                 $"The chat presence could not be established.\n\n{ex.Message}\n\nSee the IdleShell log for details.",
                 "Join stream chat",
                 MessageBoxButtons.OK,
-              // --- Layout --------------------------------------------------------------------
+                MessageBoxIcon.Error);
+        }
+    }
+
+    // --- Layout --------------------------------------------------------------------
     // Streams are no longer browser panes. The dock is only a compact control
     // strip, so game WebViews retain almost the entire workspace.
     private void LayoutPanes()
