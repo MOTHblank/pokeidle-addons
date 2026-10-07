@@ -78,6 +78,7 @@ name = "moth-controller"
 version = "0.1.0"
 dependencies = [
  "native-windows-gui",
+ "winapi",
 ]
 
 [[package]]
