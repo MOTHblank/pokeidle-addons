@@ -296,29 +296,9 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         }),
     )?;
 
-    let tree = send_and_wait(
-        &mut socket,
-        2,
-        json!({
-            "id": 2,
-            "method": "browsingContext.getTree",
-            "params": {}
-        }),
-    )?;
-
-    let context = tree
-        .get("result")
-        .and_then(|v| v.get("contexts"))
-        .and_then(Value::as_array)
-        .and_then(|v| v.first())
-        .and_then(|v| v.get("context"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Firefox returned no browsing context".to_string())?
-        .to_string();
-
     Ok(BrowserSession {
         socket,
-        next_id: 3,
+        next_id: 2,
     })
 }
 
