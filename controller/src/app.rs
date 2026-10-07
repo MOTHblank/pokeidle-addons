@@ -1306,34 +1306,24 @@ fn game_selector(
 }
 
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    let mut open = app.show_atlas;
     let viewport = ctx.content_rect();
-    let available_width = (viewport.width() - 32.0).max(420.0);
-    let available_height = (viewport.height() - 32.0).max(360.0);
-    let default_width = available_width.min(900.0);
-    let default_height = available_height.min(620.0);
-    let max_width = available_width.max(420.0);
-    let max_height = available_height.max(360.0);
+    let width = (viewport.width() - 48.0).min(900.0).max(420.0);
+    let height = (viewport.height() - 48.0).min(620.0).max(360.0);
+    let size = egui::vec2(width, height);
+    let pos = viewport.center() - size * 0.5;
 
-    egui::Window::new("Hunt Atlas")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_width(default_width)
-        .default_height(default_height)
-        .min_width(420.0_f32.min(max_width))
-        .min_height(360.0_f32.min(max_height))
-        .max_width(max_width)
-        .max_height(max_height)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .frame(
+    egui::Area::new(egui::Id::new("hunt_atlas_overlay"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ctx, |ui| {
+            ui.set_min_size(size);
+            ui.set_max_size(size);
             egui::Frame::new()
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0, BORDER))
                 .corner_radius(12.0)
-                .inner_margin(18.0),
-        )
-        .show(ctx, |ui| {
+                .inner_margin(18.0)
+                .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("Hunt Atlas")
@@ -1341,6 +1331,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .strong()
                         .color(TEXT),
                 );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("× Close").clicked() {
+                        app.show_atlas = false;
+                    }
+                });
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new("Map intelligence + observed XP/hour")
@@ -1509,7 +1504,9 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
-    app.show_atlas = open;
+        
+            });
+        });
 }
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
