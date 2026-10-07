@@ -1079,9 +1079,15 @@ fn probe_runtime_details(
     if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
         xp_sources.push(stream_bonus.clone());
     } else if !stream_missing.is_empty() {
+        let bonus_label = if stream_bonus_pct > 0.0 {
+            format!("+{}% Twitch XP available", trim_pct(stream_bonus_pct))
+        } else {
+            "Twitch XP bonus available".to_string()
+        };
+
         xp_sources.push(format!(
-            "+{}% Twitch XP available · chat not open: {}",
-            trim_pct(stream_bonus_pct.max(15.0)),
+            "{} · chat not open: {}",
+            bonus_label,
             stream_missing.join(", ")
         ));
     }
