@@ -432,13 +432,38 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.className = inventory.className || 'btn-inventario';
         button.title =
             'Open all live Twitch/KICK streams';
         button.setAttribute(
             'aria-label',
             'Open all live Twitch and KICK streams'
         );
+
+        const computed = typeof window.getComputedStyle === 'function'
+            ? window.getComputedStyle(inventory)
+            : null;
+
+        button.style.display = computed?.display === 'inline'
+            ? 'inline-block'
+            : (computed?.display || 'inline-flex');
+        button.style.alignItems = 'center';
+        button.style.justifyContent = 'center';
+        button.style.boxSizing = 'border-box';
+        button.style.visibility = 'visible';
+        button.style.opacity = '1';
+        button.style.pointerEvents = 'auto';
+        button.style.cursor = 'pointer';
+        button.style.minHeight = inventory.offsetHeight > 0
+            ? inventory.offsetHeight + 'px'
+            : '30px';
+        button.style.margin = computed?.margin || '2px 0 0 0';
+        button.style.padding = computed?.padding || '6px 10px';
+        button.style.font = computed?.font || 'inherit';
+        button.style.lineHeight = computed?.lineHeight || 'normal';
+        button.style.color = computed?.color || 'inherit';
+        button.style.background = computed?.background || 'transparent';
+        button.style.border = computed?.border || '1px solid currentColor';
+        button.style.borderRadius = computed?.borderRadius || '4px';
 
         const label = document.createElement('span');
         label.textContent = 'Open Live Streams';
@@ -466,6 +491,13 @@
     }
 
     function start() {
+        try {
+            document.documentElement?.setAttribute(
+                'data-idleshell-stream-scanner',
+                'started'
+            );
+        } catch (_) {}
+
         reportReady();
         ensureButton();
 
