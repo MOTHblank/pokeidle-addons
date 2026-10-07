@@ -255,11 +255,6 @@ fn open_game(profile: GameProfile) -> Result<(), String> {
     Ok(())
 }
 
-fn open_profile_url(profile: GameProfile, url: &str) -> Result<(), String> {
-    let config = Config::for_profile(profile)?;
-    firefox::open_url(&config, url)
-}
-
 fn open_addons(profile: GameProfile) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
 
