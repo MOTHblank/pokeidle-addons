@@ -37,6 +37,22 @@ internal sealed class ViolentmonkeyManager
 
     public IReadOnlyList<string> LastMatchDiagnostics { get; private set; } = [];
 
+    public string LastMatchSummary =>
+        LastMatchDiagnostics.Count == 0
+            ? "matching not checked"
+            : string.Join(
+                " · ",
+                LastMatchDiagnostics.Select(d =>
+                {
+                    var parts = d.Split(new[] { ": " }, 2, StringSplitOptions.None);
+                    return parts.Length == 2
+                        ? parts[0] + " " +
+                          (parts[1].Contains("MATCHES app", StringComparison.Ordinal)
+                              ? "MATCH"
+                              : "NO MATCH")
+                        : d;
+                }));
+
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
         CoreWebView2Environment environment)
@@ -429,10 +445,19 @@ internal sealed class ViolentmonkeyManager
                     return false;
 
                 var key = scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                return result.TryGetProperty(key, out var value) &&
-                       value.ValueKind != JsonValueKind.Null &&
-                       value.ValueKind != JsonValueKind.Number || 
-                       (value.ValueKind == JsonValueKind.Number && value.GetInt32() != 0);
+                if (!result.TryGetProperty(key, out var value))
+                    return false;
+
+                return value.ValueKind switch
+                {
+                    JsonValueKind.Number => value.GetInt32() != 0,
+                    JsonValueKind.String => string.Equals(
+                        value.GetString(),
+                        "more",
+                        StringComparison.OrdinalIgnoreCase),
+                    JsonValueKind.True => true,
+                    _ => false
+                };
             }
             catch (JsonException)
             {
