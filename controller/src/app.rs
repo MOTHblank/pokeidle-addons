@@ -938,9 +938,16 @@ fn draw_game_card(
                             .color(TEXT),
                         );
                     } else if !health.stream_bonus_last.is_empty() {
+                        let last_seen = if health.stream_bonus_last_at > 0 {
+                            format!(" · {}", format_time(health.stream_bonus_last_at))
+                        } else {
+                            String::new()
+                        };
+
                         ui.label(
                             RichText::new(format!(
-                                "No active bonus · last seen: {}",
+                                "No active bonus · last seen{}: {}",
+                                last_seen,
                                 health.stream_bonus_last
                             ))
                             .size(10.0)
@@ -1731,6 +1738,22 @@ fn format_pct(value: f32) -> String {
         format!("{:.0}", value)
     } else {
         format!("{:.1}", value)
+    }
+}
+
+fn format_time(timestamp_ms: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let time = UNIX_EPOCH + Duration::from_millis(timestamp_ms);
+    match time.elapsed() {
+        Ok(_) => {
+            // Keep the dashboard lightweight; users mainly need a stable clock.
+            let seconds = timestamp_ms / 1000;
+            let minute = (seconds / 60) % 60;
+            let hour = (seconds / 3600) % 24;
+            format!("{:02}:{:02}", hour, minute)
+        }
+        Err(_) => "—".to_string(),
     }
 }
 
