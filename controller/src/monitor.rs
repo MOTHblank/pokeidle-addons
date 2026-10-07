@@ -388,9 +388,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         let activity = 'Login';
         if (loggedIn) {
             activity =
-                huntSelected ||
-                activePokemon ||
-                visible('#golpes-painel')
+                huntSelected || visible('#golpes-painel')
                     ? 'Hunting'
                     : 'Center';
         }
