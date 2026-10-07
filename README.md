@@ -19,7 +19,7 @@ PokéIdle runs in normal installed Firefox with one isolated profile per game ac
 
 The game and both streaming services deliberately share the same browser profile. That means a stream opened for Game 1 uses Game 1's Twitch/KICK sessions, while Game 2 uses Game 2's sessions.
 
-The existing userscripts remain ordinary `*.user.js` files and are executed by the **official Violentmonkey Firefox extension** (or another normal browser userscript manager such as Tampermonkey). The controller never implements the userscript engine itself.
+The existing userscripts remain ordinary `*.user.js` files and are executed by the **official Violentmonkey Firefox extension**. The controller opens their official raw `.user.js` URLs for installation/update; Violentmonkey still owns the actual installation and execution. Initial installation therefore uses Violentmonkey's normal confirmation UI, while the scripts carry `@updateURL`/`@downloadURL` metadata for subsequent updates.
 
 ## Resource policy
 
