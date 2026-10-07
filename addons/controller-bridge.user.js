@@ -25,6 +25,8 @@
     const MAX_EVENTS = 250;
 
     let lastStreamBonus = '';
+    let lastStreamBonusAt = 0;
+    let lastMessageAt = 0;
 
     const copy = value => {
         try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
