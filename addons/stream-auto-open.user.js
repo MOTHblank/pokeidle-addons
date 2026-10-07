@@ -12,10 +12,6 @@
 (() => {
     'use strict';
 
-    try {
-        window.__idleshell_stream_scanner_started = true;
-    } catch (_) {}
-
     const page =
         typeof unsafeWindow !== 'undefined'
             ? unsafeWindow
@@ -23,22 +19,6 @@
 
     const BUTTON_ID = 'idleshell-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';
-
-    function reportReady() {
-        try {
-            const hostInfo = page.__idleshell_hostInfo || {};
-            if (page.chrome?.webview?.postMessage) {
-                page.chrome.webview.postMessage(
-                    JSON.stringify({
-                        type: 'userscript-ready',
-                        source: 'PokéIdle Live Stream Scanner 3.1.0',
-                        pane: String(hostInfo.title || ''),
-                        profile: String(hostInfo.profile || '')
-                    })
-                );
-            }
-        } catch (_) {}
-    }
 
     const LIVE_VALUE_RE =
         /^(?:1|true|yes|on|live|online|ao[_ -]?vivo|en[_ -]?vivo)$/i;
@@ -75,8 +55,6 @@
         'videos'
     ]);
 
-    let buttonObserver = null;
-    let buttonInstallQueued = 0;
     let scanInProgress = false;
 
     function qa(selector, root) {
@@ -322,34 +300,7 @@
         return Array.from(candidates.values());
     }
 
-    function sendToIdleShell(url) {
-        try {
-            if (
-                typeof page.__idleshell_openLink === 'function' &&
-                page.__idleshell_openLink(
-                    url,
-                    'manual-live-chat-scan'
-                )
-            ) {
-                return true;
-            }
-        } catch (_) {}
-
-        try {
-            if (page.chrome?.webview?.postMessage) {
-                page.chrome.webview.postMessage(
-                    JSON.stringify({
-                        type: 'link',
-                        url,
-                        source: 'manual-live-chat-scan'
-                    })
-                );
-                return true;
-            }
-        } catch (_) {}
-
-        // When the same userscript is used in a normal browser without
-        // IdleShell, keep the original "open stream" behavior as a fallback.
+    function openStream(url) {
         try {
             const popup = window.open(
                 url,
@@ -380,7 +331,7 @@
             let queued = 0;
 
             for (const channel of channels) {
-                if (sendToIdleShell(channel.url)) {
+                if (openStream(channel.url)) {
                     queued += 1;
                 }
             }
@@ -391,7 +342,7 @@
                     : 'No live streams found';
 
             console.info(
-                '[IdleShell] manual live chat scan:',
+                '[Moth] manual live chat scan:',
                 channels.length,
                 'live channel(s),',
                 queued,
@@ -399,7 +350,7 @@
             );
         } catch (error) {
             console.error(
-                '[IdleShell] manual live chat scan failed:',
+                '[Moth] manual live chat scan failed:',
                 error
             );
             button.querySelector('span').textContent =
@@ -415,8 +366,6 @@
     }
 
     function ensureButton() {
-        buttonInstallQueued = 0;
-
         if (!document.documentElement) {
             return;
         }
@@ -484,48 +433,18 @@
     }
 
     function scheduleButtonInstall() {
-        if (buttonInstallQueued) {
-            return;
-        }
-
-        buttonInstallQueued = window.setTimeout(() => {
-            buttonInstallQueued = 0;
-            ensureButton();
-        }, 100);
+        window.setTimeout(ensureButton, 100);
     }
 
     function start() {
-        try {
-            window.__idleshell_stream_scanner_started = true;
-        } catch (_) {}
-
-        reportReady();
         ensureButton();
 
-        if (buttonObserver) {
-            return;
-        }
-
-        buttonObserver = new MutationObserver(() => {
-            try {
-                window.__idleshell_stream_scanner_started = true;
-            } catch (_) {}
-
-            scheduleButtonInstall();
-        });
-
-        const observeTarget =
-            document.documentElement || document;
-
-        buttonObserver.observe(observeTarget, {
-            childList: true,
-            subtree: true
-        });
-
-        scheduleButtonInstall();
+        window.setInterval(() => {
+            ensureButton();
+        }, 3000);
 
         console.info(
-            '[IdleShell] manual live stream scanner ready'
+            '[Moth] manual live stream scanner ready'
         );
     }
 
