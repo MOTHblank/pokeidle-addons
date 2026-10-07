@@ -18,6 +18,9 @@
 (() => {
     'use strict';
 
+    if (new URLSearchParams(location.search).has('moth-controller')) return;
+
+
     const page =
         typeof unsafeWindow !== 'undefined'
             ? unsafeWindow
