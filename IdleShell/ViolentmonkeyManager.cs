@@ -262,14 +262,25 @@ internal sealed class ViolentmonkeyManager
         try
         {
             using var outer = JsonDocument.Parse(raw);
-            var inner = outer.RootElement.GetString();
-            if (string.IsNullOrWhiteSpace(inner))
-                return (false, false);
+            var root = outer.RootElement;
 
-            using var result = JsonDocument.Parse(inner);
-            var found = result.RootElement.TryGetProperty("found", out var foundValue) &&
+            if (root.ValueKind == JsonValueKind.String)
+            {
+                var inner = root.GetString();
+                if (string.IsNullOrWhiteSpace(inner))
+                    return (false, false);
+
+                using var result = JsonDocument.Parse(inner);
+                root = result.RootElement.Clone();
+            }
+
+            var found = root.ValueKind == JsonValueKind.Object &&
+                        root.TryGetProperty("found", out var foundValue) &&
+                        foundValue.ValueKind == JsonValueKind.True &&
                         foundValue.GetBoolean();
-            var enabled = result.RootElement.TryGetProperty("enabled", out var enabledValue) &&
+            var enabled = root.ValueKind == JsonValueKind.Object &&
+                          root.TryGetProperty("enabled", out var enabledValue) &&
+                          enabledValue.ValueKind == JsonValueKind.True &&
                           enabledValue.GetBoolean();
             return (found, enabled);
         }
