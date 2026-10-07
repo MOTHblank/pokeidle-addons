@@ -140,7 +140,7 @@
             const menu = document.querySelector('[data-a-target="player-settings-menu"]');
             if (menu) {
                 try {
-                    document.querySelector('[data-a-target="player-settings-button']')?.click();
+                    document.querySelector('[data-a-target="player-settings-button"]')?.click();
                 } catch (_) {}
             }
         };
