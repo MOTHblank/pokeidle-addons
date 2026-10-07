@@ -1,4 +1,5 @@
 use crate::config::{Config, GameProfile};
+use crate::accounts::show as show_accounts;
 use crate::firefox;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
@@ -28,6 +29,7 @@ pub fn run() -> Result<(), String> {
     let mut game2_status = nwg::Label::default();
     let mut game2_button = nwg::Button::default();
     let mut launch_both_button = nwg::Button::default();
+    let mut accounts_button = nwg::Button::default();
     let mut profiles_button = nwg::Button::default();
     let mut close_button = nwg::Button::default();
     let mut status = nwg::Label::default();
@@ -113,8 +115,16 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not create Launch Both button: {error}"))?;
 
     nwg::Button::builder()
+        .text("Accounts")
+        .position((24, 268))
+        .size((145, 38))
+        .parent(&window)
+        .build(&mut accounts_button)
+        .map_err(|error| format!("could not create Accounts button: {error}"))?;
+
+    nwg::Button::builder()
         .text("Open Profiles")
-        .position((180, 220))
+        .position((180, 268))
         .size((145, 38))
         .parent(&window)
         .build(&mut profiles_button)
@@ -122,7 +132,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Button::builder()
         .text("Close")
-        .position((336, 220))
+        .position((336, 268))
         .size((139, 38))
         .parent(&window)
         .build(&mut close_button)
@@ -130,8 +140,8 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("Starting…")
-        .position((24, 286))
-        .size((450, 66))
+        .position((24, 328))
+        .size((450, 40))
         .parent(&window)
         .build(&mut status)
         .map_err(|error| format!("could not create status: {error}"))?;
@@ -147,6 +157,7 @@ pub fn run() -> Result<(), String> {
     let game1_button_handle = game1_button.handle;
     let game2_button_handle = game2_button.handle;
     let launch_both_button_handle = launch_both_button.handle;
+    let accounts_button_handle = accounts_button.handle;
     let profiles_button_handle = profiles_button.handle;
     let close_button_handle = close_button.handle;
     let window_handle = window.handle;
@@ -196,6 +207,8 @@ pub fn run() -> Result<(), String> {
                             &state.game2_status,
                             &state.status,
                         );
+                    } else if handle == accounts_button_handle {
+                        show_accounts();
                     } else if handle == profiles_button_handle {
                         let state = state_for_events.borrow();
                         open_profiles_folder(&state.status);
