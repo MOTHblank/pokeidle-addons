@@ -394,8 +394,10 @@ internal sealed class ChatPresenceHost : IAsyncDisposable
             _ownerHwnd,
             options);
 
-        _controller.IsVisible = false;
+        // Keep the controller off-screen while allowing WebView2 to consider it
+        // visible long enough for the low-memory target to be accepted.
         _controller.Bounds = new System.Drawing.Rectangle(-10000, -10000, 1, 1);
+        _controller.IsVisible = true;
 
         _view = _controller.CoreWebView2;
         _view.Settings.AreDevToolsEnabled = false;
@@ -424,6 +426,8 @@ internal sealed class ChatPresenceHost : IAsyncDisposable
                 CoreWebView2MemoryUsageTargetLevel.Low;
         }
         catch { }
+
+        _controller.IsVisible = false;
 
         _log(
             $"{_service} chat presence host started for {_profileId}; " +
