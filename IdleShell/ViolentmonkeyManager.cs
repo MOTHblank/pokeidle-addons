@@ -35,6 +35,8 @@ internal sealed class ViolentmonkeyManager
     public IReadOnlyList<string> ScriptNames =>
         _scripts.Select(script => script.Name).ToArray();
 
+    public IReadOnlyList<string> LastMatchDiagnostics { get; private set; } = [];
+
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
         CoreWebView2Environment environment)
@@ -124,6 +126,8 @@ internal sealed class ViolentmonkeyManager
 
             await RemoveLegacyRouterAsync(view);
 
+            var diagnostics = new List<string>();
+
             foreach (var script in _scripts)
             {
                 var imported = await ImportScriptAsync(view, script);
@@ -137,10 +141,22 @@ internal sealed class ViolentmonkeyManager
                         $"Violentmonkey imported '{script.Name}' as script #{imported.ScriptId}, " +
                         "but the persisted script code could not be verified.");
 
+                var matching = await IsScriptMatchingAsync(
+                    view,
+                    imported.ScriptId,
+                    "https://pokeidle.io/app");
+
+                diagnostics.Add(
+                    $"{script.Name}: {(imported.Enabled ? "enabled" : "DISABLED")}, " +
+                    $"{(matching ? "MATCHES app" : "DOES NOT MATCH app")}");
+
                 Console.Error.WriteLine(
                     $"[IdleShell] verified userscript '{script.Name}' as VM script #{imported.ScriptId} " +
-                    $"in profile {profile.ProfileName}: {(imported.Enabled ? "enabled" : "DISABLED")}");
+                    $"in profile {profile.ProfileName}: {(imported.Enabled ? "enabled" : "DISABLED")}; " +
+                    $"{(matching ? "matches app" : "does not match app")}");
             }
+
+            LastMatchDiagnostics = diagnostics;
 
             Console.Error.WriteLine(
                 $"[IdleShell] real Violentmonkey {Version} synchronized " +
@@ -312,6 +328,119 @@ internal sealed class ViolentmonkeyManager
             Console.Error.WriteLine(
                 $"[IdleShell] legacy stream-link router cleanup skipped: {ex.Message}");
         }
+    }
+
+    private static async Task<bool> IsScriptMatchingAsync(
+        CoreWebView2 view,
+        int scriptId,
+        string pageUrl)
+    {
+        var operationId = Guid.NewGuid().ToString("N");
+        var request = """
+(() => {
+  const id = __OPERATION_ID__;
+  const state = window.__idleshellVmMatches ??= Object.create(null);
+
+  try {
+    Promise.resolve(
+      chrome.runtime.sendMessage({
+        cmd: 'GetMoreIds',
+        data: {
+          url: __PAGE_URL__,
+          isTop: true,
+          ids: { __SCRIPT_ID__: 1 }
+        }
+      })
+    ).then(
+      result => {
+        state[id] = {
+          done: true,
+          ok: true,
+          result
+        };
+      },
+      error => {
+        state[id] = {
+          done: true,
+          ok: false,
+          error: String(error?.message || error)
+        };
+      }
+    );
+
+    state[id] = { done: false };
+  } catch (error) {
+    state[id] = {
+      done: true,
+      ok: false,
+      error: String(error?.message || error)
+    };
+  }
+
+  return true;
+})()
+"""
+            .Replace(
+                "__OPERATION_ID__",
+                JsonSerializer.Serialize(operationId),
+                StringComparison.Ordinal)
+            .Replace(
+                "__PAGE_URL__",
+                JsonSerializer.Serialize(pageUrl),
+                StringComparison.Ordinal)
+            .Replace(
+                "__SCRIPT_ID__",
+                scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+
+        await view.ExecuteScriptAsync(request);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+
+            var probe = await view.ExecuteScriptAsync(
+                $"""
+                (() => {
+                  const v = window.__idleshellVmMatches?.["{{operationId}}"];
+                  return JSON.stringify(v ?? null);
+                })()
+                """);
+
+            try
+            {
+                using var outer = JsonDocument.Parse(probe);
+                var json = outer.RootElement.GetString();
+                if (string.IsNullOrWhiteSpace(json))
+                    continue;
+
+                using var state = JsonDocument.Parse(json);
+                var root = state.RootElement;
+
+                if (!root.TryGetProperty("done", out var done) || !done.GetBoolean())
+                    continue;
+
+                if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+                    return false;
+
+                if (!root.TryGetProperty("result", out var result) ||
+                    result.ValueKind != JsonValueKind.Object)
+                    return false;
+
+                var key = scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                return result.TryGetProperty(key, out var value) &&
+                       value.ValueKind != JsonValueKind.Null &&
+                       value.ValueKind != JsonValueKind.Number || 
+                       (value.ValueKind == JsonValueKind.Number && value.GetInt32() != 0);
+            }
+            catch (JsonException)
+            {
+                // Extension response may still be materializing.
+            }
+        }
+
+        return false;
     }
 
     private static async Task<bool> VerifyImportedScriptAsync(
