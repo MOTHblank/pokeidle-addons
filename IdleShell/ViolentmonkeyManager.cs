@@ -239,7 +239,7 @@ internal sealed class ViolentmonkeyManager
         CoreWebView2 view,
         LocalScript script)
     {
-        var request = $"""
+        var request = $$"""
 (() => {
   return Promise.resolve(
     chrome.runtime.sendMessage({
