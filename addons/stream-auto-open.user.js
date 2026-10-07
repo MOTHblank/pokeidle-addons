@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.0.0
-// @description  Opens current official Twitch/KICK live chats from the existing PokéIdle tab and refreshes the list once per hour.
+// @version      6.1.0
+// @description  Opens current official Twitch/KICK live chats in background tabs and refreshes the list once per hour.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -303,7 +303,11 @@
                 return false;
             }
 
-            const tab = GM_openInTab(item.chat, true);
+            const tab = GM_openInTab(item.chat, {
+                active: false,
+                insert: true,
+                setParent: true
+            });
 
             if (!tab) {
                 return false;
