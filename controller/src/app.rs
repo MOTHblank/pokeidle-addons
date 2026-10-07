@@ -1742,19 +1742,10 @@ fn format_pct(value: f32) -> String {
 }
 
 fn format_time(timestamp_ms: u64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    let time = UNIX_EPOCH + Duration::from_millis(timestamp_ms);
-    match time.elapsed() {
-        Ok(_) => {
-            // Keep the dashboard lightweight; users mainly need a stable clock.
-            let seconds = timestamp_ms / 1000;
-            let minute = (seconds / 60) % 60;
-            let hour = (seconds / 3600) % 24;
-            format!("{:02}:{:02}", hour, minute)
-        }
-        Err(_) => "—".to_string(),
-    }
+    let seconds = timestamp_ms / 1000;
+    let minute = (seconds / 60) % 60;
+    let hour = (seconds / 3600) % 24;
+    format!("{:02}:{:02}", hour, minute)
 }
 
 fn format_number(value: u64) -> String {
