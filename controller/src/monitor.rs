@@ -593,6 +593,17 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
     let mut twitch_tabs = 0u8;
     let mut twitch_low_resource_ok = 0u8;
+    let mut xp_bonuses = page
+        .get("xpBonuses")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     for context in &contexts {
         if !context.url.starts_with("https://www.twitch.tv/")
@@ -638,6 +649,14 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         }
     }
 
+    let stream_scan_opened = page.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if stream_scan_opened > 0
+        && twitch_tabs > 0
+        && !xp_bonuses.iter().any(|value| value.to_ascii_lowercase().contains("twitch"))
+    {
+        xp_bonuses.push("Twitch stream · +15% XP (chat open)".to_string());
+    }
+
     Ok(Probe {
         url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
         title: page.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -665,8 +684,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         autocatch_restock: page.get("autocatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
         stream_scan_status: page.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
         stream_scan_live: page.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
-        stream_scan_opened: page.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
-        xp_bonuses: page.get("xpBonuses").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default(),
+        stream_scan_opened,
+        xp_bonuses,
     })
 }
 
