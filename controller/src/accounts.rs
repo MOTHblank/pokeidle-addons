@@ -5,8 +5,6 @@ use std::rc::Rc;
 
 const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 const KICK_LOGIN: &str = "https://kick.com/";
-const STREAM_MANAGER_URL: &str = "https://pokeidle.io/app?moth-stream-action=manager#moth-stream-action=manager";
-const SCAN_LIVE_URL: &str = "https://pokeidle.io/app?moth-stream-action=scan#moth-stream-action=scan";
 
 const ADDONS: &[(&str, &str)] = &[
     (
@@ -43,8 +41,6 @@ enum Action {
     Game(GameProfile),
     Twitch(GameProfile),
     Kick(GameProfile),
-    Streams(GameProfile),
-    ScanLive(GameProfile),
     Addons(GameProfile),
     Folder(GameProfile),
 }
@@ -54,8 +50,8 @@ pub struct AccountsWindow {
     title: nwg::Label,
     headings: [nwg::Label; 2],
     descriptions: [nwg::Label; 2],
-    game1_buttons: [nwg::Button; 7],
-    game2_buttons: [nwg::Button; 7],
+    game1_buttons: [nwg::Button; 5],
+    game2_buttons: [nwg::Button; 5],
     close: nwg::Button,
     handler: nwg::EventHandler,
 }
@@ -88,9 +84,9 @@ impl AccountsWindow {
         let mut descriptions: [nwg::Label; 2] =
             std::array::from_fn(|_| nwg::Label::default());
 
-        let mut game1_buttons: [nwg::Button; 7] =
+        let mut game1_buttons: [nwg::Button; 5] =
             std::array::from_fn(|_| nwg::Button::default());
-        let mut game2_buttons: [nwg::Button; 7] =
+        let mut game2_buttons: [nwg::Button; 5] =
             std::array::from_fn(|_| nwg::Button::default());
 
         build_game_row(
@@ -125,17 +121,13 @@ impl AccountsWindow {
             (game1_buttons[0].handle, Action::Game(GameProfile::Game1)),
             (game1_buttons[1].handle, Action::Twitch(GameProfile::Game1)),
             (game1_buttons[2].handle, Action::Kick(GameProfile::Game1)),
-            (game1_buttons[3].handle, Action::Streams(GameProfile::Game1)),
-            (game1_buttons[4].handle, Action::ScanLive(GameProfile::Game1)),
-            (game1_buttons[5].handle, Action::Addons(GameProfile::Game1)),
-            (game1_buttons[6].handle, Action::Folder(GameProfile::Game1)),
+            (game1_buttons[3].handle, Action::Addons(GameProfile::Game1)),
+            (game1_buttons[4].handle, Action::Folder(GameProfile::Game1)),
             (game2_buttons[0].handle, Action::Game(GameProfile::Game2)),
             (game2_buttons[1].handle, Action::Twitch(GameProfile::Game2)),
             (game2_buttons[2].handle, Action::Kick(GameProfile::Game2)),
-            (game2_buttons[3].handle, Action::Streams(GameProfile::Game2)),
-            (game2_buttons[4].handle, Action::ScanLive(GameProfile::Game2)),
-            (game2_buttons[5].handle, Action::Addons(GameProfile::Game2)),
-            (game2_buttons[6].handle, Action::Folder(GameProfile::Game2)),
+            (game2_buttons[3].handle, Action::Addons(GameProfile::Game2)),
+            (game2_buttons[4].handle, Action::Folder(GameProfile::Game2)),
         ];
 
         let events_window = Rc::clone(&window);
@@ -166,12 +158,6 @@ impl AccountsWindow {
                                 }
                                 Action::Kick(profile) => {
                                     open_login(*profile, KICK_LOGIN, "KICK")
-                                }
-                                Action::Streams(profile) => {
-                                    open_profile_url(*profile, STREAM_MANAGER_URL)
-                                }
-                                Action::ScanLive(profile) => {
-                                    open_profile_url(*profile, SCAN_LIVE_URL)
                                 }
                                 Action::Addons(profile) => open_addons(*profile),
                                 Action::Folder(profile) => open_profile_folder(*profile),
@@ -216,7 +202,7 @@ fn build_game_row(
     window: &Rc<nwg::Window>,
     heading: &mut nwg::Label,
     description: &mut nwg::Label,
-    buttons: &mut [nwg::Button; 7],
+    buttons: &mut [nwg::Button; 5],
     title: &str,
     y: i32,
 ) -> Result<(), String> {
@@ -242,21 +228,19 @@ fn build_game_row(
         "Open Game",
         "Twitch",
         "KICK",
-        "Streams",
-        "Scan Live",
         "Addons",
         "Profile",
     ];
 
     for (index, label) in labels.into_iter().enumerate() {
-        let row = if index < 4 { 0 } else { 1 };
-        let column = if index < 4 { index } else { index - 4 };
+        let row = if index < 3 { 0 } else { 1 };
+        let column = if index < 3 { index } else { index - 3 };
 
         nwg::Button::builder()
             .text(label)
             .flags(nwg::ButtonFlags::VISIBLE)
-            .position((24 + (column as i32) * 124, y + 58 + row * 38))
-            .size((116, 32))
+            .position((24 + (column as i32) * 150, y + 58 + row * 38))
+            .size((140, 32))
             .parent(&**window)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
