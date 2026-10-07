@@ -3,7 +3,7 @@ namespace Moth.PokeIdle.IdleShell;
 internal static class AppConfig
 {
     public const string GameUrl = "https://pokeidle.io/app";
-    public const int ToolbarHeight = 40;
+    public const int ToolbarHeight = 68;
 
     // Game environment: never throttle, never treat covered windows as hidden.
     public const string GameBrowserArguments =
