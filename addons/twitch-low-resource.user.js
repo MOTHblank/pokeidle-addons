@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      1.0.0
+// @version      1.1.0
 // @description  Keeps Twitch streams at the lowest available quality and trims nonessential page rendering to reduce bandwidth, decode and UI overhead while leaving chat pop-outs untouched.
 // @match        https://www.twitch.tv/*
 // @match        https://www.twitch.tv/*/*
