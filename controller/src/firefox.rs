@@ -3,6 +3,16 @@ use std::fs;
 use std::io;
 use std::process::{Child, Command, Stdio};
 
+#[cfg(windows)]
+use std::{thread, time::Duration};
+
+#[cfg(windows)]
+use winapi::shared::minwindef::{BOOL, DWORD, LPARAM, TRUE};
+#[cfg(windows)]
+use winapi::shared::windef::HWND;
+#[cfg(windows)]
+use winapi::um::winuser::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, ShowWindow, SW_MINIMIZE};
+
 const USER_PREFS: &str = r#"
 // Moth defaults: keep the browser quiet and cheap without changing
 // PokéIdle, Twitch, or KICK functionality. This file is created once
@@ -16,6 +26,13 @@ user_pref("browser.startup.page", 0);
 user_pref("browser.sessionstore.restore_on_demand", true);
 user_pref("browser.sessionstore.restore_tabs_lazily", true);
 user_pref("browser.pagethumbnails.capturing_disabled", true);
+user_pref("browser.discovery.enabled", false);
+user_pref("browser.sessionstore.interval", 600000);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("datareporting.policy.dataSubmissionEnabled", false);
+user_pref("datareporting.usage.uploadEnabled", false);
+user_pref("toolkit.telemetry.archive.enabled", false);
+user_pref("toolkit.telemetry.enabled", false);
 user_pref("browser.uitour.enabled", false);
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.urlbar.suggest.searches", false);
@@ -53,7 +70,7 @@ pub fn launch(config: &Config) -> Result<Child, String> {
 
     provision_profile(&config.profile_dir)?;
 
-    Command::new(&config.firefox_executable)
+    let child = Command::new(&config.firefox_executable)
         // Each Moth game profile must be a genuinely separate Firefox
         // instance so Game 1 and Game 2 cannot inherit each other's cookies,
         // logins, or session state. --no-remote implies --new-instance.
@@ -66,8 +83,64 @@ pub fn launch(config: &Config) -> Result<Child, String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(format_spawn_error)
+        .map_err(format_spawn_error)?;
+
+    minimize_process_window_async(child.id());
+    Ok(child)
 }
+
+
+#[cfg(windows)]
+struct WindowSearch {
+    pid: DWORD,
+    minimized: bool,
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn find_process_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let search = &mut *(lparam as *mut WindowSearch);
+    let mut window_pid: DWORD = 0;
+
+    GetWindowThreadProcessId(hwnd, &mut window_pid);
+
+    if window_pid == search.pid && IsWindowVisible(hwnd) != 0 {
+        ShowWindow(hwnd, SW_MINIMIZE);
+        search.minimized = true;
+        return 0;
+    }
+
+    TRUE
+}
+
+#[cfg(windows)]
+fn minimize_process_window_async(pid: u32) {
+    thread::spawn(move || {
+        // Firefox creates its top-level window asynchronously. Poll briefly
+        // instead of blocking the GUI thread or using a shell wrapper.
+        for _ in 0..40 {
+            let mut search = WindowSearch {
+                pid,
+                minimized: false,
+            };
+
+            unsafe {
+                EnumWindows(
+                    Some(find_process_window),
+                    &mut search as *mut WindowSearch as LPARAM,
+                );
+            }
+
+            if search.minimized {
+                return;
+            }
+
+            thread::sleep(Duration::from_millis(250));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn minimize_process_window_async(_pid: u32) {}
 
 fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
     if config.profile_dir.exists() {
@@ -116,6 +189,13 @@ fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
         ("browser.newtabpage.preload", r#"user_pref("browser.newtabpage.preload", false);"#),
         ("browser.sessionstore.restore_on_demand", r#"user_pref("browser.sessionstore.restore_on_demand", true);"#),
         ("browser.pagethumbnails.capturing_disabled", r#"user_pref("browser.pagethumbnails.capturing_disabled", true);"#),
+        ("browser.discovery.enabled", r#"user_pref("browser.discovery.enabled", false);"#),
+        ("browser.sessionstore.interval", r#"user_pref("browser.sessionstore.interval", 600000);"#),
+        ("datareporting.healthreport.uploadEnabled", r#"user_pref("datareporting.healthreport.uploadEnabled", false);"#),
+        ("datareporting.policy.dataSubmissionEnabled", r#"user_pref("datareporting.policy.dataSubmissionEnabled", false);"#),
+        ("datareporting.usage.uploadEnabled", r#"user_pref("datareporting.usage.uploadEnabled", false);"#),
+        ("toolkit.telemetry.archive.enabled", r#"user_pref("toolkit.telemetry.archive.enabled", false);"#),
+        ("toolkit.telemetry.enabled", r#"user_pref("toolkit.telemetry.enabled", false);"#),
         ("browser.uitour.enabled", r#"user_pref("browser.uitour.enabled", false);"#),
         ("browser.shell.checkDefaultBrowser", r#"user_pref("browser.shell.checkDefaultBrowser", false);"#),
         ("browser.urlbar.suggest.searches", r#"user_pref("browser.urlbar.suggest.searches", false);"#),
