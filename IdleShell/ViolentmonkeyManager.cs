@@ -35,10 +35,6 @@ internal sealed class ViolentmonkeyManager
     public IReadOnlyList<string> ScriptNames =>
         _scripts.Select(script => script.Name).ToArray();
 
-    public string? FindScriptSource(string name) =>
-        _scripts.FirstOrDefault(script =>
-            string.Equals(script.Name, name, StringComparison.OrdinalIgnoreCase))?.Source;
-
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
         CoreWebView2Environment environment)
