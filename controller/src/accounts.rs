@@ -126,7 +126,7 @@ fn build_game_row(
     let mut frame = nwg::Frame::default();
 
     nwg::Frame::builder()
-        .flags(nwg::FrameFlags::BORDER)
+        .flags(nwg::FrameFlags::BORDER | nwg::FrameFlags::VISIBLE)
         .position((24, y + 20))
         .size((572, 132))
         .parent(window)
