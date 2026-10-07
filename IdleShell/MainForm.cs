@@ -343,7 +343,7 @@ internal sealed class MainForm : Form
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new ViolentmonkeyManager(addonsFolder);
             _userscriptStatus.Text =
-                $"Userscripts: installed · {_userscripts.ScriptNames.Count} bundled · waiting for game";
+                $"Userscripts: VM ready · {_userscripts.ScriptNames.Count} bundled";
             Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.ScriptNames.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
@@ -991,7 +991,7 @@ internal sealed class MainForm : Form
         if (msg.Type == "userscript-ready")
         {
             _userscriptStatus.Text =
-                $"Userscripts: running · {msg.Source} · Game {WorkspaceForPane(pane)?.Index + 1 ?? 0}";
+                $"Userscript: {msg.Source} · Game {WorkspaceForPane(pane)?.Index + 1 ?? 0} · running";
             return;
         }
 
