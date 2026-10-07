@@ -98,7 +98,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
                     break;
 
                 case AccountService.Kick:
-                    var kick = await GetKickHostAsync(account);
+                    var kick = await GetKickHostAsync(account, channel);
                     await kick.JoinAsync(channel);
                     break;
 
@@ -397,7 +397,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
         }
     }
 
-    private async Task<KickChatHost> GetKickHostAsync(Account account)
+    private async Task<KickChatHost> GetKickHostAsync(Account account, string initialChannel)
     {
         if (_kick.TryGetValue(account.Id, out var existing))
             return existing;
@@ -408,7 +408,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
             _ownerHwnd,
             _log);
 
-        await host.StartAsync();
+        await host.JoinAsync(initialChannel);
         _kick[account.Id] = host;
         return host;
     }
@@ -649,6 +649,7 @@ internal sealed class KickChatHost : IAsyncDisposable
 
     private CoreWebView2Controller? _controller;
     private CoreWebView2? _view;
+    private string? _primaryChannel;
     private TaskCompletionSource<bool>? _pageReady;
 
     private const string BootstrapScript = """
@@ -696,10 +697,11 @@ internal sealed class KickChatHost : IAsyncDisposable
   };
 
   const remove = (slug) => {
-    const frame = state.frames[String(slug || '').trim()];
+    slug = String(slug || '').trim();
+    const frame = state.frames[slug];
     if (!frame) return false;
     frame.remove();
-    delete state.frames[String(slug || '').trim()];
+    delete state.frames[slug];
     return true;
   };
 
@@ -712,10 +714,9 @@ internal sealed class KickChatHost : IAsyncDisposable
   };
 
   document.documentElement.style.background = 'transparent';
-  document.body.innerHTML = '';
-  document.body.style.margin = '0';
-  document.body.style.padding = '0';
   document.body.style.background = 'transparent';
+  document.body.style.overflow = 'hidden';
+  document.body.style.margin = '0';
 })();
 """;
 
@@ -731,10 +732,78 @@ internal sealed class KickChatHost : IAsyncDisposable
         _log = log;
     }
 
-    public async Task StartAsync()
+    public async Task JoinAsync(string slug)
+    {
+        if (_channels.Contains(slug))
+            return;
+
+        if (_controller is null)
+        {
+            _channels.Add(slug);
+            await StartAsync(slug);
+            return;
+        }
+
+        _channels.Add(slug);
+        await AddFrameAsync(slug);
+    }
+
+    public async Task LeaveAsync(string slug)
+    {
+        if (!_channels.Remove(slug))
+            return;
+
+        if (_controller is null)
+            return;
+
+        if (string.Equals(slug, _primaryChannel, StringComparison.OrdinalIgnoreCase))
+        {
+            var next = _channels.FirstOrDefault();
+            if (next is null)
+            {
+                _primaryChannel = null;
+                return;
+            }
+
+            _primaryChannel = next;
+            _pageReady = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _view!.Navigate(ChatUrl(next));
+            await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            foreach (var channel in _channels.Where(x =>
+                         !string.Equals(x, _primaryChannel, StringComparison.OrdinalIgnoreCase)))
+                await AddFrameAsync(channel);
+
+            return;
+        }
+
+        var js = $"globalThis.__idleshellKickRemove?.({JsonSerializer.Serialize(slug)});";
+        await _view!.ExecuteScriptAsync(js);
+    }
+
+    public async Task ReloadAsync()
+    {
+        if (_view is null || _primaryChannel is null)
+            return;
+
+        _pageReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _view.Reload();
+        await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        foreach (var channel in _channels.Where(x =>
+                     !string.Equals(x, _primaryChannel, StringComparison.OrdinalIgnoreCase)))
+            await AddFrameAsync(channel);
+    }
+
+    private async Task StartAsync(string primaryChannel)
     {
         if (_controller is not null)
             return;
+
+        _primaryChannel = primaryChannel;
 
         var options = _environment.CreateCoreWebView2ControllerOptions();
         options.ProfileName = _profileId;
@@ -755,11 +824,13 @@ internal sealed class KickChatHost : IAsyncDisposable
         _view.ProcessFailed += (_, e) =>
             _log($"Kick chat WebView process failed for profile {_profileId}: {e.ProcessFailedKind}");
 
+        await _view.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript);
+
         _pageReady = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         _view.NavigationCompleted += OnNavigationCompleted;
-        _view.Navigate("https://kick.com/");
+        _view.Navigate(ChatUrl(primaryChannel));
         await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         try
@@ -770,41 +841,24 @@ internal sealed class KickChatHost : IAsyncDisposable
         catch { }
     }
 
-    public async Task JoinAsync(string slug)
+    private async Task AddFrameAsync(string slug)
     {
-        await StartAsync();
-        _channels.Add(slug);
+        if (_view is null)
+            return;
 
         var js = $"globalThis.__idleshellKickAdd?.({JsonSerializer.Serialize(slug)});";
-        await _view!.ExecuteScriptAsync(js);
-    }
-
-    public async Task LeaveAsync(string slug)
-    {
-        _channels.Remove(slug);
-        if (_view is null) return;
-
-        var js = $"globalThis.__idleshellKickRemove?.({JsonSerializer.Serialize(slug)});";
         await _view.ExecuteScriptAsync(js);
     }
 
-    public async Task ReloadAsync()
-    {
-        if (_view is null) return;
-        _pageReady = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        _view.Reload();
-        await _pageReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
-
-        foreach (var slug in _channels.ToArray())
-            await JoinAsync(slug);
-    }
+    private static string ChatUrl(string slug) =>
+        "https://kick.com/popout/" + Uri.EscapeDataString(slug) + "/chat";
 
     private void OnNavigationCompleted(
         object? sender,
         CoreWebView2NavigationCompletedEventArgs e)
     {
-        if (_pageReady is null) return;
+        if (_pageReady is null)
+            return;
 
         if (!e.IsSuccess)
         {
@@ -814,21 +868,7 @@ internal sealed class KickChatHost : IAsyncDisposable
             return;
         }
 
-        _ = InitializeHostAsync();
-    }
-
-    private async Task InitializeHostAsync()
-    {
-        try
-        {
-            await _view!.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript);
-            await _view.ExecuteScriptAsync(BootstrapScript);
-            _pageReady?.TrySetResult(true);
-        }
-        catch (Exception ex)
-        {
-            _pageReady?.TrySetException(ex);
-        }
+        _pageReady.TrySetResult(true);
     }
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -862,6 +902,7 @@ internal sealed class KickChatHost : IAsyncDisposable
         _view = null;
         _controller = null;
         _channels.Clear();
+        _primaryChannel = null;
         await Task.CompletedTask;
     }
 }
