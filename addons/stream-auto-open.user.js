@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      3.2.0
+// @version      4.0.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @run-at       document-start
@@ -50,6 +50,113 @@
     ]);
 
     let scanInProgress = false;
+    const MAX_STREAMS_PER_SERVICE = 10;
+    const STREAMS_KEY = 'moth-pokeidle-streams-v1';
+    const openChats = new Map();
+
+    function loadStreamConfig() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(STREAMS_KEY) || '{}');
+            return {
+                twitch: Array.from({ length: MAX_STREAMS_PER_SERVICE }, (_, i) => String(saved?.twitch?.[i] || '')),
+                kick: Array.from({ length: MAX_STREAMS_PER_SERVICE }, (_, i) => String(saved?.kick?.[i] || ''))
+            };
+        } catch (_) {
+            return {
+                twitch: Array(MAX_STREAMS_PER_SERVICE).fill(''),
+                kick: Array(MAX_STREAMS_PER_SERVICE).fill('')
+            };
+        }
+    }
+
+    function saveStreamConfig(config) {
+        try {
+            localStorage.setItem(STREAMS_KEY, JSON.stringify(config));
+        } catch (_) {}
+    }
+
+    function channelName(raw) {
+        const url = normalizeChannelUrl(raw);
+        if (!url) return '';
+        return decodeURIComponent(new URL(url).pathname.slice(1));
+    }
+
+    function chatUrl(raw) {
+        const url = normalizeChannelUrl(raw);
+        if (!url) return null;
+        const parsed = new URL(url);
+        const channel = encodeURIComponent(
+            decodeURIComponent(parsed.pathname.slice(1))
+        );
+
+        return parsed.hostname === 'twitch.tv'
+            ? 'https://www.twitch.tv/popout/' + channel + '/chat'
+            : 'https://kick.com/popout/' + channel + '/chat';
+    }
+
+    function chatKey(service, index) {
+        return 'moth-' + service + '-' + (index + 1);
+    }
+
+    function openChat(service, index, raw) {
+        const channel = channelName(raw);
+        const url = chatUrl(raw);
+        if (!channel || !url) return false;
+
+        const key = chatKey(service, index);
+        const current = openChats.get(key);
+
+        if (current && !current.closed) {
+            try { current.focus(); } catch (_) {}
+            return true;
+        }
+
+        try {
+            const chat = window.open(url, key);
+            if (!chat) return false;
+            openChats.set(key, chat);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function closeChat(service, index) {
+        const key = chatKey(service, index);
+        const chat = openChats.get(key);
+        if (!chat) return false;
+
+        try { chat.close(); } catch (_) {}
+        openChats.delete(key);
+        return true;
+    }
+
+    function openAllConfiguredChats(config) {
+        let opened = 0;
+
+        for (const service of ['twitch', 'kick']) {
+            for (let index = 0; index < MAX_STREAMS_PER_SERVICE; index += 1) {
+                if (openChat(service, index, config[service][index])) {
+                    opened += 1;
+                }
+            }
+        }
+
+        return opened;
+    }
+
+    function closeAllChats() {
+        let closed = 0;
+
+        for (const key of Array.from(openChats.keys())) {
+            try { openChats.get(key)?.close(); } catch (_) {}
+            openChats.delete(key);
+            closed += 1;
+        }
+
+        return closed;
+    }
+
 
     function qa(selector, root) {
         return Array.from(
@@ -295,16 +402,173 @@
     }
 
     function openStream(url) {
-        try {
-            const popup = window.open(
-                url,
-                '_blank',
-                'noopener,noreferrer'
-            );
-            return !!popup;
-        } catch (_) {
-            return false;
+        const parsed = new URL(url);
+        const service = parsed.hostname.replace(/^www\./, '') === 'twitch.tv'
+            ? 'twitch'
+            : 'kick';
+
+        const channel = channelName(url);
+        if (!channel) return false;
+
+        const config = loadStreamConfig();
+        let index = config[service].findIndex(
+            value => normalizeText(value) === normalizeText(channel)
+        );
+
+        if (index < 0) {
+            index = config[service].findIndex(value => !value);
+            if (index >= 0) {
+                config[service][index] = channel;
+                saveStreamConfig(config);
+            }
         }
+
+        if (index < 0) return false;
+        return openChat(service, index, channel);
+    }
+
+    function closeManager() {
+        document.getElementById('moth-stream-manager')?.remove();
+    }
+
+    function renderManager() {
+        if (document.getElementById('moth-stream-manager')) return;
+
+        const config = loadStreamConfig();
+        const panel = document.createElement('div');
+        panel.id = 'moth-stream-manager';
+        panel.style.cssText = [
+            'position:fixed',
+            'right:18px',
+            'top:70px',
+            'z-index:2147483647',
+            'width:430px',
+            'max-height:80vh',
+            'overflow:auto',
+            'box-sizing:border-box',
+            'padding:12px',
+            'background:#111',
+            'color:#eee',
+            'border:1px solid #555',
+            'border-radius:8px',
+            'box-shadow:0 8px 30px rgba(0,0,0,.45)',
+            'font:13px/1.3 system-ui,sans-serif'
+        ].join(';');
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-weight:700';
+        header.textContent = 'Moth Stream Chats';
+
+        const closeManagerButton = document.createElement('button');
+        closeManagerButton.type = 'button';
+        closeManagerButton.textContent = '×';
+        closeManagerButton.style.cssText = 'background:none;border:0;color:#fff;font-size:22px;cursor:pointer';
+        closeManagerButton.addEventListener('click', closeManager);
+        header.appendChild(closeManagerButton);
+        panel.appendChild(header);
+
+        const note = document.createElement('div');
+        note.textContent = 'Chat-only: no stream video is loaded. These connections use this game profile.';
+        note.style.cssText = 'margin-bottom:10px;opacity:.72';
+        panel.appendChild(note);
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:6px;margin-bottom:10px';
+
+        const openAll = document.createElement('button');
+        openAll.type = 'button';
+        openAll.textContent = 'Open all';
+        openAll.addEventListener('click', () => {
+            const count = openAllConfiguredChats(config);
+            openAll.textContent = 'Opened ' + count;
+            window.setTimeout(() => { openAll.textContent = 'Open all'; }, 1000);
+        });
+
+        const closeAll = document.createElement('button');
+        closeAll.type = 'button';
+        closeAll.textContent = 'Close all';
+        closeAll.addEventListener('click', () => {
+            const count = closeAllChats();
+            closeAll.textContent = 'Closed ' + count;
+            window.setTimeout(() => { closeAll.textContent = 'Close all'; }, 1000);
+        });
+
+        for (const button of [openAll, closeAll]) {
+            button.style.cssText = 'padding:5px 9px;cursor:pointer';
+            actions.appendChild(button);
+        }
+
+        panel.appendChild(actions);
+
+        for (const service of ['twitch', 'kick']) {
+            const section = document.createElement('section');
+
+            const title = document.createElement('div');
+            title.textContent = service === 'twitch'
+                ? 'Twitch · 10 chat slots'
+                : 'KICK · 10 chat slots';
+            title.style.cssText = 'font-weight:700;margin:8px 0 5px';
+            section.appendChild(title);
+
+            for (let index = 0; index < MAX_STREAMS_PER_SERVICE; index += 1) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;gap:4px;margin:3px 0';
+
+                const number = document.createElement('span');
+                number.textContent = String(index + 1).padStart(2, '0');
+                number.style.cssText = 'width:22px;opacity:.6;padding-top:5px';
+
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.placeholder = 'channel';
+                input.value = config[service][index];
+                input.style.cssText = 'flex:1;min-width:0;padding:5px';
+
+                const save = document.createElement('button');
+                save.type = 'button';
+                save.textContent = 'Save';
+                save.style.cssText = 'padding:4px 7px;cursor:pointer';
+
+                const chat = document.createElement('button');
+                chat.type = 'button';
+                chat.textContent = 'Chat';
+                chat.style.cssText = 'padding:4px 7px;cursor:pointer';
+
+                const close = document.createElement('button');
+                close.type = 'button';
+                close.textContent = '×';
+                close.title = 'Close chat';
+                close.style.cssText = 'padding:4px 8px;cursor:pointer';
+
+                save.addEventListener('click', () => {
+                    const value = channelName(input.value);
+                    if (!value) return;
+                    config[service][index] = value;
+                    input.value = value;
+                    saveStreamConfig(config);
+                });
+
+                chat.addEventListener('click', () => {
+                    const value = channelName(input.value);
+                    if (!value) return;
+                    config[service][index] = value;
+                    input.value = value;
+                    saveStreamConfig(config);
+                    openChat(service, index, value);
+                });
+
+                close.addEventListener('click', () => {
+                    closeChat(service, index);
+                });
+
+                row.append(number, input, save, chat, close);
+                section.appendChild(row);
+            }
+
+            panel.appendChild(section);
+        }
+
+        document.body.appendChild(panel);
     }
 
     function scanLiveStreams(button) {
@@ -424,6 +688,16 @@
             'afterend',
             button
         );
+
+        const managerButton = document.createElement('button');
+        managerButton.type = 'button';
+        managerButton.id = 'moth-manage-streams';
+        managerButton.textContent = 'Manage Chats';
+        managerButton.title = 'Manage up to 10 Twitch + 10 KICK chat-only connections';
+        managerButton.style.cssText = button.style.cssText;
+        managerButton.style.marginLeft = '4px';
+        managerButton.addEventListener('click', renderManager);
+        inventory.insertAdjacentElement('afterend', managerButton);
     }
 
     function start() {
