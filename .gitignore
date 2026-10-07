@@ -18,12 +18,6 @@
 # Debug symbols
 *.pdb
 
-# Third-party packages fetched/installed at runtime
-*.crx
-
-# IdleShell local diagnostics
+# Local diagnostics
 *.log
 probe.csv
-
-# Official Violentmonkey runtime (downloaded by IdleShell/prepare-violentmonkey.ps1)
-**/vendor/violentmonkey/
