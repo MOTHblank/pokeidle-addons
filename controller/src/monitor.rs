@@ -73,6 +73,7 @@ pub struct Health {
     pub stream_scan_opened: u32,
     pub xp_bonuses: Vec<String>,
     pub player_level: u32,
+    pub player_xp: String,
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
@@ -115,6 +116,7 @@ impl Default for Health {
             stream_scan_opened: 0,
             xp_bonuses: Vec::new(),
             player_level: 0,
+            player_xp: String::new(),
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
@@ -248,6 +250,7 @@ struct BrowserSession {
 #[derive(Default)]
 struct RuntimeProbe {
     player_level: u32,
+    player_xp: String,
     gold: u64,
     orbs: u64,
     fallen_count: u32,
@@ -299,6 +302,7 @@ struct Probe {
     stream_scan_opened: u32,
     xp_bonuses: Vec<String>,
     player_level: u32,
+    player_xp: String,
     gold: u64,
     orbs: u64,
     stream_bonus: String,
@@ -385,6 +389,7 @@ fn monitor_loop(
                         current.stream_scan_opened = probe.stream_scan_opened;
                         current.xp_bonuses = probe.xp_bonuses;
                         current.player_level = probe.player_level;
+                        current.player_xp = probe.player_xp;
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
                         current.stream_bonus = probe.stream_bonus;
@@ -497,6 +502,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         const loggedIn = !!app && !app.classList.contains('hidden');
         const ativo = document.querySelector('#ativo-card');
         const huntText = text('#hud-hunt');
+        const playerLevel = text('#tr-level');
+        const playerXp = text('#tr-xp-txt');
 
         const activePokemon =
             ativo && !ativo.classList.contains('vazio')
@@ -536,7 +543,20 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
             addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
             performanceFps: text('#mpp-browser-fps'),
-            performanceSceneRuns: text('#mpp-scene-runs')
+            performanceSceneRuns: text('#mpp-scene-runs'),
+            playerLevel,
+            playerXp,
+            streamBonus: (() => {
+                const sources = [
+                    text('#tr-ativos'),
+                    text('#evento-texto'),
+                    text('#evento-faixa')
+                ];
+                return sources.find(value =>
+                    /\+\s*15\s*%/i.test(value) &&
+                    /\b(?:XP|EXP|experi)/i.test(value)
+                ) || '';
+            })()
         });
     })()"#;
 
@@ -684,10 +704,17 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         stream_scan_live: runtime.stream_scan_live,
         stream_scan_opened: runtime.stream_scan_opened,
         xp_bonuses: runtime.xp_bonuses,
-        player_level: runtime.player_level,
+        player_level: page.get("playerLevel").and_then(Value::as_str)
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(runtime.player_level),
+        player_xp: page.get("playerXp").and_then(Value::as_str).unwrap_or_default().to_string(),
         gold: runtime.gold,
         orbs: runtime.orbs,
-        stream_bonus: runtime.stream_bonus,
+        stream_bonus: if runtime.stream_bonus.is_empty() {
+            page.get("streamBonus").and_then(Value::as_str).unwrap_or_default().to_string()
+        } else {
+            runtime.stream_bonus
+        },
         tabs: build_tab_infos(&contexts, &mut session.socket, &mut session.next_id),
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
@@ -702,7 +729,6 @@ fn build_tab_infos(
 
     for context in contexts.iter().filter(|context| context.depth == 0) {
         let lower = context.url.to_ascii_lowercase();
-
         let kind = if lower.starts_with("https://pokeidle.io/")
             || lower.starts_with("https://www.pokeidle.io/")
         {
@@ -719,44 +745,43 @@ fn build_tab_infos(
             "Web"
         };
 
-        let mut low_resource = false;
+        let id = *next_id;
+        *next_id += 1;
 
-        if kind == "Twitch" {
-            let id = *next_id;
-            *next_id += 1;
+        let result = send_and_wait(
+            socket,
+            id,
+            json!({
+                "id": id,
+                "method": "script.evaluate",
+                "params": {
+                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css') })",
+                    "target": { "context": context.id },
+                    "awaitPromise": false
+                }
+            }),
+        );
 
-            let result = send_and_wait(
-                socket,
-                id,
-                json!({
-                    "id": id,
-                    "method": "script.evaluate",
-                    "params": {
-                        "expression": "!!document.querySelector('#moth-twitch-low-resource-css')",
-                        "target": { "context": context.id },
-                        "awaitPromise": false
-                    }
-                }),
-            );
-
-            low_resource = result
-                .ok()
-                .and_then(|value| value.get("result"))
-                .and_then(|value| value.get("result"))
-                .and_then(|value| value.get("value"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-        }
+        let (title, low_resource) = result
+            .ok()
+            .and_then(|value| {
+                value.get("result")
+                    .and_then(|v| v.get("result"))
+                    .and_then(|v| v.get("value"))
+                    .and_then(Value::as_str)
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            })
+            .map(|value| (
+                value.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
+                value.get("lowResource").and_then(Value::as_bool).unwrap_or(false),
+            ))
+            .unwrap_or_default();
 
         tabs.push(TabInfo {
             kind: kind.to_string(),
-            title: if context.title.is_empty() {
-                context.url.clone()
-            } else {
-                context.title.clone()
-            },
+            title: if title.is_empty() { context.url.clone() } else { title },
             url: context.url.clone(),
-            low_resource,
+            low_resource: kind == "Twitch" && low_resource,
         });
     }
 
@@ -812,6 +837,12 @@ fn probe_runtime_details(
 
     let player_level =
         state.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let player_xp = snapshot
+        .get("state")
+        .and_then(|s| s.get("playerXp"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let fallen_count =
         state.get("fallen").and_then(Value::as_u64).unwrap_or(0) as u32;
     let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
@@ -994,6 +1025,7 @@ fn probe_runtime_details(
 
     Ok(RuntimeProbe {
         player_level,
+        player_xp,
         gold,
         orbs,
         fallen_count,
@@ -1052,7 +1084,13 @@ fn flush_commands(
                 "params": {
                     "expression": expression,
                     "target": {
-                    "context": session.game_context.as_deref().unwrap_or("")
+                    "context": match session.game_context.as_deref() {
+                        Some(context) => context,
+                        None => {
+                            logging::warn("controller command dropped: no PokéIdle context");
+                            continue;
+                        }
+                    }
                 },
                     "awaitPromise": false
                 }
@@ -1071,7 +1109,6 @@ fn flush_commands(
 struct ContextInfo {
     id: String,
     url: String,
-    title: String,
     depth: u8,
 }
 
@@ -1083,7 +1120,6 @@ fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>, depth: u8) {
     out.push(ContextInfo {
         id: id.to_string(),
         url: value.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
-        title: value.get("userContext").and_then(Value::as_str).unwrap_or_default().to_string(),
         depth,
     });
 
