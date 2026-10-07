@@ -1,0 +1,7 @@
+[package]
+name = "moth-controller"
+version = "0.1.0"
+edition = "2024"
+description = "Native controller for dedicated PokéIdle browser profiles"
+
+[dependencies]
