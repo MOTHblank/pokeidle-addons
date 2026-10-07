@@ -207,6 +207,28 @@
 
     function snapshot() {
         const pokemon = activePokemon();
+        const scanner = document.querySelector('#moth-scan-live-streams');
+
+        const bonusLines = (document.body?.innerText || '')
+            .split(/\n+/)
+            .map(v => v.replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .filter(line =>
+                /\+\s*\d+\s*%/.test(line) &&
+                /\b(?:XP|EXP|experi)/i.test(line)
+            )
+            .slice(0, 8);
+
+        const text = selector => {
+            const el = document.querySelector(selector);
+            return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        };
+
+        const numberFrom = selector => {
+            const match = text(selector).match(/\d[\d.,]*/);
+            return match ? Number(match[0].replace(/\D/g, '')) || 0 : 0;
+        };
+
         return {
             connected: !!socket && socket.readyState === page.WebSocket.OPEN,
             state: {
@@ -224,7 +246,16 @@
                 ),
                 fallen: fallen(),
                 visibleStreamBonus: bodyTextBonus(),
-                domBalls: balls()
+                xpBonuses: [...new Set(bonusLines)],
+                domBalls: balls(),
+                autoCatchOn: text('#moth-ac-toggle').toUpperCase() === 'ON',
+                autoCatchCaptures: numberFrom('#moth-ac-captures'),
+                autoCatchBallsUsed: numberFrom('#moth-ac-balls-used'),
+                autoCatchRate: text('#moth-ac-rate'),
+                autoCatchRestock: text('#moth-ac-restock-status'),
+                streamScanStatus: scanner?.dataset?.mothScanStatus || '',
+                streamScanLive: Number(scanner?.dataset?.mothScanLive || 0) || 0,
+                streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0
             },
             hunts: hunts.map(h => ({
                 slug: String(h?.slug || ''),
