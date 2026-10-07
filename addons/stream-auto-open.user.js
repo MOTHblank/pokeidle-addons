@@ -17,7 +17,7 @@
     const BUTTON_ID = 'moth-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';
 
-    const MAX_LIVE_CHATS_PER_SERVICE = 10;
+    const MAX_LIVE_STREAMS_PER_SERVICE = 10;
     const LIVE_SCAN_INTERVAL_MS = 60 * 60 * 1000;
     const INITIAL_SCAN_DELAY_MS = 30 * 1000;
     const UI_RECHECK_INTERVAL_MS = 30 * 1000;
@@ -329,7 +329,7 @@
         }
     }
 
-    function closeChatsNotLive(liveKeys) {
+    function closeStreamsNotLive(liveKeys) {
         for (const [key, tab] of [...openStreams.entries()]) {
             if (tab?.closed || !liveKeys.has(key)) {
                 try {
@@ -406,7 +406,7 @@
             let opened = 0;
 
             for (const item of live.values()) {
-                if (perService[item.service] >= MAX_LIVE_CHATS_PER_SERVICE) {
+                if (perService[item.service] >= MAX_LIVE_STREAMS_PER_SERVICE) {
                     continue;
                 }
 
@@ -421,10 +421,10 @@
                 }
             }
 
-            // Only close old chats when PokéIdle actually exposed its stream
+            // Only close old streams when PokéIdle actually exposed its stream
             // state. A transient server/UI delay must never wipe valid chats.
             if (streamStateIsAvailable) {
-                closeChatsNotLive(liveKeys);
+                closeStreamsNotLive(liveKeys);
             }
 
             setScanDiagnostics({
@@ -481,7 +481,7 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.title = 'Open current live Twitch streams/KICK watch pages';
+        button.title = 'Open current live Twitch chat and KICK watch pages';
         button.setAttribute(
             'aria-label',
             'Open current live Twitch and KICK streams'
