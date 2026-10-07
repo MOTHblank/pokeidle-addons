@@ -41,6 +41,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("Moth · PokéIdle")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 20))
         .size((470, 34))
         .parent(&window)
@@ -49,6 +50,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("2 game profiles · shared Twitch/KICK logins · low overhead")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 56))
         .size((470, 28))
         .parent(&window)
@@ -57,6 +59,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("GAME 1")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 104))
         .size((90, 28))
         .parent(&window)
@@ -65,6 +68,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("Not running")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((116, 104))
         .size((180, 28))
         .parent(&window)
@@ -81,6 +85,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("GAME 2")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 160))
         .size((90, 28))
         .parent(&window)
@@ -89,6 +94,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("Not running")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((116, 160))
         .size((180, 28))
         .parent(&window)
@@ -137,6 +143,7 @@ pub fn run() -> Result<(), String> {
 
     nwg::Label::builder()
         .text("Starting…")
+        .flags(nwg::LabelFlags::VISIBLE)
         .position((24, 328))
         .size((450, 40))
         .parent(&window)
