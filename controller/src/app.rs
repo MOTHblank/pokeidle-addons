@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, GameProfile};
 use crate::firefox;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
@@ -47,7 +47,7 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not create title: {error}"))?;
 
     nwg::Label::builder()
-        .text("Native controller · Firefox profiles · existing userscript manager")
+        .text("2 game profiles · shared Twitch/KICK logins · low overhead")
         .position((24, 56))
         .size((470, 28))
         .parent(&window)
@@ -156,14 +156,14 @@ pub fn run() -> Result<(), String> {
                 Event::OnButtonClick => {
                     if handle == game1_button {
                         launch_one(
-                            "AccountA",
+                            GameProfile::Game1,
                             &mut state_for_events.borrow_mut().game1,
                             &game1_status_for_events,
                             &status_for_events,
                         );
                     } else if handle == game2_button {
                         launch_one(
-                            "AccountB",
+                            GameProfile::Game2,
                             &mut state_for_events.borrow_mut().game2,
                             &game2_status_for_events,
                             &status_for_events,
@@ -194,13 +194,13 @@ pub fn run() -> Result<(), String> {
     );
 
     launch_one(
-        "AccountA",
+        GameProfile::Game1,
         &mut state.borrow_mut().game1,
         &game1_status,
         &status,
     );
     launch_one(
-        "AccountB",
+        GameProfile::Game2,
         &mut state.borrow_mut().game2,
         &game2_status,
         &status,
@@ -212,7 +212,7 @@ pub fn run() -> Result<(), String> {
 }
 
 fn launch_one(
-    profile_name: &str,
+    profile: GameProfile,
     child_slot: &mut Option<Child>,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
@@ -221,7 +221,7 @@ fn launch_one(
         match child.try_wait() {
             Ok(None) => {
                 profile_status.set_text("Running");
-                global_status.set_text(&format!("{profile_name} is already running."));
+                global_status.set_text(&format!("{} is already running.", profile.label()));
                 return;
             }
             Ok(Some(_)) | Err(_) => {
@@ -230,11 +230,11 @@ fn launch_one(
         }
     }
 
-    let config = match Config::for_profile(profile_name) {
+    let config = match Config::for_profile(profile) {
         Ok(config) => config,
         Err(error) => {
             profile_status.set_text("Unavailable");
-            global_status.set_text(&error);
+            global_status.set_text(&format!("{}: {error}", profile.label()));
             return;
         }
     };
@@ -244,13 +244,13 @@ fn launch_one(
             *child_slot = Some(child);
             profile_status.set_text("Running");
             global_status.set_text(&format!(
-                "Started {profile_name} · {}",
-                config.profile_dir.display()
+                "Started {} · one Firefox process/profile",
+                profile.label()
             ));
         }
         Err(error) => {
             profile_status.set_text("Launch failed");
-            global_status.set_text(&format!("{profile_name}: {error}"));
+            global_status.set_text(&format!("{}: {error}", profile.label()));
         }
     }
 }
