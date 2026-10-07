@@ -39,19 +39,27 @@ internal sealed class ViolentmonkeyManager
 
     public string LastMatchSummary =>
         LastMatchDiagnostics.Count == 0
-            ? "matching not checked"
+            ? "not checked"
             : string.Join(
                 " · ",
                 LastMatchDiagnostics.Select(d =>
                 {
                     var parts = d.Split(new[] { ": " }, 2, StringSplitOptions.None);
-                    return parts.Length == 2
-                        ? parts[0] + " " +
-                          (parts[1].Contains("MATCHES app", StringComparison.Ordinal)
-                              ? "MATCH"
-                              : "NO MATCH")
-                        : d;
-                }));
+                    if (parts.Length != 2)
+                        return d;
+
+                    var name = Path.GetFileNameWithoutExtension(parts[0]);
+                    var match = parts[1].Contains("MATCHES app", StringComparison.Ordinal);
+                    var interesting =
+                        name.Contains("stream-auto-open", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("market-bot", StringComparison.OrdinalIgnoreCase);
+
+                    return interesting
+                        ? (name.Contains("stream-auto-open", StringComparison.OrdinalIgnoreCase) ? "Stream" : "Market") +
+                          (match ? " MATCH" : " MISS")
+                        : "";
+                })
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     public async Task InstallForProfileAsync(
         CoreWebView2Profile profile,
