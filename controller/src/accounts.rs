@@ -48,7 +48,7 @@ fn build() -> Result<(), String> {
     let mut close = nwg::Button::default();
     nwg::Button::builder()
         .text("Close")
-        .position((470, 328))
+        .position((470, 374))
         .size((120, 34))
         .parent(&window)
         .build(&mut close)
@@ -121,7 +121,7 @@ fn build() -> Result<(), String> {
 fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), String> {
     nwg::Window::builder()
         .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-        .size((620, 390))
+        .size((620, 430))
         .position((560, 260))
         .title("Moth · Accounts")
         .build(window)
@@ -148,7 +148,7 @@ fn build_game_row(
     nwg::Frame::builder()
         .flags(nwg::FrameFlags::BORDER | nwg::FrameFlags::VISIBLE)
         .position((24, y + 20))
-        .size((572, 132))
+        .size((572, 154))
         .parent(window)
         .build(&mut frame)
         .map_err(|e| format!("could not create {title} box: {e}"))?;
