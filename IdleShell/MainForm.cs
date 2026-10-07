@@ -955,7 +955,7 @@ internal sealed class MainForm : Form
                 pane.View.Reload();
             }
 
-            Log($"userscript extension reloaded: {_userscripts.ScriptNames.Count} script(s) across {_games.Count} game pane(s); stream panes intentionally do not load the extension");
+            Log($"userscript extension reloaded: {_userscripts.ScriptNames.Count} script(s) across {_games.Count} game pane(s); stream chat presence does not use the extension");
         }
         catch (Exception ex)
         {
@@ -1131,9 +1131,8 @@ internal sealed class MainForm : Form
     {
         foreach (var workspace in _workspaces)
         {
-            // "Hide all" now actually collapses the stream dock. The panes are
-            // retained and moved to WebView2's low-memory target, so reopening
-            // the dock does not require recreating the streams.
+            // Collapse only the lightweight chat/presence dock. The underlying
+            // chat sessions intentionally remain active so accounts stay present.
             workspace.StreamsExpanded = false;
             workspace.ActiveTabIndex = -1;
             _suppressTabEvent = true;
@@ -1426,7 +1425,8 @@ internal sealed class MainForm : Form
             }
         }
 
-        // Stream panes and active stream tabs are deliberately not persisted.
+        // Chat presence sessions and active stream tabs are intentionally not
+        // persisted; live detection rebuilds them from the current game state.
         SessionStore.Save(specs);
     }
 
