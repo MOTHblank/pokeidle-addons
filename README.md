@@ -1,9 +1,16 @@
 # pokeidle-addons
 
 PokéIdle userscripts plus a lightweight Windows WebView2 shell for running two
-persistent game accounts and optional Twitch/Kick stream panes.
+persistent game accounts with lightweight Twitch/KICK chat presence.
 
-## Layout
+## Stream architecture
+
+Idle Shell does not create a WebView2 instance for every stream. It keeps the two
+PokéIdle game WebViews, while Twitch and KICK chat presence is handled separately.
+Each configured login owns at most one hidden chat-only WebView2 host, and that host
+can keep multiple channel chats connected. Video is not loaded by the resident
+stream subsystem; an explicit external-browser action is required to watch video.
+
 
 - `addons/` — installable Tampermonkey-compatible userscripts.
 - `IdleShell/` — native .NET 10/WebView2 host.
