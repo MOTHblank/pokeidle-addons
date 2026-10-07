@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.4.0
+// @version      4.5.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -111,30 +111,70 @@
         return 'moth-' + service + '-' + (index + 1);
     }
 
-    function openChat(service, index, raw) {
+    async function openChat(service, index, raw) {
         const channel = channelName(raw);
         const url = chatUrl(raw);
-        if (!channel || !url) return false;
+
+        if (!channel || !url) {
+            return {
+                opened: false,
+                error: 'Invalid ' + service + ' channel'
+            };
+        }
 
         const key = chatKey(service, index);
         const current = openChats.get(key);
 
         if (current && !current.closed) {
-            return true;
+            return {
+                opened: true,
+                alreadyOpen: true,
+                url
+            };
         }
 
         try {
-            const chat = GM_openInTab(url, {
+            const options = {
                 active: false,
-                insert: true
+                insert: true,
+                setParent: true
+            };
+
+            let control;
+
+            if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+                control = await GM.openInTab(url, options);
+            } else if (typeof GM_openInTab === 'function') {
+                control = GM_openInTab(url, options);
+            } else {
+                throw new Error(
+                    'Violentmonkey tab API is unavailable. Reinstall/update the Moth Stream Scanner addon.'
+                );
+            }
+
+            if (!control) {
+                throw new Error('Violentmonkey did not create the chat tab.');
+            }
+
+            openChats.set(key, control);
+
+            return {
+                opened: true,
+                alreadyOpen: false,
+                url
+            };
+        } catch (error) {
+            console.error('[Moth] could not open chat:', {
+                service,
+                channel,
+                url,
+                error
             });
 
-            if (!chat) return false;
-
-            openChats.set(key, chat);
-            return true;
-        } catch (_) {
-            return false;
+            return {
+                opened: false,
+                error: error?.message || String(error)
+            };
         }
     }
 
@@ -148,18 +188,28 @@
         return true;
     }
 
-    function openAllConfiguredChats(config) {
+    async function openAllConfiguredChats(config) {
         let opened = 0;
+        const errors = [];
 
         for (const service of ['twitch', 'kick']) {
             for (let index = 0; index < MAX_STREAMS_PER_SERVICE; index += 1) {
-                if (openChat(service, index, config[service][index])) {
+                const value = config[service][index];
+                if (!value) continue;
+
+                const result = await openChat(service, index, value);
+
+                if (result.opened) {
                     opened += 1;
+                } else if (result.error) {
+                    errors.push(
+                        service.toUpperCase() + ' ' + (index + 1) + ': ' + result.error
+                    );
                 }
             }
         }
 
-        return opened;
+        return { opened, errors };
     }
 
     function closeAllChats() {
@@ -548,7 +598,7 @@
         return Array.from(collected.values());
     }
 
-    function openStream(url) {
+    async function openStream(url) {
         const parsed = new URL(url);
         const service = parsed.hostname.replace(/^www\./, '') === 'twitch.tv'
             ? 'twitch'
@@ -564,6 +614,7 @@
 
         if (index < 0) {
             index = config[service].findIndex(value => !value);
+
             if (index >= 0) {
                 config[service][index] = channel;
                 saveStreamConfig(config);
@@ -571,7 +622,9 @@
         }
 
         if (index < 0) return false;
-        return openChat(service, index, channel);
+
+        const result = await openChat(service, index, channel);
+        return result.opened;
     }
 
     function closeManager() {
@@ -625,10 +678,23 @@
         const openAll = document.createElement('button');
         openAll.type = 'button';
         openAll.textContent = 'Open all';
-        openAll.addEventListener('click', () => {
-            const count = openAllConfiguredChats(config);
-            openAll.textContent = 'Opened ' + count;
-            window.setTimeout(() => { openAll.textContent = 'Open all'; }, 1000);
+        openAll.addEventListener('click', async () => {
+            openAll.disabled = true;
+
+            const result = await openAllConfiguredChats(config);
+
+            openAll.textContent = result.errors.length
+                ? 'Opened ' + result.opened + ' · ' + result.errors.length + ' error(s)'
+                : 'Opened ' + result.opened;
+
+            if (result.errors.length) {
+                console.error('[Moth] open-all errors:', result.errors);
+            }
+
+            window.setTimeout(() => {
+                openAll.textContent = 'Open all';
+                openAll.disabled = false;
+            }, 1800);
         });
 
         const closeAll = document.createElement('button');
@@ -701,7 +767,7 @@
                     config[service][index] = value;
                     input.value = value;
                     saveStreamConfig(config);
-                    openChat(service, index, value);
+                    void openChat(service, index, value);
                 });
 
                 close.addEventListener('click', () => {
@@ -741,7 +807,7 @@
         let queued = 0;
 
         for (const channel of channels) {
-            if (openStream(channel.url)) {
+            if (await openStream(channel.url)) {
                 queued += 1;
             }
         }
