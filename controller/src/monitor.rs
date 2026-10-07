@@ -25,6 +25,13 @@ pub struct Health {
     pub active_pokemon: String,
     pub fallen_count: u32,
     pub economy_mode: bool,
+    pub addon_ok: u8,
+    pub addon_total: u8,
+    pub addon_missing: Vec<String>,
+    pub twitch_tabs: u8,
+    pub twitch_low_resource_ok: u8,
+    pub performance_fps: String,
+    pub performance_scene_runs: String,
     pub last_error: Option<String>,
 }
 
@@ -41,6 +48,13 @@ impl Default for Health {
             active_pokemon: String::new(),
             fallen_count: 0,
             economy_mode: false,
+            addon_ok: 0,
+            addon_total: 6,
+            addon_missing: Vec::new(),
+            twitch_tabs: 0,
+            twitch_low_resource_ok: 0,
+            performance_fps: String::new(),
+            performance_scene_runs: String::new(),
             last_error: None,
         }
     }
@@ -71,10 +85,6 @@ impl Health {
                     parts.push(format!("{} fallen", self.fallen_count));
                 }
 
-                if self.economy_mode {
-                    parts.push("Economy".to_string());
-                }
-
                 if parts.is_empty() {
                     "Hunting".to_string()
                 } else {
@@ -85,6 +95,43 @@ impl Health {
             "Login" => "Waiting for login".to_string(),
             other => other.to_string(),
         }
+    }
+
+    pub fn details(&self) -> String {
+        let addon = if self.addon_missing.is_empty() {
+            format!("Addons {}/{} ✓", self.addon_ok, self.addon_total)
+        } else {
+            format!(
+                "Addons {}/{} · missing: {}",
+                self.addon_ok,
+                self.addon_total,
+                self.addon_missing.join(", ")
+            )
+        };
+
+        let mut parts = vec![addon];
+
+        if self.twitch_tabs > 0 {
+            parts.push(format!(
+                "Twitch LR {}/{}",
+                self.twitch_low_resource_ok,
+                self.twitch_tabs
+            ));
+        }
+
+        if !self.performance_scene_runs.is_empty() {
+            parts.push(format!("Scene {}", self.performance_scene_runs));
+        }
+
+        if !self.performance_fps.is_empty() && self.performance_fps != "—" {
+            parts.push(format!("FPS {}", self.performance_fps));
+        }
+
+        if self.economy_mode {
+            parts.push("Economy".to_string());
+        }
+
+        parts.join(" · ")
     }
 }
 
@@ -117,7 +164,6 @@ impl MonitorHandle {
 
 struct BrowserSession {
     socket: BrowserSocket,
-    context: String,
     next_id: u64,
 }
 
@@ -131,6 +177,13 @@ struct Probe {
     active_pokemon: String,
     fallen_count: u32,
     economy_mode: bool,
+    addon_ok: u8,
+    addon_total: u8,
+    addon_missing: Vec<String>,
+    twitch_tabs: u8,
+    twitch_low_resource_ok: u8,
+    performance_fps: String,
+    performance_scene_runs: String,
 }
 
 fn monitor_loop(
@@ -191,6 +244,13 @@ fn monitor_loop(
                         current.active_pokemon = probe.active_pokemon;
                         current.fallen_count = probe.fallen_count;
                         current.economy_mode = probe.economy_mode;
+                        current.addon_ok = probe.addon_ok;
+                        current.addon_total = probe.addon_total;
+                        current.addon_missing = probe.addon_missing;
+                        current.twitch_tabs = probe.twitch_tabs;
+                        current.twitch_low_resource_ok = probe.twitch_low_resource_ok;
+                        current.performance_fps = probe.performance_fps;
+                        current.performance_scene_runs = probe.performance_scene_runs;
                         current.last_error = None;
                     }
                     notice_sender.notice();
@@ -264,29 +324,62 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
 
     Ok(BrowserSession {
         socket,
-        context,
         next_id: 3,
     })
 }
 
 fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
-    let expression = r#"(() => {
-        const app = document.querySelector('#app');
-        const ativo = document.querySelector('#ativo-card');
-        const hunt = document.querySelector('#hud-hunt');
-        const golpes = document.querySelector('#golpes-painel');
-        const caidos = document.querySelector('#caidos-lista');
-        const html = document.documentElement;
+    let tree_id = session.next_id;
+    session.next_id += 1;
 
+    let tree = send_and_wait(
+        &mut session.socket,
+        tree_id,
+        json!({
+            "id": tree_id,
+            "method": "browsingContext.getTree",
+            "params": { "maxDepth": -1 }
+        }),
+    )?;
+
+    let mut contexts = Vec::new();
+    if let Some(list) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
+        for context in list {
+            collect_contexts(context, &mut contexts);
+        }
+    }
+
+    let game = contexts
+        .iter()
+        .find(|c| {
+            c.url.starts_with("https://pokeidle.io/app")
+                || c.url.starts_with("https://www.pokeidle.io/app")
+        })
+        .ok_or_else(|| "Firefox has no PokéIdle app context".to_string())?;
+
+    let game_id = session.next_id;
+    session.next_id += 1;
+
+    let expression = r#"(() => {
+        const text = (selector) => {
+            const el = document.querySelector(selector);
+            return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        };
+        const exists = (selector) => !!document.querySelector(selector);
+        const visible = (selector) => {
+            const el = document.querySelector(selector);
+            return !!el && !el.classList.contains('hidden') && !el.hidden;
+        };
+
+        const app = document.querySelector('#app');
         const loggedIn = !!app && !app.classList.contains('hidden');
+        const ativo = document.querySelector('#ativo-card');
+        const huntText = text('#hud-hunt');
+
         const activePokemon =
             ativo && !ativo.classList.contains('vazio')
-                ? (ativo.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+                ? text('#ativo-card').slice(0, 100)
                 : '';
-
-        const huntText = hunt
-            ? (hunt.textContent || '').replace(/\s+/g, ' ').trim()
-            : '';
 
         const huntSelected =
             huntText.length > 0 &&
@@ -294,12 +387,22 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
         let activity = 'Login';
         if (loggedIn) {
-            if (huntSelected || activePokemon || (golpes && !golpes.classList.contains('hidden'))) {
-                activity = 'Hunting';
-            } else {
-                activity = 'Center';
-            }
+            activity =
+                huntSelected ||
+                activePokemon ||
+                visible('#golpes-painel')
+                    ? 'Hunting'
+                    : 'Center';
         }
+
+        const addonChecks = [
+            ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle')],
+            ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger')],
+            ['Hunt Atlas', exists('#moth-hunt-atlas-button') || exists('#moth-hunt-atlas-drawer')],
+            ['Moth Watch', exists('#moth-market-watch-tab') || exists('#moth-market-watch-panel')],
+            ['Stream Scanner', exists('#moth-scan-live-streams')],
+            ['Upstream Scraper', exists('#moth-upstream-scraper') || exists('#moth-upstream-scraper-button')]
+        ];
 
         return JSON.stringify({
             url: location.href,
@@ -307,25 +410,26 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             gameReady: loggedIn,
             loggedIn,
             activity,
-            hunt: huntSelected ? huntText.slice(0, 100) : '',
+            hunt: huntSelected ? huntText.slice(0, 80) : '',
             activePokemon,
-            fallenCount: caidos ? caidos.children.length : 0,
-            economyMode: html.classList.contains('modo-economia')
+            fallenCount: document.querySelector('#caidos-lista')?.children.length || 0,
+            economyMode: document.documentElement.classList.contains('modo-economia'),
+            addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
+            addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
+            performanceFps: text('#mpp-browser-fps'),
+            performanceSceneRuns: text('#mpp-scene-runs')
         });
     })()"#;
 
-    let command_id = session.next_id;
-    session.next_id += 1;
-
     let result = send_and_wait(
         &mut session.socket,
-        command_id,
+        game_id,
         json!({
-            "id": command_id,
+            "id": game_id,
             "method": "script.evaluate",
             "params": {
                 "expression": expression,
-                "target": { "context": session.context },
+                "target": { "context": game.id },
                 "awaitPromise": false
             }
         }),
@@ -341,49 +445,107 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     let page: Value =
         serde_json::from_str(raw).map_err(|error| format!("invalid page probe: {error}"))?;
 
+    let addon_missing = page
+        .get("addonMissing")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let addon_ok = 6u8.saturating_sub(addon_missing.len() as u8);
+
+    let mut twitch_tabs = 0u8;
+    let mut twitch_low_resource_ok = 0u8;
+
+    for context in &contexts {
+        if !context.url.starts_with("https://www.twitch.tv/")
+            && !context.url.starts_with("https://twitch.tv/")
+            && !context.url.starts_with("https://player.twitch.tv/")
+            && !context.url.starts_with("https://m.twitch.tv/")
+        {
+            continue;
+        }
+
+        twitch_tabs = twitch_tabs.saturating_add(1);
+
+        let twitch_id = session.next_id;
+        session.next_id += 1;
+
+        let twitch_probe = send_and_wait(
+            &mut session.socket,
+            twitch_id,
+            json!({
+                "id": twitch_id,
+                "method": "script.evaluate",
+                "params": {
+                    "expression": "JSON.stringify({ lowResource: !!document.querySelector('#moth-twitch-low-resource-css') })",
+                    "target": { "context": context.id },
+                    "awaitPromise": false
+                }
+            }),
+        );
+
+        if let Ok(value) = twitch_probe {
+            let low_resource = value
+                .get("result")
+                .and_then(|v| v.get("result"))
+                .and_then(|v| v.get("value"))
+                .and_then(Value::as_str)
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .and_then(|v| v.get("lowResource").and_then(Value::as_bool))
+                .unwrap_or(false);
+
+            if low_resource {
+                twitch_low_resource_ok = twitch_low_resource_ok.saturating_add(1);
+            }
+        }
+    }
+
     Ok(Probe {
-        url: page
-            .get("url")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        title: page
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        game_ready: page
-            .get("gameReady")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        logged_in: page
-            .get("loggedIn")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        activity: page
-            .get("activity")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown")
-            .to_string(),
-        hunt: page
-            .get("hunt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        active_pokemon: page
-            .get("activePokemon")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        fallen_count: page
-            .get("fallenCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
-        economy_mode: page
-            .get("economyMode")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
+        title: page.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
+        game_ready: page.get("gameReady").and_then(Value::as_bool).unwrap_or(false),
+        logged_in: page.get("loggedIn").and_then(Value::as_bool).unwrap_or(false),
+        activity: page.get("activity").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
+        hunt: page.get("hunt").and_then(Value::as_str).unwrap_or_default().to_string(),
+        active_pokemon: page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string(),
+        fallen_count: page.get("fallenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
+        economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
+        addon_ok,
+        addon_total: 6,
+        addon_missing,
+        twitch_tabs,
+        twitch_low_resource_ok,
+        performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
+        performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),
     })
+}
+
+struct ContextInfo {
+    id: String,
+    url: String,
+}
+
+fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>) {
+    let Some(id) = value.get("context").and_then(Value::as_str) else {
+        return;
+    };
+
+    out.push(ContextInfo {
+        id: id.to_string(),
+        url: value.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
+    });
+
+    if let Some(children) = value.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_contexts(child, out);
+        }
+    }
 }
 
 fn end_session(session: &mut Option<BrowserSession>) {
