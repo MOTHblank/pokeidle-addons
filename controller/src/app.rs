@@ -3,6 +3,7 @@ use crate::config::GameProfile;
 use crate::firefox;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
+use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
 use std::process::Child;
 
@@ -56,6 +57,7 @@ pub struct ControllerApp {
     atlas_profile: GameProfile,
     market_profile: GameProfile,
     market_search: String,
+    atlas_search: String,
     market_currency: String,
     status: String,
     status_error: bool,
@@ -79,6 +81,7 @@ impl ControllerApp {
             atlas_profile: GameProfile::Game1,
             market_profile: GameProfile::Game1,
             market_search: String::new(),
+            atlas_search: String::new(),
             market_currency: "gold".to_string(),
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -683,9 +686,11 @@ fn draw_game_card(
 
                     ui.add_space(9.0);
 
-                    ui.horizontal(|ui| {
-                        mini_metric(ui, "LEVEL", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
-                        mini_metric(ui, "XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
+                    ui.horizontal_wrapped(|ui| {
+                        mini_metric(ui, "TRAINER LV", if health.player_level == 0 { "—" } else { &health.player_level.to_string() });
+                        mini_metric(ui, "TRAINER XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
+                        mini_metric(ui, "POKÉMON LV", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
+                        mini_metric(ui, "POKÉMON XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
                         mini_metric(ui, "FALLEN", &health.fallen_count.to_string());
                     });
                 });
@@ -797,6 +802,80 @@ fn draw_game_card(
                 }
                 automation_badge(ui, "Performance+", &performance_value, true);
             });
+
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("OPEN TABS")
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
+
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .corner_radius(10.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    if health.tabs.is_empty() {
+                        ui.label(
+                            RichText::new("No top-level tabs reported")
+                                .size(10.0)
+                                .color(DIM),
+                        );
+                    } else {
+                        for tab in &health.tabs {
+                            ui.horizontal(|ui| {
+                                let marker = if tab.kind == "Twitch" {
+                                    if tab.low_resource { "●" } else { "○" }
+                                } else {
+                                    "●"
+                                };
+
+                                ui.label(
+                                    RichText::new(marker)
+                                        .size(9.0)
+                                        .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
+                                );
+
+                                ui.label(
+                                    RichText::new(&tab.kind)
+                                        .size(9.0)
+                                        .strong()
+                                        .color(TEXT),
+                                );
+
+                                ui.add_space(5.0);
+
+                                let title = if tab.title.is_empty() {
+                                    &tab.url
+                                } else {
+                                    &tab.title
+                                };
+
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(compact_text(title, 54))
+                                            .size(9.0)
+                                            .color(MUTED),
+                                    )
+                                    .truncate(),
+                                );
+
+                                if tab.kind == "Twitch" {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.label(
+                                            RichText::new(if tab.low_resource { "LOW RESOURCE" } else { "FULL" })
+                                                .size(8.0)
+                                                .strong()
+                                                .color(if tab.low_resource { GOOD } else { WARN }),
+                                        );
+                                    });
+                                }
+                            });
+                        }
+                    }
+                });
 
             ui.add_space(12.0);
             ui.label(
@@ -987,6 +1066,422 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, "UI repaint", "1 sec", MUTED);
             });
         });
+}
+
+
+fn game_selector(
+    ui: &mut egui::Ui,
+    selected: &mut GameProfile,
+) {
+    ui.horizontal(|ui| {
+        for profile in GameProfile::ALL {
+            let active = *selected == profile;
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(profile.label())
+                            .size(10.0)
+                            .strong()
+                            .color(if active { TEXT } else { MUTED }),
+                    )
+                    .fill(if active {
+                        ACCENT.linear_multiply(0.22)
+                    } else {
+                        PANEL_ALT
+                    })
+                    .stroke(Stroke::new(
+                        1.0,
+                        if active { ACCENT } else { BORDER },
+                    ))
+                    .corner_radius(7.0),
+                )
+                .clicked()
+            {
+                *selected = profile;
+            }
+        }
+    });
+}
+
+fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    egui::Window::new("Hunt Atlas")
+        .resizable(true)
+        .default_width(900.0)
+        .default_height(620.0)
+        .min_width(700.0)
+        .min_height(480.0)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .frame(
+            egui::Frame::new()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(12.0)
+                .inner_margin(18.0),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Hunt Atlas")
+                        .font(FontId::proportional(22.0))
+                        .strong()
+                        .color(TEXT),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Map intelligence + observed XP/hour")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Close").clicked() {
+                        app.show_atlas = false;
+                    }
+                });
+            });
+
+            ui.add_space(14.0);
+            game_selector(ui, &mut app.atlas_profile);
+
+            let index = ControllerApp::game_index(app.atlas_profile);
+            let health = app.games[index].health();
+
+            ui.add_space(12.0);
+
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(10.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Current hunt").size(9.0).strong().color(DIM));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(if health.hunt.is_empty() { "—" } else { &health.hunt })
+                            .size(14.0).strong().color(TEXT));
+                        ui.add_space(18.0);
+                        ui.label(RichText::new(format!("Trainer Lv {}", health.player_level))
+                            .size(10.0).color(MUTED));
+                        ui.add_space(10.0);
+                        ui.label(RichText::new(format!("{} hunts available", health.hunts.len()))
+                            .size(10.0).color(MUTED));
+                    });
+                });
+
+            ui.add_space(12.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Filter").size(10.0).strong().color(DIM));
+                ui.add_sized(
+                    [260.0, 28.0],
+                    egui::TextEdit::singleline(&mut app.atlas_search)
+                        .hint_text("hunt or Pokémon"),
+                );
+            });
+
+            ui.add_space(10.0);
+
+            let search = app.atlas_search.to_lowercase();
+            let mut hunts: Vec<_> = health
+                .hunts
+                .iter()
+                .filter(|hunt| {
+                    search.is_empty()
+                        || hunt.name.to_lowercase().contains(&search)
+                        || hunt.slug.to_lowercase().contains(&search)
+                        || hunt.species.iter().any(|name| name.to_lowercase().contains(&search))
+                })
+                .cloned()
+                .collect();
+
+            hunts.sort_by(|a, b| {
+                if a.slug == health.hunt {
+                    std::cmp::Ordering::Less
+                } else if b.slug == health.hunt {
+                    std::cmp::Ordering::Greater
+                } else {
+                    b.xp_per_hour.cmp(&a.xp_per_hour).then(a.level.cmp(&b.level))
+                }
+            });
+
+            egui::ScrollArea::vertical()
+                .id_salt("atlas_list")
+                .max_height(410.0)
+                .show(ui, |ui| {
+                    for hunt in hunts {
+                        let current = hunt.name.eq_ignore_ascii_case(&health.hunt)
+                            || hunt.slug.eq_ignore_ascii_case(&health.hunt);
+
+                        egui::Frame::new()
+                            .fill(if current { ACCENT.linear_multiply(0.08) } else { PANEL_ALT })
+                            .stroke(Stroke::new(1.0, if current { ACCENT.linear_multiply(0.35) } else { BORDER }))
+                            .corner_radius(9.0)
+                            .inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.label(RichText::new(&hunt.name).size(12.0).strong().color(TEXT));
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Lv {} · {} species",
+                                                hunt.level,
+                                                hunt.species.len()
+                                            ))
+                                            .size(9.0)
+                                            .color(MUTED),
+                                        );
+                                    });
+
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let xp = format_rate(hunt.xp_per_hour);
+                                        let pxp = format_rate(hunt.pokemon_xp_per_hour);
+                                        let kills = if hunt.kills_per_hour > 0 {
+                                            format!("{} kills/h", hunt.kills_per_hour)
+                                        } else {
+                                            "warming up".to_string()
+                                        };
+
+                                        ui.vertical(|ui| {
+                                            ui.label(RichText::new(format!("{} trainer XP/h", xp)).size(11.0).strong().color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED }));
+                                            ui.label(RichText::new(format!("{} Pokémon XP/h · {}", pxp, kills)).size(9.0).color(MUTED));
+                                        });
+
+                                        ui.add_space(18.0);
+
+                                        let button = if current { "Current" } else { "Go" };
+                                        let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
+                                        if clicked && !current {
+                                            if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                                monitor.send(json!({
+                                                    "t": "hunt.select",
+                                                    "slug": hunt.slug
+                                                }));
+                                                app.set_status(format!("{} · changing hunt to {}", app.atlas_profile.label(), hunt.name), false);
+                                            } else {
+                                                app.set_status(format!("{} is not running.", app.atlas_profile.label()), true);
+                                            }
+                                        }
+                                    });
+                                });
+                            });
+
+                        ui.add_space(7.0);
+                    }
+
+                    if health.hunts.is_empty() {
+                        ui.label(RichText::new("No hunt data yet. The controller bridge must receive the game's welcome message first.")
+                            .size(11.0).color(DIM));
+                    }
+                });
+        });
+}
+
+fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    egui::Window::new("Moth Watch")
+        .resizable(true)
+        .default_width(1000.0)
+        .default_height(650.0)
+        .min_width(780.0)
+        .min_height(520.0)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .frame(
+            egui::Frame::new()
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(12.0)
+                .inner_margin(18.0),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Moth Watch")
+                        .font(FontId::proportional(22.0))
+                        .strong()
+                        .color(TEXT),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("RMT market browser")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Close").clicked() {
+                        app.show_market = false;
+                    }
+                });
+            });
+
+            ui.add_space(14.0);
+            game_selector(ui, &mut app.market_profile);
+
+            let index = ControllerApp::game_index(app.market_profile);
+            let health = app.games[index].health();
+
+            ui.add_space(12.0);
+
+            ui.horizontal(|ui| {
+                let gold = format_number(health.gold);
+                let orbs = format_number(health.orbs);
+                ui.label(RichText::new(format!("Gold {}", gold)).size(11.0).strong().color(WARN));
+                ui.add_space(14.0);
+                ui.label(RichText::new(format!("Gems {}", orbs)).size(11.0).strong().color(ACCENT));
+                ui.add_space(20.0);
+
+                if ui.button("Refresh market").clicked() {
+                    if let Some(monitor) = app.games[index].monitor.as_ref() {
+                        monitor.send(json!({ "t": "market.itens" }));
+                        app.set_status(format!("{} · market refresh requested", app.market_profile.label()), false);
+                    } else {
+                        app.set_status(format!("{} is not running.", app.market_profile.label()), true);
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Find item").size(10.0).strong().color(DIM));
+                ui.add_sized(
+                    [300.0, 28.0],
+                    egui::TextEdit::singleline(&mut app.market_search)
+                        .hint_text("item name"),
+                );
+
+                ui.add_space(10.0);
+
+                for currency in ["gold", "orb"] {
+                    let active = app.market_currency == currency;
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(if currency == "gold" { "Gold" } else { "Gems" }).size(10.0))
+                                .fill(if active { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                                .stroke(Stroke::new(1.0, if active { ACCENT } else { BORDER }))
+                                .corner_radius(7.0),
+                        )
+                        .clicked()
+                    {
+                        app.market_currency = currency.to_string();
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+
+            let search = app.market_search.to_lowercase();
+            let catalog: Vec<_> = health
+                .market_catalog
+                .iter()
+                .filter(|item| search.is_empty() || item.name.to_lowercase().contains(&search))
+                .take(35)
+                .cloned()
+                .collect();
+
+            egui::ScrollArea::vertical()
+                .id_salt("market_catalog")
+                .max_height(180.0)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for item in catalog {
+                            let label = compact_text(&item.name, 22);
+                            if ui.button(label).clicked() {
+                                if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                    monitor.send(json!({
+                                        "t": "market.item",
+                                        "itemId": item.id,
+                                        "moeda": app.market_currency
+                                    }));
+                                    app.set_status(
+                                        format!("{} · inspecting {}", app.market_profile.label(), item.name),
+                                        false,
+                                    );
+                                }
+                            }
+                        }
+                    });
+                });
+
+            ui.add_space(12.0);
+
+            ui.label(RichText::new("LISTINGS").size(9.0).strong().color(DIM));
+            ui.add_space(6.0);
+
+            egui::ScrollArea::vertical()
+                .id_salt("market_listings")
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    if health.market_listings.is_empty() {
+                        ui.label(
+                            RichText::new("No item listings loaded. Pick an item above to inspect its RMT listings.")
+                                .size(11.0)
+                                .color(DIM),
+                        );
+                    } else {
+                        for listing in &health.market_listings {
+                            if listing.currency != app.market_currency {
+                                continue;
+                            }
+
+                            egui::Frame::new()
+                                .fill(PANEL_ALT)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0)
+                                .inner_margin(9.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(RichText::new(compact_text(&listing.name, 30)).size(11.0).strong().color(TEXT));
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} × {} · seller {}",
+                                                    format_number(listing.price),
+                                                    listing.quantity,
+                                                    compact_text(&listing.seller, 20)
+                                                ))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                            );
+                                        });
+
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            if ui.button("Buy 1").clicked() {
+                                                if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                                    monitor.send(json!({
+                                                        "t": "market.comprar",
+                                                        "id": listing.id,
+                                                        "qtd": 1,
+                                                        "preco": listing.price,
+                                                        "moeda": listing.currency
+                                                    }));
+                                                    app.set_status(
+                                                        format!("{} · buy command sent for {}", app.market_profile.label(), listing.name),
+                                                        false,
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                            ui.add_space(6.0);
+                        }
+                    }
+                });
+        });
+}
+
+fn format_number(value: u64) -> String {
+    let mut value = value.to_string();
+    let mut i = value.len() as isize - 3;
+    while i > 0 {
+        value.insert(i as usize, ',');
+        i -= 3;
+    }
+    value
+}
+
+fn format_rate(value: u64) -> String {
+    format_number(value)
 }
 
 fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
