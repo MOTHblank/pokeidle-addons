@@ -930,9 +930,13 @@ fn draw_game_card(
                         );
                         ui.label(
                             RichText::new(format!(
-                                "Open chat: {} · estimated +{}% XP",
+                                "Open chat: {}{}",
                                 health.stream_missing.join(", "),
-                                format_pct(health.stream_bonus_pct.max(15.0))
+                                if health.stream_bonus_pct > 0.0 {
+                                    format!(" · +{}% XP", format_pct(health.stream_bonus_pct))
+                                } else {
+                                    String::new()
+                                }
                             ))
                             .size(10.0)
                             .color(TEXT),
