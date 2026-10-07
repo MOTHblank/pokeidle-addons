@@ -12,10 +12,7 @@
     'use strict';
 
     try {
-        document.documentElement?.setAttribute(
-            'data-idleshell-market-bot',
-            'started'
-        );
+        window.__idleshell_market_bot_started = true;
     } catch {}
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -1924,10 +1921,7 @@
 
     function bootstrap() {
         try {
-            document.documentElement?.setAttribute(
-                'data-idleshell-market-bot',
-                'started'
-            );
+            window.__idleshell_market_bot_started = true;
         } catch {}
 
         reportReady();
@@ -1936,10 +1930,7 @@
 
         state.scanTimer = setInterval(() => {
             try {
-                document.documentElement?.setAttribute(
-                    'data-idleshell-market-bot',
-                    'started'
-                );
+                window.__idleshell_market_bot_started = true;
             } catch {}
 
             ensureUi();
