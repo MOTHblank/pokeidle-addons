@@ -6,6 +6,8 @@
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js
 // @run-at       document-idle
 // ==/UserScript==
 
