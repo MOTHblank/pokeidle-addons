@@ -4,7 +4,6 @@ use native_windows_gui as nwg;
 
 const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 const KICK_LOGIN: &str = "https://kick.com/";
-const POKEIDLE_APP: &str = "https://pokeidle.io/app";
 const STREAM_MANAGER_URL: &str = "https://pokeidle.io/app?moth-stream-action=manager";
 const SCAN_LIVE_URL: &str = "https://pokeidle.io/app?moth-stream-action=scan";
 
