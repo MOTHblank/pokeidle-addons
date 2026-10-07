@@ -28,11 +28,17 @@ Do not create separate stream-login profiles. Keeping the sessions together is d
 
 ## Current UI
 
-- **Game 1** — launch/relaunch Game 1's Firefox profile.
-- **Game 2** — launch/relaunch Game 2's Firefox profile.
-- **Launch Both** — launch/relaunch both profiles.
-- **Open Profiles** — open the profile data directory in Explorer.
-- **Close** — close the controller without closing Firefox.
+The **Accounts** window is the per-profile service panel, not a credential vault. Each row operates on exactly one game Firefox profile:
+
+- **Open Game** — launch that profile.
+- **Twitch** — open Twitch login in that profile.
+- **KICK** — open KICK in that profile.
+- **Streams** — open the userscript stream manager in that profile.
+- **Scan Live** — open PokéIdle and trigger the userscript live-chat scanner.
+- **Addons** — open all seven repository `.user.js` installer/update URLs in that profile.
+- **Profile** — open the profile directory in Explorer.
+
+The controller never stores Twitch/KICK passwords or tokens. Their sessions remain in Firefox profile storage.
 
 ## Stream/resource model
 
@@ -48,9 +54,11 @@ The goal is approximately one Firefox instance per game account, with stream res
 
 The controller does not embed a browser, use WebView2, or implement a userscript engine.
 
-PokéIdle runs in normal Firefox processes. The **official Violentmonkey Firefox extension** owns the repository's ordinary `*.user.js` files; Tampermonkey is also compatible.
+PokéIdle runs in normal Firefox processes. The **official Violentmonkey Firefox extension** owns the repository's ordinary `*.user.js` files.
 
-The controller is responsible for desktop/process/profile orchestration only.
+The controller opens the raw `.user.js` URLs for installation/update. The first install still goes through Violentmonkey's normal confirmation UI; the scripts carry `@updateURL` and `@downloadURL` so later updates are handled by Violentmonkey.
+
+The controller is responsible for desktop/process/profile orchestration and launching stream/addon commands in the correct profile.
 
 ## Development
 
