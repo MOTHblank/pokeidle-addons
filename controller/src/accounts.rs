@@ -1,6 +1,7 @@
 use crate::config::{Config, GameProfile};
 use crate::firefox;
 use native_windows_gui as nwg;
+use std::rc::Rc;
 
 const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 const KICK_LOGIN: &str = "https://kick.com/";
@@ -8,13 +9,34 @@ const STREAM_MANAGER_URL: &str = "https://pokeidle.io/app?moth-stream-action=man
 const SCAN_LIVE_URL: &str = "https://pokeidle.io/app?moth-stream-action=scan";
 
 const ADDONS: &[(&str, &str)] = &[
-    ("Auto Catch+", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/autocatch.user.js"),
-    ("Hunt Atlas", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/hunt-atlas.user.js"),
-    ("Moth Watch", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js"),
-    ("Performance+", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js"),
-    ("Upstream Scraper", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js"),
-    ("Live Stream Scanner", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js"),
-    ("Twitch Low Resource", "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js"),
+    (
+        "Auto Catch+",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/autocatch.user.js",
+    ),
+    (
+        "Hunt Atlas",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/hunt-atlas.user.js",
+    ),
+    (
+        "Moth Watch",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js",
+    ),
+    (
+        "Performance+",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js",
+    ),
+    (
+        "Upstream Scraper",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js",
+    ),
+    (
+        "Live Stream Scanner",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js",
+    ),
+    (
+        "Twitch Low Resource",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js",
+    ),
 ];
 
 enum Action {
@@ -27,141 +49,193 @@ enum Action {
     Folder(GameProfile),
 }
 
-pub fn show() {
-    if let Err(error) = build() {
-        nwg::simple_message("Moth", &error);
+pub struct AccountsWindow {
+    window: Rc<nwg::Window>,
+    title: nwg::Label,
+    headings: [nwg::Label; 2],
+    descriptions: [nwg::Label; 2],
+    game1_buttons: [nwg::Button; 7],
+    game2_buttons: [nwg::Button; 7],
+    close: nwg::Button,
+    handler: nwg::EventHandler,
+}
+
+impl AccountsWindow {
+    pub fn build() -> Result<Self, String> {
+        let mut window = nwg::Window::default();
+        nwg::Window::builder()
+            .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
+            .size((620, 430))
+            .position((560, 260))
+            .title("Moth · Accounts")
+            .build(&mut window)
+            .map_err(|e| format!("could not create account manager: {e}"))?;
+
+        let window = Rc::new(window);
+
+        let mut title = nwg::Label::default();
+        nwg::Label::builder()
+            .text("Account Manager")
+            .flags(nwg::LabelFlags::VISIBLE)
+            .position((24, 18))
+            .size((560, 32))
+            .parent(&*window)
+            .build(&mut title)
+            .map_err(|e| format!("could not create account manager title: {e}"))?;
+
+        let mut headings: [nwg::Label; 2] =
+            std::array::from_fn(|_| nwg::Label::default());
+        let mut descriptions: [nwg::Label; 2] =
+            std::array::from_fn(|_| nwg::Label::default());
+
+        let mut game1_buttons: [nwg::Button; 7] =
+            std::array::from_fn(|_| nwg::Button::default());
+        let mut game2_buttons: [nwg::Button; 7] =
+            std::array::from_fn(|_| nwg::Button::default());
+
+        build_game_row(
+            &window,
+            &mut headings[0],
+            &mut descriptions[0],
+            &mut game1_buttons,
+            "Game 1",
+            62,
+        )?;
+
+        build_game_row(
+            &window,
+            &mut headings[1],
+            &mut descriptions[1],
+            &mut game2_buttons,
+            "Game 2",
+            228,
+        )?;
+
+        let mut close = nwg::Button::default();
+        nwg::Button::builder()
+            .text("Close")
+            .flags(nwg::ButtonFlags::VISIBLE)
+            .position((470, 390))
+            .size((120, 34))
+            .parent(&*window)
+            .build(&mut close)
+            .map_err(|e| format!("could not create Close button: {e}"))?;
+
+        let actions = [
+            (game1_buttons[0].handle, Action::Game(GameProfile::Game1)),
+            (game1_buttons[1].handle, Action::Twitch(GameProfile::Game1)),
+            (game1_buttons[2].handle, Action::Kick(GameProfile::Game1)),
+            (game1_buttons[3].handle, Action::Streams(GameProfile::Game1)),
+            (game1_buttons[4].handle, Action::ScanLive(GameProfile::Game1)),
+            (game1_buttons[5].handle, Action::Addons(GameProfile::Game1)),
+            (game1_buttons[6].handle, Action::Folder(GameProfile::Game1)),
+            (game2_buttons[0].handle, Action::Game(GameProfile::Game2)),
+            (game2_buttons[1].handle, Action::Twitch(GameProfile::Game2)),
+            (game2_buttons[2].handle, Action::Kick(GameProfile::Game2)),
+            (game2_buttons[3].handle, Action::Streams(GameProfile::Game2)),
+            (game2_buttons[4].handle, Action::ScanLive(GameProfile::Game2)),
+            (game2_buttons[5].handle, Action::Addons(GameProfile::Game2)),
+            (game2_buttons[6].handle, Action::Folder(GameProfile::Game2)),
+        ];
+
+        let events_window = Rc::clone(&window);
+        let close_handle = close.handle;
+
+        let handler = nwg::full_bind_event_handler(
+            &window.handle,
+            move |event, _, handle| {
+                use nwg::Event;
+
+                match event {
+                    Event::OnWindowClose if handle == events_window.handle => {
+                        events_window.set_visible(false);
+                    }
+                    Event::OnButtonClick if handle == close_handle => {
+                        events_window.set_visible(false);
+                    }
+                    Event::OnButtonClick => {
+                        for (button, action) in &actions {
+                            if handle != *button {
+                                continue;
+                            }
+
+                            let result = match action {
+                                Action::Game(profile) => open_game(*profile),
+                                Action::Twitch(profile) => {
+                                    open_login(*profile, TWITCH_LOGIN, "Twitch")
+                                }
+                                Action::Kick(profile) => {
+                                    open_login(*profile, KICK_LOGIN, "KICK")
+                                }
+                                Action::Streams(profile) => {
+                                    open_profile_url(*profile, STREAM_MANAGER_URL)
+                                }
+                                Action::ScanLive(profile) => {
+                                    open_profile_url(*profile, SCAN_LIVE_URL)
+                                }
+                                Action::Addons(profile) => open_addons(*profile),
+                                Action::Folder(profile) => open_profile_folder(*profile),
+                            };
+
+                            if let Err(error) = result {
+                                nwg::simple_message("Moth", &error);
+                            }
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        );
+
+        Ok(Self {
+            window,
+            title,
+            headings,
+            descriptions,
+            game1_buttons,
+            game2_buttons,
+            close,
+            handler,
+        })
+    }
+
+    pub fn show(&self) {
+        self.window.set_visible(true);
+        self.window.set_focus();
     }
 }
 
-fn build() -> Result<(), String> {
-    let mut window = nwg::Window::default();
-    let mut title = nwg::Label::default();
-
-    let mut g1: [nwg::Button; 7] = std::array::from_fn(|_| nwg::Button::default());
-    let mut g2: [nwg::Button; 7] = std::array::from_fn(|_| nwg::Button::default());
-
-    build_window(&mut window, &mut title)?;
-    build_game_row(&window, &mut g1, GameProfile::Game1, "Game 1", 30)?;
-    build_game_row(&window, &mut g2, GameProfile::Game2, "Game 2", 170)?;
-
-    let mut close = nwg::Button::default();
-    nwg::Button::builder()
-        .text("Close")
-        .flags(nwg::ButtonFlags::VISIBLE)
-        .position((470, 374))
-        .size((120, 34))
-        .parent(&window)
-        .build(&mut close)
-        .map_err(|e| format!("could not create Close button: {e}"))?;
-
-    let actions = [
-        (g1[0].handle, Action::Game(GameProfile::Game1)),
-        (g1[1].handle, Action::Twitch(GameProfile::Game1)),
-        (g1[2].handle, Action::Kick(GameProfile::Game1)),
-        (g1[3].handle, Action::Streams(GameProfile::Game1)),
-        (g1[4].handle, Action::ScanLive(GameProfile::Game1)),
-        (g1[5].handle, Action::Addons(GameProfile::Game1)),
-        (g1[6].handle, Action::Folder(GameProfile::Game1)),
-        (g2[0].handle, Action::Game(GameProfile::Game2)),
-        (g2[1].handle, Action::Twitch(GameProfile::Game2)),
-        (g2[2].handle, Action::Kick(GameProfile::Game2)),
-        (g2[3].handle, Action::Streams(GameProfile::Game2)),
-        (g2[4].handle, Action::ScanLive(GameProfile::Game2)),
-        (g2[5].handle, Action::Addons(GameProfile::Game2)),
-        (g2[6].handle, Action::Folder(GameProfile::Game2)),
-    ];
-
-    let window_handle = window.handle;
-    let close_handle = close.handle;
-
-    let event_handler = nwg::full_bind_event_handler(
-        &window.handle,
-        move |event, _, handle| {
-            use nwg::Event;
-
-            match event {
-                Event::OnWindowClose if handle == window_handle => {
-                    nwg::stop_thread_dispatch();
-                }
-                Event::OnButtonClick if handle == close_handle => {
-                    nwg::stop_thread_dispatch();
-                }
-                Event::OnButtonClick => {
-                    for (button, action) in &actions {
-                        if handle != *button {
-                            continue;
-                        }
-
-                        let result = match action {
-                            Action::Game(profile) => open_game(*profile),
-                            Action::Twitch(profile) => open_login(*profile, TWITCH_LOGIN, "Twitch"),
-                            Action::Kick(profile) => open_login(*profile, KICK_LOGIN, "KICK"),
-                            Action::Streams(profile) => open_profile_url(*profile, STREAM_MANAGER_URL),
-                            Action::ScanLive(profile) => open_profile_url(*profile, SCAN_LIVE_URL),
-                            Action::Addons(profile) => open_addons(*profile),
-                            Action::Folder(profile) => open_profile_folder(*profile),
-                        };
-
-                        if let Err(error) = result {
-                            nwg::simple_message("Moth", &error);
-                        }
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        },
-    );
-
-    nwg::dispatch_thread_events();
-    nwg::unbind_event_handler(&event_handler);
-    Ok(())
-}
-
-fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), String> {
-    nwg::Window::builder()
-        .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-        .size((620, 430))
-        .position((560, 260))
-        .title("Moth · Accounts")
-        .build(window)
-        .map_err(|e| format!("could not create account manager: {e}"))?;
-
-    nwg::Label::builder()
-        .text("Account Manager")
-        .flags(nwg::LabelFlags::VISIBLE)
-        .position((24, 18))
-        .size((560, 32))
-        .parent(window)
-        .build(title)
-        .map_err(|e| format!("could not create account manager title: {e}"))
+impl Drop for AccountsWindow {
+    fn drop(&mut self) {
+        nwg::unbind_event_handler(&self.handler);
+    }
 }
 
 fn build_game_row(
-    window: &nwg::Window,
+    window: &Rc<nwg::Window>,
+    heading: &mut nwg::Label,
+    description: &mut nwg::Label,
     buttons: &mut [nwg::Button; 7],
-    _profile: GameProfile,
     title: &str,
     y: i32,
 ) -> Result<(), String> {
-    let mut heading = nwg::Label::default();
     nwg::Label::builder()
         .text(title)
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, y))
         .size((160, 24))
-        .parent(window)
-        .build(&mut heading)
+        .parent(&**window)
+        .build(heading)
         .map_err(|e| format!("could not create {title} heading: {e}"))?;
 
-    let mut description = nwg::Label::default();
     nwg::Label::builder()
         .text("PokéIdle + one Twitch login + one KICK login share this profile.")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, y + 28))
         .size((570, 24))
-        .parent(window)
-        .build(&mut description)
+        .parent(&**window)
+        .build(description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
 
     let labels = [
@@ -183,7 +257,7 @@ fn build_game_row(
             .flags(nwg::ButtonFlags::VISIBLE)
             .position((24 + (column as i32) * 124, y + 58 + row * 38))
             .size((116, 32))
-            .parent(window)
+            .parent(&**window)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
     }
