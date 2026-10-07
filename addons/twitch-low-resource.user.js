@@ -27,6 +27,13 @@
 
     const isChatPopout = /\/popout\/[^/]+\/chat(?:[/?]|$)/i.test(location.pathname);
 
+    // Chat-only tabs are already the lightweight path. Do not even install
+    // the watchdog timer or styling there.
+    if (isChatPopout) {
+        console.info('[Moth] Twitch chat-only tab left untouched');
+        return;
+    }
+
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     const textOf = (el) => {
