@@ -1008,8 +1008,8 @@ internal sealed class MainForm : Form
                 var raw = await pane.View.ExecuteScriptAsync(
                     """
                     (() => JSON.stringify({
-                        stream: document.documentElement?.getAttribute('data-idleshell-stream-scanner') === 'started',
-                        market: document.documentElement?.getAttribute('data-idleshell-market-bot') === 'started'
+                        stream: window.__idleshell_stream_scanner_started === true,
+                        market: window.__idleshell_market_bot_started === true
                     }))()
                     """
                 );
