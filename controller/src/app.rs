@@ -221,8 +221,7 @@ pub fn run() -> Result<(), String> {
                     } else if handle == accounts_button_handle {
                         show_accounts();
                     } else if handle == profiles_button_handle {
-                        let state = state_for_events.borrow();
-                        open_profiles_folder(&state.status);
+                        open_profiles_folder(&status);
                     } else if handle == close_button_handle {
                         nwg::stop_thread_dispatch();
                     }
