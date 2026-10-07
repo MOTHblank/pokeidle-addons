@@ -765,6 +765,19 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         market_summary: runtime.market_summary,
     })
 }
+fn xp_progress(value: &Value, fallback: &str) -> String {
+    let current = value.get("xp").and_then(Value::as_u64).unwrap_or(0);
+    let floor = value.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
+    let next = value.get("xpProximo").and_then(Value::as_u64).unwrap_or(0);
+
+    if next > floor && current >= floor {
+        return format!("{}/{}", current.saturating_sub(floor), next.saturating_sub(floor));
+    }
+
+    fallback.to_string()
+}
+
+
 fn trim_pct(value: f32) -> String {
     if (value.fract().abs() < 0.01 {
         format!("{:.0}", value)
@@ -907,22 +920,14 @@ fn probe_runtime_details(
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
-    let player_xp = {
-        let current = state.get("xp").and_then(Value::as_u64).unwrap_or(0);
-        let floor = state.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
-        let next = state.get("xpProximo").and_then(Value::as_u64).unwrap_or(0);
-
-        if next > floor && current >= floor {
-            format!("{}/{}", current.saturating_sub(floor), next.saturating_sub(floor))
-        } else {
-            snapshot
-                .get("state")
-                .and_then(|s| s.get("playerXp"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        }
-    };
+    let player_xp = xp_progress(
+        &state,
+        snapshot
+            .get("state")
+            .and_then(|s| s.get("playerXp"))
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
     let fallen_count =
         state.get("fallen").and_then(Value::as_u64).unwrap_or(0) as u32;
     let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
@@ -941,20 +946,14 @@ fn probe_runtime_details(
         .map(|v| v.to_string())
         .unwrap_or_default();
 
-    let pokemon_xp = {
-        let current = active.get("xp").and_then(Value::as_u64).unwrap_or(0);
-        let floor = active.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
-        let next = active.get("xpProximo").and_then(Value::as_u64).unwrap_or(0);
-
-        if next > floor && current >= floor {
-            format!("{}/{}", current.saturating_sub(floor), next.saturating_sub(floor))
-        } else {
-            state.get("activePokemonXp")
-                .and_then(Value::as_u64)
-                .map(|v| v.to_string())
-                .unwrap_or_default()
-        }
-    };
+    let pokemon_xp = xp_progress(
+        &active,
+        &state
+            .get("activePokemonXp")
+            .and_then(Value::as_u64)
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    );
 
     let mut ball_stock = Vec::new();
     if let Some(items) = state.get("domBalls").and_then(Value::as_array) {
