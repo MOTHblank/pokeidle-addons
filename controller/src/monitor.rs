@@ -161,7 +161,7 @@ fn probe_browser(port: u16) -> Result<Probe, String> {
     })
 }
 
-fn send_and_wait(
+fn send_and_wait<S>(
     socket: &mut WebSocket<S>,
     expected_id: u64,
     command: Value,
