@@ -363,7 +363,7 @@ internal sealed class ViolentmonkeyManager
         cmd: 'GetMoreIds',
         data: {
           url: __PAGE_URL__,
-          isTop: true,
+          top: true,
           ids: { __SCRIPT_ID__: 1 }
         }
       })
