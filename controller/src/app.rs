@@ -9,9 +9,6 @@ use std::rc::Rc;
 struct State {
     game1: Option<Child>,
     game2: Option<Child>,
-    game1_status: nwg::Label,
-    game2_status: nwg::Label,
-    status: nwg::Label,
 }
 
 pub fn run() -> Result<(), String> {
@@ -149,10 +146,24 @@ pub fn run() -> Result<(), String> {
     let state = Rc::new(RefCell::new(State {
         game1: None,
         game2: None,
-        game1_status,
-        game2_status,
-        status,
     }));
+
+    {
+        let mut state = state.borrow_mut();
+
+        launch_one(
+            GameProfile::Game1,
+            &mut state.game1,
+            &game1_status,
+            &status,
+        );
+        launch_one(
+            GameProfile::Game2,
+            &mut state.game2,
+            &game2_status,
+            &status,
+        );
+    }
 
     let game1_button_handle = game1_button.handle;
     let game2_button_handle = game2_button.handle;
@@ -178,52 +189,35 @@ pub fn run() -> Result<(), String> {
                 Event::OnButtonClick => {
                     if handle == game1_button_handle {
                         let mut state = state_for_events.borrow_mut();
-                        let child_slot = &mut state.game1;
-                        let profile_status = &state.game1_status;
-                        let global_status = &state.status;
                         launch_one(
                             GameProfile::Game1,
-                            child_slot,
-                            profile_status,
-                            global_status,
+                            &mut state.game1,
+                            &game1_status,
+                            &status,
                         );
                     } else if handle == game2_button_handle {
                         let mut state = state_for_events.borrow_mut();
-                        let child_slot = &mut state.game2;
-                        let profile_status = &state.game2_status;
-                        let global_status = &state.status;
                         launch_one(
                             GameProfile::Game2,
-                            child_slot,
-                            profile_status,
-                            global_status,
+                            &mut state.game2,
+                            &game2_status,
+                            &status,
                         );
                     } else if handle == launch_both_button_handle {
                         let mut state = state_for_events.borrow_mut();
 
-                        {
-                            let child_slot = &mut state.game1;
-                            let profile_status = &state.game1_status;
-                            let global_status = &state.status;
-                            launch_one(
-                                GameProfile::Game1,
-                                child_slot,
-                                profile_status,
-                                global_status,
-                            );
-                        }
-
-                        {
-                            let child_slot = &mut state.game2;
-                            let profile_status = &state.game2_status;
-                            let global_status = &state.status;
-                            launch_one(
-                                GameProfile::Game2,
-                                child_slot,
-                                profile_status,
-                                global_status,
-                            );
-                        }
+                        launch_one(
+                            GameProfile::Game1,
+                            &mut state.game1,
+                            &game1_status,
+                            &status,
+                        );
+                        launch_one(
+                            GameProfile::Game2,
+                            &mut state.game2,
+                            &game2_status,
+                            &status,
+                        );
                     } else if handle == accounts_button_handle {
                         show_accounts();
                     } else if handle == profiles_button_handle {
@@ -237,34 +231,6 @@ pub fn run() -> Result<(), String> {
             }
         },
     );
-
-    {
-        let mut state = state.borrow_mut();
-
-        {
-            let child_slot = &mut state.game1;
-            let profile_status = &state.game1_status;
-            let global_status = &state.status;
-            launch_one(
-                GameProfile::Game1,
-                child_slot,
-                profile_status,
-                global_status,
-            );
-        }
-
-        {
-            let child_slot = &mut state.game2;
-            let profile_status = &state.game2_status;
-            let global_status = &state.status;
-            launch_one(
-                GameProfile::Game2,
-                child_slot,
-                profile_status,
-                global_status,
-            );
-        }
-    }
 
     nwg::dispatch_thread_events();
     nwg::unbind_event_handler(&event_handler);
