@@ -23,6 +23,7 @@ struct GameSlot {
     profile: GameProfile,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
+    headless: bool,
 }
 
 impl GameSlot {
@@ -31,6 +32,7 @@ impl GameSlot {
             profile,
             child: None,
             monitor: None,
+            headless: true,
         }
     }
 
@@ -119,6 +121,10 @@ impl ControllerApp {
     }
 
     fn launch_one(&mut self, profile: GameProfile) {
+        self.launch_one_mode(profile, true);
+    }
+
+    fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
         self.refresh_processes();
 
@@ -129,6 +135,7 @@ impl ControllerApp {
 
         self.games[index].child = None;
         self.games[index].monitor = None;
+        self.games[index].headless = headless;
 
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
@@ -145,15 +152,16 @@ impl ControllerApp {
             config.remote_debug_port
         ));
 
-        match firefox::launch(&config) {
+        match firefox::launch(&config, headless) {
             Ok((child, monitor)) => {
                 let pid = child.id();
                 self.games[index].child = Some(child);
                 self.games[index].monitor = Some(monitor);
                 self.set_status(
                     format!(
-                        "{} started · headless Firefox · Rust BiDi health monitor",
-                        profile.label()
+                        "{} started · {} Firefox · Rust BiDi health monitor",
+                        profile.label(),
+                        if headless { "headless" } else { "visible" }
                     ),
                     false,
                 );
@@ -168,6 +176,41 @@ impl ControllerApp {
                 self.set_status(format!("{}: {}", profile.label(), error), true);
             }
         }
+    }
+
+    fn set_browser_mode(&mut self, profile: GameProfile, headless: bool) {
+        let index = Self::game_index(profile);
+        self.refresh_processes();
+
+        if !self.games[index].is_running() {
+            self.games[index].headless = headless;
+            self.launch_one_mode(profile, headless);
+            return;
+        }
+
+        if self.games[index].headless == headless {
+            self.set_status(
+                format!(
+                    "{} is already running in {} mode.",
+                    profile.label(),
+                    if headless { "headless" } else { "visible" }
+                ),
+                false,
+            );
+            return;
+        }
+
+        self.games[index].headless = headless;
+        self.set_status(
+            format!(
+                "{}: switching Firefox to {} mode...",
+                profile.label(),
+                if headless { "headless" } else { "visible" }
+            ),
+            false,
+        );
+        self.stop_one(profile);
+        self.launch_one_mode(profile, headless);
     }
 
     fn stop_one(&mut self, profile: GameProfile) {
@@ -505,7 +548,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .color(DIM),
                     );
                     ui.add_space(7.0);
-                    runtime_row(ui, "Firefox", "HEADLESS", GOOD);
+                    runtime_row(ui, "Firefox", if app.games.iter().all(|game| game.headless) { "HEADLESS" } else if app.games.iter().all(|game| !game.headless) { "VISIBLE" } else { "MIXED" }, GOOD);
                     runtime_row(ui, "Monitor", "BiDi", GOOD);
                     runtime_row(ui, "Poll", "5 sec", MUTED);
                 });
@@ -598,6 +641,25 @@ fn draw_game_card(
 
                 ui.add_space(8.0);
                 status_badge(ui, &health, running);
+
+                if running {
+                    let mode_label = if app.games[index].headless { "Show Firefox" } else { "Hide Firefox" };
+                    let mode_headless = !app.games[index].headless;
+                    let clicked = ui
+                        .add_sized(
+                            [108.0, 30.0],
+                            egui::Button::new(
+                                RichText::new(mode_label).size(10.0).strong(),
+                            )
+                            .fill(PANEL_ALT)
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(7.0),
+                        )
+                        .clicked();
+                    if clicked {
+                        app.set_browser_mode(profile, mode_headless);
+                    }
+                }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let button_text = if running { "Stop" } else { "Launch" };
