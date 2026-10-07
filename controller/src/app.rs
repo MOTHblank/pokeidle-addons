@@ -191,7 +191,7 @@ pub fn run() -> Result<(), String> {
             use nwg::Event;
 
             match event {
-                Event::OnAnimationTimer if handle == health_timer_handle => {
+                Event::OnTimerTick if handle == health_timer_handle => {
                     let state = state_for_health.borrow();
                     update_health_label(state.game1_monitor.as_ref(), &game1_status);
                     update_health_label(state.game2_monitor.as_ref(), &game2_status);
