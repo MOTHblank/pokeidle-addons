@@ -361,6 +361,8 @@ struct Probe {
     gold: u64,
     orbs: u64,
     stream_bonus: String,
+    stream_bonus_last: String,
+    stream_bonus_last_at: u64,
     stream_bonus_pct: f32,
     stream_watching: Vec<String>,
     stream_live_bonus: Vec<String>,
@@ -755,6 +757,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         } else {
             runtime.stream_bonus_last.clone()
         },
+        stream_bonus_last_at: runtime.stream_bonus_last_at,
         stream_bonus_pct: runtime.stream_bonus_pct,
         stream_watching: runtime.stream_watching,
         stream_live_bonus: runtime.stream_live_bonus,
@@ -1398,7 +1401,7 @@ fn probe_runtime_details(
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
         stream_bonus_last,
-        stream_bonus_last_at,
+        stream_bonus_last_at: last_game_message_ms,
         stream_bonus_pct,
         stream_watching,
         stream_live_bonus: live_names,
