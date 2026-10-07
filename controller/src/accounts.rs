@@ -23,7 +23,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Controller Bridge",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/controller-bridge.user.js?v=1.1.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/controller-bridge.user.js?v=1.1.1",
     ),
     (
         "Twitch Low Resource",
