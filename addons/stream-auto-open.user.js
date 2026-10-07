@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         PokéIdle Live Chat Presence
+// @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      2.0.0
-// @description  Joins every Twitch/Kick channel that PokéIdle currently marks as live so the configured account is present in chat.
+// @version      3.0.0
+// @description  Adds a button under Open Inventory that scans the current PokéIdle page for live Twitch/KICK channels and sends them to IdleShell.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
 // @run-at       document-start
@@ -17,12 +17,8 @@
             ? unsafeWindow
             : window;
 
-    // The upstream client is an SPA and rebuilds stream cards dynamically.
-    const SCAN_INTERVAL_MS = 5000;
-    const SCAN_DEBOUNCE_MS = 350;
-    const MISSING_RESET_MS = 20000;
-    const MAX_AUTO_OPEN_PER_SCAN = 20;
-    const MAX_ANCESTORS_TO_INSPECT = 8;
+    const BUTTON_ID = 'idleshell-scan-live-streams';
+    const INVENTORY_ID = 'btn-bolsa';
 
     const LIVE_VALUE_RE =
         /^(?:1|true|yes|on|live|online|ao[_ -]?vivo|en[_ -]?vivo)$/i;
@@ -59,39 +55,39 @@
         'videos'
     ]);
 
-    // Per-page state. A URL is eligible to open again only after it has
-    // disappeared long enough to represent a real live/offline transition.
-    const streamState = new Map();
-    let scanTimer = 0;
-    let scheduledScan = 0;
-    let observer = null;
-
-    function q(selector, root) {
-        return (root || document).querySelector(selector);
-    }
+    let buttonObserver = null;
+    let buttonInstallQueued = 0;
+    let scanInProgress = false;
 
     function qa(selector, root) {
-        return Array.from((root || document).querySelectorAll(selector));
+        return Array.from(
+            (root || document).querySelectorAll(selector)
+        );
     }
 
     function normalizeText(value) {
         return String(value == null ? '' : value)
             .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/\s+/g, ' ')
+            .replace(/[\\u0300-\\u036f]/g, '')
+            .replace(/\\s+/g, ' ')
             .trim()
             .toLowerCase();
     }
 
     function normalizeChannelUrl(raw) {
         try {
-            const url = new URL(String(raw || ''), location.href);
+            const url = new URL(
+                String(raw || ''),
+                location.href
+            );
 
             if (!/^https?:$/i.test(url.protocol)) {
                 return null;
             }
 
-            const host = url.hostname.toLowerCase().replace(/^www\./, '');
+            const host = url.hostname
+                .toLowerCase()
+                .replace(/^www\\./, '');
 
             if (host !== 'twitch.tv' && host !== 'kick.com') {
                 return null;
@@ -121,10 +117,13 @@
                 return null;
             }
 
-            // /videos/... and other non-channel routes are excluded by the
-            // one-segment rule. Keep the canonical channel URL only.
-            return 'https://' + host + '/' + encodeURIComponent(channel);
-        } catch {
+            return (
+                'https://' +
+                host +
+                '/' +
+                encodeURIComponent(channel)
+            );
+        } catch (_) {
             return null;
         }
     }
@@ -158,7 +157,6 @@
             'data-streaming',
             'data-status',
             'data-state',
-            'aria-live',
             'aria-label',
             'title'
         ];
@@ -212,7 +210,6 @@
         return normalizeText(value)
             .replace(/^[^a-z0-9à-ÿ]+/i, '')
             .replace(/[^a-z0-9à-ÿ]+$/i, '')
-            .replace(/(?:^|\s)(?:•|·|[-–—])(?:\s|$)/g, ' ')
             .trim();
     }
 
@@ -241,7 +238,9 @@
                 return true;
             }
 
-            if (/^(?:\d+\s+)?(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo)(?:\s+\d+)?$/i.test(text)) {
+            if (
+                /^(?:\\d+\\s+)?(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo)(?:\\s+\\d+)?$/i.test(text)
+            ) {
                 return true;
             }
         }
@@ -252,7 +251,11 @@
     function hasLiveMarker(anchor) {
         let node = anchor;
 
-        for (let depth = 0; node && depth <= MAX_ANCESTORS_TO_INSPECT; depth += 1) {
+        for (
+            let depth = 0;
+            node && depth <= 8;
+            depth += 1
+        ) {
             const attrResult = inspectAttributes(node);
 
             if (attrResult !== null) {
@@ -277,42 +280,36 @@
         return false;
     }
 
-    function collectCandidates() {
+    function collectLiveChannels() {
         const candidates = new Map();
 
         for (const anchor of qa('a[href]')) {
-            const url = normalizeChannelUrl(anchor.href || anchor.getAttribute('href'));
+            const url = normalizeChannelUrl(
+                anchor.href ||
+                anchor.getAttribute('href')
+            );
 
-            if (!url) {
+            if (!url || !hasLiveMarker(anchor)) {
                 continue;
             }
 
-            const live = hasLiveMarker(anchor);
-
-            if (!candidates.has(url)) {
-                candidates.set(url, {
-                    url,
-                    live,
-                    anchor
-                });
-                continue;
-            }
-
-            // Multiple links for one channel are common in the upstream
-            // card. Treat the channel as live if any copy carries the marker.
-            if (live) {
-                candidates.get(url).live = true;
-            }
+            candidates.set(url, {
+                url,
+                anchor
+            });
         }
 
-        return candidates;
+        return Array.from(candidates.values());
     }
 
-    function joinThroughIdleShell(url) {
+    function sendToIdleShell(url) {
         try {
             if (
                 typeof page.__idleshell_openLink === 'function' &&
-                page.__idleshell_openLink(url, 'live-chat-presence')
+                page.__idleshell_openLink(
+                    url,
+                    'manual-live-chat-scan'
+                )
             ) {
                 return true;
             }
@@ -324,7 +321,7 @@
                     JSON.stringify({
                         type: 'link',
                         url,
-                        source: 'live-chat-presence'
+                        source: 'manual-live-chat-scan'
                     })
                 );
                 return true;
@@ -334,162 +331,141 @@
         return false;
     }
 
-    function joinChat(url) {
-        if (joinThroughIdleShell(url)) {
-            return true;
-        }
-
-        try {
-            const popup = window.open(
-                url,
-                '_blank',
-                'noopener,noreferrer'
-            );
-
-            return !!popup;
-        } catch (_) {
-            return false;
-        }
-    }
-
-    function processCandidates() {
-        scheduledScan = 0;
-
-        const now = Date.now();
-        const candidates = collectCandidates();
-        let joined = 0;
-
-        for (const [url, candidate] of candidates) {
-            const previous = streamState.get(url) || {
-                live: false,
-                opened: false,
-                lastSeenAt: 0
-            };
-
-            const wasLive = previous.live;
-            const isNewOrReset =
-                previous.lastSeenAt === 0 ||
-                now - previous.lastSeenAt > MISSING_RESET_MS;
-
-            previous.lastSeenAt = now;
-
-            if (!candidate.live) {
-                previous.live = false;
-                previous.joined = false;
-                streamState.set(url, previous);
-                continue;
-            }
-
-            previous.live = true;
-
-            if (
-                (!wasLive || isNewOrReset) &&
-                !previous.joined &&
-                joined < MAX_AUTO_OPEN_PER_SCAN
-            ) {
-                if (joinChat(url)) {
-                    previous.opened = true;
-                    joined += 1;
-                    console.info(
-                        '[IdleShell] joined live chat:',
-                        url
-                    );
-                }
-            }
-
-            streamState.set(url, previous);
-        }
-
-        // Forget channels that vanished from the DOM long enough to be
-        // considered a new live transition when they return.
-        for (const [url, state] of streamState) {
-            if (
-                now - state.lastSeenAt > MISSING_RESET_MS &&
-                !candidates.has(url)
-            ) {
-                streamState.delete(url);
-            }
-        }
-
-        if (joined > 0) {
-            console.info(
-                '[IdleShell] live chat scan joined',
-                joined,
-                'chat(s)'
-            );
-        }
-    }
-
-    function scheduleScan(delay = SCAN_DEBOUNCE_MS) {
-        if (scheduledScan) {
-            window.clearTimeout(scheduledScan);
-        }
-
-        scheduledScan = window.setTimeout(
-            processCandidates,
-            delay
-        );
-    }
-
-    function installObserver() {
-        if (!document.documentElement || observer) {
+    function scanLiveStreams(button) {
+        if (scanInProgress) {
             return;
         }
 
-        observer = new MutationObserver(() => {
-            scheduleScan();
+        scanInProgress = true;
+
+        const originalLabel = button.textContent.trim();
+
+        try {
+            button.disabled = true;
+            button.querySelector('span').textContent =
+                'Scanning…';
+
+            const channels = collectLiveChannels();
+            let queued = 0;
+
+            for (const channel of channels) {
+                if (sendToIdleShell(channel.url)) {
+                    queued += 1;
+                }
+            }
+
+            button.querySelector('span').textContent =
+                queued > 0
+                    ? 'Scanned ' + queued + ' live'
+                    : 'No live streams found';
+
+            console.info(
+                '[IdleShell] manual live chat scan:',
+                channels.length,
+                'live channel(s),',
+                queued,
+                'queued'
+            );
+        } catch (error) {
+            console.error(
+                '[IdleShell] manual live chat scan failed:',
+                error
+            );
+            button.querySelector('span').textContent =
+                'Scan failed';
+        } finally {
+            window.setTimeout(() => {
+                button.disabled = false;
+                button.querySelector('span').textContent =
+                    originalLabel || 'Scan Live Streams';
+                scanInProgress = false;
+            }, 1600);
+        }
+    }
+
+    function ensureButton() {
+        buttonInstallQueued = 0;
+
+        if (!document.documentElement) {
+            return;
+        }
+
+        const inventory = document.getElementById(INVENTORY_ID);
+
+        if (!inventory) {
+            return;
+        }
+
+        const existing = document.getElementById(BUTTON_ID);
+
+        if (existing) {
+            return;
+        }
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = BUTTON_ID;
+        button.className = inventory.className || 'btn-inventario';
+        button.title =
+            'Scan the current page for live Twitch/KICK streams';
+        button.setAttribute(
+            'aria-label',
+            'Scan live Twitch and KICK streams'
+        );
+
+        const label = document.createElement('span');
+        label.textContent = 'Scan Live Streams';
+        button.appendChild(label);
+
+        button.addEventListener('click', () => {
+            scanLiveStreams(button);
         });
 
-        observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: [
-                'class',
-                'data-live',
-                'data-is-live',
-                'data-online',
-                'data-stream-live',
-                'data-streaming',
-                'data-status',
-                'data-state',
-                'aria-label',
-                'title',
-                'href'
-            ]
-        });
+        inventory.insertAdjacentElement(
+            'afterend',
+            button
+        );
+    }
+
+    function scheduleButtonInstall() {
+        if (buttonInstallQueued) {
+            return;
+        }
+
+        buttonInstallQueued = window.setTimeout(() => {
+            buttonInstallQueued = 0;
+            ensureButton();
+        }, 100);
     }
 
     function start() {
-        processCandidates();
-        installObserver();
+        ensureButton();
 
-        if (!scanTimer) {
-            scanTimer = window.setInterval(
-                processCandidates,
-                SCAN_INTERVAL_MS
-            );
+        if (!document.documentElement || buttonObserver) {
+            return;
         }
 
+        buttonObserver = new MutationObserver(() => {
+            scheduleButtonInstall();
+        });
+
+        buttonObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+
         console.info(
-            '[IdleShell] live chat presence active (PokéIdle upstream 1.240.1)'
+            '[IdleShell] manual live stream scanner ready'
         );
     }
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start, {
-            once: true
-        });
+        document.addEventListener(
+            'DOMContentLoaded',
+            start,
+            { once: true }
+        );
     } else {
         start();
     }
-
-    // The upstream SPA can replace the <html> subtree during a hard
-    // navigation/login transition, so re-install the observer if needed.
-    window.setInterval(() => {
-        if (!observer && document.documentElement) {
-            installObserver();
-            scheduleScan(0);
-        }
-    }, 10000);
 })();
