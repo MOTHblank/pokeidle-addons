@@ -19,6 +19,8 @@ user_pref("network.predictor.enable-prefetch", false);
 "#;
 
 pub fn launch(config: &Config) -> Result<Child, String> {
+    migrate_legacy_profile(config)?;
+
     fs::create_dir_all(&config.profile_dir).map_err(|error| {
         format!(
             "could not create profile directory {}: {error}",
@@ -38,6 +40,25 @@ pub fn launch(config: &Config) -> Result<Child, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(format_spawn_error)
+}
+
+fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
+    if config.profile_dir.exists() {
+        return Ok(());
+    }
+
+    let legacy_dir = config.legacy_profile_dir()?;
+    if !legacy_dir.exists() {
+        return Ok(());
+    }
+
+    fs::rename(&legacy_dir, &config.profile_dir).map_err(|error| {
+        format!(
+            "could not migrate legacy profile {} to {}: {error}",
+            legacy_dir.display(),
+            config.profile_dir.display()
+        )
+    })
 }
 
 fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
