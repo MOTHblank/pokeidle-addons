@@ -409,21 +409,18 @@ internal sealed class MainForm : Form
     {
         using var dlg = new AccountsDialog(
             _accounts,
-            acc => PaneForAccount(acc) is not null,
+            IsAccountActive,
             acc => _ = ShowAccountForLoginAsync(acc));
         dlg.ShowDialog(this);
         LayoutPanes();
     }
 
-    private Pane? PaneForAccount(Account acc)
+    private bool IsAccountActive(Account acc)
     {
         if (acc.IsStream)
-            return AllStreamSlots()
-                .FirstOrDefault(s =>
-                    string.Equals(s.Account.Id, acc.Id, StringComparison.OrdinalIgnoreCase))
-                ?.Pane;
+            return _streams?.IsAccountConnected(acc.Id) == true;
 
-        return _games.FirstOrDefault(g =>
+        return _games.Any(g =>
             string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -577,6 +574,8 @@ internal sealed class MainForm : Form
             s.Url is not null && s.Account.Service == AccountService.Twitch);
         var openKick = workspace.Slots.Count(s =>
             s.Url is not null && s.Account.Service == AccountService.Kick);
+        var connected = workspace.Slots.Count(s =>
+            s.Url is not null && s.State == StreamConnectionState.Connected);
         var state = workspace.GameForeground ? "FOREGROUND" : "BACKGROUND";
         workspace.Header.Text =
             $"GAME {workspace.Index + 1}  ·  {workspace.GamePane?.Spec.Title ?? workspace.GameProfile}";
@@ -589,7 +588,7 @@ internal sealed class MainForm : Form
         };
         workspace.GameToggle.Text = workspace.GameForeground ? "Background" : "Foreground";
         workspace.StreamHeader.Text =
-            $"{(workspace.StreamsExpanded ? "▾" : "▸")} Streams · {open} joined · T {openTwitch}/{AccountManager.MaxStreamsPerService} · K {openKick}/{AccountManager.MaxStreamsPerService}";
+            $"{(workspace.StreamsExpanded ? "▾" : "▸")} Chats · {connected} connected · T {openTwitch}/{AccountManager.MaxStreamsPerService} · K {openKick}/{AccountManager.MaxStreamsPerService}";
         workspace.StreamOpen.Text = "+ Join chat";
         var serviceIndex = workspace.ActiveStreamService == AccountService.Kick ? 1 : 0;
         if (workspace.StreamServicePicker.SelectedIndex != serviceIndex)
@@ -874,75 +873,52 @@ internal sealed class MainForm : Form
         }
     }
 
-    private async Task EnsureStreamPaneAsync(GameWorkspace workspace, StreamSlot slot, string url)
+    private async Task JoinStreamSlotAsync(
+        GameWorkspace workspace,
+        StreamSlot slot,
+        string url)
     {
-        if (slot.Pane is not null)
-        {
-            slot.Url = CanonicalStreamUrl(url);
-            workspace.StreamsExpanded = true;
-            workspace.ActiveStreamService = slot.Account.Service;
-            SelectTab(workspace, workspace.Slots.IndexOf(slot));
-            if (!string.Equals(slot.Pane.View.Source, slot.Url, StringComparison.OrdinalIgnoreCase))
-                slot.Pane.View.Navigate(slot.Url);
-            return;
-        }
-
         var canonical = CanonicalStreamUrl(url);
         if (!IsStreamUrl(canonical))
-            throw new ArgumentException("Only Twitch and Kick stream URLs can be opened here.", nameof(url));
+            throw new ArgumentException(
+                "Only Twitch or Kick channel URLs can be joined.",
+                nameof(url));
 
         workspace.StreamsExpanded = true;
         workspace.ActiveStreamService = slot.Account.Service;
-        var spec = new PaneSpec(
-            $"{slot.Account.Service} {slot.SlotNumber}", canonical, slot.Account.Id,
-            PaneKind.Stream, _inactiveStreamMode, workspace.GameProfile);
+        slot.State = StreamConnectionState.Connecting;
+        slot.Url = canonical;
+        slot.Tab.Text = StreamTabText(slot);
+        RebuildTabTitles();
+        LayoutPanes();
 
-        Pane? pane = null;
         try
         {
-            var createdPane = await Pane.CreateAsync(_streamEnv!, Handle, spec, _userscripts, navigate: false);
-            pane = createdPane;
-            createdPane.MessageReceived += OnPaneMessage;
-            createdPane.PopupRequested += OnPopupRequested;
-            createdPane.View.NavigationStarting += (_, e) =>
-                Log($"Stream G{workspace.Index + 1} {slot.Account.Service} {slot.SlotNumber} starting: {e.Uri}");
-            createdPane.View.NavigationCompleted += (_, e) =>
-            {
-                slot.Tab.Text = e.IsSuccess
-                    ? StreamTabText(slot)
-                    : $"× {(slot.Account.Service == AccountService.Twitch ? "T" : "K")}{slot.SlotNumber}";
-                if (!e.IsSuccess)
-                    Log($"Stream G{workspace.Index + 1} {slot.Account.Service} {slot.SlotNumber} navigation FAILED ({e.WebErrorStatus}, HTTP {e.HttpStatusCode}): {createdPane.View.Source}");
-                else
-                    Log($"Stream G{workspace.Index + 1} {slot.Account.Service} {slot.SlotNumber} loaded: {createdPane.View.Source}");
-            };
-            createdPane.View.SourceChanged += (_, _) =>
-                Log($"Stream G{workspace.Index + 1} {slot.Account.Service} {slot.SlotNumber} source: {createdPane.View.Source}");
-            createdPane.View.ProcessFailed += (_, e) =>
-                Log($"Stream G{workspace.Index + 1} {slot.Account.Service} {slot.SlotNumber} WebView process FAILED: {e.ProcessFailedKind}");
+            if (_streams is null)
+                throw new InvalidOperationException("Stream subsystem is not initialized.");
 
-            slot.Pane = createdPane;
+            await _streams.JoinAsync(slot.Account, canonical);
+            slot.State = StreamConnectionState.Connected;
+        }
+        catch (AuthenticationRequiredException ex)
+        {
+            slot.State = StreamConnectionState.AuthenticationRequired;
             slot.Url = canonical;
-            slot.Tab.Text = $"… {(slot.Account.Service == AccountService.Twitch ? "T" : "K")}{slot.SlotNumber}";
-            var index = workspace.Slots.IndexOf(slot);
-            SelectTab(workspace, index);
-            createdPane.View.Navigate(canonical);
+            throw new InvalidOperationException(
+                ex.Message + " Use Accounts → Log in… and then join the channel again.");
         }
         catch
         {
-            if (pane is not null) DetachAndClose(pane);
-            slot.Pane = null;
-            slot.Url = null;
-            slot.Tab.Text = StreamTabText(slot);
+            slot.State = StreamConnectionState.Error;
             throw;
         }
-    }
-
-    private void DetachAndClose(Pane pane)
-    {
-        pane.MessageReceived -= OnPaneMessage;
-        pane.PopupRequested -= OnPopupRequested;
-        pane.Close();
+        finally
+        {
+            slot.Tab.Text = StreamTabText(slot);
+            RebuildTabTitles();
+            UpdateWorkspaceHeaders();
+            LayoutPanes();
+        }
     }
 
     private void RefreshAddonsPicker()
