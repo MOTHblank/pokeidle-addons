@@ -55,31 +55,36 @@ impl Health {
                 .unwrap_or_else(|| self.state.clone());
         }
 
-        let mut parts = vec![self.activity.clone()];
+        match self.activity.as_str() {
+            "Hunting" => {
+                let mut parts = Vec::new();
 
-        if !self.active_pokemon.is_empty() {
-            parts.push(format!("active: {}", self.active_pokemon));
+                if !self.active_pokemon.is_empty() {
+                    parts.push(self.active_pokemon.clone());
+                }
+
+                if !self.hunt.is_empty() {
+                    parts.push(self.hunt.clone());
+                }
+
+                if self.fallen_count > 0 {
+                    parts.push(format!("{} fallen", self.fallen_count));
+                }
+
+                if self.economy_mode {
+                    parts.push("Economy".to_string());
+                }
+
+                if parts.is_empty() {
+                    "Hunting".to_string()
+                } else {
+                    format!("Hunting · {}", parts.join(" · "))
+                }
+            }
+            "Center" => "Online · Center".to_string(),
+            "Login" => "Waiting for login".to_string(),
+            other => other.to_string(),
         }
-
-        if !self.hunt.is_empty() {
-            parts.push(format!("hunt: {}", self.hunt));
-        }
-
-        if self.fallen_count > 0 {
-            parts.push(format!("fallen: {}", self.fallen_count));
-        }
-
-        if self.economy_mode {
-            parts.push("economy".to_string());
-        }
-
-        parts.push(if self.game_ready {
-            "game UI OK".to_string()
-        } else {
-            "game UI loading".to_string()
-        });
-
-        parts.join(" · ")
     }
 }
 
