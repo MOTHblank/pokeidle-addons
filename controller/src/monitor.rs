@@ -470,6 +470,19 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         const streamScanOpened = Number(scanner?.dataset?.mothScanOpened || 0) || 0;
 
         const xpBonuses = [];
+        const appTextLines = (app?.innerText || '')
+            .split(/\n+/)
+            .map(value => value.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+
+        for (const line of appTextLines) {
+            if (/\bXP\b|experi/i.test(line) && /\+\s*\d+\s*%/i.test(line)) {
+                xpBonuses.push(line.slice(0, 100));
+            }
+
+            if (xpBonuses.length >= 8) break;
+        }
+
         const bonusNodes = document.querySelectorAll(
             '[id*="bonus"], [class*="bonus"], [id*="buff"], [class*="buff"], [id*="xp"], [class*="xp"]'
         );
