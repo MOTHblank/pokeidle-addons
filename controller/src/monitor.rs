@@ -567,12 +567,21 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         }),
     )?;
 
-    let raw = result
+    let remote_result = result
         .get("result")
         .and_then(|v| v.get("result"))
-        .and_then(|v| v.get("value"))
+        .ok_or_else(|| "Firefox returned no page probe result".to_string())?;
+
+    let raw = remote_result
+        .get("value")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Firefox returned no page probe value".to_string())?;
+        .ok_or_else(|| {
+            let result_type = remote_result
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("Firefox returned no string page probe value (type={result_type})")
+        })?;
 
     let page: Value =
         serde_json::from_str(raw).map_err(|error| format!("invalid page probe: {error}"))?;
@@ -762,6 +771,22 @@ where
                 .and_then(Value::as_str)
                 .unwrap_or("Firefox BiDi command failed")
                 .to_string());
+        }
+
+        if value
+            .get("result")
+            .and_then(|result| result.get("type"))
+            .and_then(Value::as_str)
+            == Some("exception")
+        {
+            let result = value.get("result").unwrap_or(&Value::Null);
+            let details = result
+                .get("exceptionDetails")
+                .and_then(|details| details.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("script.evaluate raised a JavaScript exception");
+
+            return Err(format!("script.evaluate exception: {details}"));
         }
 
         return Ok(value);
