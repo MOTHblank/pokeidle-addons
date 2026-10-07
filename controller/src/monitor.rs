@@ -96,7 +96,7 @@ impl Default for Health {
             fallen_count: 0,
             economy_mode: false,
             addon_ok: 0,
-            addon_total: 6,
+            addon_total: 5,
             addon_missing: Vec::new(),
             twitch_tabs: 0,
             twitch_low_resource_ok: 0,
@@ -250,6 +250,8 @@ struct RuntimeProbe {
     player_level: u32,
     gold: u64,
     orbs: u64,
+    fallen_count: u32,
+
     pokemon_level: String,
     pokemon_xp: String,
     ball_stock: Vec<String>,
@@ -516,10 +518,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         const addonChecks = [
             ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle')],
             ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger')],
-            ['Hunt Atlas', exists('#moth-hunt-atlas-button') || exists('#moth-hunt-atlas-drawer')],
-            ['Moth Watch', exists('#moth-market-watch-tab') || exists('#moth-market-watch-panel')],
             ['Stream Scanner', exists('#moth-scan-live-streams')],
-            ['Upstream Scraper', exists('#moth-upstream-scraper') || exists('#moth-upstream-scraper-button')]
+            ['Upstream Scraper', exists('#moth-upstream-scraper') || exists('#moth-upstream-scraper-button')],
+            ['Controller Bridge', !!window.__mothControllerBridgeV1]
         ];
 
         return JSON.stringify({
@@ -575,7 +576,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         })
         .unwrap_or_default();
 
-    let addon_ok = 6u8.saturating_sub(addon_missing.len() as u8);
+    let addon_ok = 5u8.saturating_sub(addon_missing.len() as u8);
 
     let mut twitch_tabs = 0u8;
     let mut twitch_low_resource_ok = 0u8;
@@ -652,8 +653,17 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         logged_in: page.get("loggedIn").and_then(Value::as_bool).unwrap_or(false),
         activity: page.get("activity").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
         hunt: page.get("hunt").and_then(Value::as_str).unwrap_or_default().to_string(),
-        active_pokemon: page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string(),
-        fallen_count: page.get("fallenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
+        active_pokemon: runtime.pokemon_level.is_empty()
+            .then(|| page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string())
+            .unwrap_or_else(|| {
+                let bridge_name = runtime.pokemon_xp.clone();
+                if bridge_name.is_empty() {
+                    page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string()
+                } else {
+                    page.get("activePokemon").and_then(Value::as_str).unwrap_or_default().to_string()
+                }
+            }),
+        fallen_count: runtime.fallen_count,
         economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
         addon_ok,
         addon_total: 6,
@@ -674,8 +684,85 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         stream_scan_live: runtime.stream_scan_live,
         stream_scan_opened: runtime.stream_scan_opened,
         xp_bonuses: runtime.xp_bonuses,
+        player_level: runtime.player_level,
+        gold: runtime.gold,
+        orbs: runtime.orbs,
+        stream_bonus: runtime.stream_bonus,
+        tabs: build_tab_infos(&contexts, &mut session.socket, &mut session.next_id),
+        hunts: runtime.hunts,
+        market_listings: runtime.market_listings,
     })
 }
+fn build_tab_infos(
+    contexts: &[ContextInfo],
+    socket: &mut BrowserSocket,
+    next_id: &mut u64,
+) -> Vec<TabInfo> {
+    let mut tabs = Vec::new();
+
+    for context in contexts.iter().filter(|context| context.depth == 0) {
+        let lower = context.url.to_ascii_lowercase();
+
+        let kind = if lower.starts_with("https://pokeidle.io/")
+            || lower.starts_with("https://www.pokeidle.io/")
+        {
+            "PokéIdle"
+        } else if lower.contains("twitch.tv") {
+            "Twitch"
+        } else if lower.contains("kick.com") {
+            "KICK"
+        } else if lower.starts_with("about:")
+            || lower.starts_with("moz-extension:")
+        {
+            "Browser"
+        } else {
+            "Web"
+        };
+
+        let mut low_resource = false;
+
+        if kind == "Twitch" {
+            let id = *next_id;
+            *next_id += 1;
+
+            let result = send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "script.evaluate",
+                    "params": {
+                        "expression": "!!document.querySelector('#moth-twitch-low-resource-css')",
+                        "target": { "context": context.id },
+                        "awaitPromise": false
+                    }
+                }),
+            );
+
+            low_resource = result
+                .ok()
+                .and_then(|value| value.get("result"))
+                .and_then(|value| value.get("result"))
+                .and_then(|value| value.get("value"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        }
+
+        tabs.push(TabInfo {
+            kind: kind.to_string(),
+            title: if context.title.is_empty() {
+                context.url.clone()
+            } else {
+                context.title.clone()
+            },
+            url: context.url.clone(),
+            low_resource,
+        });
+    }
+
+    tabs
+}
+
 fn probe_runtime_details(
     session: &mut BrowserSession,
     context_id: &str,
@@ -725,6 +812,8 @@ fn probe_runtime_details(
 
     let player_level =
         state.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let fallen_count =
+        state.get("fallen").and_then(Value::as_u64).unwrap_or(0) as u32;
     let gold = state.get("gold").and_then(Value::as_u64).unwrap_or(0);
     let orbs = state.get("orbs").and_then(Value::as_u64).unwrap_or(0);
 
@@ -907,6 +996,7 @@ fn probe_runtime_details(
         player_level,
         gold,
         orbs,
+        fallen_count,
         pokemon_level,
         pokemon_xp,
         ball_stock,
@@ -961,7 +1051,9 @@ fn flush_commands(
                 "method": "script.evaluate",
                 "params": {
                     "expression": expression,
-                    "target": { "context": "" },
+                    "target": {
+                    "context": session.game_context.as_deref().unwrap_or("")
+                },
                     "awaitPromise": false
                 }
             }),
@@ -979,6 +1071,7 @@ fn flush_commands(
 struct ContextInfo {
     id: String,
     url: String,
+    title: String,
     depth: u8,
 }
 
@@ -990,6 +1083,7 @@ fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>, depth: u8) {
     out.push(ContextInfo {
         id: id.to_string(),
         url: value.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
+        title: value.get("userContext").and_then(Value::as_str).unwrap_or_default().to_string(),
         depth,
     });
 
