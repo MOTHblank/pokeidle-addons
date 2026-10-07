@@ -365,12 +365,18 @@ internal sealed class MainForm : Form
             // All stream accounts share ONE user data folder so their profiles
             // share Chromium's process pool (lower RAM per extra account). The
             // cookies/logins stay separated by the stable account profile name.
+            //
+            // Streams do not need the userscript extension: all repository
+            // userscripts currently target PokéIdle itself, and stream-link
+            // routing is native in the game WebView. Keeping the extension
+            // disabled here avoids loading a complete VM background/extension
+            // stack into every stream profile.
             _streamEnv = await CoreWebView2Environment.CreateAsync(
                 null, AppConfig.StreamUserDataFolder,
                 new CoreWebView2EnvironmentOptions
                 {
                     AdditionalBrowserArguments = AppConfig.StreamBrowserArguments,
-                    AreBrowserExtensionsEnabled = true
+                    AreBrowserExtensionsEnabled = false
                 });
 
             var session = SessionStore.Load();
@@ -955,13 +961,13 @@ internal sealed class MainForm : Form
             _userscripts = new ViolentmonkeyManager(folder);
             RefreshAddonsPicker();
 
-            foreach (var pane in AllPanes().ToList())
+            foreach (var pane in _games.ToList())
             {
                 await pane.AttachUserscriptAsync(_userscripts);
                 pane.View.Reload();
             }
 
-            Log($"userscript extension reloaded: {_userscripts.ScriptNames.Count} script(s) across {_games.Count} game(s) and {AllStreamSlots().Count(s => s.Pane is not null)} open stream pane(s)");
+            Log($"userscript extension reloaded: {_userscripts.ScriptNames.Count} script(s) across {_games.Count} game pane(s); stream panes intentionally do not load the extension");
         }
         catch (Exception ex)
         {
@@ -1298,8 +1304,14 @@ internal sealed class MainForm : Form
             }
 
             var candidates = ForegroundCandidates(workspace);
+            var activeStreamPane =
+                workspace.ActiveTabIndex >= 0 &&
+                workspace.ActiveTabIndex < workspace.Slots.Count
+                    ? workspace.Slots[workspace.ActiveTabIndex].Pane
+                    : null;
+
             if (workspace.StreamsExpanded)
-                GridLayout(candidates, streamBounds);
+                GridLayout(candidates, streamBounds, activeStreamPane);
 
             foreach (var slot in workspace.Slots)
             {
@@ -1329,7 +1341,7 @@ internal sealed class MainForm : Form
         return result;
     }
 
-    private static void GridLayout(List<Pane> panes, Rectangle bounds)
+    private static void GridLayout(List<Pane> panes, Rectangle bounds, Pane? normalMemoryPane)
     {
         if (panes.Count == 0 || bounds.Width <= 0 || bounds.Height <= 0) return;
 
@@ -1344,7 +1356,9 @@ internal sealed class MainForm : Form
             var c = i % cols;
             var w = c == cols - 1 ? bounds.Right - bounds.X - c * cw : cw;
             var h = r == rows - 1 ? bounds.Bottom - bounds.Y - r * ch : ch;
-            panes[i].Show(new Rectangle(bounds.X + c * cw, bounds.Y + r * ch, w, h));
+            panes[i].Show(
+                new Rectangle(bounds.X + c * cw, bounds.Y + r * ch, w, h),
+                ReferenceEquals(panes[i], normalMemoryPane));
         }
     }
 
