@@ -36,7 +36,7 @@ function Test-ViolentmonkeyFolder {
                ([string]$manifest.version) -eq $version -and
                ([string]$manifest.name) -match "Violentmonkey|extName" -and
                $hasStaticInjector -and
-               -not $hasUserScriptsPermission
+               $hasUserScriptsPermission
     }
     catch {
         return $false
@@ -108,16 +108,10 @@ else {
     $installedManifest.content_scripts = @($staticInjector)
 }
 
-# The WebView2 host deliberately uses VM's static content-script injector.
-# Removing the dynamic userScripts permission prevents Chromium from requiring
-# the per-extension "Allow User Scripts" UI toggle just to load Violentmonkey.
-$permissions = @($installedManifest.permissions | Where-Object { $_ -ne "userScripts" })
-if ($null -eq $installedManifest.PSObject.Properties["permissions"]) {
-    $installedManifest | Add-Member -MemberType NoteProperty -Name "permissions" -Value $permissions
-}
-else {
-    $installedManifest.permissions = $permissions
-}
+# Keep the official userScripts permission. Violentmonkey's MV3 engine uses
+# chrome.userScripts when the host exposes it. The static injected-web.js /
+# injected.js content script below remains present for WebView2, so ordinary
+# userscripts do not depend on the Chromium "Allow User Scripts" UI.
 
 $manifestJson = $installedManifest | ConvertTo-Json -Depth 30
 Set-Content -LiteralPath $manifestPath -Value $manifestJson -Encoding UTF8
