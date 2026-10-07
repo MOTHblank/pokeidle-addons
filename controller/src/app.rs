@@ -1719,7 +1719,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                         "moeda": currency
                                                     }));
                                                     app.set_status(
-                                                        format!("{} · inspecting {}", profile_label, item_name),
+                                                        format!("{} · loading listings to buy {}", profile_label, item_name),
                                                         false,
                                                     );
                                                 } else {
