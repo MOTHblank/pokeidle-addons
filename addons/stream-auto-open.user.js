@@ -328,7 +328,18 @@
             }
         } catch (_) {}
 
-        return false;
+        // When the same userscript is used in a normal browser without
+        // IdleShell, keep the original "open stream" behavior as a fallback.
+        try {
+            const popup = window.open(
+                url,
+                '_blank',
+                'noopener,noreferrer'
+            );
+            return !!popup;
+        } catch (_) {
+            return false;
+        }
     }
 
     function scanLiveStreams(button) {
