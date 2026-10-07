@@ -5,7 +5,6 @@
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and routes them to IdleShell.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
-// @inject-into  content
 // @run-at       document-start
 // @noframes
 // ==/UserScript==
@@ -470,7 +469,7 @@
         reportReady();
         ensureButton();
 
-        if (!document.documentElement || buttonObserver) {
+        if (buttonObserver) {
             return;
         }
 
@@ -478,10 +477,15 @@
             scheduleButtonInstall();
         });
 
-        buttonObserver.observe(document.documentElement, {
+        const observeTarget =
+            document.documentElement || document;
+
+        buttonObserver.observe(observeTarget, {
             childList: true,
             subtree: true
         });
+
+        scheduleButtonInstall();
 
         console.info(
             '[IdleShell] manual live stream scanner ready'
