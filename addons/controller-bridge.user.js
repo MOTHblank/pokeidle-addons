@@ -234,6 +234,30 @@
         };
 
         const currentStreamBonus = bodyTextBonus();
+
+        const twitch = state?.twitch || {};
+        const twitchPct = Number(
+            twitch.pctAtual ??
+            twitch.pct ??
+            0
+        );
+
+        const twitchWatching = Array.isArray(twitch.assistindoEm)
+            ? twitch.assistindoEm.filter(Boolean)
+            : [];
+
+        if (
+            twitchWatching.length &&
+            twitchPct > 0
+        ) {
+            lastStreamBonus =
+                '+' +
+                twitchPct +
+                '% XP · watching ' +
+                twitchWatching.join(', ');
+            lastStreamBonusAt = Date.now();
+        }
+
         const playerXp = text('#tr-xp-txt');
 
         const bonusLines = (document.body?.innerText || '')
