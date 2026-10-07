@@ -127,6 +127,18 @@ internal sealed class ViolentmonkeyManager
             foreach (var script in _scripts)
                 await ImportScriptAsync(view, script);
 
+            foreach (var script in _scripts)
+            {
+                var status = await GetScriptStatusAsync(view, script);
+                if (!status.Found)
+                    throw new InvalidOperationException(
+                        $"Violentmonkey imported '{script.Name}' but could not verify it in the installed script database.");
+
+                Console.Error.WriteLine(
+                    $"[IdleShell] verified userscript '{script.Name}' in profile " +
+                    $"{profile.ProfileName}: {(status.Enabled ? "enabled" : "DISABLED")}");
+            }
+
             Console.Error.WriteLine(
                 $"[IdleShell] real Violentmonkey {Version} synchronized " +
                 $"{_scripts.Count} repository script(s) into profile {profile.ProfileName}");
@@ -220,6 +232,50 @@ internal sealed class ViolentmonkeyManager
             // dependent on this one-time migration.
             Console.Error.WriteLine(
                 $"[IdleShell] legacy stream-link router cleanup skipped: {ex.Message}");
+        }
+    }
+
+    private static async Task<(bool Found, bool Enabled)> GetScriptStatusAsync(
+        CoreWebView2 view,
+        LocalScript script)
+    {
+        var request = $"""
+(() => {
+  return Promise.resolve(
+    chrome.runtime.sendMessage({
+      cmd: 'GetScript',
+      data: {
+        meta: {
+          name: {{JsonSerializer.Serialize(script.Name)}},
+          namespace: {{JsonSerializer.Serialize("moth.pokeidle")}}
+        }
+      }
+    })
+  ).then(value => JSON.stringify({
+    found: !!value,
+    enabled: !!value?.config?.enabled
+  }));
+})()
+""";
+
+        var raw = await view.ExecuteScriptAsync(request);
+        try
+        {
+            using var outer = JsonDocument.Parse(raw);
+            var inner = outer.RootElement.GetString();
+            if (string.IsNullOrWhiteSpace(inner))
+                return (false, false);
+
+            using var result = JsonDocument.Parse(inner);
+            var found = result.RootElement.TryGetProperty("found", out var foundValue) &&
+                        foundValue.GetBoolean();
+            var enabled = result.RootElement.TryGetProperty("enabled", out var enabledValue) &&
+                          enabledValue.GetBoolean();
+            return (found, enabled);
+        }
+        catch (JsonException)
+        {
+            return (false, false);
         }
     }
 
