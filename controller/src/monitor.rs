@@ -458,7 +458,7 @@ fn monitor_loop(
                         current.stream_bonus = probe.stream_bonus.clone();
                         if !probe.stream_bonus.is_empty() {
                             current.stream_bonus_last = probe.stream_bonus.clone();
-                            current.stream_bonus_last_at = probe.last_game_message_ms;
+                            current.stream_bonus_last = probe.last_game_message_ms;
                         }
                         current.stream_bonus_pct = probe.stream_bonus_pct;
                         current.stream_watching = probe.stream_watching;
@@ -980,18 +980,6 @@ fn probe_runtime_details(
         .and_then(Value::as_array)
         .map(|values| values.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
         .unwrap_or_default();
-
-    let stream_bonus = state
-        .get("visibleStreamBonus")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-
-    let stream_bonus_last = state
-        .get("lastStreamBonus")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
 
     let twitch = state.get("twitch").cloned().unwrap_or(Value::Null);
 
