@@ -44,6 +44,12 @@ pub struct MarketListing {
 }
 
 #[derive(Clone, Debug)]
+pub struct MarketItem {
+    pub id: u64,
+    pub name: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct Health {
     pub state: String,
     pub url: String,
@@ -84,6 +90,7 @@ pub struct Health {
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
     pub market_listings: Vec<MarketListing>,
+    pub market_catalog: Vec<MarketItem>,
     pub last_error: Option<String>,
 }
 
@@ -129,6 +136,7 @@ impl Default for Health {
             tabs: Vec::new(),
             hunts: Vec::new(),
             market_listings: Vec::new(),
+            market_catalog: Vec::new(),
             last_error: None,
         }
     }
@@ -279,6 +287,7 @@ struct RuntimeProbe {
     xp_bonuses: Vec<String>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
+    market_catalog: Vec<MarketItem>,
 }
 
 struct Probe {
@@ -410,6 +419,7 @@ fn monitor_loop(
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
                         current.market_listings = probe.market_listings;
+                        current.market_catalog = probe.market_catalog;
                         current.last_error = None;
                     }
                 }
@@ -1001,6 +1011,20 @@ fn probe_runtime_details(
         .cloned()
         .unwrap_or_default();
 
+    let market_catalog = catalog
+        .iter()
+        .filter_map(|item| {
+            let id = item.get("id").and_then(Value::as_u64)?;
+            let name = item
+                .get("nome")
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("Item")
+                .to_string();
+            Some(MarketItem { id, name })
+        })
+        .collect::<Vec<_>>();
+
     let mut names = std::collections::HashMap::new();
     for item in catalog {
         if let Some(id) = item.get("id").and_then(Value::as_u64) {
@@ -1073,6 +1097,7 @@ fn probe_runtime_details(
         xp_bonuses,
         hunts,
         market_listings,
+        market_catalog,
     })
 }
 
