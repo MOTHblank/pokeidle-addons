@@ -21,7 +21,8 @@
   <ItemGroup>
     <Content Include="..\addons\**\*.user.js"
              LinkBase="addons"
-             CopyToOutputDirectory="PreserveNewest" />
+             CopyToOutputDirectory="Always"
+             CopyToPublishDirectory="Always" />
 
     <!-- WebView2 userscript extension bridge files. -->
     <!-- The real Violentmonkey MV3 extension is prepared by
