@@ -4,12 +4,14 @@ use native_windows_gui as nwg;
 
 const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 const KICK_LOGIN: &str = "https://kick.com/";
+const VIOLENTMONKEY: &str = "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
 enum Action {
     Game(GameProfile),
     Twitch(GameProfile),
     Kick(GameProfile),
     Folder(GameProfile),
+    Userscripts(GameProfile),
 }
 
 pub fn show() {
@@ -43,10 +45,12 @@ fn build() -> Result<(), String> {
         (g1[1].handle, Action::Twitch(GameProfile::Game1)),
         (g1[2].handle, Action::Kick(GameProfile::Game1)),
         (g1[3].handle, Action::Folder(GameProfile::Game1)),
+        (g1[4].handle, Action::Userscripts(GameProfile::Game1)),
         (g2[0].handle, Action::Game(GameProfile::Game2)),
         (g2[1].handle, Action::Twitch(GameProfile::Game2)),
         (g2[2].handle, Action::Kick(GameProfile::Game2)),
         (g2[3].handle, Action::Folder(GameProfile::Game2)),
+        (g2[4].handle, Action::Userscripts(GameProfile::Game2)),
     ];
 
     let window_handle = window.handle;
@@ -75,6 +79,7 @@ fn build() -> Result<(), String> {
                             Action::Twitch(profile) => open_login(*profile, TWITCH_LOGIN, "Twitch"),
                             Action::Kick(profile) => open_login(*profile, KICK_LOGIN, "KICK"),
                             Action::Folder(profile) => open_profile_folder(*profile),
+                            Action::Userscripts(profile) => open_login(*profile, VIOLENTMONKEY, "official Violentmonkey"),
                         };
 
                         if let Err(error) = result {
@@ -113,7 +118,7 @@ fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), 
 
 fn build_game_row(
     window: &nwg::Window,
-    buttons: &mut [nwg::Button; 4],
+    buttons: &mut [nwg::Button; 5],
     profile: GameProfile,
     title: &str,
     y: i32,
@@ -137,12 +142,12 @@ fn build_game_row(
         .build(&mut description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
 
-    let labels = ["Open Game", "Twitch Login", "KICK Login", "Profile Folder"];
+    let labels = ["Open Game", "Twitch Login", "KICK Login", "Profile Folder", "Violentmonkey"];
     for (index, label) in labels.into_iter().enumerate() {
         nwg::Button::builder()
             .text(label)
-            .position((42 + (index as i32) * 130, y + 92))
-            .size((118, 32))
+            .position((42 + (index as i32) * 108, y + 92))
+            .size((100, 32))
             .parent(&group)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
