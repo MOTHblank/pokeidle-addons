@@ -1514,14 +1514,24 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let mut open = app.show_market;
+    let viewport = ctx.content_rect();
+    let available_width = (viewport.width() - 32.0).max(420.0);
+    let available_height = (viewport.height() - 32.0).max(360.0);
+    let default_width = available_width.min(1000.0);
+    let default_height = available_height.min(650.0);
+    let max_width = available_width.max(420.0);
+    let max_height = available_height.max(360.0);
+
     egui::Window::new("Moth Watch")
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_width(1000.0)
-        .default_height(650.0)
-        .min_width(780.0)
-        .min_height(520.0)
+        .default_width(default_width)
+        .default_height(default_height)
+        .min_width(420.0.min(max_width))
+        .min_height(360.0.min(max_height))
+        .max_width(max_width)
+        .max_height(max_height)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
