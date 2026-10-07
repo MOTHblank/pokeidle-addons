@@ -478,6 +478,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| "Firefox returned no page probe value".to_string())?;
 
+    let page: Value = serde_json::from_str(raw)
+        .map_err(|error| format!("invalid page probe: {error}"))?;
+
     let addon_missing = page
         .get("addonMissing")
         .and_then(Value::as_array)
@@ -590,6 +593,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         stream_scan_opened: runtime.stream_scan_opened,
         xp_bonuses: runtime.xp_bonuses,
     })
+}
+
 fn probe_runtime_details(
     session: &mut BrowserSession,
     context_id: &str,
