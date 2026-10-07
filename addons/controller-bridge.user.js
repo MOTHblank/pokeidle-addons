@@ -69,6 +69,8 @@
         let message;
         try { message = JSON.parse(data); } catch { return; }
 
+        lastMessageAt = Date.now();
+
         if (message.t === 'welcome') {
             hunts = Array.isArray(message.hunts) ? message.hunts.slice() : [];
             catalog = Array.isArray(message.mercado?.catalogo)
@@ -250,6 +252,7 @@
 
         return {
             connected: !!socket && socket.readyState === page.WebSocket.OPEN,
+            lastMessageAt,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
                 xp: Number(state?.xp) || 0,
