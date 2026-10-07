@@ -964,6 +964,12 @@ internal sealed class MainForm : Form
     // Stream links stay inside the game workspace that generated them.
     private void OnPaneMessage(Pane pane, HostMessage msg)
     {
+        if (msg.Type == "userscript-ready")
+        {
+            Log($"userscript ready: {msg.Source} ({pane.Spec.Profile})");
+            return;
+        }
+
         if (msg.Type != "link" || !IsStreamUrl(msg.Url)) return;
 
         var workspace = WorkspaceForPane(pane);
