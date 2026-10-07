@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.11
+// @version      0.1.12
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -11,26 +11,7 @@
 (() => {
     'use strict';
 
-    try {
-        window.__idleshell_market_bot_started = true;
-    } catch {}
-
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-
-    function reportReady() {
-        try {
-            if (page.chrome?.webview?.postMessage) {
-                page.chrome.webview.postMessage(
-                    JSON.stringify({
-                        type: 'userscript-ready',
-                        source: 'PokéIdle Moth Watch',
-                        pane: String(page.__idleshell_hostInfo?.title || ''),
-                        profile: String(page.__idleshell_hostInfo?.profile || '')
-                    })
-                );
-            }
-        } catch {}
-    }
 
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
@@ -1920,19 +1901,10 @@
     }
 
     function bootstrap() {
-        try {
-            window.__idleshell_market_bot_started = true;
-        } catch {}
-
-        reportReady();
         try { installSocketHook(); } catch {}
         try { injectStyle(); } catch {}
 
         state.scanTimer = setInterval(() => {
-            try {
-                window.__idleshell_market_bot_started = true;
-            } catch {}
-
             ensureUi();
             runScan(false);
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
