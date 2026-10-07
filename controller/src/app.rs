@@ -1656,17 +1656,26 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                             }
                         });
                     } else {
-                        for item in health.market_summary.iter().filter(|item| {
-                            let currency_available = match app.market_currency.as_str() {
-                                "gold" => item.gold_min > 0,
-                                "orb" => item.orb_min > 0,
-                                _ => true,
-                            };
+                        let selected_currency = app.market_currency.clone();
+                        let filtered_items: Vec<_> = health
+                            .market_summary
+                            .iter()
+                            .filter(|item| {
+                                let currency_available = match selected_currency.as_str() {
+                                    "gold" => item.gold_min > 0,
+                                    "orb" => item.orb_min > 0,
+                                    _ => true,
+                                };
 
-                            currency_available
-                                && (search.is_empty()
-                                    || item.name.to_lowercase().contains(&search))
-                        }).take(50) {
+                                currency_available
+                                    && (search.is_empty()
+                                        || item.name.to_lowercase().contains(&search))
+                            })
+                            .take(50)
+                            .cloned()
+                            .collect();
+
+                        for item in filtered_items {
                             egui::Frame::new()
                                 .fill(PANEL_ALT)
                                 .stroke(Stroke::new(1.0, BORDER))
@@ -1712,7 +1721,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 if let Some(monitor) = monitor {
                                                     let item_id = item.item_id;
                                                     let item_name = item.name.clone();
-                                                    let currency = app.market_currency.clone();
+                                                    let currency = selected_currency.clone();
                                                     monitor.send(json!({
                                                         "t": "market.item",
                                                         "itemId": item_id,
