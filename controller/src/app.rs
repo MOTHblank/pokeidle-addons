@@ -5,10 +5,12 @@ use std::cell::RefCell;
 use std::process::Child;
 use std::rc::Rc;
 
-#[derive(Default)]
 struct State {
     game1: Option<Child>,
     game2: Option<Child>,
+    game1_status: nwg::Label,
+    game2_status: nwg::Label,
+    status: nwg::Label,
 }
 
 pub fn run() -> Result<(), String> {
@@ -134,13 +136,22 @@ pub fn run() -> Result<(), String> {
         .build(&mut status)
         .map_err(|error| format!("could not create status: {error}"))?;
 
-    let state = Rc::new(RefCell::new(State::default()));
+    let state = Rc::new(RefCell::new(State {
+        game1: None,
+        game2: None,
+        game1_status,
+        game2_status,
+        status,
+    }));
+
+    let game1_button_handle = game1_button.handle;
+    let game2_button_handle = game2_button.handle;
+    let launch_both_button_handle = launch_both_button.handle;
+    let profiles_button_handle = profiles_button.handle;
+    let close_button_handle = close_button.handle;
+    let window_handle = window.handle;
 
     let state_for_events = state.clone();
-    let status_for_events = status.clone();
-    let game1_status_for_events = game1_status.clone();
-    let game2_status_for_events = game2_status.clone();
-    let window_for_events = window.clone();
 
     let event_handler = nwg::full_bind_event_handler(
         &window.handle,
@@ -149,42 +160,46 @@ pub fn run() -> Result<(), String> {
 
             match event {
                 Event::OnWindowClose => {
-                    if handle == window_for_events.handle {
+                    if handle == window_handle {
                         nwg::stop_thread_dispatch();
                     }
                 }
                 Event::OnButtonClick => {
-                    if handle == game1_button {
-                        launch_one(
-                            GameProfile::Game1,
-                            &mut state_for_events.borrow_mut().game1,
-                            &game1_status_for_events,
-                            &status_for_events,
-                        );
-                    } else if handle == game2_button {
-                        launch_one(
-                            GameProfile::Game2,
-                            &mut state_for_events.borrow_mut().game2,
-                            &game2_status_for_events,
-                            &status_for_events,
-                        );
-                    } else if handle == launch_both_button {
+                    if handle == game1_button_handle {
                         let mut state = state_for_events.borrow_mut();
                         launch_one(
                             GameProfile::Game1,
                             &mut state.game1,
-                            &game1_status_for_events,
-                            &status_for_events,
+                            &state.game1_status,
+                            &state.status,
+                        );
+                    } else if handle == game2_button_handle {
+                        let mut state = state_for_events.borrow_mut();
+                        launch_one(
+                            GameProfile::Game2,
+                            &mut state.game2,
+                            &state.game2_status,
+                            &state.status,
+                        );
+                    } else if handle == launch_both_button_handle {
+                        let mut state = state_for_events.borrow_mut();
+
+                        launch_one(
+                            GameProfile::Game1,
+                            &mut state.game1,
+                            &state.game1_status,
+                            &state.status,
                         );
                         launch_one(
                             GameProfile::Game2,
                             &mut state.game2,
-                            &game2_status_for_events,
-                            &status_for_events,
+                            &state.game2_status,
+                            &state.status,
                         );
-                    } else if handle == profiles_button {
-                        open_profiles_folder(&status_for_events);
-                    } else if handle == close_button {
+                    } else if handle == profiles_button_handle {
+                        let state = state_for_events.borrow();
+                        open_profiles_folder(&state.status);
+                    } else if handle == close_button_handle {
                         nwg::stop_thread_dispatch();
                     }
                 }
@@ -193,18 +208,22 @@ pub fn run() -> Result<(), String> {
         },
     );
 
-    launch_one(
-        GameProfile::Game1,
-        &mut state.borrow_mut().game1,
-        &game1_status,
-        &status,
-    );
-    launch_one(
-        GameProfile::Game2,
-        &mut state.borrow_mut().game2,
-        &game2_status,
-        &status,
-    );
+    {
+        let mut state = state.borrow_mut();
+
+        launch_one(
+            GameProfile::Game1,
+            &mut state.game1,
+            &state.game1_status,
+            &state.status,
+        );
+        launch_one(
+            GameProfile::Game2,
+            &mut state.game2,
+            &state.game2_status,
+            &state.status,
+        );
+    }
 
     nwg::dispatch_thread_events();
     nwg::unbind_event_handler(&event_handler);
@@ -226,6 +245,7 @@ fn launch_one(
             }
             Ok(Some(_)) | Err(_) => {
                 *child_slot = None;
+                profile_status.set_text("Stopped");
             }
         }
     }
