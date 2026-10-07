@@ -200,6 +200,7 @@
 
         if (current) {
             lastStreamBonus = current;
+            lastStreamBonusAt = Date.now();
         }
 
         return current;
@@ -275,6 +276,7 @@
                 playerXp,
                 visibleStreamBonus: currentStreamBonus,
                 lastStreamBonus,
+                lastStreamBonusAt,
                 twitch: copy(state?.twitch),
                 kick: copy(state?.kick),
                 loja: copy(state?.loja),
