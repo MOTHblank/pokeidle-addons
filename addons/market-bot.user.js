@@ -1897,8 +1897,13 @@
         const observer = new MutationObserver(() => {
             if (q('.cm-topo')) ensureUi();
         });
-        observer.observe(document.documentElement, { childList: true, subtree: true });
 
+        observer.observe(
+            document.documentElement || document,
+            { childList: true, subtree: true }
+        );
+
+        ensureUi();
         console.info('[Moth Watch] v0.1.11 loaded');
     }
 
