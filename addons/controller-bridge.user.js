@@ -176,15 +176,29 @@
     }
 
     function bodyTextBonus() {
-        const lines = (document.body?.innerText || '')
+        const sources = [
+            document.querySelector('#tr-ativos')?.innerText || '',
+            document.querySelector('#evento-texto')?.innerText || '',
+            document.querySelector('#evento-faixa')?.innerText || '',
+            document.body?.innerText || ''
+        ];
+
+        const lines = sources
+            .join('\n')
             .split(/\n+/)
             .map(v => v.replace(/\s+/g, ' ').trim())
             .filter(Boolean);
 
-        return lines.find(line =>
+        const current = lines.find(line =>
             /\+\s*15\s*%/i.test(line) &&
             /\b(?:XP|EXP|experi)/i.test(line)
         ) || '';
+
+        if (current) {
+            lastStreamBonus = current;
+        }
+
+        return current;
     }
 
     function fallen() {
@@ -208,6 +222,8 @@
     function snapshot() {
         const pokemon = activePokemon();
         const scanner = document.querySelector('#moth-scan-live-streams');
+        const currentStreamBonus = bodyTextBonus();
+        const playerXp = text('#tr-xp-txt');
 
         const bonusLines = (document.body?.innerText || '')
             .split(/\n+/)
@@ -245,7 +261,9 @@
                     new Set(['xp','exp','experiencia','experience','xpAtual','expAtual'])
                 ),
                 fallen: fallen(),
-                visibleStreamBonus: bodyTextBonus(),
+                playerXp,
+                visibleStreamBonus: currentStreamBonus,
+                lastStreamBonus,
                 xpBonuses: [...new Set(bonusLines)],
                 domBalls: balls(),
                 autoCatchOn: text('#moth-ac-toggle').toUpperCase() === 'ON',
