@@ -38,6 +38,7 @@ pub struct Config {
     pub profile: GameProfile,
     pub profile_dir: PathBuf,
     pub url: String,
+    pub remote_debug_port: u16,
 }
 
 impl Config {
@@ -49,11 +50,17 @@ impl Config {
 
         let profile_dir = data_root()?.join("Profiles").join(profile.name());
 
+        let remote_debug_port = match profile {
+            GameProfile::Game1 => 27701,
+            GameProfile::Game2 => 27702,
+        };
+
         Ok(Self {
             firefox_executable,
             profile,
             profile_dir,
             url: "https://pokeidle.io/app".to_string(),
+            remote_debug_port,
         })
     }
 
