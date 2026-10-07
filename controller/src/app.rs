@@ -207,8 +207,7 @@ pub fn run() -> Result<(), String> {
                         let mut state = state_for_events.borrow_mut();
                         launch_one(
                             GameProfile::Game1,
-                            &mut state.game1,
-                            &mut state.game1_monitor,
+                            &mut state,
                             &game1_status,
                             &status,
                         );
@@ -216,8 +215,7 @@ pub fn run() -> Result<(), String> {
                         let mut state = state_for_events.borrow_mut();
                         launch_one(
                             GameProfile::Game2,
-                            &mut state.game2,
-                            &mut state.game2_monitor,
+                            &mut state,
                             &game2_status,
                             &status,
                         );
@@ -273,11 +271,15 @@ pub fn run() -> Result<(), String> {
 
 fn launch_one(
     profile: GameProfile,
-    child_slot: &mut Option<Child>,
-    monitor_slot: &mut Option<monitor::MonitorHandle>,
+    state: &mut State,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
 ) {
+    let (child_slot, monitor_slot): (&mut Option<Child>, &mut Option<monitor::MonitorHandle>) =
+        match profile {
+            GameProfile::Game1 => (&mut state.game1, &mut state.game1_monitor),
+            GameProfile::Game2 => (&mut state.game2, &mut state.game2_monitor),
+        };
     if let Some(child) = child_slot.as_mut() {
         match child.try_wait() {
             Ok(None) => {
