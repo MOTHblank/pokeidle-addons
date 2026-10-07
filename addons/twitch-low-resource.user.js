@@ -8,6 +8,8 @@
 // @match        https://player.twitch.tv/*
 // @match        https://m.twitch.tv/*
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
