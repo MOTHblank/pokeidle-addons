@@ -30,7 +30,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KickChatHost> _kick =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, HashSet<string>> _channels =
+    private readonly Dictionary<string, Dictionary<string, int>> _channels =
         new(StringComparer.OrdinalIgnoreCase);
 
     public StreamPresenceManager(
@@ -75,14 +75,17 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
         if (channel is null)
             throw new ArgumentException("The URL does not contain a valid Twitch/Kick channel.", nameof(url));
 
-        if (!_channels.TryGetValue(account.Id, out var set))
+        if (!_channels.TryGetValue(account.Id, out var refs))
         {
-            set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            _channels[account.Id] = set;
+            refs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            _channels[account.Id] = refs;
         }
 
-        if (set.Contains(channel))
+        if (refs.TryGetValue(channel, out var current))
+        {
+            refs[channel] = current + 1;
             return;
+        }
 
         try
         {
@@ -106,12 +109,12 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
                     throw new ArgumentOutOfRangeException();
             }
 
-            set.Add(channel);
+            refs[channel] = 1;
             _log($"stream presence joined {account.Service} {account.DisplayLabel}: {channel}");
         }
         catch
         {
-            if (set.Count == 0)
+            if (refs.Count == 0)
                 _channels.Remove(account.Id);
             throw;
         }
@@ -157,7 +160,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
                 var client = await GetTwitchClientAsync(account, interactive: true);
                 if (client is not null)
                 {
-                    foreach (var channel in channels.ToArray())
+                    foreach (var channel in channels.Keys.ToArray())
                         await client.JoinAsync(channel);
                 }
             }
@@ -204,10 +207,20 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
     public async Task LeaveAsync(Account account, string url)
     {
         var channel = ChannelSlug(url);
-        if (channel is null) return;
-
-        if (!_channels.TryGetValue(account.Id, out var set) || !set.Remove(channel))
+        if (channel is null)
             return;
+
+        if (!_channels.TryGetValue(account.Id, out var refs) ||
+            !refs.TryGetValue(channel, out var current))
+            return;
+
+        if (current > 1)
+        {
+            refs[channel] = current - 1;
+            return;
+        }
+
+        refs.Remove(channel);
 
         switch (account.Service)
         {
@@ -222,7 +235,7 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
                 break;
         }
 
-        if (set.Count == 0)
+        if (refs.Count == 0)
         {
             _channels.Remove(account.Id);
 
