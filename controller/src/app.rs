@@ -224,15 +224,13 @@ pub fn run() -> Result<(), String> {
 
                         launch_one(
                             GameProfile::Game1,
-                            &mut state.game1,
-                            &mut state.game1_monitor,
+                            &mut state,
                             &game1_status,
                             &status,
                         );
                         launch_one(
                             GameProfile::Game2,
-                            &mut state.game2,
-                            &mut state.game2_monitor,
+                            &mut state,
                             &game2_status,
                             &status,
                         );
