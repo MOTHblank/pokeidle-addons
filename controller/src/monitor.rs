@@ -551,7 +551,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             streamScanLive,
             streamScanOpened,
             xpBonuses: xpBonusUnique
-
+        });
         } catch (error) {
             return JSON.stringify({
                 probeError: String(error?.stack || error)
