@@ -321,7 +321,7 @@
             return true;
         } catch (error) {
             console.error(
-                '[Moth] failed to open chat:',
+                '[Moth] failed to open stream:',
                 targetUrl,
                 error
             );
