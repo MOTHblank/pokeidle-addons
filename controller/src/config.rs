@@ -10,59 +10,27 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_args<I>(args: I) -> Result<Self, String>
-    where
-        I: IntoIterator<Item = String>,
-    {
-        let mut profile_name = String::from("AccountA");
-        let mut firefox_executable = find_firefox()
-            .ok_or_else(|| "Firefox was not found. Set MOTH_FIREFOX to firefox.exe.".to_string())?;
-        let mut url = String::from("https://pokeidle.io/app");
+    pub fn for_profile(profile_name: &str) -> Result<Self, String> {
+        validate_profile_name(profile_name)?;
 
-        let mut args = args.into_iter();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--profile" => {
-                    profile_name = args
-                        .next()
-                        .ok_or_else(|| "--profile requires a value".to_string())?;
-                }
-                "--firefox" => {
-                    firefox_executable = PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| "--firefox requires a path".to_string())?,
-                    );
-                }
-                "--url" => {
-                    url = args
-                        .next()
-                        .ok_or_else(|| "--url requires a value".to_string())?;
-                }
-                "--help" | "-h" => {
-                    Self::print_usage();
-                    std::process::exit(0);
-                }
-                other => return Err(format!("unknown argument: {other}")),
-            }
-        }
+        let firefox_executable = find_firefox()
+            .ok_or_else(|| {
+                "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe."
+                    .to_string()
+            })?;
 
-        validate_profile_name(&profile_name)?;
-
-        let profile_root = data_root()?;
-        let profile_dir = profile_root.join("Profiles").join(&profile_name);
+        let profile_dir = data_root()?.join("Profiles").join(profile_name);
 
         Ok(Self {
             firefox_executable,
-            profile_name,
+            profile_name: profile_name.to_string(),
             profile_dir,
-            url,
+            url: "https://pokeidle.io/app".to_string(),
         })
     }
 
-    pub fn print_usage() {
-        println!(
-            "moth-controller\n\nUsage: moth-controller [OPTIONS]\n\nOptions:\n  --profile NAME       Browser profile name (default: AccountA)\n  --firefox PATH       Firefox executable path\n  --url URL            Initial page (default: https://pokeidle.io/app)\n  -h, --help           Show this help"
-        );
+    pub fn profiles_dir() -> Result<PathBuf, String> {
+        Ok(data_root()?.join("Profiles"))
     }
 }
 
@@ -85,17 +53,7 @@ fn data_root() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(local_app_data).join("Moth").join("PokeIdle"));
     }
 
-    if let Some(home) = env::var_os("HOME") {
-        return Ok(
-            PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("Moth")
-                .join("PokeIdle"),
-        );
-    }
-
-    Err("could not determine a local application data directory".to_string())
+    Err("could not determine the Windows local application data directory".to_string())
 }
 
 fn find_firefox() -> Option<PathBuf> {
@@ -138,12 +96,4 @@ fn firefox_candidates() -> Vec<PathBuf> {
     }
 
     paths
-}
-
-#[cfg(not(windows))]
-fn firefox_candidates() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/usr/bin/firefox"),
-        PathBuf::from("/usr/local/bin/firefox"),
-    ]
 }
