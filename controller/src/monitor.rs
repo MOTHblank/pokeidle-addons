@@ -242,6 +242,7 @@ impl MonitorHandle {
 struct BrowserSession {
     socket: BrowserSocket,
     next_id: u64,
+    game_context: Option<String>,
 }
 
 #[derive(Default)]
@@ -440,6 +441,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
     Ok(BrowserSession {
         socket,
         next_id: 2,
+        game_context: None,
     })
 }
 
@@ -460,7 +462,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     let mut contexts = Vec::new();
     if let Some(list) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
         for context in list {
-            collect_contexts(context, &mut contexts);
+            collect_contexts(context, &mut contexts, 0);
         }
     }
 
@@ -470,7 +472,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             c.url.starts_with("https://pokeidle.io/app")
                 || c.url.starts_with("https://www.pokeidle.io/app")
         })
-        .ok_or_else(|| "Firefox has no PokéIdle app context".to_string())?;
+        .ok_or_else(|| "Firefox has no PokéIdle app context".to_string())?
+        .clone();
+
+    session.game_context = Some(game.id.clone());
 
     let game_id = session.next_id;
     session.next_id += 1;
@@ -905,14 +910,14 @@ fn probe_runtime_details(
         pokemon_level,
         pokemon_xp,
         ball_stock,
-        autocatch_on: false,
-        autocatch_captures: 0,
-        autocatch_balls_used: 0,
-        autocatch_rate: String::new(),
-        autocatch_restock: String::new(),
-        stream_scan_status: String::new(),
-        stream_scan_live: 0,
-        stream_scan_opened: 0,
+        autocatch_on: state.get("autoCatchOn").and_then(Value::as_bool).unwrap_or(false),
+        autocatch_captures: state.get("autoCatchCaptures").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_balls_used: state.get("autoCatchBallsUsed").and_then(Value::as_u64).unwrap_or(0) as u32,
+        autocatch_rate: state.get("autoCatchRate").and_then(Value::as_str).unwrap_or_default().to_string(),
+        autocatch_restock: state.get("autoCatchRestock").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_status: state.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
+        stream_scan_live: state.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
+        stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
         xp_bonuses,
         hunts,
@@ -970,12 +975,14 @@ fn flush_commands(
 }
 
 
+#[derive(Clone)]
 struct ContextInfo {
     id: String,
     url: String,
+    depth: u8,
 }
 
-fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>) {
+fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>, depth: u8) {
     let Some(id) = value.get("context").and_then(Value::as_str) else {
         return;
     };
@@ -983,11 +990,12 @@ fn collect_contexts(value: &Value, out: &mut Vec<ContextInfo>) {
     out.push(ContextInfo {
         id: id.to_string(),
         url: value.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
+        depth,
     });
 
     if let Some(children) = value.get("children").and_then(Value::as_array) {
         for child in children {
-            collect_contexts(child, out);
+            collect_contexts(child, out, depth.saturating_add(1));
         }
     }
 }
