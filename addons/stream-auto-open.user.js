@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.1.0
+// @version      4.2.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @run-at       document-start
@@ -51,6 +51,7 @@
     ]);
 
     let scanInProgress = false;
+    let startupActionHandled = false;
     const MAX_STREAMS_PER_SERVICE = 10;
     const STREAMS_KEY = 'moth-pokeidle-streams-v1';
     const openChats = new Map();
@@ -710,15 +711,53 @@
         inventory.insertAdjacentElement('afterend', managerButton);
     }
 
+    function consumeStartupAction() {
+        if (startupActionHandled || !location.search) {
+            return;
+        }
+
+        const url = new URL(location.href);
+        const action = url.searchParams.get('moth-stream-action');
+
+        if (action !== 'manager' && action !== 'scan') {
+            return;
+        }
+
+        startupActionHandled = true;
+        url.searchParams.delete('moth-stream-action');
+        history.replaceState(null, '', url.pathname + url.search + url.hash);
+
+        const run = () => {
+            if (action === 'manager') {
+                renderManager();
+                return;
+            }
+
+            const button = document.getElementById(BUTTON_ID);
+            if (!button) {
+                startupActionHandled = false;
+                window.setTimeout(consumeStartupAction, 750);
+                return;
+            }
+
+            scanLiveStreams(button);
+        };
+
+        window.setTimeout(run, 1200);
+    }
+
     function start() {
         ensureButton();
 
         window.setInterval(() => {
             ensureButton();
+            consumeStartupAction();
         }, 3000);
 
+        consumeStartupAction();
+
         console.info(
-            '[Moth] manual live chat scanner ready'
+            '[Moth] live chat scanner ready'
         );
     }
 
