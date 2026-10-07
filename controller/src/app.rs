@@ -729,10 +729,15 @@ fn draw_game_card(
 
                     ui.add_space(8.0);
 
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let gold = format_number(health.gold);
+                        let orbs = format_number(health.orbs);
+                        resource_value(ui, "GOLD", &gold, WARN);
+                        resource_value(ui, "GEMS", &orbs, ACCENT);
                         resource_value(
                             ui,
                             "AUTO CATCH",
+
                             if health.autocatch_on { "ON" } else { "OFF" },
                             if health.autocatch_on { GOOD } else { MUTED },
                         );
@@ -881,6 +886,42 @@ fn draw_game_card(
                                 }
                             });
                         }
+                    }
+                });
+
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("STREAM BONUS")
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
+
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .corner_radius(10.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    if !health.stream_bonus.is_empty() {
+                        ui.label(
+                            RichText::new(format!("ACTIVE · {}", health.stream_bonus))
+                                .size(10.0)
+                                .strong()
+                                .color(GOOD),
+                        );
+                    } else if !health.stream_bonus_last.is_empty() {
+                        ui.label(
+                            RichText::new(format!("Not active now · last seen: {}", health.stream_bonus_last))
+                                .size(10.0)
+                                .color(WARN),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("No stream XP bonus observed")
+                                .size(10.0)
+                                .color(DIM),
+                        );
                     }
                 });
 
