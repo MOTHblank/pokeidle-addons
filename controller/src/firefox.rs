@@ -51,7 +51,7 @@ user_pref("media.block-autoplay-until-in-foreground", true);
 user_pref("media.suspend-background-video.enabled", true);
 "#;
 
-pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
+pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle), String> {
     migrate_legacy_profile(config)?;
 
     fs::create_dir_all(&config.profile_dir).map_err(|error| {
@@ -62,12 +62,10 @@ pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
     })?;
 
     provision_profile(&config.profile_dir)?;
-    logging::info(&format!("starting Firefox: executable={} profile={} port={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, config.url));
+    logging::info(&format!("starting Firefox: executable={} profile={} port={} mode={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, if headless { "headless" } else { "visible" }, config.url));
 
-    let child = Command::new(&config.firefox_executable)
-        // Headless is intentional: the Rust controller is the visible UI
-        // and health monitor. Firefox has no window to minimize or render.
-        .arg("--headless")
+    let mut command = Command::new(&config.firefox_executable);
+    command
         .arg("--no-remote")
         .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
         .arg("--profile")
@@ -76,7 +74,13 @@ pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
         .arg(&config.url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    if headless {
+        command.arg("--headless");
+    }
+
+    let child = command
         .spawn()
         .map_err(format_spawn_error)?;
 
