@@ -124,6 +124,9 @@ $hasStaticInjector = $finalManifest.content_scripts -and
 if (-not $hasStaticInjector) {
     throw "Failed to add Violentmonkey's static injector to the WebView2 manifest."
 }
+if (-not ($finalManifest.permissions -contains "userScripts")) {
+    throw "Prepared Violentmonkey manifest is missing the userScripts permission."
+}
 
 Remove-Item $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $downloadPath -Force -ErrorAction SilentlyContinue
