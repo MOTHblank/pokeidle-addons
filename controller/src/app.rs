@@ -1299,14 +1299,25 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         let button = if current { "Current" } else { "Go" };
                                         let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
                                         if clicked && !current {
-                                            if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                            let profile_label = app.atlas_profile.label();
+                                            let monitor = app.games[index].monitor.clone();
+
+                                            if let Some(monitor) = monitor {
+                                                let hunt_slug = hunt.slug.clone();
+                                                let hunt_name = hunt.name.clone();
                                                 monitor.send(json!({
                                                     "t": "hunt.select",
-                                                    "slug": hunt.slug
+                                                    "slug": hunt_slug
                                                 }));
-                                                app.set_status(format!("{} · changing hunt to {}", app.atlas_profile.label(), hunt.name), false);
+                                                app.set_status(
+                                                    format!("{} · changing hunt to {}", profile_label, hunt_name),
+                                                    false,
+                                                );
                                             } else {
-                                                app.set_status(format!("{} is not running.", app.atlas_profile.label()), true);
+                                                app.set_status(
+                                                    format!("{} is not running.", profile_label),
+                                                    true,
+                                                );
                                             }
                                         }
                                     });
@@ -1434,15 +1445,26 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         for item in catalog {
                             let label = compact_text(&item.name, 22);
                             if ui.button(label).clicked() {
-                                if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                let profile_label = app.market_profile.label();
+                                let monitor = app.games[index].monitor.clone();
+                                if let Some(monitor) = monitor {
+                                    let item_id = item.id;
+                                    let item_name = item.name.clone();
+                                    let currency = app.market_currency.clone();
+
                                     monitor.send(json!({
                                         "t": "market.item",
-                                        "itemId": item.id,
-                                        "moeda": app.market_currency
+                                        "itemId": item_id,
+                                        "moeda": currency
                                     }));
                                     app.set_status(
-                                        format!("{} · inspecting {}", app.market_profile.label(), item.name),
+                                        format!("{} · inspecting {}", profile_label, item_name),
                                         false,
+                                    );
+                                } else {
+                                    app.set_status(
+                                        format!("{} is not running.", profile_label),
+                                        true,
                                     );
                                 }
                             }
@@ -1494,17 +1516,28 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             if ui.button("Buy 1").clicked() {
-                                                if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                                let profile_label = app.market_profile.label();
+                                                let monitor = app.games[index].monitor.clone();
+
+                                                if let Some(monitor) = monitor {
+                                                    let listing_id = listing.id;
+                                                    let listing_name = listing.name.clone();
+                                                    let currency = listing.currency.clone();
                                                     monitor.send(json!({
                                                         "t": "market.comprar",
-                                                        "id": listing.id,
+                                                        "id": listing_id,
                                                         "qtd": 1,
                                                         "preco": listing.price,
-                                                        "moeda": listing.currency
+                                                        "moeda": currency
                                                     }));
                                                     app.set_status(
-                                                        format!("{} · buy command sent for {}", app.market_profile.label(), listing.name),
+                                                        format!("{} · buy command sent for {}", profile_label, listing_name),
                                                         false,
+                                                    );
+                                                } else {
+                                                    app.set_status(
+                                                        format!("{} is not running.", profile_label),
+                                                        true,
                                                     );
                                                 }
                                             }
