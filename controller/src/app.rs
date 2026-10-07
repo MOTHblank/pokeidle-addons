@@ -891,7 +891,7 @@ fn draw_game_card(
 
             ui.add_space(12.0);
             ui.label(
-                RichText::new("STREAM BONUS")
+                RichText::new("STREAMS & BONUS")
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -903,26 +903,88 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
-                    if !health.stream_bonus.is_empty() {
+                    if !health.stream_watching.is_empty() {
                         ui.label(
-                            RichText::new(format!("ACTIVE · {}", health.stream_bonus))
+                            RichText::new(format!(
+                                "ACTIVE · +{}% XP",
+                                format_pct(health.stream_bonus_pct)
+                            ))
+                            .size(11.0)
+                            .strong()
+                            .color(GOOD),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Watching: {}",
+                                health.stream_watching.join(", ")
+                            ))
+                            .size(10.0)
+                            .color(MUTED),
+                        );
+                    } else if !health.stream_missing.is_empty() {
+                        ui.label(
+                            RichText::new("LIVE BONUS AVAILABLE")
                                 .size(10.0)
                                 .strong()
-                                .color(GOOD),
+                                .color(WARN),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "Open chat: {} · estimated +{}% XP",
+                                health.stream_missing.join(", "),
+                                format_pct(health.stream_bonus_pct.max(15.0))
+                            ))
+                            .size(10.0)
+                            .color(TEXT),
                         );
                     } else if !health.stream_bonus_last.is_empty() {
                         ui.label(
-                            RichText::new(format!("Not active now · last seen: {}", health.stream_bonus_last))
-                                .size(10.0)
-                                .color(WARN),
+                            RichText::new(format!(
+                                "No active bonus · last seen: {}",
+                                health.stream_bonus_last
+                            ))
+                            .size(10.0)
+                            .color(WARN),
                         );
                     } else {
                         ui.label(
-                            RichText::new("No stream XP bonus observed")
+                            RichText::new("No Twitch bonus detected")
                                 .size(10.0)
                                 .color(DIM),
                         );
                     }
+
+                    ui.add_space(6.0);
+
+                    ui.horizontal_wrapped(|ui| {
+                        for tab in health.tabs.iter().filter(|tab| {
+                            tab.kind == "Twitch" || tab.kind == "KICK"
+                        }) {
+                            let state = if tab.kind == "Twitch" {
+                                if tab.low_resource { "LOW" } else { "FULL" }
+                            } else {
+                                "OPEN"
+                            };
+
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {} · {}",
+                                    tab.kind,
+                                    compact_text(
+                                        tab.title.rsplit('/').next().unwrap_or(&tab.title),
+                                        24
+                                    ),
+                                    state
+                                ))
+                                .size(9.0)
+                                .color(if tab.kind == "Twitch" && tab.low_resource {
+                                    GOOD
+                                } else {
+                                    MUTED
+                                }),
+                            );
+                        }
+                    });
                 });
 
             ui.add_space(12.0);
@@ -939,16 +1001,23 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
-                    if health.xp_bonuses.is_empty() {
+                    let mut sources = health.xp_sources.clone();
+                    for bonus in &health.xp_bonuses {
+                        if !sources.iter().any(|source| source == bonus) {
+                            sources.push(bonus.clone());
+                        }
+                    }
+
+                    if sources.is_empty() {
                         ui.label(
-                            RichText::new("No active XP bonus detected in the game HUD")
+                            RichText::new("No active XP bonus detected")
                                 .size(10.0)
                                 .color(DIM),
                         );
                     } else {
                         ui.horizontal_wrapped(|ui| {
-                            for bonus in &health.xp_bonuses {
-                                bonus_chip(ui, bonus);
+                            for source in sources {
+                                bonus_chip(ui, &source);
                             }
                         });
                     }
@@ -957,6 +1026,16 @@ fn draw_game_card(
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
+                if health.last_game_message_ms > 0 {
+                    let age = (chrono_like_now_ms().saturating_sub(health.last_game_message_ms)) / 1000;
+                    ui.label(
+                        RichText::new(format!("DATA {}s ago", age))
+                            .size(8.0)
+                            .color(if age <= 10 { GOOD } else { WARN }),
+                    );
+                    ui.add_space(8.0);
+                }
+
                 let addon_color = if health.addon_ok == health.addon_total {
                     GOOD
                 } else {
@@ -1636,6 +1715,23 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
+}
+
+fn chrono_like_now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn format_pct(value: f32) -> String {
+    if value.fract().abs() < 0.01 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
 }
 
 fn format_number(value: u64) -> String {
