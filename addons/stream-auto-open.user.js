@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.6.0
+// @version      4.7.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -111,7 +111,7 @@
         return 'moth-' + service + '-' + (index + 1);
     }
 
-    async function openChat(service, index, raw) {
+    async function openChat(service, index, raw, active = false) {
         const channel = channelName(raw);
         const url = chatUrl(raw);
 
@@ -135,16 +135,18 @@
 
         try {
             const options = {
-                active: false,
+                active,
                 insert: true
             };
 
             let control;
 
-            if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-                control = await GM.openInTab(url, options);
-            } else if (typeof GM_openInTab === 'function') {
+            // Prefer the explicitly granted legacy API. It is synchronous and avoids
+            // turning a user click into an asynchronous popup attempt.
+            if (typeof GM_openInTab === 'function') {
                 control = GM_openInTab(url, options);
+            } else if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+                control = await GM.openInTab(url, options);
             } else {
                 throw new Error(
                     'Violentmonkey tab API is unavailable. Reinstall/update the Moth Stream Scanner addon.'
@@ -775,7 +777,7 @@
 
                     chat.disabled = true;
 
-                    const result = await openChat(service, index, value);
+                    const result = await openChat(service, index, value, true);
 
                     chat.textContent = result.opened
                         ? (result.alreadyOpen ? 'Already open' : 'Opened')
