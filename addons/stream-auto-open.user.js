@@ -8,6 +8,7 @@
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
 // @run-at       document-start
 // @grant        GM_openInTab
+// @grant        unsafeWindow
 // @noframes
 // ==/UserScript==
 
