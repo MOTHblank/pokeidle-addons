@@ -454,8 +454,6 @@ internal sealed class StreamPresenceManager : IAsyncDisposable
         return Uri.UnescapeDataString(segment);
     }
 
-    private sealed class AuthenticationRequiredException(string message)
-        : Exception(message);
 }
 
 internal sealed class TwitchChatClient : IAsyncDisposable
