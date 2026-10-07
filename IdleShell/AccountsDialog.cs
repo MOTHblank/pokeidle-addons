@@ -16,7 +16,7 @@ internal sealed class AccountsDialog : Form
     ];
 
     private readonly AccountManager _accounts;
-    private readonly Func<Account, bool> _isPaneOpen;
+    private readonly Func<Account, bool> _isActive;
     private readonly Action<Account> _logIn;
     private readonly ListView _list = new()
     {
@@ -36,11 +36,11 @@ internal sealed class AccountsDialog : Form
 
     public AccountsDialog(
         AccountManager accounts,
-        Func<Account, bool> isPaneOpen,
+        Func<Account, bool> isActive,
         Action<Account> logIn)
     {
         _accounts = accounts;
-        _isPaneOpen = isPaneOpen;
+        _isActive = isActive;
         _logIn = logIn;
 
         Text = "Accounts";
@@ -54,7 +54,7 @@ internal sealed class AccountsDialog : Form
         _list.Columns.Add("Label", 160);
         _list.Columns.Add("Service", 80);
         _list.Columns.Add("Routing", 70);
-        _list.Columns.Add("Pane", 55);
+        _list.Columns.Add("State", 70);
         _list.Columns.Add("Capacity", 75);
         _list.DoubleClick += (_, _) => LogInSelected();
         _list.SelectedIndexChanged += (_, _) => SyncServiceCombo();
@@ -172,7 +172,7 @@ internal sealed class AccountsDialog : Form
         }
         var confirm = MessageBox.Show(this,
             $"Remove account \"{acc.Label}\" ({acc.Id})?\n\n" +
-            "Its WebView2 profile (cookies/logins) stays on disk and will be reused " +
+            "Its saved login/session data stays on disk and can be reused " +
             "if you add an account with the same id.",
             "Accounts", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (confirm != DialogResult.Yes) return;
@@ -199,8 +199,12 @@ internal sealed class AccountsDialog : Form
             item.SubItems.Add(a.Label);
             item.SubItems.Add(a.Service.ToString());
             item.SubItems.Add(!a.IsStream ? "—" : a.Enabled ? "On" : "Off");
-            item.SubItems.Add(_isPaneOpen(a) ? "open" : "—");
-            item.SubItems.Add(a.IsStream ? $"0–{AccountManager.MaxStreamSlotsPerAccount}" : "—");
+            item.SubItems.Add(!a.IsStream
+                ? "game"
+                : _isActive(a) ? "connected" : "offline");
+            item.SubItems.Add(a.IsStream
+                ? $"0–{AccountManager.MaxStreamSlotsPerAccount} chats"
+                : "—");
             item.Tag = a;
             if (string.Equals(a.Id, selectedId, StringComparison.OrdinalIgnoreCase))
                 item.Selected = true;
