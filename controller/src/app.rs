@@ -294,9 +294,9 @@ fn toggle_one(
     profile: GameProfile,
     state: &mut State,
     button: &nwg::Button,
-    notice_sender: nwg::NoticeSender,
     profile_status: &nwg::Label,
     global_status: &nwg::Label,
+    notice_sender: nwg::NoticeSender,
 ) {
     let running = match profile {
         GameProfile::Game1 => state.game1.as_mut().and_then(|child| child.try_wait().ok()).flatten().is_none() && state.game1.is_some(),
