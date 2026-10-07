@@ -541,11 +541,19 @@
             UI_RECHECK_INTERVAL_MS
         );
 
-        window.setTimeout(() => {
-            void scheduledScan();
-        }, INITIAL_SCAN_DELAY_MS);
+        const scheduleInitialScan = () => {
+            window.setTimeout(() => {
+                void scheduledScan();
+            }, INITIAL_SCAN_DELAY_MS);
+        };
 
-        console.info('[Moth] hourly live chat scanner ready');
+        if (document.readyState === 'complete') {
+            scheduleInitialScan();
+        } else {
+            window.addEventListener('load', scheduleInitialScan, { once: true });
+        }
+
+        console.info('[Moth] live chat scanner ready · first scan 30s after page load · hourly thereafter');
     }
 
     start();
