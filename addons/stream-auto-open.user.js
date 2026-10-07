@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      5.2.1
+// @version      5.3.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js?v=5.2.1
@@ -103,13 +103,36 @@
             : 'https://kick.com/popout/' + channel + '/chat';
     }
 
+    function chatUrlForService(service, raw) {
+        const channel = channelName(raw);
+
+        if (!channel) {
+            return null;
+        }
+
+        const host = service === 'twitch'
+            ? 'www.twitch.tv'
+            : service === 'kick'
+                ? 'kick.com'
+                : null;
+
+        if (!host) {
+            return null;
+        }
+
+        return 'https://' + host + '/popout/' +
+            encodeURIComponent(channel) +
+            '/chat';
+    }
+
+
     function chatKey(service, index) {
         return 'moth-' + service + '-' + (index + 1);
     }
 
-    async function openChat(service, index, raw, active = false) {
+    function openChat(service, index, raw, active = false) {
         const channel = channelName(raw);
-        const url = chatUrl(raw);
+        const url = chatUrlForService(service, raw);
 
         if (!channel || !url) {
             return {
@@ -130,24 +153,15 @@
         }
 
         try {
-            const options = {
-                active,
-                insert: true
-            };
-
-            let control;
-
-            // Prefer the explicitly granted legacy API. It is synchronous and avoids
-            // turning a user click into an asynchronous popup attempt.
-            if (typeof GM_openInTab === 'function') {
-                control = GM_openInTab(url, options);
-            } else if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-                control = await GM.openInTab(url, options);
-            } else {
+            if (typeof GM_openInTab !== 'function') {
                 throw new Error(
-                    'Violentmonkey tab API is unavailable. Reinstall/update the Moth Stream Scanner addon.'
+                    'Violentmonkey GM_openInTab is unavailable. The installed script does not have its @grant GM_openInTab permission.'
                 );
             }
+
+            // Use the documented legacy form. The second argument is
+            // "open in background", so true keeps the game tab active.
+            const control = GM_openInTab(url, true);
 
             if (!control) {
                 throw new Error('Violentmonkey did not create the chat tab.');
@@ -785,7 +799,7 @@
                 chat.rel = 'noopener noreferrer';
                 chat.style.cssText = 'display:inline-block;box-sizing:border-box;padding:4px 7px;cursor:pointer;text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:2px';
 
-                chat.href = chatUrl(config[service][index]) || '#';
+                chat.href = chatUrlForService(service, config[service][index]) || 'about:blank';
                                 const close = document.createElement('button');
                 close.type = 'button';
                 close.textContent = '×';
@@ -798,6 +812,7 @@
                     config[service][index] = value;
                     input.value = value;
                     saveStreamConfig(config);
+                    chat.href = chatUrlForService(service, value) || 'about:blank';
                 });
 
                 chat.addEventListener('mousedown', (event) => {
@@ -814,7 +829,7 @@
                     config[service][index] = value;
                     input.value = value;
                     saveStreamConfig(config);
-                    chat.href = chatUrl(value) || '#';
+                    chat.href = chatUrlForService(service, value) || 'about:blank';
                 });
 
                                 close.addEventListener('click', () => {
