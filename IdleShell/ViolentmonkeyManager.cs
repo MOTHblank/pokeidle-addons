@@ -444,6 +444,7 @@ internal sealed class ViolentmonkeyManager
       code: {{code}},
       url: {{installUrl}},
       config: {
+        enabled: 1,
         shouldUpdate: 0
       }
     };
