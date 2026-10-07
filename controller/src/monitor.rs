@@ -96,7 +96,13 @@ pub struct Health {
     pub orbs: u64,
     pub stream_bonus: String,
     pub stream_bonus_last: String,
+    pub stream_bonus_pct: f32,
+    pub stream_watching: Vec<String>,
+    pub stream_live_bonus: Vec<String>,
+    pub stream_missing: Vec<String>,
+    pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
+    pub last_game_message_ms: u64,
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
     pub market_listings: Vec<MarketListing>,
@@ -144,7 +150,13 @@ impl Default for Health {
             orbs: 0,
             stream_bonus: String::new(),
             stream_bonus_last: String::new(),
+            stream_bonus_pct: 0.0,
+            stream_watching: Vec::new(),
+            stream_live_bonus: Vec::new(),
+            stream_missing: Vec::new(),
+            xp_sources: Vec::new(),
             bridge_connected: false,
+            last_game_message_ms: 0,
             tabs: Vec::new(),
             hunts: Vec::new(),
             market_listings: Vec::new(),
@@ -298,6 +310,12 @@ struct RuntimeProbe {
     stream_scan_opened: u32,
     stream_bonus: String,
     stream_bonus_last: String,
+    stream_bonus_pct: f32,
+    stream_watching: Vec<String>,
+    stream_live_bonus: Vec<String>,
+    stream_missing: Vec<String>,
+    xp_sources: Vec<String>,
+    last_game_message_ms: u64,
     xp_bonuses: Vec<String>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
@@ -340,7 +358,13 @@ struct Probe {
     gold: u64,
     orbs: u64,
     stream_bonus: String,
+    stream_bonus_pct: f32,
+    stream_watching: Vec<String>,
+    stream_live_bonus: Vec<String>,
+    stream_missing: Vec<String>,
+    xp_sources: Vec<String>,
     bridge_connected: bool,
+    last_game_message_ms: u64,
     tabs: Vec<TabInfo>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
@@ -434,7 +458,13 @@ fn monitor_loop(
                         if !probe.stream_bonus.is_empty() {
                             current.stream_bonus_last = probe.stream_bonus.clone();
                         }
+                        current.stream_bonus_pct = probe.stream_bonus_pct;
+                        current.stream_watching = probe.stream_watching;
+                        current.stream_live_bonus = probe.stream_live_bonus;
+                        current.stream_missing = probe.stream_missing;
+                        current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
+                        current.last_game_message_ms = probe.last_game_message_ms;
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
                         current.market_listings = probe.market_listings;
