@@ -27,6 +27,8 @@ pub struct HuntInfo {
     pub level: u32,
     pub species: Vec<String>,
     pub xp_per_hour: u64,
+    pub pokemon_xp_per_hour: u64,
+    pub kills_per_hour: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -923,10 +925,17 @@ fn probe_runtime_details(
         xp_bonuses.push(stream_bonus.clone());
     }
 
-    let current_hunt = state
-        .get("huntSlug")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    #[derive(Default)]
+    struct HuntRuntime {
+        first_at: u64,
+        last_at: u64,
+        kills: u64,
+        trainer_xp: u64,
+        pokemon_xp: u64,
+    }
+
+    let mut hunt_runtime: std::collections::HashMap<String, HuntRuntime> =
+        std::collections::HashMap::new();
 
     let battle_events = snapshot
         .get("battleEvents")
@@ -934,11 +943,12 @@ fn probe_runtime_details(
         .cloned()
         .unwrap_or_default();
 
-    let mut kill_times: std::collections::HashMap<String, Vec<u64>> =
-        std::collections::HashMap::new();
-
     for entry in battle_events {
-        if entry.get("event").and_then(|e| e.get("k")).and_then(Value::as_str) != Some("morte") {
+        let event = entry.get("event").unwrap_or(&Value::Null);
+        if event.get("k").and_then(Value::as_str) != Some("morte") {
+            continue;
+        }
+        if event.get("quem").and_then(Value::as_str) != Some("selvagem") {
             continue;
         }
 
@@ -952,7 +962,30 @@ fn probe_runtime_details(
         }
 
         let at = entry.get("at").and_then(Value::as_u64).unwrap_or(0);
-        kill_times.entry(hunt.to_string()).or_default().push(at);
+        let row = hunt_runtime.entry(hunt.to_string()).or_default();
+
+        if row.first_at == 0 || at < row.first_at {
+            row.first_at = at;
+        }
+        if at > row.last_at {
+            row.last_at = at;
+        }
+
+        row.kills += 1;
+        row.trainer_xp = row.trainer_xp.saturating_add(
+            event
+                .get("xpTreinador")
+                .or_else(|| event.get("xp"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+        row.pokemon_xp = row.pokemon_xp.saturating_add(
+            event
+                .get("xpPokemon")
+                .or_else(|| event.get("xp"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
     }
 
     let hunts = snapshot
@@ -969,18 +1002,23 @@ fn probe_runtime_details(
                         .collect::<Vec<_>>()
                 }).unwrap_or_default();
 
-                let kills = kill_times.get(&slug).cloned().unwrap_or_default();
-                let xp_per_hour = if kills.len() >= 2 {
-                    let first = *kills.first().unwrap_or(&0);
-                    let last = *kills.last().unwrap_or(&first);
-                    let elapsed_ms = last.saturating_sub(first);
-                    if elapsed_ms >= 1000 {
-                        let kills_per_hour = (kills.len() as f64) * 3_600_000.0 / elapsed_ms as f64;
-                        let base_xp = (0.6_f64 * (level as f64).powi(2) + 8.0).floor();
-                        (kills_per_hour * base_xp).round() as u64
-                    } else {
-                        0
-                    }
+                let runtime = hunt_runtime.get(&slug).cloned().unwrap_or_default();
+                let elapsed_ms = runtime.last_at.saturating_sub(runtime.first_at);
+
+                let kills_per_hour = if elapsed_ms >= 1000 {
+                    ((runtime.kills as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
+                } else {
+                    0
+                };
+
+                let xp_per_hour = if elapsed_ms >= 1000 {
+                    ((runtime.trainer_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
+                } else {
+                    0
+                };
+
+                let pokemon_xp_per_hour = if elapsed_ms >= 1000 {
+                    ((runtime.pokemon_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
                 } else {
                     0
                 };
@@ -991,6 +1029,8 @@ fn probe_runtime_details(
                     level,
                     species,
                     xp_per_hour,
+                    pokemon_xp_per_hour,
+                    kills_per_hour,
                 }
             }).collect::<Vec<_>>()
         })
