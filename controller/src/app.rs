@@ -1504,9 +1504,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
-        
-            });
-        });
+    });
 }
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
