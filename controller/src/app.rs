@@ -315,7 +315,7 @@ impl eframe::App for ControllerApp {
 
         egui::Panel::top("header")
             .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(24, 18)))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Overview")
@@ -372,7 +372,7 @@ impl eframe::App for ControllerApp {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 draw_instance_section(self, ui);
                 ui.add_space(16.0);
                 draw_runtime_section(self, ui);
@@ -385,7 +385,7 @@ impl eframe::App for ControllerApp {
                     .stroke(Stroke::new(1.0, BORDER))
                     .inner_margin(Margin::symmetric(24, 11)),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let dot_color = if self.status_error { BAD } else { GOOD };
                     ui.colored_label(dot_color, "●");
@@ -423,7 +423,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 .stroke(Stroke::new(1.0, BORDER))
                 .inner_margin(16.0),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.label(
                 RichText::new("MOTH")
                     .font(FontId::proportional(22.0))
@@ -766,8 +766,8 @@ fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
             ui.add_space(18.0);
 
-            for slot in &app.games {
-                draw_profile_card(app, ui, slot.profile);
+            for profile in GameProfile::ALL {
+                draw_profile_card(app, ui, profile);
                 ui.add_space(12.0);
             }
 
