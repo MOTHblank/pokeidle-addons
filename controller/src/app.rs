@@ -2,6 +2,7 @@ use crate::accounts::AccountsWindow;
 use crate::config::{Config, GameProfile};
 use crate::firefox;
 use crate::monitor;
+use crate::logging;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::process::Child;
@@ -17,6 +18,8 @@ struct State {
 }
 
 pub fn run() -> Result<(), String> {
+    logging::init();
+    logging::info("controller starting");
     nwg::init().map_err(|error| format!("could not initialize Windows GUI: {error}"))?;
     nwg::Font::set_global_family("Segoe UI")
         .map_err(|error| format!("could not set default Windows font: {error}"))?;
@@ -302,8 +305,11 @@ fn launch_one(
         }
     };
 
+    logging::info(&format!("launching {} with Firefox profile {} on BiDi port {}", profile.label(), config.profile_dir.display(), config.remote_debug_port));
+
     match firefox::launch(&config) {
         Ok((child, monitor)) => {
+            logging::info(&format!("{} Firefox spawned with PID {}", profile.label(), child.id()));
             *child_slot = Some(child);
             *monitor_slot = Some(monitor);
             profile_status.set_text("Headless · connecting");
@@ -313,6 +319,7 @@ fn launch_one(
             ));
         }
         Err(error) => {
+            logging::error(&format!("{} launch failed: {}", profile.label(), error));
             profile_status.set_text("Launch failed");
             global_status.set_text(&format!("{}: {error}", profile.label()));
         }
