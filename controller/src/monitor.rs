@@ -2,6 +2,7 @@ use crate::logging;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tungstenite::{connect, Message, WebSocket};
@@ -44,25 +45,37 @@ impl Health {
 #[derive(Clone)]
 pub struct MonitorHandle {
     health: Arc<Mutex<Health>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl MonitorHandle {
     pub fn start(port: u16) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
+        let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&health);
+        let stop_worker = Arc::clone(&stop);
 
-        thread::spawn(move || monitor_loop(port, shared));
+        thread::spawn(move || monitor_loop(port, shared, stop_worker));
 
-        Self { health }
+        Self { health, stop }
     }
 
     pub fn health(&self) -> Health {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
     }
+
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
-fn monitor_loop(port: u16, health: Arc<Mutex<Health>>) {
+fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
     loop {
+        if stop.load(Ordering::Relaxed) {
+            logging::info(&format!("BiDi monitor on port {} stopped", port));
+            break;
+        }
+
         match probe_browser(port) {
             Ok(probe) => {
                 if let Ok(mut current) = health.lock() {
@@ -83,7 +96,15 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>) {
             }
         }
 
-        thread::sleep(Duration::from_secs(5));
+        for _ in 0..50 {
+            if stop.load(Ordering::Relaxed) { break; }
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        if stop.load(Ordering::Relaxed) {
+            logging::info(&format!("BiDi monitor on port {} stopping", port));
+            break;
+        }
     }
 }
 
