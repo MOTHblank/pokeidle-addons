@@ -424,24 +424,25 @@ internal sealed class MainForm : Form
             string.Equals(g.Spec.Profile, acc.Id, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void OnAccountsChanged()
+    private async void OnAccountsChanged()
     {
-        foreach (var workspace in _workspaces)
+        try
         {
-            // Account membership/capacity is authoritative. Rebuild the slot
-            // inventory when the registry changes so the 10+10 service caps and
-            // two-slots-per-login rule stay deterministic.
-            foreach (var slot in workspace.Slots.ToArray())
-                if (slot.Pane is { } pane)
-                    DetachAndClose(pane);
+            if (_streams is not null)
+                await _streams.ResetAsync();
 
-            BuildStreamSlots(workspace);
+            foreach (var workspace in _workspaces)
+                BuildStreamSlots(workspace);
+
+            RebuildTabTitles();
+            UpdateWorkspaceHeaders();
+            LayoutPanes();
+            SaveSession();
         }
-
-        RebuildTabTitles();
-        UpdateWorkspaceHeaders();
-        LayoutPanes();
-        SaveSession();
+        catch (Exception ex)
+        {
+            Log($"stream account refresh failed: {ex}");
+        }
     }
 
     private void BuildStreamSlots(GameWorkspace workspace)
@@ -1155,7 +1156,7 @@ internal sealed class MainForm : Form
             : "https://www.twitch.tv/";
 
         var url = Prompt(
-            $"Open stream · Game {workspace.Index + 1}",
+            $"Join stream chat · Game {workspace.Index + 1}",
             initial);
         if (string.IsNullOrWhiteSpace(url)) return;
 
@@ -1166,8 +1167,8 @@ internal sealed class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "Only Twitch or Kick stream URLs are supported.",
-                "Open stream",
+                "Only Twitch or Kick channel URLs are supported.",
+                "Join stream chat",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             return;
@@ -1188,8 +1189,8 @@ internal sealed class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                $"No free {service} slot. This workspace supports {AccountManager.MaxStreamsPerService} {service} streams.",
-                "Open stream",
+                $"No free {service} slot. This workspace supports {AccountManager.MaxStreamsPerService} {service} chat channels.",
+                "Join stream chat",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             return;
@@ -1197,25 +1198,21 @@ internal sealed class MainForm : Form
 
         try
         {
-            await EnsureStreamPaneAsync(workspace, slot, url);
+            await JoinStreamSlotAsync(workspace, slot, url);
             SelectTab(workspace, workspace.Slots.IndexOf(slot));
             SaveSession();
         }
         catch (Exception ex)
         {
-            Log($"manual stream open failed: {ex}");
+            Log($"manual stream presence join failed: {ex}");
             MessageBox.Show(
                 this,
-                $"The stream could not be opened.\n\n{ex.Message}\n\nSee the IdleShell log for details.",
-                "Open stream",
+                $"The chat presence could not be established.\n\n{ex.Message}\n\nSee the IdleShell log for details.",
+                "Join stream chat",
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
-    }
-
-    // --- Layout --------------------------------------------------------------------
-    // Game-first layout. The stream dock is collapsed by default and uses a compact
-    // fixed-height drawer when expanded, keeping the game navigation area dominant.
+              // --- Layout --------------------------------------------------------------------
+    // Streams are no longer browser panes. The dock is only a compact control
+    // strip, so game WebViews retain almost the entire workspace.
     private void LayoutPanes()
     {
         if (_gameEnv is null) return;
@@ -1226,7 +1223,7 @@ internal sealed class MainForm : Form
         const int streamBarHeight = 30;
         const int tabHeight = 30;
         const int topGap = 6;
-        const int streamOpenWidth = 88;
+        const int streamOpenWidth = 92;
 
         var contentTop = AppConfig.ToolbarHeight + topGap;
         var contentHeight = Math.Max(0, ClientSize.Height - contentTop - pagePadding);
@@ -1238,7 +1235,6 @@ internal sealed class MainForm : Form
             var workspace = _workspaces[i];
             var x = pagePadding + i * (columnWidth + columnGap);
             var frame = new Rectangle(x, contentTop, columnWidth, contentHeight);
-
             var innerWidth = Math.Max(0, frame.Width - 2);
             var innerHeight = Math.Max(0, frame.Height - 2);
 
@@ -1248,22 +1244,33 @@ internal sealed class MainForm : Form
             workspace.Header.ForeColor = SystemColors.ActiveCaptionText;
 
             var gameTop = headerHeight + 6;
-            var expandedDockHeight = Math.Clamp(innerHeight / 3, 220, 320);
             var dockHeight = workspace.StreamsExpanded
-                ? Math.Min(expandedDockHeight, Math.Max(0, innerHeight - gameTop - 150))
+                ? streamBarHeight + tabHeight + 2
                 : streamBarHeight;
             var streamTop = Math.Max(gameTop + 1, innerHeight - dockHeight);
 
             workspace.StreamHeader.Bounds =
-                new Rectangle(frame.X + 1, frame.Y + streamTop, Math.Max(1, innerWidth - streamOpenWidth - 86), streamBarHeight);
+                new Rectangle(
+                    frame.X + 1,
+                    frame.Y + streamTop,
+                    Math.Max(1, innerWidth - streamOpenWidth - 86),
+                    streamBarHeight);
             workspace.StreamHeader.BackColor = SystemColors.ControlLight;
 
-                workspace.StreamServicePicker.Bounds =
-                new Rectangle(frame.Right - streamOpenWidth - 1 - 82 - 4, frame.Y + streamTop, 82, streamBarHeight);
+            workspace.StreamServicePicker.Bounds =
+                new Rectangle(
+                    frame.Right - streamOpenWidth - 1 - 82 - 4,
+                    frame.Y + streamTop,
+                    82,
+                    streamBarHeight);
             workspace.StreamServicePicker.Visible = workspace.StreamsExpanded;
 
             workspace.StreamOpen.Bounds =
-                new Rectangle(frame.Right - streamOpenWidth - 1, frame.Y + streamTop, streamOpenWidth, streamBarHeight);
+                new Rectangle(
+                    frame.Right - streamOpenWidth - 1,
+                    frame.Y + streamTop,
+                    streamOpenWidth,
+                    streamBarHeight);
 
             workspace.StreamTabs.Bounds =
                 new Rectangle(
@@ -1279,12 +1286,6 @@ internal sealed class MainForm : Form
                 Math.Max(0, frame.Width - 6),
                 Math.Max(0, streamTop - gameTop - 2));
 
-            var streamBounds = new Rectangle(
-                frame.X + 3,
-                frame.Y + 1 + streamTop + streamBarHeight + tabHeight,
-                Math.Max(0, frame.Width - 6),
-                Math.Max(0, innerHeight - streamTop - streamBarHeight - tabHeight - 2));
-
             if (workspace.GamePane is { } gamePane)
             {
                 if (workspace.GameForeground)
@@ -1292,64 +1293,9 @@ internal sealed class MainForm : Form
                 else
                     gamePane.Hide();
             }
-
-            var candidates = ForegroundCandidates(workspace);
-            var activeStreamPane =
-                workspace.ActiveTabIndex >= 0 &&
-                workspace.ActiveTabIndex < workspace.Slots.Count
-                    ? workspace.Slots[workspace.ActiveTabIndex].Pane
-                    : null;
-
-            if (workspace.StreamsExpanded)
-                GridLayout(candidates, streamBounds, activeStreamPane);
-
-            foreach (var slot in workspace.Slots)
-            {
-                if (slot.Pane is null || candidates.Contains(slot.Pane)) continue;
-                if (slot.Pane.Mode == StreamMode.Parked) slot.Pane.Park();
-                else slot.Pane.Hide();
-            }
-
         }
 
         UpdateWorkspaceHeaders();
-    }
-
-    private List<Pane> ForegroundCandidates(GameWorkspace workspace)
-    {
-        var result = new List<Pane>();
-        if (!workspace.StreamsExpanded) return result;
-
-        // Every opened stream pane is composited while the stream dock is open.
-        // Tabs select/manage slots; selecting a tab never replaces another stream.
-        foreach (var slot in workspace.Slots)
-        {
-            if (slot.Account.Enabled && slot.Pane is { } pane)
-                result.Add(pane);
-        }
-
-        return result;
-    }
-
-    private static void GridLayout(List<Pane> panes, Rectangle bounds, Pane? normalMemoryPane)
-    {
-        if (panes.Count == 0 || bounds.Width <= 0 || bounds.Height <= 0) return;
-
-        var cols = (int)Math.Ceiling(Math.Sqrt(panes.Count));
-        var rows = (int)Math.Ceiling(panes.Count / (double)cols);
-        var cw = bounds.Width / cols;
-        var ch = bounds.Height / rows;
-
-        for (var i = 0; i < panes.Count; i++)
-        {
-            var r = i / cols;
-            var c = i % cols;
-            var w = c == cols - 1 ? bounds.Right - bounds.X - c * cw : cw;
-            var h = r == rows - 1 ? bounds.Bottom - bounds.Y - r * ch : ch;
-            panes[i].Show(
-                new Rectangle(bounds.X + c * cw, bounds.Y + r * ch, w, h),
-                ReferenceEquals(panes[i], normalMemoryPane));
-        }
     }
 
     // Probe every pane. A hidden game is considered healthy when JavaScript
@@ -1382,11 +1328,6 @@ internal sealed class MainForm : Form
                     }
                 }
 
-                var state = p.Spec.Kind == PaneKind.Stream && !p.IsForeground
-                    ? p.Mode.ToString() : "Foreground";
-                var line = string.Join(',',
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                    Csv(p.Spec.Title), Csv(p.Spec.Kind.ToString()), Csv(state),
                     Csv(fields.vis), Csv(fields.hidden), Csv(fields.focus), Csv(fields.drift));
                 File.AppendAllText(AppConfig.ProbeCsvFile, line + Environment.NewLine);
             }
