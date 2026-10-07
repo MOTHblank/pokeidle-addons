@@ -1,482 +1,482 @@
-// [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]ser[\u0300-\u036f]cript[\u0300-\u036f][\u0300-\u036f]
-// [\u0300-\u036f]name         [\u0300-\u036f]oké[\u0300-\u036f]dle [\u0300-\u036f]ive [\u0300-\u036f]tream [\u0300-\u036f]canner
-// [\u0300-\u036f]namespace    moth.pokeidle
-// [\u0300-\u036f]version      [\u0300-\u036f].[\u0300-\u036f].[\u0300-\u036f]
-// [\u0300-\u036f]description  [\u0300-\u036f]dds an [\u0300-\u036f]pen [\u0300-\u036f]ive [\u0300-\u036f]treams b[\u0300-\u036f]tton [\u0300-\u036f]nder [\u0300-\u036f]pen [\u0300-\u036f]nventory that scans the c[\u0300-\u036f]rrent [\u0300-\u036f]oké[\u0300-\u036f]dle page [\u0300-\u036f]or live [\u0300-\u036f]witch/[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] channels and sends them to [\u0300-\u036f]dle[\u0300-\u036f]hell.
-// [\u0300-\u036f]match        https[\u0300-\u036f]//pokeidle.io/app*
-// [\u0300-\u036f]grant        [\u0300-\u036f]nsa[\u0300-\u036f]e[\u0300-\u036f]indow
-// [\u0300-\u036f]r[\u0300-\u036f]n-at       doc[\u0300-\u036f]ment-start
-// [\u0300-\u036f]no[\u0300-\u036f]rames
-// [\u0300-\u036f][\u0300-\u036f]/[\u0300-\u036f]ser[\u0300-\u036f]cript[\u0300-\u036f][\u0300-\u036f]
+// ==UserScript==
+// @name         PokéIdle Live Stream Scanner
+// @namespace    moth.pokeidle
+// @version      3.1.0
+// @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and routes them to IdleShell.
+// @match        https://pokeidle.io/app*
+// @grant        unsafeWindow
+// @run-at       document-start
+// @noframes
+// ==/UserScript==
 
-(() [\u0300-\u036f][\u0300-\u036f] {
-    '[\u0300-\u036f]se strict'[\u0300-\u036f]
+(() => {
+    'use strict';
 
-    const page [\u0300-\u036f]
-        typeo[\u0300-\u036f] [\u0300-\u036f]nsa[\u0300-\u036f]e[\u0300-\u036f]indow ![\u0300-\u036f][\u0300-\u036f] '[\u0300-\u036f]nde[\u0300-\u036f]ined'
-            [\u0300-\u036f] [\u0300-\u036f]nsa[\u0300-\u036f]e[\u0300-\u036f]indow
-            [\u0300-\u036f] window[\u0300-\u036f]
+    const page =
+        typeof unsafeWindow !== 'undefined'
+            ? unsafeWindow
+            : window;
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f] 'idleshell-scan-live-streams'[\u0300-\u036f]
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f] 'btn-bolsa'[\u0300-\u036f]
+    const BUTTON_ID = 'idleshell-scan-live-streams';
+    const INVENTORY_ID = 'btn-bolsa';
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f]
-        /^([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]|tr[\u0300-\u036f]e|yes|on|live|online|ao[\u0300-\u036f]_ -][\u0300-\u036f]vivo|en[\u0300-\u036f]_ -][\u0300-\u036f]vivo)$/i[\u0300-\u036f]
+    const LIVE_VALUE_RE =
+        /^(?:1|true|yes|on|live|online|ao[_ -]?vivo|en[_ -]?vivo)$/i;
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f]
-        /^([\u0300-\u036f][\u0300-\u036f]live|online|ao vivo|ao-vivo|en vivo|en-vivo|assistir agora|watch now|ver ao vivo|assistir)$/i[\u0300-\u036f]
+    const LIVE_TEXT_RE =
+        /^(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo|assistir agora|watch now|ver ao vivo|assistir)$/i;
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f]
-        /^([\u0300-\u036f][\u0300-\u036f]o[\u0300-\u036f][\u0300-\u036f]line|o[\u0300-\u036f][\u0300-\u036f]-line|encerrad[\u0300-\u036f]oa]|ended|not live|nao ao vivo)$/i[\u0300-\u036f]
+    const NEGATIVE_LIVE_TEXT_RE =
+        /^(?:offline|off-line|encerrad[oa]|ended|not live|nao ao vivo)$/i;
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f] new [\u0300-\u036f]et([\u0300-\u036f]
+    const EXCLUDED_TWITCH_PATHS = new Set([
         'directory',
         'downloads',
         'jobs',
         'p',
         'search',
         'settings',
-        's[\u0300-\u036f]bscriptions',
+        'subscriptions',
         'wallet'
-    ])[\u0300-\u036f]
+    ]);
 
-    const [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f] new [\u0300-\u036f]et([\u0300-\u036f]
+    const EXCLUDED_KICK_PATHS = new Set([
         'categories',
         'browse',
         'directory',
-        '[\u0300-\u036f]ollowing',
+        'following',
         'search',
         'settings',
-        'a[\u0300-\u036f]th',
+        'auth',
         'login',
         'register',
-        'sign[\u0300-\u036f]p',
+        'signup',
         'video',
         'videos'
-    ])[\u0300-\u036f]
+    ]);
 
-    let b[\u0300-\u036f]tton[\u0300-\u036f]bserver [\u0300-\u036f] n[\u0300-\u036f]ll[\u0300-\u036f]
-    let b[\u0300-\u036f]tton[\u0300-\u036f]nstall[\u0300-\u036f][\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
-    let scan[\u0300-\u036f]n[\u0300-\u036f]rogress [\u0300-\u036f] [\u0300-\u036f]alse[\u0300-\u036f]
+    let buttonObserver = null;
+    let buttonInstallQueued = 0;
+    let scanInProgress = false;
 
-    [\u0300-\u036f][\u0300-\u036f]nction qa(selector, root) {
-        ret[\u0300-\u036f]rn [\u0300-\u036f]rray.[\u0300-\u036f]rom(
-            (root || doc[\u0300-\u036f]ment).q[\u0300-\u036f]ery[\u0300-\u036f]elector[\u0300-\u036f]ll(selector)
-        )[\u0300-\u036f]
+    function qa(selector, root) {
+        return Array.from(
+            (root || document).querySelectorAll(selector)
+        );
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction normalize[\u0300-\u036f]ext(val[\u0300-\u036f]e) {
-        ret[\u0300-\u036f]rn [\u0300-\u036f]tring(val[\u0300-\u036f]e [\u0300-\u036f][\u0300-\u036f] n[\u0300-\u036f]ll [\u0300-\u036f] '' [\u0300-\u036f] val[\u0300-\u036f]e)
-            .normalize('[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]')
-            .replace(/[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]-[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]]/g, '')
-            .replace(/[\u0300-\u036f][\u0300-\u036f]s+/g, ' ')
+    function normalizeText(value) {
+        return String(value == null ? '' : value)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
             .trim()
-            .to[\u0300-\u036f]ower[\u0300-\u036f]ase()[\u0300-\u036f]
+            .toLowerCase();
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction normalize[\u0300-\u036f]hannel[\u0300-\u036f]rl(raw) {
+    function normalizeChannelUrl(raw) {
         try {
-            const [\u0300-\u036f]rl [\u0300-\u036f] new [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f](
-                [\u0300-\u036f]tring(raw || ''),
-                location.hre[\u0300-\u036f]
-            )[\u0300-\u036f]
+            const url = new URL(
+                String(raw || ''),
+                location.href
+            );
 
-            i[\u0300-\u036f] (!/^https[\u0300-\u036f][\u0300-\u036f]$/i.test([\u0300-\u036f]rl.protocol)) {
-                ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            if (!/^https?:$/i.test(url.protocol)) {
+                return null;
             }
 
-            const host [\u0300-\u036f] [\u0300-\u036f]rl.hostname
-                .to[\u0300-\u036f]ower[\u0300-\u036f]ase()
-                .replace(/^www[\u0300-\u036f][\u0300-\u036f]./, '')[\u0300-\u036f]
+            const host = url.hostname
+                .toLowerCase()
+                .replace(/^www\./, '');
 
-            i[\u0300-\u036f] (host ![\u0300-\u036f][\u0300-\u036f] 'twitch.tv' && host ![\u0300-\u036f][\u0300-\u036f] 'kick.com') {
-                ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            if (host !== 'twitch.tv' && host !== 'kick.com') {
+                return null;
             }
 
-            const segments [\u0300-\u036f] [\u0300-\u036f]rl.pathname
+            const segments = url.pathname
                 .split('/')
-                .map(part [\u0300-\u036f][\u0300-\u036f] part.trim())
-                .[\u0300-\u036f]ilter([\u0300-\u036f]oolean)[\u0300-\u036f]
+                .map(part => part.trim())
+                .filter(Boolean);
 
-            i[\u0300-\u036f] (segments.length ![\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f]) {
-                ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            if (segments.length !== 1) {
+                return null;
             }
 
-            const channel [\u0300-\u036f] segments[\u0300-\u036f][\u0300-\u036f]][\u0300-\u036f]
+            const channel = segments[0];
 
-            i[\u0300-\u036f] (!channel || channel.starts[\u0300-\u036f]ith('[\u0300-\u036f]')) {
-                ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            if (!channel || channel.startsWith(':')) {
+                return null;
             }
 
-            const excl[\u0300-\u036f]ded [\u0300-\u036f]
-                host [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] 'twitch.tv'
-                    [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]
-                    [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]
+            const excluded =
+                host === 'twitch.tv'
+                    ? EXCLUDED_TWITCH_PATHS
+                    : EXCLUDED_KICK_PATHS;
 
-            i[\u0300-\u036f] (excl[\u0300-\u036f]ded.has(channel.to[\u0300-\u036f]ower[\u0300-\u036f]ase())) {
-                ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            if (excluded.has(channel.toLowerCase())) {
+                return null;
             }
 
-            ret[\u0300-\u036f]rn (
-                'https[\u0300-\u036f]//' +
+            return (
+                'https://' +
                 host +
                 '/' +
-                encode[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]omponent(channel)
-            )[\u0300-\u036f]
+                encodeURIComponent(channel)
+            );
         } catch (_) {
-            ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+            return null;
         }
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction read[\u0300-\u036f]ive[\u0300-\u036f]al[\u0300-\u036f]e(val[\u0300-\u036f]e) {
-        const text [\u0300-\u036f] normalize[\u0300-\u036f]ext(val[\u0300-\u036f]e)[\u0300-\u036f]
+    function readLiveValue(value) {
+        const text = normalizeText(value);
 
-        i[\u0300-\u036f] (!text) {
-            ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+        if (!text) {
+            return null;
         }
 
-        i[\u0300-\u036f] ([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f].test(text)) {
-            ret[\u0300-\u036f]rn [\u0300-\u036f]alse[\u0300-\u036f]
+        if (NEGATIVE_LIVE_TEXT_RE.test(text)) {
+            return false;
         }
 
-        ret[\u0300-\u036f]rn [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f].test(text)
-            [\u0300-\u036f] tr[\u0300-\u036f]e
-            [\u0300-\u036f] n[\u0300-\u036f]ll[\u0300-\u036f]
+        return LIVE_VALUE_RE.test(text)
+            ? true
+            : null;
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction inspect[\u0300-\u036f]ttrib[\u0300-\u036f]tes(element) {
-        i[\u0300-\u036f] (!element || element.node[\u0300-\u036f]ype ![\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f]) {
-            ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+    function inspectAttributes(element) {
+        if (!element || element.nodeType !== 1) {
+            return null;
         }
 
-        const attrib[\u0300-\u036f]tes [\u0300-\u036f] [\u0300-\u036f]
+        const attributes = [
             'data-live',
             'data-is-live',
             'data-online',
             'data-stream-live',
             'data-streaming',
-            'data-stat[\u0300-\u036f]s',
+            'data-status',
             'data-state',
             'aria-label',
             'title'
-        ][\u0300-\u036f]
+        ];
 
-        [\u0300-\u036f]or (const name o[\u0300-\u036f] attrib[\u0300-\u036f]tes) {
-            const val[\u0300-\u036f]e [\u0300-\u036f] element.get[\u0300-\u036f]ttrib[\u0300-\u036f]te(name)[\u0300-\u036f]
-            const res[\u0300-\u036f]lt [\u0300-\u036f] read[\u0300-\u036f]ive[\u0300-\u036f]al[\u0300-\u036f]e(val[\u0300-\u036f]e)[\u0300-\u036f]
+        for (const name of attributes) {
+            const value = element.getAttribute(name);
+            const result = readLiveValue(value);
 
-            i[\u0300-\u036f] (res[\u0300-\u036f]lt ![\u0300-\u036f][\u0300-\u036f] n[\u0300-\u036f]ll) {
-                ret[\u0300-\u036f]rn res[\u0300-\u036f]lt[\u0300-\u036f]
+            if (result !== null) {
+                return result;
             }
 
-            i[\u0300-\u036f] (
-                /^([\u0300-\u036f][\u0300-\u036f]aria-label|title)$/.test(name) &&
-                [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f].test(normalize[\u0300-\u036f]ext(val[\u0300-\u036f]e))
+            if (
+                /^(?:aria-label|title)$/.test(name) &&
+                LIVE_TEXT_RE.test(normalizeText(value))
             ) {
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+                return true;
             }
         }
 
-        ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+        return null;
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction inspect[\u0300-\u036f]lasses(element) {
-        i[\u0300-\u036f] (!element || !element.class[\u0300-\u036f]ist) {
-            ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+    function inspectClasses(element) {
+        if (!element || !element.classList) {
+            return null;
         }
 
-        const classes [\u0300-\u036f] [\u0300-\u036f]rray.[\u0300-\u036f]rom(element.class[\u0300-\u036f]ist)
-            .map(normalize[\u0300-\u036f]ext)
-            .[\u0300-\u036f]ilter([\u0300-\u036f]oolean)[\u0300-\u036f]
+        const classes = Array.from(element.classList)
+            .map(normalizeText)
+            .filter(Boolean);
 
-        [\u0300-\u036f]or (const token o[\u0300-\u036f] classes) {
-            i[\u0300-\u036f] (
-                /^([\u0300-\u036f][\u0300-\u036f]live|is-live|live-now|live-stream|stream-live|online|is-online|ao-vivo|aovivo|en-vivo|envivo)$/.test(token)
+        for (const token of classes) {
+            if (
+                /^(?:live|is-live|live-now|live-stream|stream-live|online|is-online|ao-vivo|aovivo|en-vivo|envivo)$/.test(token)
             ) {
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+                return true;
             }
 
-            i[\u0300-\u036f] (
-                /([\u0300-\u036f][\u0300-\u036f]o[\u0300-\u036f][\u0300-\u036f]line|is-o[\u0300-\u036f][\u0300-\u036f]line|ended|encerrad[\u0300-\u036f]oa])/.test(token)
+            if (
+                /(?:offline|is-offline|ended|encerrad[oa])/.test(token)
             ) {
-                ret[\u0300-\u036f]rn [\u0300-\u036f]alse[\u0300-\u036f]
+                return false;
             }
         }
 
-        ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+        return null;
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction normalized[\u0300-\u036f]adge[\u0300-\u036f]ext(val[\u0300-\u036f]e) {
-        ret[\u0300-\u036f]rn normalize[\u0300-\u036f]ext(val[\u0300-\u036f]e)
-            .replace(/^[\u0300-\u036f]^a-z[\u0300-\u036f]-[\u0300-\u036f]à-ÿ]+/i, '')
-            .replace(/[\u0300-\u036f]^a-z[\u0300-\u036f]-[\u0300-\u036f]à-ÿ]+$/i, '')
-            .trim()[\u0300-\u036f]
+    function normalizedBadgeText(value) {
+        return normalizeText(value)
+            .replace(/^[^a-z0-9à-ÿ]+/i, '')
+            .replace(/[^a-z0-9à-ÿ]+$/i, '')
+            .trim();
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction inspect[\u0300-\u036f]adge[\u0300-\u036f]ext(container) {
-        i[\u0300-\u036f] (!container) {
-            ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+    function inspectBadgeText(container) {
+        if (!container) {
+            return null;
         }
 
-        const badge[\u0300-\u036f]andidates [\u0300-\u036f] qa(
-            'b,strong,small,span,i,[\u0300-\u036f]role[\u0300-\u036f]"stat[\u0300-\u036f]s"],[\u0300-\u036f]class*[\u0300-\u036f]"badge"],[\u0300-\u036f]class*[\u0300-\u036f]"stat[\u0300-\u036f]s"],[\u0300-\u036f]class*[\u0300-\u036f]"live"],[\u0300-\u036f]class*[\u0300-\u036f]"online"]',
+        const badgeCandidates = qa(
+            'b,strong,small,span,i,[role="status"],[class*="badge"],[class*="status"],[class*="live"],[class*="online"]',
             container
-        )[\u0300-\u036f]
+        );
 
-        [\u0300-\u036f]or (const node o[\u0300-\u036f] badge[\u0300-\u036f]andidates.slice([\u0300-\u036f], [\u0300-\u036f][\u0300-\u036f])) {
-            const text [\u0300-\u036f] normalized[\u0300-\u036f]adge[\u0300-\u036f]ext(node.text[\u0300-\u036f]ontent)[\u0300-\u036f]
+        for (const node of badgeCandidates.slice(0, 80)) {
+            const text = normalizedBadgeText(node.textContent);
 
-            i[\u0300-\u036f] (!text || text.length [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]) {
-                contin[\u0300-\u036f]e[\u0300-\u036f]
+            if (!text || text.length > 40) {
+                continue;
             }
 
-            i[\u0300-\u036f] ([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f].test(text)) {
-                ret[\u0300-\u036f]rn [\u0300-\u036f]alse[\u0300-\u036f]
+            if (NEGATIVE_LIVE_TEXT_RE.test(text)) {
+                return false;
             }
 
-            i[\u0300-\u036f] ([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f].test(text)) {
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+            if (LIVE_TEXT_RE.test(text)) {
+                return true;
             }
 
-            i[\u0300-\u036f] (
-                /^([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]d+[\u0300-\u036f][\u0300-\u036f]s+)[\u0300-\u036f]([\u0300-\u036f][\u0300-\u036f]live|online|ao vivo|ao-vivo|en vivo|en-vivo)([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]s+[\u0300-\u036f][\u0300-\u036f]d+)[\u0300-\u036f]$/i.test(text)
+            if (
+                /^(?:\d+\s+)?(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo)(?:\s+\d+)?$/i.test(text)
             ) {
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+                return true;
             }
         }
 
-        ret[\u0300-\u036f]rn n[\u0300-\u036f]ll[\u0300-\u036f]
+        return null;
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction has[\u0300-\u036f]ive[\u0300-\u036f]arker(anchor) {
-        let node [\u0300-\u036f] anchor[\u0300-\u036f]
+    function hasLiveMarker(anchor) {
+        let node = anchor;
 
-        [\u0300-\u036f]or (
-            let depth [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
-            node && depth [\u0300-\u036f][\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
-            depth +[\u0300-\u036f] [\u0300-\u036f]
+        for (
+            let depth = 0;
+            node && depth <= 8;
+            depth += 1
         ) {
-            const attr[\u0300-\u036f]es[\u0300-\u036f]lt [\u0300-\u036f] inspect[\u0300-\u036f]ttrib[\u0300-\u036f]tes(node)[\u0300-\u036f]
+            const attrResult = inspectAttributes(node);
 
-            i[\u0300-\u036f] (attr[\u0300-\u036f]es[\u0300-\u036f]lt ![\u0300-\u036f][\u0300-\u036f] n[\u0300-\u036f]ll) {
-                ret[\u0300-\u036f]rn attr[\u0300-\u036f]es[\u0300-\u036f]lt[\u0300-\u036f]
+            if (attrResult !== null) {
+                return attrResult;
             }
 
-            const class[\u0300-\u036f]es[\u0300-\u036f]lt [\u0300-\u036f] inspect[\u0300-\u036f]lasses(node)[\u0300-\u036f]
+            const classResult = inspectClasses(node);
 
-            i[\u0300-\u036f] (class[\u0300-\u036f]es[\u0300-\u036f]lt ![\u0300-\u036f][\u0300-\u036f] n[\u0300-\u036f]ll) {
-                ret[\u0300-\u036f]rn class[\u0300-\u036f]es[\u0300-\u036f]lt[\u0300-\u036f]
+            if (classResult !== null) {
+                return classResult;
             }
 
-            const badge[\u0300-\u036f]es[\u0300-\u036f]lt [\u0300-\u036f] inspect[\u0300-\u036f]adge[\u0300-\u036f]ext(node)[\u0300-\u036f]
+            const badgeResult = inspectBadgeText(node);
 
-            i[\u0300-\u036f] (badge[\u0300-\u036f]es[\u0300-\u036f]lt ![\u0300-\u036f][\u0300-\u036f] n[\u0300-\u036f]ll) {
-                ret[\u0300-\u036f]rn badge[\u0300-\u036f]es[\u0300-\u036f]lt[\u0300-\u036f]
+            if (badgeResult !== null) {
+                return badgeResult;
             }
 
-            node [\u0300-\u036f] node.parent[\u0300-\u036f]lement[\u0300-\u036f]
+            node = node.parentElement;
         }
 
-        ret[\u0300-\u036f]rn [\u0300-\u036f]alse[\u0300-\u036f]
+        return false;
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction collect[\u0300-\u036f]ive[\u0300-\u036f]hannels() {
-        const candidates [\u0300-\u036f] new [\u0300-\u036f]ap()[\u0300-\u036f]
+    function collectLiveChannels() {
+        const candidates = new Map();
 
-        [\u0300-\u036f]or (const anchor o[\u0300-\u036f] qa('a[\u0300-\u036f]hre[\u0300-\u036f]]')) {
-            const [\u0300-\u036f]rl [\u0300-\u036f] normalize[\u0300-\u036f]hannel[\u0300-\u036f]rl(
-                anchor.hre[\u0300-\u036f] ||
-                anchor.get[\u0300-\u036f]ttrib[\u0300-\u036f]te('hre[\u0300-\u036f]')
-            )[\u0300-\u036f]
+        for (const anchor of qa('a[href]')) {
+            const url = normalizeChannelUrl(
+                anchor.href ||
+                anchor.getAttribute('href')
+            );
 
-            i[\u0300-\u036f] (![\u0300-\u036f]rl || !has[\u0300-\u036f]ive[\u0300-\u036f]arker(anchor)) {
-                contin[\u0300-\u036f]e[\u0300-\u036f]
+            if (!url || !hasLiveMarker(anchor)) {
+                continue;
             }
 
-            candidates.set([\u0300-\u036f]rl, {
-                [\u0300-\u036f]rl,
+            candidates.set(url, {
+                url,
                 anchor
-            })[\u0300-\u036f]
+            });
         }
 
-        ret[\u0300-\u036f]rn [\u0300-\u036f]rray.[\u0300-\u036f]rom(candidates.val[\u0300-\u036f]es())[\u0300-\u036f]
+        return Array.from(candidates.values());
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction send[\u0300-\u036f]o[\u0300-\u036f]dle[\u0300-\u036f]hell([\u0300-\u036f]rl) {
+    function sendToIdleShell(url) {
         try {
-            i[\u0300-\u036f] (
-                typeo[\u0300-\u036f] page.__idleshell_open[\u0300-\u036f]ink [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] '[\u0300-\u036f][\u0300-\u036f]nction' &&
-                page.__idleshell_open[\u0300-\u036f]ink(
-                    [\u0300-\u036f]rl,
-                    'man[\u0300-\u036f]al-live-chat-scan'
+            if (
+                typeof page.__idleshell_openLink === 'function' &&
+                page.__idleshell_openLink(
+                    url,
+                    'manual-live-chat-scan'
                 )
             ) {
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+                return true;
             }
         } catch (_) {}
 
         try {
-            i[\u0300-\u036f] (page.chrome[\u0300-\u036f].webview[\u0300-\u036f].post[\u0300-\u036f]essage) {
-                page.chrome.webview.post[\u0300-\u036f]essage(
-                    [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f].stringi[\u0300-\u036f]y({
-                        type[\u0300-\u036f] 'link',
-                        [\u0300-\u036f]rl,
-                        so[\u0300-\u036f]rce[\u0300-\u036f] 'man[\u0300-\u036f]al-live-chat-scan'
+            if (page.chrome?.webview?.postMessage) {
+                page.chrome.webview.postMessage(
+                    JSON.stringify({
+                        type: 'link',
+                        url,
+                        source: 'manual-live-chat-scan'
                     })
-                )[\u0300-\u036f]
-                ret[\u0300-\u036f]rn tr[\u0300-\u036f]e[\u0300-\u036f]
+                );
+                return true;
             }
         } catch (_) {}
 
-        // [\u0300-\u036f]hen the same [\u0300-\u036f]serscript is [\u0300-\u036f]sed in a normal browser witho[\u0300-\u036f]t
-        // [\u0300-\u036f]dle[\u0300-\u036f]hell, keep the original "open stream" behavior as a [\u0300-\u036f]allback.
+        // When the same userscript is used in a normal browser without
+        // IdleShell, keep the original "open stream" behavior as a fallback.
         try {
-            const pop[\u0300-\u036f]p [\u0300-\u036f] window.open(
-                [\u0300-\u036f]rl,
+            const popup = window.open(
+                url,
                 '_blank',
-                'noopener,nore[\u0300-\u036f]errer'
-            )[\u0300-\u036f]
-            ret[\u0300-\u036f]rn !!pop[\u0300-\u036f]p[\u0300-\u036f]
+                'noopener,noreferrer'
+            );
+            return !!popup;
         } catch (_) {
-            ret[\u0300-\u036f]rn [\u0300-\u036f]alse[\u0300-\u036f]
+            return false;
         }
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction scan[\u0300-\u036f]ive[\u0300-\u036f]treams(b[\u0300-\u036f]tton) {
-        i[\u0300-\u036f] (scan[\u0300-\u036f]n[\u0300-\u036f]rogress) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+    function scanLiveStreams(button) {
+        if (scanInProgress) {
+            return;
         }
 
-        scan[\u0300-\u036f]n[\u0300-\u036f]rogress [\u0300-\u036f] tr[\u0300-\u036f]e[\u0300-\u036f]
+        scanInProgress = true;
 
-        const original[\u0300-\u036f]abel [\u0300-\u036f] b[\u0300-\u036f]tton.text[\u0300-\u036f]ontent.trim()[\u0300-\u036f]
+        const originalLabel = button.textContent.trim();
 
         try {
-            b[\u0300-\u036f]tton.disabled [\u0300-\u036f] tr[\u0300-\u036f]e[\u0300-\u036f]
-            b[\u0300-\u036f]tton.q[\u0300-\u036f]ery[\u0300-\u036f]elector('span').text[\u0300-\u036f]ontent [\u0300-\u036f]
-                '[\u0300-\u036f]canning…'[\u0300-\u036f]
+            button.disabled = true;
+            button.querySelector('span').textContent =
+                'Scanning…';
 
-            const channels [\u0300-\u036f] collect[\u0300-\u036f]ive[\u0300-\u036f]hannels()[\u0300-\u036f]
-            let q[\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
+            const channels = collectLiveChannels();
+            let queued = 0;
 
-            [\u0300-\u036f]or (const channel o[\u0300-\u036f] channels) {
-                i[\u0300-\u036f] (send[\u0300-\u036f]o[\u0300-\u036f]dle[\u0300-\u036f]hell(channel.[\u0300-\u036f]rl)) {
-                    q[\u0300-\u036f]e[\u0300-\u036f]ed +[\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
+            for (const channel of channels) {
+                if (sendToIdleShell(channel.url)) {
+                    queued += 1;
                 }
             }
 
-            b[\u0300-\u036f]tton.q[\u0300-\u036f]ery[\u0300-\u036f]elector('span').text[\u0300-\u036f]ontent [\u0300-\u036f]
-                q[\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] [\u0300-\u036f]
-                    [\u0300-\u036f] '[\u0300-\u036f]canned ' + q[\u0300-\u036f]e[\u0300-\u036f]ed + ' live'
-                    [\u0300-\u036f] '[\u0300-\u036f]o live streams [\u0300-\u036f]o[\u0300-\u036f]nd'[\u0300-\u036f]
+            button.querySelector('span').textContent =
+                queued > 0
+                    ? 'Scanned ' + queued + ' live'
+                    : 'No live streams found';
 
-            console.in[\u0300-\u036f]o(
-                '[\u0300-\u036f][\u0300-\u036f]dle[\u0300-\u036f]hell] man[\u0300-\u036f]al live chat scan[\u0300-\u036f]',
+            console.info(
+                '[IdleShell] manual live chat scan:',
                 channels.length,
                 'live channel(s),',
-                q[\u0300-\u036f]e[\u0300-\u036f]ed,
-                'q[\u0300-\u036f]e[\u0300-\u036f]ed'
-            )[\u0300-\u036f]
+                queued,
+                'queued'
+            );
         } catch (error) {
             console.error(
-                '[\u0300-\u036f][\u0300-\u036f]dle[\u0300-\u036f]hell] man[\u0300-\u036f]al live chat scan [\u0300-\u036f]ailed[\u0300-\u036f]',
+                '[IdleShell] manual live chat scan failed:',
                 error
-            )[\u0300-\u036f]
-            b[\u0300-\u036f]tton.q[\u0300-\u036f]ery[\u0300-\u036f]elector('span').text[\u0300-\u036f]ontent [\u0300-\u036f]
-                '[\u0300-\u036f]can [\u0300-\u036f]ailed'[\u0300-\u036f]
-        } [\u0300-\u036f]inally {
-            window.set[\u0300-\u036f]imeo[\u0300-\u036f]t(() [\u0300-\u036f][\u0300-\u036f] {
-                b[\u0300-\u036f]tton.disabled [\u0300-\u036f] [\u0300-\u036f]alse[\u0300-\u036f]
-                b[\u0300-\u036f]tton.q[\u0300-\u036f]ery[\u0300-\u036f]elector('span').text[\u0300-\u036f]ontent [\u0300-\u036f]
-                    original[\u0300-\u036f]abel || '[\u0300-\u036f]can [\u0300-\u036f]ive [\u0300-\u036f]treams'[\u0300-\u036f]
-                scan[\u0300-\u036f]n[\u0300-\u036f]rogress [\u0300-\u036f] [\u0300-\u036f]alse[\u0300-\u036f]
-            }, [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f])[\u0300-\u036f]
+            );
+            button.querySelector('span').textContent =
+                'Scan failed';
+        } finally {
+            window.setTimeout(() => {
+                button.disabled = false;
+                button.querySelector('span').textContent =
+                    originalLabel || 'Open Live Streams';
+                scanInProgress = false;
+            }, 1600);
         }
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction ens[\u0300-\u036f]re[\u0300-\u036f][\u0300-\u036f]tton() {
-        b[\u0300-\u036f]tton[\u0300-\u036f]nstall[\u0300-\u036f][\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
+    function ensureButton() {
+        buttonInstallQueued = 0;
 
-        i[\u0300-\u036f] (!doc[\u0300-\u036f]ment.doc[\u0300-\u036f]ment[\u0300-\u036f]lement) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+        if (!document.documentElement) {
+            return;
         }
 
-        const inventory [\u0300-\u036f] doc[\u0300-\u036f]ment.get[\u0300-\u036f]lement[\u0300-\u036f]y[\u0300-\u036f]d([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f])[\u0300-\u036f]
+        const inventory = document.getElementById(INVENTORY_ID);
 
-        i[\u0300-\u036f] (!inventory) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+        if (!inventory) {
+            return;
         }
 
-        const existing [\u0300-\u036f] doc[\u0300-\u036f]ment.get[\u0300-\u036f]lement[\u0300-\u036f]y[\u0300-\u036f]d([\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f])[\u0300-\u036f]
+        const existing = document.getElementById(BUTTON_ID);
 
-        i[\u0300-\u036f] (existing) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+        if (existing) {
+            return;
         }
 
-        const b[\u0300-\u036f]tton [\u0300-\u036f] doc[\u0300-\u036f]ment.create[\u0300-\u036f]lement('b[\u0300-\u036f]tton')[\u0300-\u036f]
-        b[\u0300-\u036f]tton.type [\u0300-\u036f] 'b[\u0300-\u036f]tton'[\u0300-\u036f]
-        b[\u0300-\u036f]tton.id [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]_[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]
-        b[\u0300-\u036f]tton.class[\u0300-\u036f]ame [\u0300-\u036f] inventory.class[\u0300-\u036f]ame || 'btn-inventario'[\u0300-\u036f]
-        b[\u0300-\u036f]tton.title [\u0300-\u036f]
-            '[\u0300-\u036f]can the c[\u0300-\u036f]rrent page [\u0300-\u036f]or live [\u0300-\u036f]witch/[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] streams'[\u0300-\u036f]
-        b[\u0300-\u036f]tton.set[\u0300-\u036f]ttrib[\u0300-\u036f]te(
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = BUTTON_ID;
+        button.className = inventory.className || 'btn-inventario';
+        button.title =
+            'Open all live Twitch/KICK streams';
+        button.setAttribute(
             'aria-label',
-            '[\u0300-\u036f]can live [\u0300-\u036f]witch and [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] streams'
-        )[\u0300-\u036f]
+            'Open all live Twitch and KICK streams'
+        );
 
-        const label [\u0300-\u036f] doc[\u0300-\u036f]ment.create[\u0300-\u036f]lement('span')[\u0300-\u036f]
-        label.text[\u0300-\u036f]ontent [\u0300-\u036f] '[\u0300-\u036f]can [\u0300-\u036f]ive [\u0300-\u036f]treams'[\u0300-\u036f]
-        b[\u0300-\u036f]tton.append[\u0300-\u036f]hild(label)[\u0300-\u036f]
+        const label = document.createElement('span');
+        label.textContent = 'Open Live Streams';
+        button.appendChild(label);
 
-        b[\u0300-\u036f]tton.add[\u0300-\u036f]vent[\u0300-\u036f]istener('click', () [\u0300-\u036f][\u0300-\u036f] {
-            scan[\u0300-\u036f]ive[\u0300-\u036f]treams(b[\u0300-\u036f]tton)[\u0300-\u036f]
-        })[\u0300-\u036f]
+        button.addEventListener('click', () => {
+            scanLiveStreams(button);
+        });
 
-        inventory.insert[\u0300-\u036f]djacent[\u0300-\u036f]lement(
-            'a[\u0300-\u036f]terend',
-            b[\u0300-\u036f]tton
-        )[\u0300-\u036f]
+        inventory.insertAdjacentElement(
+            'afterend',
+            button
+        );
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction sched[\u0300-\u036f]le[\u0300-\u036f][\u0300-\u036f]tton[\u0300-\u036f]nstall() {
-        i[\u0300-\u036f] (b[\u0300-\u036f]tton[\u0300-\u036f]nstall[\u0300-\u036f][\u0300-\u036f]e[\u0300-\u036f]ed) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+    function scheduleButtonInstall() {
+        if (buttonInstallQueued) {
+            return;
         }
 
-        b[\u0300-\u036f]tton[\u0300-\u036f]nstall[\u0300-\u036f][\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] window.set[\u0300-\u036f]imeo[\u0300-\u036f]t(() [\u0300-\u036f][\u0300-\u036f] {
-            b[\u0300-\u036f]tton[\u0300-\u036f]nstall[\u0300-\u036f][\u0300-\u036f]e[\u0300-\u036f]ed [\u0300-\u036f] [\u0300-\u036f][\u0300-\u036f]
-            ens[\u0300-\u036f]re[\u0300-\u036f][\u0300-\u036f]tton()[\u0300-\u036f]
-        }, [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f])[\u0300-\u036f]
+        buttonInstallQueued = window.setTimeout(() => {
+            buttonInstallQueued = 0;
+            ensureButton();
+        }, 100);
     }
 
-    [\u0300-\u036f][\u0300-\u036f]nction start() {
-        ens[\u0300-\u036f]re[\u0300-\u036f][\u0300-\u036f]tton()[\u0300-\u036f]
+    function start() {
+        ensureButton();
 
-        i[\u0300-\u036f] (!doc[\u0300-\u036f]ment.doc[\u0300-\u036f]ment[\u0300-\u036f]lement || b[\u0300-\u036f]tton[\u0300-\u036f]bserver) {
-            ret[\u0300-\u036f]rn[\u0300-\u036f]
+        if (!document.documentElement || buttonObserver) {
+            return;
         }
 
-        b[\u0300-\u036f]tton[\u0300-\u036f]bserver [\u0300-\u036f] new [\u0300-\u036f][\u0300-\u036f]tation[\u0300-\u036f]bserver(() [\u0300-\u036f][\u0300-\u036f] {
-            sched[\u0300-\u036f]le[\u0300-\u036f][\u0300-\u036f]tton[\u0300-\u036f]nstall()[\u0300-\u036f]
-        })[\u0300-\u036f]
+        buttonObserver = new MutationObserver(() => {
+            scheduleButtonInstall();
+        });
 
-        b[\u0300-\u036f]tton[\u0300-\u036f]bserver.observe(doc[\u0300-\u036f]ment.doc[\u0300-\u036f]ment[\u0300-\u036f]lement, {
-            child[\u0300-\u036f]ist[\u0300-\u036f] tr[\u0300-\u036f]e,
-            s[\u0300-\u036f]btree[\u0300-\u036f] tr[\u0300-\u036f]e
-        })[\u0300-\u036f]
+        buttonObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
 
-        console.in[\u0300-\u036f]o(
-            '[\u0300-\u036f][\u0300-\u036f]dle[\u0300-\u036f]hell] man[\u0300-\u036f]al live stream scanner ready'
-        )[\u0300-\u036f]
+        console.info(
+            '[IdleShell] manual live stream scanner ready'
+        );
     }
 
-    i[\u0300-\u036f] (doc[\u0300-\u036f]ment.ready[\u0300-\u036f]tate [\u0300-\u036f][\u0300-\u036f][\u0300-\u036f] 'loading') {
-        doc[\u0300-\u036f]ment.add[\u0300-\u036f]vent[\u0300-\u036f]istener(
-            '[\u0300-\u036f][\u0300-\u036f][\u0300-\u036f][\u0300-\u036f]ontent[\u0300-\u036f]oaded',
+    if (document.readyState === 'loading') {
+        document.addEventListener(
+            'DOMContentLoaded',
             start,
-            { once[\u0300-\u036f] tr[\u0300-\u036f]e }
-        )[\u0300-\u036f]
+            { once: true }
+        );
     } else {
-        start()[\u0300-\u036f]
+        start();
     }
-})()[\u0300-\u036f]
+})();
