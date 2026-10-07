@@ -208,6 +208,247 @@ internal sealed class Pane
         })();
         """;
 
+    private static string LiveStreamScannerScript() => """
+        (() => {
+          'use strict';
+
+          const BUTTON_ID = 'idleshell-scan-live-streams';
+          const INVENTORY_ID = 'btn-bolsa';
+
+          const LIVE_VALUE_RE =
+            /^(?:1|true|yes|on|live|online|ao[_ -]?vivo|en[_ -]?vivo)$/i;
+          const LIVE_TEXT_RE =
+            /^(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo|watch now|assistir agora|ver ao vivo|assistir)$/i;
+          const NEGATIVE_RE =
+            /^(?:offline|off-line|ended|encerrad[oa]|not live|nao ao vivo)$/i;
+
+          const EXCLUDED_TWITCH = new Set([
+            'directory', 'downloads', 'jobs', 'p', 'search',
+            'settings', 'subscriptions', 'wallet', 'videos', 'video',
+            'popout', 'embed'
+          ]);
+
+          const EXCLUDED_KICK = new Set([
+            'categories', 'browse', 'directory', 'following', 'search',
+            'settings', 'auth', 'login', 'register', 'signup',
+            'video', 'videos', 'popout'
+          ]);
+
+          let observer = null;
+          let installTimer = 0;
+          let scanning = false;
+
+          const text = value =>
+            String(value == null ? '' : value)
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .toLowerCase();
+
+          const channelUrl = raw => {
+            try {
+              const url = new URL(String(raw || ''), location.href);
+              if (!/^https?:$/i.test(url.protocol)) return null;
+
+              const host = url.hostname.toLowerCase().replace(/^www\./, '');
+              if (host !== 'twitch.tv' && host !== 'kick.com') return null;
+
+              const parts = url.pathname
+                .split('/')
+                .map(p => p.trim())
+                .filter(Boolean);
+
+              if (parts.length !== 1) return null;
+
+              const channel = parts[0];
+              const excluded =
+                host === 'twitch.tv' ? EXCLUDED_TWITCH : EXCLUDED_KICK;
+
+              if (!channel || excluded.has(channel.toLowerCase())) return null;
+
+              return 'https://' + host + '/' + encodeURIComponent(channel);
+            } catch (_) {
+              return null;
+            }
+          };
+
+          const liveValue = value => {
+            const valueText = text(value);
+            if (!valueText) return null;
+            if (NEGATIVE_RE.test(valueText)) return false;
+            if (LIVE_VALUE_RE.test(valueText)) return true;
+            return null;
+          };
+
+          const markerOn = node => {
+            if (!node || node.nodeType !== 1) return null;
+
+            for (const name of [
+              'data-live', 'data-is-live', 'data-online',
+              'data-stream-live', 'data-streaming', 'data-status',
+              'data-state'
+            ]) {
+              const result = liveValue(node.getAttribute(name));
+              if (result !== null) return result;
+            }
+
+            for (const name of ['aria-label', 'title']) {
+              const value = text(node.getAttribute(name));
+              if (!value) continue;
+              if (NEGATIVE_RE.test(value)) return false;
+              if (LIVE_TEXT_RE.test(value)) return true;
+            }
+
+            for (const cls of Array.from(node.classList || []).map(text)) {
+              if (/^(?:live|is-live|live-now|live-stream|stream-live|online|is-online|ao-vivo|aovivo|en-vivo|envivo)$/.test(cls))
+                return true;
+              if (/(?:offline|is-offline|ended|encerrad[oa])/.test(cls))
+                return false;
+            }
+
+            const badges = node.querySelectorAll(
+              'b,strong,small,span,i,[role="status"],[class*="badge"],[class*="status"],[class*="live"],[class*="online"]'
+            );
+
+            for (const badge of Array.from(badges).slice(0, 100)) {
+              const value = text(badge.textContent);
+              if (!value || value.length > 40) continue;
+              if (NEGATIVE_RE.test(value)) return false;
+              if (LIVE_TEXT_RE.test(value) || /^(?:\d+\s+)?(?:live|online|ao vivo|en vivo)(?:\s+\d+)?$/i.test(value))
+                return true;
+            }
+
+            return null;
+          };
+
+          const isLive = anchor => {
+            let node = anchor;
+            for (let depth = 0; node && depth <= 8; depth++, node = node.parentElement) {
+              const result = markerOn(node);
+              if (result !== null) return result;
+            }
+            return false;
+          };
+
+          const collect = () => {
+            const channels = new Map();
+
+            for (const anchor of document.querySelectorAll('a[href]')) {
+              const url = channelUrl(anchor.href || anchor.getAttribute('href'));
+              if (!url || !isLive(anchor)) continue;
+              channels.set(url, true);
+            }
+
+            return Array.from(channels.keys());
+          };
+
+          const send = url => {
+            try {
+              if (typeof window.__idleshell_openLink === 'function' &&
+                  window.__idleshell_openLink(url, 'manual-live-chat-scan'))
+                return true;
+            } catch (_) {}
+
+            try {
+              window.chrome?.webview?.postMessage(JSON.stringify({
+                type: 'link',
+                url,
+                source: 'manual-live-chat-scan'
+              }));
+              return true;
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const scan = button => {
+            if (scanning) return;
+            scanning = true;
+
+            const label = button.querySelector('span');
+            const original = label?.textContent || 'Open Live Streams';
+
+            try {
+              button.disabled = true;
+              if (label) label.textContent = 'Scanning…';
+
+              const urls = collect();
+              let sent = 0;
+
+              for (const url of urls) {
+                if (send(url)) sent++;
+              }
+
+              if (label)
+                label.textContent =
+                  sent > 0 ? 'Opened ' + sent + ' live' : 'No live streams';
+              console.info(
+                '[IdleShell] manual live stream scan:',
+                urls.length,
+                'live channel(s),',
+                sent,
+                'routed'
+              );
+            } catch (error) {
+              console.error('[IdleShell] manual live stream scan failed:', error);
+              if (label) label.textContent = 'Scan failed';
+            } finally {
+              window.setTimeout(() => {
+                button.disabled = false;
+                if (label) label.textContent = original;
+                scanning = false;
+              }, 1600);
+            }
+          };
+
+          const install = () => {
+            installTimer = 0;
+
+            const inventory = document.getElementById(INVENTORY_ID);
+            if (!inventory || document.getElementById(BUTTON_ID)) return;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.id = BUTTON_ID;
+            button.className = inventory.className || 'btn-inventario';
+            button.title = 'Open all live Twitch/KICK streams';
+            button.setAttribute('aria-label', 'Open all live Twitch and KICK streams');
+
+            const label = document.createElement('span');
+            label.textContent = 'Open Live Streams';
+            button.appendChild(label);
+
+            button.addEventListener('click', () => scan(button));
+            inventory.insertAdjacentElement('afterend', button);
+          };
+
+          const scheduleInstall = () => {
+            if (installTimer) return;
+            installTimer = window.setTimeout(install, 100);
+          };
+
+          const start = () => {
+            install();
+
+            if (!document.documentElement || observer) return;
+
+            observer = new MutationObserver(scheduleInstall);
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true
+            });
+          };
+
+          if (document.readyState === 'loading')
+            document.addEventListener('DOMContentLoaded', start, { once: true });
+          else
+            start();
+
+          console.info('[IdleShell] native live stream scanner ready');
+        })();
+        """;
+
     private async Task ConfigureAsync()
     {
         var s = View.Settings;
@@ -218,7 +459,10 @@ internal sealed class Pane
         await View.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript(Spec));
 
         if (Spec.Kind == PaneKind.Game)
+        {
             await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
+            await View.AddScriptToExecuteOnDocumentCreatedAsync(LiveStreamScannerScript());
+        }
 
         if (_userscripts is not null)
         {
