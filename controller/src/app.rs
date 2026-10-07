@@ -1309,20 +1309,23 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let screen = ctx.viewport_rect();
     let width = (screen.width() - 48.0).clamp(420.0, 900.0);
     let height = (screen.height() - 48.0).clamp(360.0, 620.0);
-    let pos = screen.center() - egui::vec2(width, height) * 0.5;
+    let rect = egui::Rect::from_center_size(screen.center(), egui::vec2(width, height));
 
-    egui::Area::new(egui::Id::new("hunt_atlas_overlay"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(pos)
-        .show(ctx, |ui| {
-            ui.set_width(width);
-            ui.set_height(height);
+    let mut open = app.show_atlas;
+    egui::Window::new("Hunt Atlas")
+        .id(egui::Id::new("hunt_atlas_window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .fixed_rect(rect)
+        .frame(
             egui::Frame::new()
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0, BORDER))
                 .corner_radius(12.0)
-                .inner_margin(18.0)
-                .show(ui, |ui| {
+                .inner_margin(18.0),
+        )
+        .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("Hunt Atlas")
@@ -1336,10 +1339,6 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .size(12.0)
                         .color(MUTED),
                 );
-                ui.add_space(16.0);
-                if ui.button("× Close").clicked() {
-                    app.show_atlas = false;
-                }
             });
             ui.add_space(2.0);
             ui.label(
@@ -1500,7 +1499,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     }
                 });
         });
-    });
+    app.show_atlas = open;
 }
 
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
