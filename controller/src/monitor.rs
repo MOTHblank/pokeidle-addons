@@ -1,4 +1,5 @@
 use crate::logging;
+use native_windows_gui as nwg;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -69,13 +70,13 @@ pub struct MonitorHandle {
 }
 
 impl MonitorHandle {
-    pub fn start(port: u16) -> Self {
+    pub fn start(port: u16, notice_sender: nwg::NoticeSender) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&health);
         let stop_worker = Arc::clone(&stop);
 
-        thread::spawn(move || monitor_loop(port, shared, stop_worker));
+        thread::spawn(move || monitor_loop(port, shared, stop_worker, notice_sender));
 
         Self { health, stop }
     }
@@ -92,9 +93,10 @@ impl MonitorHandle {
 struct BrowserSession {
     socket: BrowserSocket,
     context: String,
+    next_id: u64,
 }
 
-fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
+fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>, notice_sender: nwg::NoticeSender) {
     let mut session: Option<BrowserSession> = None;
 
     loop {
@@ -114,6 +116,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
                         current.state = "Running".to_string();
                         current.last_error = None;
                     }
+                    notice_sender.notice();
                 }
                 Err(error) => {
                     logging::warn(&format!(
@@ -126,6 +129,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
                         current.last_error = Some(error);
                         current.game_ready = false;
                     }
+                    notice_sender.notice();
                 }
             }
         }
@@ -140,6 +144,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
                         current.game_ready = probe.game_ready;
                         current.last_error = None;
                     }
+                    notice_sender.notice();
                 }
                 Err(error) => {
                     logging::warn(&format!(
@@ -152,6 +157,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>) {
                         current.last_error = Some(error);
                         current.game_ready = false;
                     }
+                    notice_sender.notice();
 
                     end_session(&mut session);
                 }
@@ -206,7 +212,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         .ok_or_else(|| "Firefox returned no browsing context".to_string())?
         .to_string();
 
-    Ok(BrowserSession { socket, context })
+    Ok(BrowserSession { socket, context, next_id: 3 })
 }
 
 fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
@@ -216,9 +222,12 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         gameReady: !!document.getElementById('btn-bolsa')
     })"#;
 
+    let command_id = session.next_id;
+    session.next_id += 1;
+
     let result = send_and_wait(
         &mut session.socket,
-        3,
+        command_id,
         json!({
             "id": 3,
             "method": "script.evaluate",
