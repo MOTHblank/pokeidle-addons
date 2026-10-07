@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      5.3.1
-// @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
+// @version      6.0.0
+// @description  Opens current official Twitch/KICK live chats from the existing PokéIdle tab and refreshes the list once per hour.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -17,1042 +17,508 @@
     const BUTTON_ID = 'moth-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';
 
-    const LIVE_VALUE_RE =
-        /^(?:1|true|yes|on|live|online|ao[_ -]?vivo|en[_ -]?vivo)$/i;
-
-    const LIVE_TEXT_RE =
-        /^(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo|assistir agora|watch now|ver ao vivo|assistir)$/i;
-
-    const NEGATIVE_LIVE_TEXT_RE =
-        /^(?:offline|off-line|encerrad[oa]|ended|not live|nao ao vivo)$/i;
-
-    const EXCLUDED_TWITCH_PATHS = new Set([
-        'directory',
-        'downloads',
-        'jobs',
-        'p',
-        'search',
-        'settings',
-        'subscriptions',
-        'wallet'
-    ]);
-
-    const EXCLUDED_KICK_PATHS = new Set([
-        'categories',
-        'browse',
-        'directory',
-        'following',
-        'search',
-        'settings',
-        'auth',
-        'login',
-        'register',
-        'signup',
-        'video',
-        'videos'
-    ]);
+    const MAX_LIVE_CHATS_PER_SERVICE = 10;
+    const LIVE_SCAN_INTERVAL_MS = 60 * 60 * 1000;
+    const INITIAL_SCAN_DELAY_MS = 20 * 1000;
+    const UI_RECHECK_INTERVAL_MS = 30 * 1000;
 
     let scanInProgress = false;
-    const APP_READY_TIMEOUT_MS = 15_000;
-    const MAX_STREAMS_PER_SERVICE = 10;
-    const STREAMS_KEY = 'moth-pokeidle-streams-v1';
     const openChats = new Map();
 
-    function loadStreamConfig() {
-        try {
-            const saved = JSON.parse(localStorage.getItem(STREAMS_KEY) || '{}');
-            return {
-                twitch: Array.from({ length: MAX_STREAMS_PER_SERVICE }, (_, i) => String(saved?.twitch?.[i] || '')),
-                kick: Array.from({ length: MAX_STREAMS_PER_SERVICE }, (_, i) => String(saved?.kick?.[i] || ''))
-            };
-        } catch (_) {
-            return {
-                twitch: Array(MAX_STREAMS_PER_SERVICE).fill(''),
-                kick: Array(MAX_STREAMS_PER_SERVICE).fill('')
-            };
-        }
-    }
+    const excludedTwitch = new Set([
+        'directory', 'downloads', 'jobs', 'p', 'search',
+        'settings', 'subscriptions', 'wallet'
+    ]);
 
-    function saveStreamConfig(config) {
-        try {
-            localStorage.setItem(STREAMS_KEY, JSON.stringify(config));
-        } catch (_) {}
-    }
+    const excludedKick = new Set([
+        'categories', 'browse', 'directory', 'following', 'search',
+        'settings', 'auth', 'login', 'register', 'signup',
+        'video', 'videos'
+    ]);
 
-    function channelName(raw) {
-        const value = String(raw || '').trim();
-        if (/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
-            return value;
-        }
+    const sleep = (ms) =>
+        new Promise((resolve) => window.setTimeout(resolve, ms));
 
-        const url = normalizeChannelUrl(value);
-        if (!url) return '';
-        return decodeURIComponent(new URL(url).pathname.slice(1));
-    }
-
-    function chatUrl(raw) {
-        const url = normalizeChannelUrl(raw);
-        if (!url) return null;
-        const parsed = new URL(url);
-        const channel = encodeURIComponent(
-            decodeURIComponent(parsed.pathname.slice(1))
-        );
-
-        return parsed.hostname === 'twitch.tv'
-            ? 'https://www.twitch.tv/popout/' + channel + '/chat'
-            : 'https://kick.com/popout/' + channel + '/chat';
-    }
-
-    function chatUrlForService(service, raw) {
-        const channel = channelName(raw);
-
-        if (!channel) {
-            return null;
-        }
-
-        const host = service === 'twitch'
-            ? 'www.twitch.tv'
-            : service === 'kick'
-                ? 'kick.com'
-                : null;
-
-        if (!host) {
-            return null;
-        }
-
-        return 'https://' + host + '/popout/' +
-            encodeURIComponent(channel) +
-            '/chat';
-    }
-
-
-    function chatKey(service, index) {
-        return 'moth-' + service + '-' + (index + 1);
-    }
-
-    function openChat(service, index, raw, active = false) {
-        const channel = channelName(raw);
-        const url = chatUrlForService(service, raw);
-
-        if (!channel || !url) {
-            return {
-                opened: false,
-                error: 'Invalid ' + service + ' channel'
-            };
-        }
-
-        const key = chatKey(service, index);
-        const current = openChats.get(key);
-
-        if (current && !current.closed) {
-            return {
-                opened: true,
-                alreadyOpen: true,
-                url
-            };
-        }
-
-        try {
-            if (typeof GM_openInTab !== 'function') {
-                throw new Error(
-                    'Violentmonkey GM_openInTab is unavailable. The installed script does not have its @grant GM_openInTab permission.'
-                );
-            }
-
-            // Use the documented legacy form. The second argument is
-            // "open in background", so true keeps the game tab active.
-            const control = GM_openInTab(url, true);
-
-            if (!control) {
-                throw new Error('Violentmonkey did not create the chat tab.');
-            }
-
-            openChats.set(key, control);
-
-            return {
-                opened: true,
-                alreadyOpen: false,
-                url
-            };
-        } catch (error) {
-            console.error('[Moth] could not open chat with Violentmonkey:', {
-                service,
-                channel,
-                url,
-                error
-            });
-
-            // This is only a fallback for a broken/missing VM tab API.
-            // It opens the CHAT URL, never the PokéIdle URL.
-            try {
-                const fallback = window.open(
-                    url,
-                    '_blank',
-                    'noopener,noreferrer'
-                );
-
-                if (fallback) {
-                    return {
-                        opened: true,
-                        alreadyOpen: false,
-                        fallback: true,
-                        url
-                    };
-                }
-            } catch (_) {}
-
-            return {
-                opened: false,
-                error: error?.message || String(error)
-            };
-        }
-    }
-
-    function closeChat(service, index) {
-        const key = chatKey(service, index);
-        const chat = openChats.get(key);
-        if (!chat) return false;
-
-        try { chat.close(); } catch (_) {}
-        openChats.delete(key);
-        return true;
-    }
-
-    async function openAllConfiguredChats(config) {
-        let opened = 0;
-        const errors = [];
-
-        for (const service of ['twitch', 'kick']) {
-            for (let index = 0; index < MAX_STREAMS_PER_SERVICE; index += 1) {
-                const value = config[service][index];
-                if (!value) continue;
-
-                const result = await openChat(service, index, value);
-
-                if (result.opened) {
-                    opened += 1;
-                } else if (result.error) {
-                    errors.push(
-                        service.toUpperCase() + ' ' + (index + 1) + ': ' + result.error
-                    );
-                }
-            }
-        }
-
-        return { opened, errors };
-    }
-
-    function closeAllChats() {
-        let closed = 0;
-
-        for (const key of Array.from(openChats.keys())) {
-            try { openChats.get(key)?.close(); } catch (_) {}
-            openChats.delete(key);
-            closed += 1;
-        }
-
-        return closed;
-    }
-
-
-    function qa(selector, root) {
-        return Array.from(
-            (root || document).querySelectorAll(selector)
-        );
-    }
-
-    function normalizeText(value) {
-        return String(value == null ? '' : value)
+    const text = (value) =>
+        String(value == null ? '' : value)
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .replace(/\s+/g, ' ')
             .trim()
             .toLowerCase();
-    }
 
-    function normalizeChannelUrl(raw) {
+    function channelName(raw) {
+        const value = String(raw || '').trim();
+
+        if (/^[A-Za-z0-9_-]{1,64}$/.test(value)) {
+            return value;
+        }
+
         try {
-            const url = new URL(
-                String(raw || ''),
-                location.href
-            );
-
-            if (!/^https?:$/i.test(url.protocol)) {
-                return null;
-            }
-
-            const host = url.hostname
-                .toLowerCase()
-                .replace(/^www\./, '');
+            const url = new URL(value, location.href);
+            const host = url.hostname.toLowerCase().replace(/^www\./, '');
 
             if (host !== 'twitch.tv' && host !== 'kick.com') {
-                return null;
+                return '';
             }
 
-            const segments = url.pathname
-                .split('/')
-                .map(part => part.trim())
-                .filter(Boolean);
+            const parts = url.pathname.split('/').filter(Boolean);
 
-            if (segments.length !== 1) {
-                return null;
-            }
-
-            const channel = segments[0];
-
-            if (!channel || channel.startsWith(':')) {
-                return null;
-            }
-
-            const excluded =
-                host === 'twitch.tv'
-                    ? EXCLUDED_TWITCH_PATHS
-                    : EXCLUDED_KICK_PATHS;
-
-            if (excluded.has(channel.toLowerCase())) {
-                return null;
-            }
-
-            return (
-                'https://' +
-                host +
-                '/' +
-                encodeURIComponent(channel)
-            );
+            return parts.length === 1
+                ? decodeURIComponent(parts[0])
+                : '';
         } catch (_) {
-            return null;
+            return '';
         }
     }
 
-    function readLiveValue(value) {
-        const text = normalizeText(value);
+    function channelUrl(service, raw) {
+        const name = channelName(raw);
 
-        if (!text) {
+        if (!name) {
             return null;
         }
 
-        if (NEGATIVE_LIVE_TEXT_RE.test(text)) {
-            return false;
-        }
+        const host =
+            service === 'twitch'
+                ? 'www.twitch.tv'
+                : service === 'kick'
+                    ? 'kick.com'
+                    : null;
 
-        return LIVE_VALUE_RE.test(text)
-            ? true
+        return host
+            ? 'https://' + host + '/' + encodeURIComponent(name)
             : null;
     }
 
-    function inspectAttributes(element) {
-        if (!element || element.nodeType !== 1) {
+    function chatUrl(service, raw) {
+        const name = channelName(raw);
+
+        if (!name) {
             return null;
         }
 
-        const attributes = [
-            'data-live',
-            'data-is-live',
-            'data-online',
-            'data-stream-live',
-            'data-streaming',
-            'data-status',
-            'data-state',
-            'aria-label',
-            'title'
-        ];
+        const host =
+            service === 'twitch'
+                ? 'www.twitch.tv'
+                : service === 'kick'
+                    ? 'kick.com'
+                    : null;
 
-        for (const name of attributes) {
-            const value = element.getAttribute(name);
-            const result = readLiveValue(value);
-
-            if (result !== null) {
-                return result;
-            }
-
-            if (
-                /^(?:aria-label|title)$/.test(name) &&
-                LIVE_TEXT_RE.test(normalizeText(value))
-            ) {
-                return true;
-            }
-        }
-
-        return null;
+        return host
+            ? 'https://' + host + '/popout/' +
+                encodeURIComponent(name) + '/chat'
+            : null;
     }
 
-    function inspectClasses(element) {
-        if (!element || !element.classList) {
+    function normalizeLiveLink(service, raw) {
+        const url = channelUrl(service, raw);
+
+        if (!url) {
             return null;
         }
 
-        const classes = Array.from(element.classList)
-            .map(normalizeText)
-            .filter(Boolean);
+        const name = channelName(raw);
+        const excluded =
+            service === 'twitch' ? excludedTwitch : excludedKick;
 
-        for (const token of classes) {
-            if (
-                /^(?:live|is-live|live-now|live-stream|stream-live|online|is-online|ao-vivo|aovivo|en-vivo|envivo)$/.test(token)
-            ) {
-                return true;
-            }
-
-            if (
-                /(?:offline|is-offline|ended|encerrad[oa])/.test(token)
-            ) {
-                return false;
-            }
-        }
-
-        return null;
+        return excluded.has(name.toLowerCase())
+            ? null
+            : {
+                service,
+                name,
+                url,
+                chat: chatUrl(service, name)
+            };
     }
 
-    function normalizedBadgeText(value) {
-        return normalizeText(value)
-            .replace(/^[^a-z0-9à-ÿ]+/i, '')
-            .replace(/[^a-z0-9à-ÿ]+$/i, '')
-            .trim();
-    }
-
-    function inspectBadgeText(container) {
-        if (!container) {
-            return null;
-        }
-
-        const badgeCandidates = qa(
-            'b,strong,small,span,i,[role="status"],[class*="badge"],[class*="status"],[class*="live"],[class*="online"]',
-            container
-        );
-
-        for (const node of badgeCandidates.slice(0, 80)) {
-            const text = normalizedBadgeText(node.textContent);
-
-            if (!text || text.length > 40) {
-                continue;
-            }
-
-            if (NEGATIVE_LIVE_TEXT_RE.test(text)) {
-                return false;
-            }
-
-            if (LIVE_TEXT_RE.test(text)) {
-                return true;
-            }
-
-            if (
-                /^(?:\d+\s+)?(?:live|online|ao vivo|ao-vivo|en vivo|en-vivo)(?:\s+\d+)?$/i.test(text)
-            ) {
-                return true;
-            }
-        }
-
-        return null;
-    }
-
-    function hasLiveMarker(anchor) {
-        let node = anchor;
-
-        for (
-            let depth = 0;
-            node && depth <= 8;
-            depth += 1
-        ) {
-            const attrResult = inspectAttributes(node);
-
-            if (attrResult !== null) {
-                return attrResult;
-            }
-
-            const classResult = inspectClasses(node);
-
-            if (classResult !== null) {
-                return classResult;
-            }
-
-            const badgeResult = inspectBadgeText(node);
-
-            if (badgeResult !== null) {
-                return badgeResult;
-            }
-
-            node = node.parentElement;
-        }
-
-        return false;
-    }
-
-    function collectRenderedOfficialChannels(selectors) {
-        const channels = [];
-        const seen = new Set();
+    function collectLinks(selectors) {
+        const found = new Map();
 
         for (const selector of selectors) {
-            for (const anchor of qa(selector)) {
-                const url = normalizeChannelUrl(anchor.href || anchor.getAttribute('href'));
-                if (!url || seen.has(url)) continue;
+            for (const anchor of document.querySelectorAll(selector)) {
+                const href =
+                    anchor.href ||
+                    anchor.getAttribute('href') ||
+                    '';
 
-                seen.add(url);
-                channels.push({
-                    url,
-                    anchor
-                });
+                const host = (() => {
+                    try {
+                        return new URL(href, location.href)
+                            .hostname
+                            .toLowerCase()
+                            .replace(/^www\./, '');
+                    } catch (_) {
+                        return '';
+                    }
+                })();
+
+                const service =
+                    host === 'twitch.tv'
+                        ? 'twitch'
+                        : host === 'kick.com'
+                            ? 'kick'
+                            : null;
+
+                if (!service) {
+                    continue;
+                }
+
+                const item = normalizeLiveLink(service, href);
+
+                if (item) {
+                    found.set(service + ':' + text(item.name), item);
+                }
             }
         }
 
-        return channels;
+        return [...found.values()];
     }
 
-    function collectLiveChannels() {
-        const direct = collectRenderedOfficialChannels([
+    function liveStateRows() {
+        return {
+            twitch: document.querySelector(
+                '#tr-ativos .tr-ativo.twitch'
+            ),
+            kick: document.querySelector(
+                '#tr-ativos .tr-ativo.kick'
+            )
+        };
+    }
+
+    async function collectOfficialLiveChannels() {
+        const collected = new Map();
+
+        const direct = collectLinks([
             'a.tw-canal.ao-vivo[href]',
             'a.kk-canal.ao-vivo[href]'
         ]);
 
-        const candidates = new Map(
-            direct.map((channel) => [channel.url, channel])
-        );
-
-        // Keep the generic fallback for other PokéIdle builds/pages that expose
-        // live stream links directly in the DOM.
-        for (const anchor of qa('a[href]')) {
-            const url = normalizeChannelUrl(
-                anchor.href ||
-                anchor.getAttribute('href')
-            );
-
-            if (!url || !hasLiveMarker(anchor)) {
-                continue;
-            }
-
-            candidates.set(url, {
-                url,
-                anchor
-            });
+        for (const item of direct) {
+            collected.set(item.service + ':' + text(item.name), item);
         }
-
-        return Array.from(candidates.values());
-    }
-
-    function sleep(ms) {
-        return new Promise((resolve) => window.setTimeout(resolve, ms));
-    }
-
-    async function waitForGameUi(timeoutMs = APP_READY_TIMEOUT_MS) {
-        const started = Date.now();
-
-        while (Date.now() - started < timeoutMs) {
-            if (
-                document.body &&
-                (
-                    document.getElementById('tr-ativos') ||
-                    document.querySelector('.menu-topo') ||
-                    document.getElementById(INVENTORY_ID)
-                )
-            ) {
-                return true;
-            }
-
-            await sleep(250);
-        }
-
-        return false;
-    }
-
-    async function collectLiveChannelsFromOfficialModals() {
-        const collected = new Map(
-            collectRenderedOfficialChannels([
-                'a.tw-canal.ao-vivo[href]',
-                'a.kk-canal.ao-vivo[href]'
-            ]).map((channel) => [channel.url, channel])
-        );
 
         const targets = [
             {
-                trigger: 'button.tr-ativo.twitch',
+                service: 'twitch',
+                row: '.tr-ativo.twitch.tw-aovivo',
                 body: '#tw-corpo',
                 links: '#tw-corpo a.tw-canal.ao-vivo[href]'
             },
             {
-                trigger: 'button.tr-ativo.kick',
+                service: 'kick',
+                row: '.tr-ativo.kick.kk-aovivo',
                 body: '#kk-corpo',
                 links: '#kk-corpo a.kk-canal.ao-vivo[href]'
             }
         ];
 
         for (const target of targets) {
-            const trigger = document.querySelector(target.trigger);
+            const row = document.querySelector(target.row);
 
-            if (!trigger) {
+            if (!row) {
                 continue;
             }
 
-            // The Twitch/KICK row itself tells us whether that service has a live
-            // state right now. Skip opening the modal when it is definitely offline.
-            if (
-                target.trigger.includes('.twitch') &&
-                !trigger.classList.contains('tw-aovivo') &&
-                !trigger.classList.contains('tw-ativo')
-            ) {
+            try {
+                row.click();
+            } catch (_) {
                 continue;
             }
 
-            if (
-                target.trigger.includes('.kick') &&
-                !trigger.classList.contains('kk-aovivo') &&
-                !trigger.classList.contains('kk-ativo')
-            ) {
-                continue;
-            }
+            for (let attempt = 0; attempt < 15; attempt += 1) {
+                const links = collectLinks([target.links]);
 
-            let body = document.querySelector(target.body);
-
-            if (!body) {
-                try {
-                    trigger.click();
-                } catch (_) {
-                    continue;
+                for (const item of links) {
+                    collected.set(
+                        item.service + ':' + text(item.name),
+                        item
+                    );
                 }
 
-                for (let attempt = 0; attempt < 20; attempt += 1) {
-                    await sleep(100);
-                    body = document.querySelector(target.body);
-
-                    if (body) {
-                        break;
-                    }
-                }
-            }
-
-            if (!body) {
-                continue;
-            }
-
-            for (let attempt = 0; attempt < 20; attempt += 1) {
-                const found = collectRenderedOfficialChannels([target.links]);
-
-                for (const channel of found) {
-                    collected.set(channel.url, channel);
-                }
-
-                if (found.length) {
+                if (links.length) {
                     break;
                 }
 
-                await sleep(150);
+                await sleep(100);
             }
 
             const close = document.getElementById('modal-fechar');
 
-            if (close && !document.querySelector('#modal')?.classList.contains('hidden')) {
+            if (close) {
                 try {
                     close.click();
                 } catch (_) {}
-
-                await sleep(100);
+                await sleep(80);
             }
         }
 
-        return Array.from(collected.values());
+        return collected;
     }
 
-    async function openStream(url) {
-        const parsed = new URL(url);
-        const service = parsed.hostname.replace(/^www\./, '') === 'twitch.tv'
-            ? 'twitch'
-            : 'kick';
+    function waitForGameUi(timeoutMs = 15_000) {
+        return new Promise((resolve) => {
+            const started = Date.now();
 
-        const channel = channelName(url);
-        if (!channel) return false;
+            const check = () => {
+                const ready =
+                    !!document.body &&
+                    (
+                        document.getElementById(INVENTORY_ID) ||
+                        document.querySelector('.menu-topo')
+                    );
 
-        const config = loadStreamConfig();
-        let index = config[service].findIndex(
-            value => normalizeText(value) === normalizeText(channel)
-        );
+                if (ready) {
+                    resolve(true);
+                    return;
+                }
 
-        if (index < 0) {
-            index = config[service].findIndex(value => !value);
+                if (Date.now() - started >= timeoutMs) {
+                    resolve(false);
+                    return;
+                }
 
-            if (index >= 0) {
-                config[service][index] = channel;
-                saveStreamConfig(config);
-            }
-        }
+                window.setTimeout(check, 250);
+            };
 
-        if (index < 0) return false;
-
-        const result = await openChat(service, index, channel);
-        return result.opened;
-    }
-
-    function closeManager() {
-        document.getElementById('moth-stream-manager')?.remove();
-    }
-
-    function renderManager() {
-        if (document.getElementById('moth-stream-manager')) return;
-
-        const config = loadStreamConfig();
-        const panel = document.createElement('div');
-        panel.id = 'moth-stream-manager';
-        panel.style.cssText = [
-            'position:fixed',
-            'right:18px',
-            'top:70px',
-            'z-index:2147483647',
-            'width:430px',
-            'max-height:80vh',
-            'overflow:auto',
-            'box-sizing:border-box',
-            'padding:12px',
-            'background:#111',
-            'color:#eee',
-            'border:1px solid #555',
-            'border-radius:8px',
-            'box-shadow:0 8px 30px rgba(0,0,0,.45)',
-            'font:13px/1.3 system-ui,sans-serif'
-        ].join(';');
-
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-weight:700';
-        header.textContent = 'Moth Stream Chats';
-
-        const closeManagerButton = document.createElement('button');
-        closeManagerButton.type = 'button';
-        closeManagerButton.textContent = '×';
-        closeManagerButton.style.cssText = 'background:none;border:0;color:#fff;font-size:22px;cursor:pointer';
-        closeManagerButton.addEventListener('click', closeManager);
-        header.appendChild(closeManagerButton);
-        panel.appendChild(header);
-
-        const note = document.createElement('div');
-        note.textContent = 'Chat-only: no stream video is loaded. These connections use this game profile.';
-        note.style.cssText = 'margin-bottom:10px;opacity:.72';
-        panel.appendChild(note);
-
-        const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:6px;margin-bottom:10px';
-
-        const openAll = document.createElement('button');
-        openAll.type = 'button';
-        openAll.textContent = 'Open all';
-        openAll.addEventListener('click', async () => {
-            openAll.disabled = true;
-
-            const result = await openAllConfiguredChats(config);
-
-            openAll.textContent = result.errors.length
-                ? 'Opened ' + result.opened + ' · ' + result.errors.length + ' error(s)'
-                : 'Opened ' + result.opened;
-
-            if (result.errors.length) {
-                console.error('[Moth] open-all errors:', result.errors);
-            }
-
-            window.setTimeout(() => {
-                openAll.textContent = 'Open all';
-                openAll.disabled = false;
-            }, 1800);
+            check();
         });
-
-        const closeAll = document.createElement('button');
-        closeAll.type = 'button';
-        closeAll.textContent = 'Close all';
-        closeAll.addEventListener('click', () => {
-            const count = closeAllChats();
-            closeAll.textContent = 'Closed ' + count;
-            window.setTimeout(() => { closeAll.textContent = 'Close all'; }, 1000);
-        });
-
-        for (const button of [openAll, closeAll]) {
-            button.style.cssText = 'padding:5px 9px;cursor:pointer';
-            actions.appendChild(button);
-        }
-
-        panel.appendChild(actions);
-
-        for (const service of ['twitch', 'kick']) {
-            const section = document.createElement('section');
-
-            const title = document.createElement('div');
-            title.textContent = service === 'twitch'
-                ? 'Twitch · 10 chat slots'
-                : 'KICK · 10 chat slots';
-            title.style.cssText = 'font-weight:700;margin:8px 0 5px';
-            section.appendChild(title);
-
-            for (let index = 0; index < MAX_STREAMS_PER_SERVICE; index += 1) {
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex;gap:4px;margin:3px 0';
-
-                const number = document.createElement('span');
-                number.textContent = String(index + 1).padStart(2, '0');
-                number.style.cssText = 'width:22px;opacity:.6;padding-top:5px';
-
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.placeholder = 'channel';
-                input.value = config[service][index];
-                input.style.cssText = 'flex:1;min-width:0;padding:5px';
-
-                const save = document.createElement('button');
-                save.type = 'button';
-                save.textContent = 'Save';
-                save.style.cssText = 'padding:4px 7px;cursor:pointer';
-
-                const chat = document.createElement('a');
-                chat.textContent = 'Chat';
-                chat.target = '_blank';
-                chat.rel = 'noopener noreferrer';
-                chat.style.cssText = 'display:inline-block;box-sizing:border-box;padding:4px 7px;cursor:pointer;text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:2px';
-
-                chat.href = chatUrlForService(service, config[service][index]) || 'about:blank';
-                                const close = document.createElement('button');
-                close.type = 'button';
-                close.textContent = '×';
-                close.title = 'Close chat';
-                close.style.cssText = 'padding:4px 8px;cursor:pointer';
-
-                save.addEventListener('click', () => {
-                    const value = channelName(input.value);
-                    if (!value) return;
-                    config[service][index] = value;
-                    input.value = value;
-                    saveStreamConfig(config);
-                    chat.href = chatUrlForService(service, value) || 'about:blank';
-                });
-
-                chat.addEventListener('mousedown', (event) => {
-                    if (event.button !== 0) return;
-
-                    const value = channelName(input.value);
-
-                    if (!value) {
-                        chat.textContent = 'Invalid';
-                        window.setTimeout(() => { chat.textContent = 'Chat'; }, 1200);
-                        return;
-                    }
-
-                    config[service][index] = value;
-                    input.value = value;
-                    saveStreamConfig(config);
-                    chat.href = chatUrlForService(service, value) || 'about:blank';
-                });
-
-                                close.addEventListener('click', () => {
-                    closeChat(service, index);
-                });
-
-                row.append(number, input, save, chat, close);
-                section.appendChild(row);
-            }
-
-            panel.appendChild(section);
-        }
-
-        document.body.appendChild(panel);
     }
 
-    async function runLiveScan() {
-        const ready = await waitForGameUi();
+    function openChat(item) {
+        if (!item.chat) {
+            return false;
+        }
 
-        if (!ready) {
-            console.info(
-                '[Moth] live chat scan: PokéIdle UI did not become ready'
+        const key = item.service + ':' + text(item.name);
+        const current = openChats.get(key);
+
+        if (current && !current.closed) {
+            return true;
+        }
+
+        try {
+            if (typeof GM_openInTab !== 'function') {
+                console.error('[Moth] GM_openInTab is unavailable');
+                return false;
+            }
+
+            const tab = GM_openInTab(item.chat, true);
+
+            if (!tab) {
+                return false;
+            }
+
+            openChats.set(key, tab);
+            return true;
+        } catch (error) {
+            console.error(
+                '[Moth] failed to open chat:',
+                item.chat,
+                error
             );
+            return false;
+        }
+    }
 
+    function closeChatsNotLive(liveKeys) {
+        for (const [key, tab] of [...openChats.entries()]) {
+            if (tab?.closed || !liveKeys.has(key)) {
+                try {
+                    if (!tab?.closed) {
+                        tab.close();
+                    }
+                } catch (_) {}
+
+                openChats.delete(key);
+            }
+        }
+    }
+
+    async function runLiveScan(reason = 'manual') {
+        if (scanInProgress) {
             return {
                 channels: [],
-                queued: 0,
-                notReady: true
+                opened: 0,
+                tracked: openChats.size,
+                skipped: true
             };
-        }
-
-        // The stream rows are server-driven. Give the current game a few short
-        // opportunities to render them instead of requiring the Twitch/KICK row
-        // to exist at the exact instant the button is clicked.
-        let channels = [];
-
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-            channels = await collectLiveChannelsFromOfficialModals();
-
-            if (channels.length) {
-                break;
-            }
-
-            await sleep(500);
-        }
-
-        let queued = 0;
-
-        for (const channel of channels) {
-            if (await openStream(channel.url)) {
-                queued += 1;
-            }
-        }
-
-        console.info(
-            '[Moth] live chat scan:',
-            channels.length,
-            'live channel(s),',
-            queued,
-            'opened/queued'
-        );
-
-        return {
-            channels,
-            queued
-        };
-    }
-
-    async function scanLiveStreams(button) {
-        if (scanInProgress) {
-            return;
         }
 
         scanInProgress = true;
 
-        const originalLabel = button?.querySelector('span')?.textContent?.trim() ||
-            'Open Live Streams';
-
         try {
-            if (button) {
-                button.disabled = true;
-                const label = button.querySelector('span');
-                if (label) {
-                    label.textContent = 'Scanning…';
+            if (!(await waitForGameUi())) {
+                console.info('[Moth] live scan skipped: game UI not ready');
+
+                return {
+                    channels: [],
+                    opened: 0,
+                    tracked: openChats.size,
+                    notReady: true
+                };
+            }
+
+            let live = new Map();
+
+            for (let attempt = 0; attempt < 10; attempt += 1) {
+                live = await collectOfficialLiveChannels();
+
+                if (live.size) {
+                    break;
+                }
+
+                await sleep(500);
+            }
+
+            const rows = liveStateRows();
+            const streamStateIsAvailable =
+                !!rows.twitch || !!rows.kick;
+
+            const liveKeys = new Set();
+            const perService = {
+                twitch: 0,
+                kick: 0
+            };
+
+            let opened = 0;
+
+            for (const item of live.values()) {
+                if (perService[item.service] >= MAX_LIVE_CHATS_PER_SERVICE) {
+                    continue;
+                }
+
+                const key =
+                    item.service + ':' + text(item.name);
+
+                liveKeys.add(key);
+                perService[item.service] += 1;
+
+                if (openChat(item)) {
+                    opened += 1;
                 }
             }
 
-            const result = await runLiveScan();
-
-            if (button) {
-                const label = button.querySelector('span');
-                if (label) {
-                    label.textContent = result.notReady
-                        ? 'Game not ready'
-                        : result.queued > 0
-                            ? 'Scanned ' + result.queued + ' live'
-                            : result.channels.length > 0
-                                ? 'Found live, open failed'
-                                : 'No live streams found';
-                }
+            // Only close old chats when PokéIdle actually exposed its stream
+            // state. A transient server/UI delay must never wipe valid chats.
+            if (streamStateIsAvailable) {
+                closeChatsNotLive(liveKeys);
             }
 
-            return result;
-        } catch (error) {
-            console.error(
-                '[Moth] live chat scan failed:',
-                error
+            console.info(
+                '[Moth] live chat scan:',
+                reason,
+                live.size,
+                'live channel(s),',
+                opened,
+                'opened/kept,',
+                openChats.size,
+                'tracked'
             );
 
-            if (button) {
-                const label = button.querySelector('span');
-                if (label) {
-                    label.textContent = 'Scan failed';
-                }
-            }
+            return {
+                channels: [...live.values()],
+                opened,
+                tracked: openChats.size
+            };
+        } catch (error) {
+            console.error('[Moth] live chat scan failed:', error);
 
             return {
                 channels: [],
-                queued: 0
+                opened: 0,
+                tracked: openChats.size,
+                failed: true
             };
         } finally {
-            if (button) {
-                window.setTimeout(() => {
-                    button.disabled = false;
-                    const label = button.querySelector('span');
-                    if (label) {
-                        label.textContent =
-                            originalLabel || 'Open Live Streams';
-                    }
-                }, 1600);
-            }
-
             scanInProgress = false;
         }
     }
 
-    function ensureButton() {
-        if (!document.documentElement) {
-            return;
-        }
+    async function scheduledScan() {
+        await runLiveScan('hourly');
+        window.setTimeout(scheduledScan, LIVE_SCAN_INTERVAL_MS);
+    }
 
+    function ensureButton() {
         const inventory = document.getElementById(INVENTORY_ID);
 
-        if (!inventory) {
-            return;
-        }
-
-        const existing = document.getElementById(BUTTON_ID);
-
-        if (existing) {
+        if (!inventory || document.getElementById(BUTTON_ID)) {
             return;
         }
 
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.title =
-'Open all live Twitch/KICK streams';
+        button.title = 'Open current live Twitch/KICK chats';
         button.setAttribute(
             'aria-label',
-            'Open all live Twitch and KICK streams'
+            'Open current live Twitch and KICK chats'
         );
 
-        const computed = typeof window.getComputedStyle === 'function'
-            ? window.getComputedStyle(inventory)
-            : null;
+        const style = window.getComputedStyle(inventory);
 
-        button.style.display = computed?.display === 'inline'
-            ? 'inline-block'
-            : (computed?.display || 'inline-flex');
-        button.style.alignItems = 'center';
-        button.style.justifyContent = 'center';
-        button.style.boxSizing = 'border-box';
-        button.style.visibility = 'visible';
-        button.style.opacity = '1';
-        button.style.pointerEvents = 'auto';
-        button.style.cursor = 'pointer';
-        button.style.minHeight = inventory.offsetHeight > 0
-            ? inventory.offsetHeight + 'px'
-            : '30px';
-        button.style.margin = computed?.margin || '2px 0 0 0';
-        button.style.padding = computed?.padding || '6px 10px';
-        button.style.font = computed?.font || 'inherit';
-        button.style.lineHeight = computed?.lineHeight || 'normal';
-        button.style.color = computed?.color || 'inherit';
-        button.style.background = computed?.background || 'transparent';
-        button.style.border = computed?.border || '1px solid currentColor';
-        button.style.borderRadius = computed?.borderRadius || '4px';
+        button.style.cssText = [
+            'display:inline-flex',
+            'align-items:center',
+            'justify-content:center',
+            'box-sizing:border-box',
+            'min-height:' + Math.max(30, inventory.offsetHeight) + 'px',
+            'margin:' + (style.margin || '2px 0 0 0'),
+            'padding:' + (style.padding || '6px 10px'),
+            'font:' + (style.font || 'inherit'),
+            'line-height:' + (style.lineHeight || 'normal'),
+            'color:' + (style.color || 'inherit'),
+            'background:' + (style.background || 'transparent'),
+            'border:' + (style.border || '1px solid currentColor'),
+            'border-radius:' + (style.borderRadius || '4px'),
+            'cursor:pointer'
+        ].join(';');
 
         const label = document.createElement('span');
         label.textContent = 'Open Live Streams';
         button.appendChild(label);
 
-        button.addEventListener('click', () => {
-            scanLiveStreams(button);
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            label.textContent = 'Scanning…';
+
+            const result = await runLiveScan('manual');
+
+            label.textContent = result.failed
+                ? 'Scan failed'
+                : result.notReady
+                    ? 'Game not ready'
+                    : result.channels.length
+                        ? 'Opened/kept ' + result.opened
+                        : 'No live streams found';
+
+            window.setTimeout(() => {
+                if (!button.isConnected) {
+                    return;
+                }
+
+                button.disabled = false;
+                label.textContent = 'Open Live Streams';
+            }, 1600);
         });
 
-        inventory.insertAdjacentElement(
-            'afterend',
-            button
-        );
-
-        const managerButton = document.createElement('button');
-        managerButton.type = 'button';
-        managerButton.id = 'moth-manage-streams';
-        managerButton.textContent = 'Manage Chats';
-        managerButton.title = 'Manage up to 10 Twitch + 10 KICK chat-only connections';
-        managerButton.style.cssText = button.style.cssText;
-        managerButton.style.marginLeft = '4px';
-        managerButton.addEventListener('click', renderManager);
-        inventory.insertAdjacentElement('afterend', managerButton);
+        inventory.insertAdjacentElement('afterend', button);
     }
 
     function start() {
         ensureButton();
 
-        window.setInterval(() => {
-            ensureButton();
-        }, 3000);
-
-        console.info(
-            '[Moth] live chat scanner ready'
+        window.setInterval(
+            ensureButton,
+            UI_RECHECK_INTERVAL_MS
         );
+
+        window.setTimeout(() => {
+            void scheduledScan();
+        }, INITIAL_SCAN_DELAY_MS);
+
+        console.info('[Moth] hourly live chat scanner ready');
     }
 
     start();
