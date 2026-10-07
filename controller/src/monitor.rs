@@ -1,5 +1,4 @@
 use crate::logging;
-use native_windows_gui as nwg;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -142,13 +141,13 @@ pub struct MonitorHandle {
 }
 
 impl MonitorHandle {
-    pub fn start(port: u16, notice_sender: nwg::NoticeSender) -> Self {
+    pub fn start(port: u16) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&health);
         let stop_worker = Arc::clone(&stop);
 
-        thread::spawn(move || monitor_loop(port, shared, stop_worker, notice_sender));
+        thread::spawn(move || monitor_loop(port, shared, stop_worker));
 
         Self { health, stop }
     }
@@ -190,7 +189,6 @@ fn monitor_loop(
     port: u16,
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
-    notice_sender: nwg::NoticeSender,
 ) {
     let mut session: Option<BrowserSession> = None;
 
@@ -211,7 +209,6 @@ fn monitor_loop(
                         current.state = "Running".to_string();
                         current.last_error = None;
                     }
-                    notice_sender.notice();
                 }
                 Err(error) => {
                     logging::warn(&format!(
@@ -225,7 +222,6 @@ fn monitor_loop(
                         current.game_ready = false;
                         current.logged_in = false;
                     }
-                    notice_sender.notice();
                 }
             }
         }
@@ -253,7 +249,6 @@ fn monitor_loop(
                         current.performance_scene_runs = probe.performance_scene_runs;
                         current.last_error = None;
                     }
-                    notice_sender.notice();
                 }
                 Err(error) => {
                     logging::warn(&format!(
@@ -267,7 +262,6 @@ fn monitor_loop(
                         current.game_ready = false;
                         current.logged_in = false;
                     }
-                    notice_sender.notice();
 
                     end_session(&mut session);
                 }
