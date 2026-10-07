@@ -15,7 +15,7 @@
 (() => {
     'use strict';
 
-    const TARGET_QUALITY_RE = /^160p(?:\\D|$)/i;
+    const TARGET_QUALITY_RE = /^160p(?:\D|$)/i;
     const QUALITY_OPTION_SELECTOR =
         '[data-a-target="player-settings-menu"] input[type="radio"],' +
         '[data-a-target="player-settings-submenu-quality-option"]';
@@ -108,7 +108,7 @@
             if (!target) {
                 const scored = options
                     .map((el, index) => {
-                        const match = textOf(el).match(/(\\d{3,4})p/i);
+                        const match = textOf(el).match(/(\d{3,4})p/i);
                         return { el, index, height: match ? Number(match[1]) : Number.MAX_SAFE_INTEGER };
                     })
                     .filter(x => Number.isFinite(x.height))
@@ -148,7 +148,7 @@
             // Reduce visual work in areas outside the player without touching video controls.
             '[data-a-target="recommendations-container"],' +
             '[data-a-target="home-recommendations"] { content-visibility:auto !important; }'
-        ].join('\\n');
+         ].join('\n');
 
         (document.head || document.documentElement)?.appendChild(style);
     };
@@ -167,18 +167,10 @@
     addResourceSavingCss();
     void forceLowestQuality();
 
-    const observer = new MutationObserver(() => {
-        addResourceSavingCss();
-
-        // Twitch's SPA can destroy/recreate the player after navigation,
-        // quality changes and ads, so re-apply without a tight polling loop.
-        void forceLowestQuality();
-    });
-
-    if (document.documentElement) {
-        observer.observe(document.documentElement, { childList: true, subtree: true });
-    }
-
+    // The 5-second watchdog is deliberate: observing Twitch's entire document
+    // creates a callback for a very large number of unrelated DOM mutations.
+    // Re-checking on a fixed interval is materially cheaper and still repairs
+    // the player after SPA navigation, ads, and player recreation.
     setInterval(tick, 5000);
 
     console.info('[IdleShell] Twitch low-resource addon active');
