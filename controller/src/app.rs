@@ -394,8 +394,6 @@ impl eframe::App for ControllerApp {
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
             .show(ui, |ui| {
                 draw_instance_section(self, ui);
-                ui.add_space(16.0);
-                draw_runtime_section(self, ui);
             });
 
         if self.show_profiles {
@@ -515,17 +513,42 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.columns(2, |columns| {
-                draw_game_card(app, &mut columns[0], 0);
-                draw_game_card(app, &mut columns[1], 1);
-            });
+            let gap = ui.spacing().item_spacing.x;
+            let card_width = ((ui.available_width() - gap) / 2.0).max(320.0);
 
-            ui.add_space(16.0);
-            draw_runtime_section(app, ui);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(card_width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        draw_game_card(app, ui, 0, card_width);
+                    },
+                );
+
+                ui.allocate_ui_with_layout(
+                    egui::vec2(card_width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        draw_game_card(app, ui, 1, card_width);
+                    },
+                );
+            });
         });
+
+    ui.add_space(16.0);
+    draw_runtime_section(app, ui);
 }
 
-fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+fn draw_game_card(
+    app: &mut ControllerApp,
+    ui: &mut egui::Ui,
+    index: usize,
+    width: f32,
+) {
+    ui.set_width(width);
+
     let profile = app.games[index].profile;
     let health = app.games[index].health();
     let running = app.games[index].is_running();
@@ -610,19 +633,25 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         _ => health.summary(),
                     };
 
-                    ui.label(
-                        RichText::new(compact_text(&headline, 52))
-                            .size(18.0)
-                            .strong()
-                            .color(TEXT),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(compact_text(&headline, 52))
+                                .size(18.0)
+                                .strong()
+                                .color(TEXT),
+                        )
+                        .truncate(),
                     );
 
                     if !health.active_pokemon.is_empty() {
                         ui.add_space(3.0);
-                        ui.label(
-                            RichText::new(compact_text(&health.active_pokemon, 54))
-                                .size(11.0)
-                                .color(MUTED),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(compact_text(&health.active_pokemon, 54))
+                                    .size(11.0)
+                                    .color(MUTED),
+                            )
+                            .truncate(),
                         );
                     }
 
@@ -802,7 +831,15 @@ fn draw_game_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
 fn mini_metric(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.vertical(|ui| {
         ui.label(RichText::new(label).size(8.0).strong().color(DIM));
-        ui.label(RichText::new(compact_text(value, 18)).size(11.0).strong().color(TEXT));
+        ui.add(
+            egui::Label::new(
+                RichText::new(compact_text(value, 18))
+                    .size(11.0)
+                    .strong()
+                    .color(TEXT),
+            )
+            .truncate(),
+        );
     });
     ui.add_space(16.0);
 }
@@ -821,7 +858,15 @@ fn resource_chip(ui: &mut egui::Ui, text: &str) {
 fn resource_value(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     ui.vertical(|ui| {
         ui.label(RichText::new(label).size(8.0).strong().color(DIM));
-        ui.label(RichText::new(compact_text(value, 18)).size(10.0).strong().color(color));
+        ui.add(
+            egui::Label::new(
+                RichText::new(compact_text(value, 18))
+                    .size(10.0)
+                    .strong()
+                    .color(color),
+            )
+            .truncate(),
+        );
     });
     ui.add_space(14.0);
 }
