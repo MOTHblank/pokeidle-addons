@@ -251,32 +251,24 @@ internal sealed class MainForm : Form
         _activeWorkspaceIndex = Math.Clamp(index, 0, _workspaces.Count - 1);
     }
 
-    // Addons folder resolution order: repo checkout next to the exe's parent
-    // folders, then the build-output copy shipped beside the exe.
+    // The executable loads only the addon bundle copied beside the executable.
+    // This prevents a stale repository/build-tree addon directory from winning
+    // over the current build.
     internal static string ResolveAddonsFolder()
     {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "addons"),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "addons")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "addons")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "addons"))
-        };
+        var dir = Path.Combine(AppContext.BaseDirectory, "addons");
 
-        foreach (var dir in candidates)
+        try
         {
-            try
+            if (Directory.Exists(dir) &&
+                Directory.EnumerateFiles(dir, "*.user.js").Any())
             {
-                if (Directory.Exists(dir) &&
-                    Directory.EnumerateFiles(dir, "*.user.js").Any())
-                {
-                    return Path.GetFullPath(dir);
-                }
+                return Path.GetFullPath(dir);
             }
-            catch { }
         }
+        catch { }
 
-        return Path.GetFullPath(candidates[0]);
+        return Path.GetFullPath(dir);
     }
 
     private void BuildToolbar()
@@ -348,7 +340,9 @@ internal sealed class MainForm : Form
             var addonsFolder = ResolveAddonsFolder();
             _userscripts = new ViolentmonkeyManager(addonsFolder);
             _userscriptStatus.Text =
-                $"Userscripts: VM ready · {_userscripts.ScriptNames.Count} bundled";
+                $"VM ready · {_userscripts.ScriptNames.Count} bundled · {Path.GetFileName(Path.TrimEndingDirectorySeparator(addonsFolder))}";
+            _userscriptStatus.AccessibleName =
+                $"Userscript source folder: {addonsFolder}";
             Log($"real Violentmonkey {ViolentmonkeyManager.Version}: {_userscripts.ScriptNames.Count} repository script(s) found in {addonsFolder}");
 
             RefreshAddonsPicker();
