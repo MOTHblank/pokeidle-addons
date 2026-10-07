@@ -888,8 +888,6 @@ internal sealed class KickChatHost : IAsyncDisposable
         _view.ProcessFailed += (_, e) =>
             _log($"Kick chat WebView process failed for profile {_profileId}: {e.ProcessFailedKind}");
 
-        await _view.AddScriptToExecuteOnDocumentCreatedAsync(BootstrapScript);
-
         _pageReady = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -932,7 +930,20 @@ internal sealed class KickChatHost : IAsyncDisposable
             return;
         }
 
-        _pageReady.TrySetResult(true);
+        _ = InitializeHostAsync();
+    }
+
+    private async Task InitializeHostAsync()
+    {
+        try
+        {
+            await _view!.ExecuteScriptAsync(BootstrapScript);
+            _pageReady?.TrySetResult(true);
+        }
+        catch (Exception ex)
+        {
+            _pageReady?.TrySetException(ex);
+        }
     }
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
