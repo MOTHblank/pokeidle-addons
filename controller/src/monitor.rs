@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use std::net::TcpStream;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -162,10 +162,13 @@ fn probe_browser(port: u16) -> Result<Probe, String> {
 }
 
 fn send_and_wait(
-    socket: &mut WebSocket<TcpStream>,
+    socket: &mut WebSocket<S>,
     expected_id: u64,
     command: Value,
-) -> Result<Value, String> {
+) -> Result<Value, String>
+where
+    S: Read + Write,
+{
     socket
         .send(Message::Text(command.to_string().into()))
         .map_err(|error| error.to_string())?;
