@@ -1,6 +1,7 @@
 use crate::accounts::AccountsWindow;
 use crate::config::{Config, GameProfile};
 use crate::firefox;
+use crate::monitor;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
 use std::process::Child;
@@ -225,12 +226,14 @@ pub fn run() -> Result<(), String> {
                         launch_one(
                             GameProfile::Game1,
                             &mut state.game1,
+                            &mut state.game1_monitor,
                             &game1_status,
                             &status,
                         );
                         launch_one(
                             GameProfile::Game2,
                             &mut state.game2,
+                            &mut state.game2_monitor,
                             &game2_status,
                             &status,
                         );
