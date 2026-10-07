@@ -328,6 +328,7 @@ struct Probe {
     tabs: Vec<TabInfo>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
+    market_catalog: Vec<MarketItem>,
 }
 
 fn monitor_loop(
