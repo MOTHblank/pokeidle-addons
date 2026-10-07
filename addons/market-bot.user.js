@@ -11,6 +11,13 @@
 (() => {
     'use strict';
 
+    try {
+        document.documentElement?.setAttribute(
+            'data-idleshell-market-bot',
+            'started'
+        );
+    } catch {}
+
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
     function reportReady() {
