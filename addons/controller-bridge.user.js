@@ -24,6 +24,8 @@
     const MAX_MARKET = 80;
     const MAX_EVENTS = 250;
 
+    let lastStreamBonus = '';
+
     const copy = value => {
         try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
     };
@@ -222,6 +224,12 @@
     function snapshot() {
         const pokemon = activePokemon();
         const scanner = document.querySelector('#moth-scan-live-streams');
+
+        const text = selector => {
+            const el = document.querySelector(selector);
+            return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        };
+
         const currentStreamBonus = bodyTextBonus();
         const playerXp = text('#tr-xp-txt');
 
@@ -235,11 +243,6 @@
             )
             .slice(0, 8);
 
-        const text = selector => {
-            const el = document.querySelector(selector);
-            return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
-        };
-
         const numberFrom = selector => {
             const match = text(selector).match(/\d[\d.,]*/);
             return match ? Number(match[0].replace(/\D/g, '')) || 0 : 0;
@@ -249,6 +252,9 @@
             connected: !!socket && socket.readyState === page.WebSocket.OPEN,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
+                xp: Number(state?.xp) || 0,
+                xpNivel: Number(state?.xpNivel) || 0,
+                xpProximo: Number(state?.xpProximo) || 0,
                 huntSlug: state?.huntSlug || '',
                 activeId: state?.activeId ?? null,
                 gold: Number(state?.gold) || 0,
@@ -264,6 +270,14 @@
                 playerXp,
                 visibleStreamBonus: currentStreamBonus,
                 lastStreamBonus,
+                twitch: copy(state?.twitch),
+                kick: copy(state?.kick),
+                loja: copy(state?.loja),
+                guild: copy(state?.guild),
+                passe: copy(state?.passe),
+                evento: copy(state?.evento),
+                guildBonusPct: Number(state?.guildBonusPct) || 0,
+                guildBonusRank: Number(state?.guildBonusRank) || 0,
                 xpBonuses: [...new Set(bonusLines)],
                 domBalls: balls(),
                 autoCatchOn: text('#moth-ac-toggle').toUpperCase() === 'ON',
