@@ -18,7 +18,7 @@ internal sealed class MainForm : Form
     private readonly Label _userscriptStatus = new()
     {
         AutoSize = false,
-        Width = 360,
+        Width = 500,
         Height = 28,
         Text = "Userscripts: starting…",
         TextAlign = ContentAlignment.MiddleLeft,
@@ -307,8 +307,8 @@ internal sealed class MainForm : Form
         _userscriptStatus.Location = new Point(8, 36);
         _toolbar.Controls.Add(_userscriptStatus);
 
-        _status.Location = new Point(374, 36);
-        _status.Width = Math.Max(200, ClientSize.Width - _status.Left - 8);
+        _status.Location = new Point(516, 36);
+        _status.Width = Math.Max(180, ClientSize.Width - _status.Left - 8);
         _toolbar.Controls.Add(_status);
 
         // The picker doubles as a "Reload addons" action: selecting the first
@@ -1042,8 +1042,8 @@ internal sealed class MainForm : Form
         }
 
         _userscriptStatus.Text =
-            $"Userscripts: VM ready · Stream Scanner {(stream ? "running" : "not running")} · " +
-            $"Moth Watch {(market ? "running" : "not running")}";
+            $"VM ready · Stream Scanner: {(stream ? "RUNNING" : "NOT RUNNING")} · " +
+            $"Market Bot: {(market ? "RUNNING" : "NOT RUNNING")}";
     }
 
     // --- Stream link routing -------------------------------------------------
