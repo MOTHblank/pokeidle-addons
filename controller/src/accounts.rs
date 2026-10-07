@@ -299,7 +299,7 @@ fn build_game_row(
 
 fn open_game(profile: GameProfile) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
-    let _ = firefox::launch(&config)?;
+    let _ = firefox::launch_unmonitored(&config)?;
     Ok(())
 }
 
