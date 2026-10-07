@@ -686,12 +686,19 @@ fn draw_game_card(
 
                     ui.add_space(9.0);
 
+                    let trainer_level = if health.player_level == 0 {
+                        "—".to_string()
+                    } else {
+                        health.player_level.to_string()
+                    };
+                    let fallen = health.fallen_count.to_string();
+
                     ui.horizontal_wrapped(|ui| {
-                        mini_metric(ui, "TRAINER LV", if health.player_level == 0 { "—" } else { &health.player_level.to_string() });
+                        mini_metric(ui, "TRAINER LV", &trainer_level);
                         mini_metric(ui, "TRAINER XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
                         mini_metric(ui, "POKÉMON LV", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
                         mini_metric(ui, "POKÉMON XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
-                        mini_metric(ui, "FALLEN", &health.fallen_count.to_string());
+                        mini_metric(ui, "FALLEN", &fallen);
                     });
                 });
 
