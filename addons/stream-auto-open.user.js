@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.7.0
+// @version      4.8.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -812,26 +812,36 @@
         document.body.appendChild(panel);
     }
 
-    async function runLiveScan(options = {}) {
-        const waitForStreams = options.waitForStreams !== false;
+    async function runLiveScan() {
+        const ready = await waitForGameUi();
 
-        if (waitForStreams) {
-            const ready = await waitForStreamUi();
+        if (!ready) {
+            console.info(
+                '[Moth] live chat scan: PokéIdle UI did not become ready'
+            );
 
-            if (!ready) {
-                console.info(
-                    '[Moth] live chat scan: PokéIdle stream UI did not become ready'
-                );
-
-                return {
-                    channels: [],
-                    queued: 0,
-                    notReady: true
-                };
-            }
+            return {
+                channels: [],
+                queued: 0,
+                notReady: true
+            };
         }
 
-        const channels = await collectLiveChannelsFromOfficialModals();
+        // The stream rows are server-driven. Give the current game a few short
+        // opportunities to render them instead of requiring the Twitch/KICK row
+        // to exist at the exact instant the button is clicked.
+        let channels = [];
+
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            channels = await collectLiveChannelsFromOfficialModals();
+
+            if (channels.length) {
+                break;
+            }
+
+            await sleep(500);
+        }
+
         let queued = 0;
 
         for (const channel of channels) {
@@ -873,7 +883,7 @@
                 }
             }
 
-            const result = await runLiveScan({ waitForStreams: true });
+            const result = await runLiveScan();
 
             if (button) {
                 const label = button.querySelector('span');
@@ -1087,7 +1097,7 @@
                 return;
             }
 
-            const result = await runLiveScan({ waitForStreams: true });
+            const result = await runLiveScan();
 
             console.info(
                 '[Moth] controller-triggered scan completed:',
