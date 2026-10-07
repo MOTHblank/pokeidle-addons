@@ -23,7 +23,13 @@ impl GameProfile {
             Self::Game2 => "Game 2",
         }
     }
-}
+
+    pub const fn legacy_name(self) -> &'static str {
+        match self {
+            Self::Game1 => "AccountA",
+            Self::Game2 => "AccountB",
+        }
+    }
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -52,6 +58,10 @@ impl Config {
 
     pub fn profiles_dir() -> Result<PathBuf, String> {
         Ok(data_root()?.join("Profiles"))
+    }
+
+    pub fn legacy_profile_dir(&self) -> Result<PathBuf, String> {
+        Ok(data_root()?.join("Profiles").join(self.profile.legacy_name()))
     }
 }
 
