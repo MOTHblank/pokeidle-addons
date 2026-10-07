@@ -50,6 +50,15 @@ pub struct MarketItem {
 }
 
 #[derive(Clone, Debug)]
+pub struct MarketSummary {
+    pub item_id: u64,
+    pub name: String,
+    pub gold_min: u64,
+    pub orb_min: u64,
+    pub listings: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct Health {
     pub state: String,
     pub url: String,
@@ -92,6 +101,7 @@ pub struct Health {
     pub hunts: Vec<HuntInfo>,
     pub market_listings: Vec<MarketListing>,
     pub market_catalog: Vec<MarketItem>,
+    pub market_summary: Vec<MarketSummary>,
     pub last_error: Option<String>,
 }
 
@@ -139,6 +149,7 @@ impl Default for Health {
             hunts: Vec::new(),
             market_listings: Vec::new(),
             market_catalog: Vec::new(),
+            market_summary: Vec::new(),
             last_error: None,
         }
     }
@@ -291,6 +302,7 @@ struct RuntimeProbe {
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
     market_catalog: Vec<MarketItem>,
+    market_summary: Vec<MarketSummary>,
 }
 
 struct Probe {
@@ -426,6 +438,7 @@ fn monitor_loop(
                         current.hunts = probe.hunts;
                         current.market_listings = probe.market_listings;
                         current.market_catalog = probe.market_catalog;
+                        current.market_summary = probe.market_summary;
                         current.last_error = None;
                     }
                 }
@@ -1050,6 +1063,52 @@ fn probe_runtime_details(
         }
     }
 
+    let mut market_summary = Vec::new();
+    if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
+        for entry in messages.iter().rev() {
+            let Some(message) = entry.get("message") else { continue; };
+            if message.get("aba").and_then(Value::as_str) != Some("itens") {
+                continue;
+            }
+
+            let Some(summary) = message.get("resumo").and_then(Value::as_object) else {
+                break;
+            };
+
+            for (raw_id, row) in summary {
+                let Ok(item_id) = raw_id.parse::<u64>() else { continue; };
+                let name = names
+                    .get(&item_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Item {}", item_id));
+
+                let gold_min = row
+                    .get("minGold")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let orb_min = row
+                    .get("minOrb")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let listings = row
+                    .get("anuncios")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+
+                if listings > 0 {
+                    market_summary.push(MarketSummary {
+                        item_id,
+                        name,
+                        gold_min,
+                        orb_min,
+                        listings,
+                    });
+                }
+            }
+            break;
+        }
+    }
+
     let mut market_listings = Vec::new();
     if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
         for entry in messages {
@@ -1085,6 +1144,8 @@ fn probe_runtime_details(
 
     market_listings.sort_by_key(|listing| listing.price);
     market_listings.truncate(100);
+    market_summary.sort_by_key(|item| if item.gold_min > 0 { item.gold_min } else { u64::MAX });
+    market_summary.truncate(200);
 
     Ok(RuntimeProbe {
         bridge_connected,
@@ -1112,6 +1173,7 @@ fn probe_runtime_details(
         hunts,
         market_listings,
         market_catalog,
+        market_summary,
     })
 }
 
