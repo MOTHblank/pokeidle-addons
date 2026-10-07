@@ -17,11 +17,6 @@ internal sealed class Pane
     // Raised when page content requests a new window (window.open / target=_blank).
     public event Action<Pane, string>? PopupRequested;
 
-    // Per-pane background behavior for inactive stream panes (default: Background).
-    public StreamMode Mode { get; set; } = StreamMode.Background;
-
-    // True while this pane is displayed in the layout; false when hidden/parked.
-    public bool IsForeground { get; private set; } = true;
 
     // False after Close(); guards host-script registration on dead views.
     public bool IsAttached { get; private set; } = true;
@@ -36,7 +31,6 @@ internal sealed class Pane
         Controller = controller;
         _environment = environment;
         _userscripts = userscripts;
-        if (spec.Kind == PaneKind.Stream) Mode = spec.Mode;
     }
 
     public static async Task<Pane> CreateAsync(
@@ -226,20 +220,10 @@ internal sealed class Pane
         if (Spec.Kind == PaneKind.Game)
             await View.AddScriptToExecuteOnDocumentCreatedAsync(StreamLinkInterceptorScript());
 
-        // The full Violentmonkey extension is only needed by PokéIdle game
-        // pages. Stream pages use the Twitch low-resource addon directly when
-        // applicable, avoiding a persistent extension background stack in every
-        // stream profile.
-        if (Spec.Kind == PaneKind.Game && _userscripts is not null)
+        if (_userscripts is not null)
         {
             await _userscripts.InstallForProfileAsync(
                 View.Profile, _environment);
-        }
-        else if (Spec.Kind == PaneKind.Stream &&
-                 AccountManager.ServiceForUrl(Spec.Url) == AccountService.Twitch &&
-                 _userscripts?.FindScriptSource("Twitch Low Resource Mode") is { } lowResourceScript)
-        {
-            await View.AddScriptToExecuteOnDocumentCreatedAsync(lowResourceScript);
         }
 
         View.WebMessageReceived += (_, e) =>
@@ -258,18 +242,12 @@ internal sealed class Pane
         };
 
         // Capture popups instead of letting WebView2 spawn an OS window we
-        // cannot control (no profile/visibility handling there). The game pane
-        // forwards the URL to the link router; stream panes open it visibly.
+        // cannot control. The game pane forwards supported stream URLs to the host.
         View.NewWindowRequested += (_, e) =>
         {
             e.Handled = true;
             PopupRequested?.Invoke(this, e.Uri);
         };
-
-        if (Spec.Kind == PaneKind.Stream)
-        {
-            View.IsMuted = true;
-        }
 
     }
 
@@ -280,48 +258,19 @@ internal sealed class Pane
         manager.InstallForProfileAsync(
             View.Profile, _environment);
 
-    public void Show(Rectangle bounds, bool normalMemory = true)
+    public void Show(Rectangle bounds)
     {
         Controller.Bounds = bounds;
         Controller.IsVisible = true;
-        IsForeground = true;
-
-        // Visible stream panes continue playing, but only the selected stream
-        // needs the full normal memory target. Other simultaneously visible
-        // streams can use WebView2's low-memory target without being suspended;
-        // scripts and network connections continue to run.
-        try
-        {
-            View.MemoryUsageTargetLevel = normalMemory
-                ? CoreWebView2MemoryUsageTargetLevel.Normal
-                : CoreWebView2MemoryUsageTargetLevel.Low;
-        }
+        try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Normal; }
         catch { }
     }
 
-    // Background mode: IsVisible=false stops compositing (the big cost) while the
-    // page keeps running — Chromium throttling is already disabled via browser
-    // flags. Do NOT call TrySuspendAsync here: it pauses script timers and
-    // animations, which would stop the addons.
-    // Note: CoreWebView2Settings.PreferredBackgroundTimerWakeInterval (the
-    // "unthrottled hidden timers" API, wake interval 0) is not exposed by the
-    // pinned WebView2 package (1.0.4258.31); the --disable-background-timer-throttling
-    // flag in AppConfig covers this instead.
     public void Hide()
     {
         Controller.IsVisible = false;
-        IsForeground = false;
-        try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
-    }
-
-    // Legacy off-screen parking: keeps rendering + compositing alive, so it is
-    // only useful as a fallback if platforms pause when the pane is hidden.
-    public void Park()
-    {
-        Controller.Bounds = new Rectangle(-10000, -10000, 640, 360);
-        Controller.IsVisible = true;
-        IsForeground = false;
-        try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; } catch { }
+        try { View.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; }
+        catch { }
     }
 
     // One-shot probe script: reads visibilityState/hasFocus and measures how much
@@ -349,7 +298,7 @@ internal sealed class Pane
     {
         var url = View?.Source;
         if (!string.IsNullOrWhiteSpace(url)) Spec = Spec with { Url = url };
-        return Spec with { Mode = Mode };
+        return Spec;
     }
 
     public void Close() => Controller.Close();
