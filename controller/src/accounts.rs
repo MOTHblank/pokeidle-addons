@@ -144,23 +144,13 @@ fn build_game_row(
     title: &str,
     y: i32,
 ) -> Result<(), String> {
-    let mut frame = nwg::Frame::default();
-
-    nwg::Frame::builder()
-        .flags(nwg::FrameFlags::BORDER | nwg::FrameFlags::VISIBLE)
-        .position((24, y + 20))
-        .size((572, 154))
-        .parent(window)
-        .build(&mut frame)
-        .map_err(|e| format!("could not create {title} box: {e}"))?;
-
     let mut heading = nwg::Label::default();
     nwg::Label::builder()
         .text(title)
         .flags(nwg::LabelFlags::VISIBLE)
-        .position((18, 4))
-        .size((180, 24))
-        .parent(&frame)
+        .position((24, y))
+        .size((160, 24))
+        .parent(window)
         .build(&mut heading)
         .map_err(|e| format!("could not create {title} heading: {e}"))?;
 
@@ -168,9 +158,9 @@ fn build_game_row(
     nwg::Label::builder()
         .text("PokéIdle + one Twitch login + one KICK login share this profile.")
         .flags(nwg::LabelFlags::VISIBLE)
-        .position((18, 30))
-        .size((530, 26))
-        .parent(&frame)
+        .position((24, y + 28))
+        .size((570, 24))
+        .parent(window)
         .build(&mut description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
 
@@ -191,9 +181,9 @@ fn build_game_row(
         nwg::Button::builder()
             .text(label)
             .flags(nwg::ButtonFlags::VISIBLE)
-            .position((18 + (column as i32) * 124, 68 + row * 38))
+            .position((24 + (column as i32) * 124, y + 58 + row * 38))
             .size((116, 32))
-            .parent(&frame)
+            .parent(window)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
     }
