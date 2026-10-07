@@ -1,5 +1,5 @@
+use crate::accounts::AccountsWindow;
 use crate::config::{Config, GameProfile};
-use crate::accounts::show as show_accounts;
 use crate::firefox;
 use native_windows_gui as nwg;
 use std::cell::RefCell;
@@ -9,6 +9,7 @@ use std::rc::Rc;
 struct State {
     game1: Option<Child>,
     game2: Option<Child>,
+    accounts: Option<AccountsWindow>,
 }
 
 pub fn run() -> Result<(), String> {
@@ -153,6 +154,7 @@ pub fn run() -> Result<(), String> {
     let state = Rc::new(RefCell::new(State {
         game1: None,
         game2: None,
+        accounts: None,
     }));
 
     {
@@ -226,7 +228,22 @@ pub fn run() -> Result<(), String> {
                             &status,
                         );
                     } else if handle == accounts_button_handle {
-                        show_accounts();
+                        let mut state = state_for_events.borrow_mut();
+
+                        if state.accounts.is_none() {
+                            match AccountsWindow::build() {
+                                Ok(accounts) => {
+                                    state.accounts = Some(accounts);
+                                }
+                                Err(error) => {
+                                    nwg::simple_message("Moth", &error);
+                                }
+                            }
+                        }
+
+                        if let Some(accounts) = state.accounts.as_ref() {
+                            accounts.show();
+                        }
                     } else if handle == profiles_button_handle {
                         open_profiles_folder(&status);
                     } else if handle == close_button_handle {
