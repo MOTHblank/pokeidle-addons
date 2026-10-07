@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::monitor::MonitorHandle;
 use std::fs;
 use std::io;
 use std::process::{Child, Command, Stdio};
@@ -58,7 +59,7 @@ user_pref("media.block-autoplay-until-in-foreground", true);
 user_pref("media.suspend-background-video.enabled", true);
 "#;
 
-pub fn launch(config: &Config) -> Result<Child, String> {
+pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
     migrate_legacy_profile(config)?;
 
     fs::create_dir_all(&config.profile_dir).map_err(|error| {
@@ -71,10 +72,11 @@ pub fn launch(config: &Config) -> Result<Child, String> {
     provision_profile(&config.profile_dir)?;
 
     let child = Command::new(&config.firefox_executable)
-        // Each Moth game profile must be a genuinely separate Firefox
-        // instance so Game 1 and Game 2 cannot inherit each other's cookies,
-        // logins, or session state. --no-remote implies --new-instance.
+        // Headless is intentional: the Rust controller is the visible UI
+        // and health monitor. Firefox has no window to minimize or render.
+        .arg("--headless")
         .arg("--no-remote")
+        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
@@ -85,62 +87,9 @@ pub fn launch(config: &Config) -> Result<Child, String> {
         .spawn()
         .map_err(format_spawn_error)?;
 
-    minimize_process_window_async(child.id());
-    Ok(child)
+    let monitor = MonitorHandle::start(config.remote_debug_port);
+    Ok((child, monitor))
 }
-
-
-#[cfg(windows)]
-struct WindowSearch {
-    pid: DWORD,
-    minimized: bool,
-}
-
-#[cfg(windows)]
-unsafe extern "system" fn find_process_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let search = unsafe { &mut *(lparam as *mut WindowSearch) };
-    let mut window_pid: DWORD = 0;
-
-    unsafe { GetWindowThreadProcessId(hwnd, &mut window_pid); }
-
-    if window_pid == search.pid && unsafe { IsWindowVisible(hwnd) } != 0 {
-        unsafe { ShowWindow(hwnd, SW_MINIMIZE);
-        search.minimized = true;
-        return 0;
-    }
-
-    TRUE
-}
-
-#[cfg(windows)]
-fn minimize_process_window_async(pid: u32) {
-    thread::spawn(move || {
-        // Firefox creates its top-level window asynchronously. Poll briefly
-        // instead of blocking the GUI thread or using a shell wrapper.
-        for _ in 0..40 {
-            let mut search = WindowSearch {
-                pid,
-                minimized: false,
-            };
-
-            unsafe {
-                EnumWindows(
-                    Some(find_process_window),
-                    &mut search as *mut WindowSearch as LPARAM,
-                );
-            }
-
-            if search.minimized {
-                return;
-            }
-
-            thread::sleep(Duration::from_millis(250));
-        }
-    });
-}
-
-#[cfg(not(windows))]
-fn minimize_process_window_async(_pid: u32) {}
 
 fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
     if config.profile_dir.exists() {
