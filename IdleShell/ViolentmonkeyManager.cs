@@ -417,7 +417,7 @@ internal sealed class ViolentmonkeyManager
             await Task.Delay(50);
 
             var probe = await view.ExecuteScriptAsync(
-                $"""
+                $$"""
                 (() => {
                   const v = window.__idleshellVmMatches?.["{{operationId}}"];
                   return JSON.stringify(v ?? null);
