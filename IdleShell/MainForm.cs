@@ -13,6 +13,7 @@ internal sealed class MainForm : Form
 
     private CoreWebView2Environment? _gameEnv;
     private CoreWebView2Environment? _streamEnv;
+    private StreamPresenceManager? _streams;
     private readonly AccountManager _accounts = AccountManager.Load();
     private readonly List<Pane> _games = [];
     private readonly List<GameWorkspace> _workspaces = [new(0), new(1)];
@@ -21,12 +22,10 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _probeTimer = new() { Interval = 30000 };
     private readonly CheckBox _probeToggle = new()
         { Text = "Probe", AutoSize = true, Checked = true, Padding = new Padding(3, 6, 3, 0) };
-    private StreamMode _inactiveStreamMode = StreamMode.Background;
     private bool _probing;
     private bool _suppressTabEvent;
     private bool _suppressAddonPickerEvent;
     private readonly SemaphoreSlim _streamRouteGate = new(1, 1);
-    private Button _modeButton = null!;
     private Button _game1Button = null!;
     private Button _game2Button = null!;
     private Button _foregroundBothButton = null!;
@@ -109,8 +108,8 @@ internal sealed class MainForm : Form
     {
         public Account Account { get; set; } = account;
         public int SlotNumber { get; } = slotNumber;
-        public Pane? Pane;
         public string? Url;
+        public StreamConnectionState State { get; set; }
         public TabPage Tab { get; } = new();
     }
 
@@ -133,7 +132,13 @@ internal sealed class MainForm : Form
 
         Resize += (_, _) => LayoutPanes();
         FormClosing += (_, _) => SaveSession();
-        FormClosed += (_, _) => { _statsTimer.Stop(); _probeTimer.Stop(); foreach (var p in AllPanes()) p.Close(); };
+        FormClosed += (_, _) =>
+        {
+            _statsTimer.Stop();
+            _probeTimer.Stop();
+            foreach (var p in _games) p.Close();
+            _ = _streams?.DisposeAsync();
+        };
         Shown += async (_, _) => await InitializeAsync();
 
         _statsTimer.Tick += (_, _) => UpdateStatus();
@@ -143,10 +148,7 @@ internal sealed class MainForm : Form
     private IEnumerable<StreamSlot> AllStreamSlots() =>
         _workspaces.SelectMany(w => w.Slots);
 
-    private IEnumerable<Pane> AllPanes() =>
-        _games
-            .Concat(AllStreamSlots().Select(s => s.Pane))
-            .OfType<Pane>();
+    private IEnumerable<Pane> AllPanes() => _games;
 
     private void BuildWorkspaceChrome()
     {
@@ -259,8 +261,6 @@ internal sealed class MainForm : Form
 
     private void BuildToolbar()
     {
-        _modeButton = Button("Hidden panes: Background", (_, _) => ToggleStreamMode());
-
         var items = new Control[]
         {
             Button("Reload games", (_, _) => ReloadGames()),
@@ -271,9 +271,8 @@ internal sealed class MainForm : Form
             _foregroundBothButton = Button("Games: foreground both", (_, _) => SetGamesForeground(true)),
             Button("Accounts…", (_, _) => OpenAccountsDialog()),
             Button("Streams…", (_, _) => OpenStreamsForActiveWorkspace()),
-            Button("Hide all", (_, _) => SetAllStreamsBackground()),
+            Button("Collapse streams", (_, _) => SetAllStreamsBackground()),
             _addonsPicker,
-            _modeButton,
             _probeToggle,
             _status
         };
@@ -300,23 +299,7 @@ internal sealed class MainForm : Form
             else _probeTimer.Stop();
         };
 
-        UpdateModeButtonText();
     }
-
-    private void ToggleStreamMode()
-    {
-        _inactiveStreamMode = _inactiveStreamMode == StreamMode.Background
-            ? StreamMode.Parked : StreamMode.Background;
-        foreach (var slot in AllStreamSlots())
-            if (slot.Pane is { } p) p.Mode = _inactiveStreamMode;
-        SaveSession();
-        UpdateModeButtonText();
-        LayoutPanes();
-    }
-
-    private void UpdateModeButtonText() =>
-        _modeButton.Text = $"Hidden panes: {(_inactiveStreamMode == StreamMode.Background ? "Background" : "Parked")}";
-
     private static Button Button(string text, EventHandler handler)
     {
         var b = new Button { Text = text, AutoSize = true, Height = 28 };
@@ -362,15 +345,9 @@ internal sealed class MainForm : Form
                     AreBrowserExtensionsEnabled = true
                 });
 
-            // All stream accounts share ONE user data folder so their profiles
-            // share Chromium's process pool (lower RAM per extra account). The
-            // cookies/logins stay separated by the stable account profile name.
-            //
-            // Streams do not need the userscript extension: all repository
-            // userscripts currently target PokéIdle itself, and stream-link
-            // routing is native in the game WebView. Keeping the extension
-            // disabled here avoids loading a complete VM background/extension
-            // stack into every stream profile.
+            // The stream environment is not a video environment anymore. It is
+            // used only for Kick's single chat host per login and temporary
+            // interactive login windows. Twitch chat is native WebSocket/IRC.
             _streamEnv = await CoreWebView2Environment.CreateAsync(
                 null, AppConfig.StreamUserDataFolder,
                 new CoreWebView2EnvironmentOptions
@@ -399,6 +376,7 @@ internal sealed class MainForm : Form
             {
                 _suppressTabEvent = false;
             }
+            _streams = new StreamPresenceManager(_streamEnv, Handle, Log);
             UpdateWorkspaceHeaders();
 
             // Stream slots are intentionally fresh each shell session and are not
