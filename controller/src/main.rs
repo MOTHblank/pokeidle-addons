@@ -4,6 +4,7 @@ mod accounts;
 mod app;
 mod config;
 mod firefox;
+mod monitor;
 
 fn main() {
     if let Err(error) = app::run() {
