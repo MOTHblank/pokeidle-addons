@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::logging;
 use crate::monitor::MonitorHandle;
+use native_windows_gui as nwg;
 use std::fs;
 use std::io;
 use std::process::{Child, Command, Stdio};
@@ -51,7 +52,7 @@ user_pref("media.block-autoplay-until-in-foreground", true);
 user_pref("media.suspend-background-video.enabled", true);
 "#;
 
-pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
+pub fn launch(config: &Config, notice_sender: nwg::NoticeSender) -> Result<(Child, MonitorHandle), String> {
     migrate_legacy_profile(config)?;
 
     fs::create_dir_all(&config.profile_dir).map_err(|error| {
@@ -80,7 +81,7 @@ pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
         .spawn()
         .map_err(format_spawn_error)?;
 
-    let monitor = MonitorHandle::start(config.remote_debug_port);
+    let monitor = MonitorHandle::start(config.remote_debug_port, notice_sender);
     Ok((child, monitor))
 }
 
