@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      4.0.0
+// @version      4.1.0
 // @description  Adds Open Live Streams under Open Inventory; clicking it scans the current PokéIdle page for live Twitch/KICK channels and opens them in the current Firefox profile.
 // @match        https://pokeidle.io/app*
 // @run-at       document-start
+// @grant        GM_openInTab
 // @noframes
 // ==/UserScript==
 
@@ -112,13 +113,17 @@
         const current = openChats.get(key);
 
         if (current && !current.closed) {
-            try { current.focus(); } catch (_) {}
             return true;
         }
 
         try {
-            const chat = window.open(url, key);
+            const chat = GM_openInTab(url, {
+                active: false,
+                insert: true
+            });
+
             if (!chat) return false;
+
             openChats.set(key, chat);
             return true;
         } catch (_) {
@@ -609,7 +614,7 @@
                 channels.length,
                 'live channel(s),',
                 queued,
-                'queued'
+                'opened/queued'
             );
         } catch (error) {
             console.error(
@@ -713,7 +718,7 @@
         }, 3000);
 
         console.info(
-            '[Moth] manual live stream scanner ready'
+            '[Moth] manual live chat scanner ready'
         );
     }
 
