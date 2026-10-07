@@ -729,8 +729,19 @@ fn draw_game_card(
             );
             ui.add_space(6.0);
 
+            let performance_value = if health.performance_fps.is_empty() {
+                "Loaded".to_string()
+            } else {
+                format!("{} FPS", health.performance_fps)
+            };
+
             ui.horizontal_wrapped(|ui| {
-                automation_badge(ui, "Auto Catch", if health.autocatch_on { "Active" } else { "Off" }, health.autocatch_on);
+                automation_badge(
+                    ui,
+                    "Auto Catch",
+                    if health.autocatch_on { "Active" } else { "Off" },
+                    health.autocatch_on,
+                );
                 automation_badge(
                     ui,
                     "Restock",
@@ -748,14 +759,17 @@ fn draw_game_card(
                     health.stream_scan_status.eq_ignore_ascii_case("ok"),
                 );
                 if health.stream_scan_live > 0 || health.stream_scan_opened > 0 {
+                    let streams_value =
+                        format!("{} live · {} opened", health.stream_scan_live, health.stream_scan_opened);
+
                     automation_badge(
                         ui,
                         "Streams",
-                        &format!("{} live · {} opened", health.stream_scan_live, health.stream_scan_opened),
+                        &streams_value,
                         true,
                     );
                 }
-                automation_badge(ui, "Performance+", if health.performance_fps.is_empty() { "Loaded" } else { &format!("{} FPS", health.performance_fps) }, true);
+                automation_badge(ui, "Performance+", &performance_value, true);
             });
 
             ui.add_space(12.0);
