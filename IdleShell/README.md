@@ -8,6 +8,8 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
 - .NET 10 WinForms host.
 - Two persistent WebView2 game profiles: AccountA and AccountB.
 - One shared stream environment with separate named stream profiles.
+- Stream profiles do not load the full Violentmonkey extension; the Twitch low-resource
+  addon is injected directly into Twitch stream pages instead.
 - The UI is split into two independent Game 1 / Game 2 workspaces.
 - Each workspace has a collapsible stream dock. It is collapsed by default so the
   game keeps almost the full vertical workspace for normal navigation.
@@ -19,9 +21,12 @@ browser-native userscript execution and optional persistent Twitch/Kick stream p
 - Every opened stream slot is composited simultaneously while the dock is expanded.
   Tabs select and manage slots; they do not replace another visible stream.
   There is no separate "visible streams" limit.
+- Only the selected visible stream uses WebView2's normal memory target. Other visible
+  stream panes use the low-memory target without being suspended, so playback/scripts can
+  continue while Chromium is encouraged to reclaim or swap nonessential memory.
 - Existing PokéIdle userscripts remain ordinary `*.user.js` files in `/addons`.
 - The shell embeds the official upstream **Violentmonkey 2.49.0 MV3** extension
-  and installs it into each WebView2 profile with
+  and installs it into each **game** WebView2 profile with
   `CoreWebView2Profile.AddBrowserExtensionAsync`.
 - `prepare-violentmonkey.ps1` downloads the official release archive once and
   verifies its SHA-256 before placing the unpacked extension under
@@ -115,6 +120,12 @@ off-screen as a fallback.
 
 The toolbar probe samples visibility state, focus, and `setTimeout(1000)` drift
 every 30 seconds and writes `probe.csv` under the LocalAppData root.
+
+The shell deliberately does not install the Violentmonkey extension into stream
+profiles. Twitch streams still receive the repository's `Twitch Low Resource Mode`
+script directly; it forces the lowest advertised Twitch quality and trims expensive
+chat/navigation UI. The addon uses a lightweight 5-second watchdog instead of a
+whole-document mutation observer.
 
 ## Stream link routing
 
