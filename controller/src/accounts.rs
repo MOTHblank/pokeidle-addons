@@ -50,6 +50,7 @@ pub struct AccountsWindow {
     title: nwg::Label,
     headings: [nwg::Label; 2],
     descriptions: [nwg::Label; 2],
+    details: [nwg::Label; 2],
     game1_buttons: [nwg::Button; 5],
     game2_buttons: [nwg::Button; 5],
     close: nwg::Button,
@@ -61,9 +62,9 @@ impl AccountsWindow {
         let mut window = nwg::Window::default();
         nwg::Window::builder()
             .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-            .size((620, 430))
+            .size((700, 500))
             .position((560, 260))
-            .title("Moth · Accounts")
+            .title("Moth · Profiles")
             .build(&mut window)
             .map_err(|e| format!("could not create account manager: {e}"))?;
 
@@ -71,10 +72,10 @@ impl AccountsWindow {
 
         let mut title = nwg::Label::default();
         nwg::Label::builder()
-            .text("Account Manager")
+            .text("Profile Dashboard")
             .flags(nwg::LabelFlags::VISIBLE)
             .position((24, 18))
-            .size((560, 32))
+            .size((640, 32))
             .parent(&*window)
             .build(&mut title)
             .map_err(|e| format!("could not create account manager title: {e}"))?;
@@ -82,6 +83,8 @@ impl AccountsWindow {
         let mut headings: [nwg::Label; 2] =
             std::array::from_fn(|_| nwg::Label::default());
         let mut descriptions: [nwg::Label; 2] =
+            std::array::from_fn(|_| nwg::Label::default());
+        let mut details: [nwg::Label; 2] =
             std::array::from_fn(|_| nwg::Label::default());
 
         let mut game1_buttons: [nwg::Button; 5] =
@@ -93,6 +96,7 @@ impl AccountsWindow {
             &window,
             &mut headings[0],
             &mut descriptions[0],
+            &mut details[0],
             &mut game1_buttons,
             "Game 1",
             62,
@@ -102,6 +106,7 @@ impl AccountsWindow {
             &window,
             &mut headings[1],
             &mut descriptions[1],
+            &mut details[1],
             &mut game2_buttons,
             "Game 2",
             228,
@@ -111,7 +116,7 @@ impl AccountsWindow {
         nwg::Button::builder()
             .text("Close")
             .flags(nwg::ButtonFlags::VISIBLE)
-            .position((470, 390))
+            .position((550, 445))
             .size((120, 34))
             .parent(&*window)
             .build(&mut close)
@@ -179,6 +184,7 @@ impl AccountsWindow {
             title,
             headings,
             descriptions,
+            details,
             game1_buttons,
             game2_buttons,
             close,
@@ -202,6 +208,7 @@ fn build_game_row(
     window: &Rc<nwg::Window>,
     heading: &mut nwg::Label,
     description: &mut nwg::Label,
+    details: &mut nwg::Label,
     buttons: &mut [nwg::Button; 5],
     title: &str,
     y: i32,
@@ -210,19 +217,60 @@ fn build_game_row(
         .text(title)
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, y))
-        .size((160, 24))
+        .size((180, 24))
         .parent(&**window)
         .build(heading)
         .map_err(|e| format!("could not create {title} heading: {e}"))?;
 
     nwg::Label::builder()
-        .text("PokéIdle + one Twitch login + one KICK login share this profile.")
+        .text("PokéIdle + Twitch + KICK + Violentmonkey use this same profile.")
         .flags(nwg::LabelFlags::VISIBLE)
         .position((24, y + 28))
-        .size((570, 24))
+        .size((650, 22))
         .parent(&**window)
         .build(description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
+
+    let profile_text = match Config::for_profile(match title {
+        "Game 1" => GameProfile::Game1,
+        _ => GameProfile::Game2,
+    }) {
+        Ok(config) => {
+            let state = if config.profile_dir.exists() {
+                "Profile ready"
+            } else {
+                "Profile will be created on first launch"
+            };
+
+            let browser = if config
+                .firefox_executable
+                .to_string_lossy()
+                .to_lowercase()
+                .contains("developer")
+            {
+                "Firefox Developer Edition"
+            } else {
+                "Firefox"
+            };
+
+            format!(
+                "{} · {} · {}",
+                state,
+                browser,
+                config.profile_dir.display()
+            )
+        }
+        Err(error) => format!("Unavailable · {error}"),
+    };
+
+    nwg::Label::builder()
+        .text(&profile_text)
+        .flags(nwg::LabelFlags::VISIBLE)
+        .position((24, y + 50))
+        .size((650, 22))
+        .parent(&**window)
+        .build(details)
+        .map_err(|e| format!("could not create {title} details: {e}"))?;
 
     let labels = [
         "Open Game",
@@ -239,8 +287,8 @@ fn build_game_row(
         nwg::Button::builder()
             .text(label)
             .flags(nwg::ButtonFlags::VISIBLE)
-            .position((24 + (column as i32) * 150, y + 58 + row * 38))
-            .size((140, 32))
+            .position((24 + (column as i32) * 170, y + 78 + row * 38))
+            .size((158, 32))
             .parent(&**window)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
