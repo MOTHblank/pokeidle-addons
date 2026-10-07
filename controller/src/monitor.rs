@@ -79,6 +79,7 @@ pub struct Health {
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
+    pub stream_bonus_last: String,
     pub bridge_connected: bool,
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
@@ -123,6 +124,7 @@ impl Default for Health {
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
+            stream_bonus_last: String::new(),
             bridge_connected: false,
             tabs: Vec::new(),
             hunts: Vec::new(),
@@ -272,6 +274,7 @@ struct RuntimeProbe {
     stream_scan_live: u32,
     stream_scan_opened: u32,
     stream_bonus: String,
+    stream_bonus_last: String,
     xp_bonuses: Vec<String>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
@@ -398,7 +401,10 @@ fn monitor_loop(
                         current.player_xp = probe.player_xp;
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
-                        current.stream_bonus = probe.stream_bonus;
+                        current.stream_bonus = probe.stream_bonus.clone();
+                        if !probe.stream_bonus.is_empty() {
+                            current.stream_bonus_last = probe.stream_bonus.clone();
+                        }
                         current.bridge_connected = probe.bridge_connected;
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
@@ -605,71 +611,17 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
     let addon_ok = 5u8.saturating_sub(addon_missing.len() as u8);
 
-    let mut twitch_tabs = 0u8;
-    let mut twitch_low_resource_ok = 0u8;
-    let mut xp_bonuses = page
-        .get("xpBonuses")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let tabs = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
 
-    for context in &contexts {
-        if !context.url.starts_with("https://www.twitch.tv/")
-            && !context.url.starts_with("https://twitch.tv/")
-            && !context.url.starts_with("https://player.twitch.tv/")
-            && !context.url.starts_with("https://m.twitch.tv/")
-        {
-            continue;
-        }
+    let twitch_tabs = tabs
+        .iter()
+        .filter(|tab| tab.kind == "Twitch")
+        .count() as u8;
 
-        twitch_tabs = twitch_tabs.saturating_add(1);
-
-        let twitch_id = session.next_id;
-        session.next_id += 1;
-
-        let twitch_probe = send_and_wait(
-            &mut session.socket,
-            twitch_id,
-            json!({
-                "id": twitch_id,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": "JSON.stringify({ lowResource: !!document.querySelector('#moth-twitch-low-resource-css') })",
-                    "target": { "context": context.id },
-                    "awaitPromise": false
-                }
-            }),
-        );
-
-        if let Ok(value) = twitch_probe {
-            let low_resource = value
-                .get("result")
-                .and_then(|v| v.get("result"))
-                .and_then(|v| v.get("value"))
-                .and_then(Value::as_str)
-                .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                .and_then(|v| v.get("lowResource").and_then(Value::as_bool))
-                .unwrap_or(false);
-
-            if low_resource {
-                twitch_low_resource_ok = twitch_low_resource_ok.saturating_add(1);
-            }
-        }
-    }
-
-    let stream_scan_opened = page.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32;
-    if stream_scan_opened > 0
-        && twitch_tabs > 0
-        && !xp_bonuses.iter().any(|value| value.to_ascii_lowercase().contains("twitch"))
-    {
-        xp_bonuses.push("Twitch stream · +15% XP (chat open)".to_string());
-    }
+    let twitch_low_resource_ok = tabs
+        .iter()
+        .filter(|tab| tab.kind == "Twitch" && tab.low_resource)
+        .count() as u8;
 
     let runtime = probe_runtime_details(session, &game.id).unwrap_or_default();
 
@@ -732,7 +684,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         } else {
             runtime.stream_bonus
         },
-        tabs: build_tab_infos(&contexts, &mut session.socket, &mut session.next_id),
+        tabs,
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
     })
@@ -919,10 +871,16 @@ fn probe_runtime_details(
         .unwrap_or_default()
         .to_string();
 
-    if !stream_bonus.is_empty()
-        && !xp_bonuses.iter().any(|item| item == &stream_bonus)
-    {
-        xp_bonuses.push(stream_bonus.clone());
+    let stream_bonus_last = state
+        .get("lastStreamBonus")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    for bonus in [stream_bonus.clone(), stream_bonus_last.clone()] {
+        if !bonus.is_empty() && !xp_bonuses.iter().any(|item| item == &bonus) {
+            xp_bonuses.push(bonus);
+        }
     }
 
     #[derive(Default)]
@@ -1110,6 +1068,7 @@ fn probe_runtime_details(
         stream_scan_live: state.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
+        stream_bonus_last,
         xp_bonuses,
         hunts,
         market_listings,
