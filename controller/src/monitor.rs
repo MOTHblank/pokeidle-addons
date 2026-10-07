@@ -715,9 +715,11 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         } else {
             runtime.stream_bonus
         },
+        bridge_connected: runtime.bridge_connected,
         tabs,
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
+        market_catalog: runtime.market_catalog,
     })
 }
 fn build_tab_infos(
@@ -920,7 +922,7 @@ fn probe_runtime_details(
         }
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     struct HuntRuntime {
         first_at: u64,
         last_at: u64,
