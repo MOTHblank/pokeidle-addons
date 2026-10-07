@@ -44,7 +44,7 @@ internal static class SessionStore
         }
         catch
         {
-            // Old sessions containing stream PaneSpecs are intentionally
+            // Old sessions containing obsolete stream pane records are intentionally
             // discarded after the stream subsystem redesign.
         }
 
