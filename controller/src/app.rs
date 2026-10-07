@@ -35,6 +35,7 @@ pub fn run() -> Result<(), String> {
     let mut game2_button = nwg::Button::default();
     let mut launch_both_button = nwg::Button::default();
     let mut accounts_button = nwg::Button::default();
+    let mut logs_button = nwg::Button::default();
     let mut profiles_button = nwg::Button::default();
     let mut close_button = nwg::Button::default();
     let mut status = nwg::Label::default();
@@ -127,6 +128,14 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not create Launch Both button: {error}"))?;
 
     nwg::Button::builder()
+        .text("Open Logs")
+        .position((180, 220))
+        .size((145, 38))
+        .parent(&window)
+        .build(&mut logs_button)
+        .map_err(|error| format!("could not create Logs button: {error}"))?;
+
+    nwg::Button::builder()
         .text("Accounts")
         .position((24, 268))
         .size((145, 38))
@@ -181,6 +190,7 @@ pub fn run() -> Result<(), String> {
     let game2_button_handle = game2_button.handle;
     let launch_both_button_handle = launch_both_button.handle;
     let accounts_button_handle = accounts_button.handle;
+    let logs_button_handle = logs_button.handle;
     let profiles_button_handle = profiles_button.handle;
     let close_button_handle = close_button.handle;
     let health_timer_handle = health_timer.handle;
@@ -254,6 +264,8 @@ pub fn run() -> Result<(), String> {
                         if let Some(accounts) = state.accounts.as_ref() {
                             accounts.show();
                         }
+                    } else if handle == logs_button_handle {
+                        open_logs(&status);
                     } else if handle == profiles_button_handle {
                         open_profiles_folder(&status);
                     } else if handle == close_button_handle {
@@ -340,6 +352,34 @@ fn update_health_label(
         health.state,
         health.summary()
     ));
+}
+
+fn open_logs(status: &nwg::Label) {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
+        status.set_text("Could not determine LOCALAPPDATA for logs");
+        return;
+    };
+
+    let path = std::path::PathBuf::from(local_app_data)
+        .join("Moth")
+        .join("PokeIdle")
+        .join("moth-controller.log");
+
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            status.set_text(&format!("Could not create log folder: {error}"));
+            return;
+        }
+    }
+
+    if !path.exists() {
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+    }
+
+    match std::process::Command::new("notepad.exe").arg(&path).spawn() {
+        Ok(_) => status.set_text(&format!("Opened log: {}", path.display())),
+        Err(error) => status.set_text(&format!("Could not open log: {error}")),
+    }
 }
 
 fn open_profiles_folder(status: &nwg::Label) {
