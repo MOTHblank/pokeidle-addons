@@ -85,6 +85,40 @@ pub fn launch(config: &Config, notice_sender: nwg::NoticeSender) -> Result<(Chil
     Ok((child, monitor))
 }
 
+pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
+    migrate_legacy_profile(config)?;
+
+    fs::create_dir_all(&config.profile_dir).map_err(|error| {
+        format!(
+            "could not create profile directory {}: {error}",
+            config.profile_dir.display()
+        )
+    })?;
+
+    provision_profile(&config.profile_dir)?;
+    logging::info(&format!(
+        "starting unmonitored headless Firefox: executable={} profile={} port={} url={}",
+        config.firefox_executable.display(),
+        config.profile_dir.display(),
+        config.remote_debug_port,
+        config.url
+    ));
+
+    Command::new(&config.firefox_executable)
+        .arg("--headless")
+        .arg("--no-remote")
+        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-window")
+        .arg(&config.url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(format_spawn_error)
+}
+
 fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
     if config.profile_dir.exists() {
         return Ok(());
