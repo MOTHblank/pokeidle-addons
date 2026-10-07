@@ -1039,7 +1039,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        var matchSummary = _userscripts?.LastMatchSummary ?? "matching not checked";
+        var matchSummary = _userscripts?.LastMatchSummary ?? "not checked";
         _userscriptStatus.Text =
             $"VM · Stream Scanner: {(stream ? "RUNNING" : "NOT RUNNING")} · " +
             $"Market Bot: {(market ? "RUNNING" : "NOT RUNNING")} · " +
