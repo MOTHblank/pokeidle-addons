@@ -19,6 +19,12 @@ pub struct Health {
     pub url: String,
     pub title: String,
     pub game_ready: bool,
+    pub logged_in: bool,
+    pub activity: String,
+    pub hunt: String,
+    pub active_pokemon: String,
+    pub fallen_count: u32,
+    pub economy_mode: bool,
     pub last_error: Option<String>,
 }
 
@@ -29,6 +35,12 @@ impl Default for Health {
             url: String::new(),
             title: String::new(),
             game_ready: false,
+            logged_in: false,
+            activity: "Starting".to_string(),
+            hunt: String::new(),
+            active_pokemon: String::new(),
+            fallen_count: 0,
+            economy_mode: false,
             last_error: None,
         }
     }
@@ -36,30 +48,38 @@ impl Default for Health {
 
 impl Health {
     pub fn summary(&self) -> String {
-        match self.state.as_str() {
-            "Running" => format!(
-                "{} · {} · {}",
-                if self.game_ready {
-                    "game UI OK"
-                } else {
-                    "game UI waiting"
-                },
-                if self.title.is_empty() {
-                    "no title"
-                } else {
-                    &self.title
-                },
-                if self.url.is_empty() {
-                    "no URL"
-                } else {
-                    &self.url
-                }
-            ),
-            _ => self
+        if self.state != "Running" {
+            return self
                 .last_error
                 .clone()
-                .unwrap_or_else(|| self.state.clone()),
+                .unwrap_or_else(|| self.state.clone());
         }
+
+        let mut parts = vec![self.activity.clone()];
+
+        if !self.active_pokemon.is_empty() {
+            parts.push(format!("active: {}", self.active_pokemon));
+        }
+
+        if !self.hunt.is_empty() {
+            parts.push(format!("hunt: {}", self.hunt));
+        }
+
+        if self.fallen_count > 0 {
+            parts.push(format!("fallen: {}", self.fallen_count));
+        }
+
+        if self.economy_mode {
+            parts.push("economy".to_string());
+        }
+
+        parts.push(if self.game_ready {
+            "game UI OK".to_string()
+        } else {
+            "game UI loading".to_string()
+        });
+
+        parts.join(" · ")
     }
 }
 
@@ -96,7 +116,24 @@ struct BrowserSession {
     next_id: u64,
 }
 
-fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>, notice_sender: nwg::NoticeSender) {
+struct Probe {
+    url: String,
+    title: String,
+    game_ready: bool,
+    logged_in: bool,
+    activity: String,
+    hunt: String,
+    active_pokemon: String,
+    fallen_count: u32,
+    economy_mode: bool,
+}
+
+fn monitor_loop(
+    port: u16,
+    health: Arc<Mutex<Health>>,
+    stop: Arc<AtomicBool>,
+    notice_sender: nwg::NoticeSender,
+) {
     let mut session: Option<BrowserSession> = None;
 
     loop {
@@ -128,6 +165,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>, no
                         current.state = "Connecting".to_string();
                         current.last_error = Some(error);
                         current.game_ready = false;
+                        current.logged_in = false;
                     }
                     notice_sender.notice();
                 }
@@ -142,6 +180,12 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>, no
                         current.url = probe.url;
                         current.title = probe.title;
                         current.game_ready = probe.game_ready;
+                        current.logged_in = probe.logged_in;
+                        current.activity = probe.activity;
+                        current.hunt = probe.hunt;
+                        current.active_pokemon = probe.active_pokemon;
+                        current.fallen_count = probe.fallen_count;
+                        current.economy_mode = probe.economy_mode;
                         current.last_error = None;
                     }
                     notice_sender.notice();
@@ -156,6 +200,7 @@ fn monitor_loop(port: u16, health: Arc<Mutex<Health>>, stop: Arc<AtomicBool>, no
                         current.state = "Reconnecting".to_string();
                         current.last_error = Some(error);
                         current.game_ready = false;
+                        current.logged_in = false;
                     }
                     notice_sender.notice();
 
@@ -212,15 +257,57 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         .ok_or_else(|| "Firefox returned no browsing context".to_string())?
         .to_string();
 
-    Ok(BrowserSession { socket, context, next_id: 3 })
+    Ok(BrowserSession {
+        socket,
+        context,
+        next_id: 3,
+    })
 }
 
 fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
-    let expression = r#"JSON.stringify({
-        url: location.href,
-        title: document.title,
-        gameReady: !!document.getElementById('btn-bolsa')
-    })"#;
+    let expression = r#"(() => {
+        const app = document.querySelector('#app');
+        const ativo = document.querySelector('#ativo-card');
+        const hunt = document.querySelector('#hud-hunt');
+        const golpes = document.querySelector('#golpes-painel');
+        const caidos = document.querySelector('#caidos-lista');
+        const html = document.documentElement;
+
+        const loggedIn = !!app && !app.classList.contains('hidden');
+        const activePokemon =
+            ativo && !ativo.classList.contains('vazio')
+                ? (ativo.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+                : '';
+
+        const huntText = hunt
+            ? (hunt.textContent || '').replace(/\s+/g, ' ').trim()
+            : '';
+
+        const huntSelected =
+            huntText.length > 0 &&
+            !/^escolha um mapa\s*[→›-]?\s*$/i.test(huntText);
+
+        let activity = 'Login';
+        if (loggedIn) {
+            if (huntSelected || activePokemon || (golpes && !golpes.classList.contains('hidden'))) {
+                activity = 'Hunting';
+            } else {
+                activity = 'Center';
+            }
+        }
+
+        return JSON.stringify({
+            url: location.href,
+            title: document.title,
+            gameReady: loggedIn,
+            loggedIn,
+            activity,
+            hunt: huntSelected ? huntText.slice(0, 100) : '',
+            activePokemon,
+            fallenCount: caidos ? caidos.children.length : 0,
+            economyMode: html.classList.contains('modo-economia')
+        });
+    })()"#;
 
     let command_id = session.next_id;
     session.next_id += 1;
@@ -229,7 +316,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         &mut session.socket,
         command_id,
         json!({
-            "id": 3,
+            "id": command_id,
             "method": "script.evaluate",
             "params": {
                 "expression": expression,
@@ -264,6 +351,33 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             .get("gameReady")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        logged_in: page
+            .get("loggedIn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        activity: page
+            .get("activity")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown")
+            .to_string(),
+        hunt: page
+            .get("hunt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        active_pokemon: page
+            .get("activePokemon")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        fallen_count: page
+            .get("fallenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        economy_mode: page
+            .get("economyMode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -272,23 +386,18 @@ fn end_session(session: &mut Option<BrowserSession>) {
         return;
     };
 
+    let command_id = session.next_id;
     let _ = send_and_wait(
         &mut session.socket,
-        4,
+        command_id,
         json!({
-            "id": 4,
+            "id": command_id,
             "method": "session.end",
             "params": {}
         }),
     );
 
     let _ = session.socket.close(None);
-}
-
-struct Probe {
-    url: String,
-    title: String,
-    game_ready: bool,
 }
 
 fn send_and_wait<S>(
