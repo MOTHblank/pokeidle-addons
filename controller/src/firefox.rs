@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::logging;
 use crate::monitor::MonitorHandle;
 use std::fs;
 use std::io;
@@ -61,6 +62,7 @@ pub fn launch(config: &Config) -> Result<(Child, MonitorHandle), String> {
     })?;
 
     provision_profile(&config.profile_dir)?;
+    logging::info(&format!("starting Firefox: executable={} profile={} port={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, config.url));
 
     let child = Command::new(&config.firefox_executable)
         // Headless is intentional: the Rust controller is the visible UI
