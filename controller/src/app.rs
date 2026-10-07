@@ -51,6 +51,12 @@ impl GameSlot {
 pub struct ControllerApp {
     games: [GameSlot; 2],
     show_profiles: bool,
+    show_atlas: bool,
+    show_market: bool,
+    atlas_profile: GameProfile,
+    market_profile: GameProfile,
+    market_search: String,
+    market_currency: String,
     status: String,
     status_error: bool,
 }
@@ -68,6 +74,12 @@ impl ControllerApp {
                 GameSlot::new(GameProfile::Game2),
             ],
             show_profiles: false,
+            show_atlas: false,
+            show_market: false,
+            atlas_profile: GameProfile::Game1,
+            market_profile: GameProfile::Game1,
+            market_search: String::new(),
+            market_currency: "gold".to_string(),
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
         }
@@ -399,6 +411,12 @@ impl eframe::App for ControllerApp {
         if self.show_profiles {
             draw_profiles_window(self, ui.ctx());
         }
+        if self.show_atlas {
+            draw_atlas_window(self, ui.ctx());
+        }
+        if self.show_market {
+            draw_market_window(self, ui.ctx());
+        }
     }
 }
 
@@ -444,6 +462,14 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             if sidebar_button(ui, "◫  Profiles", false).clicked() {
                 app.show_profiles = true;
+            }
+
+            if sidebar_button(ui, "⌁  Hunt Atlas", false).clicked() {
+                app.show_atlas = true;
+            }
+
+            if sidebar_button(ui, "◇  Moth Watch", false).clicked() {
+                app.show_market = true;
             }
 
             if sidebar_button(ui, "≡  Logs", false).clicked() {
