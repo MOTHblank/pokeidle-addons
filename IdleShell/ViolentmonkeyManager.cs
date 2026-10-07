@@ -177,56 +177,132 @@ internal sealed class ViolentmonkeyManager
     {
         const string legacyName = "IdleShell Link Router (pokeidle.io)";
         const string legacyNamespace = "moth.pokeidle";
+        var operationId = Guid.NewGuid().ToString("N");
 
         var request = """
 (() => {
-  const state = { removed: false, id: null };
-  return Promise.resolve(
-    chrome.runtime.sendMessage({
-      cmd: 'GetScript',
-      data: {
-        meta: {
-          name: __LEGACY_NAME__,
-          namespace: __LEGACY_NAMESPACE__
-        }
-      }
-    })
-  ).then(script => {
-    const id = script?.props?.id;
-    if (!id) return state;
-    state.id = id;
-    return Promise.resolve(
+  const id = __OPERATION_ID__;
+  const state = window.__idleshellVmLegacyCleanup ??= Object.create(null);
+
+  try {
+    Promise.resolve(
       chrome.runtime.sendMessage({
-        cmd: 'MarkRemoved',
-        data: { id, removed: true }
+        cmd: 'GetScript',
+        data: {
+          meta: {
+            name: __LEGACY_NAME__,
+            namespace: __LEGACY_NAMESPACE__
+          }
+        }
       })
-    ).then(() => {
-      state.removed = true;
-      return state;
+    ).then(script => {
+      const scriptId = script?.props?.id;
+      if (!scriptId) {
+        state[id] = { done: true, ok: true, removed: false };
+        return;
+      }
+
+      return Promise.resolve(
+        chrome.runtime.sendMessage({
+          cmd: 'MarkRemoved',
+          data: { id: scriptId, removed: true }
+        })
+      ).then(() => {
+        state[id] = {
+          done: true,
+          ok: true,
+          removed: true,
+          scriptId
+        };
+      });
+    }).catch(error => {
+      state[id] = {
+        done: true,
+        ok: false,
+        error: String(error?.message || error)
+      };
     });
-  }).then(value => JSON.stringify(value));
+
+    state[id] = { done: false };
+  } catch (error) {
+    state[id] = {
+      done: true,
+      ok: false,
+      error: String(error?.message || error)
+    };
+  }
+
+  return true;
 })()
 """
-            .Replace("__LEGACY_NAME__", JsonSerializer.Serialize(legacyName), StringComparison.Ordinal)
-            .Replace("__LEGACY_NAMESPACE__", JsonSerializer.Serialize(legacyNamespace), StringComparison.Ordinal);
+            .Replace(
+                "__OPERATION_ID__",
+                JsonSerializer.Serialize(operationId),
+                StringComparison.Ordinal)
+            .Replace(
+                "__LEGACY_NAME__",
+                JsonSerializer.Serialize(legacyName),
+                StringComparison.Ordinal)
+            .Replace(
+                "__LEGACY_NAMESPACE__",
+                JsonSerializer.Serialize(legacyNamespace),
+                StringComparison.Ordinal);
 
         try
         {
-            var outer = await view.ExecuteScriptAsync(request);
-            using var outerDoc = JsonDocument.Parse(outer);
-            var inner = outerDoc.RootElement.GetString();
-            if (string.IsNullOrWhiteSpace(inner))
-                return;
+            await view.ExecuteScriptAsync(request);
 
-            using var result = JsonDocument.Parse(inner);
-            if (result.RootElement.TryGetProperty("removed", out var removed) &&
-                removed.GetBoolean())
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline)
             {
-                var id = result.RootElement.TryGetProperty("id", out var idValue)
-                    ? idValue.ToString()
-                    : "?";
-                Console.Error.WriteLine(
-                    $"[IdleShell] removed legacy stream-link router script #{id}");
+                await Task.Delay(50);
+
+                var probe = await view.ExecuteScriptAsync(
+                    $$"""
+                    (() => {
+                      const v = window.__idleshellVmLegacyCleanup?.["{{operationId}}"];
+                      return JSON.stringify(v ?? null);
+                    })()
+                    """);
+
+                try
+                {
+                    using var outer = JsonDocument.Parse(probe);
+                    var json = outer.RootElement.GetString();
+                    if (string.IsNullOrWhiteSpace(json))
+                        continue;
+
+                    using var result = JsonDocument.Parse(json);
+                    var root = result.RootElement;
+                    if (!root.TryGetProperty("done", out var done) || !done.GetBoolean())
+                        continue;
+
+                    if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean())
+                    {
+                        if (root.TryGetProperty("removed", out var removed) &&
+                            removed.GetBoolean())
+                        {
+                            var id = root.TryGetProperty("scriptId", out var idValue)
+                                ? idValue.ToString()
+                                : "?";
+                            Console.Error.WriteLine(
+                                $"[IdleShell] removed legacy stream-link router script #{id}");
+                        }
+
+                        return;
+                    }
+
+                    var error = root.TryGetProperty("error", out var errorValue)
+                        ? errorValue.GetString()
+                        : "unknown Violentmonkey legacy-router cleanup error";
+
+                    throw new InvalidOperationException(
+                        error ?? "unknown Violentmonkey legacy-router cleanup error");
+                }
+                catch (JsonException)
+                {
+                    // The extension response may still be materializing.
+                }
             }
         }
         catch (Exception ex)
@@ -243,64 +319,111 @@ internal sealed class ViolentmonkeyManager
         int scriptId,
         string expectedSource)
     {
+        var operationId = Guid.NewGuid().ToString("N");
         var request = """
 (() => {
-  return Promise.resolve(
-    chrome.runtime.sendMessage({
-      cmd: 'GetScriptCode',
-      data: __SCRIPT_ID__
-    })
-  ).then(value => JSON.stringify({
-    found: typeof value === 'string',
-    code: value ?? null
-  }));
+  const id = __OPERATION_ID__;
+  const state = window.__idleshellVmVerifications ??= Object.create(null);
+
+  try {
+    Promise.resolve(
+      chrome.runtime.sendMessage({
+        cmd: 'GetScriptCode',
+        data: __SCRIPT_ID__
+      })
+    ).then(
+      code => { state[id] = { done: true, ok: true, code }; },
+      error => {
+        state[id] = {
+          done: true,
+          ok: false,
+          error: String(error?.message || error)
+        };
+      }
+    );
+
+    state[id] = { done: false };
+  } catch (error) {
+    state[id] = {
+      done: true,
+      ok: false,
+      error: String(error?.message || error)
+    };
+  }
+
+  return true;
 })()
 """
-            .Replace("__SCRIPT_ID__", scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            .Replace(
+                "__OPERATION_ID__",
+                JsonSerializer.Serialize(operationId),
+                StringComparison.Ordinal)
+            .Replace(
+                "__SCRIPT_ID__",
+                scriptId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+
+        await view.ExecuteScriptAsync(request);
 
         var expectedHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(expectedSource)));
 
-        var raw = await view.ExecuteScriptAsync(request);
-        try
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (DateTime.UtcNow < deadline)
         {
-            using var outer = JsonDocument.Parse(raw);
-            var root = outer.RootElement;
+            await Task.Delay(50);
 
-            if (root.ValueKind == JsonValueKind.String)
+            var probe = await view.ExecuteScriptAsync(
+                $$"""
+                (() => {
+                  const v = window.__idleshellVmVerifications?.["{{operationId}}"];
+                  return JSON.stringify(v ?? null);
+                })()
+                """);
+
+            try
             {
-                var inner = root.GetString();
-                if (string.IsNullOrWhiteSpace(inner))
+                using var outer = JsonDocument.Parse(probe);
+                var json = outer.RootElement.GetString();
+                if (string.IsNullOrWhiteSpace(json))
+                    continue;
+
+                using var state = JsonDocument.Parse(json);
+                var root = state.RootElement;
+                if (!root.TryGetProperty("done", out var done) || !done.GetBoolean())
+                    continue;
+
+                if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+                {
+                    var error = root.TryGetProperty("error", out var errorValue)
+                        ? errorValue.GetString()
+                        : "unknown Violentmonkey verification error";
+                    throw new InvalidOperationException(error ?? "unknown Violentmonkey verification error");
+                }
+
+                if (!root.TryGetProperty("code", out var codeValue) ||
+                    codeValue.ValueKind != JsonValueKind.String)
                     return false;
 
-                using var result = JsonDocument.Parse(inner);
-                root = result.RootElement.Clone();
-            }
+                var actualCode = codeValue.GetString();
+                if (actualCode is null)
+                    return false;
 
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("found", out var foundValue) ||
-                !foundValue.GetBoolean() ||
-                !root.TryGetProperty("code", out var codeValue) ||
-                codeValue.ValueKind != JsonValueKind.String)
+                var actualHash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(actualCode)));
+
+                return string.Equals(actualHash, expectedHash, StringComparison.Ordinal);
+            }
+            catch (JsonException)
             {
-                return false;
+                // The extension response may still be materializing.
             }
-
-            var actualCode = codeValue.GetString();
-            if (actualCode is null)
-                return false;
-
-            var actualHash = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(actualCode)));
-
-            return string.Equals(actualHash, expectedHash, StringComparison.Ordinal);
         }
-        catch (JsonException)
-        {
-            return false;
-        }
+
+        throw new TimeoutException(
+            $"Timed out verifying persisted Violentmonkey script #{scriptId}.");
     }
 
     private static async Task<(int ScriptId, bool Enabled)> ImportScriptAsync(
