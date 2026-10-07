@@ -59,7 +59,7 @@ impl Config {
             firefox_executable,
             profile,
             profile_dir,
-            url: "https://pokeidle.io/app".to_string(),
+            url: "https://pokeidle.io/app?moth-controller=1".to_string(),
             remote_debug_port,
         })
     }
