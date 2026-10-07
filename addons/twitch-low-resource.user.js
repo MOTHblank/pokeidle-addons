@@ -512,25 +512,31 @@
         };
 
         const tick = () => {
-            addKickCss();
-
             if (location.href !== lastUrl) {
                 lastUrl = location.href;
                 lastVideoKey = '';
                 qualityDoneKey = '';
                 lastQualityAttempt = 0;
+                culledPlayer?.classList.remove('moth-kick-player-root');
+                culledPlayer = null;
+                document.body?.classList.remove('moth-kick-low-resource-active');
             }
 
+            // Do not touch KICK pages until the real stream player exists.
+            // This is important for Cloudflare challenge/interstitial pages:
+            // they need the normal page DOM, animations and layout to run
+            // without our resource-culling CSS or synthetic input events.
             const video = findMainVideo();
             if (!video) return;
 
+            addKickCss();
             lastVideoKey = playerKey(video);
             keepKickWatching(video);
             cullKickPage(video);
             void chooseLowestKickQuality(video);
         };
 
-        addKickCss();
+        // Wait for a real player before changing anything on the page.
         setInterval(tick, 5000);
         tick();
 
