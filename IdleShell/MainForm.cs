@@ -1039,9 +1039,11 @@ internal sealed class MainForm : Form
             return;
         }
 
+        var matchSummary = _userscripts?.LastMatchSummary ?? "matching not checked";
         _userscriptStatus.Text =
-            $"VM ready · Stream Scanner: {(stream ? "RUNNING" : "NOT RUNNING")} · " +
-            $"Market Bot: {(market ? "RUNNING" : "NOT RUNNING")}";
+            $"VM · Stream Scanner: {(stream ? "RUNNING" : "NOT RUNNING")} · " +
+            $"Market Bot: {(market ? "RUNNING" : "NOT RUNNING")} · " +
+            $"VM match: {matchSummary}";
     }
 
     // --- Stream link routing -------------------------------------------------
