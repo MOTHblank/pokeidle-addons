@@ -4,15 +4,6 @@ use std::fs;
 use std::io;
 use std::process::{Child, Command, Stdio};
 
-#[cfg(windows)]
-use std::{thread, time::Duration};
-
-#[cfg(windows)]
-use winapi::shared::minwindef::{BOOL, DWORD, LPARAM, TRUE};
-#[cfg(windows)]
-use winapi::shared::windef::HWND;
-#[cfg(windows)]
-use winapi::um::winuser::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, ShowWindow, SW_MINIMIZE};
 
 const USER_PREFS: &str = r#"
 // Moth defaults: keep the browser quiet and cheap without changing
