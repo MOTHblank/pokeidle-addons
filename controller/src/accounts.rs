@@ -24,8 +24,8 @@ fn build() -> Result<(), String> {
     let mut window = nwg::Window::default();
     let mut title = nwg::Label::default();
 
-    let mut g1 = [nwg::Button::default(), nwg::Button::default(), nwg::Button::default(), nwg::Button::default()];
-    let mut g2 = [nwg::Button::default(), nwg::Button::default(), nwg::Button::default(), nwg::Button::default()];
+    let mut g1: [nwg::Button; 5] = std::array::from_fn(|_| nwg::Button::default());
+    let mut g2: [nwg::Button; 5] = std::array::from_fn(|_| nwg::Button::default());
 
     build_window(&mut window, &mut title)?;
     build_game_row(&window, &mut g1, GameProfile::Game1, "Game 1", 30)?;
@@ -119,26 +119,35 @@ fn build_window(window: &mut nwg::Window, title: &mut nwg::Label) -> Result<(), 
 fn build_game_row(
     window: &nwg::Window,
     buttons: &mut [nwg::Button; 5],
-    profile: GameProfile,
+    _profile: GameProfile,
     title: &str,
     y: i32,
 ) -> Result<(), String> {
-    let mut group = nwg::GroupBox::default();
+    let mut frame = nwg::Frame::default();
 
-    nwg::GroupBox::builder()
-        .text(title)
+    nwg::Frame::builder()
+        .flags(nwg::FrameFlags::BORDER)
         .position((24, y + 20))
         .size((572, 132))
         .parent(window)
-        .build(&mut group)
+        .build(&mut frame)
         .map_err(|e| format!("could not create {title} box: {e}"))?;
+
+    let mut heading = nwg::Label::default();
+    nwg::Label::builder()
+        .text(title)
+        .position((18, 4))
+        .size((180, 24))
+        .parent(&frame)
+        .build(&mut heading)
+        .map_err(|e| format!("could not create {title} heading: {e}"))?;
 
     let mut description = nwg::Label::default();
     nwg::Label::builder()
         .text("PokéIdle + one Twitch login + one KICK login share this profile.")
-        .position((42, y + 52))
+        .position((18, 30))
         .size((530, 26))
-        .parent(&group)
+        .parent(&frame)
         .build(&mut description)
         .map_err(|e| format!("could not create {title} description: {e}"))?;
 
@@ -146,14 +155,13 @@ fn build_game_row(
     for (index, label) in labels.into_iter().enumerate() {
         nwg::Button::builder()
             .text(label)
-            .position((42 + (index as i32) * 108, y + 92))
+            .position((18 + (index as i32) * 108, 72))
             .size((100, 32))
-            .parent(&group)
+            .parent(&frame)
             .build(&mut buttons[index])
             .map_err(|e| format!("could not create {title} {label} button: {e}"))?;
     }
 
-    let _ = profile;
     Ok(())
 }
 
