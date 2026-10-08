@@ -356,7 +356,11 @@ impl KickManager {
             // The BiDi endpoint is the authoritative identity of a managed
             // KICK browser. Never launch another one while that port exists.
             if remote_port_open(port) {
-                if !launch_recent && self.connect(profile, port).is_ok() {
+                // A newly launched Firefox already owns this port. Connecting
+                // to it is safe while startup is recent; delaying here leaves
+                // the first page open but prevents the remaining KICK tabs
+                // from being created until window detection or a 120s timeout.
+                if self.connect(profile, port).is_ok() {
                     return Ok(true);
                 }
                 return Ok(false);
