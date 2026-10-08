@@ -29,8 +29,6 @@ Instale estes componentes antes de configurar o controlador:
 
    O Violentmonkey é obrigatório para os userscripts deste repositório. **Cada perfil isolado do controlador é independente**, portanto o Violentmonkey precisa estar instalado em cada conta que você pretende usar.
 
-4. **PokéIdle**  
-   [Abrir PokéIdle](https://pokeidle.io/app)
 
 ## Primeira configuração
 
