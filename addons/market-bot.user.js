@@ -1312,13 +1312,6 @@
         };
     }
 
-    page.__mothMarketWatchControllerV1 = {
-        version: 1,
-        buy: buyFromController,
-        configure: configureFromController,
-        scan: scanFromController
-    };
-
     function finishPendingBuy(reason) {
         const pending = state.pendingBuy;
         if (!pending) return;
