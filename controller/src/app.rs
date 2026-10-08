@@ -1,7 +1,7 @@
 use crate::accounts;
 use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
-use crate::kick::KickManager;
+use crate::kick::{KickManager, KickStream};
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
 use serde_json::json;
@@ -279,8 +279,13 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "nick" => "apelido",
         "Twitch" => "Twitch",
         "KICK" => "KICK",
-        "Test KICK headless" => "Testar KICK em modo oculto",
-        "Test current KICK streams in headless Firefox. Close the current managed KICK browser before switching modes." => "Testa as streams atuais do KICK no Firefox em modo oculto. Feche o navegador KICK gerenciado antes de mudar de modo.",
+        "KICK MULTISTREAM" => "KICK MULTISTREAM",
+        "No live KICK channels detected." => "Nenhum canal KICK ao vivo detectado.",
+        "live KICK channels:" => "canais KICK ao vivo:",
+        "Copy link" => "Copiar link",
+        "Open in regular browser" => "Abrir no navegador normal",
+        "Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox." => "Link MultiKick copiado. Abra-o em um navegador normal, fora do Firefox gerenciado pelo controlador.",
+        "Copy this MultiKick link and open it in a regular browser, not inside the controller-managed Firefox." => "Copie este link MultiKick e abra-o em um navegador normal, não no Firefox gerenciado pelo controlador.",
         "Dashboard · live health polling enabled" => "Painel · monitoramento de saúde ao vivo ativado",
         "Loaded" => "Carregado",
         "Auto Catch" => "Captura automática",
@@ -412,7 +417,6 @@ pub struct ControllerApp {
     kick_manager: KickManager,
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
-    kick_headless_test: [bool; 4],
     tab_url_input: [String; 4],
     tab_url_open: [bool; 4],
 }
@@ -434,7 +438,6 @@ impl ControllerApp {
             kick_manager: KickManager::new(),
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
-            kick_headless_test: [false; 4],
             tab_url_input: std::array::from_fn(|_| String::new()),
             tab_url_open: [false; 4],
             accounts: Config::load_accounts().unwrap_or_else(|error| {
@@ -484,18 +487,6 @@ impl ControllerApp {
         }
 
         self.account_setup_checked_at = Some(Instant::now());
-    }
-
-    fn sync_kick_streams(&mut self) {
-        for profile in GameProfile::ALL {
-            let health = self.games[profile.index()].health();
-            self.kick_manager.sync(
-                profile,
-                &health.kick_streams,
-                health.kick_state_available,
-                self.kick_headless_test[profile.index()],
-            );
-        }
     }
 
     fn refresh_processes(&mut self) {
@@ -758,7 +749,6 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
-        self.sync_kick_streams();
 
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
 
@@ -989,6 +979,44 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 );
             });
         });
+}
+
+fn multikick_link(streams: &[KickStream]) -> Option<(String, Vec<String>)> {
+    let mut channels: Vec<String> = Vec::new();
+
+    for stream in streams.iter().take(10) {
+        let url = stream.url.trim();
+        let Some(path) = url
+            .strip_prefix("https://kick.com/")
+            .or_else(|| url.strip_prefix("https://www.kick.com/"))
+        else {
+            continue;
+        };
+
+        let channel = path
+            .split(|character| character == '/' || character == '?' || character == '#')
+            .next()
+            .unwrap_or_default()
+            .trim();
+
+        if channel.is_empty()
+            || !channel
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+        {
+            continue;
+        }
+
+        if !channels.iter().any(|existing| existing.eq_ignore_ascii_case(channel)) {
+            channels.push(channel.to_string());
+        }
+    }
+
+    if channels.is_empty() {
+        None
+    } else {
+        Some((format!("https://multikick.com/{}", channels.join("/")), channels))
+    }
 }
 
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -1327,6 +1355,66 @@ fn draw_game_card(
                 }
                 automation_badge(ui, tr("Performance+"), &performance_value, true);
             });
+
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new(tr("KICK MULTISTREAM"))
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+            ui.add_space(6.0);
+
+            egui::Frame::new()
+                .fill(PANEL_ALT)
+                .corner_radius(10.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    if let Some((link, channels)) = multikick_link(&health.kick_streams) {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {}",
+                                channels.len(),
+                                tr("live KICK channels:")
+                            ))
+                            .size(10.0)
+                            .strong()
+                            .color(GOOD),
+                        );
+                        ui.label(
+                            RichText::new(channels.join(" · "))
+                                .size(10.0)
+                                .color(TEXT),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(&link)
+                                .size(10.0)
+                                .color(ACCENT),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(tr("Copy link")).clicked() {
+                                ui.ctx().copy_text(link.clone());
+                                app.set_status(
+                                    tr("Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox.").to_string(),
+                                    false,
+                                );
+                            }
+                            ui.hyperlink_to(tr("Open in regular browser"), &link);
+                        });
+                        ui.label(
+                            RichText::new(tr("Copy this MultiKick link and open it in a regular browser, not inside the controller-managed Firefox."))
+                                .size(9.0)
+                                .color(MUTED),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(tr("No live KICK channels detected."))
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                    }
+                });
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -2067,21 +2155,6 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
                                     status_chip(ui, "Twitch", twitch_label, twitch_open);
                                     status_chip(ui, "KICK", kick_label, false);
-
-                                    let headless_changed = ui
-                                        .checkbox(
-                                            &mut app.kick_headless_test[index],
-                                            tr("Test KICK headless"),
-                                        )
-                                        .on_hover_text(tr("Test current KICK streams in headless Firefox. Close the current managed KICK browser before switching modes."))
-                                        .changed();
-
-                                    if headless_changed {
-                                        app.kick_manager.set_headless_test(
-                                            profile,
-                                            app.kick_headless_test[index],
-                                        );
-                                    }
 
                                     if running {
                                         status_chip(
