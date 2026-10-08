@@ -107,7 +107,9 @@
         let message;
         try { message = JSON.parse(data); } catch { return; }
 
-        lastMessageAt = Date.now();
+        if (message.t !== 'pong') {
+            lastMessageAt = Date.now();
+        }
 
         /*
          * PokéIdle can create more than one WebSocket over the lifetime of a
