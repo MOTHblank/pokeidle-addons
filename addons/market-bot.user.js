@@ -111,7 +111,8 @@
             goldSuspicious: 0,
             orbSuspicious: 0
         },
-        releaseTimers: new Map()
+        releaseTimers: new Map(),
+        lastControllerResult: null
     };
 
     let config = loadConfig();
@@ -1166,9 +1167,25 @@
         tryBuy(candidate, false);
     }
 
+    function controllerResult(result) {
+        state.lastControllerResult = {
+            at: Date.now(),
+            ok: !!result.ok,
+            source: String(result.source || 'unknown'),
+            error: result.error ? String(result.error) : '',
+            listingId: Number(result.listingId || 0)
+        };
+        queueRender();
+        return result;
+    }
+
     function buyFromController(request) {
         if (!request || !Number(request.id) || !Number(request.preco)) {
-            return { ok: false, error: 'invalid market purchase request' };
+            return controllerResult({
+                ok: false,
+                error: 'invalid market purchase request',
+                source: 'validation'
+            });
         }
 
         const listingId = Number(request.id);
@@ -1179,7 +1196,11 @@
         );
 
         if (candidate) {
-            return { ok: tryBuy(candidate, true), source: 'candidate' };
+            return controllerResult({
+                ok: tryBuy(candidate, true),
+                source: 'candidate',
+                listingId
+            });
         }
 
         /*
@@ -1201,12 +1222,101 @@
             addLog('BUY · listing #' + listingId + ' · native controller');
         }
 
-        return { ok: sent, source: 'direct' };
+        return controllerResult({
+            ok: sent,
+            source: 'direct',
+            listingId,
+            error: sent ? '' : 'game websocket is not open'
+        });
+    }
+
+    function configureFromController(patch) {
+        if (!patch || typeof patch !== 'object') {
+            return { ok: false, error: 'invalid Moth Watch configuration' };
+        }
+
+        const booleanKeys = [
+            'enabled',
+            'autoBuy',
+            'scanItems',
+            'scanPokemon',
+            'autoBuyItems',
+            'autoBuyPokemon',
+            'buyCoins',
+            'buyGems',
+            'buyWholeItemBatch'
+        ];
+        const numberKeys = [
+            'scanSeconds',
+            'watchPercent',
+            'autoBuyPercent',
+            'goldReserve',
+            'gemReserve',
+            'maxCoinsPerBuy',
+            'maxGemsPerBuy',
+            'minItemUnits',
+            'minPokemonSamples',
+            'pokemonHistoryPages',
+            'pokemonHistoryRefreshMinutes'
+        ];
+        const viewKeys = ['viewCurrency', 'viewKind', 'viewSort'];
+
+        for (const key of booleanKeys) {
+            if (Object.prototype.hasOwnProperty.call(patch, key)) {
+                config[key] = !!patch[key];
+            }
+        }
+
+        for (const key of numberKeys) {
+            if (Object.prototype.hasOwnProperty.call(patch, key)) {
+                config[key] = Math.max(0, Number(patch[key]) || 0);
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(patch, 'viewCurrency')
+            && ['all', 'gold', 'orb'].includes(String(patch.viewCurrency))) {
+            config.viewCurrency = String(patch.viewCurrency);
+        }
+
+        if (Object.prototype.hasOwnProperty.call(patch, 'viewKind')
+            && ['all', 'item', 'pokemon'].includes(String(patch.viewKind))) {
+            config.viewKind = String(patch.viewKind);
+        }
+
+        if (Object.prototype.hasOwnProperty.call(patch, 'viewSort')
+            && ['discount', 'newest', 'price-asc', 'price-desc', 'reference-desc', 'quantity-desc', 'name'].includes(String(patch.viewSort))) {
+            config.viewSort = String(patch.viewSort);
+        }
+
+        config.scanSeconds = Math.max(1, Number(config.scanSeconds) || 5);
+        config.watchPercent = Math.max(1, Number(config.watchPercent) || 70);
+        config.autoBuyPercent = Math.max(1, Number(config.autoBuyPercent) || 40);
+        config.minItemUnits = Math.max(1, Number(config.minItemUnits) || 1);
+        config.minPokemonSamples = Math.max(1, Number(config.minPokemonSamples) || 1);
+        config.pokemonHistoryPages = Math.max(1, Number(config.pokemonHistoryPages) || 12);
+        config.pokemonHistoryRefreshMinutes = Math.max(5, Number(config.pokemonHistoryRefreshMinutes) || 60);
+
+        saveConfig();
+        runScan(true);
+        ensureUi();
+        queueRender();
+
+        return { ok: true };
+    }
+
+    function scanFromController() {
+        runScan(true);
+        return {
+            ok: true,
+            connected: !!state.gameSocket && state.gameSocket.readyState === 1
+        };
     }
 
     page.__mothMarketWatchControllerV1 = {
         version: 1,
-        buy: buyFromController
+        buy: buyFromController,
+        configure: configureFromController,
+        scan: scanFromController
     };
 
     function finishPendingBuy(reason) {
@@ -2055,7 +2165,16 @@
             baseline: baselineStats(),
             itemScanStats: copy(state.itemScanStats) || {},
             config: configView,
-            buyLog: logs
+            buyLog: logs,
+            controllerResult: state.lastControllerResult
+                ? {
+                    at: Number(state.lastControllerResult.at) || 0,
+                    ok: !!state.lastControllerResult.ok,
+                    source: String(state.lastControllerResult.source || ''),
+                    error: String(state.lastControllerResult.error || ''),
+                    listingId: Number(state.lastControllerResult.listingId || 0)
+                }
+                : null
         };
     }
 
