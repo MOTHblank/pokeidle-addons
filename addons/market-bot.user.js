@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.27
+// @version      0.1.28
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2519,7 +2519,10 @@
          * The outer modal's inner content is replaced in place by PokéIdle,
          * so a class left on #modal-corpo survives and hides the new screen.
          */
-        if (!isCommunity && state.watchOpen) {
+        if (
+            !isCommunity &&
+            (state.watchOpen || qa('.moth-watch-active').length > 0)
+        ) {
             closeWatch();
         }
 
@@ -2829,7 +2832,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.23 loaded');
+        console.info('[Moth Watch] v0.1.28 loaded');
     }
 
     bootstrap();
