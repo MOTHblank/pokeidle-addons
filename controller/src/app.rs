@@ -43,6 +43,7 @@ fn localize_status(message: String) -> String {
         ("Could not open folder: ", "Não foi possível abrir a pasta: "),
         ("Twitch opened in ", "Twitch aberto em "),
         ("KICK opened in ", "KICK aberto em "),
+        ("Opened KICK login in uncontrolled normal Firefox · close it after authentication", "Login do KICK aberto no Firefox normal sem controle · feche-o após autenticar"),
         ("Violentmonkey installer opened in ", "Instalador do Violentmonkey aberto em "),
         ("could not read Firefox extensions registry: ", "não foi possível ler o registro de extensões do Firefox: "),
         ("invalid Firefox extensions registry: ", "registro de extensões do Firefox inválido: "),
@@ -865,7 +866,7 @@ impl ControllerApp {
             ProfileAction::Kick => self
                 .kick_manager
                 .open_login(profile, accounts::KICK_LOGIN)
-                .map(|_| "Opened KICK in normal Firefox".to_string()),
+                .map(|_| "Opened KICK login in uncontrolled normal Firefox · close it after authentication".to_string()),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Addons => accounts::open_addons(profile)
                 .map(|count| format!("Opened {count} addon installers")),
