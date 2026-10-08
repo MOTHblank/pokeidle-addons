@@ -1532,6 +1532,7 @@
                 state.releaseTimers.clear();
                 queueRender();
             }
+            }
         });
     }
 
@@ -2249,7 +2250,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.15 loaded');
+        console.info('[Moth Watch] v0.1.16 loaded');
     }
 
     bootstrap();
