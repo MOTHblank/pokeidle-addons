@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.26
+// @version      0.1.27
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2426,11 +2426,13 @@
     function closeWatch() {
         state.watchOpen = false;
 
-        const body =
-            q('#modal-corpo') ||
-            q('.cm-corpo');
-
-        if (body) {
+        /*
+         * The native modal reuses #modal-corpo when navigating between RMT
+         * and other screens. Clear every activation class, not just whichever
+         * body querySelector happens to find first, or the next RMT render can
+         * inherit the CSS rule that hides all of its children.
+         */
+        for (const body of qa('.moth-watch-active')) {
             body.classList.remove('moth-watch-active');
         }
 
@@ -2508,8 +2510,18 @@
 
         const isCommunity =
             modal &&
+            !modal.classList.contains('hidden') &&
             modalBox?.dataset?.modal ===
                 'community';
+
+        /*
+         * Closing RMT or navigating to another modal must exit Watch mode.
+         * The outer modal's inner content is replaced in place by PokéIdle,
+         * so a class left on #modal-corpo survives and hides the new screen.
+         */
+        if (!isCommunity && state.watchOpen) {
+            closeWatch();
+        }
 
         if (isCommunity && modalBody) {
             const communityTop =
