@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.1.2
+// @version      1.1.3
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -27,6 +27,7 @@
     let lastStreamBonus = '';
     let lastStreamBonusAt = 0;
     let lastMessageAt = 0;
+    let lastBattleAt = 0;
 
     const copy = value => {
         try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
@@ -100,6 +101,7 @@
         }
 
         if (message.t === 'batalha') {
+            lastBattleAt = Date.now();
             if (sourceSocket && (message.ev || []).some(event => event?.k === 'hunt')) {
                 socket = sourceSocket;
                 gameSocket = sourceSocket;
@@ -326,6 +328,10 @@
         return {
             connected: !!gameSocket && gameSocket.readyState === page.WebSocket.OPEN,
             lastMessageAt,
+            lastBattleAt,
+            huntChangeCooldownMs: lastBattleAt
+                ? Math.max(0, 2600 - (Date.now() - lastBattleAt))
+                : 0,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
                 xp: Number(state?.xp) || 0,
