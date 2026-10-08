@@ -304,7 +304,7 @@ impl GameSlot {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AtlasFilters {
     region: String,
     min_level: String,
