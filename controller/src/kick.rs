@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::time::{Duration, Instant};
 use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
@@ -256,6 +256,12 @@ impl KickManager {
             session.socket = None;
             session.tabs.clear();
             session.pending.clear();
+
+            // The first KICK stream/login URL is already the initial tab.
+            // Firefox may take a moment before its BiDi endpoint accepts a
+            // connection; the next controller tick will attach and reconcile
+            // the remaining tabs.
+            return Ok(());
         }
 
         if self.session_mut(profile).socket.is_none() {
