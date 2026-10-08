@@ -3,101 +3,11 @@ use crate::logging;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
-
-#[cfg(windows)]
-type Hwnd = *mut std::ffi::c_void;
-
-#[cfg(windows)]
-unsafe extern "system" fn collect_window_callback(hwnd: Hwnd, lparam: isize) -> i32 {
-    unsafe {
-        let windows = &mut *(lparam as *mut Vec<Hwnd>);
-        if IsWindowVisible(hwnd) != 0 {
-            windows.push(hwnd);
-        }
-    }
-    1
-}
-
-#[cfg(windows)]
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn EnumWindows(
-        callback: Option<unsafe extern "system" fn(Hwnd, isize) -> i32>,
-        lparam: isize,
-    ) -> i32;
-    fn IsWindowVisible(hwnd: Hwnd) -> i32;
-    fn IsWindow(hwnd: Hwnd) -> i32;
-    fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
-}
-
-#[cfg(windows)]
-fn visible_windows() -> Vec<Hwnd> {
-    let mut windows = Vec::new();
-    unsafe {
-        let _ = EnumWindows(
-            Some(collect_window_callback),
-            &mut windows as *mut _ as isize,
-        );
-    }
-    windows
-}
-
-#[cfg(windows)]
-fn window_is_valid(hwnd: Hwnd) -> bool {
-    unsafe { IsWindow(hwnd) != 0 && IsWindowVisible(hwnd) != 0 }
-}
-
-#[cfg(windows)]
-fn window_title(hwnd: Hwnd) -> String {
-    let mut buffer = [0u16; 1024];
-    let length = unsafe {
-        GetWindowTextW(
-            hwnd,
-            buffer.as_mut_ptr(),
-            buffer.len() as i32,
-        )
-    };
-
-    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
-}
-
-#[cfg(windows)]
-fn window_snapshot() -> HashSet<Hwnd> {
-    visible_windows().into_iter().collect()
-}
-
-#[cfg(windows)]
-fn find_new_kick_window(
-    before: &HashSet<Hwnd>,
-) -> Option<Hwnd> {
-    let current = visible_windows();
-
-    let is_new = |hwnd: Hwnd| !before.contains(&hwnd) && window_is_valid(hwnd);
-
-    current
-        .iter()
-        .copied()
-        .filter(|hwnd| is_new(*hwnd))
-        .find(|hwnd| window_title(*hwnd).to_ascii_lowercase().contains("kick"))
-        .or_else(|| {
-            current
-                .into_iter()
-                .filter(|hwnd| is_new(*hwnd))
-                .next()
-        })
-}
-
-
-#[derive(Clone, Debug)]
-pub struct KickStream {
-    pub name: String,
-    pub url: String,
-}
 
 #[cfg(windows)]
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -188,11 +98,32 @@ fn close_window(hwnd: Hwnd) {
 }
 
 #[cfg(windows)]
+fn remote_port_open(port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &("127.0.0.1", port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .unwrap(),
+        Duration::from_millis(100),
+    )
+    .is_ok()
+}
+
+#[derive(Clone, Debug)]
+pub struct KickStream {
+    pub name: String,
+    pub url: String,
+}
+
+#[cfg(windows)]
 #[derive(Default)]
 struct KickSession {
     profile_dir: Option<PathBuf>,
     browser_executable: Option<PathBuf>,
+    browser_pid: Option<u32>,
     managed: bool,
+    headless: bool,
     browser_hwnd: Option<Hwnd>,
     launch_started: Option<Instant>,
     launch_windows: Option<HashSet<Hwnd>>,
@@ -226,7 +157,7 @@ impl KickManager {
     ) {
         #[cfg(not(windows))]
         {
-            let _ = (profile, streams, state_available);
+            let _ = (profile, streams, state_available, headless);
             return;
         }
 
@@ -330,10 +261,12 @@ impl KickManager {
                 session.socket = None;
                 session.tabs.clear();
                 session.pending.clear();
+                session.browser_pid = None;
                 session.browser_hwnd = None;
                 session.launch_started = None;
                 session.launch_windows = None;
                 session.managed = false;
+                session.headless = false;
             }
         }
     }
@@ -381,10 +314,13 @@ impl KickManager {
 
         self.discover_browser_window(profile);
 
-        let launch_recent = self.session_mut(profile)
+        let launch_recent = self
+            .session_mut(profile)
             .launch_started
-            .map(|started| started.elapsed() < Duration::from_secs(30))
+            .map(|started| started.elapsed() < Duration::from_secs(120))
             .unwrap_or(false);
+
+        let port = 27801 + profile.index() as u16;
 
         if self.session_mut(profile).managed {
             if self.session_mut(profile).headless != headless {
@@ -395,11 +331,13 @@ impl KickManager {
                 return Ok(true);
             }
 
-            // A managed browser may have been left running while its controller
-            // socket was briefly unavailable. Reattach before considering a new launch.
-            let port = 27801 + profile.index() as u16;
-            if !launch_recent && self.connect(profile, port).is_ok() {
-                return Ok(true);
+            // The BiDi endpoint is the authoritative identity of a managed
+            // KICK browser. Never launch another one while that port exists.
+            if remote_port_open(port) {
+                if !launch_recent && self.connect(profile, port).is_ok() {
+                    return Ok(true);
+                }
+                return Ok(false);
             }
 
             if self.session_browser_exists(profile) || launch_recent {
@@ -407,15 +345,12 @@ impl KickManager {
             }
 
             self.clear_browser_tracking(profile);
-        } else {
-            // Uncontrolled login browser: never touch it from the stream manager.
-            if self.session_browser_exists(profile) || launch_recent {
-                return Ok(false);
-            }
+        } else if self.session_browser_exists(profile) || launch_recent {
+            // Uncontrolled login browser. The stream manager must not touch it.
+            return Ok(false);
         }
 
         let launch_windows = window_snapshot();
-        let port = 27801 + profile.index() as u16;
 
         let mut command = Command::new(&executable);
         command
@@ -424,20 +359,22 @@ impl KickManager {
         if headless {
             command.arg("--headless");
         }
-        let child = command
+
+        command
             .arg("--profile")
             .arg(&profile_dir)
             .arg("--new-window")
             .arg(initial_url)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        let child = command
             .spawn()
             .map_err(|error| format!("could not start managed KICK Firefox: {error}"))?;
 
-        let pid = child.id();
         let session = self.session_mut(profile);
-        session.browser_pid = Some(pid);
+        session.browser_pid = Some(child.id());
         session.managed = true;
         session.headless = headless;
         session.browser_hwnd = None;
@@ -458,6 +395,10 @@ impl KickManager {
 
     #[cfg(windows)]
     fn discover_browser_window(&mut self, profile: GameProfile) {
+        if self.session_mut(profile).headless {
+            return;
+        }
+
         let before = self.session_mut(profile).launch_windows.clone();
         let Some(before) = before else { return; };
 
@@ -493,7 +434,7 @@ impl KickManager {
         session.pending.clear();
     }
 
-        #[cfg(windows)]
+    #[cfg(windows)]
     fn open_unmanaged_login(
         &mut self,
         profile: GameProfile,
@@ -526,7 +467,7 @@ impl KickManager {
 
         self.discover_browser_window(profile);
 
-        if self.session_browser_open(profile) {
+        if self.session_browser_exists(profile) {
             Command::new(&executable)
                 .arg("--profile")
                 .arg(&profile_dir)
