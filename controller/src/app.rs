@@ -2330,7 +2330,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     app.show_market = open;
 }
 
-fn chrono_like_now_ms() -> u64 {
+pub(crate) fn chrono_like_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     SystemTime::now()
