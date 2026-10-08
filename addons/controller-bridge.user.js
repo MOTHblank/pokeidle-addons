@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.2
+// @version      1.3.3
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -228,84 +228,134 @@
 
     function installHook() {
         /*
-         * PokéIdle's current client creates the native WebSocket and then
-         * assigns ws.onmessage/ws.onclose directly. Do not replace the
-         * WebSocket constructor and do not replace addEventListener: both are
-         * global interception points that can alter browser startup.
+         * PokéIdle assigns its real message handler with ws.onmessage.
+         * We need to observe that first assignment, but changing both
+         * onmessage and onclose accessors permanently is unnecessarily risky
+         * during document-start and can interfere with native WebSocket setup.
          *
-         * Instead, shadow the standard WebSocket event-handler properties on
-         * the page's prototype. The native setter still runs unchanged; we
-         * only observe the socket after the game registers its handler.
+         * Temporarily shadow only onmessage. As soon as the game installs its
+         * handler, attach our passive listeners and immediately restore the
+         * exact native descriptor. From that point onward the browser/game
+         * owns WebSocket completely again.
          */
         const NativeWebSocket = page.WebSocket;
         const proto = NativeWebSocket && NativeWebSocket.prototype;
         if (!proto) return false;
 
+        let owner = proto;
+        let descriptor = null;
+
+        while (owner && !descriptor) {
+            descriptor =
+                Object.getOwnPropertyDescriptor(
+                    owner,
+                    'onmessage'
+                ) || null;
+            if (!descriptor) {
+                owner = Object.getPrototypeOf(owner);
+            }
+        }
+
+        if (
+            !descriptor ||
+            typeof descriptor.set !== 'function' ||
+            descriptor.configurable === false
+        ) {
+            return false;
+        }
+
         const attached = new WeakSet();
+        let restored = false;
+
+        const restore = () => {
+            if (restored) return;
+            restored = true;
+
+            try {
+                if (owner === proto) {
+                    Object.defineProperty(
+                        proto,
+                        'onmessage',
+                        descriptor
+                    );
+                } else {
+                    delete proto.onmessage;
+                }
+            } catch {
+                /*
+                 * Restoration failure must never propagate into the game's
+                 * event-handler setter. The native setter was already called.
+                 */
+            }
+        };
 
         const observe = ws => {
             if (!ws || attached.has(ws)) return;
             attached.add(ws);
+
             try {
                 attach(ws);
             } catch (error) {
-                try { console.warn('[Moth Controller Bridge] socket observation failed:', error); } catch {}
+                try {
+                    console.warn(
+                        '[Moth Controller Bridge] socket observation failed:',
+                        error
+                    );
+                } catch {}
             }
         };
 
-        const patchHandler = property => {
-            const marker = property === 'onmessage'
-                ? '__mothControllerBridgeOnMessageV1'
-                : '__mothControllerBridgeOnCloseV1';
+        const nativeGet = descriptor.get;
+        const nativeSet = descriptor.set;
 
-            if (proto[marker]) return true;
-
-            let owner = proto;
-            let descriptor = null;
-            while (owner && !descriptor) {
-                descriptor = Object.getOwnPropertyDescriptor(owner, property) || null;
-                owner = Object.getPrototypeOf(owner);
-            }
-
-            if (!descriptor || typeof descriptor.set !== 'function') return false;
-
-            const nativeGet = descriptor.get;
-            const nativeSet = descriptor.set;
-
-            try {
-                Object.defineProperty(proto, marker, {
-                    value: true,
-                    configurable: false,
-                    enumerable: false,
-                    writable: false
-                });
-
-                Object.defineProperty(proto, property, {
+        try {
+            Object.defineProperty(
+                proto,
+                'onmessage',
+                {
                     configurable: true,
                     enumerable: descriptor.enumerable,
                     get: nativeGet
                         ? function() {
-                            return Reflect.apply(nativeGet, this, []);
+                            return Reflect.apply(
+                                nativeGet,
+                                this,
+                                []
+                            );
                         }
                         : undefined,
                     set: function(value) {
-                        const result = Reflect.apply(nativeSet, this, [value]);
-                        if (typeof value === 'function') observe(this);
+                        const result =
+                            Reflect.apply(
+                                nativeSet,
+                                this,
+                                [value]
+                            );
+
+                        if (
+                            typeof value ===
+                            'function'
+                        ) {
+                            observe(this);
+                            restore();
+                        }
+
                         return result;
                     }
-                });
+                }
+            );
 
-                return true;
-            } catch {
-                return false;
-            }
-        };
-
-        // Current upstream uses onmessage/onclose. Observe either one, but
-        // neither path changes the constructor or the native event API.
-        const messagePatched = patchHandler('onmessage');
-        const closePatched = patchHandler('onclose');
-        return messagePatched || closePatched;
+            /*
+             * If the game has already assigned onmessage before this userscript
+             * gets here, there is nothing more to intercept. The polling
+             * fallback below can still use any socket adopted by another addon,
+             * while the page continues normally.
+             */
+            return true;
+        } catch {
+            restore();
+            return false;
+        }
     }
 
     function bridgeSocket() {
@@ -628,7 +678,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 4,
+        version: 5,
         send,
         snapshot,
         gameSnapshot,
