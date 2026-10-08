@@ -248,7 +248,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Violentmonkey" => "Violentmonkey",
         "Installed" => "Instalado",
         "Not installed" => "Não instalado",
-        "Profile ready" => "Perfil pronto",
         "Not configured" => "Não configurado",
         "Open" => "Aberto",
         "Not checked" => "Não verificado",
@@ -3466,7 +3465,6 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
                         let index = profile.index();
-                        let account_name = app.accounts[index].name.clone();
                         let enabled = app.accounts[index].enabled;
                         let setup = app.account_setup[index].clone();
                         let health = app.games[index].health();
