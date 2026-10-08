@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.16
+// @version      0.1.17
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2022,7 +2022,7 @@
             const label = normalize(element.textContent);
             return (
                 label === 'rmt' ||
-                /(^|\\s)rmt(\\s|$)/.test(label)
+                /(^|\s)rmt(\s|$)/.test(label)
             );
         }) || null;
     }
