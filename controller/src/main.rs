@@ -3,6 +3,7 @@
 mod accounts;
 mod app;
 mod config;
+mod kick;
 mod firefox;
 mod monitor;
 mod logging;
