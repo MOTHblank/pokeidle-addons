@@ -227,59 +227,40 @@
     }
 
     function installHook() {
-        /*
-         * Never patch WebSocket.prototype event-handler accessors. They are
-         * shared with the game's own startup listeners, and even temporary
-         * prototype overrides can interfere with page initialization.
-         *
-         * Wrap construction instead so each socket receives passive listeners
-         * immediately. The Proxy forwards the native prototype and constants,
-         * preserving normal WebSocket instances and instanceof checks.
-         */
-        const NativeWebSocket = page.WebSocket;
-        if (typeof NativeWebSocket !== 'function') return false;
+    const Native = page.WebSocket;
+    if (typeof Native !== 'function') return false;
+    if (Native.__mothWrapped) return true;
 
-        let WrappedWebSocket;
-        try {
-            WrappedWebSocket = new Proxy(NativeWebSocket, {
-                construct(target, args, newTarget) {
-                    const ws = Reflect.construct(
-                        target,
-                        args,
-                        newTarget === WrappedWebSocket ? target : newTarget
-                    );
+    try {
+        const Wrapped = function WebSocket(...args) {
+            // Called without `new`: let the native constructor throw its usual error
+            if (!new.target) return Native(...args);
 
-                    try {
-                        attach(ws);
-                    } catch (error) {
-                        try {
-                            console.warn(
-                                '[Moth Controller Bridge] socket observation failed:',
-                                error
-                            );
-                        } catch {}
-                    }
+            const ws = Reflect.construct(
+                Native,
+                args,
+                new.target === Wrapped ? Native : new.target
+            );
 
-                    return ws;
-                }
-            });
+            try { attach(ws); } catch (error) {
+                try { console.warn('[Moth Controller Bridge] attach failed:', error); } catch {}
+            }
+            return ws;
+        };
 
-            page.WebSocket = WrappedWebSocket;
-            return page.WebSocket === WrappedWebSocket;
-        } catch (error) {
-            /*
-             * If this browser/userscript sandbox disallows wrapping WebSocket,
-             * do not let instrumentation prevent the game from loading.
-             */
-            try {
-                console.warn(
-                    '[Moth Controller Bridge] WebSocket instrumentation unavailable:',
-                    error
-                );
-            } catch {}
-            return false;
+        Wrapped.prototype = Native.prototype;
+        for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+            Object.defineProperty(Wrapped, key, { value: Native[key] });
         }
+        Object.defineProperty(Wrapped, '__mothWrapped', { value: true });
+
+        page.WebSocket = Wrapped;
+        return page.WebSocket === Wrapped;
+    } catch (error) {
+        try { console.warn('[Moth Controller Bridge] WebSocket hook unavailable:', error); } catch {}
+        return false;
     }
+}
 
     function bridgeSocket() {
         return gameSocket || socket || null;
