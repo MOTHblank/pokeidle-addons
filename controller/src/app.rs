@@ -2739,24 +2739,38 @@ fn moth_watch_reference_text(candidate: &crate::monitor::MothWatchCandidate) -> 
     match candidate.reference_source.as_str() {
         "active-median" => {
             let mut text = format!(
-                "current market median · {} listings",
-                candidate.active_reference_listings
+                format!("{} · {} {}",
+                    tr("current market median"),
+                    candidate.active_reference_listings,
+                    tr("listings"))
             );
             if candidate.server_average > candidate.average {
                 text.push_str(&format!(
-                    " · server 7d avg {} ignored",
-                    format_number(candidate.server_average)
-                ));
+                    text.push_str(&format!(
+                        " · {} {} {}",
+                        tr("server 7d avg"),
+                        format_number(candidate.server_average),
+                        tr("ignored")
+                    ));
+                }
             }
             text
         }
         "live-7d" => format!(
-            "live 7d avg / unit · {} units sold",
-            candidate.samples
+            format!(
+                "{} · {} {}",
+                tr("live 7d avg / unit"),
+                candidate.samples,
+                tr("units sold")
+            ),
         ),
         _ => format!(
-            "frozen fallback / unit · {} units sold",
-            candidate.samples
+            format!(
+                "{} · {} {}",
+                tr("frozen fallback / unit"),
+                candidate.samples,
+                tr("units sold")
+            ),
         ),
     }
 }
@@ -2787,7 +2801,7 @@ fn draw_moth_watch_config(
                         set_status: &mut dyn FnMut(String),
                     ) {
                         let mut next = value;
-                        if ui.checkbox(&mut next, label).changed() {
+                        if ui.checkbox(&mut next, tr(label)).changed() {
                             moth_watch_send(
                                 monitor,
                                 json!({
@@ -2795,7 +2809,7 @@ fn draw_moth_watch_config(
                                     "patch": { key: next }
                                 }),
                             );
-                            set_status(format!("{} updated.", label));
+                            set_status(format!("{} {}", tr(label), tr("updated.")));
                         }
                     }
 
@@ -2809,7 +2823,7 @@ fn draw_moth_watch_config(
                     ) {
                         let mut next = value as f64;
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(label).size(9.0).color(MUTED));
+                            ui.label(RichText::new(tr(label)).size(9.0).color(MUTED));
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut next)
@@ -2971,15 +2985,17 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
             ui.horizontal_wrapped(|ui| {
                 let connection_text = if info.connected {
-                    "Connected"
+                    tr("Connected")
                 } else {
-                    "Disconnected"
+                    tr("Disconnected")
                 };
                 ui.label(
                     RichText::new(format!(
-                        "{} · {} · Items: {} · Pokémon: {}",
+                        "{} · {} · {}: {} · {}: {}",
                         connection_text,
+                        tr("nick"),
                         info.nick,
+                        tr("Items"),
                         info.item_status,
                         info.pokemon_status
                     ))
@@ -2990,8 +3006,10 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(format!(
-                        "Coins {} · Gems {}",
+                        "{} {} · {} {}",
+                        tr("Coins"),
                         format_number(info.gold),
+                        tr("Gems"),
                         format_number(info.orbs)
                     ))
                     .size(10.0)
@@ -3002,8 +3020,10 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(format!(
-                        "Candidates {} · protocol {}",
+                        "{} {} · {} {}",
+                        tr("Candidates"),
                         info.candidates.len(),
+                        tr("protocol"),
                         info.protocol_messages
                     ))
                     .size(9.0)
@@ -3014,12 +3034,12 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             if let Some(result) = &info.controller_result {
                 let result_text = if result.ok {
                     if result.listing_id > 0 {
-                        format!("Purchase command accepted · listing #{}", result.listing_id)
+                        format!("{} · listing #{}", tr("Purchase command accepted"), result.listing_id)
                     } else {
-                        "Moth Watch command accepted".to_string()
+                        tr("Moth Watch command accepted").to_string()
                     }
                 } else if result.error.is_empty() {
-                    "Moth Watch rejected the command".to_string()
+                    tr("Moth Watch rejected the command).to_string()
                 } else {
                     format!("Moth Watch: {}", result.error)
                 };
