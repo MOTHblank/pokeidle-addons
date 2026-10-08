@@ -1,6 +1,7 @@
 use crate::accounts;
 use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
+use crate::kick::KickManager;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
 use serde_json::{json, Value};
@@ -348,6 +349,7 @@ pub struct ControllerApp {
     market_currency: String,
     status: String,
     status_error: bool,
+    kick_manager: KickManager,
 }
 
 impl ControllerApp {
@@ -372,6 +374,7 @@ impl ControllerApp {
             market_currency: "gold".to_string(),
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
+            kick_manager: KickManager::new(),
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -398,6 +401,17 @@ impl ControllerApp {
                 self.set_status(error, true);
                 false
             }
+        }
+    }
+
+    fn sync_kick_streams(&mut self) {
+        for profile in GameProfile::ALL {
+            let health = self.games[profile.index()].health();
+            self.kick_manager.sync(
+                profile,
+                &health.kick_streams,
+                health.kick_state_available,
+            );
         }
     }
 
@@ -641,7 +655,10 @@ impl ControllerApp {
         let result = match action {
             ProfileAction::Game => accounts::open_game(profile).map(|_| "Opened game".to_string()),
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
-            ProfileAction::Kick => accounts::open_login(profile, accounts::KICK_LOGIN, "KICK"),
+            ProfileAction::Kick => self
+                .kick_manager
+                .open_login(profile, accounts::KICK_LOGIN)
+                .map(|_| "Opened KICK in normal Firefox".to_string()),
             ProfileAction::Addons => accounts::open_addons(profile)
                 .map(|count| format!("Opened {count} addon installers")),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
@@ -656,6 +673,8 @@ impl ControllerApp {
 
 impl Drop for ControllerApp {
     fn drop(&mut self) {
+        self.kick_manager.shutdown();
+
         for slot in &mut self.games {
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.stop();
@@ -678,6 +697,7 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        self.sync_kick_streams();
 
         // Keep the normal UI at 1Hz, but repaint the Atlas smoothly while its
         // hunt-change cooldown countdown is active.
