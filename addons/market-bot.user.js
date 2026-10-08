@@ -5,8 +5,8 @@
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
-// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js
-// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/market-bot.user.js
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js
 // @run-at       document-start
 // ==/UserScript==
 
@@ -1971,7 +1971,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.11 loaded');
+        console.info('[Moth Watch] v0.1.12 loaded');
     }
 
     bootstrap();
