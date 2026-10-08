@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.15
+// @version      1.7.16
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -971,6 +971,25 @@
                     'xp';
                 next.sortDirection =
                     'desc';
+            }
+
+            const validSorts = [
+                'xp',
+                'name',
+                'pokedex',
+                'level',
+                'npc',
+                'player_market',
+                'matchup'
+            ];
+
+            if (
+                !validSorts.includes(
+                    next.sort
+                )
+            ) {
+                next.sort =
+                    defaults.sort;
             }
 
             if (
@@ -7042,14 +7061,38 @@
                     return comparison;
                 }
 
-                return a.name.localeCompare(
-                    b.name,
-                    currentLocale(),
-                    {
-                        sensitivity:
-                            'base'
-                    }
-                );
+                /*
+                 * The primary sort can legitimately tie (for example several
+                 * Pokémon can share the same hunt level/XP, or market data can
+                 * be unavailable while it is loading). Keep the requested
+                 * direction meaningful instead of always falling back to
+                 * ascending name order.
+                 */
+                const nameTie =
+                    a.name.localeCompare(
+                        b.name,
+                        currentLocale(),
+                        {
+                            sensitivity:
+                                'base'
+                        }
+                    ) *
+                    direction;
+
+                if (nameTie) {
+                    return nameTie;
+                }
+
+                return (
+                    (
+                        Number(a.id) ||
+                        0
+                    ) -
+                    (
+                        Number(b.id) ||
+                        0
+                    )
+                ) * direction;
             }
         );
 
@@ -10251,7 +10294,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.15 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.16 loaded'
         );
     }
 
