@@ -3,6 +3,7 @@ name: Build Moth Controller
 on:
   push:
     branches:
+      - master
       - rust-rewrite
   workflow_dispatch:
 
