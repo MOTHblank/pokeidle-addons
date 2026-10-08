@@ -1602,7 +1602,9 @@ fn draw_game_card(
                         );
                         ui.label(
                             RichText::new(format!(
-                                format!("{} {}", tr("Watching:"), health.stream_watching.join(", "))
+                                "{} {}",
+                                tr("Watching:"),
+                                health.stream_watching.join(", ")
                             ))
                             .size(10.0)
                             .color(MUTED),
