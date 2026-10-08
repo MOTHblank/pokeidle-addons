@@ -2968,7 +2968,17 @@
                 return false;
             }
 
-            const snapshot = bridge.gameSnapshot();
+            const primarySnapshot = bridge.gameSnapshot();
+            const fallbackSnapshot =
+                Array.isArray(primarySnapshot?.hunts) &&
+                primarySnapshot.hunts.length
+                    ? null
+                    : (
+                        typeof bridge.snapshot === 'function'
+                            ? bridge.snapshot()
+                            : null
+                    );
+            const snapshot = fallbackSnapshot || primarySnapshot;
             const gameState = snapshot?.state || {};
 
             if (Array.isArray(snapshot?.hunts) && snapshot.hunts.length) {
