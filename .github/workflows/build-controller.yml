@@ -1,10 +1,6 @@
-name: Build Moth Controller
+name: Manual Moth Controller Build
 
 on:
-  push:
-    branches:
-      - master
-      - rust-rewrite
   workflow_dispatch:
 
 jobs:
