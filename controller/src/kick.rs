@@ -145,14 +145,14 @@ fn find_kick_window(
 #[cfg(windows)]
 fn find_new_kick_window(
     before: &HashSet<Hwnd>,
-    browser_pid: u32,
+    browser_pid: Option<u32>,
     channel: &str,
 ) -> Option<Hwnd> {
     let current = visible_windows();
 
     if let Some(hwnd) = find_kick_window(
         current.iter().copied().filter(|hwnd| !before.contains(hwnd)),
-        Some(browser_pid),
+        browser_pid,
         channel,
     ) {
         return Some(hwnd);
@@ -161,7 +161,12 @@ fn find_new_kick_window(
     current
         .into_iter()
         .filter(|hwnd| !before.contains(hwnd))
-        .filter(|hwnd| window_is_valid(*hwnd) && window_pid(*hwnd) == browser_pid)
+        .filter(|hwnd| {
+            window_is_valid(*hwnd)
+                && browser_pid
+                    .map(|pid| window_pid(*hwnd) == pid)
+                    .unwrap_or(true)
+        })
         .find(|hwnd| {
             let title = normalized(&window_title(*hwnd));
             title.contains("kick") || title.contains(&normalized(channel))
@@ -394,9 +399,19 @@ impl KickManager {
             for _ in 0..60 {
                 if let Some(hwnd) = find_new_kick_window(
                     &before,
-                    child.id(),
+                    Some(child.id()),
                     &stream.name,
                 ) {
+                    session.browser_pid = Some(window_pid(hwnd));
+                    return Ok(hwnd);
+                }
+
+                if let Some(hwnd) = find_new_kick_window(
+                    &before,
+                    None,
+                    &stream.name,
+                ) {
+                    session.browser_pid = Some(window_pid(hwnd));
                     return Ok(hwnd);
                 }
 
@@ -419,7 +434,7 @@ impl KickManager {
         for _ in 0..60 {
             if let Some(hwnd) = find_new_kick_window(
                 &before,
-                session.browser_pid.unwrap_or(0),
+                session.browser_pid,
                 &stream.name,
             ) {
                 return Ok(hwnd);
