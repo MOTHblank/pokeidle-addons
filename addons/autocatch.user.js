@@ -974,7 +974,25 @@
         }
     }
 
+    function gameIsLoading() {
+        const loading = q('#carregando');
+        if (!loading) return false;
+        if (
+            loading.hidden ||
+            loading.classList.contains('hidden') ||
+            loading.getAttribute('aria-hidden') === 'true'
+        ) {
+            return false;
+        }
+        return loading.getClientRects().length > 0;
+    }
+
     function ensureRestockItemCatalog() {
+        if (gameIsLoading()) {
+            window.setTimeout(ensureRestockItemCatalog, 750);
+            return Promise.resolve(null);
+        }
+
         if (itemCatalogLoadPromise) return itemCatalogLoadPromise;
 
         itemCatalogLoadPromise = fetch('/assets/items.json', {
