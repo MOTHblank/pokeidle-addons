@@ -4,8 +4,8 @@
 // @version      6.3.0
 // @description  Opens current official Twitch chats as lightweight popouts and current KICK streams as regular watch pages in background tabs; refreshes once per hour.
 // @match        https://pokeidle.io/app*
-// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
-// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @run-at       document-start
 // @grant        GM_openInTab
 // @grant        unsafeWindow
