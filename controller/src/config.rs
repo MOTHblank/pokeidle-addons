@@ -179,9 +179,20 @@ impl Config {
     }
 
     pub fn kick_firefox_executable() -> Result<PathBuf, String> {
-        firefox_standard_candidates()
+        // Use the same Firefox selection order as the game profiles. In
+        // particular, do not silently switch a KICK account to an older
+        // standard Firefox when Firefox Developer Edition is the browser Moth
+        // is already using successfully.
+        if let Some(path) = env::var_os("MOTH_FIREFOX") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+
+        firefox_developer_candidates()
             .into_iter()
-            .chain(firefox_developer_candidates())
+            .chain(firefox_standard_candidates())
             .find(|path| path.is_file())
             .ok_or_else(|| {
                 "Firefox was not found for the dedicated KICK browser. Install Firefox.".to_string()
