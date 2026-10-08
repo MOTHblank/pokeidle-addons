@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.1
+// @version      6.5.2
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -290,6 +290,7 @@
 
     let stats = freshStats();
     let protocolHookInstalled = false;
+    const observedProtocolSockets = new WeakSet();
     let protocolSockets = 0;
     let protocolMessages = 0;
     let protocolCaptureSignals = 0;
@@ -1821,16 +1822,16 @@
     }
 
     function attachProtocolSocket(socket) {
+        if (!socket || observedProtocolSockets.has(socket)) return false;
+        observedProtocolSockets.add(socket);
+
         protocolSockets++;
         activeProtocolSocket = socket;
 
         socket.addEventListener('close', () => {
-            if (
-                activeProtocolSocket ===
-                socket
-            ) {
-                activeProtocolSocket =
-                    null;
+            if (activeProtocolSocket === socket) {
+                activeProtocolSocket = null;
+                protocolHookInstalled = false;
             }
         });
 
@@ -1845,53 +1846,63 @@
             inspectIncomingProtocolMessage(event.data);
         });
 
-        const nativeSend = socket.send;
+        /*
+         * This is an instance-only send wrapper. Unlike replacing
+         * window.WebSocket, it cannot affect how the game constructs sockets.
+         */
+        try {
+            const nativeSend = socket.send;
+            socket.send = function(data) {
+                inspectOutgoingProtocolMessage(data);
+                return nativeSend.call(this, data);
+            };
+        } catch {}
 
-        socket.send = function (data) {
-            inspectOutgoingProtocolMessage(data);
-            return nativeSend.call(this, data);
-        };
+        return true;
+    }
+
+    function adoptBridgeSocket() {
+        try {
+            const bridge = page.__mothControllerBridgeV1;
+            const candidate =
+                bridge && typeof bridge.socket === 'function'
+                    ? bridge.socket()
+                    : null;
+
+            if (!candidate || candidate.readyState > page.WebSocket.OPEN) {
+                return false;
+            }
+
+            attachProtocolSocket(candidate);
+            activeProtocolSocket = candidate;
+            protocolHookInstalled = true;
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     function installProtocolHook() {
-        if (protocolHookInstalled) return true;
+        if (adoptBridgeSocket()) return true;
 
-        const NativeWebSocket = page.WebSocket;
-        if (typeof NativeWebSocket !== 'function') return false;
-
-        if (
-            page.__mothAutoCatchWebSocketHookV611
-        ) {
-            protocolHookInstalled = true;
-            return true;
-        }
-
-        const WrappedWebSocket = new Proxy(NativeWebSocket, {
-            construct(target, args) {
-                const socket = Reflect.construct(target, args, target);
-                attachProtocolSocket(socket);
-                return socket;
-            }
-        });
-
-        try {
-            page.WebSocket = WrappedWebSocket;
-            page.__mothAutoCatchWebSocketHookV611 = true;
-            protocolHookInstalled = page.WebSocket === WrappedWebSocket;
-
-            if (protocolHookInstalled) {
-                console.info('[PokéIdle Auto Catch+] slot protocol hook installed');
-            }
-        } catch (error) {
-            console.warn('[PokéIdle Auto Catch+] WebSocket hook failed', error);
-            protocolHookInstalled = false;
-        }
-
-        return protocolHookInstalled;
+        /*
+         * Controller Bridge is the authoritative WebSocket observer. Do not
+         * install another global constructor hook here: the upstream client
+         * constructs its socket during boot, and another Proxy can interfere
+         * with that startup path.
+         */
+        protocolHookInstalled = false;
+        return false;
     }
 
-    // Install before PokéIdle creates its socket.
+    // Bridge may be installed by another userscript a moment later.
     installProtocolHook();
+    const protocolAdoptionTimer = setInterval(() => {
+        if (adoptBridgeSocket()) {
+            clearInterval(protocolAdoptionTimer);
+        }
+    }, 250);
+
     // ---------------------------------------------------------------------
     // Automation
     // ---------------------------------------------------------------------
