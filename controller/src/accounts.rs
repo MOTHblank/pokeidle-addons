@@ -3,7 +3,6 @@ use crate::firefox;
 use serde_json::Value;
 
 pub const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
-pub const KICK_LOGIN: &str = "https://kick.com/";
 pub const VIOLENTMONKEY_INSTALL: &str =
     "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
