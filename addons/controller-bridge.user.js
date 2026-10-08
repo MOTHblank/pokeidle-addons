@@ -18,7 +18,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 4 &&
+        Number(existingBridge.version) >= 5 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
