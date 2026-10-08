@@ -539,6 +539,8 @@ pub struct ControllerApp {
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
     kick_headless_test: [bool; 4],
+    tab_url_input: [String; 4],
+    tab_url_open: [bool; 4],
 }
 
 impl ControllerApp {
@@ -565,6 +567,8 @@ impl ControllerApp {
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
             kick_headless_test: [false; 4],
+            tab_url_input: std::array::from_fn(|_| String::new()),
+            tab_url_open: [false; 4],
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -1483,12 +1487,31 @@ fn draw_game_card(
             });
 
             ui.add_space(12.0);
-            ui.label(
-                RichText::new(tr("OPEN TABS"))
-                    .size(9.0)
-                    .strong()
-                    .color(DIM),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(tr("OPEN TABS"))
+                        .size(9.0)
+                        .strong()
+                        .color(DIM),
+                );
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("+")
+                                    .size(13.0)
+                                    .strong()
+                            )
+                            .min_size(egui::vec2(24.0, 22.0)),
+                        )
+                        .on_hover_text(tr("Open a custom URL in this Firefox profile"))
+                        .clicked()
+                    {
+                        app.tab_url_open[index] = !app.tab_url_open[index];
+                    }
+                });
+            });
             ui.add_space(6.0);
 
             egui::Frame::new()
@@ -1496,6 +1519,63 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
+                    if app.tab_url_open[index] {
+                        ui.horizontal(|ui| {
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut app.tab_url_input[index])
+                                    .hint_text(tr("https://example.com"))
+                                    .desired_width((width - 150.0).max(180.0))
+                            );
+
+                            let enter = response.lost_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
+
+                            if ui.button(tr("Open")).clicked() || enter {
+                                let raw = app.tab_url_input[index].trim();
+                                if raw.is_empty() {
+                                    app.set_status(
+                                        format!(
+                                            "{}: {}",
+                                            account_name,
+                                            tr("Enter a URL.")
+                                        ),
+                                        true,
+                                    );
+                                } else {
+                                    let url = if raw.starts_with("https://") || raw.starts_with("http://") {
+                                        raw.to_string()
+                                    } else {
+                                        format!("https://{}", raw)
+                                    };
+
+                                    app.games[index].monitor.as_ref().map(|monitor| {
+                                        monitor.send(json!({
+                                            "t": "browser.openTab",
+                                            "url": url
+                                        }));
+                                    });
+
+                                    app.tab_url_input[index].clear();
+                                    app.tab_url_open[index] = false;
+                                    app.set_status(
+                                        format!(
+                                            "{} · {}",
+                                            account_name,
+                                            tr("custom tab requested")
+                                        ),
+                                        false,
+                                    );
+                                }
+                            }
+
+                            if ui.button("×").clicked() {
+                                app.tab_url_open[index] = false;
+                            }
+                        });
+
+                        ui.add_space(6.0);
+                    }
+
                     if health.tabs.is_empty() {
                         ui.label(
                             RichText::new(tr("No top-level tabs reported"))
