@@ -1,8 +1,11 @@
 use crate::config::{Config, GameProfile};
 use crate::firefox;
+use serde_json::Value;
 
 pub const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 pub const KICK_LOGIN: &str = "https://kick.com/";
+pub const VIOLENTMONKEY_INSTALL: &str =
+    "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
 pub const ADDONS: &[(&str, &str)] = &[
     (
@@ -35,6 +38,41 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
 
 ];
+
+pub fn violentmonkey_installed(profile: GameProfile) -> Result<bool, String> {
+    let config = Config::for_profile(profile)?;
+    let extensions = config.profile_dir.join("extensions.json");
+
+    if !extensions.is_file() {
+        return Ok(false);
+    }
+
+    let raw = std::fs::read_to_string(&extensions)
+        .map_err(|error| format!("could not read Firefox extensions registry: {error}"))?;
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid Firefox extensions registry: {error}"))?;
+
+    let Some(addons) = value.get("addons").and_then(Value::as_array) else {
+        return Ok(false);
+    };
+
+    Ok(addons.iter().any(|addon| {
+        let name = addon
+            .get("defaultLocale")
+            .and_then(|locale| locale.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| addon.get("name").and_then(Value::as_str))
+            .unwrap_or_default();
+
+        let id = addon
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        name.to_ascii_lowercase().contains("violentmonkey")
+            || id.to_ascii_lowercase().contains("violentmonkey")
+    }))
+}
 
 pub fn open_game(profile: GameProfile) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
