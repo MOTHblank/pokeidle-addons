@@ -21,11 +21,31 @@ pub struct TabInfo {
 }
 
 #[derive(Clone, Debug)]
+pub struct HuntSpeciesInfo {
+    pub id: u32,
+    pub name: String,
+    pub points: u32,
+    pub types: Vec<String>,
+    pub weak_to: Vec<String>,
+    pub captured: bool,
+    pub capture_count: u32,
+    pub npc_value: u64,
+    pub market_value: u64,
+    pub offense_multiplier: Option<f32>,
+    pub offense_type: String,
+    pub defense_multiplier: Option<f32>,
+    pub defense_type: String,
+    pub matchup_score: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
 pub struct HuntInfo {
     pub slug: String,
     pub name: String,
     pub level: u32,
+    pub area: String,
     pub species: Vec<String>,
+    pub species_details: Vec<HuntSpeciesInfo>,
     pub xp_per_hour: u64,
     pub pokemon_xp_per_hour: u64,
     pub kills_per_hour: u64,
@@ -112,6 +132,7 @@ pub struct Health {
     pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
     pub last_game_message_ms: u64,
+    pub last_battle_at: u64,
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
     pub market_listings: Vec<MarketListing>,
@@ -135,7 +156,7 @@ impl Default for Health {
             fallen_count: 0,
             economy_mode: false,
             addon_ok: 0,
-            addon_total: 5,
+            addon_total: 7,
             addon_missing: Vec::new(),
             twitch_tabs: 0,
             twitch_low_resource_ok: 0,
@@ -166,6 +187,7 @@ impl Default for Health {
             xp_sources: Vec::new(),
             bridge_connected: false,
             last_game_message_ms: 0,
+            last_battle_at: 0,
             tabs: Vec::new(),
             hunts: Vec::new(),
             market_listings: Vec::new(),
@@ -325,6 +347,7 @@ struct RuntimeProbe {
     stream_missing: Vec<String>,
     xp_sources: Vec<String>,
     last_game_message_ms: u64,
+    last_battle_at: u64,
     xp_bonuses: Vec<String>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
@@ -475,6 +498,7 @@ fn monitor_loop(
                         current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
                         current.last_game_message_ms = probe.last_game_message_ms;
+                        current.last_battle_at = probe.last_battle_at;
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
                         current.market_listings = probe.market_listings;
@@ -725,7 +749,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         },
         economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
         addon_ok,
-        addon_total: 5,
+        addon_total: 7,
         addon_missing,
         twitch_tabs,
         twitch_low_resource_ok,
@@ -770,6 +794,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
         last_game_message_ms: runtime.last_game_message_ms,
+        last_battle_at: runtime.last_battle_at,
         tabs,
         hunts: runtime.hunts,
         market_listings: runtime.market_listings,
@@ -929,6 +954,11 @@ fn probe_runtime_details(
 
     let last_game_message_ms = snapshot
         .get("lastMessageAt")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let last_battle_at = snapshot
+        .get("lastBattleAt")
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
@@ -1213,24 +1243,83 @@ fn probe_runtime_details(
             let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
             let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
             let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let species = hunt.get("species").and_then(Value::as_array).map(|values| {
-                values.iter()
-                    .filter_map(|species| species.get("name").and_then(Value::as_str).map(str::to_string))
-                    .collect::<Vec<_>>()
+            let area = hunt.get("area").and_then(Value::as_str).unwrap_or_default().to_string();
+
+            let species_details = hunt.get("species").and_then(Value::as_array).map(|values| {
+                values.iter().filter_map(|species| {
+                    let id = species.get("id").and_then(Value::as_u64)? as u32;
+                    let name = species.get("name").and_then(Value::as_str).unwrap_or("Pokémon").to_string();
+                    let types = species.get("types")
+                        .and_then(Value::as_array)
+                        .map(|values| {
+                            values.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let weak_to = species.get("weakTo")
+                        .and_then(Value::as_array)
+                        .map(|values| {
+                            values.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let offense = species.get("offense").and_then(|value| {
+                        let multiplier = value.get("multiplier").and_then(Value::as_f64)?;
+                        Some((
+                            multiplier as f32,
+                            value.get("attackType").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        ))
+                    });
+                    let defense = species.get("defense").and_then(|value| {
+                        let multiplier = value.get("multiplier").and_then(Value::as_f64)?;
+                        Some((
+                            multiplier as f32,
+                            value.get("attackType").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        ))
+                    });
+
+                    Some(HuntSpeciesInfo {
+                        id,
+                        name,
+                        points: species.get("points").and_then(Value::as_u64).unwrap_or(1) as u32,
+                        types,
+                        weak_to,
+                        captured: species.get("captured").and_then(Value::as_bool).unwrap_or(false),
+                        capture_count: species.get("captureCount").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        npc_value: species.get("npcValue").and_then(Value::as_u64).unwrap_or(0),
+                        market_value: species.get("marketValue").and_then(Value::as_u64).unwrap_or(0),
+                        offense_multiplier: offense.as_ref().map(|item| item.0),
+                        offense_type: offense.map(|item| item.1).unwrap_or_default(),
+                        defense_multiplier: defense.as_ref().map(|item| item.0),
+                        defense_type: defense.map(|item| item.1).unwrap_or_default(),
+                        matchup_score: species.get("matchupScore").and_then(Value::as_f64).map(|value| value as f32),
+                    })
+                }).collect::<Vec<_>>()
             }).unwrap_or_default();
+
+            let species = species_details.iter()
+                .map(|species| species.name.clone())
+                .collect::<Vec<_>>();
 
             HuntInfo {
                 slug,
                 name,
                 level,
+                area,
                 species,
-                xp_per_hour: hunt.get("xpPerHour").and_then(Value::as_u64).unwrap_or(0),
-                pokemon_xp_per_hour: hunt.get("pokemonXpPerHour").and_then(Value::as_u64).unwrap_or(0),
-                kills_per_hour: hunt.get("killsPerHour").and_then(Value::as_u64).unwrap_or(0),
+                xp_per_hour: hunt.get("xp").and_then(|value| value.get("value")).and_then(Value::as_u64).unwrap_or(0),
+                pokemon_xp_per_hour: hunt.get("xp").and_then(|value| value.get("pokemonValue")).and_then(Value::as_u64).unwrap_or(0),
+                kills_per_hour: hunt.get("xp").and_then(|value| value.get("killsH")).and_then(Value::as_f64).map(|v| v.max(0.0).round() as u64).unwrap_or(0),
                 unlocked: hunt.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
                 current: hunt.get("current").and_then(Value::as_bool).unwrap_or(false),
-                xp_source: hunt.get("xpSource").and_then(Value::as_str).unwrap_or("learning").to_string(),
-                xp_samples: hunt.get("samples").and_then(Value::as_u64).unwrap_or(0),
+                xp_source: hunt.get("xp").and_then(|value| value.get("source")).and_then(Value::as_str).unwrap_or("learning").to_string(),
+                xp_samples: hunt.get("xp").and_then(|value| value.get("samples")).and_then(Value::as_u64).unwrap_or(0),
+                species_details,
             }
         }).collect::<Vec<_>>()
     } else {
@@ -1263,7 +1352,9 @@ fn probe_runtime_details(
                     slug: slug.clone(),
                     name,
                     level,
+                    area: String::new(),
                     species,
+                    species_details: Vec::new(),
                     xp_per_hour,
                     pokemon_xp_per_hour,
                     kills_per_hour,
@@ -1466,6 +1557,7 @@ fn probe_runtime_details(
         stream_missing,
         xp_sources,
         last_game_message_ms,
+        last_battle_at,
         xp_bonuses,
         hunts,
         market_listings,
