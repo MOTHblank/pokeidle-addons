@@ -60,9 +60,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Overview" => "Visão geral",
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
-        "LAUNCH BOTH" => "INICIAR AMBOS",\n        "LAUNCH ENABLED" => "INICIAR HABILITADAS",
+        "LAUNCH BOTH" => "INICIAR AMBOS",
         "LAUNCH ENABLED" => "INICIAR HABILITADAS",
-        "Accounts" => "Contas",\n        "◫  Accounts" => "◫  Contas",
+        "Accounts" => "Contas",
+        "◫  Accounts" => "◫  Contas",
         "Account Manager" => "Gerenciador de contas",
         "Enabled" => "Habilitada",
         "Account name" => "Nome da conta",
@@ -75,7 +76,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Status" => "Status",
         "Name cannot be empty" => "O nome não pode ficar vazio",
         "Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled." => "Cada slot é um perfil separado do Firefox. Desabilitar um slot o remove do painel e de Iniciar habilitadas.",
-        "Add account" => "Adicionar conta",\n        "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma conta.",
+        "Add account" => "Adicionar conta",
+        "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma conta.",
         "footer.by" => "por MOTHblank",
         "footer.play" => "MOTHblank no Google Play",
         "footer.x" => "MOTHblank no X",
@@ -209,8 +211,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "LOGIN" => "LOGIN",
         "ERROR" => "ERRO",
         "LANGUAGE" => "IDIOMA",
-        "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma.",
-        "◫  Accounts" => "◫  Contas",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
         "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
         _ => en,
@@ -446,7 +446,6 @@ impl ControllerApp {
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
-        let account_name = account_name;
         let slot = &mut self.games[index];
 
         if let Some(monitor) = slot.monitor.as_ref() {
