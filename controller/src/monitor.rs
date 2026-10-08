@@ -22,133 +22,6 @@ pub struct TabInfo {
 }
 
 #[derive(Clone, Debug)]
-pub struct HuntSpeciesInfo {
-    pub id: u32,
-    pub name: String,
-    pub types: Vec<String>,
-    pub weak_to: Vec<String>,
-    pub weakness_multipliers: Vec<(String, f32)>,
-    pub captured: bool,
-    pub npc_value: u64,
-    pub market_value: u64,
-    pub matchup_score: Option<f32>,
-    pub capture_count: u32,
-    pub offense_multiplier: Option<f32>,
-    pub offense_type: String,
-    pub defense_multiplier: Option<f32>,
-    pub defense_type: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct HuntInfo {
-    pub slug: String,
-    pub name: String,
-    pub level: u32,
-    pub area: String,
-    pub species_details: Vec<HuntSpeciesInfo>,
-    pub xp_per_hour: u64,
-    pub pokemon_xp_per_hour: u64,
-    pub kills_per_hour: u64,
-    pub unlocked: bool,
-    pub current: bool,
-    pub xp_source: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchCandidate {
-    pub kind: String,
-    pub listing_id: u64,
-    pub name: String,
-    pub currency: String,
-    pub price: u64,
-    pub average: u64,
-    pub samples: u64,
-    pub ratio: f32,
-    pub qty: u64,
-    pub purchase_quantity: u64,
-    pub unit_price: u64,
-    pub seller: String,
-    pub retained_until: u64,
-    pub reference_source: String,
-    pub active_reference_listings: u64,
-    pub server_average: u64,
-    pub can_buy: bool,
-    pub auto_buy_eligible: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchPending {
-    pub listing_id: u64,
-    pub currency: String,
-    pub unit_price: u64,
-    pub qty: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchConfig {
-    pub enabled: bool,
-    pub scan_seconds: u64,
-    pub watch_percent: u64,
-    pub auto_buy: bool,
-    pub auto_buy_percent: u64,
-    pub scan_items: bool,
-    pub scan_pokemon: bool,
-    pub auto_buy_items: bool,
-    pub auto_buy_pokemon: bool,
-    pub buy_coins: bool,
-    pub buy_gems: bool,
-    pub buy_whole_item_batch: bool,
-    pub gold_reserve: u64,
-    pub gem_reserve: u64,
-    pub max_coins_per_buy: u64,
-    pub max_gems_per_buy: u64,
-    pub min_item_units: u64,
-    pub min_pokemon_samples: u64,
-    pub pokemon_history_pages: u64,
-    pub pokemon_history_refresh_minutes: u64,
-    pub view_currency: String,
-    pub view_kind: String,
-    pub view_sort: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchLog {
-    pub at: u64,
-    pub text: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchControllerResult {
-    pub ok: bool,
-    pub error: String,
-    pub listing_id: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct MothWatchInfo {
-    pub connected: bool,
-    pub nick: String,
-    pub gold: u64,
-    pub orbs: u64,
-    pub item_status: String,
-    pub pokemon_status: String,
-    pub protocol_messages: u64,
-    pub server_clock_offset: i64,
-    pub pending_buy: Option<MothWatchPending>,
-    pub candidates: Vec<MothWatchCandidate>,
-    pub baseline_items: u64,
-    pub baseline_gold: u64,
-    pub baseline_orb: u64,
-    pub gold_checked: u64,
-    pub orb_checked: u64,
-    pub gold_suspicious: u64,
-    pub orb_suspicious: u64,
-    pub config: MothWatchConfig,
-    pub buy_log: Vec<MothWatchLog>,
-    pub controller_result: Option<MothWatchControllerResult>,
-}
-
-#[derive(Clone, Debug)]
 pub struct Health {
     pub state: String,
     pub url: String,
@@ -193,10 +66,7 @@ pub struct Health {
     pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
     pub last_game_message_ms: u64,
-    pub last_battle_at: u64,
     pub tabs: Vec<TabInfo>,
-    pub hunts: Vec<HuntInfo>,
-    pub moth_watch: Option<MothWatchInfo>,
     pub kick_streams: Vec<KickStream>,
     pub kick_state_available: bool,
     pub last_error: Option<String>,
@@ -248,10 +118,7 @@ impl Default for Health {
             xp_sources: Vec::new(),
             bridge_connected: false,
             last_game_message_ms: 0,
-            last_battle_at: 0,
             tabs: Vec::new(),
-            hunts: Vec::new(),
-            moth_watch: None,
             kick_streams: Vec::new(),
             kick_state_available: false,
             last_error: None,
@@ -372,10 +239,7 @@ struct RuntimeProbe {
     stream_missing: Vec<String>,
     xp_sources: Vec<String>,
     last_game_message_ms: u64,
-    last_battle_at: u64,
     xp_bonuses: Vec<String>,
-    hunts: Vec<HuntInfo>,
-    moth_watch: Option<MothWatchInfo>,
     kick_streams: Vec<KickStream>,
     kick_state_available: bool,
 }
@@ -423,10 +287,7 @@ struct Probe {
     xp_sources: Vec<String>,
     bridge_connected: bool,
     last_game_message_ms: u64,
-    last_battle_at: u64,
     tabs: Vec<TabInfo>,
-    hunts: Vec<HuntInfo>,
-    moth_watch: Option<MothWatchInfo>,
     kick_streams: Vec<KickStream>,
     kick_state_available: bool,
 }
@@ -524,10 +385,7 @@ fn monitor_loop(
                         current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
                         current.last_game_message_ms = probe.last_game_message_ms;
-                        current.last_battle_at = probe.last_battle_at;
                         current.tabs = probe.tabs;
-                        current.hunts = probe.hunts;
-                        current.moth_watch = probe.moth_watch;
                         current.kick_streams = probe.kick_streams;
                         current.kick_state_available = probe.kick_state_available;
                         current.last_error = None;
@@ -858,126 +716,11 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
         last_game_message_ms: runtime.last_game_message_ms,
-        last_battle_at: runtime.last_battle_at,
         tabs,
-        hunts: runtime.hunts,
-        moth_watch: runtime.moth_watch,
         kick_streams: runtime.kick_streams,
         kick_state_available: runtime.kick_state_available,
     })
 }
-fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
-    if value.is_null() {
-        return None;
-    }
-
-    let config_value = value.get("config").unwrap_or(&Value::Null);
-    let config = MothWatchConfig {
-        enabled: config_value.get("enabled").and_then(Value::as_bool).unwrap_or(false),
-        scan_seconds: config_value.get("scanSeconds").and_then(Value::as_u64).unwrap_or(5),
-        watch_percent: config_value.get("watchPercent").and_then(Value::as_u64).unwrap_or(70),
-        auto_buy: config_value.get("autoBuy").and_then(Value::as_bool).unwrap_or(false),
-        auto_buy_percent: config_value.get("autoBuyPercent").and_then(Value::as_u64).unwrap_or(40),
-        scan_items: config_value.get("scanItems").and_then(Value::as_bool).unwrap_or(true),
-        scan_pokemon: config_value.get("scanPokemon").and_then(Value::as_bool).unwrap_or(true),
-        auto_buy_items: config_value.get("autoBuyItems").and_then(Value::as_bool).unwrap_or(true),
-        auto_buy_pokemon: config_value.get("autoBuyPokemon").and_then(Value::as_bool).unwrap_or(true),
-        buy_coins: config_value.get("buyCoins").and_then(Value::as_bool).unwrap_or(true),
-        buy_gems: config_value.get("buyGems").and_then(Value::as_bool).unwrap_or(true),
-        buy_whole_item_batch: config_value.get("buyWholeItemBatch").and_then(Value::as_bool).unwrap_or(true),
-        gold_reserve: config_value.get("goldReserve").and_then(Value::as_u64).unwrap_or(0),
-        gem_reserve: config_value.get("gemReserve").and_then(Value::as_u64).unwrap_or(0),
-        max_coins_per_buy: config_value.get("maxCoinsPerBuy").and_then(Value::as_u64).unwrap_or(0),
-        max_gems_per_buy: config_value.get("maxGemsPerBuy").and_then(Value::as_u64).unwrap_or(0),
-        min_item_units: config_value.get("minItemUnits").and_then(Value::as_u64).unwrap_or(1),
-        min_pokemon_samples: config_value.get("minPokemonSamples").and_then(Value::as_u64).unwrap_or(1),
-        pokemon_history_pages: config_value.get("pokemonHistoryPages").and_then(Value::as_u64).unwrap_or(12),
-        pokemon_history_refresh_minutes: config_value.get("pokemonHistoryRefreshMinutes").and_then(Value::as_u64).unwrap_or(60),
-        view_currency: config_value.get("viewCurrency").and_then(Value::as_str).unwrap_or("all").to_string(),
-        view_kind: config_value.get("viewKind").and_then(Value::as_str).unwrap_or("all").to_string(),
-        view_sort: config_value.get("viewSort").and_then(Value::as_str).unwrap_or("discount").to_string(),
-    };
-
-    let pending_buy = value.get("pendingBuy").and_then(|pending| {
-        if pending.is_null() { return None; }
-        Some(MothWatchPending {
-            listing_id: pending.get("listingId").and_then(Value::as_u64).unwrap_or(0),
-            currency: pending.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
-            unit_price: pending.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
-            qty: pending.get("qty").and_then(Value::as_u64).unwrap_or(0),
-        })
-    });
-
-    let candidates = value.get("candidates")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items.iter().map(|candidate| MothWatchCandidate {
-                kind: candidate.get("kind").and_then(Value::as_str).unwrap_or_default().to_string(),
-                listing_id: candidate.get("listingId").and_then(Value::as_u64).unwrap_or(0),
-                name: candidate.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
-                currency: candidate.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
-                price: candidate.get("price").and_then(Value::as_u64).unwrap_or(0),
-                average: candidate.get("average").and_then(Value::as_u64).unwrap_or(0),
-                samples: candidate.get("samples").and_then(Value::as_u64).unwrap_or(0),
-                ratio: candidate.get("ratio").and_then(Value::as_f64).unwrap_or(f64::NAN) as f32,
-                qty: candidate.get("qty").and_then(Value::as_u64).unwrap_or(1),
-                purchase_quantity: candidate.get("purchaseQuantity").and_then(Value::as_u64).unwrap_or(0),
-                unit_price: candidate.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
-                seller: candidate.get("seller").and_then(Value::as_str).unwrap_or("—").to_string(),
-                retained_until: candidate.get("retainedUntil").and_then(Value::as_u64).unwrap_or(0),
-                reference_source: candidate.get("referenceSource").and_then(Value::as_str).unwrap_or_default().to_string(),
-                active_reference_listings: candidate.get("activeReferenceListings").and_then(Value::as_u64).unwrap_or(0),
-                server_average: candidate.get("serverAverage").and_then(Value::as_u64).unwrap_or(0),
-                can_buy: candidate.get("canBuy").and_then(Value::as_bool).unwrap_or(false),
-                auto_buy_eligible: candidate.get("autoBuyEligible").and_then(Value::as_bool).unwrap_or(false),
-            }).collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let buy_log = value.get("buyLog")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items.iter().map(|row| MothWatchLog {
-                at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
-                text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
-            }).collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let item_stats = value.get("itemScanStats").unwrap_or(&Value::Null);
-    let controller_result = value.get("controllerResult").and_then(|row| {
-        if row.is_null() { return None; }
-        Some(MothWatchControllerResult {
-            ok: row.get("ok").and_then(Value::as_bool).unwrap_or(false),
-            error: row.get("error").and_then(Value::as_str).unwrap_or_default().to_string(),
-            listing_id: row.get("listingId").and_then(Value::as_u64).unwrap_or(0),
-        })
-    });
-
-    Some(MothWatchInfo {
-        connected: value.get("connected").and_then(Value::as_bool).unwrap_or(false),
-        nick: value.get("nick").and_then(Value::as_str).unwrap_or_default().to_string(),
-        gold: value.get("gold").and_then(Value::as_u64).unwrap_or(0),
-        orbs: value.get("orbs").and_then(Value::as_u64).unwrap_or(0),
-        item_status: value.get("itemStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
-        pokemon_status: value.get("pokemonStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
-        protocol_messages: value.get("protocolMessages").and_then(Value::as_u64).unwrap_or(0),
-        server_clock_offset: value.get("serverClockOffset").and_then(Value::as_i64).unwrap_or(0),
-        pending_buy,
-        candidates,
-        baseline_items: value.get("baseline").and_then(|v| v.get("items")).and_then(Value::as_u64).unwrap_or(0),
-        baseline_gold: value.get("baseline").and_then(|v| v.get("gold")).and_then(Value::as_u64).unwrap_or(0),
-        baseline_orb: value.get("baseline").and_then(|v| v.get("orb")).and_then(Value::as_u64).unwrap_or(0),
-        gold_checked: item_stats.get("goldChecked").and_then(Value::as_u64).unwrap_or(0),
-        orb_checked: item_stats.get("orbChecked").and_then(Value::as_u64).unwrap_or(0),
-        gold_suspicious: item_stats.get("goldSuspicious").and_then(Value::as_u64).unwrap_or(0),
-        orb_suspicious: item_stats.get("orbSuspicious").and_then(Value::as_u64).unwrap_or(0),
-        config,
-        buy_log,
-        controller_result,
-    })
-}
-
 fn xp_progress(value: &Value, fallback: &str) -> String {
     let current = value.get("xp").and_then(Value::as_u64).unwrap_or(0);
     let floor = value.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
@@ -1112,10 +855,6 @@ fn probe_runtime_details(
         return Err(error.to_string());
     }
 
-    let moth_watch = parse_moth_watch_snapshot(
-        snapshot.get("mothWatch").unwrap_or(&Value::Null)
-    );
-
     let stream = snapshot.get("stream").unwrap_or(&Value::Null);
     let kick_scanner = stream.get("kickScanner").unwrap_or(&Value::Null);
     let kick_state_available = kick_scanner
@@ -1162,11 +901,6 @@ fn probe_runtime_details(
 
     let last_game_message_ms = snapshot
         .get("lastMessageAt")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-
-    let last_battle_at = snapshot
-        .get("lastBattleAt")
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
@@ -1383,199 +1117,6 @@ fn probe_runtime_details(
         }
     }
 
-    #[derive(Clone, Default)]
-    struct HuntRuntime {
-        first_at: u64,
-        last_at: u64,
-        kills: u64,
-        trainer_xp: u64,
-        pokemon_xp: u64,
-    }
-
-    let battle_events = snapshot
-        .get("battleEvents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut hunt_runtime: std::collections::HashMap<String, HuntRuntime> =
-        std::collections::HashMap::new();
-
-    for entry in &battle_events {
-        let event = entry.get("event").unwrap_or(&Value::Null);
-        if event.get("k").and_then(Value::as_str) != Some("morte")
-            || event.get("quem").and_then(Value::as_str) != Some("selvagem")
-        {
-            continue;
-        }
-
-        let hunt = entry
-            .get("hunt")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-
-        if hunt.is_empty() {
-            continue;
-        }
-
-        let at = entry.get("at").and_then(Value::as_u64).unwrap_or(0);
-        let row = hunt_runtime.entry(hunt.to_string()).or_default();
-
-        if row.first_at == 0 || at < row.first_at {
-            row.first_at = at;
-        }
-        if at > row.last_at {
-            row.last_at = at;
-        }
-
-        row.kills += 1;
-        row.trainer_xp = row.trainer_xp.saturating_add(
-            event.get("xpTreinador")
-                .or_else(|| event.get("xp"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-        );
-        row.pokemon_xp = row.pokemon_xp.saturating_add(
-            event.get("xpPokemon")
-                .or_else(|| event.get("xp"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-        );
-    }
-
-    let hunt_atlas = snapshot.get("huntAtlas").cloned().unwrap_or(Value::Null);
-    let atlas_hunts = hunt_atlas.get("hunts").and_then(Value::as_array);
-
-    let hunts = if let Some(values) = atlas_hunts {
-        values.iter().map(|hunt| {
-            let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
-            let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
-            let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let area = hunt.get("area").and_then(Value::as_str).unwrap_or_default().to_string();
-
-            let species_details = hunt.get("species").and_then(Value::as_array).map(|values| {
-                values.iter().filter_map(|species| {
-                    let id = species.get("id").and_then(Value::as_u64)? as u32;
-                    let name = species.get("name").and_then(Value::as_str).unwrap_or("Pokémon").to_string();
-                    let types = species.get("types")
-                        .and_then(Value::as_array)
-                        .map(|values| {
-                            values.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let weak_to = species.get("weakTo")
-                        .and_then(Value::as_array)
-                        .map(|values| {
-                            values.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-
-                    let weakness_multipliers =
-                        species.get("weaknessMultipliers")
-                            .and_then(Value::as_array)
-                            .map(|values| {
-                                values.iter()
-                                    .filter_map(|entry| {
-                                        Some((
-                                            entry.get("type")?.as_str()?.to_string(),
-                                            entry.get("multiplier")?.as_f64()? as f32,
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-
-                    let offense = species.get("offense").and_then(|value| {
-                        let multiplier = value.get("multiplier").and_then(Value::as_f64)?;
-                        Some((
-                            multiplier as f32,
-                            value.get("attackType").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        ))
-                    });
-                    let defense = species.get("defense").and_then(|value| {
-                        let multiplier = value.get("multiplier").and_then(Value::as_f64)?;
-                        Some((
-                            multiplier as f32,
-                            value.get("attackType").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        ))
-                    });
-
-                    Some(HuntSpeciesInfo {
-                        id,
-                        name,
-                        types,
-                        weak_to,
-                        weakness_multipliers,
-                        captured: species.get("captured").and_then(Value::as_bool).unwrap_or(false),
-                        npc_value: species.get("npcValue").and_then(Value::as_u64).unwrap_or(0),
-                        market_value: species.get("marketValue").and_then(Value::as_u64).unwrap_or(0),
-                        matchup_score: species.get("matchupScore").and_then(Value::as_f64).map(|value| value as f32),
-                        capture_count: species.get("captureCount").and_then(Value::as_u64).unwrap_or(0) as u32,
-                        offense_multiplier: offense.as_ref().map(|item| item.0),
-                        offense_type: offense.map(|item| item.1).unwrap_or_default(),
-                        defense_multiplier: defense.as_ref().map(|item| item.0),
-                        defense_type: defense.map(|item| item.1).unwrap_or_default(),
-                    })
-                }).collect::<Vec<_>>()
-            }).unwrap_or_default();
-
-            HuntInfo {
-                slug,
-                name,
-                level,
-                area,
-                xp_per_hour: hunt.get("xp").and_then(|value| value.get("value")).and_then(Value::as_u64).unwrap_or(0),
-                pokemon_xp_per_hour: hunt.get("xp").and_then(|value| value.get("pokemonValue")).and_then(Value::as_u64).unwrap_or(0),
-                kills_per_hour: hunt.get("xp").and_then(|value| value.get("killsH")).and_then(Value::as_f64).map(|v| v.max(0.0).round() as u64).unwrap_or(0),
-                unlocked: hunt.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
-                current: hunt.get("current").and_then(Value::as_bool).unwrap_or(false),
-                xp_source: hunt.get("xp").and_then(|value| value.get("source")).and_then(Value::as_str).unwrap_or("learning").to_string(),
-                species_details,
-            }
-        }).collect::<Vec<_>>()
-    } else {
-        snapshot
-            .get("hunts")
-            .and_then(Value::as_array)
-            .map(|values| values.iter().map(|hunt| {
-                let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
-                let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
-                let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
-                    let runtime = hunt_runtime.get(&slug).cloned().unwrap_or_default();
-                let elapsed_ms = runtime.last_at.saturating_sub(runtime.first_at);
-                let kills_per_hour = if elapsed_ms >= 1000 {
-                    ((runtime.kills as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else { 0 };
-                let xp_per_hour = if elapsed_ms >= 1000 {
-                    ((runtime.trainer_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else { 0 };
-                let pokemon_xp_per_hour = if elapsed_ms >= 1000 {
-                    ((runtime.pokemon_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else { 0 };
-
-                HuntInfo {
-                    slug: slug.clone(),
-                    name,
-                    level,
-                    area: String::new(),
-                    species_details: Vec::new(),
-                    xp_per_hour,
-                    pokemon_xp_per_hour,
-                    kills_per_hour,
-                    unlocked: level <= player_level,
-                    current: slug == hunt_slug,
-                    xp_source: if xp_per_hour > 0 { "observed".to_string() } else { "learning".to_string() },
-                }
-            }).collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
-
     Ok(RuntimeProbe {
         bridge_connected,
         hunt_slug,
@@ -1604,10 +1145,7 @@ fn probe_runtime_details(
         stream_missing,
         xp_sources,
         last_game_message_ms,
-        last_battle_at,
         xp_bonuses,
-        hunts,
-        moth_watch,
         kick_streams,
         kick_state_available,
     })
@@ -1685,70 +1223,24 @@ fn flush_commands(
     };
 
     for payload in pending {
-        if payload.get("t").and_then(Value::as_str) == Some("browser.openTab") {
-            let url = payload
-                .get("url")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
-
-            if url.is_empty()
-                || !(url.starts_with("https://") || url.starts_with("http://"))
-            {
-                logging::warn("custom browser tab rejected: URL must use http:// or https://");
-                continue;
-            }
-
-            if let Err(error) = open_custom_tab(session, url) {
-                logging::warn(&format!("custom browser tab failed: {}", error));
-            }
-
+        if payload.get("t").and_then(Value::as_str) != Some("browser.openTab") {
+            logging::warn("unsupported controller command dropped");
             continue;
         }
 
-        let id = session.next_id;
-        session.next_id += 1;
+        let url = payload
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
 
-        let expression = "JSON.stringify(window.__mothControllerBridgeV1 ? window.__mothControllerBridgeV1.send(ARG) : {ok:false,error:'controller bridge missing'})";
-        let arg = match serde_json::to_string(&payload) {
-            Ok(value) => value,
-            Err(error) => {
-                logging::warn(&format!("failed to serialize controller command: {}", error));
-                continue;
-            }
-        };
+        if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
+            logging::warn("custom browser tab rejected: URL must use http:// or https://");
+            continue;
+        }
 
-        let expression = format!(
-            "(payload => {})({})",
-            expression,
-            arg
-        );
-
-        match send_and_wait(
-            &mut session.socket,
-            id,
-            json!({
-                "id": id,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": expression,
-                    "target": {
-                    "context": match session.game_context.as_deref() {
-                        Some(context) => context,
-                        None => {
-                            logging::warn("controller command dropped: no PokéIdle context");
-                            continue;
-                        }
-                    }
-                },
-                    "awaitPromise": false
-                }
-            }),
-        ) {
-            Ok(_) => {}
-            Err(error) => {
-                logging::warn(&format!("controller command failed: {}", error));
-            }
+        if let Err(error) = open_custom_tab(session, url) {
+            logging::warn(&format!("custom browser tab failed: {}", error));
         }
     }
 }
