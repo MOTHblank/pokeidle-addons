@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.19
+// @version      0.1.20
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -70,6 +70,7 @@
     const state = {
         socket: null,
         gameSocket: null,
+        observedSockets: new Set(),
         hookInstalled: false,
         nick: '',
         gold: 0,
@@ -1508,35 +1509,85 @@
     }
 
     function attachSocket(socket) {
-        if (!state.socket) state.socket = socket;
+        if (!socket || state.observedSockets.has(socket)) {
+            return;
+        }
+
+        state.observedSockets.add(socket);
+
+        if (!state.socket) {
+            state.socket = socket;
+        }
 
         socket.addEventListener('message', event => {
             handleProtocolData(event.data, socket);
         });
 
         socket.addEventListener('close', () => {
-            if (state.gameSocket === socket) state.gameSocket = null;
+            state.observedSockets.delete(socket);
+
+            if (state.gameSocket === socket) {
+                state.gameSocket = null;
+            }
+
             if (state.socket === socket) {
-            state.socket = state.gameSocket || null;
+                state.socket = state.gameSocket || null;
+            }
+
             if (!state.socket) {
                 state.itemStatus = 'disconnected';
                 state.pokemonStatus = 'disconnected';
                 state.pendingBuy = null;
                 state.pokemonScan = null;
                 state.historyFetch = null;
-                if (state.itemSummaryRetryTimer) clearTimeout(state.itemSummaryRetryTimer);
-                if (state.detailPumpTimer) clearTimeout(state.detailPumpTimer);
+
+                if (state.itemSummaryRetryTimer) {
+                    clearTimeout(state.itemSummaryRetryTimer);
+                }
+
+                if (state.detailPumpTimer) {
+                    clearTimeout(state.detailPumpTimer);
+                }
+
                 state.itemSummaryRetryTimer = null;
                 state.detailPumpTimer = null;
-                for (const entry of state.releaseTimers.values()) clearTimeout(entry.timer);
+
+                for (const entry of state.releaseTimers.values()) {
+                    clearTimeout(entry.timer);
+                }
+
                 state.releaseTimers.clear();
                 queueRender();
-            }
             }
         });
     }
 
+    function adoptBridgeSocket() {
+        try {
+            const bridge = page.__mothControllerBridgeV1;
+            const candidate =
+                bridge &&
+                typeof bridge.socket === 'function'
+                    ? bridge.socket()
+                    : null;
+
+            if (
+                candidate &&
+                candidate.readyState === 1
+            ) {
+                attachSocket(candidate);
+                state.gameSocket = candidate;
+                state.socket = candidate;
+                return true;
+            }
+        } catch {}
+
+        return false;
+    }
+
     function installSocketHook() {
+        adoptBridgeSocket();
+
         if (state.hookInstalled) return true;
         const NativeWebSocket = page.WebSocket;
         if (typeof NativeWebSocket !== 'function') return false;
@@ -2334,6 +2385,7 @@
         try { injectStyle(); } catch {}
 
         state.scanTimer = setInterval(() => {
+            adoptBridgeSocket();
             ensureUi();
             runScan(false);
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
@@ -2352,7 +2404,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.19 loaded');
+        console.info('[Moth Watch] v0.1.20 loaded');
     }
 
     bootstrap();
