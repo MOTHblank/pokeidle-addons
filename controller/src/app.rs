@@ -1463,24 +1463,38 @@ fn draw_game_card(
                                 } else {
                                     // Accept bare domains, pasted URLs, and mixed-case schemes.
                                     // A malformed URL should not be reported as successfully queued.
-                                    let candidate = if raw.contains("://") {
+                                    let candidate = if raw
+                                        .get(..7)
+                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                        || raw
+                                            .get(..8)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+                                    {
                                         raw.to_string()
+                                    } else if raw.contains("://") {
+                                        String::new()
                                     } else {
                                         format!("https://{}", raw)
                                     };
-                                    let parsed = candidate
-                                        .parse::<egui::Url>()
-                                        .ok()
-                                        .filter(|url| {
-                                            matches!(url.scheme(), "http" | "https")
-                                                && url.host_str().is_some()
-                                        });
+                                    let has_http_scheme = candidate
+                                        .get(..7)
+                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                        || candidate
+                                            .get(..8)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+                                    let host = candidate
+                                        .split_once("://")
+                                        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+                                        .unwrap_or_default();
+                                    let valid_url = has_http_scheme
+                                        && !host.is_empty()
+                                        && !host.contains(char::is_whitespace);
 
-                                    if let Some(url) = parsed {
+                                    if valid_url {
                                         if let Some(monitor) = app.games[index].monitor.as_ref() {
                                             monitor.send(json!({
                                                 "t": "browser.openTab",
-                                                "url": url.to_string()
+                                                "url": candidate
                                             }));
                                             app.tab_url_input[index].clear();
                                             app.tab_url_open[index] = false;
