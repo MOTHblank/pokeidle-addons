@@ -27,7 +27,9 @@
     }
 
     let socket = null;
+    let gameSocket = null;
     let state = null;
+    let statePokemon = new Map();
     let hunts = [];
     let catalog = [];
     let serverTypeChart = null;
@@ -46,39 +48,59 @@
         try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
     };
 
+    /*
+     * The current upstream client advertises delta: 1 in hello and then
+     * receives partial state frames. Mirror shared/estado-delta.mjs here so
+     * the bridge always exposes the same complete state that the game sees.
+     */
     function merge(partial, full = false) {
-        if (!partial || typeof partial !== 'object') return;
+        if (!partial || typeof partial !== 'object') return state;
 
-        const { cheio, pokemons, pkMud, pkFora, dexMud, dexFora, ...rest } = partial;
+        const {
+            cheio,
+            pokemons,
+            pkMud,
+            pkFora,
+            dexMud,
+            dexFora,
+            ...rest
+        } = partial;
 
-        if (full || cheio === true || !state) {
-            state = { ...rest, pokemons: Array.isArray(pokemons) ? pokemons.slice() : [] };
-            return;
+        if (full || cheio || !state) {
+            state = { ...rest };
+            statePokemon = new Map(
+                (Array.isArray(pokemons) ? pokemons : []).map(p => [p?.id, p])
+            );
+            return buildState();
         }
 
         Object.assign(state, rest);
 
         if (Array.isArray(pokemons)) {
-            state.pokemons = pokemons.slice();
-        } else {
-            const byId = new Map(
-                (state.pokemons || []).map(p => [String(p?.id), p])
-            );
+            statePokemon = new Map(pokemons.map(p => [p?.id, p]));
+        }
 
-            for (const pokemon of pkMud || []) {
-                if (pokemon?.id != null) byId.set(String(pokemon.id), pokemon);
-            }
+        for (const pokemon of pkMud || []) {
+            if (pokemon?.id != null) statePokemon.set(pokemon.id, pokemon);
+        }
 
-            for (const id of pkFora || []) byId.delete(String(id));
-            state.pokemons = [...byId.values()];
+        for (const id of pkFora || []) {
+            statePokemon.delete(id);
         }
 
         if (dexMud || dexFora) {
             state.pokedex = { ...(state.pokedex || {}), ...(dexMud || {}) };
             for (const id of dexFora || []) delete state.pokedex[id];
         }
+
+        return buildState();
     }
 
+    function buildState() {
+        return state
+            ? { ...state, pokemons: [...statePokemon.values()] }
+            : null;
+    }
     function incoming(data, sourceSocket = null) {
         if (typeof data !== 'string') return;
 
@@ -184,8 +206,6 @@
                 market.splice(0, market.length - MAX_MARKET);
         }
     }
-
-    let gameSocket = null;
 
     function attach(ws) {
         if (!socket) socket = ws;
