@@ -65,13 +65,25 @@
         }
     }
 
-    function incoming(data) {
+    function incoming(data, sourceSocket = null) {
         if (typeof data !== 'string') return;
 
         let message;
         try { message = JSON.parse(data); } catch { return; }
 
         lastMessageAt = Date.now();
+
+        /*
+         * PokéIdle can create more than one WebSocket over the lifetime of a
+         * page. The authoritative game socket is the one that emits welcome
+         * and battle/market protocol messages. Do not let an unrelated socket
+         * replace it, or controller commands (hunt.select / market.comprar)
+         * can silently go to the wrong connection.
+         */
+        if (message.t === 'welcome' && sourceSocket) {
+            socket = sourceSocket;
+            gameSocket = sourceSocket;
+        }
 
         if (message.t === 'welcome') {
             hunts = Array.isArray(message.hunts) ? message.hunts.slice() : [];
@@ -88,37 +100,57 @@
         }
 
         if (message.t === 'batalha') {
+            if (sourceSocket && (message.ev || []).some(event => event?.k === 'hunt')) {
+                socket = sourceSocket;
+                gameSocket = sourceSocket;
+            }
+
+            let activeHunt = state?.huntSlug || '';
             for (const event of message.ev || []) {
+                if (event?.k === 'hunt' && typeof event.slug === 'string' && event.slug) {
+                    activeHunt = event.slug;
+                    if (!state) state = {};
+                    state.huntSlug = activeHunt;
+                }
+
                 events.push({
                     at: Date.now(),
-                    hunt: state?.huntSlug || '',
+                    hunt: activeHunt,
                     event: copy(event)
                 });
             }
+
             if (events.length > MAX_EVENTS)
                 events.splice(0, events.length - MAX_EVENTS);
             return;
         }
 
         if (message.t === 'market') {
+            if (sourceSocket) {
+                socket = sourceSocket;
+                gameSocket = sourceSocket;
+            }
             market.push({ at: Date.now(), message: copy(message) });
             if (market.length > MAX_MARKET)
                 market.splice(0, market.length - MAX_MARKET);
         }
     }
 
+    let gameSocket = null;
+
     function attach(ws) {
-        socket = ws;
+        if (!socket) socket = ws;
 
         ws.addEventListener('close', () => {
-            if (socket === ws) socket = null;
+            if (gameSocket === ws) gameSocket = null;
+            if (socket === ws) socket = gameSocket || null;
         });
 
         ws.addEventListener('message', event => {
             if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
-                event.data.text().then(incoming).catch(() => {});
+                event.data.text().then(text => incoming(text, ws)).catch(() => {});
             } else {
-                incoming(event.data);
+                incoming(event.data, ws);
             }
         });
     }
@@ -144,12 +176,13 @@
     }
 
     function send(payload) {
-        if (!socket || socket.readyState !== page.WebSocket.OPEN) {
+        const target = gameSocket || socket;
+        if (!target || target.readyState !== page.WebSocket.OPEN) {
             return { ok: false, error: 'game websocket is not open' };
         }
 
         try {
-            socket.send(JSON.stringify(payload));
+            target.send(JSON.stringify(payload));
             return { ok: true };
         } catch (error) {
             return { ok: false, error: String(error) };
@@ -278,7 +311,7 @@
         };
 
         return {
-            connected: !!socket && socket.readyState === page.WebSocket.OPEN,
+            connected: !!gameSocket && gameSocket.readyState === page.WebSocket.OPEN,
             lastMessageAt,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
