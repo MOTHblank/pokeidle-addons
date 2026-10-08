@@ -66,6 +66,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "◫  Accounts" => "◫  Contas",
         "Account Manager" => "Gerenciador de contas",
         "Enabled" => "Habilitada",
+        "Enable account" => "Habilitar conta",
         "Account name" => "Nome da conta",
         "Save accounts" => "Salvar contas",
         "Firefox profile" => "Perfil do Firefox",
@@ -2322,11 +2323,34 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                     ui.add_space(10.0);
 
-                                    let response = ui.checkbox(
-                                        &mut account.enabled,
-                                        tr("Enabled"),
+                                    let checkbox_glyph = if account.enabled { "✓" } else { "" };
+                                    let checkbox = egui::Button::new(
+                                        RichText::new(checkbox_glyph)
+                                            .size(13.0)
+                                            .strong()
+                                            .color(if account.enabled { TEXT } else { DIM }),
+                                    )
+                                    .fill(if account.enabled {
+                                        ACCENT.linear_multiply(0.22)
+                                    } else {
+                                        PANEL
+                                    })
+                                    .stroke(Stroke::new(
+                                        1.0,
+                                        if account.enabled { ACCENT } else { BORDER },
+                                    ))
+                                    .corner_radius(5.0);
+
+                                    if ui.add_sized([28.0, 28.0], checkbox).clicked() {
+                                        account.enabled = !account.enabled;
+                                        changed = true;
+                                    }
+
+                                    ui.label(
+                                        RichText::new(tr("Enable account"))
+                                            .size(10.0)
+                                            .color(TEXT),
                                     );
-                                    changed |= response.changed();
 
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         ui.label(
