@@ -178,14 +178,42 @@
     }
 
     function send(payload) {
+        const mothWatch = page.__mothMarketWatchControllerV1;
+
         if (
+            mothWatch &&
+            typeof mothWatch.buy === 'function' &&
             payload &&
-            payload.t === 'market.comprar' &&
-            page.__mothMarketWatchControllerV1 &&
-            typeof page.__mothMarketWatchControllerV1.buy === 'function'
+            payload.t === 'market.comprar'
         ) {
             try {
-                return page.__mothMarketWatchControllerV1.buy(payload);
+                return mothWatch.buy(payload);
+            } catch (error) {
+                return { ok: false, error: String(error) };
+            }
+        }
+
+        if (
+            mothWatch &&
+            typeof mothWatch.configure === 'function' &&
+            payload &&
+            payload.t === 'mothWatch.configure'
+        ) {
+            try {
+                return mothWatch.configure(payload.patch || {});
+            } catch (error) {
+                return { ok: false, error: String(error) };
+            }
+        }
+
+        if (
+            mothWatch &&
+            typeof mothWatch.scan === 'function' &&
+            payload &&
+            payload.t === 'mothWatch.scan'
+        ) {
+            try {
+                return mothWatch.scan();
             } catch (error) {
                 return { ok: false, error: String(error) };
             }
@@ -368,6 +396,16 @@
                 trainerXpProximo: Number(state?.xpProximo) || 0,
                 xpBonuses: [...new Set(bonusLines)],
                 serverNow: Number(state?.servidorAgora) || 0,
+                mothWatch: (() => {
+                    try {
+                        const api = page.__mothMarketWatchControllerV1;
+                        return api && typeof api.snapshot === 'function'
+                            ? copy(api.snapshot())
+                            : null;
+                    } catch {
+                        return null;
+                    }
+                })(),
                 huntAtlas: (() => {
                     try {
                         const api = page.__mothHuntAtlasControllerV1;
