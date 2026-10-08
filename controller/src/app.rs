@@ -3,7 +3,7 @@ use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
-use serde_json::json;
+use serde_json::{json, Value};
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
 use std::process::Child;
 
