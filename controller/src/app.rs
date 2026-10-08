@@ -1528,7 +1528,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 
 fn game_selector(
-    app: &ControllerApp,
+    account_names: &[String; 4],
     ui: &mut egui::Ui,
     selected: &mut GameProfile,
 ) {
@@ -1538,7 +1538,7 @@ fn game_selector(
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new(app.account_name(profile))
+                        RichText::new(account_names[profile.index()].as_str())
                             .size(10.0)
                             .strong()
                             .color(if active { TEXT } else { MUTED }),
@@ -1649,7 +1649,8 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
             );
 
             ui.add_space(14.0);
-            game_selector(app, ui, &mut app.atlas_profile);
+            let account_names = std::array::from_fn(|i| app.accounts[i].name.clone());
+            game_selector(&account_names, ui, &mut app.atlas_profile);
 
             let index = ControllerApp::game_index(app.atlas_profile);
             let health = app.games[index].health();
@@ -1859,7 +1860,8 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             });
 
             ui.add_space(14.0);
-            game_selector(app, ui, &mut app.market_profile);
+            let account_names = std::array::from_fn(|i| app.accounts[i].name.clone());
+            game_selector(&account_names, ui, &mut app.market_profile);
 
             let index = ControllerApp::game_index(app.market_profile);
             let health = app.games[index].health();
