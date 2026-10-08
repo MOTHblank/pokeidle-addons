@@ -279,6 +279,16 @@ impl KickManager {
             .map(|started| started.elapsed() < Duration::from_secs(30))
             .unwrap_or(false);
 
+        // Recover an already-managed KICK browser after the controller itself
+        // restarts. The browser owns this port, so this is a stronger identity
+        // check than the Firefox launcher PID.
+        let port = 27801 + profile.index() as u16;
+        if self.session_mut(profile).socket.is_none() && !launch_recent {
+            if self.connect(profile, port).is_ok() {
+                return Ok(true);
+            }
+        }
+
         if self.session_mut(profile).managed {
             if self.session_mut(profile).socket.is_some() {
                 return Ok(true);
