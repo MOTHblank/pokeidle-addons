@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.1.1
+// @version      1.1.2
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
