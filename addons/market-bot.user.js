@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.22
+// @version      0.1.23
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -1612,53 +1612,31 @@
     }
 
     function installSocketHook() {
-        adoptBridgeSocket();
-
-        if (state.hookInstalled) return true;
-        const NativeWebSocket = page.WebSocket;
-        if (typeof NativeWebSocket !== 'function') return false;
-
-        if (page.__mothMarketWatchWebSocket) {
+        /*
+         * Controller Bridge is the single owner of game WebSocket discovery.
+         * Do not install another global constructor Proxy here: the current
+         * upstream client creates its socket during boot.
+         */
+        if (adoptBridgeSocket()) {
             state.hookInstalled = true;
             return true;
         }
 
-        try {
-            const WrappedWebSocket = new Proxy(NativeWebSocket, {
-                construct(target, args) {
-                    const socket = Reflect.construct(target, args, target);
-                    attachSocket(socket);
-                    return socket;
-                }
-            });
-
-            for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
-                try {
-                    Object.defineProperty(
-                        WrappedWebSocket,
-                        key,
-                        { value: NativeWebSocket[key] }
-                    );
-                } catch {}
-            }
-
-            page.WebSocket = WrappedWebSocket;
-            page.__mothMarketWatchWebSocket = WrappedWebSocket;
-            state.hookInstalled = true;
-            return true;
-        } catch (error) {
-            /*
-             * A hostile/non-writable page WebSocket must not kill the market UI.
-             * The watch panel remains usable for manual inspection and can still
-             * render cached/reference data.
-             */
-            state.hookInstalled = false;
-            state.itemStatus = 'socket hook unavailable';
-            state.pokemonStatus = 'socket hook unavailable';
-            try { console.warn('[Moth Watch] WebSocket hook unavailable', error); } catch {}
-            return false;
-        }
+        state.hookInstalled = false;
+        return false;
     }
+
+    installSocketHook();
+
+    // The bridge can load immediately before or after this addon, and it may
+    // replace the game socket after reconnect. Re-adopt without touching the
+    // global WebSocket constructor.
+    setInterval(() => {
+        const socket = state.gameSocket || state.socket;
+        if (!socket || socket.readyState !== 1) {
+            adoptBridgeSocket();
+        }
+    }, 1000);
 
     function injectStyle() {
         if (q('#moth-market-watch-style')) return;
