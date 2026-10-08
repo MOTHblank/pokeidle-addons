@@ -171,6 +171,13 @@ impl Config {
         Ok(data_root()?.join("Profiles"))
     }
 
+    pub fn kick_profile_dir(&self) -> PathBuf {
+        data_root()
+            .expect("Moth data root must be available on Windows")
+            .join("KickProfiles")
+            .join(self.profile.name())
+    }
+
     pub fn legacy_profile_dir(&self) -> Result<PathBuf, String> {
         Ok(data_root()?.join("Profiles").join(self.profile.legacy_name()))
     }
