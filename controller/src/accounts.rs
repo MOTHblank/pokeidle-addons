@@ -19,7 +19,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Controller Bridge",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.1.4",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.2.0",
     ),
     (
         "Twitch Low Resource",
@@ -31,7 +31,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.14",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.15",
     ),
 
 ];
