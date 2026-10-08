@@ -2124,7 +2124,7 @@
 
             .moth-ac-stats {
                 display: grid;
-                grid-template-columns: repeat(3,minmax(0,1fr));
+                grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
                 gap: 5px;
                 margin-bottom: 7px;
             }
@@ -2688,7 +2688,7 @@
 
             <div class="moth-ac-restock">
                 <div class="moth-ac-restock-head">
-                    <label title="Automatically buy the selected ball and selected potion while Auto Catch is ON.">
+                    <label title="Automatically buy the selected ball, potion, and revive while Auto Catch is ON.">
                         <input id="moth-ac-restock-enabled" type="checkbox">
                         Auto-restock
                     </label>
@@ -2703,6 +2703,10 @@
                     <label>
                         <span>Potion to restock</span>
                         <select id="moth-ac-restock-potion"></select>
+                    </label>
+                    <label>
+                        <span>Revive to restock</span>
+                        <select id="moth-ac-restock-revive"></select>
                     </label>
                 </div>
 
