@@ -29,6 +29,9 @@ pub struct HuntSpeciesInfo {
     pub weak_to: Vec<String>,
     pub weakness_multipliers: Vec<(String, f32)>,
     pub captured: bool,
+    pub npc_value: u64,
+    pub market_value: u64,
+    pub matchup_score: Option<f32>,
     pub capture_count: u32,
     pub offense_multiplier: Option<f32>,
     pub offense_type: String,
@@ -110,6 +113,7 @@ pub struct MothWatchConfig {
 
 #[derive(Clone, Debug)]
 pub struct MothWatchLog {
+    pub at: u64,
     pub text: String,
 }
 
@@ -1470,6 +1474,9 @@ fn probe_runtime_details(
                         weak_to,
                         weakness_multipliers,
                         captured: species.get("captured").and_then(Value::as_bool).unwrap_or(false),
+                        npc_value: species.get("npcValue").and_then(Value::as_u64).unwrap_or(0),
+                        market_value: species.get("marketValue").and_then(Value::as_u64).unwrap_or(0),
+                        matchup_score: species.get("matchupScore").and_then(Value::as_f64).map(|value| value as f32),
                         capture_count: species.get("captureCount").and_then(Value::as_u64).unwrap_or(0) as u32,
                         offense_multiplier: offense.as_ref().map(|item| item.0),
                         offense_type: offense.map(|item| item.1).unwrap_or_default(),
