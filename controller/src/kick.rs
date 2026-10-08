@@ -1,11 +1,9 @@
 use crate::config::{Config, GameProfile};
 use crate::logging;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 use std::path::PathBuf;
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct KickStream {
