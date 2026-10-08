@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.2.0
+// @version      6.3.0
 // @description  Opens current official Twitch chats as lightweight popouts and current KICK streams as regular watch pages in background tabs; refreshes once per hour.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js
@@ -25,6 +25,8 @@
 
     let scanInProgress = false;
     const openStreams = new Map();
+    let lastKickLive = [];
+    let lastKickStateAvailable = false;
 
     const excludedTwitch = new Set([
         'directory', 'downloads', 'jobs', 'p', 'search',
@@ -287,9 +289,15 @@
     }
 
     function openStream(item) {
-        // Twitch only needs its popout chat. KICK needs the actual channel page
-        // because its Channel Points are tied to real watch time on the stream.
-        const targetUrl = item.service === 'kick' ? item.url : item.chat;
+        // KICK is intentionally not opened from this userscript. Its pages
+        // must stay outside the Moth-controlled Firefox profile so KICK sees
+        // a normal browser. Rust opens/closes the reported live KICK windows.
+        if (item.service === 'kick') {
+            return false;
+        }
+
+        // Twitch still uses its lightweight chat popout.
+        const targetUrl = item.chat;
 
         if (!targetUrl) {
             return false;
@@ -384,6 +392,7 @@
         button.dataset.mothScanLive = String(data.live ?? 0);
         button.dataset.mothScanOpened = String(data.opened ?? 0);
         button.dataset.mothScanTracked = String(data.tracked ?? 0);
+        button.dataset.mothScanKickLive = String(lastKickLive.length);
         button.dataset.mothScanAt = String(Date.now());
     }
 
@@ -429,6 +438,14 @@
             const streamStateIsAvailable =
                 !!rows.twitch || !!rows.kick;
 
+            lastKickStateAvailable = !!rows.kick && !!streamStateIsAvailable;
+            lastKickLive = [...live.values()]
+                .filter(item => item.service === 'kick')
+                .map(item => ({
+                    name: item.name,
+                    url: item.url
+                }));
+
             const liveKeys = new Set();
             const perService = {
                 twitch: 0,
@@ -447,6 +464,10 @@
 
                 liveKeys.add(key);
                 perService[item.service] += 1;
+
+                if (item.service === 'kick') {
+                    continue;
+                }
 
                 if (openStream(item)) {
                     opened += 1;
@@ -590,7 +611,19 @@
             window.addEventListener('load', scheduleInitialScan, { once: true });
         }
 
-        console.info('[Moth] live stream scanner ready · first scan 30s after page load · hourly thereafter');
+        const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    page.__mothKickScannerV1 = {
+        version: 1,
+        snapshot() {
+            return {
+                live: lastKickLive.map(item => ({ ...item })),
+                stateAvailable: lastKickStateAvailable,
+                scannedAt: Number(document.getElementById(BUTTON_ID)?.dataset?.mothScanAt || 0) || 0
+            };
+        }
+    };
+
+    console.info('[Moth] live stream scanner ready · KICK is delegated to native browser profile · first scan 30s after page load · hourly thereafter');
     }
 
     start();
