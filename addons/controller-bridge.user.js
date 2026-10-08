@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.5
+// @version      1.3.6
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -18,7 +18,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 7 &&
+        Number(existingBridge.version) >= 8 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
@@ -31,18 +31,12 @@
     let state = null;
     let statePokemon = new Map();
     let hunts = [];
-    let catalog = [];
     let serverTypeChart = null;
     let huntAmplification = 1.5;
-    const market = [];
-    const events = [];
-    const MAX_MARKET = 80;
-    const MAX_EVENTS = 250;
 
     let lastStreamBonus = '';
     let lastStreamBonusAt = 0;
     let lastMessageAt = 0;
-    let lastBattleAt = 0;
 
     const copy = value => {
         try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
@@ -114,9 +108,8 @@
         /*
          * PokéIdle can create more than one WebSocket over the lifetime of a
          * page. The authoritative game socket is the one that emits welcome
-         * and battle/market protocol messages. Do not let an unrelated socket
-         * replace it, or controller commands (hunt.select / market.comprar)
-         * can silently go to the wrong connection.
+         * and game state messages. Do not let an unrelated socket replace it,
+         * or the standalone addons can observe the wrong connection.
          */
         if (message.t === 'welcome' && sourceSocket) {
             socket = sourceSocket;
@@ -143,9 +136,6 @@
                 huntAmplification = Number(message.ampliacaoHunt);
             }
 
-            catalog = Array.isArray(message.mercado?.catalogo)
-                ? message.mercado.catalogo.slice()
-                : [];
             merge(message.estado, true);
             return;
         }
@@ -172,40 +162,20 @@
         }
 
         if (message.t === 'batalha') {
-            lastBattleAt = Date.now();
             if (sourceSocket && (message.ev || []).some(event => event?.k === 'hunt')) {
                 socket = sourceSocket;
                 gameSocket = sourceSocket;
             }
 
-            let activeHunt = state?.huntSlug || '';
+            // Keep current-hunt state current without retaining native-Atlas
+            // battle history.
             for (const event of message.ev || []) {
                 if (event?.k === 'hunt' && typeof event.slug === 'string' && event.slug) {
-                    activeHunt = event.slug;
                     if (!state) state = {};
-                    state.huntSlug = activeHunt;
+                    state.huntSlug = event.slug;
                 }
-
-                events.push({
-                    at: Date.now(),
-                    hunt: activeHunt,
-                    event: copy(event)
-                });
             }
-
-            if (events.length > MAX_EVENTS)
-                events.splice(0, events.length - MAX_EVENTS);
             return;
-        }
-
-        if (message.t === 'market') {
-            if (sourceSocket) {
-                socket = sourceSocket;
-                gameSocket = sourceSocket;
-            }
-            market.push({ at: Date.now(), message: copy(message) });
-            if (market.length > MAX_MARKET)
-                market.splice(0, market.length - MAX_MARKET);
         }
     }
 
@@ -280,74 +250,6 @@
 
     function bridgeSocket() {
         return gameSocket || socket || null;
-    }
-
-    function send(payload) {
-        const mothWatch = page.__mothMarketWatchControllerV1;
-
-        if (
-            mothWatch &&
-            typeof mothWatch.buy === 'function' &&
-            payload &&
-            payload.t === 'market.comprar'
-        ) {
-            try {
-                return mothWatch.buy(payload);
-            } catch (error) {
-                return { ok: false, error: String(error) };
-            }
-        }
-
-        if (
-            mothWatch &&
-            typeof mothWatch.configure === 'function' &&
-            payload &&
-            payload.t === 'mothWatch.configure'
-        ) {
-            try {
-                return mothWatch.configure(payload.patch || {});
-            } catch (error) {
-                return { ok: false, error: String(error) };
-            }
-        }
-
-        if (
-            mothWatch &&
-            typeof mothWatch.scan === 'function' &&
-            payload &&
-            payload.t === 'mothWatch.scan'
-        ) {
-            try {
-                return mothWatch.scan();
-            } catch (error) {
-                return { ok: false, error: String(error) };
-            }
-        }
-
-        if (
-            mothWatch &&
-            typeof mothWatch.refreshBaseline === 'function' &&
-            payload &&
-            payload.t === 'mothWatch.refreshBaseline'
-        ) {
-            try {
-                return mothWatch.refreshBaseline();
-            } catch (error) {
-                return { ok: false, error: String(error) };
-            }
-        }
-
-        const target = gameSocket || socket;
-        if (!target || target.readyState !== page.WebSocket.OPEN) {
-            return { ok: false, error: 'game websocket is not open' };
-        }
-
-        try {
-            target.send(JSON.stringify(payload));
-            return { ok: true };
-        } catch (error) {
-            return { ok: false, error: String(error) };
-        }
     }
 
     function pickNumber(value, names, depth = 0, seen = new Set()) {
@@ -488,10 +390,6 @@
         return {
             connected: !!gameSocket && gameSocket.readyState === page.WebSocket.OPEN,
             lastMessageAt,
-            lastBattleAt,
-            huntChangeCooldownMs: lastBattleAt
-                ? Math.max(0, 2600 - (Date.now() - lastBattleAt))
-                : 0,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
                 xp: Number(state?.xp) || 0,
@@ -528,26 +426,6 @@
                 trainerXpProximo: Number(state?.xpProximo) || 0,
                 xpBonuses: [...new Set(bonusLines)],
                 serverNow: Number(state?.servidorAgora) || 0,
-                mothWatch: (() => {
-                    try {
-                        const api = page.__mothMarketWatchControllerV1;
-                        return api && typeof api.snapshot === 'function'
-                            ? copy(api.snapshot())
-                            : null;
-                    } catch {
-                        return null;
-                    }
-                })(),
-                huntAtlas: (() => {
-                    try {
-                        const api = page.__mothHuntAtlasControllerV1;
-                        return api && typeof api.snapshot === 'function'
-                            ? copy(api.snapshot())
-                            : null;
-                    } catch {
-                        return null;
-                    }
-                })(),
                 domBalls: balls(),
                 autoCatchOn: text('#moth-ac-toggle').toUpperCase() === 'ON',
                 autoCatchCaptures: numberFrom('#moth-ac-captures'),
@@ -566,9 +444,6 @@
                 bonusCurrent: currentStreamBonus,
                 bonusLast: lastStreamBonus
             },
-            catalog: copy(catalog) || [],
-            market: copy(market) || [],
-            battleEvents: copy(events) || []
         };
     }
 
@@ -576,7 +451,6 @@
         return {
             connected: !!gameSocket && gameSocket.readyState === page.WebSocket.OPEN,
             lastMessageAt,
-            lastBattleAt,
             state: {
                 level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
                 xp: Number(state?.xp) || 0,
@@ -598,8 +472,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 7,
-        send,
+        version: 8,
         snapshot,
         gameSnapshot,
         socket: bridgeSocket
