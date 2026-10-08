@@ -74,6 +74,12 @@ pub fn violentmonkey_installed(profile: GameProfile) -> Result<bool, String> {
     }))
 }
 
+pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
+    let config = Config::for_profile(profile)?;
+    firefox::open_url(&config, VIOLENTMONKEY_INSTALL)?;
+    Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
+}
+
 pub fn open_game(profile: GameProfile) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
     let _ = firefox::launch_unmonitored(&config)?;
