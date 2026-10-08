@@ -149,7 +149,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Open Profiles" => "Abrir perfis",
         "Open Logs" => "Abrir logs",
         "Headless" => "Oculto",
-        "Active" => "Ativo",
         "2 isolated" => "2 isolados",
         "Stream chat" => "Chat das streams",
         "First scan 30s · hourly" => "Primeiro scan em 30s · a cada hora",
@@ -208,7 +207,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "◫  Accounts" => "◫  Contas",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
         "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
-        "Enabled" => "Habilitada",
         _ => en,
     }
 }
@@ -969,7 +967,6 @@ fn draw_game_card(
                         "Hunting" if !health.hunt.is_empty() => {
                             format!("Hunting · {}", compact_text(&health.hunt, 34))
                         }
-                        "Hunting" => "Hunting".to_string(),
                         "Center" => "Online · Center".to_string(),
                         "Login" => "Waiting for login".to_string(),
                         _ => health.summary(),
@@ -2006,8 +2003,6 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                         if !health.market_summary.iter().any(|item| {
                             let currency_available = match app.market_currency.as_str() {
-                                "gold" => item.gold_min > 0,
-                                "orb" => item.orb_min > 0,
                                 _ => true,
                             };
                             currency_available
