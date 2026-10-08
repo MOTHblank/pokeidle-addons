@@ -18,23 +18,23 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.3.1",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js",
     ),
     (
         "Controller Bridge",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.2.5",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js",
     ),
     (
         "Twitch Low Resource",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.1.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js",
     ),
     (
         "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.14",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js",
     ),
     (
         "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.22",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js",
     ),
 
 ];
