@@ -29,6 +29,10 @@ pub struct HuntInfo {
     pub xp_per_hour: u64,
     pub pokemon_xp_per_hour: u64,
     pub kills_per_hour: u64,
+    pub unlocked: bool,
+    pub current: bool,
+    pub xp_source: String,
+    pub xp_samples: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +45,9 @@ pub struct MarketListing {
     pub quantity: u64,
     pub seller: String,
     pub retained_until: u64,
+    pub seconds_until_buy: u64,
+    pub reference_price: u64,
+    pub discount_pct: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +62,8 @@ pub struct MarketSummary {
     pub name: String,
     pub gold_min: u64,
     pub orb_min: u64,
+    pub gold_average: u64,
+    pub orb_average: u64,
     pub listings: u64,
 }
 
@@ -1143,21 +1152,20 @@ fn probe_runtime_details(
         pokemon_xp: u64,
     }
 
-    let mut hunt_runtime: std::collections::HashMap<String, HuntRuntime> =
-        std::collections::HashMap::new();
-
     let battle_events = snapshot
         .get("battleEvents")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
 
-    for entry in battle_events {
+    let mut hunt_runtime: std::collections::HashMap<String, HuntRuntime> =
+        std::collections::HashMap::new();
+
+    for entry in &battle_events {
         let event = entry.get("event").unwrap_or(&Value::Null);
-        if event.get("k").and_then(Value::as_str) != Some("morte") {
-            continue;
-        }
-        if event.get("quem").and_then(Value::as_str) != Some("selvagem") {
+        if event.get("k").and_then(Value::as_str) != Some("morte")
+            || event.get("quem").and_then(Value::as_str) != Some("selvagem")
+        {
             continue;
         }
 
@@ -1182,26 +1190,52 @@ fn probe_runtime_details(
 
         row.kills += 1;
         row.trainer_xp = row.trainer_xp.saturating_add(
-            event
-                .get("xpTreinador")
+            event.get("xpTreinador")
                 .or_else(|| event.get("xp"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
         );
         row.pokemon_xp = row.pokemon_xp.saturating_add(
-            event
-                .get("xpPokemon")
+            event.get("xpPokemon")
                 .or_else(|| event.get("xp"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
         );
     }
 
-    let hunts = snapshot
-        .get("hunts")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values.iter().map(|hunt| {
+    let hunt_atlas = snapshot.get("huntAtlas").cloned().unwrap_or(Value::Null);
+    let atlas_hunts = hunt_atlas.get("hunts").and_then(Value::as_array);
+
+    let hunts = if let Some(values) = atlas_hunts {
+        values.iter().map(|hunt| {
+            let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
+            let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
+            let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let species = hunt.get("species").and_then(Value::as_array).map(|values| {
+                values.iter()
+                    .filter_map(|species| species.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect::<Vec<_>>()
+            }).unwrap_or_default();
+
+            HuntInfo {
+                slug,
+                name,
+                level,
+                species,
+                xp_per_hour: hunt.get("xpPerHour").and_then(Value::as_u64).unwrap_or(0),
+                pokemon_xp_per_hour: hunt.get("pokemonXpPerHour").and_then(Value::as_u64).unwrap_or(0),
+                kills_per_hour: hunt.get("killsPerHour").and_then(Value::as_u64).unwrap_or(0),
+                unlocked: hunt.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
+                current: hunt.get("current").and_then(Value::as_bool).unwrap_or(false),
+                xp_source: hunt.get("xpSource").and_then(Value::as_str).unwrap_or("learning").to_string(),
+                xp_samples: hunt.get("samples").and_then(Value::as_u64).unwrap_or(0),
+            }
+        }).collect::<Vec<_>>()
+    } else {
+        snapshot
+            .get("hunts")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().map(|hunt| {
                 let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
                 let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
                 let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -1213,37 +1247,32 @@ fn probe_runtime_details(
 
                 let runtime = hunt_runtime.get(&slug).cloned().unwrap_or_default();
                 let elapsed_ms = runtime.last_at.saturating_sub(runtime.first_at);
-
                 let kills_per_hour = if elapsed_ms >= 1000 {
                     ((runtime.kills as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else {
-                    0
-                };
-
+                } else { 0 };
                 let xp_per_hour = if elapsed_ms >= 1000 {
                     ((runtime.trainer_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else {
-                    0
-                };
-
+                } else { 0 };
                 let pokemon_xp_per_hour = if elapsed_ms >= 1000 {
                     ((runtime.pokemon_xp as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
-                } else {
-                    0
-                };
+                } else { 0 };
 
                 HuntInfo {
-                    slug,
+                    slug: slug.clone(),
                     name,
                     level,
                     species,
                     xp_per_hour,
                     pokemon_xp_per_hour,
                     kills_per_hour,
+                    unlocked: level <= player_level,
+                    current: slug == hunt_slug,
+                    xp_source: if xp_per_hour > 0 { "observed".to_string() } else { "learning".to_string() },
+                    xp_samples: runtime.kills,
                 }
-            }).collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+            }).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
 
     let catalog = snapshot
         .get("catalog")
@@ -1277,7 +1306,10 @@ fn probe_runtime_details(
         }
     }
 
+    let mut item_averages: std::collections::HashMap<u64, (u64, u64)> =
+        std::collections::HashMap::new();
     let mut market_summary = Vec::new();
+
     if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
         for entry in messages.iter().rev() {
             let Some(message) = entry.get("message") else { continue; };
@@ -1285,8 +1317,23 @@ fn probe_runtime_details(
                 continue;
             }
 
+            if let Some(medias) = message.get("medias").and_then(Value::as_object) {
+                for (raw_id, row) in medias {
+                    let Ok(item_id) = raw_id.parse::<u64>() else { continue; };
+                    let gold_average = row.get("gold")
+                        .and_then(|v| v.get("media"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let orb_average = row.get("orb")
+                        .and_then(|v| v.get("media"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    item_averages.insert(item_id, (gold_average, orb_average));
+                }
+            }
+
             let Some(summary) = message.get("resumo").and_then(Value::as_object) else {
-                break;
+                continue;
             };
 
             for (raw_id, row) in summary {
@@ -1294,33 +1341,9 @@ fn probe_runtime_details(
                 let name = names
                     .get(&item_id)
                     .cloned()
-                    .unwrap_or_else(|| format!("Item {}", item_id));
-
-                let gold_min = row
-                    .get("minGold")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let orb_min = row
-                    .get("minOrb")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let listings = row
-                    .get("anuncios")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-
-                if listings > 0 {
-                    market_summary.push(MarketSummary {
-                        item_id,
-                        name,
-                        gold_min,
-                        orb_min,
-                        listings,
-                    });
-                }
-            }
-            break;
-        }
+                    .unwrap_or_else    let server_now = snapshot.get("serverNow").and_then(Value::as_u64).unwrap_or(0);
+    if server_now == 0 {
+        server_now = chrono_like_now_ms();
     }
 
     let mut market_listings = Vec::new();
@@ -1334,12 +1357,26 @@ fn probe_runtime_details(
             let item_id = message.get("itemId").and_then(Value::as_u64).unwrap_or(0);
             let currency = message.get("moeda").and_then(Value::as_str).unwrap_or("gold").to_string();
             let name = names.get(&item_id).cloned().unwrap_or_else(|| format!("Item {}", item_id));
+            let (gold_average, orb_average) = item_averages.get(&item_id).copied().unwrap_or((0, 0));
+            let reference_price = if currency == "orb" { orb_average } else { gold_average };
 
             if let Some(lines) = message.get("linhas").and_then(Value::as_array) {
                 for listing in lines {
                     let id = listing.get("id").and_then(Value::as_u64).unwrap_or(0);
                     let price = listing.get("preco").and_then(Value::as_u64).unwrap_or(0);
                     if id == 0 || price == 0 { continue; }
+
+                    let retained_until = listing.get("compravelEm").and_then(Value::as_u64).unwrap_or(0);
+                    let seconds_until_buy = if retained_until > server_now {
+                        (retained_until - server_now).saturating_add(999) / 1000
+                    } else {
+                        0
+                    };
+                    let discount_pct = if reference_price > price {
+                        ((reference_price - price) as f32 / reference_price as f32) * 100.0
+                    } else {
+                        0.0
+                    };
 
                     market_listings.push(MarketListing {
                         id,
@@ -1349,7 +1386,10 @@ fn probe_runtime_details(
                         price,
                         quantity: listing.get("qtd").and_then(Value::as_u64).unwrap_or(1),
                         seller: listing.get("vendedor").and_then(Value::as_str).unwrap_or("—").to_string(),
-                        retained_until: listing.get("compravelEm").and_then(Value::as_u64).unwrap_or(0),
+                        retained_until,
+                        seconds_until_buy,
+                        reference_price,
+                        discount_pct,
                     });
                 }
             }
