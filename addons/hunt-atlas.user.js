@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.12
+// @version      1.7.13
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2972,20 +2972,37 @@
             const gameState = snapshot?.state || {};
 
             if (Array.isArray(snapshot?.hunts) && snapshot.hunts.length) {
-                state.hunts = snapshot.hunts.map(hunt => ({
-                    ...hunt,
-                    slug: String(hunt?.slug || ''),
-                    nome: String(hunt?.nome || hunt?.name || hunt?.slug || ''),
-                    nivel: Number(hunt?.nivel ?? hunt?.level) || 0,
-                    especies: Array.isArray(hunt?.especies)
-                        ? hunt.especies
-                        : Array.isArray(hunt?.species)
-                            ? hunt.species.map(species => ({
-                                pokeId: Number(species?.pokeId ?? species?.id) || 0,
-                                nome: String(species?.nome || species?.name || '')
-                            }))
-                            : []
-                }));
+                state.hunts = snapshot.hunts.map(hunt => {
+                    const rawSpecies =
+                        Array.isArray(hunt?.especies)
+                            ? hunt.especies
+                            : Array.isArray(hunt?.species)
+                                ? hunt.species
+                                : Array.isArray(hunt?.pokemons)
+                                    ? hunt.pokemons
+                                    : [];
+
+                    return {
+                        ...hunt,
+                        slug: String(hunt?.slug || ''),
+                        nome: String(hunt?.nome || hunt?.name || hunt?.slug || ''),
+                        nivel: Number(hunt?.nivel ?? hunt?.level) || 0,
+                        especies: rawSpecies.map(species => ({
+                            ...species,
+                            pokeId: Number(
+                                species?.pokeId ??
+                                species?.speciesId ??
+                                species?.id
+                            ) || 0,
+                            nome: String(
+                                species?.nome ||
+                                species?.name ||
+                                ''
+                            ),
+                            pontos: Number(species?.pontos ?? species?.points ?? 1) || 1
+                        }))
+                    };
+                });
             }
 
             if (gameState && typeof gameState === 'object') {
@@ -10278,7 +10295,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.9 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.13 loaded'
         );
     }
 
