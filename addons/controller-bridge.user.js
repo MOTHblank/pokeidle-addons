@@ -15,7 +15,15 @@
     'use strict';
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__mothControllerBridgeV1) return;
+    const existingBridge = page.__mothControllerBridgeV1;
+    if (
+        existingBridge &&
+        Number(existingBridge.version) >= 2 &&
+        typeof existingBridge.snapshot === 'function' &&
+        typeof existingBridge.gameSnapshot === 'function'
+    ) {
+        return;
+    }
 
     let socket = null;
     let state = null;
