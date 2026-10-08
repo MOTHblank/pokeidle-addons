@@ -219,6 +219,19 @@
             }
         }
 
+        if (
+            mothWatch &&
+            typeof mothWatch.refreshBaseline === 'function' &&
+            payload &&
+            payload.t === 'mothWatch.refreshBaseline'
+        ) {
+            try {
+                return mothWatch.refreshBaseline();
+            } catch (error) {
+                return { ok: false, error: String(error) };
+            }
+        }
+
         const target = gameSocket || socket;
         if (!target || target.readyState !== page.WebSocket.OPEN) {
             return { ok: false, error: 'game websocket is not open' };
