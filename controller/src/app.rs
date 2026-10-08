@@ -2093,7 +2093,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         );
                         ui.add_space(18.0);
                         ui.label(
-                            RichText::new(format!("Trainer Lv {}", health.player_level))
+                            RichText::new(format!("{} {}", tr("Trainer Lv"), health.player_level))
                                 .size(10.0)
                                 .color(MUTED),
                         );
@@ -2652,11 +2652,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             let button_text = if current {
                                                 tr("Current").to_string()
                                             } else if !ready {
-                                                if pt_br() {
-                                                    format!("Aguarde {:.1}s", cooldown_ms as f32 / 1000.0)
-                                                } else {
-                                                    format!("Wait {:.1}s", cooldown_ms as f32 / 1000.0)
-                                                }
+                                                format!("{} {:.1}s", tr("Wait"), cooldown_ms as f32 / 1000.0)
                                             } else if !hunt.unlocked {
                                                 tr("locked").to_string()
                                             } else {
@@ -3694,7 +3690,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                 ui.label(
                                     RichText::new(
-                                        "Twitch uses this Firefox profile for its session. KICK uses the account's dedicated KICK profile. Opening either action always targets the corresponding account.",
+                                        tr("Twitch uses this Firefox profile for its session. KICK uses the account's dedicated KICK profile. Opening either action always targets the corresponding account."),
                                     )
                                     .size(9.0)
                                     .color(DIM),
@@ -3752,7 +3748,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) {
     let color = if good { GOOD } else { DIM };
     ui.label(
-        RichText::new(format!("{name}: {state}"))
+        RichText::new(format!("{}: {}", tr(name), tr(state)))
             .size(9.0)
             .color(color),
     );
@@ -3764,9 +3760,9 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
     let (profile_state, browser) = match config {
         Ok(ref config) => {
             let state = if config.profile_dir.exists() {
-                "Profile ready"
+                tr("Profile ready")
             } else {
-                "Created on first launch"
+                tr("Created on first launch")
             };
 
             let browser = if config
@@ -3775,14 +3771,14 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
                 .to_lowercase()
                 .contains("developer")
             {
-                "Firefox Developer Edition"
+                tr("Firefox Developer Edition")
             } else {
-                "Firefox"
+                tr("Firefox")
             };
 
             (state.to_string(), browser.to_string())
         }
-        Err(error) => ("Unavailable".to_string(), error),
+        Err(error) => (tr("Unavailable").to_string(), error),
     };
 
     egui::Frame::new()
