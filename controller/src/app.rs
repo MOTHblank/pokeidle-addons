@@ -179,10 +179,12 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting" => "Aguardando",
         "Streams" => "Streams",
         "OPEN TABS" => "ABAS ABERTAS",
-        "No top-level tabs reported",
+        "No top-level tabs reported" => "Nenhuma aba principal detectada",
         "custom tab requested" => "nova aba personalizada solicitada",
         "Enter a URL." => "Digite uma URL.",
-        "Open a custom URL in this Firefox profile" => "Abrir uma URL personalizada neste perfil do Firefox" => "Nenhuma aba principal detectada",
+        "Open a custom URL in this Firefox profile" => "Abrir uma URL personalizada neste perfil do Firefox",
+        "https://example.com" => "https://exemplo.com",
+        "Open" => "Abrir",
         "LOW RESOURCE" => "BAIXO CONSUMO",
         "FULL" => "COMPLETO",
         "STREAMS & BONUS" => "STREAMS E BÔNUS",
@@ -1241,7 +1243,7 @@ fn draw_game_card(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(account_name)
+                    RichText::new(&account_name)
                         .size(14.0)
                         .strong()
                         .color(TEXT),
@@ -1539,7 +1541,7 @@ fn draw_game_card(
                                     app.set_status(
                                         format!(
                                             "{}: {}",
-                                            account_name,
+                                            &account_name,
                                             tr("Enter a URL.")
                                         ),
                                         true,
@@ -1563,7 +1565,7 @@ fn draw_game_card(
                                     app.set_status(
                                         format!(
                                             "{} · {}",
-                                            account_name,
+                                            &account_name,
                                             tr("custom tab requested")
                                         ),
                                         false,
