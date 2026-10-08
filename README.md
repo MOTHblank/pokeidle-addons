@@ -226,15 +226,11 @@ Desabilitar uma conta a remove do Dashboard e de **Iniciar habilitadas**, mas n�
 
 ### Hunt Atlas
 
-O **Hunt Atlas** no controlador é uma visão nativa baseada nos dados recebidos pelo **Controller Bridge**.
-
-Ele permite selecionar cada conta e consultar as hunts observadas, ordenar por XP/h e viajar diretamente para uma hunt.
-
-O Atlas nativo do controlador não substitui a versão completa do Hunt Atlas que aparece na tela **Mapa**. O userscript completo também é instalado pelo botão **Contas → Addons**.
+O **Hunt Atlas** continua disponível como userscript dentro do PokéIdle e é instalado pelo botão **Contas → Addons**. A interface Rust não tem mais uma janela própria do Hunt Atlas; a versão no navegador continua independente.
 
 ### Moth Watch
 
-A seção nativa **Moth Watch** mostra dados de mercado recebidos pelo Bridge e permite consultar e enviar compras pelo perfil selecionado.
+O **Moth Watch** continua disponível como userscript dentro do PokéIdle. O painel nativo de mercado do Rust foi removido; configure filtros e compras diretamente no userscript.
 
 ### Logs
 
@@ -354,9 +350,9 @@ There is no separate installation flow. **Accounts → Addons** opens the comple
 
 **Stop all** closes every controlled Firefox instance.
 
-**Hunt Atlas** is a native controller view using data from Controller Bridge. The full Hunt Atlas map replacement is also installed through **Accounts → Addons**.
+**Hunt Atlas** remains an in-game userscript installed through **Accounts → Addons**. The Rust controller no longer provides a separate Hunt Atlas window.
 
-**Moth Watch** is the native market view using market data received through the Bridge.
+**Moth Watch** remains an in-game userscript. The Rust controller no longer provides a separate market panel; configure scanning and purchases in the userscript.
 
 The dashboard uses vertical scrolling rather than shrinking account cards. Wide windows use two columns; narrow windows use one.
 
