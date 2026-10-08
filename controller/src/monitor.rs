@@ -900,7 +900,8 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
         .and_then(Value::as_array)
         .map(|items| {
             items.iter().map(|row| MothWatchLog {
-                    text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+                at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
+                text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
             }).collect::<Vec<_>>()
         })
         .unwrap_or_default();
