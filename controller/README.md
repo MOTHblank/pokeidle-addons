@@ -37,7 +37,7 @@ The **Accounts** window manages up to four independent Firefox profiles. Each ro
 - **KICK** — open KICK in that profile.
 - **Streams** — open the userscript stream manager in that profile.
 - **Scan Live** — open PokéIdle and trigger the userscript live-chat scanner.
-- **Addons** — open the repository’s core `.user.js` installer/update URLs in that profile.
+- **Addons** — open the complete repository `.user.js` installer/update set in that profile.
 - **Profile** — open the profile directory in Explorer.
 
 The controller never stores Twitch/KICK passwords or tokens. Their sessions remain in Firefox profile storage.
