@@ -77,6 +77,108 @@ pub struct MarketItem {
 }
 
 #[derive(Clone, Debug)]
+pub struct MothWatchCandidate {
+    pub key: String,
+    pub kind: String,
+    pub listing_id: u64,
+    pub item_id: u64,
+    pub name: String,
+    pub currency: String,
+    pub price: u64,
+    pub average: u64,
+    pub samples: u64,
+    pub ratio: f32,
+    pub qty: u64,
+    pub purchase_quantity: u64,
+    pub unit_price: u64,
+    pub seller: String,
+    pub retained_until: u64,
+    pub first_seen_at: u64,
+    pub seen_at: u64,
+    pub reference_source: String,
+    pub active_reference_listings: u64,
+    pub server_average: u64,
+    pub can_buy: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct MothWatchPending {
+    pub listing_id: u64,
+    pub currency: String,
+    pub unit_price: u64,
+    pub qty: u64,
+    pub spend: u64,
+    pub sent_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MothWatchConfig {
+    pub enabled: bool,
+    pub scan_seconds: u64,
+    pub watch_percent: u64,
+    pub auto_buy: bool,
+    pub auto_buy_percent: u64,
+    pub scan_items: bool,
+    pub scan_pokemon: bool,
+    pub auto_buy_items: bool,
+    pub auto_buy_pokemon: bool,
+    pub buy_coins: bool,
+    pub buy_gems: bool,
+    pub buy_whole_item_batch: bool,
+    pub gold_reserve: u64,
+    pub gem_reserve: u64,
+    pub max_coins_per_buy: u64,
+    pub max_gems_per_buy: u64,
+    pub min_item_units: u64,
+    pub min_pokemon_samples: u64,
+    pub pokemon_history_pages: u64,
+    pub pokemon_history_refresh_minutes: u64,
+    pub view_currency: String,
+    pub view_kind: String,
+    pub view_sort: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct MothWatchLog {
+    pub at: u64,
+    pub text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct MothWatchControllerResult {
+    pub at: u64,
+    pub ok: bool,
+    pub source: String,
+    pub error: String,
+    pub listing_id: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MothWatchInfo {
+    pub connected: bool,
+    pub nick: String,
+    pub gold: u64,
+    pub orbs: u64,
+    pub item_status: String,
+    pub pokemon_status: String,
+    pub protocol_messages: u64,
+    pub last_scan_at: u64,
+    pub pending_buy: Option<MothWatchPending>,
+    pub candidates: Vec<MothWatchCandidate>,
+    pub all_candidates: u64,
+    pub baseline_items: u64,
+    pub baseline_gold: u64,
+    pub baseline_orb: u64,
+    pub gold_checked: u64,
+    pub orb_checked: u64,
+    pub gold_suspicious: u64,
+    pub orb_suspicious: u64,
+    pub config: MothWatchConfig,
+    pub buy_log: Vec<MothWatchLog>,
+    pub controller_result: Option<MothWatchControllerResult>,
+}
+
+#[derive(Clone, Debug)]
 pub struct MarketSummary {
     pub item_id: u64,
     pub name: String,
@@ -138,6 +240,7 @@ pub struct Health {
     pub market_listings: Vec<MarketListing>,
     pub market_catalog: Vec<MarketItem>,
     pub market_summary: Vec<MarketSummary>,
+    pub moth_watch: Option<MothWatchInfo>,
     pub last_error: Option<String>,
 }
 
@@ -193,6 +296,7 @@ impl Default for Health {
             market_listings: Vec::new(),
             market_catalog: Vec::new(),
             market_summary: Vec::new(),
+            moth_watch: None,
             last_error: None,
         }
     }
@@ -404,6 +508,7 @@ struct Probe {
     market_listings: Vec<MarketListing>,
     market_catalog: Vec<MarketItem>,
     market_summary: Vec<MarketSummary>,
+    moth_watch: Option<MothWatchInfo>,
 }
 
 fn monitor_loop(
@@ -505,6 +610,7 @@ fn monitor_loop(
                         current.market_listings = probe.market_listings;
                         current.market_catalog = probe.market_catalog;
                         current.market_summary = probe.market_summary;
+                        current.moth_watch = probe.moth_watch;
                         current.last_error = None;
                     }
                 }
@@ -803,6 +909,126 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         market_summary: runtime.market_summary,
     })
 }
+fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
+    if value.is_null() {
+        return None;
+    }
+
+    let config_value = value.get("config").unwrap_or(&Value::Null);
+    let config = MothWatchConfig {
+        enabled: config_value.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        scan_seconds: config_value.get("scanSeconds").and_then(Value::as_u64).unwrap_or(5),
+        watch_percent: config_value.get("watchPercent").and_then(Value::as_u64).unwrap_or(70),
+        auto_buy: config_value.get("autoBuy").and_then(Value::as_bool).unwrap_or(false),
+        auto_buy_percent: config_value.get("autoBuyPercent").and_then(Value::as_u64).unwrap_or(40),
+        scan_items: config_value.get("scanItems").and_then(Value::as_bool).unwrap_or(true),
+        scan_pokemon: config_value.get("scanPokemon").and_then(Value::as_bool).unwrap_or(true),
+        auto_buy_items: config_value.get("autoBuyItems").and_then(Value::as_bool).unwrap_or(true),
+        auto_buy_pokemon: config_value.get("autoBuyPokemon").and_then(Value::as_bool).unwrap_or(true),
+        buy_coins: config_value.get("buyCoins").and_then(Value::as_bool).unwrap_or(true),
+        buy_gems: config_value.get("buyGems").and_then(Value::as_bool).unwrap_or(true),
+        buy_whole_item_batch: config_value.get("buyWholeItemBatch").and_then(Value::as_bool).unwrap_or(true),
+        gold_reserve: config_value.get("goldReserve").and_then(Value::as_u64).unwrap_or(0),
+        gem_reserve: config_value.get("gemReserve").and_then(Value::as_u64).unwrap_or(0),
+        max_coins_per_buy: config_value.get("maxCoinsPerBuy").and_then(Value::as_u64).unwrap_or(0),
+        max_gems_per_buy: config_value.get("maxGemsPerBuy").and_then(Value::as_u64).unwrap_or(0),
+        min_item_units: config_value.get("minItemUnits").and_then(Value::as_u64).unwrap_or(1),
+        min_pokemon_samples: config_value.get("minPokemonSamples").and_then(Value::as_u64).unwrap_or(1),
+        pokemon_history_pages: config_value.get("pokemonHistoryPages").and_then(Value::as_u64).unwrap_or(12),
+        pokemon_history_refresh_minutes: config_value.get("pokemonHistoryRefreshMinutes").and_then(Value::as_u64).unwrap_or(60),
+        view_currency: config_value.get("viewCurrency").and_then(Value::as_str).unwrap_or("all").to_string(),
+        view_kind: config_value.get("viewKind").and_then(Value::as_str).unwrap_or("all").to_string(),
+        view_sort: config_value.get("viewSort").and_then(Value::as_str).unwrap_or("discount").to_string(),
+    };
+
+    let pending_buy = value.get("pendingBuy").and_then(|pending| {
+        if pending.is_null() { return None; }
+        Some(MothWatchPending {
+            listing_id: pending.get("listingId").and_then(Value::as_u64).unwrap_or(0),
+            currency: pending.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
+            unit_price: pending.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
+            qty: pending.get("qty").and_then(Value::as_u64).unwrap_or(0),
+            spend: pending.get("spend").and_then(Value::as_u64).unwrap_or(0),
+            sent_at: pending.get("sentAt").and_then(Value::as_u64).unwrap_or(0),
+        })
+    });
+
+    let candidates = value.get("candidates")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().map(|candidate| MothWatchCandidate {
+                key: candidate.get("key").and_then(Value::as_str).unwrap_or_default().to_string(),
+                kind: candidate.get("kind").and_then(Value::as_str).unwrap_or_default().to_string(),
+                listing_id: candidate.get("listingId").and_then(Value::as_u64).unwrap_or(0),
+                item_id: candidate.get("itemId").and_then(Value::as_u64).unwrap_or(0),
+                name: candidate.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                currency: candidate.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
+                price: candidate.get("price").and_then(Value::as_u64).unwrap_or(0),
+                average: candidate.get("average").and_then(Value::as_u64).unwrap_or(0),
+                samples: candidate.get("samples").and_then(Value::as_u64).unwrap_or(0),
+                ratio: candidate.get("ratio").and_then(Value::as_f64).unwrap_or(f64::NAN) as f32,
+                qty: candidate.get("qty").and_then(Value::as_u64).unwrap_or(1),
+                purchase_quantity: candidate.get("purchaseQuantity").and_then(Value::as_u64).unwrap_or(0),
+                unit_price: candidate.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
+                seller: candidate.get("seller").and_then(Value::as_str).unwrap_or("—").to_string(),
+                retained_until: candidate.get("retainedUntil").and_then(Value::as_u64).unwrap_or(0),
+                first_seen_at: candidate.get("firstSeenAt").and_then(Value::as_u64).unwrap_or(0),
+                seen_at: candidate.get("seenAt").and_then(Value::as_u64).unwrap_or(0),
+                reference_source: candidate.get("referenceSource").and_then(Value::as_str).unwrap_or_default().to_string(),
+                active_reference_listings: candidate.get("activeReferenceListings").and_then(Value::as_u64).unwrap_or(0),
+                server_average: candidate.get("serverAverage").and_then(Value::as_u64).unwrap_or(0),
+                can_buy: candidate.get("canBuy").and_then(Value::as_bool).unwrap_or(false),
+            }).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let buy_log = value.get("buyLog")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().map(|row| MothWatchLog {
+                at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
+                text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+            }).collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let item_stats = value.get("itemScanStats").unwrap_or(&Value::Null);
+    let controller_result = value.get("controllerResult").and_then(|row| {
+        if row.is_null() { return None; }
+        Some(MothWatchControllerResult {
+            at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
+            ok: row.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            source: row.get("source").and_then(Value::as_str).unwrap_or_default().to_string(),
+            error: row.get("error").and_then(Value::as_str).unwrap_or_default().to_string(),
+            listing_id: row.get("listingId").and_then(Value::as_u64).unwrap_or(0),
+        })
+    });
+
+    Some(MothWatchInfo {
+        connected: value.get("connected").and_then(Value::as_bool).unwrap_or(false),
+        nick: value.get("nick").and_then(Value::as_str).unwrap_or_default().to_string(),
+        gold: value.get("gold").and_then(Value::as_u64).unwrap_or(0),
+        orbs: value.get("orbs").and_then(Value::as_u64).unwrap_or(0),
+        item_status: value.get("itemStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
+        pokemon_status: value.get("pokemonStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
+        protocol_messages: value.get("protocolMessages").and_then(Value::as_u64).unwrap_or(0),
+        last_scan_at: value.get("lastScanAt").and_then(Value::as_u64).unwrap_or(0),
+        pending_buy,
+        candidates,
+        all_candidates: value.get("allCandidates").and_then(Value::as_u64).unwrap_or(0),
+        baseline_items: value.get("baseline").and_then(|v| v.get("items")).and_then(Value::as_u64).unwrap_or(0),
+        baseline_gold: value.get("baseline").and_then(|v| v.get("gold")).and_then(Value::as_u64).unwrap_or(0),
+        baseline_orb: value.get("baseline").and_then(|v| v.get("orb")).and_then(Value::as_u64).unwrap_or(0),
+        gold_checked: item_stats.get("goldChecked").and_then(Value::as_u64).unwrap_or(0),
+        orb_checked: item_stats.get("orbChecked").and_then(Value::as_u64).unwrap_or(0),
+        gold_suspicious: item_stats.get("goldSuspicious").and_then(Value::as_u64).unwrap_or(0),
+        orb_suspicious: item_stats.get("orbSuspicious").and_then(Value::as_u64).unwrap_or(0),
+        config,
+        buy_log,
+        controller_result,
+    })
+}
+
 fn xp_progress(value: &Value, fallback: &str) -> String {
     let current = value.get("xp").and_then(Value::as_u64).unwrap_or(0);
     let floor = value.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
@@ -936,6 +1162,10 @@ fn probe_runtime_details(
     if let Some(error) = snapshot.get("error").and_then(Value::as_str) {
         return Err(error.to_string());
     }
+
+    let moth_watch = parse_moth_watch_snapshot(
+        snapshot.get("mothWatch").unwrap_or(&Value::Null)
+    );
 
     let state = snapshot.get("state").cloned().unwrap_or(Value::Null);
     let active = state.get("activePokemon").cloned().unwrap_or(Value::Null);
