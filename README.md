@@ -4,6 +4,12 @@ Addons para **PokéIdle** e um controlador nativo leve para manter até quatro c
 
 O projeto foi feito para Windows. O controlador usa o Firefox instalado normalmente, com **um perfil isolado por conta**. Os userscripts continuam sendo executados pelo **Violentmonkey**; o controlador não possui um motor próprio de userscripts.
 
+## Transparência e desenvolvimento
+
+Nenhuma parte do código deste projeto está escondida: todo o código-fonte está disponível neste repositório para que você possa revisá-lo. Você também pode pedir a uma IA de sua confiança para analisar o código e ajudar a identificar possíveis problemas de segurança ou comportamento.
+
+Este aplicativo ainda está em desenvolvimento, então nem tudo funciona perfeitamente. Caso encontre algum problema, abra uma [Issue](https://github.com/MOTHblank/pokeidle-addons/issues) descrevendo o que aconteceu. Sugestões de funcionalidades que estejam faltando também são bem-vindas. E, se você sabe programar, contribuições e pull requests são bem-vindos.
+
 ## Instalação
 
 Instale estes componentes antes de configurar o controlador:
@@ -293,6 +299,12 @@ Depois use **Contas → Addons**.
 A collection of **PokéIdle** addons plus a lightweight native controller for keeping up to four accounts in isolated Firefox profiles.
 
 The project targets Windows. The controller uses normal installed Firefox with **one isolated browser profile per account**. Userscripts continue to run through **Violentmonkey**; the controller does not contain its own userscript engine.
+
+### Transparency and development
+
+No part of this project's code is hidden: the complete source code is available in this repository for anyone to review. You can also ask an AI you trust to review the code and help identify potential security or behavioral problems.
+
+This application is still under development, so not everything will work perfectly yet. When you encounter a problem, open an [Issue](https://github.com/MOTHblank/pokeidle-addons/issues) describing what happened. Suggestions for missing features are welcome as well. And if you know how to program, contributions and pull requests are welcome.
 
 ### Installation
 
