@@ -26,7 +26,7 @@ Instale estes componentes antes de configurar o controlador:
 
 
 ## Primeira configuração
-
+Video configurando uma conta: https://www.youtube.com/watch?v=8nO0gfs0jPQ
 Abra o **Moth Controller**.
 
 A interface começa em **PT-BR**. No menu lateral existe um seletor **EN / PT-BR** para trocar o idioma a qualquer momento.
@@ -42,51 +42,20 @@ Existem quatro slots independentes:
 - **Game 3**
 - **Game 4**
 
-Os dois primeiros vêm habilitados por padrão para manter compatibilidade com a configuração antiga.
+Os dois primeiros vêm habilitados por padrão.
 
 Para cada conta:
 
-1. Marque **Habilitada**.
+1. Marque **Habilitar**.
 2. Dê um nome para a conta, por exemplo **Main**, **Alt**, **Shiny Hunter** ou o nome que preferir.
-3. Feche a janela ou continue configurando os outros slots.
-
-Os nomes e o estado habilitado são salvos automaticamente em:
-
-    %LOCALAPPDATA%\Moth\PokeIdle\accounts.json
-
-Os dados do navegador de cada slot ficam separados em:
-
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game1
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game2
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game3
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game4
-
-Cada diretório é uma sessão Firefox independente. Cookies, localStorage, login do PokéIdle e login das plataformas de streaming não são compartilhados entre contas.
-
-### 2. Faça login em cada conta
-
-Para cada slot habilitado:
-
-1. Use o **Twitch** na janela de Contas para abrir o login da Twitch naquele perfil.
-2. Use o **KICK** para abrir o KICK naquele mesmo perfil.
+3. Clique nos botões dentro do card da conta, começando por *instalar ViolentMonkey* (gerenciador de scripts).
+4. Feche a janela e clique no botão *Addons* para instalar meus scripts (só controller-bridge é de fato necessário para o funcionamento, mas os outros trazem automações)
+5. Use o **Twitch** na janela de Contas para abrir o login da Twitch naquele perfil.
 3. Abra o jogo nesse perfil e faça login no **PokéIdle**.
-4. Termine o login de todas as plataformas antes de passar para a próxima conta.
+
 
 **Não misture logins entre perfis.** Game 1 deve permanecer com as sessões da conta 1; Game 2 com as da conta 2; e assim por diante.
 
-### 3. Instale o Violentmonkey em cada perfil
-
-O perfil do Firefox criado pelo controlador é separado do seu Firefox pessoal.
-
-Faça o seguinte para cada conta habilitada:
-
-1. Abra o perfil pelo controlador.
-2. Abra a página do [Violentmonkey](https://addons.mozilla.org/pt-BR/firefox/addon/violentmonkey/).
-3. Instale a extensão.
-4. Volte ao PokéIdle.
-5. Na janela **Contas**, use **Addons**.
-
-O botão **Addons** abre os instaladores de todos os userscripts recomendados no perfil selecionado. A primeira instalação passa pela confirmação normal do Violentmonkey; depois as próprias URLs de update permitem que o Violentmonkey mantenha os scripts atualizados.
 
 ## Userscripts
 
@@ -101,21 +70,19 @@ Captura automática configurável e estatísticas de captura. O Auto Catch tamb�
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
 **Live Stream Scanner**  
-Opens Twitch chat popouts as before. For KICK, detected live channels are collected in the Rust interface as a single MultiKick link. Copy or open that link in a **regular browser**, not in a controller-managed Firefox window.  
-
-Verifica os streams atuais e abre automaticamente os chats da Twitch e as páginas KICK necessárias. A primeira verificação acontece após aproximadamente 30 segundos e depois uma vez por hora.
+Abre chat de streamers online a cada dez minutos. Para a KICK (que barra o acesso automatizado), um link multistream fica disponível na interface.
 
 **Controller Bridge**  
-É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo, caça, estado de login, recursos, abas, bônus e mercado.
+É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo.
 
 **Twitch Low Resource Mode**  
 Mantém as páginas da Twitch no menor consumo prático. Pop-outs de chat da Twitch permanecem intocados; a redução de recursos é aplicada somente à Twitch.
 
 **PokéIdle Hunt Atlas**  
-Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. O userscript é instalado automaticamente pelo botão **Addons**.
+Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. 
 
 **PokéIdle Moth Watch**  
-Monitoramento e compra configurável do mercado. O userscript também é instalado automaticamente pelo botão **Addons**.
+Monitoramento e compra configurável do mercado.
 
 ## Como configurar os userscripts
 
@@ -140,25 +107,6 @@ Abra o painel **Performance+** no PokéIdle.
 
 Ele vem habilitado por padrão. O perfil de desempenho pode ser ajustado ali. Para contas usadas apenas para ficar AFK, mantenha-o ativo.
 
-### Live Stream Scanner
-
-Normalmente não exige configuração manual.
-
-O objetivo do script é abrir automaticamente os streams encontrados pelo jogo. Para a Twitch, o fluxo leve usa **chat**. Para o KICK, ele abre a página real do canal porque o tempo de exibição é necessário para recursos como Channel Points.
-
-O scanner faz a primeira verificação depois de aproximadamente 30 segundos e repete a cada hora.
-
-### Twitch Low Resource Mode
-
-Normalmente não exige configuração manual. Ele começa a atuar quando o script encontra uma página compatível da Twitch.
-
-**Não desative esse script nos perfis usados para os streams automáticos** caso o objetivo seja minimizar o consumo de recursos.
-
-### Controller Bridge
-
-Não possui configuração de usuário normal. Deixe-o ativo nos perfis controlados pelo Moth Controller.
-
-Sem o Bridge, o controlador não consegue receber o estado do jogo.
 
 ### Moth Watch
 
@@ -221,14 +169,6 @@ Use **Contas** para:
 
 Desabilitar uma conta a remove do Dashboard e de **Iniciar habilitadas**, mas não apaga o perfil nem seus logins.
 
-### Hunt Atlas
-
-O **Hunt Atlas** continua disponível como userscript dentro do PokéIdle e é instalado pelo botão **Contas → Addons**. A interface Rust não tem mais uma janela própria do Hunt Atlas; a versão no navegador continua independente.
-
-### Moth Watch
-
-O **Moth Watch** continua disponível como userscript dentro do PokéIdle. O painel nativo de mercado do Rust foi removido; configure filtros e compras diretamente no userscript.
-
 ### Logs
 
 **Logs** abre o log do controlador em:
@@ -241,10 +181,6 @@ O objetivo do projeto é manter o número de processos do navegador baixo:
 
 - um Firefox isolado por conta;
 - Twitch em modo de chat leve quando possível;
-- KICK com página real somente quando necessário para manter o tempo de exibição/Channel Points;
-- nenhum navegador oculto embutido;
-- nenhum WebView2;
-- nenhuma implementação própria de userscript.
 
 O controlador apenas coordena processos, perfis e comunicação. O navegador continua sendo o Firefox oficial e o Violentmonkey continua sendo responsável pela execução dos userscripts.
 
