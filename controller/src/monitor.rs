@@ -665,7 +665,14 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle')],
             ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger')],
             ['Stream Scanner', exists('#moth-scan-live-streams')],
-            ['Controller Bridge', !!window.__mothControllerBridgeV1],
+            ['Controller Bridge', (() => {
+                const bridge = window.__mothControllerBridgeV1;
+                return !!bridge
+                    && Number(bridge.version) >= 4
+                    && typeof bridge.snapshot === 'function'
+                    && typeof bridge.gameSnapshot === 'function'
+                    && typeof bridge.socket === 'function';
+            })()],
             ['Twitch Low Resource', exists('#moth-twitch-low-resource-css')],
             ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1],
             ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1']
