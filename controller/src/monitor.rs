@@ -563,9 +563,6 @@ fn monitor_loop(
                         current.last_battle_at = probe.last_battle_at;
                         current.tabs = probe.tabs;
                         current.hunts = probe.hunts;
-                        current.market_listings = probe.market_listings;
-                        current.market_catalog = probe.market_catalog;
-                        current.market_summary = probe.market_summary;
                         current.moth_watch = probe.moth_watch;
                         current.kick_streams = probe.kick_streams;
                         current.kick_state_available = probe.kick_state_available;
@@ -1526,10 +1523,6 @@ fn probe_runtime_details(
                 }).collect::<Vec<_>>()
             }).unwrap_or_default();
 
-            let species = species_details.iter()
-                .map(|species| species.name.clone())
-                .collect::<Vec<_>>();
-
             HuntInfo {
                 slug,
                 name,
@@ -1553,13 +1546,7 @@ fn probe_runtime_details(
                 let slug = hunt.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
                 let name = hunt.get("name").and_then(Value::as_str).unwrap_or(&slug).to_string();
                 let level = hunt.get("level").and_then(Value::as_u64).unwrap_or(0) as u32;
-                let species = hunt.get("species").and_then(Value::as_array).map(|values| {
-                    values.iter()
-                        .filter_map(|species| species.get("name").and_then(Value::as_str).map(str::to_string))
-                        .collect::<Vec<_>>()
-                }).unwrap_or_default();
-
-                let runtime = hunt_runtime.get(&slug).cloned().unwrap_or_default();
+                    let runtime = hunt_runtime.get(&slug).cloned().unwrap_or_default();
                 let elapsed_ms = runtime.last_at.saturating_sub(runtime.first_at);
                 let kills_per_hour = if elapsed_ms >= 1000 {
                     ((runtime.kills as f64) * 3_600_000.0 / elapsed_ms as f64).round() as u64
@@ -1576,7 +1563,6 @@ fn probe_runtime_details(
                     name,
                     level,
                     area: String::new(),
-                    species,
                     species_details: Vec::new(),
                     xp_per_hour,
                     pokemon_xp_per_hour,
@@ -1588,71 +1574,6 @@ fn probe_runtime_details(
             }).collect::<Vec<_>>())
             .unwrap_or_default()
     };
-
-    let mut market_listings = Vec::new();
-    if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
-        for entry in messages {
-            let Some(message) = entry.get("message") else { continue; };
-            if message.get("aba").and_then(Value::as_str) != Some("item") {
-                continue;
-            }
-
-            let item_id = message.get("itemId").and_then(Value::as_u64).unwrap_or(0);
-            let currency = message.get("moeda").and_then(Value::as_str).unwrap_or("gold").to_string();
-            let name = names
-                .get(&item_id)
-                .cloned()
-                .unwrap_or_else(|| format!("Item {}", item_id));
-            let (gold_average, orb_average) =
-                item_averages.get(&item_id).copied().unwrap_or((0, 0));
-            let reference_price = if currency == "orb" { orb_average } else { gold_average };
-
-            if let Some(lines) = message.get("linhas").and_then(Value::as_array) {
-                for listing in lines {
-                    let id = listing.get("id").and_then(Value::as_u64).unwrap_or(0);
-                    let price = listing.get("preco").and_then(Value::as_u64).unwrap_or(0);
-                    if id == 0 || price == 0 { continue; }
-
-                    let retained_until = listing
-                        .get("compravelEm")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    let seconds_until_buy = if retained_until > server_now {
-                        (retained_until - server_now).saturating_add(999) / 1000
-                    } else {
-                        0
-                    };
-                    let discount_pct = if reference_price > price {
-                        ((reference_price - price) as f32 / reference_price as f32) * 100.0
-                    } else {
-                        0.0
-                    };
-
-                    market_listings.push(MarketListing {
-                        id,
-                        item_id,
-                        name: name.clone(),
-                        currency: currency.clone(),
-                        price,
-                        quantity: listing.get("qtd").and_then(Value::as_u64).unwrap_or(1),
-                        seller: listing.get("vendedor")
-                            .and_then(Value::as_str)
-                            .unwrap_or("—")
-                            .to_string(),
-                        retained_until,
-                        seconds_until_buy,
-                        reference_price,
-                        discount_pct,
-                    });
-                }
-            }
-        }
-    }
-
-    market_listings.sort_by_key(|listing| listing.price);
-    market_listings.truncate(100);
-    market_summary.sort_by_key(|item| if item.gold_min > 0 { item.gold_min } else { u64::MAX });
-    market_summary.truncate(200);
 
     Ok(RuntimeProbe {
         bridge_connected,
