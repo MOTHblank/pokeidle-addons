@@ -10,7 +10,7 @@ use std::process::Child;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-static PT_BR: AtomicBool = AtomicBool::new(false);
+static PT_BR: AtomicBool = AtomicBool::new(true);
 
 fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
@@ -771,6 +771,40 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             if sidebar_button(ui, tr("■  Stop all"), false).clicked() {
                 app.stop_all();
             }
+
+            ui.add_space(16.0);
+            section_label(ui, tr("LANGUAGE"));
+
+            ui.horizontal(|ui| {
+                let en_selected = !pt_br();
+                let pt_selected = pt_br();
+
+                if ui
+                    .add_sized(
+                        [78.0, 30.0],
+                        egui::SelectableLabel::new(
+                            en_selected,
+                            RichText::new("EN").size(10.0).strong(),
+                        ),
+                    )
+                    .clicked()
+                {
+                    PT_BR.store(false, Ordering::Relaxed);
+                }
+
+                if ui
+                    .add_sized(
+                        [78.0, 30.0],
+                        egui::SelectableLabel::new(
+                            pt_selected,
+                            RichText::new("PT-BR").size(10.0).strong(),
+                        ),
+                    )
+                    .clicked()
+                {
+                    PT_BR.store(true, Ordering::Relaxed);
+                }
+            });
 
             ui.add_space(20.0);
 
