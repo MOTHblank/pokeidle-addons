@@ -2571,26 +2571,191 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     app.show_atlas = open;
 }
 
+fn moth_watch_remaining_seconds(info: &crate::monitor::MothWatchInfo, retained_until: u64) -> u64 {
+    if retained_until == 0 {
+        return 0;
+    }
+
+    let now = chrono_like_now_ms();
+    let server_now = if info.server_clock_offset >= 0 {
+        now.saturating_sub(info.server_clock_offset as u64)
+    } else {
+        now.saturating_add(info.server_clock_offset.unsigned_abs())
+    };
+
+    if retained_until > server_now {
+        (retained_until - server_now + 999) / 1000
+    } else {
+        0
+    }
+}
+
+fn moth_watch_send(monitor: Option<&MonitorHandle>, payload: Value) {
+    if let Some(monitor) = monitor {
+        monitor.send(payload);
+    }
+}
+
+fn moth_watch_reference_text(candidate: &crate::monitor::MothWatchCandidate) -> String {
+    match candidate.reference_source.as_str() {
+        "active-median" => {
+            let mut text = format!(
+                "current market median · {} listings",
+                candidate.active_reference_listings
+            );
+            if candidate.server_average > candidate.average {
+                text.push_str(&format!(
+                    " · server 7d avg {} ignored",
+                    format_number(candidate.server_average)
+                ));
+            }
+            text
+        }
+        "live-7d" => format!(
+            "live 7d avg / unit · {} units sold",
+            candidate.samples
+        ),
+        _ => format!(
+            "frozen fallback / unit · {} units sold",
+            candidate.samples
+        ),
+    }
+}
+
+fn draw_moth_watch_config(
+    ui: &mut egui::Ui,
+    monitor: Option<&MonitorHandle>,
+    config: &crate::monitor::MothWatchConfig,
+    set_status: &mut dyn FnMut(String),
+) {
+    egui::Frame::new()
+        .fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(9.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            egui::Grid::new("moth_watch_config_grid")
+                .num_columns(2)
+                .spacing([10.0, 6.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    fn toggle(
+                        ui: &mut egui::Ui,
+                        label: &str,
+                        value: bool,
+                        monitor: Option<&MonitorHandle>,
+                        key: &str,
+                        set_status: &mut dyn FnMut(String),
+                    ) {
+                        let mut next = value;
+                        if ui.checkbox(&mut next, label).changed() {
+                            moth_watch_send(
+                                monitor,
+                                json!({
+                                    "t": "mothWatch.configure",
+                                    "patch": { key: next }
+                                }),
+                            );
+                            set_status(format!("{} updated.", label));
+                        }
+                    }
+
+                    fn number(
+                        ui: &mut egui::Ui,
+                        label: &str,
+                        value: u64,
+                        monitor: Option<&MonitorHandle>,
+                        key: &str,
+                        set_status: &mut dyn FnMut(String),
+                    ) {
+                        let mut next = value as f64;
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(label).size(9.0).color(MUTED));
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut next)
+                                        .range(0.0..=1_000_000_000.0)
+                                        .speed(1.0),
+                                )
+                                .changed()
+                            {
+                                moth_watch_send(
+                                    monitor,
+                                    json!({
+                                        "t": "mothWatch.configure",
+                                        "patch": { key: next.max(0.0) }
+                                    }),
+                                );
+                                set_status(format!("{} updated.", label));
+                            }
+                        });
+                    }
+
+                    toggle(ui, "Enabled", config.enabled, monitor, "enabled", set_status);
+                    ui.end_row();
+                    number(ui, "Watch prices ≤ reference (%)", config.watch_percent, monitor, "watchPercent", set_status);
+                    ui.end_row();
+                    toggle(ui, "Auto-buy", config.auto_buy, monitor, "autoBuy", set_status);
+                    ui.end_row();
+                    number(ui, "Auto-buy prices ≤ reference (%)", config.auto_buy_percent, monitor, "autoBuyPercent", set_status);
+                    ui.end_row();
+                    number(ui, "Scan every (seconds)", config.scan_seconds, monitor, "scanSeconds", set_status);
+                    ui.end_row();
+
+                    toggle(ui, "Watch items", config.scan_items, monitor, "scanItems", set_status);
+                    ui.end_row();
+                    toggle(ui, "Watch Pokémon", config.scan_pokemon, monitor, "scanPokemon", set_status);
+                    ui.end_row();
+                    toggle(ui, "Auto-buy items", config.auto_buy_items, monitor, "autoBuyItems", set_status);
+                    ui.end_row();
+                    toggle(ui, "Auto-buy Pokémon", config.auto_buy_pokemon, monitor, "autoBuyPokemon", set_status);
+                    ui.end_row();
+                    toggle(ui, "Buy Coin listings", config.buy_coins, monitor, "buyCoins", set_status);
+                    ui.end_row();
+                    toggle(ui, "Buy Gem listings", config.buy_gems, monitor, "buyGems", set_status);
+                    ui.end_row();
+                    toggle(ui, "Take full item batch", config.buy_whole_item_batch, monitor, "buyWholeItemBatch", set_status);
+                    ui.end_row();
+
+                    number(ui, "Keep Coins", config.gold_reserve, monitor, "goldReserve", set_status);
+                    ui.end_row();
+                    number(ui, "Keep Gems", config.gem_reserve, monitor, "gemReserve", set_status);
+                    ui.end_row();
+                    number(ui, "Max Coins / buy (0 = unlimited)", config.max_coins_per_buy, monitor, "maxCoinsPerBuy", set_status);
+                    ui.end_row();
+                    number(ui, "Max Gems / buy (0 = unlimited)", config.max_gems_per_buy, monitor, "maxGemsPerBuy", set_status);
+                    ui.end_row();
+                    number(ui, "Min item units in average", config.min_item_units, monitor, "minItemUnits", set_status);
+                    ui.end_row();
+                    number(ui, "Min Pokémon sale samples", config.min_pokemon_samples, monitor, "minPokemonSamples", set_status);
+                    ui.end_row();
+                    number(ui, "Pokémon history pages", config.pokemon_history_pages, monitor, "pokemonHistoryPages", set_status);
+                    ui.end_row();
+                    number(ui, "Pokémon history refresh (minutes)", config.pokemon_history_refresh_minutes, monitor, "pokemonHistoryRefreshMinutes", set_status);
+                    ui.end_row();
+                });
+        });
+}
+
 fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let mut open = app.show_market;
     let viewport = ctx.content_rect();
-    let available_width = (viewport.width() - 32.0).max(420.0);
-    let available_height = (viewport.height() - 32.0).max(360.0);
-    let default_width = available_width.min(1000.0);
-    let default_height = available_height.min(650.0);
-    let max_width = available_width.max(420.0);
-    let max_height = available_height.max(360.0);
+    let available_width = (viewport.width() - 32.0).max(620.0);
+    let available_height = (viewport.height() - 32.0).max(460.0);
+    let default_width = available_width.min(1120.0);
+    let default_height = available_height.min(760.0);
 
     egui::Window::new(tr("Moth Watch"))
+        .id(egui::Id::new("moth_watch_window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
         .default_width(default_width)
         .default_height(default_height)
-        .min_width(420.0_f32.min(max_width))
-        .min_height(360.0_f32.min(max_height))
-        .max_width(max_width)
-        .max_height(max_height)
+        .min_width(620.0_f32.min(available_width))
+        .min_height(460.0_f32.min(available_height))
+        .max_width(available_width)
+        .max_height(available_height)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
@@ -2600,6 +2765,10 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .inner_margin(18.0),
         )
         .show(ctx, |ui| {
+            let index = app.market_profile.index();
+            let monitor = app.games[index].monitor.clone();
+            let health = app.games[index].health();
+
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(tr("Moth Watch"))
@@ -2608,380 +2777,417 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .color(TEXT),
                 );
                 ui.add_space(8.0);
+
                 ui.label(
-                    RichText::new(tr("RMT market browser"))
-                        .size(12.0)
-                        .color(MUTED),
+                    RichText::new("Userscript engine")
+                        .size(10.0)
+                        .strong()
+                        .color(GOOD),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(tr("Select an item, then buy from the live listings below"))
-                            .size(10.0)
-                            .color(DIM),
-                    );
-                });
-            });
-
-            ui.add_space(14.0);
-            let account_names = std::array::from_fn(|i| app.accounts[i].name.clone());
-            game_selector(&account_names, ui, &mut app.market_profile);
-
-            let index = ControllerApp::game_index(app.market_profile);
-            let health = app.games[index].health();
-
-            ui.add_space(12.0);
-
-            ui.horizontal(|ui| {
-                let gold = format_number(health.gold);
-                let orbs = format_number(health.orbs);
-                ui.label(RichText::new(format!("Gold {}", gold)).size(11.0).strong().color(WARN));
-                ui.add_space(14.0);
-                ui.label(RichText::new(format!("Gems {}", orbs)).size(11.0).strong().color(ACCENT));
-                ui.add_space(20.0);
-
-                if ui.button(tr("Refresh market")).clicked() {
-                    if let Some(monitor) = app.games[index].monitor.as_ref() {
-                        monitor.send(json!({ "t": "market.itens" }));
-                        app.set_status(format!("{} · market refresh requested", app.account_name(app.market_profile)), false);
-                    } else {
-                        app.set_status(format!("{} is not running.", app.account_name(app.market_profile)), true);
-                    }
-                }
-            });
-
-            ui.add_space(10.0);
-
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr("Find item")).size(10.0).strong().color(DIM));
-                ui.add_sized(
-                    [300.0, 28.0],
-                    egui::TextEdit::singleline(&mut app.market_search)
-                        .hint_text(tr("item name")),
-                );
-
-                ui.add_space(10.0);
-
-                for currency in ["gold", "orb"] {
-                    let active = app.market_currency == currency;
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new(if currency == "gold" { "Gold" } else { "Gems" }).size(10.0))
-                                .fill(if active { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
-                                .stroke(Stroke::new(1.0, if active { ACCENT } else { BORDER }))
-                                .corner_radius(7.0),
-                        )
-                        .clicked()
-                    {
-                        app.market_currency = currency.to_string();
-                    }
-                }
-            });
-
-            ui.add_space(10.0);
-
-            let search = app.market_search.to_lowercase();
-
-            egui::ScrollArea::vertical()
-                .id_salt("market_catalog")
-                .max_height(250.0)
-                .show(ui, |ui| {
-                    if health.market_summary.is_empty() {
-                        ui.label(
-                            RichText::new(tr("No market summary loaded. Press Refresh market."))
-                                .size(11.0)
-                                .color(DIM),
-                        );
-
-                        ui.add_space(6.0);
-
-                        let catalog: Vec<_> = health
-                            .market_catalog
-                            .iter()
-                            .filter(|item| {
-                                search.is_empty()
-                                    || item.name.to_lowercase().contains(&search)
-                            })
-                            .take(35)
-                            .cloned()
-                            .collect();
-
-                        ui.horizontal_wrapped(|ui| {
-                            for item in catalog {
-                                let label = compact_text(&item.name, 22);
-                                if ui.button(label).clicked() {
-                                    let profile_label = app.account_name(app.market_profile);
-                                    let monitor = app.games[index].monitor.clone();
-                                    if let Some(monitor) = monitor {
-                                        let item_id = item.id;
-                                        let item_name = item.name.clone();
-                                        let currency = app.market_currency.clone();
-
-                                        monitor.send(json!({
-                                            "t": "market.item",
-                                            "itemId": item_id,
-                                            "moeda": currency
-                                        }));
-                                        app.set_status(
-                                            format!("{} · loading listings to buy {}", profile_label, item_name),
-                                            false,
-                                        );
-                                    } else {
-                                        app.set_status(
-                                            format!("{} is not running.", profile_label),
-                                            true,
-                                        );
-                                    }
-                                }
-                            }
-                        });
-                    } else {
-                        let selected_currency = app.market_currency.clone();
-                        let filtered_items: Vec<_> = health
-                            .market_summary
-                            .iter()
-                            .filter(|item| {
-                                let currency_available = match selected_currency.as_str() {
-                                    "gold" => item.gold_min > 0,
-                                    "orb" => item.orb_min > 0,
-                                    _ => true,
-                                };
-
-                                currency_available
-                                    && (search.is_empty()
-                                        || item.name.to_lowercase().contains(&search))
-                            })
-                            .take(50)
-                            .cloned()
-                            .collect();
-
-                        for item in filtered_items {
-                            egui::Frame::new()
-                                .fill(PANEL_ALT)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0)
-                                .inner_margin(9.0)
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.vertical(|ui| {
-                                            ui.label(
-                                                RichText::new(compact_text(&item.name, 32))
-                                                    .size(11.0)
-                                                    .strong()
-                                                    .color(TEXT),
-                                            );
-
-                                            let price = if app.market_currency == "gold" {
-                                                if item.gold_min > 0 {
-                                                    format!("{} gold", format_number(item.gold_min))
-                                                } else {
-                                                    "— gold".to_string()
-                                                }
-                                            } else if item.orb_min > 0 {
-                                                format!("{} gems", format_number(item.orb_min))
-                                            } else {
-                                                "— gems".to_string()
-                                            };
-
-                                            let reference = if app.market_currency == "gold" {
-                                                item.gold_average
-                                            } else {
-                                                item.orb_average
-                                            };
-                                            let min_price = if app.market_currency == "gold" {
-                                                item.gold_min
-                                            } else {
-                                                item.orb_min
-                                            };
-                                            let discount = if reference > min_price && min_price > 0 {
-                                                format!(" · {}", market_discount_label(
-                                                    ((reference - min_price) as f32 / reference as f32) * 100.0
-                                                ))
-                                            } else {
-                                                String::new()
-                                            };
-
-                                            ui.label(
-                                                RichText::new(format!(
-                                                    "{} · {} listings{}",
-                                                    price,
-                                                    item.listings,
-                                                    discount
-                                                ))
-                                                .size(9.0)
-                                                .color(MUTED),
-                                            );
-                                        });
-
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let profile_label = app.account_name(app.market_profile);
-                                            let monitor = app.games[index].monitor.clone();
-                                            if ui.button(tr("Buy")).clicked() {
-                                                if let Some(monitor) = monitor {
-                                                    let item_id = item.item_id;
-                                                    let item_name = item.name.clone();
-                                                    let currency = selected_currency.clone();
-                                                    monitor.send(json!({
-                                                        "t": "market.item",
-                                                        "itemId": item_id,
-                                                        "moeda": currency
-                                                    }));
-                                                    app.set_status(
-                                                        format!("{} · loading listings to buy {}", profile_label, item_name),
-                                                        false,
-                                                    );
-                                                } else {
-                                                    app.set_status(
-                                                        format!("{} is not running.", profile_label),
-                                                        true,
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    });
-                                });
-
-                            ui.add_space(5.0);
-                        }
-
-                        if !health.market_summary.iter().any(|item| {
-                            let currency_available = match app.market_currency.as_str() {
-                                _ => true,
-                            };
-                            currency_available
-                                && (search.is_empty()
-                                    || item.name.to_lowercase().contains(&search))
-                        }) {
-                            ui.label(
-                                RichText::new(tr("No listings in the selected currency match your search."))
-                                    .size(11.0)
-                                    .color(DIM),
+                    if let Some(info) = &health.moth_watch {
+                        if ui.button(tr("Refresh market")).clicked() {
+                            moth_watch_send(
+                                monitor.as_ref(),
+                                json!({"t": "mothWatch.scan"})
+                            );
+                            app.set_status(
+                                format!("{} · Moth Watch scan requested", app.account_name(app.market_profile)),
+                                false,
                             );
                         }
                     }
                 });
+            });
 
-            ui.add_space(12.0);
+            ui.add_space(9.0);
+            let account_names = std::array::from_fn(|i| app.accounts[i].name.clone());
+            game_selector(&account_names, ui, &mut app.market_profile);
 
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr("LISTINGS")).size(9.0).strong().color(DIM));
-                ui.add_space(8.0);
+            ui.add_space(10.0);
+
+            let Some(info) = health.moth_watch.as_ref() else {
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .stroke(Stroke::new(1.0, BAD))
+                    .corner_radius(10.0)
+                    .inner_margin(14.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("Moth Watch userscript is not running in this profile.")
+                                .size(12.0)
+                                .strong()
+                                .color(BAD),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("The native market interface is disabled rather than using a different implementation. Install/update Moth Watch with Accounts → Addons.")
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                    });
+                return;
+            };
+
+            ui.horizontal_wrapped(|ui| {
+                let connection_text = if info.connected {
+                    "Connected"
+                } else {
+                    "Disconnected"
+                };
                 ui.label(
-                    RichText::new(if app.market_currency == "gold" { tr("GOLD ONLY") } else { tr("GEMS ONLY") })
-                        .size(8.0)
-                        .strong()
-                        .color(if app.market_currency == "gold" { WARN } else { ACCENT }),
+                    RichText::new(format!(
+                        "{} · {} · Items: {} · Pokémon: {}",
+                        connection_text,
+                        info.nick,
+                        info.item_status,
+                        info.pokemon_status
+                    ))
+                    .size(10.0)
+                    .color(if info.connected { GOOD } else { BAD }),
+                );
+
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Coins {} · Gems {}",
+                        format_number(info.gold),
+                        format_number(info.orbs)
+                    ))
+                    .size(10.0)
+                    .strong()
+                    .color(TEXT),
+                );
+
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Candidates {} · protocol {}",
+                        info.candidates.len(),
+                        info.protocol_messages
+                    ))
+                    .size(9.0)
+                    .color(DIM),
                 );
             });
-            ui.add_space(6.0);
+
+            if let Some(result) = &info.controller_result {
+                let result_text = if result.ok {
+                    if result.listing_id > 0 {
+                        format!("Purchase command accepted · listing #{}", result.listing_id)
+                    } else {
+                        "Moth Watch command accepted".to_string()
+                    }
+                } else if result.error.is_empty() {
+                    "Moth Watch rejected the command".to_string()
+                } else {
+                    format!("Moth Watch: {}", result.error)
+                };
+
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(result_text)
+                        .size(9.0)
+                        .strong()
+                        .color(if result.ok { GOOD } else { BAD }),
+                );
+            }
+
+            if let Some(pending) = &info.pending_buy {
+                ui.add_space(5.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Purchase pending · #{} · {} × {} · {}",
+                        pending.listing_id,
+                        pending.qty,
+                        format_number(pending.unit_price),
+                        if pending.currency == "orb" { "Gems" } else { "Coins" }
+                    ))
+                    .size(9.0)
+                    .strong()
+                    .color(WARN),
+                );
+            }
+
+            ui.add_space(9.0);
+
+            let mut set_status = |message: String| {
+                app.set_status(
+                    format!("{} · {}", app.account_name(app.market_profile), message),
+                    false,
+                );
+            };
+
+            draw_moth_watch_config(
+                ui,
+                monitor.as_ref(),
+                &info.config,
+                &mut set_status,
+            );
+
+            ui.add_space(8.0);
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(
+                    format!(
+                        "References: {} items · {} Coin · {} Gem",
+                        info.baseline_items,
+                        info.baseline_gold,
+                        info.baseline_orb
+                    )
+                ).size(9.0).color(DIM));
+
+                ui.add_space(10.0);
+
+                ui.label(RichText::new(
+                    format!(
+                        "Irregular: {} / {} Coin · {} / {} Gem",
+                        info.gold_suspicious,
+                        info.gold_checked,
+                        info.orb_suspicious,
+                        info.orb_checked
+                    )
+                ).size(9.0).color(DIM));
+
+                if ui.button(tr("Refresh market")).clicked() {
+                    moth_watch_send(
+                        monitor.as_ref(),
+                        json!({"t": "mothWatch.scan"})
+                    );
+                }
+                if ui.button("Freeze current 7d averages").clicked() {
+                    moth_watch_send(
+                        monitor.as_ref(),
+                        json!({"t": "mothWatch.refreshBaseline"})
+                    );
+                    app.set_status(
+                        format!("{} · baseline refresh requested", app.account_name(app.market_profile)),
+                        false,
+                    );
+                }
+            });
+
+            ui.add_space(8.0);
 
             egui::ScrollArea::vertical()
-                .id_salt("market_listings")
-                .max_height(300.0)
+                .id_salt("moth_watch_candidates")
+                .auto_shrink([false, false])
+                .max_height(ui.available_height().max(220.0))
                 .show(ui, |ui| {
-                    if health.market_listings.is_empty() {
+                    if info.candidates.is_empty() {
                         ui.label(
-                            RichText::new(tr("No item listings loaded. Pick an item above to load listings you can buy."))
+                            RichText::new("No current listings are below the watch threshold.")
                                 .size(11.0)
                                 .color(DIM),
                         );
                     } else {
-                        for listing in &health.market_listings {
-                            if listing.currency != app.market_currency {
-                                continue;
-                            }
+                        for candidate in &info.candidates {
+                            let retained_seconds =
+                                moth_watch_remaining_seconds(info, candidate.retained_until);
+                            let discount = ((1.0_f32 - candidate.ratio) * 100.0).max(0.0);
+                            let total = candidate.price.saturating_mul(candidate.qty);
+                            let can_buy =
+                                candidate.can_buy &&
+                                info.pending_buy.is_none() &&
+                                retained_seconds == 0;
+
+                            let auto = info.config.auto_buy
+                                && candidate.ratio <= (info.config.auto_buy_percent as f32 / 100.0)
+                                && ((candidate.currency == "gold" && info.config.buy_coins)
+                                    || (candidate.currency == "orb" && info.config.buy_gems));
 
                             egui::Frame::new()
                                 .fill(PANEL_ALT)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0)
-                                .inner_margin(9.0)
+                                .stroke(Stroke::new(
+                                    1.0,
+                                    if auto { ACCENT } else { BORDER },
+                                ))
+                                .corner_radius(7.0)
+                                .inner_margin(8.0)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
+                                        ui.set_width(220.0);
                                         ui.vertical(|ui| {
-                                            ui.label(RichText::new(compact_text(&listing.name, 30)).size(11.0).strong().color(TEXT));
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new(candidate.kind.to_ascii_uppercase())
+                                                        .size(8.0)
+                                                        .strong()
+                                                        .color(DIM),
+                                                );
+                                                ui.label(
+                                                    RichText::new(&candidate.name)
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(TEXT),
+                                                );
+                                            });
+                                            ui.label(
+                                                RichText::new(if candidate.kind == "item" {
+                                                    format!(
+                                                        "{} units · total {}",
+                                                        candidate.qty,
+                                                        format_number(total)
+                                                    )
+                                                } else {
+                                                    "completed-sales reference".to_string()
+                                                })
+                                                .size(8.0)
+                                                .color(MUTED),
+                                            );
+                                        });
+
+                                        ui.set_min_width(105.0);
+                                        ui.vertical(|ui| {
                                             ui.label(
                                                 RichText::new(format!(
-                                                    "{} × {} · seller {}",
-                                                    format_number(listing.price),
-                                                    listing.quantity,
-                                                    compact_text(&listing.seller, 20)
+                                                    "{} {}",
+                                                    format_number(candidate.price),
+                                                    if candidate.currency == "orb" { "Gems" } else { "Coins" }
+                                                ))
+                                                .size(10.0)
+                                                .strong()
+                                                .color(TEXT),
+                                            );
+                                            ui.label(
+                                                RichText::new("listed")
+                                                    .size(8.0)
+                                                    .color(DIM),
+                                            );
+                                        });
+
+                                        ui.set_min_width(135.0);
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} {}",
+                                                    format_number(candidate.average),
+                                                    if candidate.currency == "orb" { "Gems" } else { "Coins" }
                                                 ))
                                                 .size(9.0)
                                                 .color(MUTED),
                                             );
-                                            let reference = if listing.reference_price > 0 {
-                                                format!(
-                                                    " · {} · ref {}",
-                                                    market_discount_label(listing.discount_pct),
-                                                    format_number(listing.reference_price)
-                                                )
-                                            } else {
-                                                String::new()
-                                            };
                                             ui.label(
-                                                RichText::new(format!(
-                                                    "{}{}",
-                                                    market_wait_label(listing.seconds_until_buy),
-                                                    reference
-                                                ))
-                                                .size(9.0)
-                                                .color(
-                                                    if listing.seconds_until_buy > 0 {
-                                                        WARN
-                                                    } else if listing.discount_pct > 0.05 {
-                                                        GOOD
-                                                    } else {
-                                                        DIM
-                                                    }
-                                                ),
+                                                RichText::new(moth_watch_reference_text(candidate))
+                                                    .size(8.0)
+                                                    .color(DIM),
+                                            );
+                                        });
+
+                                        ui.set_min_width(90.0);
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(format!("−{:.0}%", discount))
+                                                    .size(10.0)
+                                                    .strong()
+                                                    .color(if auto { ACCENT } else { GOOD }),
+                                            );
+                                            ui.label(
+                                                RichText::new(if auto { "auto-buy range" } else { "watch range" })
+                                                    .size(8.0)
+                                                    .color(DIM),
+                                            );
+                                        });
+
+                                        ui.set_min_width(150.0);
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(format!("Seller: {}", candidate.seller))
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(TEXT),
+                                            );
+                                            ui.label(
+                                                RichText::new(if retained_seconds > 0 {
+                                                    format!("retained · {}s", retained_seconds)
+                                                } else {
+                                                    "available".to_string()
+                                                })
+                                                .size(8.0)
+                                                .color(if retained_seconds > 0 { WARN } else { DIM }),
                                             );
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let can_buy = listing.seconds_until_buy == 0;
+                                            let button_text = if retained_seconds > 0 {
+                                                "Wait".to_string()
+                                            } else if info.pending_buy.is_some() {
+                                                "Pending".to_string()
+                                            } else if candidate.can_buy {
+                                                "Buy".to_string()
+                                            } else {
+                                                "Balance".to_string()
+                                            };
+
                                             if ui
-                                                .add_enabled(
-                                                    can_buy,
-                                                    egui::Button::new(
-                                                        if can_buy { tr("Buy") } else { tr("Wait") }
-                                                    )
-                                                )
+                                                .add_enabled(can_buy, egui::Button::new(button_text))
                                                 .clicked()
                                             {
-                                                let profile_label = app.account_name(app.market_profile);
-                                                let monitor = app.games[index].monitor.clone();
+                                                let qty = candidate.purchase_quantity.max(1);
+                                                let price = candidate.unit_price.max(candidate.price);
 
-                                                if let Some(monitor) = monitor {
-                                                    let listing_id = listing.id;
-                                                    let listing_name = listing.name.clone();
-                                                    let currency = listing.currency.clone();
-                                                    monitor.send(json!({
+                                                moth_watch_send(
+                                                    monitor.as_ref(),
+                                                    json!({
                                                         "t": "market.comprar",
-                                                        "id": listing_id,
-                                                        "qtd": listing.quantity.max(1),
-                                                        "preco": listing.price,
-                                                        "moeda": currency
-                                                    }));
-                                                    app.set_status(
-                                                        format!("{} · buy command sent for {}", profile_label, listing_name),
-                                                        false,
-                                                    );
-                                                } else {
-                                                    app.set_status(
-                                                        format!("{} is not running.", profile_label),
-                                                        true,
-                                                    );
-                                                }
+                                                        "id": candidate.listing_id,
+                                                        "qtd": qty,
+                                                        "preco": price,
+                                                        "moeda": candidate.currency
+                                                    }),
+                                                );
+                                                app.set_status(
+                                                    format!(
+                                                        "{} · Moth Watch purchase requested for {}",
+                                                        app.account_name(app.market_profile),
+                                                        candidate.name
+                                                    ),
+                                                    false,
+                                                );
                                             }
                                         });
                                     });
                                 });
-                            ui.add_space(6.0);
+                        }
+                    }
+                });
+
+            ui.add_space(8.0);
+
+            ui.label(
+                RichText::new(tr("Recent bot activity"))
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+            );
+
+            egui::ScrollArea::vertical()
+                .id_salt("moth_watch_logs")
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    if info.buy_log.is_empty() {
+                        ui.label(
+                            RichText::new("No purchases attempted this session.")
+                                .size(9.0)
+                                .color(DIM),
+                        );
+                    } else {
+                        for row in &info.buy_log {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    format_time(row.at),
+                                    row.text
+                                ))
+                                .size(8.0)
+                                .color(MUTED),
+                            );
                         }
                     }
                 });
         });
+
     app.show_market = open;
 }
 
