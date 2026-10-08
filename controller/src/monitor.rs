@@ -663,7 +663,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             ['Controller Bridge', !!window.__mothControllerBridgeV1],
             ['Twitch Low Resource', exists('#moth-twitch-low-resource-css')],
             ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1],
-            ['Moth Watch', !!window.__mothMarketWatchControllerV1]
+            ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1']
         ];
 
         return JSON.stringify({
