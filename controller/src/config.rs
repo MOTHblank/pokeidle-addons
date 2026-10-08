@@ -1,19 +1,43 @@
 use std::env;
 use std::path::PathBuf;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameProfile {
     Game1,
     Game2,
+    Game3,
+    Game4,
 }
 
 impl GameProfile {
-    pub const ALL: [Self; 2] = [Self::Game1, Self::Game2];
+    pub const ALL: [Self; 4] = [Self::Game1, Self::Game2, Self::Game3, Self::Game4];
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Game1 => 0,
+            Self::Game2 => 1,
+            Self::Game3 => 2,
+            Self::Game4 => 3,
+        }
+    }
+
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Game1),
+            1 => Some(Self::Game2),
+            2 => Some(Self::Game3),
+            3 => Some(Self::Game4),
+            _ => None,
+        }
+    }
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::Game1 => "Game1",
             Self::Game2 => "Game2",
+            Self::Game3 => "Game3",
+            Self::Game4 => "Game4",
         }
     }
 
@@ -21,6 +45,8 @@ impl GameProfile {
         match self {
             Self::Game1 => "Game 1",
             Self::Game2 => "Game 2",
+            Self::Game3 => "Game 3",
+            Self::Game4 => "Game 4",
         }
     }
 
@@ -28,7 +54,87 @@ impl GameProfile {
         match self {
             Self::Game1 => "AccountA",
             Self::Game2 => "AccountB",
+            Self::Game3 => "AccountC",
+            Self::Game4 => "AccountD",
         }
+    }
+
+    pub const fn default_enabled(self) -> bool {
+        matches!(self, Self::Game1 | Self::Game2)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountConfig {
+    pub name: String,
+    pub enabled: bool,
+}
+
+impl AccountConfig {
+    pub fn default_for(profile: GameProfile) -> Self {
+        Self {
+            name: profile.label().to_string(),
+            enabled: profile.default_enabled(),
+        }
+    }
+}
+
+impl Config {
+    pub fn accounts_path() -> Result<PathBuf, String> {
+        Ok(data_root()?.join("accounts.json"))
+    }
+
+    pub fn load_accounts() -> Result<[AccountConfig; 4], String> {
+        let defaults = std::array::from_fn(AccountConfig::default_for);
+        let path = Self::accounts_path()?;
+        if !path.exists() {
+            return Ok(defaults);
+        }
+
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| format!("could not read account configuration: {error}"))?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|error| format!("invalid account configuration: {error}"))?;
+
+        let mut accounts = defaults;
+        if let Some(entries) = value.get("accounts").and_then(Value::as_array) {
+            for entry in entries {
+                let Some(index) = entry.get("slot").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).filter(|v| *v < 4) else {
+                    continue;
+                };
+                if let Some(name) = entry.get("name").and_then(Value::as_str) {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        accounts[index].name = name.to_string();
+                    }
+                }
+                if let Some(enabled) = entry.get("enabled").and_then(Value::as_bool) {
+                    accounts[index].enabled = enabled;
+                }
+            }
+        }
+        Ok(accounts)
+    }
+
+    pub fn save_accounts(accounts: &[AccountConfig; 4]) -> Result<(), String> {
+        let path = Self::accounts_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("could not create account data directory: {error}"))?;
+        }
+
+        let value = json!({
+            "version": 1,
+            "accounts": accounts.iter().enumerate().map(|(index, account)| json!({
+                "slot": index,
+                "name": account.name,
+                "enabled": account.enabled
+            })).collect::<Vec<_>>()
+        });
+        let raw = serde_json::to_string_pretty(&value)
+            .map_err(|error| format!("could not serialize account configuration: {error}"))?;
+        std::fs::write(path, raw)
+            .map_err(|error| format!("could not save account configuration: {error}"))
     }
 }
 
@@ -50,10 +156,7 @@ impl Config {
 
         let profile_dir = data_root()?.join("Profiles").join(profile.name());
 
-        let remote_debug_port = match profile {
-            GameProfile::Game1 => 27701,
-            GameProfile::Game2 => 27702,
-        };
+        let remote_debug_port = 27701 + profile.index() as u16;
 
         Ok(Self {
             firefox_executable,
