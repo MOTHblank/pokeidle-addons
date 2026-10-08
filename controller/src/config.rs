@@ -178,6 +178,16 @@ impl Config {
             .join(self.profile.name())
     }
 
+    pub fn kick_firefox_executable() -> Result<PathBuf, String> {
+        firefox_standard_candidates()
+            .into_iter()
+            .chain(firefox_developer_candidates())
+            .find(|path| path.is_file())
+            .ok_or_else(|| {
+                "Firefox was not found for the dedicated KICK browser. Install Firefox.".to_string()
+            })
+    }
+
     pub fn legacy_profile_dir(&self) -> Result<PathBuf, String> {
         Ok(data_root()?.join("Profiles").join(self.profile.legacy_name()))
     }
