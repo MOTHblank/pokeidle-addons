@@ -521,7 +521,7 @@
     }
 
     async function scheduledScan() {
-        await runLiveScan('hourly');
+        await runLiveScan('scheduled');
         window.setTimeout(scheduledScan, LIVE_SCAN_INTERVAL_MS);
     }
 
