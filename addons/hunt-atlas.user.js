@@ -9716,6 +9716,40 @@
         );
     }
 
+    page.__mothHuntAtlasControllerV1 = {
+        version: 1,
+        snapshot() {
+            return {
+                playerLevel: Number(state.playerLevel || 0),
+                currentHuntSlug: state.currentHuntSlug || '',
+                hunts: state.hunts.map(hunt => {
+                    const xp = huntXpEstimate(hunt);
+                    return {
+                        slug: String(hunt?.slug || ''),
+                        name: String(hunt?.nome || hunt?.slug || ''),
+                        level: Number(hunt?.nivel || 0),
+                        area: String(hunt?.area || ''),
+                        species: Array.isArray(hunt?.especies)
+                            ? hunt.especies.map(row => ({
+                                id: Number(row?.pokeId || 0),
+                                name: String(row?.nome || row?.name || ''),
+                                weight: Number(row?.pontos || 1)
+                            }))
+                            : [],
+                        unlocked: isUnlocked(hunt),
+                        current: isHuntHere(hunt?.slug || ''),
+                        xpPerHour: Number(xp?.value || 0),
+                        pokemonXpPerHour: Number(xp?.pokemonValue || 0),
+                        killsPerHour: Number(xp?.killsH || 0),
+                        observed: !!xp?.observed,
+                        xpSource: String(xp?.source || 'learning'),
+                        samples: Number(xp?.samples || 0)
+                    };
+                })
+            };
+        }
+    };
+
     function bootstrap() {
         injectStyles();
         ensureButton();
