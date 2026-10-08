@@ -27,6 +27,7 @@ Instale estes componentes antes de configurar o controlador:
 
 ## Primeira configuração
 Video configurando uma conta: https://www.youtube.com/watch?v=8nO0gfs0jPQ
+
 Abra o **Moth Controller**.
 
 A interface começa em **PT-BR**. No menu lateral existe um seletor **EN / PT-BR** para trocar o idioma a qualquer momento.
