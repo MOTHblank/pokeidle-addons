@@ -1461,29 +1461,49 @@ fn draw_game_card(
                                         true,
                                     );
                                 } else {
-                                    let url = if raw.starts_with("https://") || raw.starts_with("http://") {
+                                    // Accept bare domains, pasted URLs, and mixed-case schemes.
+                                    // A malformed URL should not be reported as successfully queued.
+                                    let candidate = if raw.contains("://") {
                                         raw.to_string()
                                     } else {
                                         format!("https://{}", raw)
                                     };
+                                    let parsed = candidate
+                                        .parse::<egui::Url>()
+                                        .ok()
+                                        .filter(|url| {
+                                            matches!(url.scheme(), "http" | "https")
+                                                && url.host_str().is_some()
+                                        });
 
-                                    app.games[index].monitor.as_ref().map(|monitor| {
-                                        monitor.send(json!({
-                                            "t": "browser.openTab",
-                                            "url": url
-                                        }));
-                                    });
-
-                                    app.tab_url_input[index].clear();
-                                    app.tab_url_open[index] = false;
-                                    app.set_status(
-                                        format!(
-                                            "{} · {}",
-                                            &account_name,
-                                            tr("custom tab requested")
-                                        ),
-                                        false,
-                                    );
+                                    if let Some(url) = parsed {
+                                        if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                            monitor.send(json!({
+                                                "t": "browser.openTab",
+                                                "url": url.to_string()
+                                            }));
+                                            app.tab_url_input[index].clear();
+                                            app.tab_url_open[index] = false;
+                                            app.set_status(
+                                                format!(
+                                                    "{} · {}",
+                                                    &account_name,
+                                                    tr("custom tab requested")
+                                                ),
+                                                false,
+                                            );
+                                        } else {
+                                            app.set_status(
+                                                format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
+                                                true,
+                                            );
+                                        }
+                                    } else {
+                                        app.set_status(
+                                            format!("{}: {}", &account_name, tr("Enter a valid http:// or https:// URL, or a domain such as example.com.")),
+                                            true,
+                                        );
+                                    }
                                 }
                             }
 
