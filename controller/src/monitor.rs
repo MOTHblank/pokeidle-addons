@@ -465,6 +465,8 @@ struct RuntimeProbe {
     market_catalog: Vec<MarketItem>,
     market_summary: Vec<MarketSummary>,
     moth_watch: Option<MothWatchInfo>,
+    kick_streams: Vec<KickStream>,
+    kick_state_available: bool,
 }
 
 struct Probe {
