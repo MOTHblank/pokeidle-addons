@@ -18,7 +18,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.3.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.3.1",
     ),
     (
         "Controller Bridge",
