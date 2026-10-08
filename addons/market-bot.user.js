@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.14
+// @version      0.1.15
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -12,9 +12,6 @@
 
 (() => {
     'use strict';
-
-    if (new URLSearchParams(location.search).has('moth-controller')) return;
-
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
