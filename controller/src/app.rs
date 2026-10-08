@@ -166,6 +166,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Hunt Atlas" => "Atlas de Caça",
         "Map intelligence + observed XP/hour" => "Inteligência do mapa + XP/h observado",
         "Select a hunt to travel · XP rates are measured from battle events" => "Selecione uma caça para viajar · as taxas de XP são medidas pelos combates",
+        "Select a hunt to travel · XP/hour uses measured combat data or the Hunt Atlas combat model" => "Selecione uma caça para viajar · XP/hora usa dados de combate medidos ou o modelo de combate do Hunt Atlas",
         "Region" => "Região",
         "All regions" => "Todas as regiões",
         "Min" => "Mín.",
@@ -1741,6 +1742,20 @@ fn draw_credits(ui: &mut egui::Ui) {
         });
 }
 
+fn hunt_change_cooldown_label(milliseconds: u64) -> String {
+    if pt_br() {
+        format!(
+            "Troca de hunt disponível em {:.1}s",
+            milliseconds as f32 / 1000.0
+        )
+    } else {
+        format!(
+            "Hunt change available in {:.1}s",
+            milliseconds as f32 / 1000.0
+        )
+    }
+}
+
 fn hunt_change_cooldown_ms(health: &Health) -> u64 {
     if health.last_battle_at == 0 {
         return 0;
@@ -1942,11 +1957,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         ui.add_space(10.0);
 
                         let cooldown_text = if cooldown_ms > 0 {
-                            format!(
-                                "{} {:.1}s",
-                                tr("Wait"),
-                                cooldown_ms as f32 / 1000.0
-                            )
+                            hunt_change_cooldown_label(cooldown_ms)
                         } else {
                             tr("Current").to_string()
                         };
@@ -2498,7 +2509,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             let button_text = if current {
                                                 tr("Current")
                                             } else if !ready {
-                                                format!("{:.1}s", cooldown_ms as f32 / 1000.0)
+                                                if pt_br() {
+                                                    format!("Aguarde {:.1}s", cooldown_ms as f32 / 1000.0)
+                                                } else {
+                                                    format!("Wait {:.1}s", cooldown_ms as f32 / 1000.0)
+                                                }
                                             } else if !hunt.unlocked {
                                                 tr("locked").to_string()
                                             } else {
