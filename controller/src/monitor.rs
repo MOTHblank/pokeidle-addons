@@ -1575,6 +1575,68 @@ fn probe_runtime_details(
     })
 }
 
+fn open_custom_tab(
+    session: &mut BrowserSession,
+    url: &str,
+) -> Result<(), String> {
+    let create_id = session.next_id;
+    session.next_id += 1;
+
+    let response = send_and_wait(
+        &mut session.socket,
+        create_id,
+        json!({
+            "id": create_id,
+            "method": "browsingContext.create",
+            "params": {
+                "type": "tab"
+            }
+        }),
+    )?;
+
+    let context = response
+        .get("result")
+        .and_then(|value| value.get("context"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "custom tab creation returned no context".to_string())?
+        .to_string();
+
+    let navigate_id = session.next_id;
+    session.next_id += 1;
+
+    if let Err(error) = send_and_wait(
+        &mut session.socket,
+        navigate_id,
+        json!({
+            "id": navigate_id,
+            "method": "browsingContext.navigate",
+            "params": {
+                "context": context,
+                "url": url,
+                "wait": "none"
+            }
+        }),
+    ) {
+        let close_id = session.next_id;
+        session.next_id += 1;
+        let _ = send_and_wait(
+            &mut session.socket,
+            close_id,
+            json!({
+                "id": close_id,
+                "method": "browsingContext.close",
+                "params": {
+                    "context": context
+                }
+            }),
+        );
+        return Err(error);
+    }
+
+    logging::info(&format!("opened custom browser tab: {}", url));
+    Ok(())
+}
+
 fn flush_commands(
     session: &mut BrowserSession,
     commands: &Arc<Mutex<Vec<Value>>>,
@@ -1585,6 +1647,27 @@ fn flush_commands(
     };
 
     for payload in pending {
+        if payload.get("t").and_then(Value::as_str) == Some("browser.openTab") {
+            let url = payload
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+
+            if url.is_empty()
+                || !(url.starts_with("https://") || url.starts_with("http://"))
+            {
+                logging::warn("custom browser tab rejected: URL must use http:// or https://");
+                continue;
+            }
+
+            if let Err(error) = open_custom_tab(session, url) {
+                logging::warn(&format!("custom browser tab failed: {}", error));
+            }
+
+            continue;
+        }
+
         let id = session.next_id;
         session.next_id += 1;
 
