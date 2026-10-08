@@ -71,6 +71,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Disabled" => "Desabilitada",
         "Available slots" => "Slots disponíveis",
         "Unique profile" => "Perfil exclusivo",
+        "Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection." => "Gerencie até 4 perfis exclusivos do Firefox. Cada conta possui seu próprio armazenamento do navegador e conexão BiDi.",
+        "Status" => "Status",
+        "Name cannot be empty" => "O nome não pode ficar vazio",
+        "Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled." => "Cada slot é um perfil separado do Firefox. Desabilitar um slot o remove do painel e de Iniciar habilitadas.",
         "Add account" => "Adicionar conta",
         "MOTH" => "MOTH",
         "POKEIDLE" => "POKEIDLE",
@@ -200,6 +204,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "LOGIN" => "LOGIN",
         "ERROR" => "ERRO",
         "LANGUAGE" => "IDIOMA",
+        "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma.",
+        "◫  Accounts" => "◫  Contas",
+        "▶  Launch enabled" => "▶  Iniciar habilitadas",
+        "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
+        "Enabled" => "Habilitada",
         _ => en,
     }
 }
@@ -321,7 +330,7 @@ impl ControllerApp {
             };
 
             if exited {
-                logging::info(&format!("{} Firefox process exited", slot.self.account_name(profile)));
+                logging::info(&format!("{} Firefox process exited", self.account_name(slot.profile)));
                 if let Some(monitor) = slot.monitor.as_ref() {
                     monitor.stop();
                 }
@@ -345,7 +354,7 @@ impl ControllerApp {
         self.refresh_processes();
 
         if self.games[index].is_running() {
-            self.set_status(format!("{} is already running.", profile.label()), false);
+            self.set_status(format!("{} is already running.", self.account_name(profile)), false);
             return;
         }
 
@@ -356,14 +365,14 @@ impl ControllerApp {
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
             Err(error) => {
-                self.set_status(format!("{}: {}", profile.label(), error), true);
+                self.set_status(format!("{}: {}", self.account_name(profile), error), true);
                 return;
             }
         };
 
         logging::info(&format!(
             "launching {} with Firefox profile {} on BiDi port {}",
-            profile.label(),
+            self.account_name(profile),
             config.profile_dir.display(),
             config.remote_debug_port
         ));
@@ -376,20 +385,20 @@ impl ControllerApp {
                 self.set_status(
                     format!(
                         "{} started · {} Firefox · Rust BiDi health monitor",
-                        profile.label(),
+                        self.account_name(profile),
                         if headless { "headless" } else { "visible" }
                     ),
                     false,
                 );
                 logging::info(&format!(
                     "{} Firefox spawned with PID {}",
-                    profile.label(),
+                    self.account_name(profile),
                     pid
                 ));
             }
             Err(error) => {
-                logging::error(&format!("{} launch failed: {}", profile.label(), error));
-                self.set_status(format!("{}: {}", profile.label(), error), true);
+                logging::error(&format!("{} launch failed: {}", self.account_name(profile), error));
+                self.set_status(format!("{}: {}", self.account_name(profile), error), true);
             }
         }
     }
@@ -408,7 +417,7 @@ impl ControllerApp {
             self.set_status(
                 format!(
                     "{} is already running in {} mode.",
-                    profile.label(),
+                    self.account_name(profile),
                     if headless { "headless" } else { "visible" }
                 ),
                 false,
@@ -419,7 +428,7 @@ impl ControllerApp {
         self.set_status(
             format!(
                 "{}: switching Firefox to {} mode...",
-                profile.label(),
+                self.account_name(profile),
                 if headless { "headless" } else { "visible" }
             ),
             false,
@@ -439,13 +448,13 @@ impl ControllerApp {
 
         let Some(mut child) = slot.child.take() else {
             slot.monitor = None;
-            self.set_status(format!("{} is already stopped.", profile.label()), false);
+            self.set_status(format!("{} is already stopped.", self.account_name(profile)), false);
             return true;
         };
 
         logging::info(&format!(
             "stopping {} Firefox PID {}",
-            profile.label(),
+            self.account_name(profile),
             child.id()
         ));
 
@@ -453,19 +462,19 @@ impl ControllerApp {
             Ok(()) => {
                 let _ = child.wait();
                 slot.monitor = None;
-                self.set_status(format!("{} Firefox closed.", profile.label()), false);
+                self.set_status(format!("{} Firefox closed.", self.account_name(profile)), false);
                 true
             }
             Err(error) => {
                 logging::error(&format!(
                     "failed to stop {} Firefox PID {}: {}",
-                    profile.label(),
+                    self.account_name(profile),
                     child.id(),
                     error
                 ));
                 slot.child = Some(child);
                 self.set_status(
-                    format!("{}: could not close Firefox: {}", profile.label(), error),
+                    format!("{}: could not close Firefox: {}", self.account_name(profile), error),
                     true,
                 );
                 false
@@ -557,7 +566,7 @@ impl ControllerApp {
         };
 
         match result {
-            Ok(message) => self.set_status(format!("{} · {}", profile.label(), message), false),
+            Ok(message) => self.set_status(format!("{} · {}", self.account_name(profile), message), false),
             Err(error) => self.set_status(error, true),
         }
     }
@@ -633,7 +642,7 @@ impl eframe::App for ControllerApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(tr("LAUNCH BOTH"))
+                                    RichText::new(tr("LAUNCH ENABLED"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -728,8 +737,8 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.set_status("Dashboard · live health polling enabled", false);
             }
 
-            if sidebar_button(ui, tr("◫  Profiles"), false).clicked() {
-                app.show_profiles = true;
+            if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
+                app.show_accounts = true;
             }
 
             if sidebar_button(ui, tr("⌁  Hunt Atlas"), false).clicked() {
@@ -747,8 +756,8 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(18.0);
             section_label(ui, tr("OPERATIONS"));
 
-            if sidebar_button(ui, tr("▶  Launch both"), false).clicked() {
-                app.launch_both();
+            if sidebar_button(ui, tr("▶  Launch enabled"), false).clicked() {
+                app.launch_enabled();
             }
 
             if sidebar_button(ui, tr("■  Stop all"), false).clicked() {
@@ -796,7 +805,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         );
         ui.add_space(8.0);
         ui.label(
-            RichText::new(tr("Live state for both isolated Firefox profiles"))
+            RichText::new(tr("Live state for enabled isolated Firefox profiles"))
                 .size(11.0)
                 .color(DIM),
         );
@@ -805,30 +814,49 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(12.0);
 
     egui::ScrollArea::vertical()
+        .id_salt("instances_page")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let gap = ui.spacing().item_spacing.x;
-            let card_width = ((ui.available_width() - gap) / 2.0).max(320.0);
+            let profiles: Vec<usize> = GameProfile::ALL
+                .iter()
+                .map(|profile| profile.index())
+                .filter(|index| app.accounts[*index].enabled)
+                .collect();
 
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-
-                ui.allocate_ui_with_layout(
-                    egui::vec2(card_width, 0.0),
-                    Layout::top_down(Align::Min),
-                    |ui| {
-                        draw_game_card(app, ui, 0, card_width);
-                    },
+            if profiles.is_empty() {
+                ui.label(
+                    RichText::new(tr("No accounts enabled. Open Account Manager to add or enable one."))
+                        .size(12.0)
+                        .color(DIM),
                 );
+            } else {
+                let gap = ui.spacing().item_spacing.x;
+                let available = ui.available_width();
+                let columns = if available >= 880.0 { 2 } else { 1 };
+                let card_width = if columns == 2 {
+                    ((available - gap) / 2.0).max(390.0)
+                } else {
+                    available.max(390.0)
+                };
 
-                ui.allocate_ui_with_layout(
-                    egui::vec2(card_width, 0.0),
-                    Layout::top_down(Align::Min),
-                    |ui| {
-                        draw_game_card(app, ui, 1, card_width);
-                    },
-                );
-            });
+                for chunk in profiles.chunks(columns) {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+
+                        for index in chunk {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(card_width, 0.0),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    draw_game_card(app, ui, *index, card_width);
+                                },
+                            );
+                        }
+                    });
+
+                    ui.add_space(12.0);
+                }
+            }
 
             ui.add_space(16.0);
             draw_runtime_section(app, ui);
@@ -844,6 +872,7 @@ fn draw_game_card(
     ui.set_width(width);
 
     let profile = app.games[index].profile;
+    let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
 
@@ -855,7 +884,7 @@ fn draw_game_card(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(profile.label())
+                    RichText::new(account_name)
                         .size(14.0)
                         .strong()
                         .color(TEXT),
@@ -1501,7 +1530,7 @@ fn game_selector(
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new(profile.label())
+                        RichText::new(self.account_name(profile))
                             .size(10.0)
                             .strong()
                             .color(if active { TEXT } else { MUTED }),
@@ -1687,7 +1716,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         let button = if current { tr("Current") } else { tr("Go") };
                                         let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
                                         if clicked && !current {
-                                            let profile_label = app.atlas_profile.label();
+                                            let profile_label = app.atlas_self.account_name(profile);
                                             let monitor = app.games[index].monitor.clone();
 
                                             if let Some(monitor) = monitor {
@@ -1793,9 +1822,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 if ui.button(tr("Refresh market")).clicked() {
                     if let Some(monitor) = app.games[index].monitor.as_ref() {
                         monitor.send(json!({ "t": "market.itens" }));
-                        app.set_status(format!("{} · market refresh requested", app.market_profile.label()), false);
+                        app.set_status(format!("{} · market refresh requested", app.market_self.account_name(profile)), false);
                     } else {
-                        app.set_status(format!("{} is not running.", app.market_profile.label()), true);
+                        app.set_status(format!("{} is not running.", app.market_self.account_name(profile)), true);
                     }
                 }
             });
@@ -1860,7 +1889,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                             for item in catalog {
                                 let label = compact_text(&item.name, 22);
                                 if ui.button(label).clicked() {
-                                    let profile_label = app.market_profile.label();
+                                    let profile_label = app.market_self.account_name(profile);
                                     let monitor = app.games[index].monitor.clone();
                                     if let Some(monitor) = monitor {
                                         let item_id = item.id;
@@ -1945,7 +1974,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let profile_label = app.market_profile.label();
+                                            let profile_label = app.market_self.account_name(profile);
                                             let monitor = app.games[index].monitor.clone();
                                             if ui.button(tr("Buy")).clicked() {
                                                 if let Some(monitor) = monitor {
@@ -2047,7 +2076,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             if ui.button(tr("Buy")).clicked() {
-                                                let profile_label = app.market_profile.label();
+                                                let profile_label = app.market_self.account_name(profile);
                                                 let monitor = app.games[index].monitor.clone();
 
                                                 if let Some(monitor) = monitor {
@@ -2121,14 +2150,16 @@ fn format_rate(value: u64) -> String {
     format_number(value)
 }
 
-fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    egui::Window::new(tr("Profiles"))
-        .title_bar(true)
+fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    let mut open = app.show_accounts;
+    egui::Window::new(tr("Account Manager"))
+        .open(&mut open)
+        .collapsible(false)
         .resizable(true)
-        .default_width(700.0)
-        .default_height(520.0)
-        .min_width(620.0)
-        .min_height(420.0)
+        .default_width(820.0)
+        .default_height(620.0)
+        .min_width(720.0)
+        .min_height(500.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
@@ -2139,42 +2170,151 @@ fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(tr("Profiles"))
-                        .font(FontId::proportional(22.0))
-                        .strong()
-                        .color(TEXT),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(tr("Account, browser and addon entry points"))
-                        .size(12.0)
-                        .color(MUTED),
-                );
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(tr("Account Manager"))
+                            .font(FontId::proportional(22.0))
+                            .strong()
+                            .color(TEXT),
+                    );
+                    ui.label(
+                        RichText::new(tr("Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection."))
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                });
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button(tr("Close")).clicked() {
-                        app.show_profiles = false;
+                        app.show_accounts = false;
                     }
                 });
             });
 
-            ui.add_space(18.0);
+            ui.add_space(12.0);
 
-            for profile in GameProfile::ALL {
-                draw_profile_card(app, ui, profile);
-                ui.add_space(12.0);
-            }
+            egui::ScrollArea::vertical()
+                .id_salt("account_manager_list")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for profile in GameProfile::ALL {
+                        let index = profile.index();
+                        let account = &mut app.accounts[index];
+                        let mut changed = false;
 
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(
-                    "Login sessions stay inside each Firefox profile. Addon installers open through Violentmonkey.",
-                )
-                .size(10.0)
-                .color(DIM),
-            );
+                        egui::Frame::new()
+                            .fill(PANEL_ALT)
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(10.0)
+                            .inner_margin(14.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(profile.label())
+                                            .size(15.0)
+                                            .strong()
+                                            .color(TEXT),
+                                    );
+
+                                    ui.add_space(10.0);
+
+                                    let response = ui.checkbox(
+                                        &mut account.enabled,
+                                        tr("Enabled"),
+                                    );
+                                    changed |= response.changed();
+
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{}: {}",
+                                                tr("Firefox profile"),
+                                                profile.name()
+                                            ))
+                                            .size(9.0)
+                                            .color(DIM),
+                                        );
+                                    });
+                                });
+
+                                ui.add_space(8.0);
+
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(tr("Account name"))
+                                            .size(10.0)
+                                            .strong()
+                                            .color(DIM),
+                                    );
+                                    let response = ui.add_sized(
+                                        [360.0, 30.0],
+                                        egui::TextEdit::singleline(&mut account.name)
+                                            .hint_text(profile.label()),
+                                    );
+                                    changed |= response.changed();
+
+                                    if account.name.trim().is_empty() {
+                                        ui.colored_label(WARN, tr("Name cannot be empty"));
+                                    }
+                                });
+
+                                ui.add_space(7.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} {}",
+                                            tr("Status"),
+                                            if account.enabled {
+                                                tr("Enabled")
+                                            } else {
+                                                tr("Disabled")
+                                            }
+                                        ))
+                                        .size(10.0)
+                                        .color(if account.enabled { GOOD } else { DIM }),
+                                    );
+                                    ui.add_space(14.0);
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{}: %LOCALAPPDATA%\\Moth\\PokeIdle\\Profiles\\{}",
+                                            tr("Firefox profile"),
+                                            profile.name()
+                                        ))
+                                        .size(9.0)
+                                        .color(DIM),
+                                    );
+                                });
+
+                                if changed {
+                                    // Persistence happens after this frame so the same
+                                    // mutable account reference is no longer borrowed.
+                                }
+                            });
+
+                        ui.add_space(10.0);
+
+                        // Save changes immediately, while preserving the account slot.
+                        if changed {
+                            let trimmed = app.accounts[index].name.trim().to_string();
+                            app.accounts[index].name = if trimmed.is_empty() {
+                                profile.label().to_string()
+                            } else {
+                                trimmed
+                            };
+                            app.save_account_config();
+                        }
+                    }
+
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(tr("Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled."))
+                            .size(10.0)
+                            .color(DIM),
+                    );
+                });
         });
+
+    app.show_accounts = open;
 }
 
 fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GameProfile) {
@@ -2211,7 +2351,7 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(profile.label())
+                    RichText::new(self.account_name(profile))
                         .font(FontId::proportional(15.0))
                         .strong()
                         .color(TEXT),
