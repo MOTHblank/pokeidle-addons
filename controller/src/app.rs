@@ -218,6 +218,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "All types" => "Todos os tipos",
         "Weak to" => "Fraco contra",
         "Any weakness" => "Qualquer fraqueza",
+        "Match all selected" => "Exigir todos os selecionados",
+        "selected" => "selecionados",
+        "No weaknesses selected" => "Nenhuma fraqueza selecionada",
         "Collection" => "Coleção",
         "Caught + uncaught" => "Capturados + não capturados",
         "Uncaught only" => "Só não capturados",
@@ -483,7 +486,8 @@ struct AtlasFilters {
     max_level: String,
     availability: String,
     type_filter: String,
-    weakness: String,
+    weakness: Vec<String>,
+    weakness_match_all: bool,
     collection: String,
     sort: String,
     sort_direction: String,
@@ -497,7 +501,8 @@ impl Default for AtlasFilters {
             max_level: String::new(),
             availability: "unlocked".to_string(),
             type_filter: "all".to_string(),
-            weakness: "all".to_string(),
+            weakness: Vec::new(),
+            weakness_match_all: false,
             collection: "all".to_string(),
             sort: "xp".to_string(),
             sort_direction: "desc".to_string(),
@@ -2325,28 +2330,54 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         }
                     });
 
-                ui.label(RichText::new(tr("Weak to")).size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Weak to")).size(9).strong().color(DIM));
+                let weakness_selected = app.atlas_filters.weakness.clone();
+                let weakness_label = if weakness_selected.is_empty() {
+                    tr("Any weakness").to_string()
+                } else if weakness_selected.len() == 1 {
+                    atlas_type_label(&weakness_selected[0])
+                } else {
+                    let labels = weakness_selected
+                        .iter()
+                        .map(|value| atlas_type_label(value))
+                        .collect::<Vec<_>>();
+                    format!("{} {}", labels.join(" · "), tr("selected"))
+                };
+
                 egui::ComboBox::from_id_salt("atlas_weakness")
-                    .selected_text(if app.atlas_filters.weakness == "all" {
-                        tr("Any weakness").to_string()
-                    } else {
-                        app.atlas_filters.weakness.clone()
-                    })
+                    .selected_text(weakness_label)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut app.atlas_filters.weakness,
-                            "all".to_string(),
-                            tr("Any weakness"),
-                        );
                         for value in atlas_type_options() {
-                            ui.selectable_value(
-                                &mut app.atlas_filters.weakness,
-                                value.to_string(),
-                                value,
-                            );
+                            let mut checked = app.atlas_filters.weakness.iter().any(|selected| {
+                                selected.eq_ignore_ascii_case(value)
+                            });
+
+                            if ui.checkbox(&mut checked, atlas_type_label(value)).changed() {
+                                if checked {
+                                    if !app.atlas_filters.weakness.iter().any(|selected| {
+                                        selected.eq_ignore_ascii_case(value)
+                                    }) {
+                                        app.atlas_filters.weakness.push(value.to_string());
+                                    }
+                                } else {
+                                    app.atlas_filters
+                                        .weakness
+                                        .retain(|selected| !selected.eq_ignore_ascii_case(value));
+                                }
+                            }
+                        }
+
+                        ui.separator();
+
+                        if ui.button(tr("Clear filters")).clicked() {
+                            app.atlas_filters.weakness.clear();
                         }
                     });
 
+                ui.checkbox(
+                    &mut app.atlas_filters.weakness_match_all,
+                    tr("Match all selected"),
+                );
                 ui.label(RichText::new(tr("Collection")).size(9.0).strong().color(DIM));
                 egui::ComboBox::from_id_salt("atlas_collection")
                     .selected_text(match app.atlas_filters.collection.as_str() {
@@ -2453,12 +2484,24 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         continue;
                     }
 
-                    if app.atlas_filters.weakness != "all"
-                        && !species.weak_to.iter().any(|value| {
-                            value.eq_ignore_ascii_case(&app.atlas_filters.weakness)
-                        })
-                    {
-                        continue;
+                    if !app.atlas_filters.weakness.is_empty() {
+                        let matches = if app.atlas_filters.weakness_match_all {
+                            app.atlas_filters.weakness.iter().all(|selected| {
+                                species.weak_to.iter().any(|value| {
+                                    value.eq_ignore_ascii_case(selected)
+                                })
+                            })
+                        } else {
+                            app.atlas_filters.weakness.iter().any(|selected| {
+                                species.weak_to.iter().any(|value| {
+                                    value.eq_ignore_ascii_case(selected)
+                                })
+                            })
+                        };
+
+                        if !matches {
+                            continue;
+                        }
                     }
 
                     if !search.is_empty() {
