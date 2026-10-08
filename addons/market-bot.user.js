@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.21
+// @version      0.1.22
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -829,8 +829,27 @@
         fetch.waitingSince = Date.now();
     }
 
+    function gameIsLoading() {
+        const loading = q('#carregando');
+        if (!loading) return false;
+        if (
+            loading.hidden ||
+            loading.classList.contains('hidden') ||
+            loading.getAttribute('aria-hidden') === 'true'
+        ) {
+            return false;
+        }
+        return loading.getClientRects().length > 0;
+    }
+
     function ensurePokemonHistory(force) {
         if (!config.scanPokemon) return;
+        // Do not compete with the game's own boot-time data and asset loading.
+        // The normal scan timer will retry after the loading overlay disappears.
+        if (gameIsLoading()) {
+            state.pokemonStatus = 'waiting for game';
+            return;
+        }
         if (state.historyFetch) return;
 
         const age = Date.now() - Number(state.pokemonReference.capturedAt || 0);
@@ -1371,6 +1390,13 @@
 
     function runScan(force) {
         if (!config.enabled) return;
+        // The game opens its WebSocket before the client finishes booting.
+        // Wait for the loading overlay to disappear before sending market scans.
+        if (gameIsLoading()) {
+            state.itemStatus = 'waiting for game';
+            state.pokemonStatus = 'waiting for game';
+            return;
+        }
         if (!state.socket || state.socket.readyState !== 1) return;
 
         const now = Date.now();
