@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.28
+// @version      0.1.29
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -79,6 +79,8 @@
         gold: 0,
         orbs: 0,
         catalog: new Map(),
+        itemNames: new Map(),
+        creatureNames: new Map(),
         itemSummary: {},
         liveItemAverages: {},
         loadedItemKeys: new Set(),
@@ -335,10 +337,86 @@
     }
 
     function catalogName(itemId) {
-        const item = state.catalog.get(Number(itemId));
-        return item && (item.nome || item.name)
-            ? String(item.nome || item.name)
-            : 'Item #' + itemId;
+        const id = Number(itemId);
+        const item = state.catalog.get(id);
+        const liveName = item && (item.nome || item.name);
+        const assetName = state.itemNames.get(id);
+        return liveName
+            ? String(liveName)
+            : assetName || 'Item #' + itemId;
+    }
+
+    function catalogRows(payload, keys) {
+        if (Array.isArray(payload)) return payload;
+        for (const key of keys) {
+            if (Array.isArray(payload && payload[key])) return payload[key];
+        }
+        return [];
+    }
+
+    function refreshCatalogNames() {
+        for (const candidate of state.candidates.values()) {
+            if (candidate.kind === 'item') {
+                candidate.name = catalogName(candidate.itemId);
+            } else if (candidate.kind === 'pokemon' && candidate.ficha) {
+                candidate.name = pokemonListingName(candidate.ficha);
+            }
+        }
+        queueRender();
+    }
+
+    async function loadNameCatalogs() {
+        const loadJson = async url => {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Catalog HTTP ' + response.status);
+            return response.json();
+        };
+
+        try {
+            const payload = await loadJson('/assets/items.json');
+            for (const item of catalogRows(payload, ['items'])) {
+                const id = Number(item && (item.itemId ?? item.id));
+                const name = String(item && (item.nome || item.name) || '').trim();
+                if (Number.isFinite(id) && id > 0 && name) {
+                    state.itemNames.set(id, name);
+                }
+            }
+        } catch (error) {
+            console.warn('[Moth Watch] item-name catalog unavailable', error);
+        }
+
+        for (const url of [
+            '/assets/creatures.json',
+            '/assets/creatures-outland-novos.json'
+        ]) {
+            try {
+                const payload = await loadJson(url);
+                for (const creature of catalogRows(payload, ['creatures', 'pokemon', 'pokemons', 'patches'])) {
+                    const id = Number(
+                        creature && (
+                            creature.pokeId ??
+                            creature.speciesId ??
+                            creature.id
+                        )
+                    );
+                    const name = String(
+                        creature && (
+                            creature.name ||
+                            creature.nome ||
+                            creature.speciesName ||
+                            creature.nomePokemon
+                        ) || ''
+                    ).trim();
+                    if (Number.isFinite(id) && id > 0 && name) {
+                        state.creatureNames.set(id, name);
+                    }
+                }
+            } catch (error) {
+                console.warn('[Moth Watch] Pokémon-name catalog unavailable at ' + url, error);
+            }
+        }
+
+        refreshCatalogNames();
     }
 
     function freezeItemBaseline(medias, force) {
@@ -749,6 +827,33 @@
         return Number.isFinite(id) && id > 0 ? id : null;
     }
 
+    function pokemonSpeciesName(ficha) {
+        const suppliedName = String(
+            ficha && (
+                ficha.nome ||
+                ficha.name ||
+                ficha.speciesName ||
+                ficha.pokemonNome ||
+                ficha.especie?.nome ||
+                ficha.pokemon?.nome ||
+                ficha.pokemon?.name
+            ) || ''
+        ).trim();
+        if (suppliedName) return suppliedName;
+
+        const speciesId = speciesIdOf(ficha);
+        return (speciesId && state.creatureNames.get(speciesId)) ||
+            'Pokémon #' + (speciesId || '?');
+    }
+
+    function pokemonListingName(ficha) {
+        const shiny = ficha && ficha.shiny ? 'Shiny ' : '';
+        const species = pokemonSpeciesName(ficha);
+        const power = Math.max(1, Number(ficha && ficha.potencia || 1));
+        const level = Number(ficha && ficha.level || 0);
+        return shiny + species + ' · P' + power + ' · Lv ' + level;
+    }
+
     function pokemonBucketKeys(ficha, currency) {
         const speciesId = speciesIdOf(ficha);
         if (!speciesId) return [];
@@ -1130,20 +1235,13 @@
             const ratio = price / ref.value;
             if (ratio > scanRatio) continue;
 
-            const species = String(
-                listing.ficha.nome ||
-                listing.ficha.name ||
-                ('Pokémon #' + (speciesIdOf(listing.ficha) || '?'))
-            );
-            const shiny = listing.ficha.shiny ? 'Shiny ' : '';
-            const power = Math.max(1, Number(listing.ficha.potencia || 1));
-
             addCandidate({
                 key: group + listing.id,
                 kind: 'pokemon',
                 listingId: Number(listing.id),
                 pokemonId: Number(listing.pokemonId || listing.ficha.id || 0),
-                name: shiny + species + ' · P' + power + ' · Lv ' + Number(listing.ficha.level || 0),
+                ficha: listing.ficha,
+                name: pokemonListingName(listing.ficha),
                 currency: currency,
                 price: price,
                 unitPrice: Number(listing.preco),
@@ -2752,6 +2850,7 @@
         } catch {}
         try { installSocketHook(); } catch {}
         try { injectStyle(); } catch {}
+        loadNameCatalogs();
 
         state.scanTimer = setInterval(() => {
             adoptBridgeSocket();
@@ -2832,7 +2931,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.28 loaded');
+        console.info('[Moth Watch] v0.1.29 loaded');
     }
 
     bootstrap();
