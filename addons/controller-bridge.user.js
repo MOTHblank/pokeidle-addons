@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.2.8
+// @version      1.2.9
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -18,7 +18,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 2 &&
+        Number(existingBridge.version) >= 3 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
@@ -206,20 +206,19 @@
 
     function installHook() {
         /*
-         * Do not proxy/replace the native WebSocket constructor. Even a
-         * transparent constructor Proxy can interfere with app startup in
-         * browser/userscript combinations. Observe sockets only after the
-         * game registers a message/close listener, leaving construction and
-         * the native send/receive path untouched.
+         * PokéIdle's current client creates the native WebSocket and then
+         * assigns ws.onmessage/ws.onclose directly. Do not replace the
+         * WebSocket constructor and do not replace addEventListener: both are
+         * global interception points that can alter browser startup.
+         *
+         * Instead, shadow the standard WebSocket event-handler properties on
+         * the page's prototype. The native setter still runs unchanged; we
+         * only observe the socket after the game registers its handler.
          */
         const NativeWebSocket = page.WebSocket;
         const proto = NativeWebSocket && NativeWebSocket.prototype;
-        if (!proto || typeof proto.addEventListener !== 'function') return false;
+        if (!proto) return false;
 
-        const marker = '__mothControllerBridgeAddEventListenerV1';
-        if (proto[marker]) return true;
-
-        const nativeAddEventListener = proto.addEventListener;
         const attached = new WeakSet();
 
         const observe = ws => {
@@ -232,28 +231,59 @@
             }
         };
 
-        try {
-            Object.defineProperty(proto, marker, {
-                value: true,
-                configurable: false,
-                enumerable: false,
-                writable: false
-            });
-            Object.defineProperty(proto, 'addEventListener', {
-                configurable: true,
-                writable: true,
-                value: function(type, listener, options) {
-                    const result = Reflect.apply(nativeAddEventListener, this, [type, listener, options]);
-                    if (type === 'message' || type === 'close') observe(this);
-                    return result;
-                }
-            });
-            return true;
-        } catch {
-            // If the prototype cannot be patched, do not fall back to a
-            // constructor Proxy: the game must still be allowed to load.
-            return false;
-        }
+        const patchHandler = property => {
+            const marker = property === 'onmessage'
+                ? '__mothControllerBridgeOnMessageV1'
+                : '__mothControllerBridgeOnCloseV1';
+
+            if (proto[marker]) return true;
+
+            let owner = proto;
+            let descriptor = null;
+            while (owner && !descriptor) {
+                descriptor = Object.getOwnPropertyDescriptor(owner, property) || null;
+                owner = Object.getPrototypeOf(owner);
+            }
+
+            if (!descriptor || typeof descriptor.set !== 'function') return false;
+
+            const nativeGet = descriptor.get;
+            const nativeSet = descriptor.set;
+
+            try {
+                Object.defineProperty(proto, marker, {
+                    value: true,
+                    configurable: false,
+                    enumerable: false,
+                    writable: false
+                });
+
+                Object.defineProperty(proto, property, {
+                    configurable: true,
+                    enumerable: descriptor.enumerable,
+                    get: nativeGet
+                        ? function() {
+                            return Reflect.apply(nativeGet, this, []);
+                        }
+                        : undefined,
+                    set: function(value) {
+                        const result = Reflect.apply(nativeSet, this, [value]);
+                        if (typeof value === 'function') observe(this);
+                        return result;
+                    }
+                });
+
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
+        // Current upstream uses onmessage/onclose. Observe either one, but
+        // neither path changes the constructor or the native event API.
+        const messagePatched = patchHandler('onmessage');
+        const closePatched = patchHandler('onclose');
+        return messagePatched || closePatched;
     }
 
     function bridgeSocket() {
@@ -573,7 +603,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 2,
+        version: 3,
         send,
         snapshot,
         gameSnapshot,
