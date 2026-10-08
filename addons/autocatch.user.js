@@ -3118,7 +3118,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.0 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.2 loaded');
     }
 
     if (document.readyState === 'loading') {
