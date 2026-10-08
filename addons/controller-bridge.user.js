@@ -4,6 +4,8 @@
 // @version      1.3.5
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
 // @grant        none
 // @run-at       document-start
 // @noframes
