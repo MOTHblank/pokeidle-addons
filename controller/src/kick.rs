@@ -545,13 +545,13 @@ impl KickManager {
             (session.headless, session.browser_hwnd, session.browser_pid)
         };
 
+        let session_id = self.next_id(profile);
         if let Some(socket) = self.session_mut(profile).socket.as_mut() {
-            let id = self.next_id(profile);
             let _ = send_and_wait(
                 socket,
-                id,
+                session_id,
                 json!({
-                    "id": id,
+                    "id": session_id,
                     "method": "session.end",
                     "params": {}
                 }),
