@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.25
+// @version      0.1.26
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -1502,12 +1502,30 @@
         return sendBackground({ t: 'market.itens' });
     }
 
+    function communityMarketIsOpen() {
+        const list = q('#cm-lista');
+        if (!list) return false;
+
+        const modal = q('#modal');
+        if (!modal || modal.classList.contains('hidden')) return false;
+
+        const shell = q('#modal .modal-caixa');
+        if (shell && shell.dataset.modal && shell.dataset.modal !== 'community') return false;
+
+        // Moth Watch reuses the market modal shell. Do not let background diamond
+        // requests repaint the native market while the Watch panel is active.
+        if (q('#modal-corpo.moth-watch-active') || q('.cm-corpo.moth-watch-active')) {
+            return false;
+        }
+        return true;
+    }
+
     function requestDiamondListings() {
         if (!config.enabled || !config.scanDiamonds) {
             state.diamondStatus = 'disabled';
             return false;
         }
-        if (gameIsLoading() || q('#cm-lista')) return false;
+        if (gameIsLoading() || communityMarketIsOpen()) return false;
         if (!state.socket || state.socket.readyState !== 1) return false;
 
         const now = Date.now();
