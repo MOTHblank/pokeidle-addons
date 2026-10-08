@@ -7,6 +7,156 @@ use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
 use std::process::Child;
 
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static PT_BR: AtomicBool = AtomicBool::new(false);
+
+fn pt_br() -> bool {
+    PT_BR.load(Ordering::Relaxed)
+}
+
+fn tr<'a>(en: &'a str) -> &'a str {
+    if !pt_br() {
+        return en;
+    }
+
+    match en {
+        tr("Overview") => "Visão geral",
+        tr("PokéIdle controller") => "Controlador do PokéIdle",
+        tr("STOP ALL") => "PARAR TUDO",
+        tr("LAUNCH BOTH") => "INICIAR AMBOS",
+        "MOTH" => "MOTH",
+        "POKEIDLE" => "POKEIDLE",
+        tr("WORKSPACE") => "ÁREA DE TRABALHO",
+        tr("▦  Dashboard") => "▦  Painel",
+        tr("◫  Profiles") => "◫  Perfis",
+        tr("⌁  Hunt Atlas") => "⌁  Atlas de Caça",
+        tr("◇  Moth Watch") => tr("◇  Moth Watch"),
+        tr("≡  Logs") => tr("≡  Logs"),
+        tr("OPERATIONS") => "OPERAÇÕES",
+        tr("▶  Launch both") => "▶  Iniciar ambos",
+        tr("■  Stop all") => "■  Parar tudo",
+        tr("RUNTIME") => "EXECUÇÃO",
+        "Firefox" => "Firefox",
+        "Monitor" => "Monitor",
+        "Poll" => "Consulta",
+        tr("HEADLESS") => "OCULTO",
+        tr("VISIBLE") => "VISÍVEL",
+        tr("MIXED") => "MISTO",
+        tr("Rust rewrite · Windows") => "Reescrita em Rust · Windows",
+        tr("Instances") => "Instâncias",
+        tr("Live state for both isolated Firefox profiles") => "Estado atual dos dois perfis isolados do Firefox",
+        tr("Show Firefox") => "Mostrar Firefox",
+        tr("Hide Firefox") => "Ocultar Firefox",
+        tr("Stop") => "Parar",
+        tr("Launch") => "Iniciar",
+        tr("CURRENT ACTIVITY") => "ATIVIDADE ATUAL",
+        tr("STATE") => "ESTADO",
+        "Hunting" => "Caçando",
+        "Online · Center" => "Online · Centro",
+        "Waiting for login" => "Aguardando login",
+        "TRAINER LV" => "NÍVEL DO TREINADOR",
+        "TRAINER XP" => "XP DO TREINADOR",
+        "POKÉMON LV" => "NÍVEL DO POKÉMON",
+        "POKÉMON XP" => "XP DO POKÉMON",
+        "FALLEN" => "CAÍDOS",
+        tr("RESOURCES") => "RECURSOS",
+        tr("Pokéballs: unavailable") => "Pokébolas: indisponíveis",
+        tr("GOLD") => "OURO",
+        tr("GEMS") => "GEMAS",
+        tr("AUTO CATCH") => "CAPTURA AUTOMÁTICA",
+        tr("USED") => "USADAS",
+        tr("CAPTURES") => "CAPTURAS",
+        tr("SUCCESS") => "SUCESSO",
+        "ON" => "ATIVADO",
+        "OFF" => "DESATIVADO",
+        tr("AUTOMATION") => "AUTOMAÇÃO",
+        "Active" => "Ativo",
+        "Restock" => "Reposição",
+        "Stream scanner" => "Scanner de streams",
+        "Waiting" => "Aguardando",
+        "Streams" => "Streams",
+        tr("OPEN TABS") => "ABAS ABERTAS",
+        tr("No top-level tabs reported") => "Nenhuma aba principal detectada",
+        tr("LOW RESOURCE") => "BAIXO CONSUMO",
+        tr("FULL") => "COMPLETO",
+        tr("STREAMS & BONUS") => "STREAMS E BÔNUS",
+        "ACTIVE" => "ATIVO",
+        "Watching:" => "Assistindo:",
+        tr("LIVE BONUS AVAILABLE") => "BÔNUS DE LIVE DISPONÍVEL",
+        "Open chat:" => "Abra o chat:",
+        "No active bonus" => "Nenhum bônus ativo",
+        tr("No Twitch bonus detected") => "Nenhum bônus da Twitch detectado",
+        "OPEN" => "ABERTA",
+        tr("XP BONUS SOURCES") => "FONTES DE BÔNUS DE XP",
+        tr("No active XP bonus detected") => "Nenhum bônus de XP ativo detectado",
+        tr("DATA") => "DADOS",
+        tr("ADDONS") => tr("ADDONS"),
+        tr("Missing:") => "Ausentes:",
+        tr("Runtime") => "Execução",
+        tr("Controller-side diagnostics") => "Diagnóstico do controlador",
+        tr("Open Profiles") => "Abrir perfis",
+        tr("Open Logs") => "Abrir logs",
+        "Headless" => "Oculto",
+        "Active" => "Ativo",
+        "2 isolated" => "2 isolados",
+        "Stream chat" => "Chat das streams",
+        "First scan 30s · hourly" => "Primeiro scan em 30s · a cada hora",
+        "UI repaint" => "Atualização da interface",
+        "1 sec" => "1 s",
+        tr("Hunt Atlas") => "Atlas de Caça",
+        tr("Map intelligence + observed XP/hour") => "Inteligência do mapa + XP/h observado",
+        tr("Select a hunt to travel · XP rates are measured from battle events") => "Selecione uma caça para viajar · as taxas de XP são medidas pelos combates",
+        tr("Current hunt") => "Caça atual",
+        tr("Filter") => "Filtro",
+        tr("hunt or Pokémon") => "caça ou Pokémon",
+        "hunts available" => "caças disponíveis",
+        "species" => "espécies",
+        "kills/h" => "abates/h",
+        "warming up" => "aquecendo",
+        "trainer XP/h" => "XP de treinador/h",
+        "Pokémon XP/h" => "XP de Pokémon/h",
+        "Current" => "Atual",
+        "Go" => "Ir",
+        "No hunt data yet. The controller bridge must receive the game's welcome message first." => "Ainda não há dados de caça. A ponte do controlador precisa receber primeiro a mensagem de boas-vindas do jogo.",
+        tr("Moth Watch") => tr("Moth Watch"),
+        tr("RMT market browser") => "Navegador do mercado RMT",
+        tr("Select an item, then buy from the live listings below") => "Selecione um item e compre nas ofertas abaixo",
+        tr("Refresh market") => "Atualizar mercado",
+        tr("Find item") => "Encontrar item",
+        tr("item name") => "nome do item",
+        "Gold" => "Ouro",
+        "Gems" => "Gemas",
+        tr("No market summary loaded. Press Refresh market.") => "Resumo do mercado não carregado. Clique em Atualizar mercado.",
+        "listings" => "ofertas",
+        tr("No listings in the selected currency match your search.") => "Nenhuma oferta na moeda selecionada corresponde à sua busca.",
+        tr("LISTINGS") => "OFERTAS",
+        tr("GOLD ONLY") => "APENAS OURO",
+        tr("GEMS ONLY") => "APENAS GEMAS",
+        tr("No item listings loaded. Pick an item above to load listings you can buy.") => "Nenhuma oferta de item carregada. Escolha um item acima para carregar ofertas disponíveis.",
+        "seller" => "vendedor",
+        tr("Buy") => "Comprar",
+        tr("Profiles") => "Perfis",
+        tr("Account, browser and addon entry points") => "Pontos de acesso a contas, navegador e addons",
+        tr("Close") => "Fechar",
+        tr("Open Game") => "Abrir jogo",
+        tr("Addons") => tr("Addons"),
+        tr("Profile folder") => "Pasta do perfil",
+        "Profile ready" => "Perfil pronto",
+        "Created on first launch" => "Criado na primeira execução",
+        "Firefox Developer Edition" => "Firefox Developer Edition",
+        "Unavailable" => "Indisponível",
+        "STOPPED" => "PARADO",
+        "HUNTING" => "CAÇANDO",
+        "ONLINE" => "ONLINE",
+        "CONNECTING" => "CONECTANDO",
+        "LOGIN" => "LOGIN",
+        "ERROR" => "ERRO",
+        _ => en,
+    }
+}
+
 const BG: Color32 = Color32::from_rgb(11, 13, 18);
 const PANEL: Color32 = Color32::from_rgb(17, 20, 27);
 const PANEL_ALT: Color32 = Color32::from_rgb(22, 26, 34);
@@ -378,14 +528,14 @@ impl eframe::App for ControllerApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Overview")
+                        RichText::new(tr("Overview"))
                             .font(FontId::proportional(26.0))
                             .strong()
                             .color(TEXT),
                     );
                     ui.add_space(12.0);
                     ui.label(
-                        RichText::new("PokéIdle controller")
+                        RichText::new(tr("PokéIdle controller"))
                             .font(FontId::proportional(14.0))
                             .color(MUTED),
                     );
@@ -394,7 +544,7 @@ impl eframe::App for ControllerApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("STOP ALL")
+                                    RichText::new(tr("STOP ALL"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -413,7 +563,7 @@ impl eframe::App for ControllerApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("LAUNCH BOTH")
+                                    RichText::new(tr("LAUNCH BOTH"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -502,36 +652,36 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             );
             ui.add_space(22.0);
 
-            section_label(ui, "WORKSPACE");
+            section_label(ui, tr("WORKSPACE"));
 
-            if sidebar_button(ui, "▦  Dashboard", true).clicked() {
+            if sidebar_button(ui, tr("▦  Dashboard"), true).clicked() {
                 app.set_status("Dashboard · live health polling enabled", false);
             }
 
-            if sidebar_button(ui, "◫  Profiles", false).clicked() {
+            if sidebar_button(ui, tr("◫  Profiles"), false).clicked() {
                 app.show_profiles = true;
             }
 
-            if sidebar_button(ui, "⌁  Hunt Atlas", false).clicked() {
+            if sidebar_button(ui, tr("⌁  Hunt Atlas"), false).clicked() {
                 app.show_atlas = true;
             }
 
-            if sidebar_button(ui, "◇  Moth Watch", false).clicked() {
+            if sidebar_button(ui, tr("◇  Moth Watch"), false).clicked() {
                 app.show_market = true;
             }
 
-            if sidebar_button(ui, "≡  Logs", false).clicked() {
+            if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
                 app.open_logs();
             }
 
             ui.add_space(18.0);
-            section_label(ui, "OPERATIONS");
+            section_label(ui, tr("OPERATIONS"));
 
-            if sidebar_button(ui, "▶  Launch both", false).clicked() {
+            if sidebar_button(ui, tr("▶  Launch both"), false).clicked() {
                 app.launch_both();
             }
 
-            if sidebar_button(ui, "■  Stop all", false).clicked() {
+            if sidebar_button(ui, tr("■  Stop all"), false).clicked() {
                 app.stop_all();
             }
 
@@ -544,13 +694,13 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 .inner_margin(12.0)
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new("RUNTIME")
+                        RichText::new(tr("RUNTIME"))
                             .size(10.0)
                             .strong()
                             .color(DIM),
                     );
                     ui.add_space(7.0);
-                    runtime_row(ui, "Firefox", if app.games.iter().all(|game| game.headless) { "HEADLESS" } else if app.games.iter().all(|game| !game.headless) { "VISIBLE" } else { "MIXED" }, GOOD);
+                    runtime_row(ui, "Firefox", if app.games.iter().all(|game| game.headless) { tr("HEADLESS") } else if app.games.iter().all(|game| !game.headless) { tr("VISIBLE") } else { tr("MIXED") }, GOOD);
                     runtime_row(ui, "Monitor", "BiDi", GOOD);
                     runtime_row(ui, "Poll", "5 sec", MUTED);
                 });
@@ -558,7 +708,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(12.0);
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.label(
-                    RichText::new("Rust rewrite · Windows")
+                    RichText::new(tr("Rust rewrite · Windows"))
                         .size(10.0)
                         .color(DIM),
                 );
@@ -569,14 +719,14 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Instances")
+            RichText::new(tr("Instances"))
                 .font(FontId::proportional(17.0))
                 .strong()
                 .color(TEXT),
         );
         ui.add_space(8.0);
         ui.label(
-            RichText::new("Live state for both isolated Firefox profiles")
+            RichText::new(tr("Live state for both isolated Firefox profiles"))
                 .size(11.0)
                 .color(DIM),
         );
@@ -645,7 +795,7 @@ fn draw_game_card(
                 status_badge(ui, &health, running);
 
                 if running {
-                    let mode_label = if app.games[index].headless { "Show Firefox" } else { "Hide Firefox" };
+                    let mode_label = if app.games[index].headless { tr("Show Firefox") } else { tr("Hide Firefox") };
                     let mode_headless = !app.games[index].headless;
                     let clicked = ui
                         .add_sized(
@@ -664,7 +814,7 @@ fn draw_game_card(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let button_text = if running { "Stop" } else { "Launch" };
+                    let button_text = if running { tr("Stop") } else { tr("Launch") };
                     let clicked = ui
                         .add_sized(
                             [84.0, 30.0],
@@ -704,9 +854,9 @@ fn draw_game_card(
                     ui.label(
                         RichText::new(
                             if health.activity == "Hunting" {
-                                "CURRENT ACTIVITY"
+                                tr("CURRENT ACTIVITY")
                             } else {
-                                "STATE"
+                                tr("STATE")
                             },
                         )
                         .size(9.0)
@@ -769,7 +919,7 @@ fn draw_game_card(
             ui.add_space(12.0);
 
             ui.label(
-                RichText::new("RESOURCES")
+                RichText::new(tr("RESOURCES"))
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -782,7 +932,7 @@ fn draw_game_card(
                 .inner_margin(10.0)
                 .show(ui, |ui| {
                     if health.ball_stock.is_empty() {
-                        ui.label(RichText::new("Pokéballs: unavailable").size(11.0).color(MUTED));
+                        ui.label(RichText::new(tr("Pokéballs: unavailable")).size(11.0).color(MUTED));
                     } else {
                         ui.horizontal_wrapped(|ui| {
                             for item in &health.ball_stock {
@@ -796,30 +946,30 @@ fn draw_game_card(
                     ui.horizontal_wrapped(|ui| {
                         let gold = format_number(health.gold);
                         let orbs = format_number(health.orbs);
-                        resource_value(ui, "GOLD", &gold, WARN);
-                        resource_value(ui, "GEMS", &orbs, ACCENT);
+                        resource_value(ui, tr("GOLD"), &gold, WARN);
+                        resource_value(ui, tr("GEMS"), &orbs, ACCENT);
                         resource_value(
                             ui,
-                            "AUTO CATCH",
+                            tr("AUTO CATCH"),
 
                             if health.autocatch_on { "ON" } else { "OFF" },
                             if health.autocatch_on { GOOD } else { MUTED },
                         );
                         resource_value(
                             ui,
-                            "USED",
+                            tr("USED"),
                             &health.autocatch_balls_used.to_string(),
                             TEXT,
                         );
                         resource_value(
                             ui,
-                            "CAPTURES",
+                            tr("CAPTURES"),
                             &health.autocatch_captures.to_string(),
                             TEXT,
                         );
                         resource_value(
                             ui,
-                            "SUCCESS",
+                            tr("SUCCESS"),
                             if health.autocatch_rate.is_empty() { "—" } else { &health.autocatch_rate },
                             TEXT,
                         );
@@ -829,7 +979,7 @@ fn draw_game_card(
             ui.add_space(12.0);
 
             ui.label(
-                RichText::new("AUTOMATION")
+                RichText::new(tr("AUTOMATION"))
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -881,7 +1031,7 @@ fn draw_game_card(
 
             ui.add_space(12.0);
             ui.label(
-                RichText::new("OPEN TABS")
+                RichText::new(tr("OPEN TABS"))
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -895,7 +1045,7 @@ fn draw_game_card(
                 .show(ui, |ui| {
                     if health.tabs.is_empty() {
                         ui.label(
-                            RichText::new("No top-level tabs reported")
+                            RichText::new(tr("No top-level tabs reported"))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -941,7 +1091,7 @@ fn draw_game_card(
                                 if tab.kind == "Twitch" {
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         ui.label(
-                                            RichText::new(if tab.low_resource { "LOW RESOURCE" } else { "FULL" })
+                                            RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("FULL") })
                                                 .size(8.0)
                                                 .strong()
                                                 .color(if tab.low_resource { GOOD } else { WARN }),
@@ -955,7 +1105,7 @@ fn draw_game_card(
 
             ui.add_space(12.0);
             ui.label(
-                RichText::new("STREAMS & BONUS")
+                RichText::new(tr("STREAMS & BONUS"))
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -987,7 +1137,7 @@ fn draw_game_card(
                         );
                     } else if !health.stream_missing.is_empty() {
                         ui.label(
-                            RichText::new("LIVE BONUS AVAILABLE")
+                            RichText::new(tr("LIVE BONUS AVAILABLE"))
                                 .size(10.0)
                                 .strong()
                                 .color(WARN),
@@ -1023,7 +1173,7 @@ fn draw_game_card(
                         );
                     } else {
                         ui.label(
-                            RichText::new("No Twitch bonus detected")
+                            RichText::new(tr("No Twitch bonus detected"))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -1036,7 +1186,7 @@ fn draw_game_card(
                             tab.kind == "Twitch" || tab.kind == "KICK"
                         }) {
                             let state = if tab.kind == "Twitch" {
-                                if tab.low_resource { "LOW" } else { "FULL" }
+                                if tab.low_resource { "LOW" } else { tr("FULL") }
                             } else {
                                 "OPEN"
                             };
@@ -1064,7 +1214,7 @@ fn draw_game_card(
 
             ui.add_space(12.0);
             ui.label(
-                RichText::new("XP BONUS SOURCES")
+                RichText::new(tr("XP BONUS SOURCES"))
                     .size(9.0)
                     .strong()
                     .color(DIM),
@@ -1085,7 +1235,7 @@ fn draw_game_card(
 
                     if sources.is_empty() {
                         ui.label(
-                            RichText::new("No active XP bonus detected")
+                            RichText::new(tr("No active XP bonus detected"))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -1154,7 +1304,7 @@ fn draw_game_card(
 
 fn mini_metric(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label).size(8.0).strong().color(DIM));
+        ui.label(RichText::new(tr(label)).size(8.0).strong().color(DIM));
         ui.add(
             egui::Label::new(
                 RichText::new(compact_text(value, 18))
@@ -1181,7 +1331,7 @@ fn resource_chip(ui: &mut egui::Ui, text: &str) {
 
 fn resource_value(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label).size(8.0).strong().color(DIM));
+        ui.label(RichText::new(tr(label)).size(8.0).strong().color(DIM));
         ui.add(
             egui::Label::new(
                 RichText::new(compact_text(value, 18))
@@ -1204,7 +1354,7 @@ fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("● {}", label))
+                    RichText::new(format!("● {}", tr(label)))
                         .size(9.0)
                         .strong()
                         .color(if good { GOOD } else { MUTED }),
@@ -1230,23 +1380,23 @@ fn bonus_chip(ui: &mut egui::Ui, text: &str) {
 fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("Runtime")
+            RichText::new(tr("Runtime"))
                 .font(FontId::proportional(17.0))
                 .strong()
                 .color(TEXT),
         );
         ui.add_space(8.0);
         ui.label(
-            RichText::new("Controller-side diagnostics")
+            RichText::new(tr("Controller-side diagnostics"))
                 .size(11.0)
                 .color(DIM),
         );
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Open Profiles").clicked() {
+            if ui.button(tr("Open Profiles")).clicked() {
                 app.show_profiles = true;
             }
-            if ui.button("Open Logs").clicked() {
+            if ui.button(tr("Open Logs")).clicked() {
                 app.open_logs();
             }
         });
@@ -1263,7 +1413,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.horizontal_wrapped(|ui| {
                 runtime_chip(ui, "Firefox", "Headless", GOOD);
                 runtime_chip(ui, "BiDi", "Active", GOOD);
-                runtime_chip(ui, "Profiles", "2 isolated", MUTED);
+                runtime_chip(ui, tr("Profiles"), "2 isolated", MUTED);
                 runtime_chip(ui, "Stream chat", "First scan 30s · hourly", MUTED);
                 runtime_chip(ui, "UI repaint", "1 sec", MUTED);
             });
@@ -1312,7 +1462,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let rect = egui::Rect::from_center_size(screen.center(), egui::vec2(width, height));
 
     let mut open = app.show_atlas;
-    egui::Window::new("Hunt Atlas")
+    egui::Window::new(tr("Hunt Atlas"))
         .id(egui::Id::new("hunt_atlas_window"))
         .open(&mut open)
         .collapsible(false)
@@ -1328,21 +1478,21 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Hunt Atlas")
+                    RichText::new(tr("Hunt Atlas"))
                         .font(FontId::proportional(22.0))
                         .strong()
                         .color(TEXT),
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Map intelligence + observed XP/hour")
+                    RichText::new(tr("Map intelligence + observed XP/hour"))
                         .size(12.0)
                         .color(MUTED),
                 );
             });
             ui.add_space(2.0);
             ui.label(
-                RichText::new("Select a hunt to travel · XP rates are measured from battle events")
+                RichText::new(tr("Select a hunt to travel · XP rates are measured from battle events"))
                     .size(10.0)
                     .color(DIM),
             );
@@ -1362,7 +1512,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .inner_margin(12.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Current hunt").size(9.0).strong().color(DIM));
+                        ui.label(RichText::new(tr("Current hunt")).size(9.0).strong().color(DIM));
                         ui.add_space(8.0);
                         ui.label(RichText::new(if health.hunt.is_empty() { "—" } else { &health.hunt })
                             .size(14.0).strong().color(TEXT));
@@ -1370,7 +1520,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         ui.label(RichText::new(format!("Trainer Lv {}", health.player_level))
                             .size(10.0).color(MUTED));
                         ui.add_space(10.0);
-                        ui.label(RichText::new(format!("{} hunts available", health.hunts.len()))
+                        ui.label(RichText::new(format!("{} {}", health.hunts.len(), tr("hunts available")))
                             .size(10.0).color(MUTED));
                     });
                 });
@@ -1378,11 +1528,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Filter").size(10.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Filter")).size(10.0).strong().color(DIM));
                 ui.add_sized(
                     [260.0, 28.0],
                     egui::TextEdit::singleline(&mut app.atlas_search)
-                        .hint_text("hunt or Pokémon"),
+                        .hint_text(tr("hunt or Pokémon")),
                 );
             });
 
@@ -1450,14 +1600,14 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         let xp = format_rate(hunt.xp_per_hour);
                                         let pxp = format_rate(hunt.pokemon_xp_per_hour);
                                         let kills = if hunt.kills_per_hour > 0 {
-                                            format!("{} kills/h", hunt.kills_per_hour)
+                                            format!("{} {}", hunt.kills_per_hour, tr("kills/h"))
                                         } else {
-                                            "warming up".to_string()
+                                            tr("warming up").to_string()
                                         };
 
                                         ui.vertical(|ui| {
-                                            ui.label(RichText::new(format!("{} trainer XP/h", xp)).size(11.0).strong().color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED }));
-                                            ui.label(RichText::new(format!("{} Pokémon XP/h · {}", pxp, kills)).size(9.0).color(MUTED));
+                                            ui.label(RichText::new(format!("{} {}", xp, tr("trainer XP/h"))).size(11.0).strong().color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED }));
+                                            ui.label(RichText::new(format!("{} {} · {}", pxp, tr("Pokémon XP/h"), kills)).size(9.0).color(MUTED));
                                         });
 
                                         ui.add_space(18.0);
@@ -1512,7 +1662,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let max_width = available_width.max(420.0);
     let max_height = available_height.max(360.0);
 
-    egui::Window::new("Moth Watch")
+    egui::Window::new(tr("Moth Watch"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -1533,21 +1683,21 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Moth Watch")
+                    RichText::new(tr("Moth Watch"))
                         .font(FontId::proportional(22.0))
                         .strong()
                         .color(TEXT),
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("RMT market browser")
+                    RichText::new(tr("RMT market browser"))
                         .size(12.0)
                         .color(MUTED),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
-                        RichText::new("Select an item, then buy from the live listings below")
+                        RichText::new(tr("Select an item, then buy from the live listings below"))
                             .size(10.0)
                             .color(DIM),
                     );
@@ -1570,7 +1720,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.label(RichText::new(format!("Gems {}", orbs)).size(11.0).strong().color(ACCENT));
                 ui.add_space(20.0);
 
-                if ui.button("Refresh market").clicked() {
+                if ui.button(tr("Refresh market")).clicked() {
                     if let Some(monitor) = app.games[index].monitor.as_ref() {
                         monitor.send(json!({ "t": "market.itens" }));
                         app.set_status(format!("{} · market refresh requested", app.market_profile.label()), false);
@@ -1583,11 +1733,11 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Find item").size(10.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Find item")).size(10.0).strong().color(DIM));
                 ui.add_sized(
                     [300.0, 28.0],
                     egui::TextEdit::singleline(&mut app.market_search)
-                        .hint_text("item name"),
+                        .hint_text(tr("item name")),
                 );
 
                 ui.add_space(10.0);
@@ -1618,7 +1768,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if health.market_summary.is_empty() {
                         ui.label(
-                            RichText::new("No market summary loaded. Press Refresh market.")
+                            RichText::new(tr("No market summary loaded. Press Refresh market."))
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -1727,7 +1877,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             let profile_label = app.market_profile.label();
                                             let monitor = app.games[index].monitor.clone();
-                                            if ui.button("Buy").clicked() {
+                                            if ui.button(tr("Buy")).clicked() {
                                                 if let Some(monitor) = monitor {
                                                     let item_id = item.item_id;
                                                     let item_name = item.name.clone();
@@ -1766,7 +1916,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     || item.name.to_lowercase().contains(&search))
                         }) {
                             ui.label(
-                                RichText::new("No listings in the selected currency match your search.")
+                                RichText::new(tr("No listings in the selected currency match your search."))
                                     .size(11.0)
                                     .color(DIM),
                             );
@@ -1777,10 +1927,10 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("LISTINGS").size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr("LISTINGS")).size(9.0).strong().color(DIM));
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new(if app.market_currency == "gold" { "GOLD ONLY" } else { "GEMS ONLY" })
+                    RichText::new(if app.market_currency == "gold" { tr("GOLD ONLY") } else { tr("GEMS ONLY") })
                         .size(8.0)
                         .strong()
                         .color(if app.market_currency == "gold" { WARN } else { ACCENT }),
@@ -1794,7 +1944,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if health.market_listings.is_empty() {
                         ui.label(
-                            RichText::new("No item listings loaded. Pick an item above to load listings you can buy.")
+                            RichText::new(tr("No item listings loaded. Pick an item above to load listings you can buy."))
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -1826,7 +1976,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            if ui.button("Buy").clicked() {
+                                            if ui.button(tr("Buy")).clicked() {
                                                 let profile_label = app.market_profile.label();
                                                 let monitor = app.games[index].monitor.clone();
 
@@ -1902,7 +2052,7 @@ fn format_rate(value: u64) -> String {
 }
 
 fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    egui::Window::new("Profiles")
+    egui::Window::new(tr("Profiles"))
         .title_bar(true)
         .resizable(true)
         .default_width(700.0)
@@ -1920,20 +2070,20 @@ fn draw_profiles_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Profiles")
+                    RichText::new(tr("Profiles"))
                         .font(FontId::proportional(22.0))
                         .strong()
                         .color(TEXT),
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Account, browser and addon entry points")
+                    RichText::new(tr("Account, browser and addon entry points"))
                         .size(12.0)
                         .color(MUTED),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
+                    if ui.button(tr("Close")).clicked() {
                         app.show_profiles = false;
                     }
                 });
@@ -2010,11 +2160,11 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
             ui.add_space(12.0);
 
             ui.horizontal_wrapped(|ui| {
-                profile_button(ui, "Open Game", || app.profile_action(profile, ProfileAction::Game));
+                profile_button(ui, tr("Open Game"), || app.profile_action(profile, ProfileAction::Game));
                 profile_button(ui, "Twitch", || app.profile_action(profile, ProfileAction::Twitch));
                 profile_button(ui, "KICK", || app.profile_action(profile, ProfileAction::Kick));
-                profile_button(ui, "Addons", || app.profile_action(profile, ProfileAction::Addons));
-                profile_button(ui, "Profile folder", || app.profile_action(profile, ProfileAction::Folder));
+                profile_button(ui, tr("Addons"), || app.profile_action(profile, ProfileAction::Addons));
+                profile_button(ui, tr("Profile folder"), || app.profile_action(profile, ProfileAction::Folder));
             });
         });
 }
@@ -2079,17 +2229,17 @@ fn runtime_chip(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
         .inner_margin(Margin::symmetric(11, 8))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(label).size(9.0).strong().color(DIM));
-                ui.label(RichText::new(value).size(11.0).color(color));
+                ui.label(RichText::new(tr(label)).size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr(value)).size(11.0).color(color));
             });
         });
 }
 
 fn runtime_row(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(10.0).color(MUTED));
+        ui.label(RichText::new(tr(label)).size(10.0).color(MUTED));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value).size(10.0).strong().color(color));
+            ui.label(RichText::new(tr(value)).size(10.0).strong().color(color));
         });
     });
     ui.add_space(5.0);
