@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.1
+// @version      1.3.2
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -406,11 +406,12 @@
     }
 
     function bodyTextBonus() {
+        // Upstream renders the bonus in these explicit HUD nodes. Avoid a
+        // full document.body.innerText traversal on every controller poll.
         const sources = [
             document.querySelector('#tr-ativos')?.innerText || '',
             document.querySelector('#evento-texto')?.innerText || '',
-            document.querySelector('#evento-faixa')?.innerText || '',
-            document.body?.innerText || ''
+            document.querySelector('#evento-faixa')?.innerText || ''
         ];
 
         const lines = sources
@@ -497,9 +498,11 @@
 
         const playerXp = text('#tr-xp-txt');
 
-        const bonusLines = (document.body?.innerText || '')
-            .split(/\n+/)
-            .map(v => v.replace(/\s+/g, ' ').trim())
+        const bonusLines = [
+            text('#tr-ativos'),
+            text('#evento-texto'),
+            text('#evento-faixa')
+        ]
             .filter(Boolean)
             .filter(line =>
                 /\+\s*\d+\s*%/.test(line) &&
