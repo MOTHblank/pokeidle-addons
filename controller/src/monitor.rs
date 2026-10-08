@@ -1528,7 +1528,6 @@ fn probe_runtime_details(
                 name,
                 level,
                 area,
-                species,
                 xp_per_hour: hunt.get("xp").and_then(|value| value.get("value")).and_then(Value::as_u64).unwrap_or(0),
                 pokemon_xp_per_hour: hunt.get("xp").and_then(|value| value.get("pokemonValue")).and_then(Value::as_u64).unwrap_or(0),
                 kills_per_hour: hunt.get("xp").and_then(|value| value.get("killsH")).and_then(Value::as_f64).map(|v| v.max(0.0).round() as u64).unwrap_or(0),
