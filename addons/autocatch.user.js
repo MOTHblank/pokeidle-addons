@@ -1897,11 +1897,12 @@
 
     // Bridge may be installed by another userscript a moment later.
     installProtocolHook();
-    const protocolAdoptionTimer = setInterval(() => {
-        if (adoptBridgeSocket()) {
-            clearInterval(protocolAdoptionTimer);
+    setInterval(() => {
+        const socket = activeProtocolSocket;
+        if (!socket || socket.readyState !== page.WebSocket.OPEN) {
+            adoptBridgeSocket();
         }
-    }, 250);
+    }, 1000);
 
     // ---------------------------------------------------------------------
     // Automation
