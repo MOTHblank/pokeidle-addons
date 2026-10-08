@@ -15,7 +15,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.2.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.3.0",
     ),
     (
         "Controller Bridge",
@@ -27,7 +27,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-huntatlas/main/hunt-atlas.user.js?v=1.7.8",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.9",
     ),
     (
         "Moth Watch",
