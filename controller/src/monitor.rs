@@ -28,6 +28,7 @@ pub struct HuntSpeciesInfo {
     pub points: u32,
     pub types: Vec<String>,
     pub weak_to: Vec<String>,
+    pub weakness_multipliers: Vec<(String, f32)>,
     pub captured: bool,
     pub capture_count: u32,
     pub npc_value: u64,
@@ -1546,6 +1547,21 @@ fn probe_runtime_details(
                         })
                         .unwrap_or_default();
 
+                    let weakness_multipliers =
+                        species.get("weaknessMultipliers")
+                            .and_then(Value::as_array)
+                            .map(|values| {
+                                values.iter()
+                                    .filter_map(|entry| {
+                                        Some((
+                                            entry.get("type")?.as_str()?.to_string(),
+                                            entry.get("multiplier")?.as_f64()? as f32,
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+
                     let offense = species.get("offense").and_then(|value| {
                         let multiplier = value.get("multiplier").and_then(Value::as_f64)?;
                         Some((
@@ -1567,6 +1583,7 @@ fn probe_runtime_details(
                         points: species.get("points").and_then(Value::as_u64).unwrap_or(1) as u32,
                         types,
                         weak_to,
+                        weakness_multipliers,
                         captured: species.get("captured").and_then(Value::as_bool).unwrap_or(false),
                         capture_count: species.get("captureCount").and_then(Value::as_u64).unwrap_or(0) as u32,
                         npc_value: species.get("npcValue").and_then(Value::as_u64).unwrap_or(0),
