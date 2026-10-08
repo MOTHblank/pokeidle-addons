@@ -299,7 +299,7 @@ impl ControllerApp {
             status_error: false,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
-                std::array::from_fn(AccountConfig::default_for)
+                std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
             }),
         }
     }
@@ -446,6 +446,7 @@ impl ControllerApp {
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
         let slot = &mut self.games[index];
 
         if let Some(monitor) = slot.monitor.as_ref() {
@@ -1527,6 +1528,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 
 fn game_selector(
+    app: &ControllerApp,
     ui: &mut egui::Ui,
     selected: &mut GameProfile,
 ) {
@@ -1647,7 +1649,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
             );
 
             ui.add_space(14.0);
-            game_selector(ui, &mut app.atlas_profile);
+            game_selector(app, ui, &mut app.atlas_profile);
 
             let index = ControllerApp::game_index(app.atlas_profile);
             let health = app.games[index].health();
@@ -1857,7 +1859,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             });
 
             ui.add_space(14.0);
-            game_selector(ui, &mut app.market_profile);
+            game_selector(app, ui, &mut app.market_profile);
 
             let index = ControllerApp::game_index(app.market_profile);
             let health = app.games[index].health();
