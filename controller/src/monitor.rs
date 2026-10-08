@@ -634,6 +634,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
         const app = document.querySelector('#app');
         const loggedIn = !!app && !app.classList.contains('hidden');
+        const loading = visible('#carregando');
+        const loadingPercent = text('#carga-pct');
+        const loadingStage = text('#carga-etapa');
         const ativo = document.querySelector('#ativo-card');
         const huntText = text('#hud-hunt');
         const playerLevel = text('#tr-level');
@@ -649,7 +652,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             !/^escolha um mapa\s*[→›-]?\s*$/i.test(huntText);
 
         let activity = 'Login';
-        if (loggedIn) {
+        if (loading && !loggedIn) {
+            activity = 'Loading';
+        } else if (loggedIn) {
             activity =
                 huntSelected || visible('#golpes-painel')
                     ? 'Hunting'
@@ -672,7 +677,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             gameReady: loggedIn,
             loggedIn,
             activity,
-            hunt: huntSelected ? huntText.slice(0, 80) : '',
+            hunt: loading && !loggedIn
+                ? [loadingPercent ? loadingPercent + '%' : '', loadingStage].filter(Boolean).join(' · ')
+                : huntSelected ? huntText.slice(0, 80) : '',
             activePokemon,
             fallenCount: document.querySelector('#caidos-lista')?.children.length || 0,
             economyMode: document.documentElement.classList.contains('modo-economia'),
