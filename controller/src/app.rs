@@ -334,7 +334,8 @@ impl ControllerApp {
             };
 
             if exited {
-                logging::info(&format!("{} Firefox process exited", self.account_name(slot.profile)));
+                let account_name = self.accounts[slot.profile.index()].name.clone();
+                logging::info(&format!("{} Firefox process exited", account_name));
                 if let Some(monitor) = slot.monitor.as_ref() {
                     monitor.stop();
                 }
@@ -358,7 +359,7 @@ impl ControllerApp {
         self.refresh_processes();
 
         if self.games[index].is_running() {
-            self.set_status(format!("{} is already running.", self.account_name(profile)), false);
+            self.set_status(format!("{} is already running.", account_name), false);
             return;
         }
 
@@ -444,6 +445,7 @@ impl ControllerApp {
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
         let slot = &mut self.games[index];
 
         if let Some(monitor) = slot.monitor.as_ref() {
