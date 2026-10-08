@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.20
+// @version      0.1.21
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2394,17 +2394,33 @@
             if (state.watchOpen) queueRender();
         }, 1000);
 
-        const observer = new MutationObserver(() => {
-            ensureUi();
-        });
+        /*
+         * Observe only the modal shell. The previous whole-document observer
+         * woke up for every combat/asset DOM mutation during game boot and
+         * repeatedly scanned the page while it was still loading.
+         */
+        const modal =
+            q('#modal');
 
-        observer.observe(
-            document.documentElement || document,
-            { childList: true, subtree: true }
-        );
+        if (modal) {
+            const observer =
+                new MutationObserver(() => {
+                    ensureUi();
+                });
+
+            observer.observe(
+                modal,
+                {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'data-modal']
+                }
+            );
+        }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.20 loaded');
+        console.info('[Moth Watch] v0.1.21 loaded');
     }
 
     bootstrap();
