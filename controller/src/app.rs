@@ -2720,6 +2720,42 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     .color(DIM),
                                             );
 
+                                            let selected_weaknesses =
+                                                app.atlas_filters
+                                                    .weakness
+                                                    .iter()
+                                                    .filter_map(|selected| {
+                                                        species
+                                                            .weakness_multipliers
+                                                            .iter()
+                                                            .find(|(attack_type, _)| {
+                                                                attack_type
+                                                                    .eq_ignore_ascii_case(
+                                                                        selected
+                                                                    )
+                                                            })
+                                                            .filter(|(_, multiplier)| *multiplier > 1.0)
+                                                            .map(|(_, multiplier)| {
+                                                                format!(
+                                                                    "{} {}",
+                                                                    atlas_type_label(selected),
+                                                                    format_multiplier(*multiplier)
+                                                                )
+                                                            })
+                                                    })
+                                                    .collect::<Vec<_>>();
+
+                                            if !selected_weaknesses.is_empty() {
+                                                ui.label(
+                                                    RichText::new(
+                                                        selected_weaknesses.join(" · ")
+                                                    )
+                                                    .size(8.0)
+                                                    .strong()
+                                                    .color(GOOD),
+                                                );
+                                            }
+
                                             ui.label(
                                                 RichText::new(captured_label)
                                                     .size(8.0)
