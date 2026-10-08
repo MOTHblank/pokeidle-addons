@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.1.4
+// @version      1.2.0
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -474,10 +474,44 @@
         };
     }
 
+    function gameSnapshot() {
+        return {
+            connected: !!gameSocket && gameSocket.readyState === page.WebSocket.OPEN,
+            lastMessageAt,
+            lastBattleAt,
+            state: {
+                level: Number.isFinite(Number(state?.level)) ? Number(state.level) : null,
+                xp: Number(state?.xp) || 0,
+                xpNivel: Number(state?.xpNivel) || 0,
+                xpProximo: Number(state?.xpProximo) || 0,
+                huntSlug: state?.huntSlug || '',
+                activeId: state?.activeId ?? null,
+                noCentro: state?.noCentro ?? null,
+                casa: copy(state?.casa),
+                boss: copy(state?.boss),
+                evento: copy(state?.evento),
+                pokemons: copy(state?.pokemons) || [],
+                pokedex: copy(state?.pokedex) || {}
+            },
+            hunts: hunts.map(h => ({
+                slug: String(h?.slug || ''),
+                name: String(h?.nome || h?.name || h?.slug || ''),
+                level: Number(h?.nivel ?? h?.level) || 0,
+                species: Array.isArray(h?.especies)
+                    ? h.especies.map(s => ({
+                        id: Number(s?.pokeId ?? s?.speciesId) || 0,
+                        name: String(s?.nome || s?.name || '')
+                    }))
+                    : []
+            }))
+        };
+    }
+
     page.__mothControllerBridgeV1 = {
-        version: 1,
+        version: 2,
         send,
-        snapshot
+        snapshot,
+        gameSnapshot
     };
 
     page.__mothControllerHeadless = true;
