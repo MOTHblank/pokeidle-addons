@@ -297,12 +297,10 @@ No part of this project's code is hidden: the complete source code is available 
 
 This application is still under development, so not everything will work perfectly yet. When you encounter a problem, open an [Issue](https://github.com/MOTHblank/pokeidle-addons/issues) describing what happened. Suggestions for missing features are welcome as well. And if you know how to program, contributions and pull requests are welcome.
 
-### Installation
+### Requirements
 
 1. [Download Firefox Developer Edition](https://www.mozilla.org/firefox/developer/)
 2. [Download Firemin](https://rizonesoft.com/downloads/firemin/)
-3. [Install Violentmonkey for Firefox](https://addons.mozilla.org/en-US/firefox/addon/violentmonkey/)
-4. [Open PokéIdle](https://pokeidle.io/app)
 
 Violentmonkey must be installed separately in every isolated controller profile you enable.
 
