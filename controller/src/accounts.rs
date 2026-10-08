@@ -14,10 +14,6 @@ pub const ADDONS: &[(&str, &str)] = &[
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js",
     ),
     (
-        "Upstream Scraper",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/scraper-exporter.user.js",
-    ),
-    (
         "Live Stream Scanner",
         "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js?v=6.2.0",
     ),
