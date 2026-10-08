@@ -1,7 +1,7 @@
 use crate::accounts;
 use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
-use crate::kick::{KickManager, KickStream};
+use crate::kick::KickStream;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
 use serde_json::json;
@@ -333,7 +333,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
         "last seen" => "visto pela última vez",
-        "Twitch uses this Firefox profile for its session. KICK uses the account's dedicated KICK profile. Opening either action always targets the corresponding account." => "A Twitch usa este perfil do Firefox para sua sessão. O KICK usa o perfil dedicado desta conta. Abrir qualquer uma das opções sempre usa a conta correspondente.",
+        "Twitch uses this Firefox profile for its session. All actions target this account." => "A Twitch usa este perfil do Firefox para sua sessão. Todas as ações usam esta conta.",
         "addon installers" => "instaladores de addons",
         "addon installers opened" => "instaladores de addons abertos",
         "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe." => "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe.",
@@ -404,7 +404,6 @@ impl GameSlot {
 #[derive(Clone, Debug, Default)]
 struct AccountSetup {
     profile_ready: bool,
-    kick_profile_ready: bool,
     violentmonkey_installed: bool,
 }
 
@@ -414,7 +413,6 @@ pub struct ControllerApp {
     accounts: [AccountConfig; 4],
     status: String,
     status_error: bool,
-    kick_manager: KickManager,
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
@@ -435,7 +433,6 @@ impl ControllerApp {
             show_accounts: false,
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
-            kick_manager: KickManager::new(),
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
@@ -481,7 +478,6 @@ impl ControllerApp {
 
             self.account_setup[index] = AccountSetup {
                 profile_ready: config.profile_dir.exists(),
-                kick_profile_ready: config.kick_profile_dir().exists(),
                 violentmonkey_installed: vm_installed,
             };
         }
@@ -706,10 +702,6 @@ impl ControllerApp {
         let result = match action {
             ProfileAction::Game => accounts::open_game(profile).map(|_| "Opened game".to_string()),
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
-            ProfileAction::Kick => self
-                .kick_manager
-                .open_login(profile, accounts::KICK_LOGIN)
-                .map(|_| "Opened KICK login in uncontrolled normal Firefox · close it after authentication".to_string()),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Addons => accounts::open_addons(profile)
                 .map(|count| format!("Opened {count} addon installers")),
@@ -725,8 +717,6 @@ impl ControllerApp {
 
 impl Drop for ControllerApp {
     fn drop(&mut self) {
-        self.kick_manager.shutdown();
-
         for slot in &mut self.games {
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.stop();
@@ -847,7 +837,6 @@ impl eframe::App for ControllerApp {
 enum ProfileAction {
     Game,
     Twitch,
-    Kick,
     InstallViolentmonkey,
     Addons,
     Folder,
@@ -2142,19 +2131,17 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         tr("Not installed")
                                     };
                                     let twitch_open = health.tabs.iter().any(|tab| tab.kind == "Twitch");
-                                    // These checks only observe profile/tab existence. They do not
-                                    // authenticate Twitch or KICK, so never label a profile as logged in.
+                                    // This check only observes tab existence. It does not
+                                    // authenticate Twitch, so never label a profile as logged in.
                                     let twitch_label = if twitch_open {
                                         tr("Tab open")
                                     } else {
                                         tr("Not checked")
                                     };
-                                    let kick_label = tr("Not checked");
 
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
                                     status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
                                     status_chip(ui, "Twitch", twitch_label, twitch_open);
-                                    status_chip(ui, "KICK", kick_label, false);
 
                                     if running {
                                         status_chip(
@@ -2172,7 +2159,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                 ui.label(
                                     RichText::new(
-                                        tr("Twitch uses this Firefox profile for its session. KICK uses the account's dedicated KICK profile. Opening either action always targets the corresponding account."),
+                                        tr("Twitch uses this Firefox profile for its session. All actions target this account."),
                                     )
                                     .size(9.0)
                                     .color(DIM),
@@ -2186,9 +2173,6 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     });
                                     profile_button(ui, tr("Twitch"), || {
                                         app.profile_action(profile, ProfileAction::Twitch)
-                                    });
-                                    profile_button(ui, tr("KICK"), || {
-                                        app.profile_action(profile, ProfileAction::Kick)
                                     });
                                     profile_button(ui, tr("Install Violentmonkey"), || {
                                         app.profile_action(profile, ProfileAction::InstallViolentmonkey)
