@@ -221,6 +221,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Match all selected" => "Exigir todos os selecionados",
         "selected" => "selecionados",
         "No weaknesses selected" => "Nenhuma fraqueza selecionada",
+        "Clear selection" => "Limpar seleção",
         "Collection" => "Coleção",
         "Caught + uncaught" => "Capturados + não capturados",
         "Uncaught only" => "Só não capturados",
@@ -2341,7 +2342,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .iter()
                         .map(|value| atlas_type_label(value))
                         .collect::<Vec<_>>();
-                    format!("{} {}", labels.join(" · "), tr("selected"))
+                    format!("{} ({})", labels.join(" · "), tr("selected"))
                 };
 
                 egui::ComboBox::from_id_salt("atlas_weakness")
@@ -2369,7 +2370,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                         ui.separator();
 
-                        if ui.button(tr("Clear filters")).clicked() {
+                        if ui.button(tr("Clear selection")).clicked() {
                             app.atlas_filters.weakness.clear();
                         }
                     });
