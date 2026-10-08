@@ -13,7 +13,7 @@
 (() => {
     'use strict';
 
-    const SETTINGS_KEY = 'moth-pokeidle-autocatch-v5';
+    const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
     const RESULT_TIMEOUT_MS = 1000;
     const RESTOCK_ACK_TIMEOUT_MS = 10000;
