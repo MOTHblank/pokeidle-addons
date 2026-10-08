@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.2.7
+// @version      1.2.8
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -205,29 +205,53 @@
     }
 
     function installHook() {
+        /*
+         * Do not proxy/replace the native WebSocket constructor. Even a
+         * transparent constructor Proxy can interfere with app startup in
+         * browser/userscript combinations. Observe sockets only after the
+         * game registers a message/close listener, leaving construction and
+         * the native send/receive path untouched.
+         */
         const NativeWebSocket = page.WebSocket;
-        if (typeof NativeWebSocket !== 'function') return false;
+        const proto = NativeWebSocket && NativeWebSocket.prototype;
+        if (!proto || typeof proto.addEventListener !== 'function') return false;
 
-        const Wrapped = new Proxy(NativeWebSocket, {
-            construct(target, args) {
-                // Native WebSocket must be constructed with its own constructor.
-                // Passing the Proxy as newTarget can break browser-native setup
-                // and stall the game's startup before the bridge can observe it.
-                const ws = Reflect.construct(target, args, target);
-                try {
-                    attach(ws);
-                } catch (error) {
-                    // Observation is optional; the game's socket is not.
-                    try { console.warn('[Moth Controller Bridge] socket hook failed:', error); } catch {}
-                }
-                return ws;
+        const marker = '__mothControllerBridgeAddEventListenerV1';
+        if (proto[marker]) return true;
+
+        const nativeAddEventListener = proto.addEventListener;
+        const attached = new WeakSet();
+
+        const observe = ws => {
+            if (!ws || attached.has(ws)) return;
+            attached.add(ws);
+            try {
+                attach(ws);
+            } catch (error) {
+                try { console.warn('[Moth Controller Bridge] socket observation failed:', error); } catch {}
             }
-        });
+        };
 
         try {
-            page.WebSocket = Wrapped;
-            return page.WebSocket === Wrapped;
+            Object.defineProperty(proto, marker, {
+                value: true,
+                configurable: false,
+                enumerable: false,
+                writable: false
+            });
+            Object.defineProperty(proto, 'addEventListener', {
+                configurable: true,
+                writable: true,
+                value: function(type, listener, options) {
+                    const result = Reflect.apply(nativeAddEventListener, this, [type, listener, options]);
+                    if (type === 'message' || type === 'close') observe(this);
+                    return result;
+                }
+            });
+            return true;
         } catch {
+            // If the prototype cannot be patched, do not fall back to a
+            // constructor Proxy: the game must still be allowed to load.
             return false;
         }
     }
