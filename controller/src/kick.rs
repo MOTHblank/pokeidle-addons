@@ -1,9 +1,13 @@
 use crate::config::{Config, GameProfile};
 use crate::logging;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
+use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
 #[derive(Clone, Debug)]
 pub struct KickStream {
@@ -12,177 +16,23 @@ pub struct KickStream {
 }
 
 #[cfg(windows)]
-type Hwnd = *mut std::ffi::c_void;
+type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[cfg(windows)]
-const WM_CLOSE: u32 = 0x0010;
-
-#[cfg(windows)]
-#[derive(Default)]
-struct EnumWindowsContext {
-    windows: Vec<Hwnd>,
-}
-
-#[cfg(windows)]
-unsafe extern "system" fn collect_window_callback(
-    hwnd: Hwnd,
-    lparam: isize,
-) -> i32 {
-    unsafe {
-        let context = &mut *(lparam as *mut EnumWindowsContext);
-
-        if IsWindowVisible(hwnd) != 0 {
-            context.windows.push(hwnd);
-        }
-    }
-
-    1
-}
-
-#[cfg(windows)]
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn EnumWindows(
-        callback: Option<unsafe extern "system" fn(Hwnd, isize) -> i32>,
-        lparam: isize,
-    ) -> i32;
-    fn IsWindowVisible(hwnd: Hwnd) -> i32;
-    fn IsWindow(hwnd: Hwnd) -> i32;
-    fn GetWindowThreadProcessId(hwnd: Hwnd, process_id: *mut u32) -> u32;
-    fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
-    fn PostMessageW(hwnd: Hwnd, message: u32, wparam: usize, lparam: isize) -> i32;
-}
-
-#[cfg(windows)]
-fn visible_windows() -> Vec<Hwnd> {
-    let mut context = EnumWindowsContext::default();
-
-    unsafe {
-        let _ = EnumWindows(
-            Some(collect_window_callback),
-            &mut context as *mut _ as isize,
-        );
-    }
-
-    context.windows
-}
-
-#[cfg(windows)]
-fn window_pid(hwnd: Hwnd) -> u32 {
-    let mut pid = 0u32;
-
-    unsafe {
-        let _ = GetWindowThreadProcessId(hwnd, &mut pid);
-    }
-
-    pid
-}
-
-#[cfg(windows)]
-fn window_title(hwnd: Hwnd) -> String {
-    let mut buffer = [0u16; 1024];
-
-    let length = unsafe {
-        GetWindowTextW(
-            hwnd,
-            buffer.as_mut_ptr(),
-            buffer.len() as i32,
-        )
-    };
-
-    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
-}
-
-#[cfg(windows)]
-fn window_is_valid(hwnd: Hwnd) -> bool {
-    unsafe { IsWindow(hwnd) != 0 && IsWindowVisible(hwnd) != 0 }
-}
-
-#[cfg(windows)]
-fn close_window(hwnd: Hwnd) {
-    unsafe {
-        let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
-    }
-}
-
-#[cfg(windows)]
-fn normalized(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-#[cfg(windows)]
-fn snapshot_windows() -> HashSet<Hwnd> {
-    visible_windows().into_iter().collect()
-}
-
-#[cfg(windows)]
-fn find_kick_window(
-    candidate_windows: impl IntoIterator<Item = Hwnd>,
-    browser_pid: Option<u32>,
-    channel: &str,
-) -> Option<Hwnd> {
-    let needle = normalized(channel);
-
-    for hwnd in candidate_windows {
-        if !window_is_valid(hwnd) {
-            continue;
-        }
-
-        if let Some(pid) = browser_pid {
-            if window_pid(hwnd) != pid {
-                continue;
-            }
-        }
-
-        let title = normalized(&window_title(hwnd));
-
-        if title.contains("kick") && title.contains(&needle) {
-            return Some(hwnd);
-        }
-    }
-
-    None
-}
-
-#[cfg(windows)]
-fn find_new_kick_window(
-    before: &HashSet<Hwnd>,
-    browser_pid: Option<u32>,
-    channel: &str,
-) -> Option<Hwnd> {
-    let current = visible_windows();
-
-    if let Some(hwnd) = find_kick_window(
-        current.iter().copied().filter(|hwnd| !before.contains(hwnd)),
-        browser_pid,
-        channel,
-    ) {
-        return Some(hwnd);
-    }
-
-    current
-        .into_iter()
-        .filter(|hwnd| !before.contains(hwnd))
-        .filter(|hwnd| {
-            window_is_valid(*hwnd)
-                && browser_pid
-                    .map(|pid| window_pid(*hwnd) == pid)
-                    .unwrap_or(true)
-        })
-        .find(|hwnd| {
-            let title = normalized(&window_title(*hwnd));
-            title.contains("kick") || title.contains(&normalized(channel))
-        })
-}
-
 #[derive(Default)]
 struct KickSession {
     profile_dir: Option<PathBuf>,
     browser_executable: Option<PathBuf>,
     browser_pid: Option<u32>,
-    windows: HashMap<String, Hwnd>,
+    socket: Option<BrowserSocket>,
+    next_id: u64,
+    tabs: HashMap<String, String>,
     pending: HashMap<String, Instant>,
 }
+
+#[cfg(not(windows))]
+#[derive(Default)]
+struct KickSession;
 
 pub struct KickManager {
     sessions: [KickSession; 4],
@@ -210,11 +60,22 @@ impl KickManager {
         #[cfg(windows)]
         {
             let Ok(config) = Config::for_profile(profile) else {
-                logging::warn(&format!("KICK profile {} could not be configured", profile.label()));
+                logging::warn(&format!(
+                    "KICK profile {} could not be configured",
+                    profile.label()
+                ));
                 return;
             };
+
             self.configure(profile, &config);
-            self.sync_windows(profile, streams, state_available);
+
+            if let Err(error) = self.sync_tabs(profile, streams, state_available) {
+                logging::warn(&format!(
+                    "KICK tab sync failed for {}: {}",
+                    profile.label(),
+                    error
+                ));
+            }
         }
     }
 
@@ -231,25 +92,89 @@ impl KickManager {
 
         #[cfg(windows)]
         {
+            if !url.starts_with("https://kick.com/") {
+                return Err("refusing to open a non-KICK HTTPS URL".to_string());
+            }
+
             let config = Config::for_profile(profile)?;
             self.configure(profile, &config);
-            self.open_url(profile, url).map(|_| ())
+
+            self.ensure_browser(profile, url)?;
+
+            let id = self.next_id(profile);
+            let result = {
+                let session = self.session_mut(profile);
+                if session.socket.is_none() {
+                    return Err("KICK Firefox remote control is not ready yet".to_string());
+                }
+
+                send_and_wait(
+                    session.socket.as_mut().unwrap(),
+                    id,
+                    json!({
+                        "id": id,
+                        "method": "browsingContext.create",
+                        "params": {
+                            "type": "tab"
+                        }
+                    }),
+                )?
+            };
+
+            let context = result
+                .get("result")
+                .and_then(|value| value.get("context"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| "KICK tab creation returned no context".to_string())?
+                .to_string();
+
+            let navigate_id = self.next_id(profile);
+            {
+                let session = self.session_mut(profile);
+                send_and_wait(
+                    session.socket.as_mut().unwrap(),
+                    navigate_id,
+                    json!({
+                        "id": navigate_id,
+                        "method": "browsingContext.navigate",
+                        "params": {
+                            "context": context,
+                            "url": url,
+                            "wait": "none"
+                        }
+                    }),
+                )?;
+            }
+
+            Ok(())
         }
     }
 
     pub fn shutdown(&mut self) {
         #[cfg(windows)]
         {
-            for session in &mut self.sessions {
-                for hwnd in session.windows.values().copied() {
-                    if window_is_valid(hwnd) {
-                        close_window(hwnd);
-                    }
-                }
+            for profile in GameProfile::ALL {
+                let _ = self.close_all_managed_tabs(profile);
 
-                session.windows.clear();
-                session.browser_pid = None;
+                let session = self.session_mut(profile);
+                if let Some(socket) = session.socket.as_mut() {
+                    let id = session.next_id;
+                    session.next_id += 1;
+                    let _ = send_and_wait(
+                        socket,
+                        id,
+                        json!({
+                            "id": id,
+                            "method": "session.end",
+                            "params": {}
+                        }),
+                    );
+                    let _ = socket.close(None);
+                }
+                session.socket = None;
+                session.tabs.clear();
                 session.pending.clear();
+                session.browser_pid = None;
             }
         }
     }
@@ -260,168 +185,14 @@ impl KickManager {
     }
 
     #[cfg(windows)]
-    fn sync_windows(
-        &mut self,
-        profile: GameProfile,
-        streams: &[KickStream],
-        state_available: bool,
-    ) {
+    fn next_id(&mut self, profile: GameProfile) -> u64 {
         let session = self.session_mut(profile);
-
-        let mut desired = HashMap::new();
-        for stream in streams.iter().take(10) {
-            let key = normalized(&stream.name);
-            if key.is_empty() || stream.url.is_empty() {
-                continue;
-            }
-            desired.insert(key, stream.clone());
+        if session.next_id == 0 {
+            session.next_id = 1;
         }
-
-        session.windows.retain(|_, hwnd| window_is_valid(*hwnd));
-        session.pending.retain(|_, started| started.elapsed() < Duration::from_secs(15));
-
-        for stream in desired.values() {
-            let key = normalized(&stream.name);
-
-            if session.windows.contains_key(&key) {
-                continue;
-            }
-
-            let existing = find_kick_window(
-                visible_windows(),
-                session.browser_pid,
-                &stream.name,
-            ).or_else(|| {
-                if session.browser_pid.map(|pid| process_alive(pid)).unwrap_or(false) {
-                    None
-                } else {
-                    find_kick_window(visible_windows(), None, &stream.name)
-                }
-            });
-
-            if let Some(hwnd) = existing {
-                session.browser_pid = Some(window_pid(hwnd));
-                session.windows.insert(key.clone(), hwnd);
-                session.pending.remove(&key);
-                continue;
-            }
-
-            if session.pending.contains_key(&key) {
-                continue;
-            }
-
-            match Self::launch_stream_window(session, stream) {
-                Ok(()) => {
-                    session.pending.insert(key.clone(), Instant::now());
-                    logging::info(&format!(
-                        "KICK opening in normal Firefox: {}",
-                        stream.url
-                    ));
-                }
-                Err(error) => {
-                    logging::warn(&format!(
-                        "KICK stream open failed for {}: {}",
-                        stream.name, error
-                    ));
-                }
-            }
-        }
-
-        if state_available {
-            let live_keys: HashSet<String> = desired.keys().cloned().collect();
-
-            let stale = session
-                .windows
-                .iter()
-                .filter_map(|(key, hwnd)| {
-                    if live_keys.contains(key) {
-                        None
-                    } else {
-                        Some((key.clone(), *hwnd))
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            for (key, hwnd) in stale {
-                if window_is_valid(hwnd) {
-                    close_window(hwnd);
-                    logging::info(&format!("KICK closed offline stream window: {}", key));
-                }
-                session.windows.remove(&key);
-            }
-        }
-
-        let tracked_keys: HashSet<String> = session.windows.keys().cloned().collect();
-        session.pending.retain(|key, _| desired.contains_key(key) && !tracked_keys.contains(key));
-    }
-
-    #[cfg(windows)]
-    fn open_url(
-        &mut self,
-        profile: GameProfile,
-        url: &str,
-    ) -> Result<(), String> {
-        let session = self.session_mut(profile);
-
-        let stream = KickStream {
-            name: "login".to_string(),
-            url: url.to_string(),
-        };
-
-        Self::launch_stream_window(session, &stream)
-    }
-
-    #[cfg(windows)]
-    fn launch_stream_window(
-        session: &mut KickSession,
-        stream: &KickStream,
-    ) -> Result<(), String> {
-        if stream.url.is_empty() {
-            return Err("empty KICK URL".to_string());
-        }
-
-        if !stream.url.starts_with("https://kick.com/") {
-            return Err("refusing to open a non-KICK HTTPS URL".to_string());
-        }
-
-        let profile_dir = session
-            .profile_dir
-            .clone()
-            .ok_or_else(|| "KICK browser profile is not initialized".to_string())?;
-
-        let executable = session
-            .browser_executable
-            .clone()
-            .ok_or_else(|| "KICK Firefox executable is not initialized".to_string())?;
-
-        std::fs::create_dir_all(&profile_dir)
-            .map_err(|error| format!("could not create KICK profile: {error}"))?;
-
-        if session
-            .browser_pid
-            .map(|pid| !process_alive(pid))
-            .unwrap_or(true)
-        {
-            let child = Command::new(&executable)
-                .arg("--profile")
-                .arg(&profile_dir)
-                .arg("--new-window")
-                .arg(&stream.url)
-                .spawn()
-                .map_err(|error| format!("could not start normal KICK Firefox: {error}"))?;
-
-            session.browser_pid = Some(child.id());
-            return Ok(());
-        }
-
-        Command::new(&executable)
-            .arg("--profile")
-            .arg(&profile_dir)
-            .arg("--new-window")
-            .arg(&stream.url)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("could not request a new KICK Firefox window: {error}"))
+        let id = session.next_id;
+        session.next_id += 1;
+        id
     }
 
     #[cfg(windows)]
@@ -429,6 +200,405 @@ impl KickManager {
         let session = self.session_mut(profile);
         session.profile_dir = Some(config.kick_profile_dir());
         session.browser_executable = Config::kick_firefox_executable().ok();
+    }
+
+    #[cfg(windows)]
+    fn ensure_browser(
+        &mut self,
+        profile: GameProfile,
+        initial_url: &str,
+    ) -> Result<(), String> {
+        let (profile_dir, executable) = {
+            let session = self.session_mut(profile);
+            (
+                session
+                    .profile_dir
+                    .clone()
+                    .ok_or_else(|| "KICK browser profile is not initialized".to_string())?,
+                session
+                    .browser_executable
+                    .clone()
+                    .ok_or_else(|| "KICK Firefox executable is not initialized".to_string())?,
+            )
+        };
+
+        std::fs::create_dir_all(&profile_dir)
+            .map_err(|error| format!("could not create KICK profile: {error}"))?;
+
+        let port = 27801 + profile.index() as u16;
+
+        let alive = {
+            let session = self.session_mut(profile);
+            session
+                .browser_pid
+                .map(process_alive)
+                .unwrap_or(false)
+        };
+
+        if !alive {
+            let child = Command::new(&executable)
+                .arg("--no-remote")
+                .arg(format!("--remote-debugging-port={}", port))
+                .arg("--profile")
+                .arg(&profile_dir)
+                .arg("--new-window")
+                .arg(initial_url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|error| format!("could not start normal KICK Firefox: {error}"))?;
+
+            let pid = child.id();
+
+            let session = self.session_mut(profile);
+            session.browser_pid = Some(pid);
+            session.socket = None;
+            session.tabs.clear();
+            session.pending.clear();
+        }
+
+        if self.session_mut(profile).socket.is_none() {
+            self.connect(profile, port)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn connect(&mut self, profile: GameProfile, port: u16) -> Result<(), String> {
+        let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
+            .map_err(|error| error.to_string())?;
+
+        send_and_wait(
+            &mut socket,
+            1,
+            json!({
+                "id": 1,
+                "method": "session.new",
+                "params": {
+                    "capabilities": {}
+                }
+            }),
+        )?;
+
+        let session = self.session_mut(profile);
+        session.socket = Some(socket);
+        session.next_id = 2;
+
+        logging::info(&format!(
+            "KICK normal Firefox connected on BiDi port {} for {}",
+            port,
+            profile.label()
+        ));
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn sync_tabs(
+        &mut self,
+        profile: GameProfile,
+        streams: &[KickStream],
+        state_available: bool,
+    ) -> Result<(), String> {
+        let mut desired = HashMap::new();
+
+        for stream in streams.iter().take(10) {
+            let key = normalize(&stream.name);
+            if key.is_empty() || !is_kick_url(&stream.url) {
+                continue;
+            }
+            desired.insert(key, stream.url.clone());
+        }
+
+        if desired.is_empty() && !state_available {
+            return Ok(());
+        }
+
+        let initial_url = desired
+            .values()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "https://kick.com/".to_string());
+
+        if let Err(error) = self.ensure_browser(profile, &initial_url) {
+            return Err(error);
+        }
+
+        let contexts = self.contexts(profile)?;
+        let mut current = HashMap::new();
+
+        for context in contexts {
+            let Some(channel) = kick_channel_from_url(&context.url) else {
+                continue;
+            };
+
+            if desired.contains_key(&channel) && !current.contains_key(&channel) {
+                current.insert(channel, context.id);
+            }
+        }
+
+        {
+            let session = self.session_mut(profile);
+            session.tabs = current.clone();
+            session.pending.retain(|key, _| desired.contains_key(key));
+        }
+
+        for (key, url) in &desired {
+            if current.contains_key(key) {
+                continue;
+            }
+
+            self.create_stream_tab(profile, key, url)?;
+        }
+
+        if state_available {
+            let stale = {
+                let session = self.session_mut(profile);
+                session
+                    .tabs
+                    .keys()
+                    .filter(|key| !desired.contains_key(*key))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+
+            for key in stale {
+                self.close_stream_tab(profile, &key)?;
+            }
+        }
+
+        let tracked_keys: HashSet<String> = {
+            let session = self.session_mut(profile);
+            session.tabs.keys().cloned().collect()
+        };
+
+        let session = self.session_mut(profile);
+        session
+            .pending
+            .retain(|key, _| desired.contains_key(key) && !tracked_keys.contains(key));
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn contexts(&mut self, profile: GameProfile) -> Result<Vec<KickContext>, String> {
+        let id = self.next_id(profile);
+        let response = {
+            let session = self.session_mut(profile);
+            let socket = session
+                .socket
+                .as_mut()
+                .ok_or_else(|| "KICK Firefox remote control is not connected".to_string())?;
+
+            send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "browsingContext.getTree",
+                    "params": {
+                        "maxDepth": 10
+                    }
+                }),
+            )?
+        };
+
+        let mut contexts = Vec::new();
+        if let Some(list) = response
+            .get("result")
+            .and_then(|value| value.get("contexts"))
+            .and_then(Value::as_array)
+        {
+            for value in list {
+                collect_contexts(value, &mut contexts);
+            }
+        }
+
+        Ok(contexts)
+    }
+
+    #[cfg(windows)]
+    fn create_stream_tab(
+        &mut self,
+        profile: GameProfile,
+        key: &str,
+        url: &str,
+    ) -> Result<(), String> {
+        let id = self.next_id(profile);
+        let response = {
+            let session = self.session_mut(profile);
+            let socket = session
+                .socket
+                .as_mut()
+                .ok_or_else(|| "KICK Firefox remote control is not connected".to_string())?;
+
+            send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "browsingContext.create",
+                    "params": {
+                        "type": "tab"
+                    }
+                }),
+            )?
+        };
+
+        let context = response
+            .get("result")
+            .and_then(|value| value.get("context"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "KICK tab creation returned no context".to_string())?
+            .to_string();
+
+        let navigate_id = self.next_id(profile);
+        {
+            let session = self.session_mut(profile);
+            let socket = session
+                .socket
+                .as_mut()
+                .ok_or_else(|| "KICK Firefox remote control is not connected".to_string())?;
+
+            send_and_wait(
+                socket,
+                navigate_id,
+                json!({
+                    "id": navigate_id,
+                    "method": "browsingContext.navigate",
+                    "params": {
+                        "context": context,
+                        "url": url,
+                        "wait": "none"
+                    }
+                }),
+            )?;
+        }
+
+        let session = self.session_mut(profile);
+        session.tabs.insert(key.to_string(), context);
+        session.pending.remove(key);
+
+        logging::info(&format!(
+            "KICK opened stream as tab in normal Firefox: {}",
+            url
+        ));
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn close_stream_tab(
+        &mut self,
+        profile: GameProfile,
+        key: &str,
+    ) -> Result<(), String> {
+        let context = {
+            let session = self.session_mut(profile);
+            session.tabs.remove(key)
+        };
+
+        let Some(context) = context else {
+            return Ok(());
+        };
+
+        let id = self.next_id(profile);
+        let session = self.session_mut(profile);
+        let socket = session
+            .socket
+            .as_mut()
+            .ok_or_else(|| "KICK Firefox remote control is not connected".to_string())?;
+
+        send_and_wait(
+            socket,
+            id,
+            json!({
+                "id": id,
+                "method": "browsingContext.close",
+                "params": {
+                    "context": context
+                }
+            }),
+        )?;
+
+        logging::info(&format!(
+            "KICK closed offline stream tab: {}",
+            key
+        ));
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn close_all_managed_tabs(&mut self, profile: GameProfile) -> Result<(), String> {
+        let keys = {
+            let session = self.session_mut(profile);
+            session.tabs.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for key in keys {
+            let _ = self.close_stream_tab(profile, &key);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone)]
+struct KickContext {
+    id: String,
+    url: String,
+}
+
+#[cfg(windows)]
+fn collect_contexts(value: &Value, out: &mut Vec<KickContext>) {
+    let Some(id) = value.get("context").and_then(Value::as_str) else {
+        return;
+    };
+
+    out.push(KickContext {
+        id: id.to_string(),
+        url: value
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    });
+
+    if let Some(children) = value.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_contexts(child, out);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn normalize(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .trim_matches('/')
+        .to_string()
+}
+
+#[cfg(windows)]
+fn is_kick_url(url: &str) -> bool {
+    url.starts_with("https://kick.com/")
+}
+
+#[cfg(windows)]
+fn kick_channel_from_url(url: &str) -> Option<String> {
+    let value = url.strip_prefix("https://kick.com/")?;
+    let path = value.split(['?', '#', '/']).next().unwrap_or_default();
+    let channel = normalize(path);
+
+    if channel.is_empty() {
+        None
+    } else {
+        Some(channel)
     }
 }
 
@@ -468,6 +638,60 @@ fn process_alive(pid: u32) -> bool {
 #[cfg(not(windows))]
 fn process_alive(_pid: u32) -> bool {
     false
+}
+
+fn send_and_wait<S>(
+    socket: &mut WebSocket<S>,
+    expected_id: u64,
+    command: Value,
+) -> Result<Value, String>
+where
+    S: Read + Write,
+{
+    socket
+        .send(Message::Text(command.to_string().into()))
+        .map_err(|error| error.to_string())?;
+
+    loop {
+        let message = socket.read().map_err(|error| error.to_string())?;
+
+        let Message::Text(text) = message else {
+            continue;
+        };
+
+        let value: Value = serde_json::from_str(text.as_ref())
+            .map_err(|error| format!("invalid KICK BiDi JSON: {error}"))?;
+
+        if value.get("id").and_then(Value::as_u64) != Some(expected_id) {
+            continue;
+        }
+
+        if value.get("type").and_then(Value::as_str) == Some("error") {
+            return Err(value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("KICK Firefox BiDi command failed")
+                .to_string());
+        }
+
+        if value
+            .get("result")
+            .and_then(|result| result.get("type"))
+            .and_then(Value::as_str)
+            == Some("exception")
+        {
+            let result = value.get("result").unwrap_or(&Value::Null);
+            let details = result
+                .get("exceptionDetails")
+                .and_then(|details| details.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("KICK BiDi script command raised an exception");
+
+            return Err(format!("KICK script command exception: {details}"));
+        }
+
+        return Ok(value);
+    }
 }
 
 impl Default for KickManager {
