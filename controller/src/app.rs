@@ -25,6 +25,10 @@ fn localize_status(message: String) -> String {
     let mut value = message;
     for (en, pt) in [
         ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
+        ("addon installers, but some failed:
+", "instaladores de addons, mas alguns falharam:
+"),
+        ("Use \"Install Violentmonkey\" first.", "Use \"Instalar Violentmonkey\" primeiro."),
         ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe."),
         ("Violentmonkey is not installed and active in ", "O Violentmonkey não está instalado e ativo em "),
         ("invalid page probe: ", "sondagem de página inválida: "),
