@@ -201,6 +201,11 @@ impl KickManager {
 
         #[cfg(windows)]
         {
+            let Ok(config) = Config::for_profile(profile) else {
+                logging::warn(&format!("KICK profile {} could not be configured", profile.label()));
+                return;
+            };
+            self.configure(profile, &config);
             self.sync_windows(profile, streams, state_available);
         }
     }
@@ -218,6 +223,8 @@ impl KickManager {
 
         #[cfg(windows)]
         {
+            let config = Config::for_profile(profile)?;
+            self.configure(profile, &config);
             self.open_url(profile, url).map(|_| ())
         }
     }
@@ -434,8 +441,6 @@ impl KickManager {
 
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
-    use std::mem::MaybeUninit;
-
     unsafe extern "system" {
         fn OpenProcess(
             desired_access: u32,
@@ -458,9 +463,8 @@ fn process_alive(pid: u32) -> bool {
             return false;
         }
 
-        let mut exit_code = MaybeUninit::<u32>::uninit();
-        let ok = GetExitCodeProcess(process, exit_code.as_mut_ptr()) != 0;
-        let exit_code = exit_code.assume_init();
+        let mut exit_code = 0u32;
+        let ok = GetExitCodeProcess(process, &mut exit_code) != 0;
         let _ = CloseHandle(process);
 
         ok && exit_code == STILL_ACTIVE
