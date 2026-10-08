@@ -1,12 +1,10 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.4
+// @version      1.3.5
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
-// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
-// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
-// @grant        unsafeWindow
+// @grant        none
 // @run-at       document-start
 // @noframes
 // ==/UserScript==
@@ -14,11 +12,11 @@
 (() => {
     'use strict';
 
-    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const page = window;
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 6 &&
+        Number(existingBridge.version) >= 7 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
@@ -227,40 +225,56 @@
     }
 
     function installHook() {
-    const Native = page.WebSocket;
-    if (typeof Native !== 'function') return false;
-    if (Native.__mothWrapped) return true;
+        /*
+         * Observe newly created game sockets through a constructor Proxy.
+         * The hook runs in the page context so the game and bridge share the
+         * same WebSocket constructor and there is no cross-sandbox assignment.
+         */
+        const NativeWebSocket = page.WebSocket;
+        if (typeof NativeWebSocket !== 'function') return false;
 
-    try {
-        const Wrapped = function WebSocket(...args) {
-            // Called without `new`: let the native constructor throw its usual error
-            if (!new.target) return Native(...args);
+        let WrappedWebSocket;
+        try {
+            WrappedWebSocket = new Proxy(NativeWebSocket, {
+                construct(target, args, newTarget) {
+                    const ws = Reflect.construct(
+                        target,
+                        args,
+                        newTarget === WrappedWebSocket ? target : newTarget
+                    );
 
-            const ws = Reflect.construct(
-                Native,
-                args,
-                new.target === Wrapped ? Native : new.target
-            );
+                    try {
+                        attach(ws);
+                    } catch (error) {
+                        try {
+                            console.warn(
+                                '[Moth Controller Bridge] socket observation failed:',
+                                error
+                            );
+                        } catch {}
+                    }
 
-            try { attach(ws); } catch (error) {
-                try { console.warn('[Moth Controller Bridge] attach failed:', error); } catch {}
-            }
-            return ws;
-        };
+                    return ws;
+                }
+            });
 
-        Wrapped.prototype = Native.prototype;
-        for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
-            Object.defineProperty(Wrapped, key, { value: Native[key] });
+            page.WebSocket = WrappedWebSocket;
+            return page.WebSocket === WrappedWebSocket;
+        } catch (error) {
+            /*
+             * Instrumentation must never prevent the game from starting.
+             * If the page won't allow the wrapper assignment, leave WebSocket
+             * untouched and let the game continue without bridge data.
+             */
+            try {
+                console.warn(
+                    '[Moth Controller Bridge] WebSocket instrumentation unavailable:',
+                    error
+                );
+            } catch {}
+            return false;
         }
-        Object.defineProperty(Wrapped, '__mothWrapped', { value: true });
-
-        page.WebSocket = Wrapped;
-        return page.WebSocket === Wrapped;
-    } catch (error) {
-        try { console.warn('[Moth Controller Bridge] WebSocket hook unavailable:', error); } catch {}
-        return false;
     }
-}
 
     function bridgeSocket() {
         return gameSocket || socket || null;
@@ -582,7 +596,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 6,
+        version: 7,
         send,
         snapshot,
         gameSnapshot,
