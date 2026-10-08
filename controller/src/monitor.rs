@@ -25,7 +25,6 @@ pub struct TabInfo {
 pub struct HuntSpeciesInfo {
     pub id: u32,
     pub name: String,
-    pub points: u32,
     pub types: Vec<String>,
     pub weak_to: Vec<String>,
     pub weakness_multipliers: Vec<(String, f32)>,
@@ -46,7 +45,6 @@ pub struct HuntInfo {
     pub name: String,
     pub level: u32,
     pub area: String,
-    pub species: Vec<String>,
     pub species_details: Vec<HuntSpeciesInfo>,
     pub xp_per_hour: u64,
     pub pokemon_xp_per_hour: u64,
@@ -54,36 +52,12 @@ pub struct HuntInfo {
     pub unlocked: bool,
     pub current: bool,
     pub xp_source: String,
-    pub xp_samples: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct MarketListing {
-    pub id: u64,
-    pub item_id: u64,
-    pub name: String,
-    pub currency: String,
-    pub price: u64,
-    pub quantity: u64,
-    pub seller: String,
-    pub retained_until: u64,
-    pub seconds_until_buy: u64,
-    pub reference_price: u64,
-    pub discount_pct: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct MarketItem {
-    pub id: u64,
-    pub name: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct MothWatchCandidate {
-    pub key: String,
     pub kind: String,
     pub listing_id: u64,
-    pub item_id: u64,
     pub name: String,
     pub currency: String,
     pub price: u64,
@@ -95,8 +69,6 @@ pub struct MothWatchCandidate {
     pub unit_price: u64,
     pub seller: String,
     pub retained_until: u64,
-    pub first_seen_at: u64,
-    pub seen_at: u64,
     pub reference_source: String,
     pub active_reference_listings: u64,
     pub server_average: u64,
@@ -110,8 +82,6 @@ pub struct MothWatchPending {
     pub currency: String,
     pub unit_price: u64,
     pub qty: u64,
-    pub spend: u64,
-    pub sent_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -143,7 +113,6 @@ pub struct MothWatchConfig {
 
 #[derive(Clone, Debug)]
 pub struct MothWatchLog {
-    pub at: u64,
     pub text: String,
 }
 
@@ -151,7 +120,6 @@ pub struct MothWatchLog {
 pub struct MothWatchControllerResult {
     pub at: u64,
     pub ok: bool,
-    pub source: String,
     pub error: String,
     pub listing_id: u64,
 }
@@ -165,11 +133,9 @@ pub struct MothWatchInfo {
     pub item_status: String,
     pub pokemon_status: String,
     pub protocol_messages: u64,
-    pub last_scan_at: u64,
     pub server_clock_offset: i64,
     pub pending_buy: Option<MothWatchPending>,
     pub candidates: Vec<MothWatchCandidate>,
-    pub all_candidates: u64,
     pub baseline_items: u64,
     pub baseline_gold: u64,
     pub baseline_orb: u64,
@@ -180,17 +146,6 @@ pub struct MothWatchInfo {
     pub config: MothWatchConfig,
     pub buy_log: Vec<MothWatchLog>,
     pub controller_result: Option<MothWatchControllerResult>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MarketSummary {
-    pub item_id: u64,
-    pub name: String,
-    pub gold_min: u64,
-    pub orb_min: u64,
-    pub gold_average: u64,
-    pub orb_average: u64,
-    pub listings: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -241,9 +196,6 @@ pub struct Health {
     pub last_battle_at: u64,
     pub tabs: Vec<TabInfo>,
     pub hunts: Vec<HuntInfo>,
-    pub market_listings: Vec<MarketListing>,
-    pub market_catalog: Vec<MarketItem>,
-    pub market_summary: Vec<MarketSummary>,
     pub moth_watch: Option<MothWatchInfo>,
     pub kick_streams: Vec<KickStream>,
     pub kick_state_available: bool,
@@ -299,9 +251,6 @@ impl Default for Health {
             last_battle_at: 0,
             tabs: Vec::new(),
             hunts: Vec::new(),
-            market_listings: Vec::new(),
-            market_catalog: Vec::new(),
-            market_summary: Vec::new(),
             moth_watch: None,
             kick_streams: Vec::new(),
             kick_state_available: false,
@@ -462,9 +411,6 @@ struct RuntimeProbe {
     last_battle_at: u64,
     xp_bonuses: Vec<String>,
     hunts: Vec<HuntInfo>,
-    market_listings: Vec<MarketListing>,
-    market_catalog: Vec<MarketItem>,
-    market_summary: Vec<MarketSummary>,
     moth_watch: Option<MothWatchInfo>,
     kick_streams: Vec<KickStream>,
     kick_state_available: bool,
@@ -516,9 +462,6 @@ struct Probe {
     last_battle_at: u64,
     tabs: Vec<TabInfo>,
     hunts: Vec<HuntInfo>,
-    market_listings: Vec<MarketListing>,
-    market_catalog: Vec<MarketItem>,
-    market_summary: Vec<MarketSummary>,
     moth_watch: Option<MothWatchInfo>,
     kick_streams: Vec<KickStream>,
     kick_state_available: bool,
@@ -919,9 +862,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         last_battle_at: runtime.last_battle_at,
         tabs,
         hunts: runtime.hunts,
-        market_listings: runtime.market_listings,
-        market_catalog: runtime.market_catalog,
-        market_summary: runtime.market_summary,
         moth_watch: runtime.moth_watch,
         kick_streams: runtime.kick_streams,
         kick_state_available: runtime.kick_state_available,
@@ -966,8 +906,6 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
             currency: pending.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
             unit_price: pending.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
             qty: pending.get("qty").and_then(Value::as_u64).unwrap_or(0),
-            spend: pending.get("spend").and_then(Value::as_u64).unwrap_or(0),
-            sent_at: pending.get("sentAt").and_then(Value::as_u64).unwrap_or(0),
         })
     });
 
@@ -975,10 +913,8 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
         .and_then(Value::as_array)
         .map(|items| {
             items.iter().map(|candidate| MothWatchCandidate {
-                key: candidate.get("key").and_then(Value::as_str).unwrap_or_default().to_string(),
                 kind: candidate.get("kind").and_then(Value::as_str).unwrap_or_default().to_string(),
                 listing_id: candidate.get("listingId").and_then(Value::as_u64).unwrap_or(0),
-                item_id: candidate.get("itemId").and_then(Value::as_u64).unwrap_or(0),
                 name: candidate.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
                 currency: candidate.get("currency").and_then(Value::as_str).unwrap_or("gold").to_string(),
                 price: candidate.get("price").and_then(Value::as_u64).unwrap_or(0),
@@ -990,8 +926,6 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
                 unit_price: candidate.get("unitPrice").and_then(Value::as_u64).unwrap_or(0),
                 seller: candidate.get("seller").and_then(Value::as_str).unwrap_or("—").to_string(),
                 retained_until: candidate.get("retainedUntil").and_then(Value::as_u64).unwrap_or(0),
-                first_seen_at: candidate.get("firstSeenAt").and_then(Value::as_u64).unwrap_or(0),
-                seen_at: candidate.get("seenAt").and_then(Value::as_u64).unwrap_or(0),
                 reference_source: candidate.get("referenceSource").and_then(Value::as_str).unwrap_or_default().to_string(),
                 active_reference_listings: candidate.get("activeReferenceListings").and_then(Value::as_u64).unwrap_or(0),
                 server_average: candidate.get("serverAverage").and_then(Value::as_u64).unwrap_or(0),
@@ -1005,8 +939,7 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
         .and_then(Value::as_array)
         .map(|items| {
             items.iter().map(|row| MothWatchLog {
-                at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
-                text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    text: row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
             }).collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -1017,7 +950,6 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
         Some(MothWatchControllerResult {
             at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
             ok: row.get("ok").and_then(Value::as_bool).unwrap_or(false),
-            source: row.get("source").and_then(Value::as_str).unwrap_or_default().to_string(),
             error: row.get("error").and_then(Value::as_str).unwrap_or_default().to_string(),
             listing_id: row.get("listingId").and_then(Value::as_u64).unwrap_or(0),
         })
@@ -1031,11 +963,9 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
         item_status: value.get("itemStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
         pokemon_status: value.get("pokemonStatus").and_then(Value::as_str).unwrap_or("waiting").to_string(),
         protocol_messages: value.get("protocolMessages").and_then(Value::as_u64).unwrap_or(0),
-        last_scan_at: value.get("lastScanAt").and_then(Value::as_u64).unwrap_or(0),
         server_clock_offset: value.get("serverClockOffset").and_then(Value::as_i64).unwrap_or(0),
         pending_buy,
         candidates,
-        all_candidates: value.get("allCandidates").and_then(Value::as_u64).unwrap_or(0),
         baseline_items: value.get("baseline").and_then(|v| v.get("items")).and_then(Value::as_u64).unwrap_or(0),
         baseline_gold: value.get("baseline").and_then(|v| v.get("gold")).and_then(Value::as_u64).unwrap_or(0),
         baseline_orb: value.get("baseline").and_then(|v| v.get("orb")).and_then(Value::as_u64).unwrap_or(0),
@@ -1580,7 +1510,6 @@ fn probe_runtime_details(
                     Some(HuntSpeciesInfo {
                         id,
                         name,
-                        points: species.get("points").and_then(Value::as_u64).unwrap_or(1) as u32,
                         types,
                         weak_to,
                         weakness_multipliers,
@@ -1613,7 +1542,6 @@ fn probe_runtime_details(
                 unlocked: hunt.get("unlocked").and_then(Value::as_bool).unwrap_or(false),
                 current: hunt.get("current").and_then(Value::as_bool).unwrap_or(false),
                 xp_source: hunt.get("xp").and_then(|value| value.get("source")).and_then(Value::as_str).unwrap_or("learning").to_string(),
-                xp_samples: hunt.get("xp").and_then(|value| value.get("samples")).and_then(Value::as_u64).unwrap_or(0),
                 species_details,
             }
         }).collect::<Vec<_>>()
@@ -1656,108 +1584,10 @@ fn probe_runtime_details(
                     unlocked: level <= player_level,
                     current: slug == hunt_slug,
                     xp_source: if xp_per_hour > 0 { "observed".to_string() } else { "learning".to_string() },
-                    xp_samples: runtime.kills,
                 }
             }).collect::<Vec<_>>())
             .unwrap_or_default()
     };
-
-    let catalog = snapshot
-        .get("catalog")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let market_catalog = catalog
-        .iter()
-        .filter_map(|item| {
-            let id = item.get("id").and_then(Value::as_u64)?;
-            let name = item
-                .get("nome")
-                .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("Item")
-                .to_string();
-            Some(MarketItem { id, name })
-        })
-        .collect::<Vec<_>>();
-
-    let mut names = std::collections::HashMap::new();
-    for item in catalog {
-        if let Some(id) = item.get("id").and_then(Value::as_u64) {
-            let name = item.get("nome")
-                .or_else(|| item.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("Item")
-                .to_string();
-            names.insert(id, name);
-        }
-    }
-
-    let mut item_averages: std::collections::HashMap<u64, (u64, u64)> =
-        std::collections::HashMap::new();
-    let mut market_summary = Vec::new();
-
-    if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
-        for entry in messages.iter().rev() {
-            let Some(message) = entry.get("message") else { continue; };
-            if message.get("aba").and_then(Value::as_str) != Some("itens") {
-                continue;
-            }
-
-            if let Some(medias) = message.get("medias").and_then(Value::as_object) {
-                for (raw_id, row) in medias {
-                    let Ok(item_id) = raw_id.parse::<u64>() else { continue; };
-                    let gold_average = row.get("gold")
-                        .and_then(|v| v.get("media"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    let orb_average = row.get("orb")
-                        .and_then(|v| v.get("media"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    item_averages.insert(item_id, (gold_average, orb_average));
-                }
-            }
-
-            let Some(summary) = message.get("resumo").and_then(Value::as_object) else {
-                continue;
-            };
-
-            for (raw_id, row) in summary {
-                let Ok(item_id) = raw_id.parse::<u64>() else { continue; };
-                let name = names
-                    .get(&item_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Item {}", item_id));
-
-                let gold_min = row.get("minGold").and_then(Value::as_u64).unwrap_or(0);
-                let orb_min = row.get("minOrb").and_then(Value::as_u64).unwrap_or(0);
-                let listings = row.get("anuncios").and_then(Value::as_u64).unwrap_or(0);
-                let (gold_average, orb_average) =
-                    item_averages.get(&item_id).copied().unwrap_or((0, 0));
-
-                if listings > 0 {
-                    market_summary.push(MarketSummary {
-                        item_id,
-                        name,
-                        gold_min,
-                        orb_min,
-                        gold_average,
-                        orb_average,
-                        listings,
-                    });
-                }
-            }
-
-            break;
-        }
-    }
-
-    let mut server_now = snapshot.get("serverNow").and_then(Value::as_u64).unwrap_or(0);
-    if server_now == 0 {
-        server_now = crate::app::chrono_like_now_ms();
-    }
 
     let mut market_listings = Vec::new();
     if let Some(messages) = snapshot.get("market").and_then(Value::as_array) {
@@ -1855,9 +1685,6 @@ fn probe_runtime_details(
         last_battle_at,
         xp_bonuses,
         hunts,
-        market_listings,
-        market_catalog,
-        market_summary,
         moth_watch,
         kick_streams,
         kick_state_available,
