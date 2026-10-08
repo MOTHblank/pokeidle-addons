@@ -93,8 +93,10 @@ O botão **Addons** abre os instaladores dos scripts principais no perfil seleci
 
 ### Scripts instalados pelo botão Addons
 
+O botão **Addons** instala todos os userscripts recomendados para o perfil selecionado:
+
 **Auto Catch+**  
-Captura automática configurável e estatísticas de captura.
+Captura automática configurável e estatísticas de captura. O Auto Catch também possui reposição automática independente para **bolas, poções e Revives**.
 
 **Performance+**  
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
@@ -108,21 +110,11 @@ Verifica os streams atuais e abre automaticamente os chats da Twitch e as págin
 **Twitch + KICK Low Resource Mode**  
 Mantém Twitch e KICK no menor consumo prático. Chats da Twitch permanecem leves; no KICK, a página normal do canal é mantida para que o player real continue disponível para o tempo de exibição/Channel Points.
 
-### Scripts adicionais
-
-Dois scripts do projeto não são instalados pelo botão **Addons** do controlador porque possuem fluxo próprio:
-
 **PokéIdle Hunt Atlas**  
-[Repositório do Hunt Atlas](https://github.com/MOTHblank/pokeidle-huntatlas) · [Instalar hunt-atlas.user.js](https://github.com/MOTHblank/pokeidle-huntatlas/raw/refs/heads/main/hunt-atlas.user.js)
-
-Instale-o normalmente pelo Violentmonkey no perfil em que deseja usar o Atlas. Ele substitui a tela **Mapa** do PokéIdle por uma interface de busca e comparação de hunts.
-
-O Hunt Atlas segue separado do modo de página usado pelo controlador e deve ser usado na página normal do PokéIdle.
+Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. O userscript é instalado automaticamente pelo botão **Addons**.
 
 **PokéIdle Moth Watch**  
-[Instalar market-bot.user.js](https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js)
-
-É o userscript opcional de monitoramento/compra do mercado. Ele possui sua própria configuração dentro do PokéIdle.
+Monitoramento e compra configurável do mercado. O userscript também é instalado automaticamente pelo botão **Addons**.
 
 ## Como configurar os userscripts
 
@@ -329,19 +321,17 @@ Install Violentmonkey inside each enabled profile, then use **Accounts → Addon
 
 ### Core userscripts
 
-The **Addons** button installs:
+The **Addons** button installs all recommended userscripts for the selected profile:
 
-- Auto Catch+
+- Auto Catch+ — including independent ball, potion and revive restocking
 - Performance+
 - Live Stream Scanner
 - Controller Bridge
 - Twitch + KICK Low Resource Mode
+- PokéIdle Hunt Atlas
+- PokéIdle Moth Watch
 
-**Hunt Atlas** and **Moth Watch** have separate installation flows.
-
-[Hunt Atlas repository](https://github.com/MOTHblank/pokeidle-huntatlas) · [Install Hunt Atlas](https://github.com/MOTHblank/pokeidle-huntatlas/raw/refs/heads/main/hunt-atlas.user.js)
-
-[Install Moth Watch](https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js)
+There is no separate installation flow. **Accounts → Addons** opens the complete addon set in the selected Firefox profile.
 
 ### Controller usage
 
