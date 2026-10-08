@@ -2213,7 +2213,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.14 loaded');
+        console.info('[Moth Watch] v0.1.15 loaded');
     }
 
     bootstrap();
