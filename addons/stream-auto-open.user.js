@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.3.0
-// @description  Opens current official Twitch chats as lightweight popouts and current KICK streams as regular watch pages in background tabs; refreshes once per hour.
+// @version      6.3.1
+// @description  Opens current official Twitch chats as lightweight popouts and delegates KICK streams to the native normal-browser manager; refreshes every 10 minutes.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -19,7 +19,7 @@
     const INVENTORY_ID = 'btn-bolsa';
 
     const MAX_LIVE_STREAMS_PER_SERVICE = 10;
-    const LIVE_SCAN_INTERVAL_MS = 60 * 60 * 1000;
+    const LIVE_SCAN_INTERVAL_MS = 10 * 60 * 1000;
     const INITIAL_SCAN_DELAY_MS = 30 * 1000;
     const UI_RECHECK_INTERVAL_MS = 30 * 1000;
 
@@ -623,7 +623,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner ready · KICK is delegated to native browser profile · first scan 30s after page load · hourly thereafter');
+    console.info('[Moth] live stream scanner ready · KICK is delegated to native browser profile · first scan 30s after page load · every 10 minutes thereafter');
     }
 
     start();
