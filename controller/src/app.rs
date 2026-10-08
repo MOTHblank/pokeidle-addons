@@ -78,11 +78,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled." => "Cada slot é um perfil separado do Firefox. Desabilitar um slot o remove do painel e de Iniciar habilitadas.",
         "Add account" => "Adicionar conta",
         "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma conta.",
-        "footer.by" => "por MOTHblank",
-        "footer.play" => "MOTHblank no Google Play",
-        "footer.x" => "MOTHblank no X",
-        "footer.whatsapp" => "WhatsApp / Pix",
-        "footer.source" => "código-fonte",
+        "by MOTHblank" => "por MOTHblank",
+        "MOTHblank on Google Play" => "MOTHblank no Google Play",
+        "MOTHblank on X" => "MOTHblank no X",
+        "WhatsApp / Pix" => "WhatsApp / Pix",
+        "source code" => "código-fonte",
         "Credits" => "Créditos",
         "MOTH" => "MOTH",
         "POKEIDLE" => "POKEIDLE",
@@ -828,6 +828,9 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             ui.add_space(12.0);
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+                ui.add_space(6.0);
+                draw_credits(ui);
+                ui.add_space(10.0);
                 ui.label(
                     RichText::new(tr("Rust rewrite · Windows"))
                         .size(10.0)
@@ -1603,39 +1606,43 @@ fn draw_credits(ui: &mut egui::Ui) {
         .corner_radius(8.0)
         .inner_margin(Margin::symmetric(9, 7))
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
+            ui.vertical(|ui| {
                 ui.label(
                     RichText::new(tr("Credits"))
                         .size(9.0)
                         .strong()
                         .color(DIM),
                 );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(tr("footer.by"))
-                        .size(9.0)
-                        .color(MUTED),
-                );
-                ui.label(RichText::new("·").size(9.0).color(DIM));
-                ui.hyperlink_to(
-                    tr("footer.play"),
-                    "https://play.google.com/store/apps/developer?id=MOTHblank",
-                );
-                ui.label(RichText::new("·").size(9.0).color(DIM));
-                ui.hyperlink_to(
-                    tr("footer.x"),
-                    "https://x.com/MOTHblank",
-                );
-                ui.label(RichText::new("·").size(9.0).color(DIM));
-                ui.hyperlink_to(
-                    tr("footer.whatsapp"),
-                    "https://wa.me/+5537999933376",
-                );
-                ui.label(RichText::new("·").size(9.0).color(DIM));
-                ui.hyperlink_to(
-                    tr("footer.source"),
-                    "https://github.com/MOTHblank/pokeidle-huntatlas",
-                );
+
+                ui.add_space(3.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(tr("by MOTHblank"))
+                            .size(9.0)
+                            .color(MUTED),
+                    );
+                    ui.label(RichText::new("·").size(9.0).color(DIM));
+                    ui.hyperlink_to(
+                        tr("MOTHblank on Google Play"),
+                        "https://play.google.com/store/apps/developer?id=MOTHblank",
+                    );
+                    ui.label(RichText::new("·").size(9.0).color(DIM));
+                    ui.hyperlink_to(
+                        tr("MOTHblank on X"),
+                        "https://x.com/MOTHblank",
+                    );
+                    ui.label(RichText::new("·").size(9.0).color(DIM));
+                    ui.hyperlink_to(
+                        tr("WhatsApp / Pix"),
+                        "https://wa.me/+5537999933376",
+                    );
+                    ui.label(RichText::new("·").size(9.0).color(DIM));
+                    ui.hyperlink_to(
+                        tr("source code"),
+                        "https://github.com/MOTHblank/pokeidle-huntatlas",
+                    );
+                });
             });
         });
 }
@@ -1835,8 +1842,6 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     .size(11.0).color(DIM));
             }
 
-            ui.add_space(10.0);
-            draw_credits(ui);
         });
     app.show_atlas = open;
 }
