@@ -40,6 +40,7 @@ unsafe extern "system" fn collect_window_callback(
 }
 
 #[cfg(windows)]
+#[link(name = "user32")]
 unsafe extern "system" {
     fn EnumWindows(
         callback: Option<unsafe extern "system" fn(Hwnd, isize) -> i32>,
@@ -432,6 +433,7 @@ impl KickManager {
 
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
+    #[link(name = "kernel32")]
     unsafe extern "system" {
         fn OpenProcess(
             desired_access: u32,
