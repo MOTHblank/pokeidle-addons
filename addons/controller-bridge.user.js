@@ -450,17 +450,7 @@
                 streamScanLive: Number(scanner?.dataset?.mothScanLive || 0) || 0,
                 streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0
             },
-            hunts: hunts.map(h => ({
-                slug: String(h?.slug || ''),
-                name: String(h?.nome || h?.name || h?.slug || ''),
-                level: Number(h?.nivel ?? h?.level) || 0,
-                species: Array.isArray(h?.especies)
-                    ? h.especies.map(s => ({
-                        id: Number(s?.pokeId ?? s?.speciesId) || 0,
-                        name: String(s?.nome || s?.name || '')
-                    }))
-                    : []
-            })),
+            hunts: copy(hunts) || [],
             stream: {
                 twitch: copy(state?.twitch),
                 kick: copy(state?.kick),
