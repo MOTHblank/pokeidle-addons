@@ -3254,8 +3254,13 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.set_width(220.0);
                                         ui.vertical(|ui| {
                                             ui.horizontal(|ui| {
+                                                let kind_label = match candidate.kind.as_str() {
+                                                    "item" => tr("Items").to_string(),
+                                                    "pokemon" => tr("Pokémon").to_string(),
+                                                    _ => candidate.kind.to_ascii_uppercase(),
+                                                };
                                                 ui.label(
-                                                    RichText::new(candidate.kind.to_ascii_uppercase())
+                                                    RichText::new(kind_label)
                                                         .size(8.0)
                                                         .strong()
                                                         .color(DIM),
@@ -3270,8 +3275,10 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             ui.label(
                                                 RichText::new(if candidate.kind == "item" {
                                                     format!(
-                                                        "{} units · total {}",
+                                                        "{} {} · {} {}",
                                                         candidate.qty,
+                                                        tr("units"),
+                                                        tr("total"),
                                                         format_number(total)
                                                     )
                                                 } else {
@@ -3288,7 +3295,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 RichText::new(format!(
                                                     "{} {}",
                                                     format_number(candidate.price),
-                                                    if candidate.currency == "orb" { "Gems" } else { "Coins" }
+                                                    if candidate.currency == "orb" { tr("Gems") } else { tr("Coins") }
                                                 ))
                                                 .size(10.0)
                                                 .strong()
@@ -3383,8 +3390,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 );
                                                 app.set_status(
                                                     format!(
-                                                        "{} · Moth Watch purchase requested for {}",
+                                                        "{} · {} {}",
                                                         app.account_name(app.market_profile),
+                                                        tr("Moth Watch purchase requested for"),
                                                         candidate.name
                                                     ),
                                                     false,
@@ -3845,7 +3853,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     };
 
     ui.label(
-        RichText::new(format!("● {}", label))
+        RichText::new(format!("● {}", tr(label)))
             .size(10.0)
             .strong()
             .color(color),
@@ -3855,7 +3863,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
 fn metric(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.vertical(|ui| {
         ui.label(
-            RichText::new(label)
+            RichText::new(tr(label))
                 .size(9.0)
                 .strong()
                 .color(DIM),
