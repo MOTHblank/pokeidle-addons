@@ -1,5 +1,5 @@
 use crate::accounts;
-use crate::config::GameProfile;
+use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
@@ -61,6 +61,17 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
+        "LAUNCH ENABLED" => "INICIAR HABILITADAS",
+        "Accounts" => "Contas",
+        "Account Manager" => "Gerenciador de contas",
+        "Enabled" => "Habilitada",
+        "Account name" => "Nome da conta",
+        "Save accounts" => "Salvar contas",
+        "Firefox profile" => "Perfil do Firefox",
+        "Disabled" => "Desabilitada",
+        "Available slots" => "Slots disponíveis",
+        "Unique profile" => "Perfil exclusivo",
+        "Add account" => "Adicionar conta",
         "MOTH" => "MOTH",
         "POKEIDLE" => "POKEIDLE",
         "WORKSPACE" => "ÁREA DE TRABALHO",
@@ -238,10 +249,11 @@ impl GameSlot {
 }
 
 pub struct ControllerApp {
-    games: [GameSlot; 2],
-    show_profiles: bool,
+    games: [GameSlot; 4],
+    show_accounts: bool,
     show_atlas: bool,
     show_market: bool,
+    accounts: [AccountConfig; 4],
     atlas_profile: GameProfile,
     market_profile: GameProfile,
     market_search: String,
@@ -259,11 +271,10 @@ impl ControllerApp {
         logging::info("controller UI initialized with egui/eframe");
 
         Self {
-            games: [
-                GameSlot::new(GameProfile::Game1),
-                GameSlot::new(GameProfile::Game2),
-            ],
-            show_profiles: false,
+            games: std::array::from_fn(|i| {
+                GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
+            }),
+            show_accounts: false,
             show_atlas: false,
             show_market: false,
             atlas_profile: GameProfile::Game1,
@@ -273,13 +284,32 @@ impl ControllerApp {
             market_currency: "gold".to_string(),
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
+            accounts: Config::load_accounts().unwrap_or_else(|error| {
+                logging::warn(&format!("account configuration load failed: {error}"));
+                std::array::from_fn(AccountConfig::default_for)
+            }),
         }
     }
 
     fn game_index(profile: GameProfile) -> usize {
-        match profile {
-            GameProfile::Game1 => 0,
-            GameProfile::Game2 => 1,
+        profile.index()
+    }
+
+    fn account_name(&self, profile: GameProfile) -> String {
+        self.accounts[profile.index()].name.clone()
+    }
+
+    fn account_enabled(&self, profile: GameProfile) -> bool {
+        self.accounts[profile.index()].enabled
+    }
+
+    fn save_account_config(&mut self) -> bool {
+        match Config::save_accounts(&self.accounts) {
+            Ok(()) => true,
+            Err(error) => {
+                self.set_status(error, true);
+                false
+            }
         }
     }
 
@@ -291,7 +321,7 @@ impl ControllerApp {
             };
 
             if exited {
-                logging::info(&format!("{} Firefox process exited", slot.profile.label()));
+                logging::info(&format!("{} Firefox process exited", slot.self.account_name(profile)));
                 if let Some(monitor) = slot.monitor.as_ref() {
                     monitor.stop();
                 }
@@ -443,15 +473,19 @@ impl ControllerApp {
         }
     }
 
-    fn launch_both(&mut self) {
-        self.launch_one(GameProfile::Game1);
-        self.launch_one(GameProfile::Game2);
-        self.set_status("Launch Both requested · monitoring will update as Firefox becomes ready", false);
+    fn launch_enabled(&mut self) {
+        for profile in GameProfile::ALL {
+            if self.account_enabled(profile) {
+                self.launch_one(profile);
+            }
+        }
+        self.set_status("Launch enabled requested · monitoring will update as Firefox becomes ready", false);
     }
 
     fn stop_all(&mut self) {
-        self.stop_one(GameProfile::Game1);
-        self.stop_one(GameProfile::Game2);
+        for profile in GameProfile::ALL {
+            self.stop_one(profile);
+        }
         self.set_status("All Firefox instances closed.", false);
     }
 
@@ -539,7 +573,7 @@ impl Drop for ControllerApp {
             if let Some(mut child) = slot.child.take() {
                 logging::info(&format!(
                     "controller shutting down; closing {} Firefox PID {}",
-                    slot.profile.label(),
+                    self.account_name(slot.profile),
                     child.id()
                 ));
                 let _ = child.kill();
@@ -610,7 +644,7 @@ impl eframe::App for ControllerApp {
                             )
                             .clicked()
                         {
-                            self.launch_both();
+                            self.launch_enabled();
                         }
                     });
                 });
@@ -642,8 +676,8 @@ impl eframe::App for ControllerApp {
                 draw_instance_section(self, ui);
             });
 
-        if self.show_profiles {
-            draw_profiles_window(self, ui.ctx());
+        if self.show_accounts {
+            draw_accounts_window(self, ui.ctx());
         }
         if self.show_atlas {
             draw_atlas_window(self, ui.ctx());
