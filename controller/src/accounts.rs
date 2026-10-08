@@ -95,7 +95,7 @@ pub fn open_game(profile: GameProfile) -> Result<(), String> {
 pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
     if !violentmonkey_installed(profile)? {
         return Err(format!(
-            "Violentmonkey is not installed and active in {}. Use "Install Violentmonkey" first.",
+            "Violentmonkey is not installed and active in {}. Use \"Install Violentmonkey\" first.",
             profile.label()
         ));
     }
