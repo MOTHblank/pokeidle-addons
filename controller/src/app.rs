@@ -356,6 +356,7 @@ impl ControllerApp {
 
     fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
         self.refresh_processes();
 
         if self.games[index].is_running() {
@@ -445,7 +446,7 @@ impl ControllerApp {
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
-        let account_name = self.account_name(profile);
+        let account_name = account_name;
         let slot = &mut self.games[index];
 
         if let Some(monitor) = slot.monitor.as_ref() {
@@ -454,13 +455,13 @@ impl ControllerApp {
 
         let Some(mut child) = slot.child.take() else {
             slot.monitor = None;
-            self.set_status(format!("{} is already stopped.", self.account_name(profile)), false);
+            self.set_status(format!("{} is already stopped.", account_name), false);
             return true;
         };
 
         logging::info(&format!(
             "stopping {} Firefox PID {}",
-            self.account_name(profile),
+            account_name,
             child.id()
         ));
 
@@ -468,19 +469,19 @@ impl ControllerApp {
             Ok(()) => {
                 let _ = child.wait();
                 slot.monitor = None;
-                self.set_status(format!("{} Firefox closed.", self.account_name(profile)), false);
+                self.set_status(format!("{} Firefox closed.", account_name), false);
                 true
             }
             Err(error) => {
                 logging::error(&format!(
                     "failed to stop {} Firefox PID {}: {}",
-                    self.account_name(profile),
+                    account_name,
                     child.id(),
                     error
                 ));
                 slot.child = Some(child);
                 self.set_status(
-                    format!("{}: could not close Firefox: {}", self.account_name(profile), error),
+                    format!("{}: could not close Firefox: {}", account_name, error),
                     true,
                 );
                 false
@@ -586,9 +587,10 @@ impl Drop for ControllerApp {
             }
 
             if let Some(mut child) = slot.child.take() {
+                let account_name = self.accounts[slot.profile.index()].name.clone();
                 logging::info(&format!(
                     "controller shutting down; closing {} Firefox PID {}",
-                    self.account_name(slot.profile),
+                    account_name,
                     child.id()
                 ));
                 let _ = child.kill();
