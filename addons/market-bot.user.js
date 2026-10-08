@@ -2015,14 +2015,16 @@
 
     function findRmtNavigationButton() {
         const candidates = qa(
-            'button, a, [role="button"], [role="tab"]'
+            'button, a, .cm-acao, .cm-atalho, [role="button"], [role="tab"]'
         );
 
-        return candidates.find(
-            element =>
-                normalize(element.textContent) ===
-                'rmt'
-        ) || null;
+        return candidates.find(element => {
+            const label = normalize(element.textContent);
+            return (
+                label === 'rmt' ||
+                /(^|\\s)rmt(\\s|$)/.test(label)
+            );
+        }) || null;
     }
 
     function ensureUi() {
