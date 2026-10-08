@@ -2109,11 +2109,14 @@
                 'community';
 
         if (isCommunity && modalBody) {
-            const actions =
-                q('#modal .modal-acoes');
+            const communityTop =
+                q('#modal-corpo .cm-topo');
+            const watchHost =
+                q('.cm-atalhos', communityTop) ||
+                communityTop;
 
-            if (actions) {
-                installWatchButton(actions);
+            if (watchHost) {
+                installWatchButton(watchHost);
             }
 
             let panel =
