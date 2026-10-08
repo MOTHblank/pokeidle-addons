@@ -252,6 +252,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Open" => "Aberto",
         "Not checked" => "Não verificado",
         "Scripts" => "Scripts",
+        "BiDi" => "BiDi",
+        "nick" => "apelido",
+        "Twitch" => "Twitch",
+        "KICK" => "KICK",
         "Dashboard · live health polling enabled" => "Painel · monitoramento de saúde ao vivo ativado",
         "Loaded" => "Carregado",
         "Auto Catch" => "Captura automática",
@@ -1731,7 +1735,7 @@ fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(value, 24)).size(9.0).color(TEXT));
+                ui.label(RichText::new(compact_text(tr(value), 24)).size(9.0).color(TEXT));
             });
         });
 }
@@ -2926,7 +2930,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.add_space(8.0);
 
                 ui.label(
-                    RichText::new("Userscript engine")
+                    RichText::new(tr("Userscript engine"))
                         .size(10.0)
                         .strong()
                         .color(GOOD),
@@ -2962,14 +2966,14 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     .inner_margin(14.0)
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new("Moth Watch userscript is not running in this profile.")
+                            RichText::new(tr("Moth Watch userscript is not running in this profile."))
                                 .size(12.0)
                                 .strong()
                                 .color(BAD),
                         );
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new("The native market interface is disabled rather than using a different implementation. Install/update Moth Watch with Accounts → Addons.")
+                            RichText::new(tr("The native market interface is disabled rather than using a different implementation. Install/update Moth Watch with Accounts → Addons."))
                                 .size(10.0)
                                 .color(MUTED),
                         );
@@ -3109,7 +3113,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         json!({"t": "mothWatch.scan"})
                     );
                 }
-                if ui.button("Freeze current 7d averages").clicked() {
+                if ui.button(tr("Freeze current 7d averages")).clicked() {
                     moth_watch_send(
                         monitor.as_ref(),
                         json!({"t": "mothWatch.refreshBaseline"})
@@ -3124,7 +3128,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.add_space(8.0);
 
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Currency").size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Currency")).size(9.0).strong().color(DIM));
                 for (value, label) in [
                     ("all", "All"),
                     ("gold", "Coins"),
@@ -3151,7 +3155,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 }
 
                 ui.add_space(6.0);
-                ui.label(RichText::new("Type").size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Type")).size(9.0).strong().color(DIM));
                 for (value, label) in [
                     ("all", "All"),
                     ("item", "Items"),
@@ -3178,7 +3182,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 }
 
                 ui.add_space(6.0);
-                ui.label(RichText::new("Sort").size(9.0).strong().color(DIM));
+                ui.label(RichText::new(tr("Sort")).size(9.0).strong().color(DIM));
                 egui::ComboBox::from_id_salt("moth_watch_sort")
                     .selected_text(match info.config.view_sort.as_str() {
                         "newest" => "Newest detected",
@@ -3224,7 +3228,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if info.candidates.is_empty() {
                         ui.label(
-                            RichText::new("No current listings are below the watch threshold.")
+                            RichText::new(tr("No current listings are below the watch threshold."))
                                 .size(11.0)
                                 .color(DIM),
                         );
@@ -3295,7 +3299,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 .color(TEXT),
                                             );
                                             ui.label(
-                                                RichText::new("listed")
+                                                RichText::new(tr("listed"))
                                                     .size(8.0)
                                                     .color(DIM),
                                             );
@@ -3328,7 +3332,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     .color(if auto { ACCENT } else { GOOD }),
                                             );
                                             ui.label(
-                                                RichText::new(if auto { "auto-buy range" } else { "watch range" })
+                                                RichText::new(if auto { tr("auto-buy range") } else { tr("watch range") })
                                                     .size(8.0)
                                                     .color(DIM),
                                             );
@@ -3337,7 +3341,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.set_min_width(150.0);
                                         ui.vertical(|ui| {
                                             ui.label(
-                                                RichText::new(format!("Seller: {}", candidate.seller))
+                                                RichText::new(format!("{} {}", tr("Seller:"), candidate.seller))
                                                     .size(9.0)
                                                     .strong()
                                                     .color(TEXT),
@@ -3412,7 +3416,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     if info.buy_log.is_empty() {
                         ui.label(
-                            RichText::new("No purchases attempted this session.")
+                            RichText::new(tr("No purchases attempted this session."))
                                 .size(9.0)
                                 .color(DIM),
                         );
@@ -3702,10 +3706,10 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     profile_button(ui, tr("Open Game"), || {
                                         app.profile_action(profile, ProfileAction::Game)
                                     });
-                                    profile_button(ui, "Twitch", || {
+                                    profile_button(ui, tr("Twitch"), || {
                                         app.profile_action(profile, ProfileAction::Twitch)
                                     });
-                                    profile_button(ui, "KICK", || {
+                                    profile_button(ui, tr("KICK"), || {
                                         app.profile_action(profile, ProfileAction::Kick)
                                     });
                                     profile_button(ui, tr("Install Violentmonkey"), || {
@@ -3809,8 +3813,8 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
 
             ui.horizontal_wrapped(|ui| {
                 profile_button(ui, tr("Open Game"), || app.profile_action(profile, ProfileAction::Game));
-                profile_button(ui, "Twitch", || app.profile_action(profile, ProfileAction::Twitch));
-                profile_button(ui, "KICK", || app.profile_action(profile, ProfileAction::Kick));
+                profile_button(ui, tr("Twitch"), || app.profile_action(profile, ProfileAction::Twitch));
+                profile_button(ui, tr("KICK"), || app.profile_action(profile, ProfileAction::Kick));
                 profile_button(ui, tr("Addons"), || app.profile_action(profile, ProfileAction::Addons));
                 profile_button(ui, tr("Profile folder"), || app.profile_action(profile, ProfileAction::Folder));
             });
