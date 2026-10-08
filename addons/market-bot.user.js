@@ -2121,6 +2121,10 @@
                 retainedUntil: Number(candidate.retainedUntil) || 0,
                 firstSeenAt: Number(candidate.firstSeenAt || candidate.seenAt || 0),
                 seenAt: Number(candidate.seenAt || 0),
+                purchaseQuantity: purchaseQuantity(candidate),
+                canBuy: !state.pendingBuy &&
+                    !(candidate.retainedUntil && candidate.retainedUntil > serverNow()) &&
+                    purchaseQuantity(candidate) > 0,
                 referenceSource: String(candidate.referenceSource || ''),
                 activeReferenceListings: Number(candidate.activeReferenceListings || 0),
                 serverAverage: Number(candidate.serverAverage || 0)
@@ -2181,7 +2185,18 @@
     page.__mothMarketWatchControllerV1 = {
         version: 1,
         buy: buyFromController,
-        snapshot: controllerSnapshot
+        configure: configureFromController,
+        scan: scanFromController,
+        snapshot: controllerSnapshot,
+        refreshBaseline: () => {
+            state.forceBaselineNext = true;
+            state.baseline = emptyBaseline();
+            saveBaseline();
+            requestItemSummary();
+            queueRender();
+            return { ok: true };
+        },
+        exportBaseline: () => exportBaselineText()
     };
 
     function bootstrap() {
