@@ -10,15 +10,15 @@ pub const VIOLENTMONKEY_INSTALL: &str =
 pub const ADDONS: &[(&str, &str)] = &[
     (
         "Auto Catch+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/autocatch.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/autocatch.user.js?v=6.5.2",
     ),
     (
         "Performance+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/performance.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/performance.user.js?v=5.0.0",
     ),
     (
         "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.3.1",
     ),
     (
         "Controller Bridge",
@@ -28,15 +28,15 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Twitch Low Resource",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.1.0",
     ),
     (
         "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.15",
     ),
     (
         "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.23",
     ),
 
 ];
