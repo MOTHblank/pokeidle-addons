@@ -7,23 +7,23 @@ pub const KICK_LOGIN: &str = "https://kick.com/";
 pub const ADDONS: &[(&str, &str)] = &[
     (
         "Auto Catch+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/autocatch.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/autocatch.user.js",
     ),
     (
         "Performance+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/performance.user.js",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/performance.user.js",
     ),
     (
         "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/stream-auto-open.user.js?v=6.2.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.2.0",
     ),
     (
         "Controller Bridge",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/controller-bridge.user.js?v=1.1.1",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.1.1",
     ),
     (
         "Twitch Low Resource",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/rust-rewrite/addons/twitch-low-resource.user.js?v=2.0.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.0.0",
     ),
     (
         "Hunt Atlas",
