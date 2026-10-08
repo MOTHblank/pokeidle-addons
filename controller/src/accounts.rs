@@ -69,8 +69,14 @@ pub fn violentmonkey_installed(profile: GameProfile) -> Result<bool, String> {
             .and_then(Value::as_str)
             .unwrap_or_default();
 
-        name.to_ascii_lowercase().contains("violentmonkey")
-            || id.to_ascii_lowercase().contains("violentmonkey")
+        let active = addon
+            .get("active")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        active
+            && (name.to_ascii_lowercase().contains("violentmonkey")
+                || id.to_ascii_lowercase().contains("violentmonkey"))
     }))
 }
 
@@ -87,6 +93,13 @@ pub fn open_game(profile: GameProfile) -> Result<(), String> {
 }
 
 pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
+    if !violentmonkey_installed(profile)? {
+        return Err(format!(
+            "Violentmonkey is not installed and active in {}. Use "Install Violentmonkey" first.",
+            profile.label()
+        ));
+    }
+
     let config = Config::for_profile(profile)?;
     let mut opened = 0usize;
     let mut failures = Vec::new();
