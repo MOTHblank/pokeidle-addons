@@ -107,8 +107,8 @@ Verifica os streams atuais e abre automaticamente os chats da Twitch e as págin
 **Controller Bridge**  
 É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo, caça, estado de login, recursos, abas, bônus e mercado.
 
-**Twitch + KICK Low Resource Mode**  
-Mantém Twitch e KICK no menor consumo prático. Chats da Twitch permanecem leves; no KICK, a página normal do canal é mantida para que o player real continue disponível para o tempo de exibição/Channel Points.
+**Twitch Low Resource Mode**  
+Mantém as páginas da Twitch no menor consumo prático. Pop-outs de chat da Twitch permanecem intocados; a redução de recursos é aplicada somente à Twitch.
 
 **PokéIdle Hunt Atlas**  
 Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. O userscript é instalado automaticamente pelo botão **Addons**.
@@ -147,9 +147,9 @@ O objetivo do script é abrir automaticamente os streams encontrados pelo jogo. 
 
 O scanner faz a primeira verificação depois de aproximadamente 30 segundos e repete a cada hora.
 
-### Twitch + KICK Low Resource Mode
+### Twitch Low Resource Mode
 
-Normalmente não exige configuração manual. Ele começa a atuar quando o script encontra uma página compatível da Twitch ou do KICK.
+Normalmente não exige configuração manual. Ele começa a atuar quando o script encontra uma página compatível da Twitch.
 
 **Não desative esse script nos perfis usados para os streams automáticos** caso o objetivo seja minimizar o consumo de recursos.
 
@@ -328,7 +328,7 @@ The **Addons** button installs all recommended userscripts for the selected prof
 - Performance+
 - Live Stream Scanner
 - Controller Bridge
-- Twitch + KICK Low Resource Mode
+- Twitch Low Resource Mode
 - PokéIdle Hunt Atlas
 - PokéIdle Moth Watch
 
