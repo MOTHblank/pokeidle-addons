@@ -2321,6 +2321,12 @@
     };
 
     function bootstrap() {
+        try {
+            document.documentElement?.setAttribute(
+                'data-moth-watch-ready',
+                '1'
+            );
+        } catch {}
         try { installSocketHook(); } catch {}
         try { injectStyle(); } catch {}
 
