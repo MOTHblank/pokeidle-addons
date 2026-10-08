@@ -72,6 +72,7 @@
 
     const state = {
         socket: null,
+        gameSocket: null,
         hookInstalled: false,
         nick: '',
         gold: 0,
@@ -1308,9 +1309,24 @@
         return null;
     }
 
-    function handleProtocolObject(message) {
+    function handleProtocolObject(message, sourceSocket = null) {
         if (!message || typeof message !== 'object') return;
         state.protocolMessages++;
+
+        /*
+         * The game may create several WebSockets. Only a socket that carries
+         * the authenticated PokéIdle protocol should become the command
+         * socket. This prevents Moth Watch purchases/scans from being sent to
+         * an unrelated page socket.
+         */
+        if (sourceSocket && (
+            message.t === 'welcome' ||
+            message.t === 'market' ||
+            message.t === 'batalha'
+        )) {
+            state.socket = sourceSocket;
+            state.gameSocket = sourceSocket;
+        }
 
         if (message.t === 'welcome') {
             mergePlayer(message.estado, true);
@@ -1379,31 +1395,32 @@
         handlePokemonListings(message);
     }
 
-    function handleProtocolData(data) {
+    function handleProtocolData(data, sourceSocket = null) {
         if (typeof Blob !== 'undefined' && data instanceof Blob) {
             data.text().then(text => {
                 const message = decodeMessage(text);
-                if (message) handleProtocolObject(message);
+                if (message) handleProtocolObject(message, sourceSocket);
             }).catch(() => {});
             return;
         }
         const message = decodeMessage(data);
-        if (message) handleProtocolObject(message);
+        if (message) handleProtocolObject(message, sourceSocket);
     }
 
     function attachSocket(socket) {
-        state.socket = socket;
+        if (!state.socket) state.socket = socket;
 
         socket.addEventListener('message', event => {
-            handleProtocolData(event.data);
+            handleProtocolData(event.data, socket);
         });
 
         socket.addEventListener('close', () => {
+            if (state.gameSocket === socket) state.gameSocket = null;
             if (state.socket === socket) {
-                state.socket = null;
-                state.itemStatus = 'disconnected';
-                state.pokemonStatus = 'disconnected';
-                state.pendingBuy = null;
+                state.socket = state.gameSocket || null;
+                if (!state.socket) {
+                        state.pokemonStatus = 'disconnected';
+                    state.pendingBuy = null;
                 state.pokemonScan = null;
                 state.historyFetch = null;
                 if (state.itemSummaryRetryTimer) clearTimeout(state.itemSummaryRetryTimer);
