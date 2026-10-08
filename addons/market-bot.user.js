@@ -2424,7 +2424,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.21 loaded');
+        console.info('[Moth Watch] v0.1.23 loaded');
     }
 
     bootstrap();
