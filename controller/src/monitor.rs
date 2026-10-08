@@ -398,6 +398,7 @@ struct Probe {
     xp_sources: Vec<String>,
     bridge_connected: bool,
     last_game_message_ms: u64,
+    last_battle_at: u64,
     tabs: Vec<TabInfo>,
     hunts: Vec<HuntInfo>,
     market_listings: Vec<MarketListing>,
