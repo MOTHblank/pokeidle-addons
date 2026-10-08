@@ -166,6 +166,43 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Hunt Atlas" => "Atlas de Caça",
         "Map intelligence + observed XP/hour" => "Inteligência do mapa + XP/h observado",
         "Select a hunt to travel · XP rates are measured from battle events" => "Selecione uma caça para viajar · as taxas de XP são medidas pelos combates",
+        "Region" => "Região",
+        "All regions" => "Todas as regiões",
+        "Min" => "Mín.",
+        "Max" => "Máx.",
+        "Availability" => "Disponibilidade",
+        "All" => "Todas",
+        "Unlocked" => "Liberadas",
+        "Locked" => "Bloqueadas",
+        "Type" => "Tipo",
+        "All types" => "Todos os tipos",
+        "Weak to" => "Fraco contra",
+        "Any weakness" => "Qualquer fraqueza",
+        "Collection" => "Coleção",
+        "Caught + uncaught" => "Capturados + não capturados",
+        "Uncaught only" => "Só não capturados",
+        "Caught only" => "Só capturados",
+        "Sort" => "Ordenar",
+        "XP/hour" => "XP/hora",
+        "Name" => "Nome",
+        "Pokédex number" => "Número da Pokédex",
+        "Level" => "Nível",
+        "MKT" => "MKT",
+        "RMT" => "RMT",
+        "Matchup" => "Matchup",
+        "Ascending" => "Crescente",
+        "Descending" => "Decrescente",
+        "Clear filters" => "Limpar filtros",
+        "Advantage" => "vantagem",
+        "Disadvantage" => "desvantagem",
+        "Neutral" => "neutro",
+        "Immune" => "imune",
+        "Causes" => "Causa",
+        "Receives" => "Recebe",
+        "caught" => "capturado",
+        "not caught" => "não capturado",
+        "No Pokémon match these filters." => "Nenhum Pokémon corresponde a estes filtros.",
+        "Hunt Atlas is waiting for detailed Pokémon data from the userscript." => "O Hunt Atlas está aguardando os dados detalhados dos Pokémon enviados pelo userscript.",
         "Current hunt" => "Caça atual",
         "Filter" => "Filtro",
         "hunt or Pokémon" => "caça ou Pokémon",
@@ -267,6 +304,35 @@ impl GameSlot {
     }
 }
 
+#[derive(Clone, Debug)]
+struct AtlasFilters {
+    region: String,
+    min_level: String,
+    max_level: String,
+    availability: String,
+    type_filter: String,
+    weakness: String,
+    collection: String,
+    sort: String,
+    sort_direction: String,
+}
+
+impl Default for AtlasFilters {
+    fn default() -> Self {
+        Self {
+            region: "all".to_string(),
+            min_level: String::new(),
+            max_level: String::new(),
+            availability: "unlocked".to_string(),
+            type_filter: "all".to_string(),
+            weakness: "all".to_string(),
+            collection: "all".to_string(),
+            sort: "xp".to_string(),
+            sort_direction: "desc".to_string(),
+        }
+    }
+}
+
 pub struct ControllerApp {
     games: [GameSlot; 4],
     show_accounts: bool,
@@ -274,6 +340,7 @@ pub struct ControllerApp {
     show_market: bool,
     accounts: [AccountConfig; 4],
     atlas_profile: GameProfile,
+    atlas_filters: AtlasFilters,
     market_profile: GameProfile,
     market_search: String,
     atlas_search: String,
@@ -297,6 +364,7 @@ impl ControllerApp {
             show_atlas: false,
             show_market: false,
             atlas_profile: GameProfile::Game1,
+            atlas_filters: AtlasFilters::default(),
             market_profile: GameProfile::Game1,
             market_search: String::new(),
             atlas_search: String::new(),
@@ -610,9 +678,19 @@ impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
 
-        // The browser monitor itself polls every 5s. A 1Hz UI repaint keeps the
-        // dashboard fresh without turning the controller into another busy loop.
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        // Keep the normal UI at 1Hz, but repaint the Atlas smoothly while its
+        // hunt-change cooldown countdown is active.
+        let repaint_after = if self.show_atlas {
+            let health = self.games[self.atlas_profile.index()].health();
+            if hunt_change_cooldown_ms(&health) > 0 {
+                std::time::Duration::from_millis(100)
+            } else {
+                std::time::Duration::from_secs(1)
+            }
+        } else {
+            std::time::Duration::from_secs(1)
+        };
+        ui.ctx().request_repaint_after(repaint_after);
 
         draw_sidebar(self, ui);
 
@@ -1663,10 +1741,90 @@ fn draw_credits(ui: &mut egui::Ui) {
         });
 }
 
+fn hunt_change_cooldown_ms(health: &Health) -> u64 {
+    if health.last_battle_at == 0 {
+        return 0;
+    }
+
+    2600_u64.saturating_sub(
+        chrono_like_now_ms().saturating_sub(health.last_battle_at)
+    )
+}
+
+fn atlas_type_options() -> [&'static str; 18] {
+    [
+        "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE",
+        "FIGHTING", "POISON", "GROUND", "FLYING", "PSYCHIC", "BUG",
+        "ROCK", "GHOST", "DRAGON", "DARK", "STEEL", "FAIRY",
+    ]
+}
+
+fn atlas_compare_numeric(
+    a: f32,
+    b: f32,
+    direction: &str,
+    missing_bottom: bool,
+) -> std::cmp::Ordering {
+    let a_missing = !a.is_finite() || (missing_bottom && a <= 0.0);
+    let b_missing = !b.is_finite() || (missing_bottom && b <= 0.0);
+
+    match (a_missing, b_missing) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => {
+            let base = a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+            if direction == "asc" {
+                base
+            } else {
+                base.reverse()
+            }
+        }
+    }
+}
+
+fn atlas_matchup_label(multiplier: f32, direction: &str, attack_type: &str) -> (String, Color32) {
+    let relation = if multiplier == 0.0 {
+        ("Immune", BAD)
+    } else if direction == "offense" && multiplier > 1.0 {
+        ("Advantage", GOOD)
+    } else if direction == "offense" && multiplier < 1.0 {
+        ("Disadvantage", BAD)
+    } else if direction == "defense" && multiplier < 1.0 {
+        ("Advantage", GOOD)
+    } else if direction == "defense" && multiplier > 1.0 {
+        ("Disadvantage", BAD)
+    } else {
+        ("Neutral", MUTED)
+    };
+
+    (
+        format!(
+            "{} {} {}",
+            if direction == "offense" { "ATK" } else { "DEF" },
+            format_multiplier(multiplier),
+            if attack_type.is_empty() { "" } else { attack_type }
+        ),
+        relation.1,
+    )
+}
+
+fn format_multiplier(value: f32) -> String {
+    if value.is_finite() {
+        if (value.fract()).abs() < 0.01 {
+            format!("×{:.0}", value)
+        } else {
+            format!("×{:.2}", value)
+        }
+    } else {
+        "×?".to_string()
+    }
+}
+
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
-    let width = (screen.width() - 64.0).clamp(520.0, 920.0);
-    let height = (screen.height() - 96.0).clamp(420.0, 680.0);
+    let width = (screen.width() - 64.0).clamp(620.0, 980.0);
+    let height = (screen.height() - 96.0).clamp(460.0, 720.0);
 
     let mut open = app.show_atlas;
     egui::Window::new(tr("Hunt Atlas"))
@@ -1676,8 +1834,8 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .resizable(true)
         .default_width(width)
         .default_height(height)
-        .min_width(520.0_f32.min(width))
-        .min_height(420.0_f32.min(height))
+        .min_width(560.0_f32.min(width))
+        .min_height(440.0_f32.min(height))
         .max_width(width)
         .max_height(height)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -1703,6 +1861,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .color(MUTED),
                 );
             });
+
             ui.add_space(2.0);
             ui.label(
                 RichText::new(tr("Select a hunt to travel · XP rates are measured from battle events"))
@@ -1710,14 +1869,15 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     .color(DIM),
             );
 
-            ui.add_space(14.0);
+            ui.add_space(12.0);
             let account_names = std::array::from_fn(|i| app.accounts[i].name.clone());
             game_selector(&account_names, ui, &mut app.atlas_profile);
 
             let index = ControllerApp::game_index(app.atlas_profile);
             let health = app.games[index].health();
+            let cooldown_ms = hunt_change_cooldown_ms(&health);
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
 
             egui::Frame::new()
                 .fill(PANEL_ALT)
@@ -1725,194 +1885,637 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .corner_radius(10.0)
                 .inner_margin(12.0)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(tr("Current hunt")).size(9.0).strong().color(DIM));
-                        ui.add_space(8.0);
-                        ui.label(RichText::new(if health.hunt.is_empty() { "—" } else { &health.hunt })
-                            .size(14.0).strong().color(TEXT));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(tr("Current hunt"))
+                                .size(9.0)
+                                .strong()
+                                .color(DIM),
+                        );
+                        ui.add_space(7.0);
+                        ui.label(
+                            RichText::new(if health.hunt.is_empty() { "—" } else { &health.hunt })
+                                .size(14.0)
+                                .strong()
+                                .color(TEXT),
+                        );
                         ui.add_space(18.0);
-                        ui.label(RichText::new(format!("Trainer Lv {}", health.player_level))
-                            .size(10.0).color(MUTED));
+                        ui.label(
+                            RichText::new(format!("Trainer Lv {}", health.player_level))
+                                .size(10.0)
+                                .color(MUTED),
+                        );
                         ui.add_space(10.0);
-                        ui.label(RichText::new(format!("{} {}", health.hunts.len(), tr("hunts available")))
-                            .size(10.0).color(MUTED));
+
+                        let cooldown_text = if cooldown_ms > 0 {
+                            format!(
+                                "{} {:.1}s",
+                                tr("Wait"),
+                                cooldown_ms as f32 / 1000.0
+                            )
+                        } else {
+                            tr("Current").to_string()
+                        };
+
+                        ui.label(
+                            RichText::new(cooldown_text)
+                                .size(10.0)
+                                .strong()
+                                .color(if cooldown_ms > 0 { WARN } else { GOOD }),
+                        );
                     });
                 });
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
 
-            ui.horizontal(|ui| {
+            // Search and reset.
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("Filter")).size(10.0).strong().color(DIM));
                 ui.add_sized(
-                    [260.0, 28.0],
+                    [230.0, 28.0],
                     egui::TextEdit::singleline(&mut app.atlas_search)
                         .hint_text(tr("hunt or Pokémon")),
                 );
-            });
 
-            ui.add_space(10.0);
+                let active = app.atlas_filters != AtlasFilters::default();
+                if ui
+                    .add_enabled(active, egui::Button::new(tr("Clear filters")))
+                    .clicked()
+                {
+                    app.atlas_filters = AtlasFilters::default();
+                    app.atlas_search.clear();
+                }
 
-            let search = app.atlas_search.to_lowercase();
-            let mut hunts: Vec<_> = health
-                .hunts
-                .iter()
-                .filter(|hunt| {
-                    search.is_empty()
-                        || hunt.name.to_lowercase().contains(&search)
-                        || hunt.slug.to_lowercase().contains(&search)
-                        || hunt.species.iter().any(|name| name.to_lowercase().contains(&search))
-                })
-                .cloned()
-                .collect();
-
-            hunts.sort_by(|a, b| {
-                if a.current {
-                    std::cmp::Ordering::Less
-                } else if b.current {
-                    std::cmp::Ordering::Greater
-                } else {
-                    b.xp_per_hour.cmp(&a.xp_per_hour).then(a.level.cmp(&b.level))
+                let direction = if app.atlas_filters.sort_direction == "asc" { "↑" } else { "↓" };
+                if ui.button(direction).clicked() {
+                    app.atlas_filters.sort_direction = if app.atlas_filters.sort_direction == "asc" {
+                        "desc".to_string()
+                    } else {
+                        "asc".to_string()
+                    };
                 }
             });
 
-            egui::ScrollArea::vertical()
-                .id_salt("atlas_list")
-                .auto_shrink([false, false])
-                .max_height(ui.available_height().max(180.0))
-                .show_rows(ui, 82.0, hunts.len(), |ui, row_range| {
-                    for row in row_range {
-                        let hunt = &hunts[row];
-                        let current = hunt.current || (
-                            !health.hunt_slug.is_empty()
-                                && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug)
+            ui.add_space(8.0);
+
+            // Filter controls mirror the web Atlas: region, level, availability,
+            // type, weakness and collection.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Region")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_region")
+                    .selected_text(
+                        if app.atlas_filters.region == "all" {
+                            tr("All regions").to_string()
+                        } else {
+                            app.atlas_filters.region.clone()
+                        }
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.atlas_filters.region,
+                            "all".to_string(),
+                            tr("All regions"),
                         );
-                        let unlocked = hunt.unlocked;
-                        let xp_label = if hunt.xp_per_hour > 0 {
-                            let prefix = if hunt.xp_source.eq_ignore_ascii_case("observed") {
-                                "observed"
-                            } else if hunt.xp_source.eq_ignore_ascii_case("combat model")
-                                || hunt.xp_source.eq_ignore_ascii_case("modeled")
-                            {
-                                "modeled"
-                            } else {
-                                ""
+
+                        let mut regions = health
+                            .hunts
+                            .iter()
+                            .map(|hunt| hunt.area.clone())
+                            .filter(|area| !area.is_empty())
+                            .collect::<Vec<_>>();
+                        regions.sort();
+                        regions.dedup();
+
+                        for region in regions {
+                            ui.selectable_value(
+                                &mut app.atlas_filters.region,
+                                region.clone(),
+                                region,
+                            );
+                        }
+                    });
+
+                ui.label(RichText::new(tr("Min")).size(9.0).strong().color(DIM));
+                ui.add_sized(
+                    [64.0, 26.0],
+                    egui::TextEdit::singleline(&mut app.atlas_filters.min_level)
+                        .hint_text("1"),
+                );
+                ui.label(RichText::new(tr("Max")).size(9.0).strong().color(DIM));
+                ui.add_sized(
+                    [64.0, 26.0],
+                    egui::TextEdit::singleline(&mut app.atlas_filters.max_level)
+                        .hint_text("9999"),
+                );
+
+                ui.label(RichText::new(tr("Availability")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_availability")
+                    .selected_text(match app.atlas_filters.availability.as_str() {
+                        "locked" => tr("Locked"),
+                        "all" => tr("All"),
+                        _ => tr("Unlocked"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut app.atlas_filters.availability, "unlocked".to_string(), tr("Unlocked"));
+                        ui.selectable_value(&mut app.atlas_filters.availability, "all".to_string(), tr("All"));
+                        ui.selectable_value(&mut app.atlas_filters.availability, "locked".to_string(), tr("Locked"));
+                    });
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Type")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_type")
+                    .selected_text(if app.atlas_filters.type_filter == "all" {
+                        tr("All types").to_string()
+                    } else {
+                        app.atlas_filters.type_filter.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.atlas_filters.type_filter,
+                            "all".to_string(),
+                            tr("All types"),
+                        );
+                        for value in atlas_type_options() {
+                            ui.selectable_value(
+                                &mut app.atlas_filters.type_filter,
+                                value.to_string(),
+                                value,
+                            );
+                        }
+                    });
+
+                ui.label(RichText::new(tr("Weak to")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_weakness")
+                    .selected_text(if app.atlas_filters.weakness == "all" {
+                        tr("Any weakness").to_string()
+                    } else {
+                        app.atlas_filters.weakness.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.atlas_filters.weakness,
+                            "all".to_string(),
+                            tr("Any weakness"),
+                        );
+                        for value in atlas_type_options() {
+                            ui.selectable_value(
+                                &mut app.atlas_filters.weakness,
+                                value.to_string(),
+                                value,
+                            );
+                        }
+                    });
+
+                ui.label(RichText::new(tr("Collection")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_collection")
+                    .selected_text(match app.atlas_filters.collection.as_str() {
+                        "captured" => tr("Caught only"),
+                        "uncaught" => tr("Uncaught only"),
+                        _ => tr("Caught + uncaught"),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.atlas_filters.collection,
+                            "all".to_string(),
+                            tr("Caught + uncaught"),
+                        );
+                        ui.selectable_value(
+                            &mut app.atlas_filters.collection,
+                            "uncaught".to_string(),
+                            tr("Uncaught only"),
+                        );
+                        ui.selectable_value(
+                            &mut app.atlas_filters.collection,
+                            "captured".to_string(),
+                            tr("Caught only"),
+                        );
+                    });
+
+                ui.label(RichText::new(tr("Sort")).size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("atlas_sort")
+                    .selected_text(match app.atlas_filters.sort.as_str() {
+                        "name" => tr("Name"),
+                        "pokedex" => tr("Pokédex number"),
+                        "level" => tr("Level"),
+                        "npc" => tr("MKT"),
+                        "player_market" => tr("RMT"),
+                        "matchup" => tr("Matchup"),
+                        _ => tr("XP/hour"),
+                    })
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            ("xp", tr("XP/hour")),
+                            ("name", tr("Name")),
+                            ("pokedex", tr("Pokédex number")),
+                            ("level", tr("Level")),
+                            ("npc", tr("MKT")),
+                            ("player_market", tr("RMT")),
+                            ("matchup", tr("Matchup")),
+                        ] {
+                            ui.selectable_value(
+                                &mut app.atlas_filters.sort,
+                                value.to_string(),
+                                label,
+                            );
+                        }
+                    });
+            });
+
+            ui.add_space(9.0);
+
+            let search = app.atlas_search.to_lowercase();
+            let min_level = app.atlas_filters.min_level.trim().parse::<u32>().ok();
+            let max_level = app.atlas_filters.max_level.trim().parse::<u32>().ok();
+
+            let mut rows: Vec<(usize, usize)> = Vec::new();
+
+            for (hunt_index, hunt) in health.hunts.iter().enumerate() {
+                let unlocked = hunt.unlocked;
+                if app.atlas_filters.region != "all"
+                    && hunt.area != app.atlas_filters.region
+                {
+                    continue;
+                }
+
+                if let Some(min) = min_level {
+                    if hunt.level < min {
+                        continue;
+                    }
+                }
+
+                if let Some(max) = max_level {
+                    if hunt.level > max {
+                        continue;
+                    }
+                }
+
+                match app.atlas_filters.availability.as_str() {
+                    "unlocked" if !unlocked => continue,
+                    "locked" if unlocked => continue,
+                    _ => {}
+                }
+
+                for (species_index, species) in hunt.species_details.iter().enumerate() {
+                    let captured = species.captured;
+
+                    match app.atlas_filters.collection.as_str() {
+                        "captured" if !captured => continue,
+                        "uncaught" if captured => continue,
+                        _ => {}
+                    }
+
+                    if app.atlas_filters.type_filter != "all"
+                        && !species.types.iter().any(|value| {
+                            value.eq_ignore_ascii_case(&app.atlas_filters.type_filter)
+                        })
+                    {
+                        continue;
+                    }
+
+                    if app.atlas_filters.weakness != "all"
+                        && !species.weak_to.iter().any(|value| {
+                            value.eq_ignore_ascii_case(&app.atlas_filters.weakness)
+                        })
+                    {
+                        continue;
+                    }
+
+                    if !search.is_empty() {
+                        let matches = species.name.to_lowercase().contains(&search)
+                            || hunt.name.to_lowercase().contains(&search)
+                            || hunt.slug.to_lowercase().contains(&search)
+                            || hunt.area.to_lowercase().contains(&search)
+                            || species.types.iter().any(|value| value.to_lowercase().contains(&search));
+                        if !matches {
+                            continue;
+                        }
+                    }
+
+                    rows.push((hunt_index, species_index));
+                }
+            }
+
+            let direction = app.atlas_filters.sort_direction.as_str();
+            rows.sort_by(|(ha, sa), (hb, sb)| {
+                let a_hunt = &health.hunts[*ha];
+                let b_hunt = &health.hunts[*hb];
+                let a = &a_hunt.species_details[*sa];
+                let b = &b_hunt.species_details[*sb];
+
+                let comparison = match app.atlas_filters.sort.as_str() {
+                    "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)),
+                    "pokedex" => {
+                        atlas_compare_numeric(
+                            a.id as f32,
+                            b.id as f32,
+                            direction,
+                            false,
+                        )
+                    }
+                    "level" => atlas_compare_numeric(
+                        a_hunt.level as f32,
+                        b_hunt.level as f32,
+                        direction,
+                        false,
+                    ),
+                    "npc" => atlas_compare_numeric(
+                        a.npc_value as f32,
+                        b.npc_value as f32,
+                        direction,
+                        true,
+                    ),
+                    "player_market" => atlas_compare_numeric(
+                        a.market_value as f32,
+                        b.market_value as f32,
+                        direction,
+                        true,
+                    ),
+                    "matchup" => atlas_compare_numeric(
+                        a.matchup_score.unwrap_or(f32::NAN),
+                        b.matchup_score.unwrap_or(f32::NAN),
+                        direction,
+                        true,
+                    ),
+                    _ => atlas_compare_numeric(
+                        a_hunt.xp_per_hour as f32,
+                        b_hunt.xp_per_hour as f32,
+                        direction,
+                        true,
+                    ),
+                };
+
+                if comparison == std::cmp::Ordering::Equal {
+                    a.name
+                        .to_lowercase()
+                        .cmp(&b.name.to_lowercase())
+                        .then_with(|| a.id.cmp(&b.id))
+                } else {
+                    comparison
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} Pokémon",
+                        rows.len()
+                    ))
+                    .size(9.0)
+                    .strong()
+                    .color(DIM),
+                );
+
+                if cooldown_ms > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {:.1}s",
+                            tr("Wait"),
+                            cooldown_ms as f32 / 1000.0
+                        ))
+                        .size(9.0)
+                        .strong()
+                        .color(WARN),
+                    );
+                }
+            });
+
+            ui.add_space(6.0);
+
+            if health.hunts.iter().all(|hunt| hunt.species_details.is_empty()) {
+                ui.label(
+                    RichText::new(tr("Hunt Atlas is waiting for detailed Pokémon data from the userscript."))
+                        .size(11.0)
+                        .color(DIM),
+                );
+            } else if rows.is_empty() {
+                ui.label(
+                    RichText::new(tr("No Pokémon match these filters."))
+                        .size(11.0)
+                        .color(DIM),
+                );
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("atlas_species_list")
+                    .auto_shrink([false, false])
+                    .max_height(ui.available_height().max(180.0))
+                    .show_rows(ui, 112.0, rows.len(), |ui, row_range| {
+                        for row in row_range {
+                            let (hunt_index, species_index) = rows[row];
+                            let hunt = &health.hunts[hunt_index];
+                            let species = &hunt.species_details[species_index];
+
+                            let current = hunt.current
+                                || (
+                                    !health.hunt_slug.is_empty()
+                                        && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug)
+                                );
+
+                            let ready = cooldown_ms == 0;
+                            let xp_prefix = match hunt.xp_source.to_ascii_lowercase().as_str() {
+                                "observed" | "measured" => "observed",
+                                "combat model" | "modeled" => "model",
+                                _ => "",
                             };
 
-                            if prefix.is_empty() {
-                                format!("{} {}", format_rate(hunt.xp_per_hour), tr("trainer XP/h"))
+                            let xp_label = if hunt.xp_per_hour > 0 {
+                                if xp_prefix.is_empty() {
+                                    format!("{} {}", format_rate(hunt.xp_per_hour), tr("trainer XP/h"))
+                                } else {
+                                    format!(
+                                        "{} · {} {}",
+                                        xp_prefix,
+                                        format_rate(hunt.xp_per_hour),
+                                        tr("trainer XP/h")
+                                    )
+                                }
                             } else {
-                                format!("{} · {} {}", prefix, format_rate(hunt.xp_per_hour), tr("trainer XP/h"))
-                            }
-                        } else {
-                            tr("learning").to_string()
-                        };
+                                tr("learning").to_string()
+                            };
 
-                        ui.set_width(ui.available_width());
+                            let pokemon_xp = if hunt.pokemon_xp_per_hour > 0 {
+                                format!("{} {}", format_rate(hunt.pokemon_xp_per_hour), tr("Pokémon XP/h"))
+                            } else {
+                                "—".to_string()
+                            };
 
-                        egui::Frame::new()
-                            .fill(if current { ACCENT.linear_multiply(0.08) } else { PANEL_ALT })
-                            .stroke(Stroke::new(1.0, if current { ACCENT.linear_multiply(0.35) } else { BORDER }))
-                            .corner_radius(9.0)
-                            .inner_margin(10.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.label(RichText::new(&hunt.name).size(12.0).strong().color(TEXT));
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "Lv {} · {} {} · {}",
-                                                hunt.level,
-                                                hunt.species.len(),
-                                                tr("species"),
-                                                if unlocked { tr("unlocked") } else { tr("locked") }
-                                            ))
-                                            .size(9.0)
-                                            .color(MUTED),
-                                        );
-                                        if !hunt.species.is_empty() {
-                                            ui.label(
-                                                RichText::new(compact_text(&hunt.species.join(" · "), 58))
-                                                    .size(9.0)
-                                                    .color(DIM),
-                                            );
-                                        }
-                                    });
+                            let captured_label = if species.captured {
+                                if species.capture_count > 1 {
+                                    format!("✓ {} ×{}", tr("caught"), species.capture_count)
+                                } else {
+                                    format!("✓ {}", tr("caught"))
+                                }
+                            } else {
+                                format!("○ {}", tr("not caught"))
+                            };
 
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        let pxp = if hunt.pokemon_xp_per_hour > 0 {
-                                            format!("{} {}", format_rate(hunt.pokemon_xp_per_hour), tr("Pokémon XP/h"))
-                                        } else {
-                                            tr("learning").to_string()
-                                        };
-                                        let kills = if hunt.kills_per_hour > 0 {
-                                            format!("{} {}", hunt.kills_per_hour, tr("kills/h"))
-                                        } else {
-                                            tr("learning").to_string()
-                                        };
+                            ui.set_width(ui.available_width());
 
+                            egui::Frame::new()
+                                .fill(if current { ACCENT.linear_multiply(0.08) } else { PANEL_ALT })
+                                .stroke(Stroke::new(
+                                    1.0,
+                                    if current { ACCENT.linear_multiply(0.35) } else { BORDER },
+                                ))
+                                .corner_radius(9.0)
+                                .inner_margin(10.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.set_width(230.0);
                                         ui.vertical(|ui| {
                                             ui.label(
-                                                RichText::new(xp_label.clone())
-                                                    .size(11.0)
+                                                RichText::new(&species.name)
+                                                    .size(12.0)
                                                     .strong()
-                                                    .color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED })
+                                                    .color(TEXT),
                                             );
+
                                             ui.label(
-                                                RichText::new(format!("{} · {}", pxp, kills))
-                                                    .size(9.0)
-                                                    .color(MUTED)
+                                                RichText::new(format!(
+                                                    "{} · Lv {} · {}",
+                                                    hunt.name,
+                                                    hunt.level,
+                                                    hunt.area
+                                                ))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                            );
+
+                                            let type_text = if species.types.is_empty() {
+                                                "TYPE ?".to_string()
+                                            } else {
+                                                species.types.join(" · ")
+                                            };
+
+                                            ui.label(
+                                                RichText::new(type_text)
+                                                    .size(8.0)
+                                                    .color(DIM),
+                                            );
+
+                                            ui.label(
+                                                RichText::new(captured_label)
+                                                    .size(8.0)
+                                                    .color(if species.captured { GOOD } else { DIM }),
                                             );
                                         });
 
-                                        ui.add_space(18.0);
+                                        ui.add_space(10.0);
 
-                                        let button = if current {
-                                            tr("Current")
-                                        } else if unlocked {
-                                            tr("Go")
-                                        } else {
-                                            tr("locked")
-                                        };
-                                        let clicked = ui
-                                            .add_enabled(
-                                                unlocked && !current,
-                                                egui::Button::new(button)
-                                            )
-                                            .clicked();
-                                        if clicked {
-                                            let profile_label = app.account_name(app.atlas_profile);
-                                            let monitor = app.games[index].monitor.clone();
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(xp_label)
+                                                    .size(10.0)
+                                                    .strong()
+                                                    .color(if hunt.xp_per_hour > 0 {
+                                                        GOOD
+                                                    } else {
+                                                        MUTED
+                                                    }),
+                                            );
 
-                                            if let Some(monitor) = monitor {
-                                                let hunt_slug = hunt.slug.clone();
-                                                let hunt_name = hunt.name.clone();
-                                                monitor.send(json!({
-                                                    "t": "hunt.select",
-                                                    "slug": hunt_slug
-                                                }));
-                                                app.set_status(
-                                                    format!("{} · changing hunt to {}", profile_label, hunt_name),
-                                                    false,
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} · {}",
+                                                    pokemon_xp,
+                                                    if hunt.kills_per_hour > 0 {
+                                                        format!("{} {}", hunt.kills_per_hour, tr("kills/h"))
+                                                    } else {
+                                                        tr("learning").to_string()
+                                                    }
+                                                ))
+                                                .size(8.0)
+                                                .color(MUTED),
+                                            );
+
+                                            if let Some(value) = species.offense_multiplier {
+                                                let (label, color) = atlas_matchup_label(
+                                                    value,
+                                                    "offense",
+                                                    &species.offense_type,
                                                 );
-                                            } else {
-                                                app.set_status(
-                                                    format!("{} is not running.", profile_label),
-                                                    true,
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(8.0)
+                                                        .strong()
+                                                        .color(color),
                                                 );
                                             }
-                                        }
+
+                                            if let Some(value) = species.defense_multiplier {
+                                                let (label, color) = atlas_matchup_label(
+                                                    value,
+                                                    "defense",
+                                                    &species.defense_type,
+                                                );
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(8.0)
+                                                        .strong()
+                                                        .color(color),
+                                                );
+                                            }
+                                        });
+
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            let button_text = if current {
+                                                tr("Current")
+                                            } else if !ready {
+                                                format!("{:.1}s", cooldown_ms as f32 / 1000.0)
+                                            } else if !hunt.unlocked {
+                                                tr("locked").to_string()
+                                            } else {
+                                                tr("Go").to_string()
+                                            };
+
+                                            let enabled = hunt.unlocked && !current && ready;
+                                            if ui
+                                                .add_enabled(
+                                                    enabled,
+                                                    egui::Button::new(button_text),
+                                                )
+                                                .clicked()
+                                            {
+                                                let profile_label = app.account_name(app.atlas_profile);
+                                                let monitor = app.games[index].monitor.clone();
+
+                                                if let Some(monitor) = monitor {
+                                                    if hunt_change_cooldown_ms(&health) > 0 {
+                                                        app.set_status(
+                                                            format!(
+                                                                "{} · {:.1}s before you can change hunts",
+                                                                profile_label,
+                                                                hunt_change_cooldown_ms(&health) as f32 / 1000.0
+                                                            ),
+                                                            false,
+                                                        );
+                                                    } else {
+                                                        let hunt_slug = hunt.slug.clone();
+                                                        let hunt_name = hunt.name.clone();
+                                                        monitor.send(json!({
+                                                            "t": "hunt.select",
+                                                            "slug": hunt_slug
+                                                        }));
+                                                        app.set_status(
+                                                            format!("{} · changing hunt to {}", profile_label, hunt_name),
+                                                            false,
+                                                        );
+                                                    }
+                                                } else {
+                                                    app.set_status(
+                                                        format!("{} is not running.", profile_label),
+                                                        true,
+                                                    );
+                                                }
+                                            }
+                                        });
                                     });
                                 });
-                            });
-                    }
-                });
-
-            if health.hunts.is_empty() {
-                ui.label(RichText::new(tr("No hunt data yet. The controller bridge must receive the game's welcome message first."))
-                    .size(11.0).color(DIM));
+                        }
+                    });
             }
-
         });
+
     app.show_atlas = open;
 }
 
