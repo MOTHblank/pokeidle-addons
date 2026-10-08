@@ -1530,7 +1530,7 @@ fn game_selector(
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new(self.account_name(profile))
+                        RichText::new(app.account_name(profile))
                             .size(10.0)
                             .strong()
                             .color(if active { TEXT } else { MUTED }),
@@ -1716,7 +1716,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         let button = if current { tr("Current") } else { tr("Go") };
                                         let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
                                         if clicked && !current {
-                                            let profile_label = app.atlas_self.account_name(profile);
+                                            let profile_label = app.account_name(app.atlas_profile);
                                             let monitor = app.games[index].monitor.clone();
 
                                             if let Some(monitor) = monitor {
@@ -1822,9 +1822,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 if ui.button(tr("Refresh market")).clicked() {
                     if let Some(monitor) = app.games[index].monitor.as_ref() {
                         monitor.send(json!({ "t": "market.itens" }));
-                        app.set_status(format!("{} · market refresh requested", app.market_self.account_name(profile)), false);
+                        app.set_status(format!("{} · market refresh requested", app.account_name(app.market_profile)), false);
                     } else {
-                        app.set_status(format!("{} is not running.", app.market_self.account_name(profile)), true);
+                        app.set_status(format!("{} is not running.", app.account_name(app.market_profile)), true);
                     }
                 }
             });
@@ -1889,7 +1889,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                             for item in catalog {
                                 let label = compact_text(&item.name, 22);
                                 if ui.button(label).clicked() {
-                                    let profile_label = app.market_self.account_name(profile);
+                                    let profile_label = app.account_name(app.market_profile);
                                     let monitor = app.games[index].monitor.clone();
                                     if let Some(monitor) = monitor {
                                         let item_id = item.id;
@@ -1974,7 +1974,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            let profile_label = app.market_self.account_name(profile);
+                                            let profile_label = app.account_name(app.market_profile);
                                             let monitor = app.games[index].monitor.clone();
                                             if ui.button(tr("Buy")).clicked() {
                                                 if let Some(monitor) = monitor {
@@ -2076,7 +2076,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             if ui.button(tr("Buy")).clicked() {
-                                                let profile_label = app.market_self.account_name(profile);
+                                                let profile_label = app.account_name(app.market_profile);
                                                 let monitor = app.games[index].monitor.clone();
 
                                                 if let Some(monitor) = monitor {
