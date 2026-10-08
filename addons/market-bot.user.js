@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.17
+// @version      0.1.18
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -1589,8 +1589,10 @@
         style.id = 'moth-market-watch-style';
         style.textContent = [
             '#moth-market-watch-tab{white-space:nowrap}',
-            '.cm-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
+            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
             '#moth-market-watch-panel{display:none;width:100%;height:100%;min-height:420px;overflow:auto;padding:10px;color:var(--sobre-mad,#eee)}',
+            '#modal-corpo.moth-watch-active>#moth-market-watch-panel{display:block!important}',
+            '.cm-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
             '.cm-corpo.moth-watch-active>#moth-market-watch-panel{display:block!important}',
             '.moth-mw-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}',
             '.moth-mw-head h3{margin:0;font-size:15px}',
@@ -1995,111 +1997,200 @@
 
     function openWatch() {
         ensureUi();
-        const body = q('.cm-corpo');
-        if (!body) return;
+
+        const body =
+            q('#modal-corpo') ||
+            q('.cm-corpo');
+
+        if (!body) return false;
+
         state.watchOpen = true;
         body.classList.add('moth-watch-active');
-        const button = q('#moth-market-watch-tab');
-        if (button) button.classList.add('on');
+
+        const button =
+            q('#moth-market-watch-tab');
+
+        if (button) {
+            button.classList.add('on');
+            button.setAttribute('aria-pressed', 'true');
+        }
+
         runScan(true);
         renderWatch();
+        return true;
     }
 
     function closeWatch() {
         state.watchOpen = false;
-        const body = q('.cm-corpo');
-        if (body) body.classList.remove('moth-watch-active');
-        const button = q('#moth-market-watch-tab');
-        if (button) button.classList.remove('on');
+
+        const body =
+            q('#modal-corpo') ||
+            q('.cm-corpo');
+
+        if (body) {
+            body.classList.remove('moth-watch-active');
+        }
+
+        const button =
+            q('#moth-market-watch-tab');
+
+        if (button) {
+            button.classList.remove('on');
+            button.setAttribute('aria-pressed', 'false');
+        }
     }
 
-    function findRmtNavigationButton() {
-        const candidates = qa(
-            'button, a, .cm-acao, .cm-atalho, [role="button"], [role="tab"]'
-        );
+    function installWatchButton(host) {
+        if (!host) return null;
 
-        return candidates.find(element => {
-            const label = normalize(element.textContent);
-            return (
-                label === 'rmt' ||
-                /(^|\s)rmt(\s|$)/.test(label)
+        let button =
+            q('#moth-market-watch-tab');
+
+        if (!button) {
+            button = document.createElement('button');
+            button.id =
+                'moth-market-watch-tab';
+            button.type = 'button';
+            button.className =
+                'cm-acao cm-atalho';
+            button.innerHTML =
+                '<i aria-hidden="true">M</i><span>Moth Watch</span>';
+            button.title =
+                'Underpriced listings and market sniper settings';
+            button.setAttribute(
+                'aria-pressed',
+                state.watchOpen ? 'true' : 'false'
             );
-        }) || null;
+
+            button.addEventListener(
+                'click',
+                event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (state.watchOpen) {
+                        closeWatch();
+                    } else {
+                        openWatch();
+                    }
+                }
+            );
+        }
+
+        if (button.parentElement !== host) {
+            host.appendChild(button);
+        }
+
+        return button;
     }
 
     function ensureUi() {
         injectStyle();
 
-        const legacyTop = q('.cm-topo');
-        const body = q('.cm-corpo');
-        const rmtNavigationButton =
-            legacyTop
-                ? null
-                : findRmtNavigationButton();
-        const top =
-            legacyTop ||
-            rmtNavigationButton?.closest('.cm-topo') ||
-            rmtNavigationButton?.parentElement;
+        /*
+         * Current PokéIdle: RMT is a normal top-menu entry that opens the
+         * generic #modal. The old .cm-topo/.cm-corpo wrapper is only present
+         * inside the community market renderer on older clients.
+         *
+         * Prefer the actual RMT modal action area. This prevents Moth Watch
+         * from being mounted beside an unrelated menu element and makes its
+         * button appear where it used to: inside RMT.
+         */
+        const modal =
+            q('#modal');
+        const modalBox =
+            q('#modal .modal-caixa');
+        const modalBody =
+            q('#modal-corpo');
 
-        if (!top) return false;
+        const isCommunity =
+            modal &&
+            modalBox?.dataset?.modal ===
+                'community';
 
-        let button = q('#moth-market-watch-tab');
-        if (!button) {
-            button = document.createElement('button');
-            button.id = 'moth-market-watch-tab';
-            button.type = 'button';
-            const shortcutHost =
-                q('.cm-atalhos', top) ||
-                rmtNavigationButton?.parentElement ||
-                top;
+        if (isCommunity && modalBody) {
+            const actions =
+                q('#modal .modal-acoes');
 
-            if (shortcutHost) {
-                button.className = 'cm-acao cm-atalho';
-                button.innerHTML = '<i aria-hidden="true">M</i><span>Moth Watch</span>';
-            } else {
-                button.className = 'cm-acao';
-                button.textContent = 'Moth Watch';
+            if (actions) {
+                installWatchButton(actions);
             }
 
-            button.title =
-                'Underpriced listings and market sniper settings';
-            button.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (state.watchOpen) closeWatch();
-                else openWatch();
-            });
+            let panel =
+                q('#moth-market-watch-panel');
 
-            if (!button.parentElement) {
-                (
-                    q('.cm-atalhos', top) ||
-                    rmtNavigationButton?.parentElement ||
-                    top
-                ).appendChild(button);
+            if (!panel) {
+                panel =
+                    document.createElement('section');
+                panel.id =
+                    'moth-market-watch-panel';
+                modalBody.appendChild(panel);
+            } else if (
+                panel.parentElement !==
+                modalBody
+            ) {
+                modalBody.appendChild(panel);
             }
+
+            if (state.watchOpen) {
+                modalBody.classList.add(
+                    'moth-watch-active'
+                );
+
+                const button =
+                    q('#moth-market-watch-tab');
+
+                button?.classList.add('on');
+                button?.setAttribute(
+                    'aria-pressed',
+                    'true'
+                );
+            }
+
+            return true;
         }
 
-        let panel = q('#moth-market-watch-panel');
-        if (
-            !panel &&
-            body
+        /*
+         * Legacy client support. Keep the old structure working, but do not
+         * search the whole document for a button whose text happens to be RMT.
+         */
+        const legacyTop =
+            q('.cm-topo');
+        const legacyBody =
+            q('.cm-corpo');
+
+        if (!legacyTop || !legacyBody) {
+            return false;
+        }
+
+        const host =
+            q('.cm-atalhos', legacyTop) ||
+            legacyTop;
+
+        const button =
+            installWatchButton(host);
+
+        let panel =
+            q('#moth-market-watch-panel');
+
+        if (!panel) {
+            panel =
+                document.createElement('section');
+            panel.id =
+                'moth-market-watch-panel';
+            legacyBody.appendChild(panel);
+        } else if (
+            panel.parentElement !==
+            legacyBody
         ) {
-            panel = document.createElement('section');
-            panel.id = 'moth-market-watch-panel';
-            body.appendChild(panel);
-        }
-
-        if (!top.dataset.mothWatchBound) {
-            top.dataset.mothWatchBound = '1';
-            top.addEventListener('click', event => {
-                if (event.target.closest('#moth-market-watch-tab')) return;
-                if (state.watchOpen) closeWatch();
-            }, true);
+            legacyBody.appendChild(panel);
         }
 
         if (state.watchOpen) {
-            body.classList.add('moth-watch-active');
-            button.classList.add('on');
+            legacyBody.classList.add(
+                'moth-watch-active'
+            );
+            button?.classList.add('on');
         }
 
         return true;
@@ -2252,7 +2343,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.16 loaded');
+        console.info('[Moth Watch] v0.1.18 loaded');
     }
 
     bootstrap();
