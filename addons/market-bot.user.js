@@ -1165,6 +1165,49 @@
         tryBuy(candidate, false);
     }
 
+    function buyFromController(request) {
+        if (!request || !Number(request.id) || !Number(request.preco)) {
+            return { ok: false, error: 'invalid market purchase request' };
+        }
+
+        const listingId = Number(request.id);
+        const currency = request.moeda === 'orb' ? 'orb' : 'gold';
+        const candidate = Array.from(state.candidates.values()).find(item =>
+            Number(item.listingId) === listingId &&
+            item.currency === currency
+        );
+
+        if (candidate) {
+            return { ok: tryBuy(candidate, true), source: 'candidate' };
+        }
+
+        /*
+         * Native Moth Controller may display a listing before Moth Watch's
+         * scanner has classified it. Use the same authenticated game socket
+         * and exact market.comprar payload in that case.
+         */
+        const qty = Math.max(1, Number(request.qtd || 1));
+        const price = Number(request.preco);
+        const sent = send({
+            t: 'market.comprar',
+            id: listingId,
+            qtd: qty,
+            preco: price,
+            moeda: currency
+        });
+
+        if (sent) {
+            addLog('BUY · listing #' + listingId + ' · native controller');
+        }
+
+        return { ok: sent, source: 'direct' };
+    }
+
+    page.__mothMarketWatchControllerV1 = {
+        version: 1,
+        buy: buyFromController
+    };
+
     function finishPendingBuy(reason) {
         const pending = state.pendingBuy;
         if (!pending) return;
