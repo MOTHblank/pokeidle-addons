@@ -1,6 +1,7 @@
 use crate::config::{Config, GameProfile};
 use crate::logging;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -181,6 +182,7 @@ struct KickSession {
     browser_executable: Option<PathBuf>,
     browser_pid: Option<u32>,
     windows: HashMap<String, Hwnd>,
+    pending: HashMap<String, Instant>,
 }
 
 pub struct KickManager {
@@ -276,8 +278,7 @@ impl KickManager {
         }
 
         session.windows.retain(|_, hwnd| window_is_valid(*hwnd));
-
-        let browser_pid = session.browser_pid;
+        session.pending.retain(|_, started| started.elapsed() < Duration::from_secs(15));
 
         for stream in desired.values() {
             let key = normalized(&stream.name);
@@ -288,20 +289,32 @@ impl KickManager {
 
             let existing = find_kick_window(
                 visible_windows(),
-                browser_pid,
+                session.browser_pid,
                 &stream.name,
-            );
+            ).or_else(|| {
+                if session.browser_pid.map(|pid| process_alive(pid)).unwrap_or(false) {
+                    None
+                } else {
+                    find_kick_window(visible_windows(), None, &stream.name)
+                }
+            });
 
             if let Some(hwnd) = existing {
-                session.windows.insert(key, hwnd);
+                session.browser_pid = Some(window_pid(hwnd));
+                session.windows.insert(key.clone(), hwnd);
+                session.pending.remove(&key);
                 continue;
             }
 
-            match Self::open_stream_window(session, stream) {
-                Ok(hwnd) => {
-                    session.windows.insert(key, hwnd);
+            if session.pending.contains_key(&key) {
+                continue;
+            }
+
+            match Self::launch_stream_window(session, stream) {
+                Ok(()) => {
+                    session.pending.insert(key.clone(), Instant::now());
                     logging::info(&format!(
-                        "KICK opened in normal Firefox: {}",
+                        "KICK opening in normal Firefox: {}",
                         stream.url
                     ));
                 }
@@ -337,6 +350,9 @@ impl KickManager {
                 session.windows.remove(&key);
             }
         }
+
+        let tracked_keys: HashSet<String> = session.windows.keys().cloned().collect();
+        session.pending.retain(|key, _| desired.contains_key(key) && !tracked_keys.contains(key));
     }
 
     #[cfg(windows)]
@@ -344,7 +360,7 @@ impl KickManager {
         &mut self,
         profile: GameProfile,
         url: &str,
-    ) -> Result<Hwnd, String> {
+    ) -> Result<(), String> {
         let session = self.session_mut(profile);
 
         let stream = KickStream {
@@ -352,14 +368,14 @@ impl KickManager {
             url: url.to_string(),
         };
 
-        Self::open_stream_window(session, &stream)
+        Self::launch_stream_window(session, &stream)
     }
 
     #[cfg(windows)]
-    fn open_stream_window(
+    fn launch_stream_window(
         session: &mut KickSession,
         stream: &KickStream,
-    ) -> Result<Hwnd, String> {
+    ) -> Result<(), String> {
         if stream.url.is_empty() {
             return Err("empty KICK URL".to_string());
         }
@@ -381,8 +397,6 @@ impl KickManager {
         std::fs::create_dir_all(&profile_dir)
             .map_err(|error| format!("could not create KICK profile: {error}"))?;
 
-        let before = snapshot_windows();
-
         if session
             .browser_pid
             .map(|pid| !process_alive(pid))
@@ -397,55 +411,17 @@ impl KickManager {
                 .map_err(|error| format!("could not start normal KICK Firefox: {error}"))?;
 
             session.browser_pid = Some(child.id());
-
-            for _ in 0..60 {
-                if let Some(hwnd) = find_new_kick_window(
-                    &before,
-                    Some(child.id()),
-                    &stream.name,
-                ) {
-                    session.browser_pid = Some(window_pid(hwnd));
-                    return Ok(hwnd);
-                }
-
-                if let Some(hwnd) = find_new_kick_window(
-                    &before,
-                    None,
-                    &stream.name,
-                ) {
-                    session.browser_pid = Some(window_pid(hwnd));
-                    return Ok(hwnd);
-                }
-
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            return Err("KICK Firefox started but its window was not detected".to_string());
+            return Ok(());
         }
 
-        let child = Command::new(&executable)
+        Command::new(&executable)
             .arg("--profile")
             .arg(&profile_dir)
             .arg("--new-window")
             .arg(&stream.url)
             .spawn()
-            .map_err(|error| format!("could not request a new KICK Firefox window: {error}"))?;
-
-        let _ = child;
-
-        for _ in 0..60 {
-            if let Some(hwnd) = find_new_kick_window(
-                &before,
-                session.browser_pid,
-                &stream.name,
-            ) {
-                return Ok(hwnd);
-            }
-
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        Err("KICK Firefox did not create the requested window".to_string())
+            .map(|_| ())
+            .map_err(|error| format!("could not request a new KICK Firefox window: {error}"))
     }
 
     #[cfg(windows)]
