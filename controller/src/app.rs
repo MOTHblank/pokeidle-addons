@@ -1800,13 +1800,47 @@ fn atlas_matchup_label(multiplier: f32, direction: &str, attack_type: &str) -> (
 
     (
         format!(
-            "{} {} {}",
+            "{} {}{} · {}",
             if direction == "offense" { "ATK" } else { "DEF" },
             format_multiplier(multiplier),
-            if attack_type.is_empty() { "" } else { attack_type }
+            if attack_type.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", atlas_type_label(attack_type))
+            },
+            tr(relation.0)
         ),
         relation.1,
     )
+}
+
+fn atlas_type_label(value: &str) -> String {
+    if !pt_br() {
+        return value.to_string();
+    }
+
+    match value.to_ascii_uppercase().as_str() {
+        "NORMAL" => "Normal",
+        "FIRE" => "Fogo",
+        "WATER" => "Água",
+        "ELECTRIC" => "Elétrico",
+        "GRASS" => "Grama",
+        "ICE" => "Gelo",
+        "FIGHTING" => "Lutador",
+        "POISON" => "Veneno",
+        "GROUND" => "Terra",
+        "FLYING" => "Voador",
+        "PSYCHIC" => "Psíquico",
+        "BUG" => "Inseto",
+        "ROCK" => "Pedra",
+        "GHOST" => "Fantasma",
+        "DRAGON" => "Dragão",
+        "DARK" => "Sombrio",
+        "STEEL" => "Aço",
+        "FAIRY" => "Fada",
+        _ => value,
+    }
+    .to_string()
 }
 
 fn format_multiplier(value: f32) -> String {
@@ -2204,7 +2238,10 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 let b = &b_hunt.species_details[*sb];
 
                 let comparison = match app.atlas_filters.sort.as_str() {
-                    "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)),
+                    "name" => {
+                        let base = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+                        if direction == "asc" { base } else { base.reverse() }
+                    },
                     "pokedex" => {
                         atlas_compare_numeric(
                             a.id as f32,
