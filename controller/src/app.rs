@@ -62,6 +62,8 @@ fn localize_status(message: String) -> String {
         ("refusing to open a non-KICK HTTPS URL", "recusa ao abrir uma URL HTTPS que não é do KICK"),
         ("could not create KICK profile: ", "não foi possível criar o perfil do KICK: "),
         ("could not start normal KICK Firefox: ", "não foi possível iniciar o Firefox normal do KICK: "),
+        ("could not start managed KICK Firefox: ", "não foi possível iniciar o Firefox gerenciado do KICK: "),
+        ("KICK is currently managed by the controller. Close its managed Firefox window before starting KICK login.", "o KICK está sendo gerenciado pelo controlador. Feche a janela gerenciada do Firefox do KICK antes de iniciar o login."),
         ("could not request a new KICK Firefox window: ", "não foi possível solicitar uma nova janela do Firefox do KICK: "),
         (" updated.", " atualizado."),
         (" is already running.", " já está em execução."),
@@ -200,7 +202,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Headless" => "Oculto",
         "2 isolated" => "2 isolados",
         "Stream chat" => "Chat das streams",
-        "First scan 30s · hourly" => "Primeiro scan em 30s · a cada hora",
+        "First scan 30s · 10 min" => "Primeiro scan em 30s · a cada 10 min",
         "UI repaint" => "Atualização da interface",
         "1 sec" => "1 s",
         "Hunt Atlas" => "Atlas de Caça",
@@ -348,6 +350,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "nick" => "apelido",
         "Twitch" => "Twitch",
         "KICK" => "KICK",
+        "Test KICK headless" => "Testar KICK em modo oculto",
+        "Test current KICK streams in headless Firefox. Close the current managed KICK browser before switching modes." => "Testa as streams atuais do KICK no Firefox em modo oculto. Feche o navegador KICK gerenciado antes de mudar de modo.",
         "Dashboard · live health polling enabled" => "Painel · monitoramento de saúde ao vivo ativado",
         "Loaded" => "Carregado",
         "Auto Catch" => "Captura automática",
@@ -528,14 +532,13 @@ pub struct ControllerApp {
     atlas_profile: GameProfile,
     atlas_filters: AtlasFilters,
     market_profile: GameProfile,
-    market_search: String,
     atlas_search: String,
-    market_currency: String,
     status: String,
     status_error: bool,
     kick_manager: KickManager,
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
+    kick_headless_test: [bool; 4],
 }
 
 impl ControllerApp {
@@ -555,14 +558,13 @@ impl ControllerApp {
             atlas_profile: GameProfile::Game1,
             atlas_filters: AtlasFilters::default(),
             market_profile: GameProfile::Game1,
-            market_search: String::new(),
             atlas_search: String::new(),
-            market_currency: "gold".to_string(),
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
             kick_manager: KickManager::new(),
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
+            kick_headless_test: [false; 4],
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -619,6 +621,7 @@ impl ControllerApp {
                 profile,
                 &health.kick_streams,
                 health.kick_state_available,
+                self.kick_headless_test[profile.index()],
             );
         }
     }
@@ -833,29 +836,6 @@ impl ControllerApp {
         {
             Ok(_) => self.set_status(format!("Opened controller log · {}", path.display()), false),
             Err(error) => self.set_status(format!("Could not open log: {error}"), true),
-        }
-    }
-
-    fn open_profiles_folder(&mut self) {
-        let profiles = match crate::config::Config::profiles_dir() {
-            Ok(path) => path,
-            Err(error) => {
-                self.set_status(error, true);
-                return;
-            }
-        };
-
-        if let Err(error) = std::fs::create_dir_all(&profiles) {
-            self.set_status(format!("Could not create profiles folder: {error}"), true);
-            return;
-        }
-
-        match std::process::Command::new("explorer.exe")
-            .arg(&profiles)
-            .spawn()
-        {
-            Ok(_) => self.set_status(format!("Opened {}", profiles.display()), false),
-            Err(error) => self.set_status(format!("Could not open folder: {error}"), true),
         }
     }
 
@@ -1900,7 +1880,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     &format!("{} {}", enabled_profiles, tr("isolated")),
                     MUTED,
                 );
-                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · hourly"), MUTED);
+                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 10 min"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), tr("1 sec"), MUTED);
             });
         });
@@ -3665,40 +3645,7 @@ fn format_rate(value: u64) -> String {
     format_number(value)
 }
 
-fn market_wait_label(seconds: u64) -> String {
-    if seconds == 0 {
-        return if pt_br() { "Disponível".to_string() } else { "Available".to_string() };
-    }
 
-    let minutes = seconds / 60;
-    let secs = seconds % 60;
-
-    if minutes > 0 {
-        if pt_br() {
-            format!("Libera em {}m {:02}s", minutes, secs)
-        } else {
-            format!("Available in {}m {:02}s", minutes, secs)
-        }
-    } else if pt_br() {
-        format!("Libera em {}s", secs)
-    } else {
-        format!("Available in {}s", secs)
-    }
-}
-
-fn market_discount_label(discount_pct: f32) -> String {
-    if discount_pct > 0.05 {
-        if pt_br() {
-            format!("−{}% vs média 7d", format_pct(discount_pct))
-        } else {
-            format!("−{}% vs 7d avg", format_pct(discount_pct))
-        }
-    } else if pt_br() {
-        "Sem desconto vs média 7d".to_string()
-    } else {
-        "No discount vs 7d avg".to_string()
-    }
-}
 
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
     if app
@@ -3866,6 +3813,21 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     status_chip(ui, "Twitch", twitch_label, setup.profile_ready);
                                     status_chip(ui, "KICK", kick_label, setup.kick_profile_ready);
 
+                                    let headless_changed = ui
+                                        .checkbox(
+                                            &mut app.kick_headless_test[index],
+                                            tr("Test KICK headless"),
+                                        )
+                                        .on_hover_text(tr("Test current KICK streams in headless Firefox. Close the current managed KICK browser before switching modes."))
+                                        .changed();
+
+                                    if headless_changed {
+                                        app.kick_manager.set_headless_test(
+                                            profile,
+                                            app.kick_headless_test[index],
+                                        );
+                                    }
+
                                     if running {
                                         status_chip(
                                             ui,
@@ -3947,67 +3909,6 @@ fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) {
 }
 
 
-fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GameProfile) {
-    let config = crate::config::Config::for_profile(profile);
-    let (profile_state, browser) = match config {
-        Ok(ref config) => {
-            let state = if config.profile_dir.exists() {
-                tr("Profile ready")
-            } else {
-                tr("Created on first launch")
-            };
-
-            let browser = if config
-                .firefox_executable
-                .to_string_lossy()
-                .to_lowercase()
-                .contains("developer")
-            {
-                tr("Firefox Developer Edition")
-            } else {
-                tr("Firefox")
-            };
-
-            (state.to_string(), browser.to_string())
-        }
-        Err(error) => (tr("Unavailable").to_string(), error),
-    };
-
-    egui::Frame::new()
-        .fill(PANEL_ALT)
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(10.0)
-        .inner_margin(14.0)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(app.account_name(profile))
-                        .font(FontId::proportional(15.0))
-                        .strong()
-                        .color(TEXT),
-                );
-                ui.add_space(8.0);
-                ui.label(RichText::new(profile_state).size(11.0).color(GOOD));
-            });
-
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(browser)
-                    .size(10.0)
-                    .color(MUTED),
-            );
-
-            ui.add_space(12.0);
-
-            ui.horizontal_wrapped(|ui| {
-                profile_button(ui, tr("Open Game"), || app.profile_action(profile, ProfileAction::Game));
-                profile_button(ui, tr("Twitch"), || app.profile_action(profile, ProfileAction::Twitch));
-                profile_button(ui, tr("KICK"), || app.profile_action(profile, ProfileAction::Kick));
-                profile_button(ui, tr("Addons"), || app.profile_action(profile, ProfileAction::Addons));
-                profile_button(ui, tr("Profile folder"), || app.profile_action(profile, ProfileAction::Folder));
-            });
-        });
-}
 
 fn profile_button(ui: &mut egui::Ui, label: &str, mut action: impl FnMut()) {
     if ui
@@ -4044,22 +3945,6 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     );
 }
 
-fn metric(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.vertical(|ui| {
-        ui.label(
-            RichText::new(tr(label))
-                .size(9.0)
-                .strong()
-                .color(DIM),
-        );
-        ui.label(
-            RichText::new(compact_text(value, 22))
-                .size(11.0)
-                .color(TEXT),
-        );
-    });
-    ui.add_space(18.0);
-}
 
 fn runtime_chip(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     egui::Frame::new()
