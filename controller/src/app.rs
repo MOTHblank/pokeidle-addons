@@ -301,6 +301,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Not configured" => "Não configurado",
         "Open" => "Aberto",
         "Not checked" => "Não verificado",
+        "Tab open" => "Aba aberta",
         "Scripts" => "Scripts",
         "Watch prices ≤ reference (%)" => "Preços monitorados ≤ referência (%)",
         "Auto-buy" => "Compra automática",
@@ -3880,23 +3881,19 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         tr("Not installed")
                                     };
                                     let twitch_open = health.tabs.iter().any(|tab| tab.kind == "Twitch");
+                                    // These checks only observe profile/tab existence. They do not
+                                    // authenticate Twitch or KICK, so never label a profile as logged in.
                                     let twitch_label = if twitch_open {
-                                        tr("Open")
-                                    } else if setup.profile_ready {
-                                        tr("Profile ready")
+                                        tr("Tab open")
                                     } else {
-                                        tr("Not configured")
+                                        tr("Not checked")
                                     };
-                                    let kick_label = if setup.kick_profile_ready {
-                                        tr("Profile ready")
-                                    } else {
-                                        tr("Not configured")
-                                    };
+                                    let kick_label = tr("Not checked");
 
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
                                     status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
-                                    status_chip(ui, "Twitch", twitch_label, setup.profile_ready);
-                                    status_chip(ui, "KICK", kick_label, setup.kick_profile_ready);
+                                    status_chip(ui, "Twitch", twitch_label, twitch_open);
+                                    status_chip(ui, "KICK", kick_label, false);
 
                                     let headless_changed = ui
                                         .checkbox(
