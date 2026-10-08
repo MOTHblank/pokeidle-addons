@@ -2970,6 +2970,100 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
             ui.add_space(8.0);
 
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Currency").size(9.0).strong().color(DIM));
+                for (value, label) in [
+                    ("all", "All"),
+                    ("gold", "Coins"),
+                    ("orb", "Gems"),
+                ] {
+                    let active = info.config.view_currency == value;
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(label).size(9.0))
+                                .fill(if active { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                                .stroke(Stroke::new(1.0, if active { ACCENT } else { BORDER }))
+                                .corner_radius(6.0),
+                        )
+                        .clicked()
+                    {
+                        moth_watch_send(
+                            monitor.as_ref(),
+                            json!({
+                                "t": "mothWatch.configure",
+                                "patch": { "viewCurrency": value }
+                            }),
+                        );
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("Type").size(9.0).strong().color(DIM));
+                for (value, label) in [
+                    ("all", "All"),
+                    ("item", "Items"),
+                    ("pokemon", "Pokémon"),
+                ] {
+                    let active = info.config.view_kind == value;
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(label).size(9.0))
+                                .fill(if active { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                                .stroke(Stroke::new(1.0, if active { ACCENT } else { BORDER }))
+                                .corner_radius(6.0),
+                        )
+                        .clicked()
+                    {
+                        moth_watch_send(
+                            monitor.as_ref(),
+                            json!({
+                                "t": "mothWatch.configure",
+                                "patch": { "viewKind": value }
+                            }),
+                        );
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("Sort").size(9.0).strong().color(DIM));
+                egui::ComboBox::from_id_salt("moth_watch_sort")
+                    .selected_text(match info.config.view_sort.as_str() {
+                        "newest" => "Newest detected",
+                        "price-asc" => "Price: low → high",
+                        "price-desc" => "Price: high → low",
+                        "reference-desc" => "Reference: high → low",
+                        "quantity-desc" => "Quantity: high → low",
+                        "name" => "Name: A → Z",
+                        _ => "Biggest discount",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            ("discount", "Biggest discount"),
+                            ("newest", "Newest detected"),
+                            ("price-asc", "Price: low → high"),
+                            ("price-desc", "Price: high → low"),
+                            ("reference-desc", "Reference: high → low"),
+                            ("quantity-desc", "Quantity: high → low"),
+                            ("name", "Name: A → Z"),
+                        ] {
+                            if ui
+                                .selectable_label(info.config.view_sort == value, label)
+                                .clicked()
+                            {
+                                moth_watch_send(
+                                    monitor.as_ref(),
+                                    json!({
+                                        "t": "mothWatch.configure",
+                                        "patch": { "viewSort": value }
+                                    }),
+                                );
+                            }
+                        }
+                    });
+            });
+
+            ui.add_space(8.0);
+
             egui::ScrollArea::vertical()
                 .id_salt("moth_watch_candidates")
                 .auto_shrink([false, false])
