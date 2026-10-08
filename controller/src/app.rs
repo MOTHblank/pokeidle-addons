@@ -1592,7 +1592,8 @@ fn draw_game_card(
                     if !health.stream_watching.is_empty() {
                         ui.label(
                             RichText::new(format!(
-                                format!("{} · +{}% XP", tr("ACTIVE"), format_pct(health.stream_bonus_pct)),
+                                "{} · +{}% XP",
+                                tr("ACTIVE"),
                                 format_pct(health.stream_bonus_pct)
                             ))
                             .size(11.0)
@@ -1615,7 +1616,8 @@ fn draw_game_card(
                         );
                         ui.label(
                             RichText::new(format!(
-                                format!("{} {}{}", tr("Open chat:"), health.stream_missing.join(", "),
+                                "{} {}{}",
+                                tr("Open chat:"),
                                 health.stream_missing.join(", "),
                                 if health.stream_bonus_pct > 0.0 {
                                     format!(" · +{}% XP", format_pct(health.stream_bonus_pct))
