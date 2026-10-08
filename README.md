@@ -87,7 +87,7 @@ Faça o seguinte para cada conta habilitada:
 4. Volte ao PokéIdle.
 5. Na janela **Contas**, use **Addons**.
 
-O botão **Addons** abre os instaladores dos scripts principais no perfil selecionado. A primeira instalação passa pela confirmação normal do Violentmonkey; depois as próprias URLs de update permitem que o Violentmonkey mantenha os scripts atualizados.
+O botão **Addons** abre os instaladores de todos os userscripts recomendados no perfil selecionado. A primeira instalação passa pela confirmação normal do Violentmonkey; depois as próprias URLs de update permitem que o Violentmonkey mantenha os scripts atualizados.
 
 ## Userscripts
 
@@ -127,8 +127,9 @@ Abra o painel do **Auto Catch+** dentro do PokéIdle e escolha:
 - ativação da captura automática;
 - bolas que podem ser usadas;
 - reservas mínimas;
-- opções de reposição;
 - intervalo de operação.
+
+Na seção **Auto-restock**, bolas, poções e **Revives são categorias independentes**. Cada uma possui seu próprio item, limite **at** e limite **to**. É possível reabastecer poções e Revives ao mesmo tempo; um não substitui o outro.
 
 Comece com as reservas conservadoras e ajuste depois de confirmar que a captura está funcionando como esperado.
 
@@ -225,7 +226,7 @@ O **Hunt Atlas** no controlador é uma visão nativa baseada nos dados recebidos
 
 Ele permite selecionar cada conta e consultar as hunts observadas, ordenar por XP/h e viajar diretamente para uma hunt.
 
-O Atlas nativo do controlador não substitui o userscript completo do Hunt Atlas. Para a experiência completa da tela **Mapa**, instale o userscript separado.
+O Atlas nativo do controlador não substitui a versão completa do Hunt Atlas que aparece na tela **Mapa**. O userscript completo também é instalado pelo botão **Contas → Addons**.
 
 ### Moth Watch
 
@@ -317,7 +318,7 @@ Each slot gets its own Firefox profile:
 
 Use the account's **Twitch**, **KICK**, and game entry points from that same profile. Never mix account sessions between profiles.
 
-Install Violentmonkey inside each enabled profile, then use **Accounts → Addons** to open the core addon installers.
+Install Violentmonkey inside each enabled profile, then use **Accounts → Addons** to open the complete addon set.
 
 ### Core userscripts
 
@@ -343,7 +344,7 @@ There is no separate installation flow. **Accounts → Addons** opens the comple
 
 **Stop all** closes every controlled Firefox instance.
 
-**Hunt Atlas** is a native controller view using data from Controller Bridge. The full Hunt Atlas map replacement remains a separate userscript.
+**Hunt Atlas** is a native controller view using data from Controller Bridge. The full Hunt Atlas map replacement is also installed through **Accounts → Addons**.
 
 **Moth Watch** is the native market view using market data received through the Bridge.
 
