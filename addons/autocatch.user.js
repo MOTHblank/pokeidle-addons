@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.0
+// @version      6.5.1
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -931,25 +931,42 @@
             if (!Number.isFinite(id)) continue;
 
             const name = item?.name || item?.nome;
-            if (!name || !isRestockPotion({ name })) continue;
+            if (
+                !name ||
+                (!isRestockPotion({ name }) && !isRestockRevive({ name }))
+            ) {
+                continue;
+            }
 
             /*
-             * items.json is the authoritative complete item catalog. The
-             * welcome.itensCompraveis payload can still override the price
-             * when the server provides one.
+             * Keep potions and revives in the same source catalog, but let
+             * their selectors classify them independently. The previous
+             * potion-only gate silently discarded every Revive before
+             * restockReviveEntries() could ever see it.
+             *
+             * items.json is the complete item catalog; the server's
+             * itensCompraveis payload may supply a more specific price.
+             * Do not replace a known price with zero when a partial payload
+             * omits price fields.
              */
-            const priceGold = Number(
+            const suppliedPrice =
                 item?.preco ??
                 item?.npcPrice ??
-                item?.priceGold ??
-                0
-            );
+                item?.priceGold;
+            const previous = itemCatalog.get(id);
+            const parsedPrice = Number(suppliedPrice);
+            const priceGold =
+                suppliedPrice != null &&
+                Number.isFinite(parsedPrice) &&
+                parsedPrice > 0
+                    ? parsedPrice
+                    : Number(previous?.priceGold || 0);
 
             itemCatalog.set(id, {
                 id,
                 name,
                 nome: name,
-                icon: item?.icon || '',
+                icon: item?.icon || previous?.icon || '',
                 priceGold,
                 compravel: Number.isFinite(priceGold) && priceGold > 0
             });
