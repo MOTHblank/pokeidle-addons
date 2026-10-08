@@ -1,3 +1,4 @@
+use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -243,6 +244,8 @@ pub struct Health {
     pub market_catalog: Vec<MarketItem>,
     pub market_summary: Vec<MarketSummary>,
     pub moth_watch: Option<MothWatchInfo>,
+    pub kick_streams: Vec<KickStream>,
+    pub kick_state_available: bool,
     pub last_error: Option<String>,
 }
 
@@ -299,6 +302,8 @@ impl Default for Health {
             market_catalog: Vec::new(),
             market_summary: Vec::new(),
             moth_watch: None,
+            kick_streams: Vec::new(),
+            kick_state_available: false,
             last_error: None,
         }
     }
@@ -512,6 +517,8 @@ struct Probe {
     market_catalog: Vec<MarketItem>,
     market_summary: Vec<MarketSummary>,
     moth_watch: Option<MothWatchInfo>,
+    kick_streams: Vec<KickStream>,
+    kick_state_available: bool,
 }
 
 fn monitor_loop(
@@ -614,6 +621,8 @@ fn monitor_loop(
                         current.market_catalog = probe.market_catalog;
                         current.market_summary = probe.market_summary;
                         current.moth_watch = probe.moth_watch;
+                        current.kick_streams = probe.kick_streams;
+                        current.kick_state_available = probe.kick_state_available;
                         current.last_error = None;
                     }
                 }
@@ -911,6 +920,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         market_catalog: runtime.market_catalog,
         market_summary: runtime.market_summary,
         moth_watch: runtime.moth_watch,
+        kick_streams: runtime.kick_streams,
+        kick_state_available: runtime.kick_state_available,
     })
 }
 fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
@@ -1172,6 +1183,34 @@ fn probe_runtime_details(
     let moth_watch = parse_moth_watch_snapshot(
         snapshot.get("mothWatch").unwrap_or(&Value::Null)
     );
+
+    let stream = snapshot.get("stream").unwrap_or(&Value::Null);
+    let kick_scanner = stream.get("kickScanner").unwrap_or(&Value::Null);
+    let kick_state_available = kick_scanner
+        .get("stateAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let kick_streams = kick_scanner
+        .get("live")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name").and_then(Value::as_str)?.trim();
+                    let url = item.get("url").and_then(Value::as_str)?.trim();
+                    if name.is_empty() || url.is_empty() {
+                        return None;
+                    }
+                    Some(KickStream {
+                        name: name.to_string(),
+                        url: url.to_string(),
+                    })
+                })
+                .take(10)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     let state = snapshot.get("state").cloned().unwrap_or(Value::Null);
     let active = state.get("activePokemon").cloned().unwrap_or(Value::Null);
@@ -1801,6 +1840,8 @@ fn probe_runtime_details(
         market_catalog,
         market_summary,
         moth_watch,
+        kick_streams,
+        kick_state_available,
     })
 }
 
