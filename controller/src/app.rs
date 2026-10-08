@@ -243,7 +243,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Installed" => "Instalado",
         "Not installed" => "Não instalado",
         "Not configured" => "Não configurado",
-        "Open" => "Aberto",
         "Not checked" => "Não verificado",
         "Tab open" => "Aba aberta",
         "Scripts" => "Scripts",
@@ -2319,4 +2318,38 @@ pub fn run() -> Result<(), String> {
         Box::new(|cc| Ok(Box::new(ControllerApp::new(cc)))),
     )
     .map_err(|error| format!("could not start controller UI: {error}"))
+}
+
+pub(crate) fn chrono_like_now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn format_pct(value: f32) -> String {
+    if value.fract().abs() < 0.01 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+fn format_time(timestamp_ms: u64) -> String {
+    let seconds = timestamp_ms / 1000;
+    let minute = (seconds / 60) % 60;
+    let hour = (seconds / 3600) % 24;
+    format!("{:02}:{:02}", hour, minute)
+}
+
+fn format_number(value: u64) -> String {
+    let mut value = value.to_string();
+    let mut i = value.len() as isize - 3;
+    while i > 0 {
+        value.insert(i as usize, ',');
+        i -= 3;
+    }
+    value
 }
