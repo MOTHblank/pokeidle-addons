@@ -7,7 +7,7 @@ use crate::monitor::{Health, MonitorHandle};
 use serde_json::{json, Value};
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
 use std::process::Child;
-
+use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -244,6 +244,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Close" => "Fechar",
         "Open Game" => "Abrir jogo",
         "Addons" => "Addons",
+        "Install Violentmonkey" => "Instalar Violentmonkey",
+        "Violentmonkey" => "Violentmonkey",
+        "Installed" => "Instalado",
+        "Not installed" => "Não instalado",
+        "Profile ready" => "Perfil pronto",
+        "Not configured" => "Não configurado",
+        "Open" => "Aberto",
+        "Not checked" => "Não verificado",
+        "Scripts" => "Scripts",
         "Profile folder" => "Pasta do perfil",
         "Profile ready" => "Perfil pronto",
         "Created on first launch" => "Criado na primeira execução",
@@ -335,6 +344,13 @@ impl Default for AtlasFilters {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct AccountSetup {
+    profile_ready: bool,
+    kick_profile_ready: bool,
+    violentmonkey_installed: bool,
+}
+
 pub struct ControllerApp {
     games: [GameSlot; 4],
     show_accounts: bool,
@@ -350,6 +366,8 @@ pub struct ControllerApp {
     status: String,
     status_error: bool,
     kick_manager: KickManager,
+    account_setup: [AccountSetup; 4],
+    account_setup_checked_at: Option<Instant>,
 }
 
 impl ControllerApp {
@@ -375,6 +393,8 @@ impl ControllerApp {
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
             kick_manager: KickManager::new(),
+            account_setup: std::array::from_fn(|_| AccountSetup::default()),
+            account_setup_checked_at: None,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -402,6 +422,26 @@ impl ControllerApp {
                 false
             }
         }
+    }
+
+    fn refresh_account_setup(&mut self) {
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            let Ok(config) = Config::for_profile(profile) else {
+                self.account_setup[index] = AccountSetup::default();
+                continue;
+            };
+
+            let vm_installed = accounts::violentmonkey_installed(profile).unwrap_or(false);
+
+            self.account_setup[index] = AccountSetup {
+                profile_ready: config.profile_dir.exists(),
+                kick_profile_ready: config.kick_profile_dir().exists(),
+                violentmonkey_installed: vm_installed,
+            };
+        }
+
+        self.account_setup_checked_at = Some(Instant::now());
     }
 
     fn sync_kick_streams(&mut self) {
@@ -659,6 +699,7 @@ impl ControllerApp {
                 .kick_manager
                 .open_login(profile, accounts::KICK_LOGIN)
                 .map(|_| "Opened KICK in normal Firefox".to_string()),
+            ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Addons => accounts::open_addons(profile)
                 .map(|count| format!("Opened {count} addon installers")),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
@@ -815,6 +856,7 @@ enum ProfileAction {
     Game,
     Twitch,
     Kick,
+    InstallViolentmonkey,
     Addons,
     Folder,
 }
@@ -3376,6 +3418,14 @@ fn market_discount_label(discount_pct: f32) -> String {
 }
 
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
+    if app
+        .account_setup_checked_at
+        .map(|checked| checked.elapsed() >= Duration::from_secs(1))
+        .unwrap_or(true)
+    {
+        app.refresh_account_setup();
+    }
+
     let mut open = app.show_accounts;
     egui::Window::new(tr("Account Manager"))
         .open(&mut open)
@@ -3394,26 +3444,18 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .inner_margin(18.0),
         )
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(tr("Account Manager"))
-                            .font(FontId::proportional(22.0))
-                            .strong()
-                            .color(TEXT),
-                    );
-                    ui.label(
-                        RichText::new(tr("Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection."))
-                            .size(11.0)
-                            .color(MUTED),
-                    );
-                });
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(tr("Close")).clicked() {
-                        app.show_accounts = false;
-                    }
-                });
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(tr("Account Manager"))
+                        .font(FontId::proportional(22.0))
+                        .strong()
+                        .color(TEXT),
+                );
+                ui.label(
+                    RichText::new(tr("Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection."))
+                        .size(11.0)
+                        .color(MUTED),
+                );
             });
 
             ui.add_space(12.0);
@@ -3424,7 +3466,12 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
                         let index = profile.index();
-                        let account = &mut app.accounts[index];
+                        let account_name = app.accounts[index].name.clone();
+                        let enabled = app.accounts[index].enabled;
+                        let setup = app.account_setup[index].clone();
+                        let health = app.games[index].health();
+                        let running = app.games[index].is_running();
+
                         let mut changed = false;
 
                         egui::Frame::new()
@@ -3440,29 +3487,28 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             .strong()
                                             .color(TEXT),
                                     );
-
                                     ui.add_space(10.0);
 
-                                    let checkbox_glyph = if account.enabled { "✓" } else { "" };
+                                    let checkbox_glyph = if enabled { "✓" } else { "" };
                                     let checkbox = egui::Button::new(
                                         RichText::new(checkbox_glyph)
                                             .size(13.0)
                                             .strong()
-                                            .color(if account.enabled { TEXT } else { DIM }),
+                                            .color(if enabled { TEXT } else { DIM }),
                                     )
-                                    .fill(if account.enabled {
+                                    .fill(if enabled {
                                         ACCENT.linear_multiply(0.22)
                                     } else {
                                         PANEL
                                     })
                                     .stroke(Stroke::new(
                                         1.0,
-                                        if account.enabled { ACCENT } else { BORDER },
+                                        if enabled { ACCENT } else { BORDER },
                                     ))
                                     .corner_radius(5.0);
 
                                     if ui.add_sized([28.0, 28.0], checkbox).clicked() {
-                                        account.enabled = !account.enabled;
+                                        app.accounts[index].enabled = !enabled;
                                         changed = true;
                                     }
 
@@ -3496,52 +3542,94 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     );
                                     let response = ui.add_sized(
                                         [360.0, 30.0],
-                                        egui::TextEdit::singleline(&mut account.name)
+                                        egui::TextEdit::singleline(&mut app.accounts[index].name)
                                             .hint_text(profile.label()),
                                     );
                                     changed |= response.changed();
 
-                                    if account.name.trim().is_empty() {
+                                    if app.accounts[index].name.trim().is_empty() {
                                         ui.colored_label(WARN, tr("Name cannot be empty"));
                                     }
                                 });
 
-                                ui.add_space(7.0);
+                                ui.add_space(8.0);
+
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} {}",
-                                            tr("Status"),
-                                            if account.enabled {
-                                                tr("Enabled")
-                                            } else {
-                                                tr("Disabled")
-                                            }
-                                        ))
-                                        .size(10.0)
-                                        .color(if account.enabled { GOOD } else { DIM }),
-                                    );
-                                    ui.add_space(14.0);
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{}: %LOCALAPPDATA%\\Moth\\PokeIdle\\Profiles\\{}",
-                                            tr("Firefox profile"),
-                                            profile.name()
-                                        ))
-                                        .size(9.0)
-                                        .color(DIM),
-                                    );
+                                    let profile_label = if setup.profile_ready {
+                                        tr("Profile ready")
+                                    } else {
+                                        tr("Not configured")
+                                    };
+                                    let vm_label = if setup.violentmonkey_installed {
+                                        tr("Installed")
+                                    } else {
+                                        tr("Not installed")
+                                    };
+                                    let twitch_open = health.tabs.iter().any(|tab| tab.kind == "Twitch");
+                                    let twitch_label = if twitch_open {
+                                        tr("Open")
+                                    } else if setup.profile_ready {
+                                        tr("Profile ready")
+                                    } else {
+                                        tr("Not configured")
+                                    };
+                                    let kick_label = if setup.kick_profile_ready {
+                                        tr("Profile ready")
+                                    } else {
+                                        tr("Not configured")
+                                    };
+
+                                    status_chip(ui, "Firefox", profile_label, setup.profile_ready);
+                                    status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
+                                    status_chip(ui, "Twitch", twitch_label, setup.profile_ready);
+                                    status_chip(ui, "KICK", kick_label, setup.kick_profile_ready);
+
+                                    if running {
+                                        status_chip(
+                                            ui,
+                                            tr("Scripts"),
+                                            &format!("{}/{}", health.addon_ok, health.addon_total),
+                                            health.addon_ok == health.addon_total,
+                                        );
+                                    } else {
+                                        status_chip(ui, tr("Scripts"), tr("Not checked"), false);
+                                    }
                                 });
 
-                                if changed {
-                                    // Persistence happens after this frame so the same
-                                    // mutable account reference is no longer borrowed.
-                                }
+                                ui.add_space(8.0);
+
+                                ui.label(
+                                    RichText::new(
+                                        "Twitch uses this Firefox profile for its session. KICK uses the account's dedicated KICK profile. Opening either action always targets the corresponding account.",
+                                    )
+                                    .size(9.0)
+                                    .color(DIM),
+                                );
+
+                                ui.add_space(8.0);
+
+                                ui.horizontal_wrapped(|ui| {
+                                    profile_button(ui, tr("Open Game"), || {
+                                        app.profile_action(profile, ProfileAction::Game)
+                                    });
+                                    profile_button(ui, "Twitch", || {
+                                        app.profile_action(profile, ProfileAction::Twitch)
+                                    });
+                                    profile_button(ui, "KICK", || {
+                                        app.profile_action(profile, ProfileAction::Kick)
+                                    });
+                                    profile_button(ui, tr("Install Violentmonkey"), || {
+                                        app.profile_action(profile, ProfileAction::InstallViolentmonkey)
+                                    });
+                                    profile_button(ui, tr("Addons"), || {
+                                        app.profile_action(profile, ProfileAction::Addons)
+                                    });
+                                    profile_button(ui, tr("Profile folder"), || {
+                                        app.profile_action(profile, ProfileAction::Folder)
+                                    });
+                                });
                             });
 
-                        ui.add_space(10.0);
-
-                        // Save changes immediately, while preserving the account slot.
                         if changed {
                             let trimmed = app.accounts[index].name.trim().to_string();
                             app.accounts[index].name = if trimmed.is_empty() {
@@ -3551,6 +3639,8 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                             };
                             app.save_account_config();
                         }
+
+                        ui.add_space(10.0);
                     }
 
                     ui.add_space(6.0);
@@ -3564,6 +3654,16 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
     app.show_accounts = open;
 }
+
+fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) {
+    let color = if good { GOOD } else { DIM };
+    ui.label(
+        RichText::new(format!("{name}: {state}"))
+            .size(9.0)
+            .color(color),
+    );
+}
+
 
 fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GameProfile) {
     let config = crate::config::Config::for_profile(profile);
