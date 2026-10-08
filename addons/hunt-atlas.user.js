@@ -10023,15 +10023,26 @@
                     state.typesBySpecies.get(id) || []
                 );
 
-                const weakTo = types.length
-                    ? STANDARD_TYPES.filter(
-                        attackType =>
-                            weaknessMultiplier(
-                                types,
-                                attackType
-                            ) > 1
-                    )
+                const weaknessMultipliers = types.length
+                    ? STANDARD_TYPES
+                        .map(attackType => ({
+                            type: attackType,
+                            multiplier:
+                                weaknessMultiplier(
+                                    types,
+                                    attackType
+                                )
+                        }))
+                        .filter(
+                            entry =>
+                                entry.multiplier > 1
+                        )
                     : [];
+
+                const weakTo =
+                    weaknessMultipliers.map(
+                        entry => entry.type
+                    );
 
                 const view = {
                     id,
@@ -10056,6 +10067,7 @@
                     ),
                     types,
                     weakTo,
+                    weaknessMultipliers,
                     captured: isCaptured(id),
                     captureCount: captureCount(id),
                     npcValue: Number(
