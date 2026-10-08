@@ -1477,8 +1477,13 @@ fn draw_game_card(
                     health.stream_scan_status.eq_ignore_ascii_case("ok"),
                 );
                 if health.stream_scan_live > 0 || health.stream_scan_opened > 0 {
-                    let streams_value =
-                        format!("{} live · {} opened", health.stream_scan_live, health.stream_scan_opened);
+                    let streams_value = format!(
+                        "{} {} · {} {}",
+                        health.stream_scan_live,
+                        tr("live"),
+                        health.stream_scan_opened,
+                        tr("opened")
+                    );
 
                     automation_badge(
                         ui,
@@ -3115,7 +3120,12 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             if let Some(result) = &info.controller_result {
                 let result_text = if result.ok {
                     if result.listing_id > 0 {
-                        format!("{} · listing #{}", tr("Purchase command accepted"), result.listing_id)
+                        format!(
+                            "{} · {} #{}",
+                            tr("Purchase command accepted"),
+                            tr("listing"),
+                            result.listing_id
+                        )
                     } else {
                         tr("Moth Watch command accepted").to_string()
                     }
