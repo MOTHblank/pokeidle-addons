@@ -8,7 +8,7 @@ The controller is intended to be a normal Windows application. A release build p
 
     moth-controller.exe
 
-Double-clicking it opens the controller window and automatically launches the two dedicated game profiles.
+Double-clicking it opens the controller window and automatically manages the enabled dedicated game profiles (up to four).
 
 ## Profiles
 
@@ -16,6 +16,8 @@ Each game account owns exactly one Firefox profile:
 
     %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game1
     %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game2
+    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game3
+    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game4
 
 That same profile is used for:
 
@@ -28,14 +30,14 @@ Do not create separate stream-login profiles. Keeping the sessions together is d
 
 ## Current UI
 
-The **Accounts** window is the per-profile service panel, not a credential vault. Each row operates on exactly one game Firefox profile:
+The **Accounts** window manages up to four independent Firefox profiles. Each row operates on exactly one game Firefox profile:
 
 - **Open Game** — launch that profile.
 - **Twitch** — open Twitch login in that profile.
 - **KICK** — open KICK in that profile.
 - **Streams** — open the userscript stream manager in that profile.
 - **Scan Live** — open PokéIdle and trigger the userscript live-chat scanner.
-- **Addons** — open all seven repository `.user.js` installer/update URLs in that profile.
+- **Addons** — open the repository’s core `.user.js` installer/update URLs in that profile.
 - **Profile** — open the profile directory in Explorer.
 
 The controller never stores Twitch/KICK passwords or tokens. Their sessions remain in Firefox profile storage.
