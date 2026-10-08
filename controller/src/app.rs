@@ -3086,10 +3086,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 info.pending_buy.is_none() &&
                                 retained_seconds == 0;
 
-                            let auto = info.config.auto_buy
-                                && candidate.ratio <= (info.config.auto_buy_percent as f32 / 100.0)
-                                && ((candidate.currency == "gold" && info.config.buy_coins)
-                                    || (candidate.currency == "orb" && info.config.buy_gems));
+                            let auto = candidate.auto_buy_eligible;
 
                             egui::Frame::new()
                                 .fill(PANEL_ALT)
