@@ -22,7 +22,9 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Controller Bridge",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js",
+        // The controller's Addons action deliberately cache-busts this script. The
+        // userscript metadata still points at the canonical URL for normal future updates.
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.2.9",
     ),
     (
         "Twitch Low Resource",
