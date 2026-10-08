@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.3.1
+// @version      6.3.2
 // @description  Opens current official Twitch chats as lightweight popouts and delegates KICK streams to the native normal-browser manager; refreshes every 10 minutes.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -194,7 +194,11 @@
 
         const direct = collectLinks([
             'a.tw-canal.ao-vivo[href]',
-            'a.kk-canal.ao-vivo[href]'
+            'a.kk-canal.ao-vivo[href]',
+            '#tr-ativos .tr-ativo.twitch.tw-aovivo a[href*="twitch.tv/"]',
+            '#tr-ativos .tr-ativo.kick.kk-aovivo a[href*="kick.com/"]',
+            '#tw-corpo a[href*="twitch.tv/"]',
+            '#kk-corpo a[href*="kick.com/"]'
         ]);
 
         for (const item of direct) {
@@ -206,13 +210,13 @@
                 service: 'twitch',
                 row: '.tr-ativo.twitch.tw-aovivo',
                 body: '#tw-corpo',
-                links: '#tw-corpo a.tw-canal.ao-vivo[href]'
+                links: '#tw-corpo a[href*="twitch.tv/"]'
             },
             {
                 service: 'kick',
                 row: '.tr-ativo.kick.kk-aovivo',
                 body: '#kk-corpo',
-                links: '#kk-corpo a.kk-canal.ao-vivo[href]'
+                links: '#kk-corpo a[href*="kick.com/"]'
             }
         ];
 
@@ -438,7 +442,7 @@
             const streamStateIsAvailable =
                 !!rows.twitch || !!rows.kick;
 
-            lastKickStateAvailable = !!rows.kick && !!streamStateIsAvailable;
+            lastKickStateAvailable = !!rows.kick;
             lastKickLive = [...live.values()]
                 .filter(item => item.service === 'kick')
                 .map(item => ({
@@ -499,6 +503,12 @@
                 openStreams.size,
                 'tracked'
             );
+            if (lastKickLive.length) {
+                console.info(
+                    '[Moth] KICK streams delegated to native controller:',
+                    lastKickLive.map(item => item.name)
+                );
+            }
 
             return {
                 channels: [...live.values()],
@@ -623,7 +633,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner ready · KICK is delegated to native browser profile · first scan 30s after page load · every 10 minutes thereafter');
+    console.info('[Moth] live stream scanner v6.3.2 ready · KICK is delegated to native browser profile · first scan 30s after page load · every 10 minutes thereafter');
     }
 
     start();
