@@ -10,7 +10,7 @@ Nenhuma parte do código deste projeto está escondida: todo o código-fonte est
 
 Este aplicativo ainda está em desenvolvimento, então nem tudo funciona perfeitamente. Caso encontre algum problema, abra uma [Issue](https://github.com/MOTHblank/pokeidle-addons/issues) descrevendo o que aconteceu. Sugestões de funcionalidades que estejam faltando também são bem-vindas. E, se você sabe programar, contribuições e pull requests são bem-vindos.
 
-## Instalação
+## Requisitos
 
 Instale estes componentes antes de configurar o controlador:
 
@@ -23,11 +23,6 @@ Instale estes componentes antes de configurar o controlador:
    [Baixar Firemin](https://rizonesoft.com/downloads/firemin/)
 
    O Firemin é opcional, mas recomendado para reduzir o uso de memória do Firefox quando os perfis ficam abertos por longos períodos. Deixe o Firemin em execução e configure-o para monitorar o Firefox Developer Edition.
-
-3. **Violentmonkey para Firefox**  
-   [Instalar Violentmonkey](https://addons.mozilla.org/pt-BR/firefox/addon/violentmonkey/)
-
-   O Violentmonkey é obrigatório para os userscripts deste repositório. **Cada perfil isolado do controlador é independente**, portanto o Violentmonkey precisa estar instalado em cada conta que você pretende usar.
 
 
 ## Primeira configuração
