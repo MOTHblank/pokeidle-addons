@@ -10251,7 +10251,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.14 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.15 loaded'
         );
     }
 
