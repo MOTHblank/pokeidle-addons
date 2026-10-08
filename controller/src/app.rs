@@ -16,6 +16,41 @@ fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
 }
 
+fn localize_status(message: String) -> String {
+    if !pt_br() {
+        return message;
+    }
+
+    let mut value = message;
+    for (en, pt) in [
+        ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
+        (" is already running.", " já está em execução."),
+        (" is already stopped.", " já está parado."),
+        (" Firefox closed.", " Firefox fechado."),
+        (" could not close Firefox: ", " não foi possível fechar o Firefox: "),
+        ("Launch Both requested · monitoring will update as Firefox becomes ready", "Iniciar ambos solicitado · o monitor atualizará quando o Firefox estiver pronto"),
+        ("All Firefox instances closed.", "Todas as instâncias do Firefox foram fechadas."),
+        ("Opened controller log · ", "Log do controlador aberto · "),
+        ("Opened profile folder", "Pasta do perfil aberta"),
+        ("Opened game", "Jogo aberto"),
+        ("Opened profile folder", "Pasta do perfil aberta"),
+        ("Opened ", "Aberto: "),
+        ("Could not ", "Não foi possível "),
+        (" is not running.", " não está em execução."),
+        ("market refresh requested", "atualização do mercado solicitada"),
+        ("loading listings to buy ", "carregando ofertas para comprar "),
+        ("buy command sent for ", "comando de compra enviado para "),
+        ("changing hunt to ", "mudando a caça para "),
+        ("switching Firefox to ", "mudando o Firefox para o modo "),
+        (" mode...", " ..."),
+        ("started · ", "iniciado · "),
+        (" · market refresh requested", " · atualização do mercado solicitada"),
+    ] {
+        value = value.replace(en, pt);
+    }
+    value
+}
+
 fn tr<'a>(en: &'a str) -> &'a str {
     if !pt_br() {
         return en;
@@ -236,7 +271,7 @@ impl ControllerApp {
             market_search: String::new(),
             atlas_search: String::new(),
             market_currency: "gold".to_string(),
-            status: "Ready · launch only the profiles you need".to_string(),
+            status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
         }
     }
@@ -267,7 +302,7 @@ impl ControllerApp {
     }
 
     fn set_status(&mut self, message: impl Into<String>, error: bool) {
-        self.status = message.into();
+        self.status = localize_status(message.into());
         self.status_error = error;
     }
 
