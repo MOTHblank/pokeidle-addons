@@ -170,6 +170,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Filter" => "Filtro",
         "hunt or Pokémon" => "caça ou Pokémon",
         "hunts available" => "caças disponíveis",
+        "unlocked" => "liberada",
+        "locked" => "bloqueada",
+        "Wait" => "Aguarde",
+        "learning" => "aquecendo",
+        "observed" => "observado",
         "species" => "espécies",
         "kills/h" => "abates/h",
         "warming up" => "aquecendo",
@@ -1659,18 +1664,23 @@ fn draw_credits(ui: &mut egui::Ui) {
 }
 
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
-    let screen = ctx.viewport_rect();
-    let width = (screen.width() - 48.0).clamp(420.0, 900.0);
-    let height = (screen.height() - 48.0).clamp(360.0, 620.0);
-    let rect = egui::Rect::from_center_size(screen.center(), egui::vec2(width, height));
+    let screen = ctx.content_rect();
+    let width = (screen.width() - 64.0).clamp(520.0, 920.0);
+    let height = (screen.height() - 96.0).clamp(420.0, 680.0);
 
     let mut open = app.show_atlas;
     egui::Window::new(tr("Hunt Atlas"))
         .id(egui::Id::new("hunt_atlas_window"))
         .open(&mut open)
         .collapsible(false)
-        .resizable(false)
-        .fixed_rect(rect)
+        .resizable(true)
+        .default_width(width)
+        .default_height(height)
+        .min_width(520.0_f32.min(width))
+        .min_height(420.0_f32.min(height))
+        .max_width(width)
+        .max_height(height)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
                 .fill(PANEL)
@@ -1756,9 +1766,9 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 .collect();
 
             hunts.sort_by(|a, b| {
-                if a.slug.eq_ignore_ascii_case(&health.hunt_slug) && !health.hunt_slug.is_empty() {
+                if a.current {
                     std::cmp::Ordering::Less
-                } else if b.slug.eq_ignore_ascii_case(&health.hunt_slug) && !health.hunt_slug.is_empty() {
+                } else if b.current {
                     std::cmp::Ordering::Greater
                 } else {
                     b.xp_per_hour.cmp(&a.xp_per_hour).then(a.level.cmp(&b.level))
@@ -1767,12 +1777,37 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
             egui::ScrollArea::vertical()
                 .id_salt("atlas_list")
-                .max_height(410.0)
-                .show_rows(ui, 78.0, hunts.len(), |ui, row_range| {
+                .auto_shrink([false, false])
+                .max_height(ui.available_height().max(180.0))
+                .show_rows(ui, 82.0, hunts.len(), |ui, row_range| {
                     for row in row_range {
                         let hunt = &hunts[row];
-                        let current = !health.hunt_slug.is_empty()
-                            && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug);
+                        let current = hunt.current || (
+                            !health.hunt_slug.is_empty()
+                                && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug)
+                        );
+                        let unlocked = hunt.unlocked;
+                        let xp_label = if hunt.xp_per_hour > 0 {
+                            let prefix = if hunt.xp_source.eq_ignore_ascii_case("observed") {
+                                "observed"
+                            } else if hunt.xp_source.eq_ignore_ascii_case("combat model")
+                                || hunt.xp_source.eq_ignore_ascii_case("modeled")
+                            {
+                                "modeled"
+                            } else {
+                                ""
+                            };
+
+                            if prefix.is_empty() {
+                                format!("{} {}", format_rate(hunt.xp_per_hour), tr("trainer XP/h"))
+                            } else {
+                                format!("{} · {} {}", prefix, format_rate(hunt.xp_per_hour), tr("trainer XP/h"))
+                            }
+                        } else {
+                            tr("learning").to_string()
+                        };
+
+                        ui.set_width(ui.available_width());
 
                         egui::Frame::new()
                             .fill(if current { ACCENT.linear_multiply(0.08) } else { PANEL_ALT })
@@ -1785,10 +1820,11 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.label(RichText::new(&hunt.name).size(12.0).strong().color(TEXT));
                                         ui.label(
                                             RichText::new(format!(
-                                                "Lv {} · {} {}",
+                                                "Lv {} · {} {} · {}",
                                                 hunt.level,
                                                 hunt.species.len(),
-                                                tr("species")
+                                                tr("species"),
+                                                if unlocked { tr("unlocked") } else { tr("locked") }
                                             ))
                                             .size(9.0)
                                             .color(MUTED),
@@ -1803,24 +1839,47 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     });
 
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        let xp = format_rate(hunt.xp_per_hour);
-                                        let pxp = format_rate(hunt.pokemon_xp_per_hour);
+                                        let pxp = if hunt.pokemon_xp_per_hour > 0 {
+                                            format!("{} {}", format_rate(hunt.pokemon_xp_per_hour), tr("Pokémon XP/h"))
+                                        } else {
+                                            tr("learning").to_string()
+                                        };
                                         let kills = if hunt.kills_per_hour > 0 {
                                             format!("{} {}", hunt.kills_per_hour, tr("kills/h"))
                                         } else {
-                                            tr("warming up").to_string()
+                                            tr("learning").to_string()
                                         };
 
                                         ui.vertical(|ui| {
-                                            ui.label(RichText::new(format!("{} {}", xp, tr("trainer XP/h"))).size(11.0).strong().color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED }));
-                                            ui.label(RichText::new(format!("{} {} · {}", pxp, tr("Pokémon XP/h"), kills)).size(9.0).color(MUTED));
+                                            ui.label(
+                                                RichText::new(xp_label.clone())
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(if hunt.xp_per_hour > 0 { GOOD } else { MUTED })
+                                            );
+                                            ui.label(
+                                                RichText::new(format!("{} · {}", pxp, kills))
+                                                    .size(9.0)
+                                                    .color(MUTED)
+                                            );
                                         });
 
                                         ui.add_space(18.0);
 
-                                        let button = if current { tr("Current") } else { tr("Go") };
-                                        let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
-                                        if clicked && !current {
+                                        let button = if current {
+                                            tr("Current")
+                                        } else if unlocked {
+                                            tr("Go")
+                                        } else {
+                                            tr("locked")
+                                        };
+                                        let clicked = ui
+                                            .add_enabled(
+                                                unlocked && !current,
+                                                egui::Button::new(button)
+                                            )
+                                            .clicked();
+                                        if clicked {
                                             let profile_label = app.account_name(app.atlas_profile);
                                             let monitor = app.games[index].monitor.clone();
 
@@ -2069,11 +2128,30 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 "— gems".to_string()
                                             };
 
+                                            let reference = if app.market_currency == "gold" {
+                                                item.gold_average
+                                            } else {
+                                                item.orb_average
+                                            };
+                                            let min_price = if app.market_currency == "gold" {
+                                                item.gold_min
+                                            } else {
+                                                item.orb_min
+                                            };
+                                            let discount = if reference > min_price && min_price > 0 {
+                                                format!(" · {}", market_discount_label(
+                                                    ((reference - min_price) as f32 / reference as f32) * 100.0
+                                                ))
+                                            } else {
+                                                String::new()
+                                            };
+
                                             ui.label(
                                                 RichText::new(format!(
-                                                    "{} · {} listings",
+                                                    "{} · {} listings{}",
                                                     price,
-                                                    item.listings
+                                                    item.listings,
+                                                    discount
                                                 ))
                                                 .size(9.0)
                                                 .color(MUTED),
@@ -2177,10 +2255,45 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 .size(9.0)
                                                 .color(MUTED),
                                             );
+                                            let reference = if listing.reference_price > 0 {
+                                                format!(
+                                                    " · {} · ref {}",
+                                                    market_discount_label(listing.discount_pct),
+                                                    format_number(listing.reference_price)
+                                                )
+                                            } else {
+                                                String::new()
+                                            };
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{}{}",
+                                                    market_wait_label(listing.seconds_until_buy),
+                                                    reference
+                                                ))
+                                                .size(9.0)
+                                                .color(
+                                                    if listing.seconds_until_buy > 0 {
+                                                        WARN
+                                                    } else if listing.discount_pct > 0.05 {
+                                                        GOOD
+                                                    } else {
+                                                        DIM
+                                                    }
+                                                ),
+                                            );
                                         });
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            if ui.button(tr("Buy")).clicked() {
+                                            let can_buy = listing.seconds_until_buy == 0;
+                                            if ui
+                                                .add_enabled(
+                                                    can_buy,
+                                                    egui::Button::new(
+                                                        if can_buy { tr("Buy") } else { tr("Wait") }
+                                                    )
+                                                )
+                                                .clicked()
+                                            {
                                                 let profile_label = app.account_name(app.market_profile);
                                                 let monitor = app.games[index].monitor.clone();
 
@@ -2191,7 +2304,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     monitor.send(json!({
                                                         "t": "market.comprar",
                                                         "id": listing_id,
-                                                        "qtd": 1,
+                                                        "qtd": listing.quantity.max(1),
                                                         "preco": listing.price,
                                                         "moeda": currency
                                                     }));
@@ -2253,6 +2366,41 @@ fn format_number(value: u64) -> String {
 
 fn format_rate(value: u64) -> String {
     format_number(value)
+}
+
+fn market_wait_label(seconds: u64) -> String {
+    if seconds == 0 {
+        return if pt_br() { "Disponível".to_string() } else { "Available".to_string() };
+    }
+
+    let minutes = seconds / 60;
+    let secs = seconds % 60;
+
+    if minutes > 0 {
+        if pt_br() {
+            format!("Libera em {}m {:02}s", minutes, secs)
+        } else {
+            format!("Available in {}m {:02}s", minutes, secs)
+        }
+    } else if pt_br() {
+        format!("Libera em {}s", secs)
+    } else {
+        format!("Available in {}s", secs)
+    }
+}
+
+fn market_discount_label(discount_pct: f32) -> String {
+    if discount_pct > 0.05 {
+        if pt_br() {
+            format!("−{}% vs média 7d", format_pct(discount_pct))
+        } else {
+            format!("−{}% vs 7d avg", format_pct(discount_pct))
+        }
+    } else if pt_br() {
+        "Sem desconto vs média 7d".to_string()
+    } else {
+        "No discount vs 7d avg".to_string()
+    }
 }
 
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
