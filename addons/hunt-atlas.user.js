@@ -6986,18 +6986,25 @@
                     sort === 'xp'
                 ) {
                     const value =
-                        species =>
-                            Number(
+                        species => {
+                            const estimate =
                                 huntXpEstimate(
                                     species.hunt
-                                )?.value ||
-                                0
-                            );
+                                );
+                            const rate =
+                                Number(estimate?.value);
+
+                            return Number.isFinite(rate) &&
+                                rate > 0
+                                ? rate
+                                : null;
+                        };
 
                     comparison =
                         compareNumbers(
                             value(a),
-                            value(b)
+                            value(b),
+                            true
                         );
                 } else if (
                     sort === 'npc'
@@ -7046,14 +7053,22 @@
                 } else if (
                     sort === 'matchup'
                 ) {
+                    const score = species => {
+                        const value =
+                            bestMatchupScore(
+                                species
+                            );
+
+                        return Number.isFinite(value)
+                            ? value
+                            : null;
+                    };
+
                     comparison =
                         compareNumbers(
-                            bestMatchupScore(
-                                a
-                            ),
-                            bestMatchupScore(
-                                b
-                            )
+                            score(a),
+                            score(b),
+                            true
                         );
                 }
 
