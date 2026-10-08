@@ -80,8 +80,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Add account" => "Adicionar conta",
         "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma conta.",
         "by MOTHblank" => "por MOTHblank",
-        "MOTHblank on Google Play" => "MOTHblank no Google Play",
-        "MOTHblank on X" => "MOTHblank no X",
+        "Google Play" => "Google Play",
+        "X" => "X",
         "WhatsApp / Pix" => "WhatsApp / Pix",
         "source code" => "código-fonte",
         "Credits" => "Créditos",
@@ -1640,12 +1640,12 @@ fn draw_credits(ui: &mut egui::Ui) {
                     );
                     ui.label(RichText::new("·").size(9.0).color(DIM));
                     ui.hyperlink_to(
-                        tr("MOTHblank on Google Play"),
+                        tr("Google Play"),
                         "https://play.google.com/store/apps/developer?id=MOTHblank",
                     );
                     ui.label(RichText::new("·").size(9.0).color(DIM));
                     ui.hyperlink_to(
-                        tr("MOTHblank on X"),
+                        tr("X"),
                         "https://x.com/MOTHblank",
                     );
                     ui.label(RichText::new("·").size(9.0).color(DIM));
@@ -1656,7 +1656,7 @@ fn draw_credits(ui: &mut egui::Ui) {
                     ui.label(RichText::new("·").size(9.0).color(DIM));
                     ui.hyperlink_to(
                         tr("source code"),
-                        "https://github.com/MOTHblank/pokeidle-huntatlas",
+                        "https://github.com/MOTHblank/pokeidle-addons",
                     );
                 });
             });
