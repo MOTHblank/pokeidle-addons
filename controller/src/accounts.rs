@@ -23,7 +23,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Twitch Low Resource",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.0.0",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.1.0",
     ),
     (
         "Hunt Atlas",
