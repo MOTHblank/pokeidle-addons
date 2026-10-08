@@ -25,6 +25,12 @@ fn localize_status(message: String) -> String {
     let mut value = message;
     for (en, pt) in [
         ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
+        ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe."),
+        ("Violentmonkey is not installed and active in ", "O Violentmonkey não está instalado e ativo em "),
+        ("invalid page probe: ", "sondagem de página inválida: "),
+        ("invalid controller bridge snapshot: ", "snapshot inválido da ponte do controlador: "),
+        ("invalid BiDi JSON: ", "JSON BiDi inválido: "),
+        ("script.evaluate exception: ", "exceção em script.evaluate: "),
         ("Launch enabled requested · monitoring will update as Firefox becomes ready", "Iniciar habilitadas solicitado · o monitor atualizará quando o Firefox estiver pronto"),
         ("Could not determine LOCALAPPDATA for logs.", "Não foi possível determinar LOCALAPPDATA para os logs."),
         ("Could not create log folder: ", "Não foi possível criar a pasta de logs: "),
