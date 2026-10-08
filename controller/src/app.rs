@@ -2739,38 +2739,32 @@ fn moth_watch_reference_text(candidate: &crate::monitor::MothWatchCandidate) -> 
     match candidate.reference_source.as_str() {
         "active-median" => {
             let mut text = format!(
-                format!("{} · {} {}",
-                    tr("current market median"),
-                    candidate.active_reference_listings,
-                    tr("listings"))
+                "{} · {} {}",
+                tr("current market median"),
+                candidate.active_reference_listings,
+                tr("listings")
             );
             if candidate.server_average > candidate.average {
                 text.push_str(&format!(
-                    text.push_str(&format!(
-                        " · {} {} {}",
-                        tr("server 7d avg"),
-                        format_number(candidate.server_average),
-                        tr("ignored")
-                    ));
-                }
+                    " · {} {} {}",
+                    tr("server 7d avg"),
+                    format_number(candidate.server_average),
+                    tr("ignored")
+                ));
             }
             text
         }
         "live-7d" => format!(
-            format!(
-                "{} · {} {}",
-                tr("live 7d avg / unit"),
-                candidate.samples,
-                tr("units sold")
-            ),
+            "{} · {} {}",
+            tr("live 7d avg / unit"),
+            candidate.samples,
+            tr("units sold")
         ),
         _ => format!(
-            format!(
-                "{} · {} {}",
-                tr("frozen fallback / unit"),
-                candidate.samples,
-                tr("units sold")
-            ),
+            "{} · {} {}",
+            tr("frozen fallback / unit"),
+            candidate.samples,
+            tr("units sold")
         ),
     }
 }
@@ -2839,7 +2833,7 @@ fn draw_moth_watch_config(
                                         "patch": { key: next.max(0.0) }
                                     }),
                                 );
-                                set_status(format!("{} updated.", label));
+                                set_status(format!("{} {}", tr(label), tr("updated.")));
                             }
                         });
                     }
@@ -3039,7 +3033,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         tr("Moth Watch command accepted").to_string()
                     }
                 } else if result.error.is_empty() {
-                    tr("Moth Watch rejected the command).to_string()
+                    tr("Moth Watch rejected the command").to_string()
                 } else {
                     format!("Moth Watch: {}", result.error)
                 };
