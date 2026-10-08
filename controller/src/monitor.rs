@@ -610,8 +610,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle')],
             ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger')],
             ['Stream Scanner', exists('#moth-scan-live-streams')],
-            ['Upstream Scraper', exists('#moth-upstream-scraper') || exists('#moth-upstream-scraper-button')],
-            ['Controller Bridge', !!window.__mothControllerBridgeV1]
+            ['Controller Bridge', !!window.__mothControllerBridgeV1],
+            ['Twitch Low Resource', exists('#moth-twitch-low-resource-css')],
+            ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1],
+            ['Moth Watch', !!window.__mothMarketWatchControllerV1]
         ];
 
         return JSON.stringify({
@@ -680,7 +682,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         })
         .unwrap_or_default();
 
-    let addon_ok = 5u8.saturating_sub(addon_missing.len() as u8);
+    let addon_ok = 7u8.saturating_sub(addon_missing.len() as u8);
 
     let tabs = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
 
@@ -1341,7 +1343,32 @@ fn probe_runtime_details(
                 let name = names
                     .get(&item_id)
                     .cloned()
-                    .unwrap_or_else    let server_now = snapshot.get("serverNow").and_then(Value::as_u64).unwrap_or(0);
+                    .unwrap_or_else(|| format!("Item {}", item_id));
+
+                let gold_min = row.get("minGold").and_then(Value::as_u64).unwrap_or(0);
+                let orb_min = row.get("minOrb").and_then(Value::as_u64).unwrap_or(0);
+                let listings = row.get("anuncios").and_then(Value::as_u64).unwrap_or(0);
+                let (gold_average, orb_average) =
+                    item_averages.get(&item_id).copied().unwrap_or((0, 0));
+
+                if listings > 0 {
+                    market_summary.push(MarketSummary {
+                        item_id,
+                        name,
+                        gold_min,
+                        orb_min,
+                        gold_average,
+                        orb_average,
+                        listings,
+                    });
+                }
+            }
+
+            break;
+        }
+    }
+
+    let mut server_now = snapshot.get("serverNow").and_then(Value::as_u64).unwrap_or(0);
     if server_now == 0 {
         server_now = chrono_like_now_ms();
     }
@@ -1356,8 +1383,12 @@ fn probe_runtime_details(
 
             let item_id = message.get("itemId").and_then(Value::as_u64).unwrap_or(0);
             let currency = message.get("moeda").and_then(Value::as_str).unwrap_or("gold").to_string();
-            let name = names.get(&item_id).cloned().unwrap_or_else(|| format!("Item {}", item_id));
-            let (gold_average, orb_average) = item_averages.get(&item_id).copied().unwrap_or((0, 0));
+            let name = names
+                .get(&item_id)
+                .cloned()
+                .unwrap_or_else(|| format!("Item {}", item_id));
+            let (gold_average, orb_average) =
+                item_averages.get(&item_id).copied().unwrap_or((0, 0));
             let reference_price = if currency == "orb" { orb_average } else { gold_average };
 
             if let Some(lines) = message.get("linhas").and_then(Value::as_array) {
@@ -1366,7 +1397,10 @@ fn probe_runtime_details(
                     let price = listing.get("preco").and_then(Value::as_u64).unwrap_or(0);
                     if id == 0 || price == 0 { continue; }
 
-                    let retained_until = listing.get("compravelEm").and_then(Value::as_u64).unwrap_or(0);
+                    let retained_until = listing
+                        .get("compravelEm")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
                     let seconds_until_buy = if retained_until > server_now {
                         (retained_until - server_now).saturating_add(999) / 1000
                     } else {
@@ -1385,7 +1419,10 @@ fn probe_runtime_details(
                         currency: currency.clone(),
                         price,
                         quantity: listing.get("qtd").and_then(Value::as_u64).unwrap_or(1),
-                        seller: listing.get("vendedor").and_then(Value::as_str).unwrap_or("—").to_string(),
+                        seller: listing.get("vendedor")
+                            .and_then(Value::as_str)
+                            .unwrap_or("—")
+                            .to_string(),
                         retained_until,
                         seconds_until_buy,
                         reference_price,
