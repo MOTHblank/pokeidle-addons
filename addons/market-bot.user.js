@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.24
+// @version      0.1.25
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -16,6 +16,7 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
+    const AUTO_BUY_MIGRATION_KEY = 'moth-pokeidle-market-bot-auto-buy-defaults-v2';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
     const BACKGROUND_MIN_GAP_MS = 3000;
@@ -49,10 +50,12 @@
         autoBuyPercent: 40,
         scanItems: true,
         scanPokemon: true,
-        autoBuyItems: true,
-        autoBuyPokemon: true,
-        buyCoins: true,
-        buyGems: true,
+        scanDiamonds: true,
+        autoBuyItems: false,
+        autoBuyPokemon: false,
+        autoBuyDiamonds: false,
+        buyCoins: false,
+        buyGems: false,
         buyWholeItemBatch: true,
         goldReserve: 0,
         gemReserve: 0,
@@ -78,6 +81,13 @@
         catalog: new Map(),
         itemSummary: {},
         liveItemAverages: {},
+        loadedItemKeys: new Set(),
+        liveDiamondAverages: null,
+        diamondStatus: 'waiting',
+        diamondPendingCurrency: null,
+        diamondPendingAt: 0,
+        nextDiamondCurrency: 'gold',
+        diamondScanTimer: null,
         itemMarketCaps: new Map(),
         candidates: new Map(),
         detailQueue: [],
@@ -159,12 +169,34 @@
     }
 
     function loadConfig() {
+        let saved = {};
         try {
-            const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}');
-            return Object.assign({}, DEFAULTS, saved || {});
-        } catch {
-            return Object.assign({}, DEFAULTS);
-        }
+            saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}') || {};
+        } catch {}
+
+        const loaded = Object.assign({}, DEFAULTS, saved);
+        try {
+            /*
+             * Existing settings stored the child auto-buy toggles as ON even
+             * when the master switch was OFF. Migrate once to an explicitly
+             * safe state, then preserve future user choices.
+             */
+            if (localStorage.getItem(AUTO_BUY_MIGRATION_KEY) !== '1') {
+                for (const key of [
+                    'autoBuy',
+                    'autoBuyItems',
+                    'autoBuyPokemon',
+                    'autoBuyDiamonds',
+                    'buyCoins',
+                    'buyGems'
+                ]) {
+                    loaded[key] = false;
+                }
+                localStorage.setItem(AUTO_BUY_MIGRATION_KEY, '1');
+            }
+        } catch {}
+
+        return loaded;
     }
 
     function saveConfig() {
@@ -641,7 +673,9 @@
         }
 
         const ref = itemReference(itemId, currency);
-        if (!ref) return;
+        const manualKey = String(itemId) + ':' + currency;
+        const explicitlyLoaded = state.loadedItemKeys.has(manualKey);
+        if (!ref && !explicitlyLoaded) return;
 
         const group = 'item:' + itemId + ':' + currency + ':';
         removeCandidateGroup(group);
@@ -652,22 +686,24 @@
             const price = Number(listing.preco);
             const qty = Math.max(1, Number(listing.qtd || 1));
             if (!Number.isFinite(price) || price <= 0) continue;
-            const ratio = price / ref.average;
-            if (ratio > scanRatio) continue;
+            const ratio = ref && Number(ref.average) > 0
+                ? price / Number(ref.average)
+                : 1;
+            if (ref && ratio > scanRatio && !explicitlyLoaded) continue;
 
             addCandidate({
                 key: group + listing.id,
                 kind: 'item',
                 listingId: Number(listing.id),
                 itemId: itemId,
-                name: ref.name || catalogName(itemId),
+                name: ref && ref.name || catalogName(itemId),
                 currency: currency,
                 price: price,
-                average: ref.average,
-                samples: ref.units,
-                referenceSource: ref.source,
-                activeReferenceListings: Number(ref.activeListings || 0),
-                serverAverage: Number(ref.serverAverage || 0),
+                average: ref ? Number(ref.average) || 0 : 0,
+                samples: ref ? Number(ref.units) || 0 : 0,
+                referenceSource: ref ? ref.source : 'none',
+                activeReferenceListings: ref ? Number(ref.activeListings || 0) : 0,
+                serverAverage: ref ? Number(ref.serverAverage || 0) : 0,
                 ratio: ratio,
                 qty: qty,
                 seller: String(listing.vendedor || '—'),
@@ -996,6 +1032,76 @@
         }, 2600);
     }
 
+    function handleDiamondListings(message) {
+        const currency = state.diamondPendingCurrency ||
+            (message.moeda === 'orb' ? 'orb' : 'gold');
+        const lines = Array.isArray(message.linhas) ? message.linhas : [];
+
+        if (message.mediaDiamante && typeof message.mediaDiamante === 'object') {
+            state.liveDiamondAverages = message.mediaDiamante;
+        }
+
+        const activePrices = lines
+            .map(listing => Number(listing && listing.preco))
+            .filter(price => Number.isFinite(price) && price > 0);
+        const avgRow = state.liveDiamondAverages
+            ? state.liveDiamondAverages[currency]
+            : null;
+        let average = avgRow && Number(avgRow.media) > 0
+            ? Number(avgRow.media)
+            : 0;
+        const samples = avgRow ? Math.max(0, Number(avgRow.unidades) || 0) : 0;
+        let referenceSource = average > 0 ? 'live-7d' : 'none';
+
+        /*
+         * When three or more active offers exist, a lower active median caps
+         * an inflated historical reference. Offers remain visible without history.
+         */
+        if (average > 0 && activePrices.length >= 3) {
+            const activeMedian = median(activePrices);
+            if (activeMedian > 0 && activeMedian < average) {
+                average = activeMedian;
+                referenceSource = 'active-median';
+            }
+        }
+
+        const group = 'diamond:' + currency + ':';
+        removeCandidateGroup(group);
+
+        for (const listing of lines) {
+            if (!listing || isOwnListing(listing)) continue;
+            if (listing.moeda && listing.moeda !== currency) continue;
+
+            const price = Number(listing.preco);
+            const qty = Math.max(1, Number(listing.qtd || 1));
+            if (!Number.isFinite(price) || price <= 0) continue;
+
+            addCandidate({
+                key: group + listing.id,
+                kind: 'diamond',
+                listingId: Number(listing.id),
+                itemId: 0,
+                name: 'Diamonds',
+                currency: currency,
+                price: price,
+                average: average,
+                samples: samples,
+                referenceSource: referenceSource,
+                ratio: average > 0 ? price / average : 1,
+                qty: qty,
+                seller: String(listing.vendedor || '—'),
+                retainedUntil: retentionUntil(listing),
+                firstSeenAt: Date.now(),
+                seenAt: Date.now()
+            });
+        }
+
+        state.diamondPendingCurrency = null;
+        state.diamondPendingAt = 0;
+        state.diamondStatus = 'live · ' + (currency === 'orb' ? 'Gems' : 'Coins');
+        queueRender();
+    }
+
     function handlePokemonListings(message) {
         const scan = state.pokemonScan;
         if (!scan || !scan.waiting || message.aba !== 'vitrine') return false;
@@ -1091,6 +1197,11 @@
         if (candidate.kind === 'pokemon') {
             if (!config.autoBuyPokemon) return false;
             if (Number(candidate.samples || 0) < Math.max(1, Number(config.minPokemonSamples || 1))) return false;
+        }
+        if (candidate.kind === 'diamond') {
+            if (!config.autoBuyDiamonds) return false;
+            if (!(Number(candidate.average) > 0)) return false;
+            if (Number(candidate.samples || 0) < Math.max(1, Number(config.minItemUnits || 1))) return false;
         }
         return true;
     }
@@ -1258,8 +1369,10 @@
             'autoBuy',
             'scanItems',
             'scanPokemon',
+            'scanDiamonds',
             'autoBuyItems',
             'autoBuyPokemon',
+            'autoBuyDiamonds',
             'buyCoins',
             'buyGems',
             'buyWholeItemBatch'
@@ -1297,7 +1410,7 @@
         }
 
         if (Object.prototype.hasOwnProperty.call(patch, 'viewKind')
-            && ['all', 'item', 'pokemon'].includes(String(patch.viewKind))) {
+            && ['all', 'item', 'pokemon', 'diamond'].includes(String(patch.viewKind))) {
             config.viewKind = String(patch.viewKind);
         }
 
@@ -1389,6 +1502,71 @@
         return sendBackground({ t: 'market.itens' });
     }
 
+    function requestDiamondListings() {
+        if (!config.enabled || !config.scanDiamonds) {
+            state.diamondStatus = 'disabled';
+            return false;
+        }
+        if (gameIsLoading() || q('#cm-lista')) return false;
+        if (!state.socket || state.socket.readyState !== 1) return false;
+
+        const now = Date.now();
+        if (state.diamondPendingCurrency) {
+            if (now - Number(state.diamondPendingAt || 0) < 15000) return false;
+            state.diamondPendingCurrency = null;
+            state.diamondPendingAt = 0;
+            state.diamondStatus = 'retrying after timeout';
+        }
+
+        const delay = backgroundDelayMs();
+        if (delay > 0) {
+            if (!state.diamondScanTimer) {
+                state.diamondScanTimer = setTimeout(() => {
+                    state.diamondScanTimer = null;
+                    requestDiamondListings();
+                }, delay + 25);
+            }
+            return true;
+        }
+
+        const currency = state.nextDiamondCurrency === 'orb' ? 'orb' : 'gold';
+        const sent = sendBackground({
+            t: 'market.listar',
+            tipo: 'diamante',
+            moeda: currency,
+            busca: '',
+            ordem: 'baratos',
+            criterios: [],
+            elemento: '',
+            categoria: '',
+            soShiny: false,
+            soP5: false,
+            soTmElemental: false,
+            soTmAoe: false,
+            semOutland: false,
+            nivelMin: '',
+            nivelMax: '',
+            potenciaMin: '',
+            potenciaMax: '',
+            ivMin: '',
+            ivMax: '',
+            qualidadeMin: '',
+            qualidadeMax: '',
+            notaMin: '',
+            notaMax: '',
+            pagina: 0,
+            especieId: 0
+        });
+
+        if (sent) {
+            state.diamondPendingCurrency = currency;
+            state.diamondPendingAt = Date.now();
+            state.nextDiamondCurrency = currency === 'gold' ? 'orb' : 'gold';
+            state.diamondStatus = 'scanning · ' + (currency === 'orb' ? 'Gems' : 'Coins');
+        }
+        return sent;
+    }
+
     function runScan(force) {
         if (!config.enabled) return;
         // The game opens its WebSocket before the client finishes booting.
@@ -1410,6 +1588,7 @@
             ensurePokemonHistory(false);
             startPokemonScan();
         }
+        if (config.scanDiamonds) requestDiamondListings();
 
         pruneCandidates();
         queueRender();
@@ -1508,6 +1687,33 @@
         }
 
         if (message.t !== 'market') return;
+
+        if (message.mediaDiamante && typeof message.mediaDiamante === 'object') {
+            state.liveDiamondAverages = message.mediaDiamante;
+        }
+
+        if (message.aba === 'vitrine' && state.diamondPendingCurrency) {
+            const lines = Array.isArray(message.linhas) ? message.linhas : [];
+            const expectedCurrency = state.diamondPendingCurrency;
+            const looksLikeDiamondResponse =
+                message.tipo === 'diamante' ||
+                (lines.length > 0 && lines.every(listing =>
+                    listing &&
+                    !listing.ficha &&
+                    listing.itemId == null &&
+                    (!listing.tipo || listing.tipo === 'diamante') &&
+                    (!listing.moeda || listing.moeda === expectedCurrency)
+                )) ||
+                (!lines.length &&
+                    !state.pokemonScan?.waiting &&
+                    message.tipo !== 'pokemon' &&
+                    message.tipo !== 'item');
+
+            if (looksLikeDiamondResponse) {
+                handleDiamondListings(message);
+                return;
+            }
+        }
 
         if (message.aba === 'itens') {
             handleItemSummary(message);
@@ -1671,6 +1877,16 @@
             '.moth-mw-filter.on{filter:brightness(1.18);box-shadow:inset 0 0 0 2px var(--rx,#84325f)}',
             '.moth-mw-sort{display:flex;align-items:center;gap:5px;margin-left:auto}',
             '.moth-mw-sort select{min-height:28px;padding:3px 7px;border:1px solid var(--mad-linha,#555);border-radius:5px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:10px}',
+            '.moth-mw-inventory{margin:10px 0;padding:8px;border-radius:7px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-inventory-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:11px}',
+            '.moth-mw-inventory-head span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-inventory-list{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:4px}',
+            '.moth-mw-inventory-row{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(140px,1fr) minmax(140px,1fr);align-items:center;gap:8px;padding:5px;border-radius:5px;background:rgba(255,255,255,.025)}',
+            '.moth-mw-inventory-name{display:flex;flex-direction:column;gap:2px;min-width:0}',
+            '.moth-mw-inventory-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}',
+            '.moth-mw-inventory-name span,.moth-mw-inventory-price .moth-mw-money{font-size:10px}',
+            '.moth-mw-inventory-price{display:flex;align-items:center;justify-content:space-between;gap:5px;flex-wrap:wrap}',
+            '@media(max-width:720px){.moth-mw-inventory-row{grid-template-columns:1fr;gap:5px}.moth-mw-inventory-price{justify-content:flex-start}}',
             '.moth-mw-list{display:grid;gap:5px}',
             '.moth-mw-row{display:grid;grid-template-columns:minmax(170px,1.4fr) 120px 110px 90px minmax(110px,.8fr) auto;gap:7px;align-items:center;padding:7px;border-radius:6px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
             '.moth-mw-row.deep{box-shadow:inset 0 0 0 2px var(--rx,#84325f),inset 0 0 0 4px var(--rx-esc,#5d2345)}',
@@ -1755,6 +1971,56 @@
             escapeHtml(value) + '" min="0" step="1"></label>';
     }
 
+    function renderItemInventory() {
+        const entries = Object.entries(state.itemSummary || {})
+            .map(([rawId, row]) => ({
+                itemId: Number(rawId),
+                row: row || {},
+                name: catalogName(rawId)
+            }))
+            .filter(entry =>
+                Number.isFinite(entry.itemId) &&
+                entry.itemId > 0 &&
+                Number(entry.row.anuncios || 0) > 0
+            )
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const rows = entries.slice(0, 120).map(entry => {
+            const row = entry.row;
+            const coinPrice = Number(row.minGold);
+            const gemPrice = Number(row.minOrb);
+            const coinButton = Number.isFinite(coinPrice) && coinPrice > 0
+                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' +
+                    entry.itemId + '" data-moth-item-currency="gold">Load Coin offers</button>'
+                : '<button type="button" class="moth-mw-btn" disabled>No Coin offers</button>';
+            const gemButton = Number.isFinite(gemPrice) && gemPrice > 0
+                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' +
+                    entry.itemId + '" data-moth-item-currency="orb">Load Gem offers</button>'
+                : '<button type="button" class="moth-mw-btn" disabled>No Gem offers</button>';
+
+            return '<div class="moth-mw-inventory-row">' +
+                '<div class="moth-mw-inventory-name"><b>' + escapeHtml(entry.name) +
+                '</b><span>' + num(row.anuncios) + ' listing' +
+                (Number(row.anuncios) === 1 ? '' : 's') + '</span></div>' +
+                '<div class="moth-mw-inventory-price">' +
+                (coinPrice > 0 ? money(coinPrice, 'gold') : '<span class="moth-mw-meta">Coins —</span>') +
+                coinButton + '</div>' +
+                '<div class="moth-mw-inventory-price">' +
+                (gemPrice > 0 ? money(gemPrice, 'orb') : '<span class="moth-mw-meta">Gems —</span>') +
+                gemButton + '</div>' +
+                '</div>';
+        }).join('');
+
+        return '<div class="moth-mw-inventory">' +
+            '<div class="moth-mw-inventory-head"><b>Items for sale</b><span>' +
+            num(entries.length) + ' item types with active listings' +
+            (entries.length > 120 ? ' · showing first 120' : '') +
+            '</span></div>' +
+            '<div class="moth-mw-inventory-list">' +
+            (rows || '<div class="moth-mw-empty">No market item inventory has arrived yet.</div>') +
+            '</div></div>';
+    }
+
     function renderCandidate(candidate) {
         const discount = Math.max(0, 1 - candidate.ratio);
         const retainedSeconds = candidate.retainedUntil > serverNow()
@@ -1762,7 +2028,7 @@
             : 0;
         const canBuy = !state.pendingBuy && !retainedSeconds && purchaseQuantity(candidate) > 0;
         const auto = candidateCanAutoBuy(candidate);
-        const total = candidate.kind === 'item'
+        const total = candidate.kind === 'item' || candidate.kind === 'diamond'
             ? candidate.price * candidate.qty
             : candidate.price;
         const referenceLabel = candidate.kind === 'item'
@@ -1771,17 +2037,26 @@
                     (candidate.serverAverage > candidate.average
                         ? ' · server 7d avg ' + num(Math.round(candidate.serverAverage)) + ' ignored'
                         : '')
-                : (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
-                    ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
-            : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
+                : candidate.average > 0
+                    ? (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
+                        ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
+                    : 'no sale-price reference'
+            : candidate.kind === 'diamond'
+                ? (candidate.average > 0
+                    ? (candidate.referenceSource === 'active-median' ? 'active market median' : 'completed-sale reference') +
+                        ' · ' + num(candidate.samples) + ' sales'
+                    : 'no completed-sale reference')
+                : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
 
         return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
             '<div class="moth-mw-name"><b><span class="moth-mw-kind">' + escapeHtml(candidate.kind) + '</span>' +
             escapeHtml(candidate.name) + '</b><span>' +
-            (candidate.kind === 'item' ? num(candidate.qty) + ' units · total ' + num(total) : 'completed-sales reference') +
+            ((candidate.kind === 'item' || candidate.kind === 'diamond')
+                ? num(candidate.qty) + (candidate.kind === 'diamond' ? ' diamonds' : ' units') + ' · total ' + num(total)
+                : 'completed-sales reference') +
             '</span></div>' +
             '<div><div>' + money(candidate.price, candidate.currency) + '</div><div class="moth-mw-meta">listed' +
-            (candidate.kind === 'item' && candidate.qty > 1 ? ' / unit' : '') + '</div></div>' +
+            ((candidate.kind === 'item' || candidate.kind === 'diamond') && candidate.qty > 1 ? ' / unit' : '') + '</div></div>' +
             '<div class="moth-mw-ref"><div>' + money(Math.round(candidate.average), candidate.currency) +
             '</div><div class="moth-mw-meta">' + escapeHtml(referenceLabel) + '</div></div>' +
             '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' +
@@ -1799,7 +2074,7 @@
         const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency)
             ? config.viewCurrency
             : 'all';
-        const kindFilter = ['item', 'pokemon'].includes(config.viewKind)
+        const kindFilter = ['item', 'pokemon', 'diamond'].includes(config.viewKind)
             ? config.viewKind
             : 'all';
 
@@ -1897,12 +2172,16 @@
 
         const baseline = baselineStats();
         const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency) ? config.viewCurrency : 'all';
-        const kindFilter = ['item', 'pokemon'].includes(config.viewKind) ? config.viewKind : 'all';
+        const kindFilter = ['item', 'pokemon', 'diamond'].includes(config.viewKind) ? config.viewKind : 'all';
         const candidates = Array.from(state.candidates.values())
-            .filter(c =>
-                c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100) &&
-                candidateVisible(c)
-            )
+            .filter(c => {
+                const manuallyLoadedItem = c.kind === 'item' &&
+                    state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
+                const visibleAtAnyPrice = c.kind === 'diamond' || manuallyLoadedItem;
+                return (visibleAtAnyPrice ||
+                    c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100)) &&
+                    candidateVisible(c);
+            })
             .sort(candidateSort);
 
         const captured = state.baseline.capturedAt
@@ -1914,6 +2193,7 @@
             '<h3>Moth Watch</h3>' +
             '<span class="moth-mw-status">Items: ' + escapeHtml(state.itemStatus) +
             ' · Pokémon: ' + escapeHtml(state.pokemonStatus) +
+            ' · Diamonds: ' + escapeHtml(state.diamondStatus) +
             ' · ' + num(state.protocolMessages) + ' protocol messages</span>' +
             '<span class="moth-mw-spacer"></span>' +
             '<button type="button" class="moth-mw-btn" id="moth-mw-scan">Scan now</button>' +
@@ -1925,8 +2205,10 @@
             configField('Auto-buy', 'autoBuy', 'checkbox') +
             configField('Watch items', 'scanItems', 'checkbox') +
             configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
+            configField('Watch diamonds', 'scanDiamonds', 'checkbox') +
             configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
             configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
+            configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
             configField('Buy Coin listings', 'buyCoins', 'checkbox') +
             configField('Buy Gem listings', 'buyGems', 'checkbox') +
             configField('Take full item batch', 'buyWholeItemBatch', 'checkbox') +
@@ -1960,9 +2242,11 @@
             filterButton('All', 'kind', 'all', kindFilter === 'all', '') +
             filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
             filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
+            filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') +
             '</div>' +
             sortSelect() +
             '</div>' +
+            renderItemInventory() +
             '<div class="moth-mw-list">' +
             (candidates.length
                 ? candidates.map(renderCandidate).join('')
@@ -1986,6 +2270,20 @@
                     ensurePokemonHistory(true);
                 }
                 runScan(true);
+                queueRender();
+            });
+        }
+
+        for (const button of qa('[data-moth-item-scan]', panel)) {
+            button.addEventListener('click', () => {
+                const itemId = Number(button.dataset.mothItemScan);
+                const currency = button.dataset.mothItemCurrency === 'orb' ? 'orb' : 'gold';
+                if (!(itemId > 0)) return;
+                const key = String(itemId) + ':' + currency;
+                state.loadedItemKeys.add(key);
+                state.lastDetailRequest.delete(key);
+                queueItemDetail(itemId, currency);
+                state.itemStatus = 'loading ' + catalogName(itemId) + ' offers';
                 queueRender();
             });
         }
@@ -2295,8 +2593,10 @@
             autoBuyPercent: Math.max(1, Number(config.autoBuyPercent) || 40),
             scanItems: !!config.scanItems,
             scanPokemon: !!config.scanPokemon,
+            scanDiamonds: !!config.scanDiamonds,
             autoBuyItems: !!config.autoBuyItems,
             autoBuyPokemon: !!config.autoBuyPokemon,
+            autoBuyDiamonds: !!config.autoBuyDiamonds,
             buyCoins: !!config.buyCoins,
             buyGems: !!config.buyGems,
             buyWholeItemBatch: !!config.buyWholeItemBatch,
