@@ -30,13 +30,10 @@ pub struct HuntSpeciesInfo {
     pub weakness_multipliers: Vec<(String, f32)>,
     pub captured: bool,
     pub capture_count: u32,
-    pub npc_value: u64,
-    pub market_value: u64,
     pub offense_multiplier: Option<f32>,
     pub offense_type: String,
     pub defense_multiplier: Option<f32>,
     pub defense_type: String,
-    pub matchup_score: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -118,7 +115,6 @@ pub struct MothWatchLog {
 
 #[derive(Clone, Debug)]
 pub struct MothWatchControllerResult {
-    pub at: u64,
     pub ok: bool,
     pub error: String,
     pub listing_id: u64,
@@ -296,42 +292,6 @@ impl Health {
         }
     }
 
-    pub fn details(&self) -> String {
-        let addon = if self.addon_missing.is_empty() {
-            format!("Addons {}/{} ✓", self.addon_ok, self.addon_total)
-        } else {
-            format!(
-                "Addons {}/{} · missing: {}",
-                self.addon_ok,
-                self.addon_total,
-                self.addon_missing.join(", ")
-            )
-        };
-
-        let mut parts = vec![addon];
-
-        if self.twitch_tabs > 0 {
-            parts.push(format!(
-                "Twitch LR {}/{}",
-                self.twitch_low_resource_ok,
-                self.twitch_tabs
-            ));
-        }
-
-        if !self.performance_scene_runs.is_empty() {
-            parts.push(format!("Scene {}", self.performance_scene_runs));
-        }
-
-        if !self.performance_fps.is_empty() && self.performance_fps != "—" {
-            parts.push(format!("FPS {}", self.performance_fps));
-        }
-
-        if self.economy_mode {
-            parts.push("Economy".to_string());
-        }
-
-        parts.join(" · ")
-    }
 }
 
 #[derive(Clone)]
@@ -945,7 +905,6 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
     let controller_result = value.get("controllerResult").and_then(|row| {
         if row.is_null() { return None; }
         Some(MothWatchControllerResult {
-            at: row.get("at").and_then(Value::as_u64).unwrap_or(0),
             ok: row.get("ok").and_then(Value::as_bool).unwrap_or(false),
             error: row.get("error").and_then(Value::as_str).unwrap_or_default().to_string(),
             listing_id: row.get("listingId").and_then(Value::as_u64).unwrap_or(0),
@@ -1512,13 +1471,10 @@ fn probe_runtime_details(
                         weakness_multipliers,
                         captured: species.get("captured").and_then(Value::as_bool).unwrap_or(false),
                         capture_count: species.get("captureCount").and_then(Value::as_u64).unwrap_or(0) as u32,
-                        npc_value: species.get("npcValue").and_then(Value::as_u64).unwrap_or(0),
-                        market_value: species.get("marketValue").and_then(Value::as_u64).unwrap_or(0),
                         offense_multiplier: offense.as_ref().map(|item| item.0),
                         offense_type: offense.map(|item| item.1).unwrap_or_default(),
                         defense_multiplier: defense.as_ref().map(|item| item.0),
                         defense_type: defense.map(|item| item.1).unwrap_or_default(),
-                        matchup_score: species.get("matchupScore").and_then(Value::as_f64).map(|value| value as f32),
                     })
                 }).collect::<Vec<_>>()
             }).unwrap_or_default();
