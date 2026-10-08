@@ -228,7 +228,7 @@
     }
 
     function send(payload) {
-        const socket = state.socket;
+        const socket = state.gameSocket || state.socket;
         if (!socket || socket.readyState !== 1) return false;
         try {
             socket.send(JSON.stringify(payload));
@@ -1417,10 +1417,11 @@
         socket.addEventListener('close', () => {
             if (state.gameSocket === socket) state.gameSocket = null;
             if (state.socket === socket) {
-                state.socket = state.gameSocket || null;
-                if (!state.socket) {
-                        state.pokemonStatus = 'disconnected';
-                    state.pendingBuy = null;
+            state.socket = state.gameSocket || null;
+            if (!state.socket) {
+                state.itemStatus = 'disconnected';
+                state.pokemonStatus = 'disconnected';
+                state.pendingBuy = null;
                 state.pokemonScan = null;
                 state.historyFetch = null;
                 if (state.itemSummaryRetryTimer) clearTimeout(state.itemSummaryRetryTimer);
