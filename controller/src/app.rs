@@ -33,7 +33,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "◫  Profiles" => "◫  Perfis",
         "⌁  Hunt Atlas" => "⌁  Atlas de Caça",
         "◇  Moth Watch" => "Moth Watch",
-        "≡  Logs" => tr("≡  Logs"),
+        "≡  Logs" => "≡  Logs",
         "OPERATIONS" => "OPERAÇÕES",
         "▶  Launch both" => "▶  Iniciar ambos",
         "■  Stop all" => "■  Parar tudo",
@@ -153,6 +153,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "CONNECTING" => "CONECTANDO",
         "LOGIN" => "LOGIN",
         "ERROR" => "ERRO",
+        "LANGUAGE" => "IDIOMA",
         _ => en,
     }
 }
