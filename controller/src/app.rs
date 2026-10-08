@@ -1388,7 +1388,7 @@ fn draw_game_card(
                         );
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new(&link)
+                            RichText::new(link.as_str())
                                 .size(10.0)
                                 .color(ACCENT),
                         );
@@ -1400,7 +1400,7 @@ fn draw_game_card(
                                     false,
                                 );
                             }
-                            ui.hyperlink_to(tr("Open in regular browser"), &link);
+                            ui.hyperlink_to(tr("Open in regular browser"), link.clone());
                         });
                         ui.label(
                             RichText::new(tr("Copy this MultiKick link and open it in a regular browser, not inside the controller-managed Firefox."))
