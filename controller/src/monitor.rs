@@ -1370,7 +1370,7 @@ fn probe_runtime_details(
 
     let mut server_now = snapshot.get("serverNow").and_then(Value::as_u64).unwrap_or(0);
     if server_now == 0 {
-        server_now = chrono_like_now_ms();
+        server_now = crate::app::chrono_like_now_ms();
     }
 
     let mut market_listings = Vec::new();
