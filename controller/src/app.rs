@@ -2507,7 +2507,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             let button_text = if current {
-                                                tr("Current")
+                                                tr("Current").to_string()
                                             } else if !ready {
                                                 if pt_br() {
                                                     format!("Aguarde {:.1}s", cooldown_ms as f32 / 1000.0)
