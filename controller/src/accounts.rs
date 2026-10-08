@@ -34,7 +34,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.15",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.16",
     ),
 
 ];
