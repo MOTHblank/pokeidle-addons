@@ -459,6 +459,7 @@ struct RuntimeProbe {
     market_listings: Vec<MarketListing>,
     market_catalog: Vec<MarketItem>,
     market_summary: Vec<MarketSummary>,
+    moth_watch: Option<MothWatchInfo>,
 }
 
 struct Probe {
@@ -909,6 +910,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         market_listings: runtime.market_listings,
         market_catalog: runtime.market_catalog,
         market_summary: runtime.market_summary,
+        moth_watch: runtime.moth_watch,
     })
 }
 fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
@@ -1798,6 +1800,7 @@ fn probe_runtime_details(
         market_listings,
         market_catalog,
         market_summary,
+        moth_watch,
     })
 }
 
