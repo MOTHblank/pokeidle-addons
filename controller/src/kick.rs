@@ -249,6 +249,7 @@ impl KickManager {
 
                 session.windows.clear();
                 session.browser_pid = None;
+                session.pending.clear();
             }
         }
     }
@@ -427,7 +428,7 @@ impl KickManager {
     fn configure(&mut self, profile: GameProfile, config: &Config) {
         let session = self.session_mut(profile);
         session.profile_dir = Some(config.kick_profile_dir());
-        session.browser_executable = Some(config.firefox_executable.clone());
+        session.browser_executable = Config::kick_firefox_executable().ok();
     }
 }
 
