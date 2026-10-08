@@ -1771,8 +1771,6 @@ fn draw_game_card(
                                 tr("Twitch low resource"),
                                 health.twitch_low_resource_ok,
                                 health.twitch_tabs
-                            )
-                                health.twitch_low_resource_ok, health.twitch_tabs
                             ))
                             .size(10.0)
                             .color(MUTED),
