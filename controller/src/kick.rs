@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct KickStream {
@@ -29,10 +29,12 @@ unsafe extern "system" fn collect_window_callback(
     hwnd: Hwnd,
     lparam: isize,
 ) -> i32 {
-    let context = &mut *(lparam as *mut EnumWindowsContext);
+    unsafe {
+        let context = &mut *(lparam as *mut EnumWindowsContext);
 
-    if IsWindowVisible(hwnd) != 0 {
-        context.windows.push(hwnd);
+        if IsWindowVisible(hwnd) != 0 {
+            context.windows.push(hwnd);
+        }
     }
 
     1
