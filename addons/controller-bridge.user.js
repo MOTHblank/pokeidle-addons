@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.1.3
+// @version      1.1.4
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -337,6 +337,17 @@
             ? twitch.assistindoEm.filter(Boolean)
             : [];
 
+        const kickScanner = (() => {
+            try {
+                const api = page.__mothKickScannerV1;
+                return api && typeof api.snapshot === 'function'
+                    ? copy(api.snapshot())
+                    : null;
+            } catch {
+                return null;
+            }
+        })();
+
         if (
             twitchWatching.length &&
             twitchPct > 0
@@ -453,6 +464,7 @@
             stream: {
                 twitch: copy(state?.twitch),
                 kick: copy(state?.kick),
+                kickScanner,
                 bonusCurrent: currentStreamBonus,
                 bonusLast: lastStreamBonus
             },
