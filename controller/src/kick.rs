@@ -24,6 +24,7 @@ struct KickSession {
     profile_dir: Option<PathBuf>,
     browser_executable: Option<PathBuf>,
     browser_pid: Option<u32>,
+    managed: bool,
     socket: Option<BrowserSocket>,
     next_id: u64,
     tabs: HashMap<String, String>,
@@ -99,54 +100,7 @@ impl KickManager {
             let config = Config::for_profile(profile)?;
             self.configure(profile, &config);
 
-            self.ensure_browser(profile, url)?;
-
-            let id = self.next_id(profile);
-            let result = {
-                let session = self.session_mut(profile);
-                if session.socket.is_none() {
-                    return Err("KICK Firefox remote control is not ready yet".to_string());
-                }
-
-                send_and_wait(
-                    session.socket.as_mut().unwrap(),
-                    id,
-                    json!({
-                        "id": id,
-                        "method": "browsingContext.create",
-                        "params": {
-                            "type": "tab"
-                        }
-                    }),
-                )?
-            };
-
-            let context = result
-                .get("result")
-                .and_then(|value| value.get("context"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| "KICK tab creation returned no context".to_string())?
-                .to_string();
-
-            let navigate_id = self.next_id(profile);
-            {
-                let session = self.session_mut(profile);
-                send_and_wait(
-                    session.socket.as_mut().unwrap(),
-                    navigate_id,
-                    json!({
-                        "id": navigate_id,
-                        "method": "browsingContext.navigate",
-                        "params": {
-                            "context": context,
-                            "url": url,
-                            "wait": "none"
-                        }
-                    }),
-                )?;
-            }
-
-            Ok(())
+            self.open_unmanaged_login(profile, url)
         }
     }
 
@@ -175,6 +129,7 @@ impl KickManager {
                 session.tabs.clear();
                 session.pending.clear();
                 session.browser_pid = None;
+                session.managed = false;
             }
         }
     }
@@ -207,7 +162,7 @@ impl KickManager {
         &mut self,
         profile: GameProfile,
         initial_url: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let (profile_dir, executable) = {
             let session = self.session_mut(profile);
             (
@@ -227,15 +182,28 @@ impl KickManager {
 
         let port = 27801 + profile.index() as u16;
 
-        let alive = {
+        let (alive, managed) = {
             let session = self.session_mut(profile);
-            session
-                .browser_pid
-                .map(process_alive)
-                .unwrap_or(false)
+            (
+                session.browser_pid.map(process_alive).unwrap_or(false),
+                session.managed,
+            )
         };
 
+        if alive && !managed {
+            // The user is still completing KICK/Google authentication in the
+            // deliberately uncontrolled Firefox session. Do not attempt to
+            // attach BiDi or inject any controller-managed tabs into it.
+            return Ok(false);
+        }
+
         if !alive {
+            let session = self.session_mut(profile);
+            session.socket = None;
+            session.tabs.clear();
+            session.pending.clear();
+            session.managed = false;
+
             let child = Command::new(&executable)
                 .arg("--no-remote")
                 .arg(format!("--remote-debugging-port={}", port))
@@ -247,30 +215,108 @@ impl KickManager {
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .map_err(|error| format!("could not start normal KICK Firefox: {error}"))?;
+                .map_err(|error| format!("could not start managed KICK Firefox: {error}"))?;
 
             let pid = child.id();
 
             let session = self.session_mut(profile);
             session.browser_pid = Some(pid);
+            session.managed = true;
             session.socket = None;
             session.tabs.clear();
             session.pending.clear();
 
-            // The first KICK stream/login URL is already the initial tab.
-            // Firefox may take a moment before its BiDi endpoint accepts a
-            // connection; the next controller tick will attach and reconcile
-            // the remaining tabs.
-            return Ok(());
+            // The first KICK stream URL is already in the initial tab.
+            // Firefox may take a moment before BiDi accepts a connection.
+            return Ok(false);
         }
 
         if self.session_mut(profile).socket.is_none() {
             self.connect(profile, port)?;
         }
 
-        Ok(())
+        Ok(self.session_mut(profile).socket.is_some())
     }
 
+    #[cfg(windows)]
+    fn open_unmanaged_login(
+        &mut self,
+        profile: GameProfile,
+        url: &str,
+    ) -> Result<(), String> {
+        let (profile_dir, executable, alive, managed) = {
+            let session = self.session_mut(profile);
+            (
+                session
+                    .profile_dir
+                    .clone()
+                    .ok_or_else(|| "KICK browser profile is not initialized".to_string())?,
+                session
+                    .browser_executable
+                    .clone()
+                    .ok_or_else(|| "KICK Firefox executable is not initialized".to_string())?,
+                session.browser_pid.map(process_alive).unwrap_or(false),
+                session.managed,
+            )
+        };
+
+        if alive && managed {
+            return Err(
+                "KICK is currently managed by the controller. Close its managed Firefox window before starting KICK login."
+                    .to_string(),
+            );
+        }
+
+        std::fs::create_dir_all(&profile_dir)
+            .map_err(|error| format!("could not create KICK profile: {error}"))?;
+
+        if alive {
+            // Reuse the existing normal Firefox process/profile without adding
+            // a remote-debugging endpoint.
+            Command::new(&executable)
+                .arg("--profile")
+                .arg(&profile_dir)
+                .arg("--new-tab")
+                .arg(url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|error| format!("could not open KICK login tab: {error}"))?;
+
+            logging::info(&format!(
+                "KICK login opened in existing uncontrolled Firefox: {}",
+                url
+            ));
+            return Ok(());
+        }
+
+        let child = Command::new(&executable)
+            .arg("--no-remote")
+            .arg("--profile")
+            .arg(&profile_dir)
+            .arg("--new-window")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("could not start uncontrolled KICK login Firefox: {error}"))?;
+
+        let session = self.session_mut(profile);
+        session.browser_pid = Some(child.id());
+        session.managed = false;
+        session.socket = None;
+        session.tabs.clear();
+        session.pending.clear();
+
+        logging::info(&format!(
+            "KICK login opened in uncontrolled normal Firefox: {}",
+            url
+        ));
+
+        Ok(())
+    }
     #[cfg(windows)]
     fn connect(&mut self, profile: GameProfile, port: u16) -> Result<(), String> {
         let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
@@ -290,6 +336,7 @@ impl KickManager {
 
         let session = self.session_mut(profile);
         session.socket = Some(socket);
+        session.managed = true;
         session.next_id = 2;
 
         logging::info(&format!(
@@ -318,8 +365,17 @@ impl KickManager {
             desired.insert(key, stream.url.clone());
         }
 
-        if desired.is_empty() && !state_available {
-            return Ok(());
+        if desired.is_empty() {
+            // Nothing to open. When the controller already owns a KICK browser,
+            // reconcile/close stale managed tabs; otherwise leave the user's
+            // uncontrolled authentication browser completely alone.
+            if !state_available {
+                return Ok(());
+            }
+
+            if self.session_mut(profile).socket.is_none() {
+                return Ok(());
+            }
         }
 
         let initial_url = desired
@@ -328,8 +384,8 @@ impl KickManager {
             .cloned()
             .unwrap_or_else(|| "https://kick.com/".to_string());
 
-        if let Err(error) = self.ensure_browser(profile, &initial_url) {
-            return Err(error);
+        if !self.ensure_browser(profile, &initial_url)? {
+            return Ok(());
         }
 
         let contexts = self.contexts(profile)?;
