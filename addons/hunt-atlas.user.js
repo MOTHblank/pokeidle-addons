@@ -320,6 +320,9 @@
             'filter.weakTo': 'Weak to',
             'filter.anyWeakness': 'Any weakness',
             'filter.weaknessLoading': 'Weakness: loading…',
+            'filter.matchAllWeaknesses': 'Match all selected',
+            'filter.weaknessSelected': '{count} selected',
+            'filter.clearWeakness': 'Clear selection',
             'filter.collection': 'Collection',
             'filter.caughtAndUncaught': 'Caught + uncaught',
             'filter.uncaughtOnly': 'Uncaught only',
@@ -472,6 +475,9 @@
             'filter.weakTo': 'Fraco contra',
             'filter.anyWeakness': 'Qualquer fraqueza',
             'filter.weaknessLoading': 'Fraqueza: carregando…',
+            'filter.matchAllWeaknesses': 'Exigir todas as selecionadas',
+            'filter.weaknessSelected': '{count} selecionadas',
+            'filter.clearWeakness': 'Limpar seleção',
             'filter.collection': 'Coleção',
             'filter.caughtAndUncaught': 'Capturados + não capturados',
             'filter.uncaughtOnly': 'Só não capturados',
@@ -837,7 +843,8 @@
             minLevel: '',
             maxLevel: '',
             type: 'all',
-            weakness: 'all',
+            weakness: [],
+            weaknessMatchAll: false,
             availability: 'unlocked',
             captured: 'all',
             sort: 'xp',
@@ -905,6 +912,27 @@
                 ]
             };
 
+            if (typeof next.weakness === 'string') {
+                next.weakness =
+                    next.weakness === 'all' || !next.weakness
+                        ? []
+                        : [next.weakness];
+            } else if (!Array.isArray(next.weakness)) {
+                next.weakness = [];
+            }
+
+            next.weakness = [
+                ...new Set(
+                    next.weakness
+                        .map(value => String(value).toUpperCase())
+                        .filter(value => STANDARD_TYPES.includes(value))
+                )
+            ];
+
+            next.weaknessMatchAll =
+                Boolean(next.weaknessMatchAll) &&
+                next.weakness.length > 1;
+
             if (
                 legacySorts[
                     next.sort
@@ -965,17 +993,36 @@
         return Object.keys(
             defaults
         ).filter(
-            key =>
-                key !== 'sort' &&
-                key !== 'sortDirection' &&
-                String(
+            key => {
+                if (
+                    key === 'sort' ||
+                    key === 'sortDirection'
+                ) {
+                    return false;
+                }
+
+                if (key === 'weakness') {
+                    return (
+                        Array.isArray(state.filters.weakness) &&
+                        state.filters.weakness.length > 0
+                    );
+                }
+
+                if (key === 'weaknessMatchAll') {
+                    return Boolean(
+                        state.filters.weaknessMatchAll
+                    );
+                }
+
+                return String(
                     state.filters[key] ??
                     ''
                 ) !==
                 String(
                     defaults[key] ??
                     ''
-                )
+                );
+            }
         ).length;
     }
 
@@ -6717,7 +6764,19 @@
             state.filters.type;
 
         const weaknessFilter =
-            state.filters.weakness;
+            Array.isArray(
+                state.filters.weakness
+            )
+                ? state.filters.weakness
+                : state.filters.weakness &&
+                    state.filters.weakness !== 'all'
+                    ? [state.filters.weakness]
+                    : [];
+
+        const weaknessMatchAll =
+            Boolean(
+                state.filters.weaknessMatchAll
+            );
 
         const captureFilter =
             state.filters.captured;
@@ -6767,17 +6826,29 @@
             }
 
             if (
-                weaknessFilter !==
-                    'all' &&
-                (
-                    !types.length ||
-                    weaknessMultiplier(
-                        types,
-                        weaknessFilter
-                    ) <= 1
-                )
+                weaknessFilter.length
             ) {
-                continue;
+                const matches = weaknessMatchAll
+                    ? weaknessFilter.every(
+                        attackType =>
+                            types.length &&
+                            weaknessMultiplier(
+                                types,
+                                attackType
+                            ) > 1
+                    )
+                    : weaknessFilter.some(
+                        attackType =>
+                            types.length &&
+                            weaknessMultiplier(
+                                types,
+                                attackType
+                            ) > 1
+                    );
+
+                if (!matches) {
+                    continue;
+                }
             }
 
             const hunt =
@@ -7333,6 +7404,41 @@
 
             .mha-search {
                 grid-column: span 2;
+            }
+
+            .mha-weakness-select {
+                height: 74px !important;
+                min-height: 74px;
+            }
+
+            .mha-weakness-mode {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+                margin-top: 2px;
+                font-size: 8px;
+            }
+
+            .mha-weakness-mode label {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                min-width: 0;
+                color: #aaa;
+            }
+
+            .mha-weakness-mode input {
+                width: auto !important;
+                height: auto !important;
+                margin: 0;
+            }
+
+            .mha-weakness-mode button {
+                width: auto;
+                height: 22px;
+                padding: 2px 6px;
+                font-size: 8px;
             }
 
             .mha-level-inputs {
@@ -8320,10 +8426,23 @@
                     <select data-mha-filter="type"></select>
                 </label>
 
-                <label class="mha-field">
+                <div class="mha-field">
                     <span>${tr('filter.weakTo')}</span>
-                    <select data-mha-filter="weakness"></select>
-                </label>
+                    <select
+                        data-mha-filter="weakness"
+                        class="mha-weakness-select"
+                        multiple
+                        size="4"
+                        aria-label="${escapeHtml(tr('filter.weakTo'))}"
+                    ></select>
+                    <div class="mha-weakness-mode">
+                        <label>
+                            <input type="checkbox" data-mha-weakness-all>
+                            <span>${tr('filter.matchAllWeaknesses')}</span>
+                        </label>
+                        <button type="button" data-mha-clear-weakness>${tr('filter.clearWeakness')}</button>
+                    </div>
+                </div>
 
                 <label class="mha-field">
                     <span>${tr('filter.collection')}</span>
@@ -8466,6 +8585,39 @@
             }
         );
 
+        const weaknessAll =
+            q(
+                '[data-mha-weakness-all]',
+                drawer
+            );
+
+        weaknessAll?.addEventListener(
+            'change',
+            () => {
+                state.filters.weaknessMatchAll =
+                    Boolean(
+                        weaknessAll.checked
+                    ) &&
+                    state.filters.weakness.length > 1;
+
+                saveFilters();
+                renderDrawer();
+            }
+        );
+
+        q(
+            '[data-mha-clear-weakness]',
+            drawer
+        )?.addEventListener(
+            'click',
+            () => {
+                state.filters.weakness = [];
+                state.filters.weaknessMatchAll = false;
+                saveFilters();
+                renderDrawer();
+            }
+        );
+
         for (
             const control of
             qa(
@@ -8489,10 +8641,28 @@
             control.addEventListener(
                 eventName,
                 () => {
-                    state.filters[
-                        key
-                    ] =
-                        control.value;
+                    if (key === 'weakness') {
+                        state.filters.weakness =
+                            [...control.selectedOptions]
+                                .map(option => option.value)
+                                .filter(
+                                    value =>
+                                        value &&
+                                        value !== 'all'
+                                );
+
+                        if (
+                            state.filters.weakness.length < 2
+                        ) {
+                            state.filters.weaknessMatchAll =
+                                false;
+                        }
+                    } else {
+                        state.filters[
+                            key
+                        ] =
+                            control.value;
+                    }
 
                     state.resultLimit =
                         120;
@@ -8633,32 +8803,74 @@
                 drawer
             );
 
-        const weakHtml =
-            selectOptions(
-                STANDARD_TYPES,
-                state.filters.weakness,
-                'all',
-                state.typeStatus ===
-                    'loading'
-                    ? tr(
-                        'filter.weaknessLoading'
-                    )
-                    : tr(
-                        'filter.anyWeakness'
-                    ),
-                typeLabel
-            );
+        const weaknessSelected =
+            Array.isArray(state.filters.weakness)
+                ? state.filters.weakness
+                : [];
+
+        const weakHtml = STANDARD_TYPES
+            .map(
+                value =>
+                    '<option value="' +
+                    escapeHtml(value) +
+                    '">' +
+                    escapeHtml(typeLabel(value)) +
+                    '</option>'
+            )
+            .join('');
 
         if (
+            weakness &&
             weakness.innerHTML !==
-            weakHtml
+                weakHtml
         ) {
             weakness.innerHTML =
                 weakHtml;
         }
 
-        weakness.value =
-            state.filters.weakness;
+        if (weakness) {
+            for (
+                const option of
+                weakness.options
+            ) {
+                option.selected =
+                    weaknessSelected
+                        .includes(
+                            option.value
+                        );
+            }
+
+            weakness.title =
+                weaknessSelected.length
+                    ? tr(
+                        'filter.weaknessSelected'
+                    ).replace(
+                        '{count}',
+                        String(
+                            weaknessSelected.length
+                        )
+                    )
+                    : tr(
+                        'filter.anyWeakness'
+                    );
+        }
+
+        const weaknessAll =
+            q(
+                '[data-mha-weakness-all]',
+                drawer
+            );
+
+        if (weaknessAll) {
+            weaknessAll.checked =
+                Boolean(
+                    state.filters.weaknessMatchAll
+                ) &&
+                weaknessSelected.length > 1;
+
+            weaknessAll.disabled =
+                weaknessSelected.length < 2;
+        }
 
         for (
             const key of [
