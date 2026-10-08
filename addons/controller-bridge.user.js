@@ -176,6 +176,19 @@
     }
 
     function send(payload) {
+        if (
+            payload &&
+            payload.t === 'market.comprar' &&
+            page.__mothMarketWatchControllerV1 &&
+            typeof page.__mothMarketWatchControllerV1.buy === 'function'
+        ) {
+            try {
+                return page.__mothMarketWatchControllerV1.buy(payload);
+            } catch (error) {
+                return { ok: false, error: String(error) };
+            }
+        }
+
         const target = gameSocket || socket;
         if (!target || target.readyState !== page.WebSocket.OPEN) {
             return { ok: false, error: 'game websocket is not open' };
@@ -348,6 +361,17 @@
                 trainerXpNivel: Number(state?.xpNivel) || 0,
                 trainerXpProximo: Number(state?.xpProximo) || 0,
                 xpBonuses: [...new Set(bonusLines)],
+                serverNow: Number(state?.servidorAgora) || 0,
+                huntAtlas: (() => {
+                    try {
+                        const api = page.__mothHuntAtlasControllerV1;
+                        return api && typeof api.snapshot === 'function'
+                            ? copy(api.snapshot())
+                            : null;
+                    } catch {
+                        return null;
+                    }
+                })(),
                 domBalls: balls(),
                 autoCatchOn: text('#moth-ac-toggle').toUpperCase() === 'ON',
                 autoCatchCaptures: numberFrom('#moth-ac-captures'),
