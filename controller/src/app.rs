@@ -76,6 +76,12 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Name cannot be empty" => "O nome não pode ficar vazio",
         "Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled." => "Cada slot é um perfil separado do Firefox. Desabilitar um slot o remove do painel e de Iniciar habilitadas.",
         "Add account" => "Adicionar conta",\n        "No accounts enabled. Open Account Manager to add or enable one." => "Nenhuma conta habilitada. Abra o Gerenciador de contas para adicionar ou habilitar uma conta.",
+        "footer.by" => "por MOTHblank",
+        "footer.play" => "MOTHblank no Google Play",
+        "footer.x" => "MOTHblank no X",
+        "footer.whatsapp" => "WhatsApp / Pix",
+        "footer.source" => "código-fonte",
+        "Credits" => "Créditos",
         "MOTH" => "MOTH",
         "POKEIDLE" => "POKEIDLE",
         "WORKSPACE" => "ÁREA DE TRABALHO",
@@ -1551,6 +1557,50 @@ fn game_selector(
     });
 }
 
+fn draw_credits(ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(tr("Credits"))
+                        .size(9.0)
+                        .strong()
+                        .color(DIM),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(tr("footer.by"))
+                        .size(9.0)
+                        .color(MUTED),
+                );
+                ui.label(RichText::new("·").size(9.0).color(DIM));
+                ui.hyperlink_to(
+                    tr("footer.play"),
+                    "https://play.google.com/store/apps/developer?id=MOTHblank",
+                );
+                ui.label(RichText::new("·").size(9.0).color(DIM));
+                ui.hyperlink_to(
+                    tr("footer.x"),
+                    "https://x.com/MOTHblank",
+                );
+                ui.label(RichText::new("·").size(9.0).color(DIM));
+                ui.hyperlink_to(
+                    tr("footer.whatsapp"),
+                    "https://wa.me/+5537999933376",
+                );
+                ui.label(RichText::new("·").size(9.0).color(DIM));
+                ui.hyperlink_to(
+                    tr("footer.source"),
+                    "https://github.com/MOTHblank/pokeidle-huntatlas",
+                );
+            });
+        });
+}
+
 fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
     let screen = ctx.viewport_rect();
     let width = (screen.width() - 48.0).clamp(420.0, 900.0);
@@ -1744,6 +1794,9 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.label(RichText::new(tr("No hunt data yet. The controller bridge must receive the game's welcome message first."))
                     .size(11.0).color(DIM));
             }
+
+            ui.add_space(10.0);
+            draw_credits(ui);
         });
     app.show_atlas = open;
 }
