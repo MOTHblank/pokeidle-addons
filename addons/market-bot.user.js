@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.23
+// @version      0.1.24
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -90,6 +90,7 @@
         scanTimer: null,
         watchOpen: false,
         renderQueued: false,
+        lastRenderAt: 0,
         baseline: loadBaseline(),
         forceBaselineNext: false,
         pokemonReference: loadPokemonReference(),
@@ -2043,11 +2044,33 @@
     function queueRender() {
         if (state.renderQueued) return;
         state.renderQueued = true;
-        requestAnimationFrame(() => {
-            state.renderQueued = false;
-            ensureUi();
-            renderWatch();
-        });
+
+        /*
+         * The watch panel is a fairly large DOM tree. During live-market
+         * activity several protocol events can arrive in the same second.
+         * Rebuilding the whole panel once per animation frame is enough to
+         * starve the game thread, especially with many retained listings.
+         *
+         * Keep the open panel responsive at a bounded refresh rate while
+         * still allowing closed-state UI repair immediately.
+         */
+        const now = Date.now();
+        const minInterval = state.watchOpen ? 250 : 0;
+        const elapsed = now - Number(state.lastRenderAt || 0);
+        const delay = Math.max(0, minInterval - elapsed);
+
+        setTimeout(() => {
+            requestAnimationFrame(() => {
+                state.renderQueued = false;
+                ensureUi();
+
+                if (state.watchOpen) {
+                    state.lastRenderAt = Date.now();
+                }
+
+                renderWatch();
+            });
+        }, delay);
     }
 
     function openWatch() {
@@ -2070,8 +2093,17 @@
             button.setAttribute('aria-pressed', 'true');
         }
 
-        runScan(true);
+        /*
+         * Paint the UI first. Market/history requests can continue from the
+         * normal scan timer without making the button click compete with the
+         * initial panel construction.
+         */
         renderWatch();
+        setTimeout(() => {
+            if (state.watchOpen) {
+                runScan(true);
+            }
+        }, 0);
         return true;
     }
 
@@ -2395,8 +2427,7 @@
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
                 finishPendingBuy('watchdog');
             }
-            if (state.watchOpen) queueRender();
-        }, 1000);
+            }, 1000);
 
         /*
          * Observe only the modal shell. The previous whole-document observer
@@ -2407,20 +2438,64 @@
             q('#modal');
 
         if (modal) {
+            const modalBox = q('#modal .modal-caixa');
+
             const observer =
-                new MutationObserver(() => {
-                    ensureUi();
+                new MutationObserver(records => {
+                    /*
+                     * Ignore mutations caused solely by Moth Watch rendering
+                     * its own panel. Native modal changes still reach ensureUi.
+                     */
+                    const panel = q('#moth-market-watch-panel');
+                    const relevant = records.some(record => {
+                        if (record.type === 'childList' && panel) {
+                            const target = record.target;
+                            if (
+                                target === panel ||
+                                target?.closest?.('#moth-market-watch-panel')
+                            ) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    });
+
+                    if (relevant) {
+                        ensureUi();
+                    }
                 });
 
+            /*
+             * Watch DOM replacement inside the modal so the button/panel can
+             * be reattached when PokéIdle redraws RMT, but do not watch every
+             * descendant attribute. The old attribute observer could feed on
+             * Moth Watch's own class/aria updates while it was rendering.
+             */
             observer.observe(
                 modal,
                 {
                     childList: true,
-                    subtree: true,
-                    attributes: true,
-                    attributeFilter: ['class', 'data-modal']
+                    subtree: true
                 }
             );
+
+            observer.observe(
+                modal,
+                {
+                    attributes: true,
+                    attributeFilter: ['class']
+                }
+            );
+
+            if (modalBox) {
+                observer.observe(
+                    modalBox,
+                    {
+                        attributes: true,
+                        attributeFilter: ['data-modal']
+                    }
+                );
+            }
         }
 
         ensureUi();
