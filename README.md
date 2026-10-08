@@ -106,6 +106,8 @@ Captura automática configurável e estatísticas de captura. O Auto Catch tamb�
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
 **Live Stream Scanner**  
+Opens Twitch chat popouts as before. For KICK, detected live channels are collected in the Rust interface as a single MultiKick link. Copy or open that link in a **regular browser**, not in a controller-managed Firefox window.  
+
 Verifica os streams atuais e abre automaticamente os chats da Twitch e as páginas KICK necessárias. A primeira verificação acontece após aproximadamente 30 segundos e depois uma vez por hora.
 
 **Controller Bridge**  
