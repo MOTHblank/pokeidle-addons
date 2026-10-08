@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.4.0
+// @version      6.5.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -13,7 +13,7 @@
 (() => {
     'use strict';
 
-    const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
+    const SETTINGS_KEY = 'moth-pokeidle-autocatch-v5';
     const MIN_INTERVAL_MS = 100;
     const RESULT_TIMEOUT_MS = 1000;
     const RESTOCK_ACK_TIMEOUT_MS = 10000;
@@ -62,10 +62,13 @@
             goldReserve: 0,
             selectedBallId: 1,
             selectedPotionId: 200,
+            selectedReviveId: null,
             ballAt: 50,
             ballTo: 500,
             potionAt: 10,
-            potionTo: 50
+            potionTo: 50,
+            reviveAt: 1,
+            reviveTo: 5
         }
     };
 
@@ -87,9 +90,8 @@
             delete saved.showHud;
 
             /*
-             * v6.4 changes restock from many independent item thresholds to
-             * one selected ball and one selected potion. Preserve the most
-             * relevant legacy choice when possible.
+             * v6.5 keeps balls and potions independent and adds Revives as a
+             * separate restock category.
              */
             const savedRestock =
                 saved.restock && typeof saved.restock === 'object'
@@ -908,6 +910,13 @@
         );
     }
 
+    function isRestockRevive(item) {
+        return Boolean(
+            item &&
+            normalize(item.name || item.nome || '').includes('revive')
+        );
+    }
+
     function mergeItemCatalog(catalog) {
         const list = Array.isArray(catalog)
             ? catalog
@@ -1119,6 +1128,23 @@
             );
     }
 
+    function restockReviveMetaForId(id) {
+        const item = itemCatalog.get(Number(id));
+        return isRestockRevive(item) && item?.compravel ? item : null;
+    }
+
+    function restockReviveEntries() {
+        return [...itemCatalog.values()]
+            .filter(item =>
+                isRestockRevive(item) &&
+                item.compravel &&
+                Number(item.priceGold || 0) > 0
+            )
+            .sort((a, b) =>
+                Number(a.id) - Number(b.id)
+            );
+    }
+
     function restockThresholds() {
         return {
             ballAt: Math.max(
@@ -1136,6 +1162,14 @@
             potionTo: Math.max(
                 0,
                 Number(settings.restock.potionTo || 0)
+            ),
+            reviveAt: Math.max(
+                0,
+                Number(settings.restock.reviveAt || 0)
+            ),
+            reviveTo: Math.max(
+                0,
+                Number(settings.restock.reviveTo || 0)
             )
         };
     }
@@ -1143,10 +1177,12 @@
     function syncRestockSelections() {
         const ballSelect = q('#moth-ac-restock-ball');
         const potionSelect = q('#moth-ac-restock-potion');
-        if (!ballSelect || !potionSelect) return;
+        const reviveSelect = q('#moth-ac-restock-revive');
+        if (!ballSelect || !potionSelect || !reviveSelect) return;
 
         const ballEntries = restockBallEntries();
         const potionEntries = restockPotionEntries();
+        const reviveEntries = restockReviveEntries();
 
         let selectionChanged = false;
 
@@ -1253,6 +1289,32 @@
             settings.restock.selectedPotionId = Number(
                 potionEntries[0].id
             );
+        }
+
+        const selectedReviveId = Number(
+            settings.restock.selectedReviveId
+        );
+        syncSelect(
+            reviveSelect,
+            reviveEntries,
+            selectedReviveId,
+            'Waiting for revive catalog…'
+        );
+
+        if (
+            Number.isFinite(Number(settings.restock.selectedReviveId)) &&
+            reviveEntries.some(entry =>
+                Number(entry.id) ===
+                Number(settings.restock.selectedReviveId)
+            )
+        ) {
+            // keep the configured selection
+        } else if (reviveEntries.length) {
+            settings.restock.selectedReviveId = Number(
+                reviveEntries[0].id
+            );
+        } else {
+            settings.restock.selectedReviveId = null;
         }
 
         if (selectionChanged) {
@@ -1469,6 +1531,24 @@
             count: potionCount,
             at: thresholds.potionAt,
             to: thresholds.potionTo,
+            now
+        })) {
+            return true;
+        }
+
+        const reviveMeta = restockReviveMetaForId(
+            settings.restock.selectedReviveId
+        );
+        const reviveCount = Number(
+            protocolItems.get(reviveMeta?.id) || 0
+        );
+
+        if (tryRestockCandidate({
+            kind: 'item',
+            meta: reviveMeta,
+            count: reviveCount,
+            at: thresholds.reviveAt,
+            to: thresholds.reviveTo,
             now
         })) {
             return true;
@@ -2264,7 +2344,7 @@
 
             .moth-ac-restock-picker {
                 display: grid;
-                grid-template-columns: repeat(2,minmax(0,1fr));
+                grid-template-columns: repeat(3,minmax(0,1fr));
                 gap: 6px;
                 margin-bottom: 6px;
             }
@@ -2630,6 +2710,7 @@
                     <small></small><small>at</small><small>to</small>
                     ${restockControl('ball', 'Selected Ball')}
                     ${restockControl('potion', 'Selected Potion')}
+                    ${restockControl('revive', 'Selected Revive')}
                 </div>
 
                 <div class="moth-ac-grid moth-ac-restock-gold">
@@ -2721,6 +2802,12 @@
                 panel
             );
 
+        const restockReviveSelect =
+            q(
+                '#moth-ac-restock-revive',
+                panel
+            );
+
         restockBallSelect?.addEventListener(
             'change',
             () => {
@@ -2745,6 +2832,19 @@
             }
         );
 
+        restockReviveSelect?.addEventListener(
+            'change',
+            () => {
+                const value = Number(restockReviveSelect.value);
+                settings.restock.selectedReviveId =
+                    Number.isFinite(value) && value > 0 ? value : null;
+
+                saveSettings();
+                maybeRestock();
+                updateUI();
+            }
+        );
+
         for (
             const input of
             qa(
@@ -2756,7 +2856,9 @@
             const field =
                 key === 'ball'
                     ? 'ballAt'
-                    : 'potionAt';
+                    : key === 'potion'
+                        ? 'potionAt'
+                        : 'reviveAt';
 
             input.value =
                 Number(settings.restock[field] || 0);
@@ -2789,7 +2891,9 @@
             const field =
                 key === 'ball'
                     ? 'ballTo'
-                    : 'potionTo';
+                    : key === 'potion'
+                        ? 'potionTo'
+                        : 'reviveTo';
 
             input.value =
                 Number(settings.restock[field] || 0);
@@ -2963,7 +3067,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.4.0 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.0 loaded');
     }
 
     if (document.readyState === 'loading') {
