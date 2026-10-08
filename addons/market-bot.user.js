@@ -2118,6 +2118,7 @@
                 canBuy: !state.pendingBuy &&
                     !(candidate.retainedUntil && candidate.retainedUntil > serverNow()) &&
                     purchaseQuantity(candidate) > 0,
+                autoBuyEligible: candidateCanAutoBuy(candidate),
                 referenceSource: String(candidate.referenceSource || ''),
                 activeReferenceListings: Number(candidate.activeReferenceListings || 0),
                 serverAverage: Number(candidate.serverAverage || 0)
