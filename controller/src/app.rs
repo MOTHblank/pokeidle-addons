@@ -779,29 +779,39 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let en_selected = !pt_br();
                 let pt_selected = pt_br();
 
-                if ui
-                    .add_sized(
-                        [78.0, 30.0],
-                        egui::SelectableLabel::new(
-                            en_selected,
-                            RichText::new("EN").size(10.0).strong(),
-                        ),
-                    )
-                    .clicked()
-                {
+                let en_button = egui::Button::new(
+                    RichText::new("EN").size(10.0).strong(),
+                )
+                .fill(if en_selected {
+                    ACCENT.linear_multiply(0.22)
+                } else {
+                    PANEL_ALT
+                })
+                .stroke(Stroke::new(
+                    1.0,
+                    if en_selected { ACCENT } else { BORDER },
+                ))
+                .corner_radius(7.0);
+
+                if ui.add_sized([78.0, 30.0], en_button).clicked() {
                     PT_BR.store(false, Ordering::Relaxed);
                 }
 
-                if ui
-                    .add_sized(
-                        [78.0, 30.0],
-                        egui::SelectableLabel::new(
-                            pt_selected,
-                            RichText::new("PT-BR").size(10.0).strong(),
-                        ),
-                    )
-                    .clicked()
-                {
+                let pt_button = egui::Button::new(
+                    RichText::new("PT-BR").size(10.0).strong(),
+                )
+                .fill(if pt_selected {
+                    ACCENT.linear_multiply(0.22)
+                } else {
+                    PANEL_ALT
+                })
+                .stroke(Stroke::new(
+                    1.0,
+                    if pt_selected { ACCENT } else { BORDER },
+                ))
+                .corner_radius(7.0);
+
+                if ui.add_sized([78.0, 30.0], pt_button).clicked() {
                     PT_BR.store(true, Ordering::Relaxed);
                 }
             });
