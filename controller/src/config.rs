@@ -85,7 +85,7 @@ impl Config {
     }
 
     pub fn load_accounts() -> Result<[AccountConfig; 4], String> {
-        let defaults = std::array::from_fn(AccountConfig::default_for);
+        let defaults = std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")));
         let path = Self::accounts_path()?;
         if !path.exists() {
             return Ok(defaults);
