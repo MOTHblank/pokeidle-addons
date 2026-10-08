@@ -805,6 +805,7 @@
         mapSyncQueued: false,
         keyboardBound: false,
         websocketHookInstalled: false,
+        observedSockets: new WeakSet(),
         sockets: 0,
         activeSocket: null,
         pendingTravel: null,
@@ -3794,133 +3795,78 @@
         finalizeMarketFetch();
     }
 
-    function attachSocket(
-        socket
-    ) {
-        state.sockets++;
-        state.activeSocket =
-            socket;
-
-        socket.addEventListener(
-            'close',
-            () => {
-                if (
-                    state.activeSocket ===
-                    socket
-                ) {
-                    state.activeSocket =
-                        null;
-
-                    if (
-                        state.marketFetch ||
-                        state.marketListingFetch
-                    ) {
-                        state.marketFetch =
-                            null;
-                        state.marketListingFetch =
-                            null;
-                        state.marketStatus =
-                            state.marketValues.size
-                                ? 'cached'
-                                : 'idle';
-                    }
-                }
-            }
-        );
-
-        socket.addEventListener(
-            'message',
-            event => {
-                if (
-                    typeof Blob !==
-                        'undefined' &&
-                    event.data instanceof
-                        Blob
-                ) {
-                    event.data.text()
-                        .then(
-                            handleProtocolMessage
-                        )
-                        .catch(() => {});
-
-                    return;
-                }
-
-                handleProtocolMessage(
-                    event.data
-                );
-            }
-        );
-    }
-
-    function installWebSocketHook() {
-        if (
-            state.websocketHookInstalled
-        ) {
-            return true;
-        }
-
-        const NativeWebSocket =
-            page.WebSocket;
-
-        if (
-            typeof NativeWebSocket !==
-                'function'
-        ) {
+    function attachSocket(socket) {
+        if (!socket || state.observedSockets.has(socket)) {
             return false;
         }
 
-        if (
-            page.__mothHuntAtlasWebSocket
-        ) {
-            state.websocketHookInstalled =
-                true;
+        state.observedSockets.add(socket);
+        state.sockets++;
+        state.activeSocket = socket;
 
-            return true;
-        }
+        socket.addEventListener('close', () => {
+            if (state.activeSocket === socket) {
+                state.activeSocket = null;
+                state.websocketHookInstalled = false;
+            }
+        });
 
-        const WrappedWebSocket =
-            new Proxy(
-                NativeWebSocket,
-                {
-                    construct(
-                        target,
-                        args
-                    ) {
-                        const socket =
-                            Reflect.construct(
-                                target,
-                                args,
-                                target
-                            );
+        socket.addEventListener('message', event => {
+            if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+                event.data.text()
+                    .then(handleProtocolMessage)
+                    .catch(() => {});
+                return;
+            }
 
-                        attachSocket(
-                            socket
-                        );
+            handleProtocolMessage(event.data);
+        });
 
-                        return socket;
-                    }
-                }
-            );
+        return true;
+    }
 
+    function adoptBridgeSocket() {
         try {
-            page.WebSocket =
-                WrappedWebSocket;
+            const bridge = page.__mothControllerBridgeV1;
+            const candidate =
+                bridge && typeof bridge.socket === 'function'
+                    ? bridge.socket()
+                    : null;
 
-            page.__mothHuntAtlasWebSocket =
-                true;
+            if (!candidate || candidate.readyState > page.WebSocket.OPEN) {
+                return false;
+            }
 
-            state.websocketHookInstalled =
-                page.WebSocket ===
-                WrappedWebSocket;
-
-            return state.websocketHookInstalled;
+            attachSocket(candidate);
+            state.activeSocket = candidate;
+            state.websocketHookInstalled = true;
+            return true;
         } catch {
             return false;
         }
     }
 
+    function installWebSocketHook() {
+        /*
+         * The Controller Bridge owns protocol socket discovery. Avoid a
+         * second global WebSocket constructor Proxy, which can interfere with
+         * the upstream client's boot sequence.
+         */
+        if (adoptBridgeSocket()) return true;
+
+        state.websocketHookInstalled = false;
+        return false;
+    }
+
     installWebSocketHook();
+
+    // The bridge socket can appear after this addon, or be replaced after
+    // reconnect. Keep adoption alive instead of relying on constructor hooks.
+    setInterval(() => {
+        if (!state.activeSocket || state.activeSocket.readyState !== page.WebSocket.OPEN) {
+            adoptBridgeSocket();
+        }
+    }, 1000);
 
     // ------------------------------------------------------------------
     // Type data
