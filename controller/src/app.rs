@@ -959,7 +959,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             section_label(ui, tr("WORKSPACE"));
 
             if sidebar_button(ui, tr("▦  Dashboard"), true).clicked() {
-                app.set_status("Dashboard · live health polling enabled", false);
+                app.set_status(tr("Dashboard · live health polling enabled").to_string(), false);
             }
 
             if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
@@ -1239,11 +1239,11 @@ fn draw_game_card(
 
                     let headline = match health.activity.as_str() {
                         "Hunting" if !health.hunt.is_empty() => {
-                            format!("Hunting · {}", compact_text(&health.hunt, 34))
+                            format!("{} · {}", tr("Hunting"), compact_text(&health.hunt, 34))
                         }
-                        "Center" => "Online · Center".to_string(),
-                        "Login" => "Waiting for login".to_string(),
-                        _ => health.summary(),
+                        "Center" => tr("Online · Center").to_string(),
+                        "Login" => tr("Waiting for login").to_string(),
+                        _ => localize_status(health.summary()),
                     };
 
                     ui.add(
@@ -1322,7 +1322,7 @@ fn draw_game_card(
                             ui,
                             tr("AUTO CATCH"),
 
-                            if health.autocatch_on { "ON" } else { "OFF" },
+                            if health.autocatch_on { tr("ON") } else { tr("OFF") },
                             if health.autocatch_on { GOOD } else { MUTED },
                         );
                         resource_value(
@@ -1357,7 +1357,7 @@ fn draw_game_card(
             ui.add_space(6.0);
 
             let performance_value = if health.performance_fps.is_empty() {
-                "Loaded".to_string()
+                tr("Loaded").to_string()
             } else {
                 format!("{} FPS", health.performance_fps)
             };
@@ -1365,23 +1365,23 @@ fn draw_game_card(
             ui.horizontal_wrapped(|ui| {
                 automation_badge(
                     ui,
-                    "Auto Catch",
-                    if health.autocatch_on { "Active" } else { "Off" },
+                    tr("Auto Catch"),
+                    if health.autocatch_on { tr("Active") } else { tr("Off") },
                     health.autocatch_on,
                 );
                 automation_badge(
                     ui,
-                    "Restock",
-                    if health.autocatch_restock.is_empty() { "Off" } else { &health.autocatch_restock },
+                    tr("Restock"),
+                    if health.autocatch_restock.is_empty() { tr("Off") } else { tr(&health.autocatch_restock) },
                     health.autocatch_on && !health.autocatch_restock.eq_ignore_ascii_case("off"),
                 );
                 automation_badge(
                     ui,
-                    "Stream scanner",
+                    tr("Stream scanner"),
                     if health.stream_scan_status.is_empty() {
-                        "Waiting"
+                        tr("Waiting")
                     } else {
-                        &health.stream_scan_status
+                        tr(&health.stream_scan_status)
                     },
                     health.stream_scan_status.eq_ignore_ascii_case("ok"),
                 );
@@ -1396,7 +1396,7 @@ fn draw_game_card(
                         true,
                     );
                 }
-                automation_badge(ui, "Performance+", &performance_value, true);
+                automation_badge(ui, tr("Performance+"), &performance_value, true);
             });
 
             ui.add_space(12.0);
@@ -1490,7 +1490,7 @@ fn draw_game_card(
                     if !health.stream_watching.is_empty() {
                         ui.label(
                             RichText::new(format!(
-                                "ACTIVE · +{}% XP",
+                                format!("{} · +{}% XP", tr("ACTIVE"), format_pct(health.stream_bonus_pct)),
                                 format_pct(health.stream_bonus_pct)
                             ))
                             .size(11.0)
@@ -1499,8 +1499,7 @@ fn draw_game_card(
                         );
                         ui.label(
                             RichText::new(format!(
-                                "Watching: {}",
-                                health.stream_watching.join(", ")
+                                format!("{} {}", tr("Watching:"), health.stream_watching.join(", "))
                             ))
                             .size(10.0)
                             .color(MUTED),
@@ -1514,7 +1513,7 @@ fn draw_game_card(
                         );
                         ui.label(
                             RichText::new(format!(
-                                "Open chat: {}{}",
+                                format!("{} {}{}", tr("Open chat:"), health.stream_missing.join(", "),
                                 health.stream_missing.join(", "),
                                 if health.stream_bonus_pct > 0.0 {
                                     format!(" · +{}% XP", format_pct(health.stream_bonus_pct))
@@ -1534,8 +1533,10 @@ fn draw_game_card(
 
                         ui.label(
                             RichText::new(format!(
-                                "No active bonus · last seen{}: {}",
+                                "{} · {}{}: {}",
+                                tr("No active bonus"),
                                 last_seen,
+                                tr("last seen"),
                                 health.stream_bonus_last
                             ))
                             .size(10.0)
@@ -1556,9 +1557,9 @@ fn draw_game_card(
                             tab.kind == "Twitch" || tab.kind == "KICK"
                         }) {
                             let state = if tab.kind == "Twitch" {
-                                if tab.low_resource { "LOW" } else { tr("FULL") }
+                                if tab.low_resource { tr("LOW") } else { tr("FULL") }
                             } else {
-                                "OPEN"
+                                tr("OPEN")
                             };
 
                             ui.label(
@@ -1624,7 +1625,7 @@ fn draw_game_card(
                 if health.last_game_message_ms > 0 {
                     let age = (chrono_like_now_ms().saturating_sub(health.last_game_message_ms)) / 1000;
                     ui.label(
-                        RichText::new(format!("DATA {}s ago", age))
+                        RichText::new(format!("{} {}s {}", tr("DATA"), age, tr("ago")))
                             .size(8.0)
                             .color(if age <= 10 { GOOD } else { WARN }),
                     );
@@ -1638,7 +1639,7 @@ fn draw_game_card(
                 };
 
                 ui.label(
-                    RichText::new(format!("ADDONS {}/{}", health.addon_ok, health.addon_total))
+                    RichText::new(format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total))
                         .size(10.0)
                         .strong()
                         .color(addon_color),
@@ -1648,7 +1649,7 @@ fn draw_game_card(
                     ui.add_space(8.0);
                     ui.add(
                         egui::Label::new(
-                            RichText::new(format!("Missing: {}", health.addon_missing.join(" · ")))
+                            RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
                                 .size(10.0)
                                 .color(WARN),
                         )
@@ -1660,7 +1661,7 @@ fn draw_game_card(
                     if health.twitch_tabs > 0 {
                         ui.label(
                             RichText::new(format!(
-                                "Twitch LR {}/{}",
+                                format!("{} {}/{}", tr("Twitch low resource"), health.twitch_low_resource_ok, health.twitch_tabs),
                                 health.twitch_low_resource_ok, health.twitch_tabs
                             ))
                             .size(10.0)
@@ -1781,11 +1782,17 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .inner_margin(14.0)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                runtime_chip(ui, "Firefox", "Headless", GOOD);
-                runtime_chip(ui, "BiDi", "Active", GOOD);
-                runtime_chip(ui, tr("Profiles"), "2 isolated", MUTED);
-                runtime_chip(ui, "Stream chat", "First scan 30s · hourly", MUTED);
-                runtime_chip(ui, "UI repaint", "1 sec", MUTED);
+                runtime_chip(ui, tr("Firefox"), tr("Headless"), GOOD);
+                runtime_chip(ui, tr("BiDi"), tr("Active"), GOOD);
+                let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
+                runtime_chip(
+                    ui,
+                    tr("Profiles"),
+                    &format!("{} {}", enabled_profiles, tr("isolated")),
+                    MUTED,
+                );
+                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · hourly"), MUTED);
+                runtime_chip(ui, tr("UI repaint"), tr("1 sec"), MUTED);
             });
         });
 }
