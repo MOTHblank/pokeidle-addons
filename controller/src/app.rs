@@ -699,8 +699,17 @@ impl ControllerApp {
     }
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
+        // "Open Game" must use the controller-owned visible Firefox process.
+        // The old accounts::open_game path spawned an unmonitored headless
+        // process with the same profile, leaving it alive and locking the
+        // profile against later launches.
+        if let ProfileAction::Game = action {
+            self.set_browser_mode(profile, false);
+            return;
+        }
+
         let result = match action {
-            ProfileAction::Game => accounts::open_game(profile).map(|_| "Opened game".to_string()),
+            ProfileAction::Game => unreachable!("game action handled above"),
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Addons => accounts::open_addons(profile)
