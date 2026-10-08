@@ -2786,7 +2786,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(info) = &health.moth_watch {
+                    if health.moth_watch.is_some() {
                         if ui.button(tr("Refresh market")).clicked() {
                             moth_watch_send(
                                 monitor.as_ref(),
