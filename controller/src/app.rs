@@ -2940,7 +2940,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 json!({"t": "mothWatch.scan"})
                             );
                             app.set_status(
-                                format!("{} · Moth Watch scan requested", app.account_name(app.market_profile)),
+                                format!("{} · {}", app.account_name(app.market_profile), tr("Moth Watch scan requested")),
                                 false,
                             );
                         }
@@ -3115,7 +3115,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         json!({"t": "mothWatch.refreshBaseline"})
                     );
                     app.set_status(
-                        format!("{} · baseline refresh requested", app.account_name(app.market_profile)),
+                        format!("{} · {}", app.account_name(app.market_profile), tr("baseline refresh requested")),
                         false,
                     );
                 }
@@ -3126,9 +3126,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("Currency")).size(9.0).strong().color(DIM));
                 for (value, label) in [
-                    ("all", "All"),
-                    ("gold", "Coins"),
-                    ("orb", "Gems"),
+                    ("all", tr("All")),
+                    ("gold", tr("Coins")),
+                    ("orb", tr("Gems")),
                 ] {
                     let active = info.config.view_currency == value;
                     if ui
@@ -3153,9 +3153,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.add_space(6.0);
                 ui.label(RichText::new(tr("Type")).size(9.0).strong().color(DIM));
                 for (value, label) in [
-                    ("all", "All"),
-                    ("item", "Items"),
-                    ("pokemon", "Pokémon"),
+                    ("all", tr("All")),
+                    ("item", tr("Items")),
+                    ("pokemon", tr("Pokémon")),
                 ] {
                     let active = info.config.view_kind == value;
                     if ui
@@ -3181,23 +3181,23 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 ui.label(RichText::new(tr("Sort")).size(9.0).strong().color(DIM));
                 egui::ComboBox::from_id_salt("moth_watch_sort")
                     .selected_text(match info.config.view_sort.as_str() {
-                        "newest" => "Newest detected",
-                        "price-asc" => "Price: low → high",
-                        "price-desc" => "Price: high → low",
-                        "reference-desc" => "Reference: high → low",
-                        "quantity-desc" => "Quantity: high → low",
-                        "name" => "Name: A → Z",
-                        _ => "Biggest discount",
+                        "newest" => tr("Newest detected"),
+                        "price-asc" => tr("Price: low → high"),
+                        "price-desc" => tr("Price: high → low"),
+                        "reference-desc" => tr("Reference: high → low"),
+                        "quantity-desc" => tr("Quantity: high → low"),
+                        "name" => tr("Name: A → Z"),
+                        _ => tr("Biggest discount"),
                     })
                     .show_ui(ui, |ui| {
                         for (value, label) in [
-                            ("discount", "Biggest discount"),
-                            ("newest", "Newest detected"),
-                            ("price-asc", "Price: low → high"),
-                            ("price-desc", "Price: high → low"),
-                            ("reference-desc", "Reference: high → low"),
-                            ("quantity-desc", "Quantity: high → low"),
-                            ("name", "Name: A → Z"),
+                            ("discount", tr("Biggest discount")),
+                            ("newest", tr("Newest detected")),
+                            ("price-asc", tr("Price: low → high")),
+                            ("price-desc", tr("Price: high → low")),
+                            ("reference-desc", tr("Reference: high → low")),
+                            ("quantity-desc", tr("Quantity: high → low")),
+                            ("name", tr("Name: A → Z")),
                         ] {
                             if ui
                                 .selectable_label(info.config.view_sort == value, label)
@@ -3275,7 +3275,7 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                         format_number(total)
                                                     )
                                                 } else {
-                                                    "completed-sales reference".to_string()
+                                                    tr("completed-sales reference").to_string()
                                                 })
                                                 .size(8.0)
                                                 .color(MUTED),
@@ -3344,9 +3344,9 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             );
                                             ui.label(
                                                 RichText::new(if retained_seconds > 0 {
-                                                    format!("retained · {}s", retained_seconds)
+                                                    format!("{} · {}s", tr("retained"), retained_seconds)
                                                 } else {
-                                                    "available".to_string()
+                                                    tr("available").to_string()
                                                 })
                                                 .size(8.0)
                                                 .color(if retained_seconds > 0 { WARN } else { DIM }),
@@ -3355,13 +3355,13 @@ fn draw_market_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                             let button_text = if retained_seconds > 0 {
-                                                "Wait".to_string()
+                                                tr("Wait").to_string()
                                             } else if info.pending_buy.is_some() {
-                                                "Pending".to_string()
+                                                tr("Pending").to_string()
                                             } else if candidate.can_buy {
-                                                "Buy".to_string()
+                                                tr("Buy").to_string()
                                             } else {
-                                                "Balance".to_string()
+                                                tr("Balance").to_string()
                                             };
 
                                             if ui
