@@ -26,21 +26,6 @@ Instale estes componentes antes de configurar o controlador:
 4. **PokéIdle**  
    [Abrir PokéIdle](https://pokeidle.io/app)
 
-### Compilar o controlador
-
-O repositório atualmente distribui o código-fonte e também gera um executável Windows através do GitHub Actions.
-
-Para compilar localmente, instale o [Rust](https://www.rust-lang.org/tools/install) e execute:
-
-    cd controller
-    cargo build --release
-
-O executável será:
-
-    controller\target\release\moth-controller.exe
-
-O workflow de build está em [.github/workflows/build-controller.yml](.github/workflows/build-controller.yml).
-
 ## Primeira configuração
 
 Abra o **Moth Controller**.
@@ -377,18 +362,6 @@ The **Addons** button installs:
 **Moth Watch** is the native market view using market data received through the Bridge.
 
 The dashboard uses vertical scrolling rather than shrinking account cards. Wide windows use two columns; narrow windows use one.
-
-### Development
-
-From `controller`:
-
-    cargo build --release
-
-Release executable:
-
-    target\release\moth-controller.exe
-
-The Windows build workflow is available at [.github/workflows/build-controller.yml](.github/workflows/build-controller.yml).
 
 ---
 
