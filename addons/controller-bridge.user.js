@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.2.6
+// @version      1.2.7
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -209,10 +209,11 @@
         if (typeof NativeWebSocket !== 'function') return false;
 
         const Wrapped = new Proxy(NativeWebSocket, {
-            construct(target, args, newTarget) {
-                // Preserve native WebSocket construction semantics. A bridge
-                // failure must never prevent the game from opening its socket.
-                const ws = Reflect.construct(target, args, newTarget);
+            construct(target, args) {
+                // Native WebSocket must be constructed with its own constructor.
+                // Passing the Proxy as newTarget can break browser-native setup
+                // and stall the game's startup before the bridge can observe it.
+                const ws = Reflect.construct(target, args, target);
                 try {
                     attach(ws);
                 } catch (error) {
