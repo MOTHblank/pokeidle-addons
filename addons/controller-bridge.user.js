@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.2.3
+// @version      1.2.4
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -221,6 +221,10 @@
         } catch {
             return false;
         }
+    }
+
+    function bridgeSocket() {
+        return gameSocket || socket || null;
     }
 
     function send(payload) {
@@ -539,7 +543,8 @@
         version: 2,
         send,
         snapshot,
-        gameSnapshot
+        gameSnapshot,
+        socket: bridgeSocket
     };
 
     page.__mothControllerHeadless = true;
