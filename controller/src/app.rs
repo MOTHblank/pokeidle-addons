@@ -2337,7 +2337,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         }
                     });
 
-                ui.label(RichText::new(tr("Weak to")).size(9).strong().color(DIM));
+                ui.label(RichText::new(tr("Weak to")).size(9.0).strong().color(DIM));
                 let weakness_selected = app.atlas_filters.weakness.clone();
                 let weakness_label = if weakness_selected.is_empty() {
                     tr("Any weakness").to_string()
