@@ -99,15 +99,15 @@ fn close_window(hwnd: Hwnd) {
 
 #[cfg(windows)]
 fn remote_port_open(port: u16) -> bool {
-    TcpStream::connect_timeout(
-        &("127.0.0.1", port)
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut addrs| addrs.next())
-            .unwrap(),
-        Duration::from_millis(100),
-    )
-    .is_ok()
+    let Some(address) = ("127.0.0.1", port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+    else {
+        return false;
+    };
+
+    TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
 }
 
 #[derive(Clone, Debug)]
@@ -242,6 +242,28 @@ impl KickManager {
         {
             for profile in GameProfile::ALL {
                 let _ = self.close_all_managed_tabs(profile);
+
+                let (headless, browser_hwnd, browser_pid) = {
+                    let session = self.session_mut(profile);
+                    (session.headless, session.browser_hwnd, session.browser_pid)
+                };
+
+                if let Some(hwnd) = browser_hwnd {
+                    if window_is_valid(hwnd) {
+                        close_window(hwnd);
+                    }
+                }
+
+                if headless {
+                    if let Some(pid) = browser_pid {
+                        let _ = Command::new("taskkill")
+                            .arg("/PID")
+                            .arg(pid.to_string())
+                            .arg("/T")
+                            .arg("/F")
+                            .status();
+                    }
+                }
 
                 let session = self.session_mut(profile);
                 if let Some(socket) = session.socket.as_mut() {
