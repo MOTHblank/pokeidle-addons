@@ -741,7 +741,20 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
 
     let addon_ok = 7u8.saturating_sub(addon_missing.len() as u8);
 
-    let tabs = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
+    // The upstream game intentionally performs several large downloads and CPU-heavy
+    // catalog transforms before the login screen appears. Do not compete with that boot
+    // pipeline by evaluating every tab and serializing the full controller bridge snapshot
+    // while the loading overlay is visible.
+    let page_loading = page
+        .get("activity")
+        .and_then(Value::as_str)
+        == Some("Loading");
+
+    let tabs = if page_loading {
+        Vec::new()
+    } else {
+        build_tab_infos(&contexts, &mut session.socket, &mut session.next_id)
+    };
 
     let twitch_tabs = tabs
         .iter()
@@ -753,7 +766,18 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         .filter(|tab| tab.kind == "Twitch" && tab.low_resource)
         .count() as u8;
 
-    let runtime = probe_runtime_details(session, &game.id).unwrap_or_default();
+    let runtime = if page_loading {
+        RuntimeProbe::default()
+    } else {
+        probe_runtime_details(session, &game.id).unwrap_or_else(|error| {
+            logging::warn(&format!(
+                "controller bridge runtime probe skipped on port {}: {}",
+                session.game_context.as_deref().unwrap_or("unknown"),
+                error
+            ));
+            RuntimeProbe::default()
+        })
+    };
 
     Ok(Probe {
         url: page.get("url").and_then(Value::as_str).unwrap_or_default().to_string(),
