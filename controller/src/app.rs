@@ -1600,8 +1600,9 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
             egui::ScrollArea::vertical()
                 .id_salt("atlas_list")
                 .max_height(410.0)
-                .show(ui, |ui| {
-                    for hunt in hunts {
+                .show_rows(ui, 78.0, hunts.len(), |ui, row_range| {
+                    for row in row_range {
+                        let hunt = &hunts[row];
                         let current = !health.hunt_slug.is_empty()
                             && hunt.slug.eq_ignore_ascii_case(&health.hunt_slug);
 
@@ -1616,9 +1617,10 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         ui.label(RichText::new(&hunt.name).size(12.0).strong().color(TEXT));
                                         ui.label(
                                             RichText::new(format!(
-                                                "Lv {} · {} species",
+                                                "Lv {} · {} {}",
                                                 hunt.level,
-                                                hunt.species.len()
+                                                hunt.species.len(),
+                                                tr("species")
                                             ))
                                             .size(9.0)
                                             .color(MUTED),
@@ -1648,7 +1650,7 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                         ui.add_space(18.0);
 
-                                        let button = if current { "Current" } else { "Go" };
+                                        let button = if current { tr("Current") } else { tr("Go") };
                                         let clicked = ui.add_sized([70.0, 28.0], egui::Button::new(button)).clicked();
                                         if clicked && !current {
                                             let profile_label = app.atlas_profile.label();
@@ -1675,15 +1677,13 @@ fn draw_atlas_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     });
                                 });
                             });
-
-                        ui.add_space(7.0);
-                    }
-
-                    if health.hunts.is_empty() {
-                        ui.label(RichText::new("No hunt data yet. The controller bridge must receive the game's welcome message first.")
-                            .size(11.0).color(DIM));
                     }
                 });
+
+            if health.hunts.is_empty() {
+                ui.label(RichText::new(tr("No hunt data yet. The controller bridge must receive the game's welcome message first."))
+                    .size(11.0).color(DIM));
+            }
         });
     app.show_atlas = open;
 }
