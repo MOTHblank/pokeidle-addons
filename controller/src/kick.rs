@@ -103,6 +103,91 @@ pub struct KickStream {
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[cfg(windows)]
+type Hwnd = *mut std::ffi::c_void;
+
+#[cfg(windows)]
+const WM_CLOSE: u32 = 0x0010;
+
+#[cfg(windows)]
+unsafe extern "system" fn collect_window_callback(hwnd: Hwnd, lparam: isize) -> i32 {
+    unsafe {
+        let windows = &mut *(lparam as *mut Vec<Hwnd>);
+        if IsWindowVisible(hwnd) != 0 {
+            windows.push(hwnd);
+        }
+    }
+    1
+}
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn EnumWindows(
+        callback: Option<unsafe extern "system" fn(Hwnd, isize) -> i32>,
+        lparam: isize,
+    ) -> i32;
+    fn IsWindowVisible(hwnd: Hwnd) -> i32;
+    fn IsWindow(hwnd: Hwnd) -> i32;
+    fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max_count: i32) -> i32;
+    fn PostMessageW(hwnd: Hwnd, message: u32, wparam: usize, lparam: isize) -> i32;
+}
+
+#[cfg(windows)]
+fn visible_windows() -> Vec<Hwnd> {
+    let mut windows = Vec::new();
+    unsafe {
+        let _ = EnumWindows(
+            Some(collect_window_callback),
+            &mut windows as *mut _ as isize,
+        );
+    }
+    windows
+}
+
+#[cfg(windows)]
+fn window_is_valid(hwnd: Hwnd) -> bool {
+    unsafe { IsWindow(hwnd) != 0 && IsWindowVisible(hwnd) != 0 }
+}
+
+#[cfg(windows)]
+fn window_title(hwnd: Hwnd) -> String {
+    let mut buffer = [0u16; 1024];
+    let length = unsafe {
+        GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32)
+    };
+    String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+}
+
+#[cfg(windows)]
+fn window_snapshot() -> HashSet<Hwnd> {
+    visible_windows().into_iter().collect()
+}
+
+#[cfg(windows)]
+fn find_new_browser_window(before: &HashSet<Hwnd>) -> Option<Hwnd> {
+    let current = visible_windows();
+
+    current
+        .iter()
+        .copied()
+        .filter(|hwnd| !before.contains(hwnd) && window_is_valid(*hwnd))
+        .find(|hwnd| window_title(*hwnd).to_ascii_lowercase().contains("kick"))
+        .or_else(|| {
+            current
+                .into_iter()
+                .filter(|hwnd| !before.contains(hwnd) && window_is_valid(*hwnd))
+                .next()
+        })
+}
+
+#[cfg(windows)]
+fn close_window(hwnd: Hwnd) {
+    unsafe {
+        let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+}
+
+#[cfg(windows)]
 #[derive(Default)]
 struct KickSession {
     profile_dir: Option<PathBuf>,
@@ -137,6 +222,7 @@ impl KickManager {
         profile: GameProfile,
         streams: &[KickStream],
         state_available: bool,
+        headless: bool,
     ) {
         #[cfg(not(windows))]
         {
@@ -156,7 +242,7 @@ impl KickManager {
 
             self.configure(profile, &config);
 
-            if let Err(error) = self.sync_tabs(profile, streams, state_available) {
+            if let Err(error) = self.sync_tabs(profile, streams, state_available, headless) {
                 logging::warn(&format!(
                     "KICK tab sync failed for {}: {}",
                     profile.label(),
@@ -187,6 +273,36 @@ impl KickManager {
             self.configure(profile, &config);
 
             self.open_unmanaged_login(profile, url)
+        }
+    }
+
+    pub fn set_headless_test(&mut self, profile: GameProfile, enabled: bool) {
+        #[cfg(not(windows))]
+        {
+            let _ = (profile, enabled);
+        }
+
+        #[cfg(windows)]
+        {
+            let current = self.session_mut(profile).headless;
+            if current == enabled {
+                return;
+            }
+
+            if self.session_mut(profile).managed {
+                self.stop_managed_browser(profile);
+            }
+
+            let session = self.session_mut(profile);
+            session.headless = enabled;
+            session.managed = false;
+            session.socket = None;
+            session.tabs.clear();
+            session.pending.clear();
+            session.browser_pid = None;
+            session.browser_hwnd = None;
+            session.launch_started = None;
+            session.launch_windows = None;
         }
     }
 
@@ -250,82 +366,65 @@ impl KickManager {
         &mut self,
         profile: GameProfile,
         initial_url: &str,
+        headless: bool,
     ) -> Result<bool, String> {
         let (profile_dir, executable) = {
             let session = self.session_mut(profile);
             (
-                session
-                    .profile_dir
-                    .clone()
-                    .ok_or_else(|| "KICK browser profile is not initialized".to_string())?,
-                session
-                    .browser_executable
-                    .clone()
-                    .ok_or_else(|| "KICK Firefox executable is not initialized".to_string())?,
+                session.profile_dir.clone().ok_or_else(|| "KICK browser profile is not initialized".to_string())?,
+                session.browser_executable.clone().ok_or_else(|| "KICK Firefox executable is not initialized".to_string())?,
             )
         };
 
         std::fs::create_dir_all(&profile_dir)
             .map_err(|error| format!("could not create KICK profile: {error}"))?;
 
-        // Never decide that Firefox is gone from the PID returned by spawn().
-        // On Windows, Firefox may hand work off to another process while the
-        // browser window remains alive. We track the actual window instead.
         self.discover_browser_window(profile);
 
-        let launch_recent = self
-            .session_mut(profile)
+        let launch_recent = self.session_mut(profile)
             .launch_started
             .map(|started| started.elapsed() < Duration::from_secs(30))
             .unwrap_or(false);
 
-        // Recover an already-managed KICK browser after the controller itself
-        // restarts. The browser owns this port, so this is a stronger identity
-        // check than the Firefox launcher PID.
-        let port = 27801 + profile.index() as u16;
-        if self.session_mut(profile).socket.is_none() && !launch_recent {
-            if self.connect(profile, port).is_ok() {
-                return Ok(true);
-            }
-        }
-
         if self.session_mut(profile).managed {
+            if self.session_mut(profile).headless != headless {
+                return Ok(false);
+            }
+
             if self.session_mut(profile).socket.is_some() {
                 return Ok(true);
             }
 
-            // A managed Firefox already running with its BiDi endpoint is
-            // recoverable after controller reconnect/restart.
+            // A managed browser may have been left running while its controller
+            // socket was briefly unavailable. Reattach before considering a new launch.
             let port = 27801 + profile.index() as u16;
-            if self.connect(profile, port).is_ok() {
+            if !launch_recent && self.connect(profile, port).is_ok() {
                 return Ok(true);
             }
 
-            // Do not relaunch repeatedly while Firefox is still starting.
-            if self.session_browser_open(profile) || launch_recent {
+            if self.session_browser_exists(profile) || launch_recent {
                 return Ok(false);
             }
 
-            // The managed browser really disappeared. Start a fresh managed
-            // instance and rebuild its stream tabs.
             self.clear_browser_tracking(profile);
         } else {
-            // Uncontrolled login mode: leave the browser completely alone
-            // until the user closes its window.
-            if self.session_browser_open(profile) || launch_recent {
+            // Uncontrolled login browser: never touch it from the stream manager.
+            if self.session_browser_exists(profile) || launch_recent {
                 return Ok(false);
             }
-
-            // The user closed the authentication browser. From this point on
-            // the controller is allowed to take ownership of the profile.
         }
 
         let launch_windows = window_snapshot();
         let port = 27801 + profile.index() as u16;
 
-        let child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .arg("--no-remote")
-            .arg(format!("--remote-debugging-port={}", port))
+            .arg(format!("--remote-debugging-port={}", port));
+        if headless {
+            command.arg("--headless");
+        }
+        let child = command
             .arg("--profile")
             .arg(&profile_dir)
             .arg("--new-window")
@@ -336,10 +435,11 @@ impl KickManager {
             .spawn()
             .map_err(|error| format!("could not start managed KICK Firefox: {error}"))?;
 
-        let _ = child.id();
-
+        let pid = child.id();
         let session = self.session_mut(profile);
+        session.browser_pid = Some(pid);
         session.managed = true;
+        session.headless = headless;
         session.browser_hwnd = None;
         session.launch_started = Some(Instant::now());
         session.launch_windows = Some(launch_windows);
@@ -348,7 +448,8 @@ impl KickManager {
         session.pending.clear();
 
         logging::info(&format!(
-            "KICK starting one managed Firefox window for {}",
+            "KICK starting {} managed Firefox for {}",
+            if headless { "headless" } else { "visible" },
             profile.label()
         ));
 
@@ -357,30 +458,19 @@ impl KickManager {
 
     #[cfg(windows)]
     fn discover_browser_window(&mut self, profile: GameProfile) {
-        let before = {
-            let session = self.session_mut(profile);
-            session.launch_windows.clone()
-        };
+        let before = self.session_mut(profile).launch_windows.clone();
+        let Some(before) = before else { return; };
 
-        let Some(before) = before else {
-            return;
-        };
-
-        if let Some(hwnd) = find_new_kick_window(&before) {
+        if let Some(hwnd) = find_new_browser_window(&before) {
             let session = self.session_mut(profile);
             session.browser_hwnd = Some(hwnd);
             session.launch_windows = None;
             session.launch_started = None;
-
-            logging::info(&format!(
-                "KICK browser window established for {}",
-                profile.label()
-            ));
         }
     }
 
     #[cfg(windows)]
-    fn session_browser_open(&mut self, profile: GameProfile) -> bool {
+    fn session_browser_exists(&mut self, profile: GameProfile) -> bool {
         let session = self.session_mut(profile);
         if let Some(hwnd) = session.browser_hwnd {
             if window_is_valid(hwnd) {
@@ -394,6 +484,7 @@ impl KickManager {
     #[cfg(windows)]
     fn clear_browser_tracking(&mut self, profile: GameProfile) {
         let session = self.session_mut(profile);
+        session.browser_pid = None;
         session.browser_hwnd = None;
         session.launch_started = None;
         session.launch_windows = None;
@@ -402,7 +493,7 @@ impl KickManager {
         session.pending.clear();
     }
 
-    #[cfg(windows)]
+        #[cfg(windows)]
     fn open_unmanaged_login(
         &mut self,
         profile: GameProfile,
@@ -469,6 +560,7 @@ impl KickManager {
 
         let session = self.session_mut(profile);
         session.managed = false;
+        session.headless = false;
         session.browser_hwnd = None;
         session.launch_started = Some(Instant::now());
         session.launch_windows = Some(launch_windows);
@@ -483,6 +575,44 @@ impl KickManager {
 
         Ok(())
     }
+    #[cfg(windows)]
+    fn stop_managed_browser(&mut self, profile: GameProfile) {
+        let (headless, hwnd, pid) = {
+            let session = self.session_mut(profile);
+            (session.headless, session.browser_hwnd, session.browser_pid)
+        };
+
+        if let Some(socket) = self.session_mut(profile).socket.as_mut() {
+            let id = self.next_id(profile);
+            let _ = send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "session.end",
+                    "params": {}
+                }),
+            );
+        }
+
+        if headless {
+            if let Some(pid) = pid {
+                let _ = Command::new("taskkill")
+                    .arg("/PID").arg(pid.to_string())
+                    .arg("/T").arg("/F")
+                    .status();
+            }
+        } else if let Some(hwnd) = hwnd {
+            if window_is_valid(hwnd) {
+                close_window(hwnd);
+            }
+        }
+
+        self.clear_browser_tracking(profile);
+        let session = self.session_mut(profile);
+        session.managed = false;
+    }
+
     #[cfg(windows)]
     fn connect(&mut self, profile: GameProfile, port: u16) -> Result<(), String> {
         let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
@@ -520,6 +650,7 @@ impl KickManager {
         profile: GameProfile,
         streams: &[KickStream],
         state_available: bool,
+        headless: bool,
     ) -> Result<(), String> {
         let mut desired = HashMap::new();
 
@@ -550,7 +681,7 @@ impl KickManager {
             .cloned()
             .unwrap_or_else(|| "https://kick.com/".to_string());
 
-        if !self.ensure_browser(profile, &initial_url)? {
+        if !self.ensure_browser(profile, &initial_url, headless)? {
             return Ok(());
         }
 
