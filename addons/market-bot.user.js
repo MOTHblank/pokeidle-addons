@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.18
+// @version      0.1.19
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2352,7 +2352,7 @@
         );
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.18 loaded');
+        console.info('[Moth Watch] v0.1.19 loaded');
     }
 
     bootstrap();
