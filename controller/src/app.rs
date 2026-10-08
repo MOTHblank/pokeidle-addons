@@ -1493,7 +1493,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(tr("Open Profiles")).clicked() {
-                app.show_profiles = true;
+                app.show_accounts = true;
             }
             if ui.button(tr("Open Logs")).clicked() {
                 app.open_logs();
@@ -2351,7 +2351,7 @@ fn draw_profile_card(app: &mut ControllerApp, ui: &mut egui::Ui, profile: GamePr
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(self.account_name(profile))
+                    RichText::new(app.account_name(profile))
                         .font(FontId::proportional(15.0))
                         .strong()
                         .color(TEXT),
