@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.2.1
+// @version      1.2.2
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -29,6 +29,8 @@
     let state = null;
     let hunts = [];
     let catalog = [];
+    let serverTypeChart = null;
+    let huntAmplification = 1.5;
     const market = [];
     const events = [];
     const MAX_MARKET = 80;
@@ -97,12 +99,46 @@
         }
 
         if (message.t === 'welcome') {
-            hunts = Array.isArray(message.hunts) ? message.hunts.slice() : [];
+            if (Array.isArray(message.hunts)) {
+                hunts = copy(message.hunts) || [];
+            } else if (Array.isArray(message.estado?.hunts)) {
+                hunts = copy(message.estado.hunts) || [];
+            } else {
+                hunts = [];
+            }
+
+            if (
+                message.tabelaTipos &&
+                typeof message.tabelaTipos === 'object'
+            ) {
+                serverTypeChart = copy(message.tabelaTipos);
+            }
+
+            if (Number.isFinite(Number(message.ampliacaoHunt))) {
+                huntAmplification = Number(message.ampliacaoHunt);
+            }
+
             catalog = Array.isArray(message.mercado?.catalogo)
                 ? message.mercado.catalogo.slice()
                 : [];
             merge(message.estado, true);
             return;
+        }
+
+        if (Array.isArray(message.hunts)) {
+            hunts = copy(message.hunts) || hunts;
+        }
+
+        if (message.estado?.hunts && Array.isArray(message.estado.hunts)) {
+            hunts = copy(message.estado.hunts) || hunts;
+        }
+
+        if (message.tabelaTipos && typeof message.tabelaTipos === 'object') {
+            serverTypeChart = copy(message.tabelaTipos);
+        }
+
+        if (Number.isFinite(Number(message.ampliacaoHunt))) {
+            huntAmplification = Number(message.ampliacaoHunt);
         }
 
         if (message.t === 'estado') {
@@ -493,17 +529,9 @@
                 pokemons: copy(state?.pokemons) || [],
                 pokedex: copy(state?.pokedex) || {}
             },
-            hunts: hunts.map(h => ({
-                slug: String(h?.slug || ''),
-                name: String(h?.nome || h?.name || h?.slug || ''),
-                level: Number(h?.nivel ?? h?.level) || 0,
-                species: Array.isArray(h?.especies)
-                    ? h.especies.map(s => ({
-                        id: Number(s?.pokeId ?? s?.speciesId) || 0,
-                        name: String(s?.nome || s?.name || '')
-                    }))
-                    : []
-            }))
+            hunts: copy(hunts) || [],
+            serverTypeChart: copy(serverTypeChart),
+            huntAmplification
         };
     }
 
