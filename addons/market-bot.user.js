@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.15
+// @version      0.1.16
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2012,19 +2012,44 @@
         if (button) button.classList.remove('on');
     }
 
+    function findRmtNavigationButton() {
+        const candidates = qa(
+            'button, a, [role="button"], [role="tab"]'
+        );
+
+        return candidates.find(
+            element =>
+                normalize(element.textContent) ===
+                'rmt'
+        ) || null;
+    }
+
     function ensureUi() {
         injectStyle();
 
-        const top = q('.cm-topo');
+        const legacyTop = q('.cm-topo');
         const body = q('.cm-corpo');
-        if (!top || !body) return false;
+        const rmtNavigationButton =
+            legacyTop
+                ? null
+                : findRmtNavigationButton();
+        const top =
+            legacyTop ||
+            rmtNavigationButton?.closest('.cm-topo') ||
+            rmtNavigationButton?.parentElement;
+
+        if (!top) return false;
 
         let button = q('#moth-market-watch-tab');
         if (!button) {
             button = document.createElement('button');
             button.id = 'moth-market-watch-tab';
             button.type = 'button';
-            const shortcutHost = q('.cm-atalhos', top);
+            const shortcutHost =
+                q('.cm-atalhos', top) ||
+                rmtNavigationButton?.parentElement ||
+                top;
+
             if (shortcutHost) {
                 button.className = 'cm-acao cm-atalho';
                 button.innerHTML = '<i aria-hidden="true">M</i><span>Moth Watch</span>';
@@ -2032,7 +2057,9 @@
                 button.className = 'cm-acao';
                 button.textContent = 'Moth Watch';
             }
-            button.title = 'Underpriced listings and market sniper settings';
+
+            button.title =
+                'Underpriced listings and market sniper settings';
             button.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -2040,11 +2067,20 @@
                 else openWatch();
             });
 
-            (q('.cm-atalhos', top) || top).appendChild(button);
+            if (!button.parentElement) {
+                (
+                    q('.cm-atalhos', top) ||
+                    rmtNavigationButton?.parentElement ||
+                    top
+                ).appendChild(button);
+            }
         }
 
         let panel = q('#moth-market-watch-panel');
-        if (!panel) {
+        if (
+            !panel &&
+            body
+        ) {
             panel = document.createElement('section');
             panel.id = 'moth-market-watch-panel';
             body.appendChild(panel);
@@ -2204,7 +2240,7 @@
         }, 1000);
 
         const observer = new MutationObserver(() => {
-            if (q('.cm-topo')) ensureUi();
+            ensureUi();
         });
 
         observer.observe(
