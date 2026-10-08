@@ -99,6 +99,7 @@ pub struct MothWatchCandidate {
     pub active_reference_listings: u64,
     pub server_average: u64,
     pub can_buy: bool,
+    pub auto_buy_eligible: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -979,6 +980,7 @@ fn parse_moth_watch_snapshot(value: &Value) -> Option<MothWatchInfo> {
                 active_reference_listings: candidate.get("activeReferenceListings").and_then(Value::as_u64).unwrap_or(0),
                 server_average: candidate.get("serverAverage").and_then(Value::as_u64).unwrap_or(0),
                 can_buy: candidate.get("canBuy").and_then(Value::as_bool).unwrap_or(false),
+                auto_buy_eligible: candidate.get("autoBuyEligible").and_then(Value::as_bool).unwrap_or(false),
             }).collect::<Vec<_>>()
         })
         .unwrap_or_default();
