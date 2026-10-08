@@ -99,9 +99,6 @@ Captura automática configurável e estatísticas de captura.
 **Performance+**  
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
-**Upstream Scraper & Exporter**  
-Ferramenta para inspecionar e exportar dados do cliente upstream do PokéIdle. Não é necessária para jogar normalmente.
-
 **Live Stream Scanner**  
 Verifica os streams atuais e abre automaticamente os chats da Twitch e as páginas KICK necessárias. A primeira verificação acontece após aproximadamente 30 segundos e depois uma vez por hora.
 
@@ -336,7 +333,6 @@ The **Addons** button installs:
 
 - Auto Catch+
 - Performance+
-- Upstream Scraper & Exporter
 - Live Stream Scanner
 - Controller Bridge
 - Twitch + KICK Low Resource Mode
