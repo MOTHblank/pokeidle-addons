@@ -101,7 +101,7 @@ pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
 
     provision_profile(&config.profile_dir)?;
     logging::info(&format!(
-        "starting unmonitored headless Firefox: executable={} profile={} port={} url={}",
+        "starting unmonitored visible Firefox: executable={} profile={} port={} url={}",
         config.firefox_executable.display(),
         config.profile_dir.display(),
         config.remote_debug_port,
@@ -109,7 +109,6 @@ pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
     ));
 
     Command::new(&config.firefox_executable)
-        .arg("--headless")
         .arg("--no-remote")
         .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
         .arg("--profile")
