@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.2.1
+// @version      5.2.2
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -297,8 +297,71 @@
         restoreNativeOptimized
     );
 
-    // Apply before app.js/campo.mjs start using otimizadoLigado().
-    syncNativeOptimized();
+    // Upstream sprites.mjs paints active/team Pokémon into DOM canvases via
+    // a 220ms setInterval. CSS animation rules do not stop that canvas drawing.
+    // Let each sprite canvas paint one frame, then skip clear/draw operations
+    // while Performance is active; Full mode resumes the original calls.
+    const spriteCanvasDrawCount = new WeakMap();
+
+    function installPokemonSpriteFreezeHook() {
+        const contextType = page.CanvasRenderingContext2D;
+        const prototype = contextType?.prototype;
+        if (!prototype?.drawImage || !prototype?.clearRect) {
+            return false;
+        }
+        if (prototype.drawImage.__mothPerformanceSpriteFreeze) {
+            return true;
+        }
+
+        const originalDrawImage = prototype.drawImage;
+        const originalClearRect = prototype.clearRect;
+        const isActiveOrPartySprite = canvas =>
+            Boolean(canvas?.closest?.('#ativo-card, #time-corpo'));
+
+        const guardedDrawImage = function (...args) {
+            const canvas = this.canvas;
+            if (!isActiveOrPartySprite(canvas)) {
+                return originalDrawImage.apply(this, args);
+            }
+
+            const previousFrames = spriteCanvasDrawCount.get(canvas) || 0;
+            if (settings.enabled && currentMode === 'paused' && previousFrames > 0) {
+                return;
+            }
+
+            const result = originalDrawImage.apply(this, args);
+            spriteCanvasDrawCount.set(canvas, previousFrames + 1);
+            return result;
+        };
+        Object.defineProperty(guardedDrawImage, '__mothPerformanceSpriteFreeze', {
+            value: true
+        });
+
+        const guardedClearRect = function (...args) {
+            const canvas = this.canvas;
+            if (
+                isActiveOrPartySprite(canvas) &&
+                settings.enabled &&
+                currentMode === 'paused' &&
+                (spriteCanvasDrawCount.get(canvas) || 0) > 0
+            ) {
+                return;
+            }
+            return originalClearRect.apply(this, args);
+        };
+
+        try {
+            prototype.drawImage = guardedDrawImage;
+            prototype.clearRect = guardedClearRect;
+            return prototype.drawImage === guardedDrawImage &&
+                prototype.clearRect === guardedClearRect;
+        } catch (error) {
+            console.warn('[PokéIdle Performance+] Pokémon sprite freeze hook failed', error);
+            return false;
+        }
+    }
+
+    installPokemonSpriteFreezeHook();
 
     // ------------------------------------------------------------------
     // Upstream-aware requestAnimationFrame throttling
