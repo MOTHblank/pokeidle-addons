@@ -526,9 +526,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             ['Controller Bridge', (() => {
                 const bridge = window.__mothControllerBridgeV1;
                 return !!bridge
-                    && Number(bridge.version) >= 4
+                    && Number(bridge.version) >= 9
                     && typeof bridge.snapshot === 'function'
                     && typeof bridge.gameSnapshot === 'function'
+                    && typeof bridge.streamStateSnapshot === 'function'
                     && typeof bridge.socket === 'function';
             })()],
             ['Twitch Low Resource', exists('#moth-twitch-low-resource-addon-ready') || exists('#moth-twitch-low-resource-css')],
