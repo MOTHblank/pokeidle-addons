@@ -540,8 +540,6 @@
                 return publicId;
             }
 
-            const publicId = nextSyntheticRafId--;
-
             const pending = {
                 actualId: null,
                 cancelled: false
