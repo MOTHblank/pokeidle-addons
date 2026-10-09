@@ -4,6 +4,7 @@ use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
 use crate::monitor::{Health, MonitorHandle};
+use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
 use std::process::Child;
@@ -123,6 +124,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "WhatsApp / Pix" => "WhatsApp / Pix",
         "source code" => "código-fonte",
         "Credits" => "Créditos",
+        "Version" => "Versão",
+        "Update available" => "Atualização disponível",
         "MOTH" => "MOTH",
         "POKEIDLE" => "POKEIDLE",
         "WORKSPACE" => "ÁREA DE TRABALHO",
@@ -419,6 +422,7 @@ pub struct ControllerApp {
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
     tab_url_open: [bool; 4],
+    update_status: SharedUpdateStatus,
 }
 
 impl ControllerApp {
@@ -427,6 +431,7 @@ impl ControllerApp {
 
         logging::init();
         logging::info("controller UI initialized with egui/eframe");
+        let update_status = update::start_update_check();
 
         Self {
             games: std::array::from_fn(|i| {
@@ -439,6 +444,7 @@ impl ControllerApp {
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
             tab_url_open: [false; 4],
+            update_status,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -1023,7 +1029,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(12.0);
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.add_space(6.0);
-                draw_credits(ui);
+                draw_credits(ui, &app.update_status);
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(tr("Rust rewrite · Windows"))
@@ -2019,7 +2025,7 @@ fn game_selector(
     });
 }
 
-fn draw_credits(ui: &mut egui::Ui) {
+fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
     egui::Frame::new()
         .fill(PANEL_ALT)
         .stroke(Stroke::new(1.0, BORDER))
@@ -2063,6 +2069,40 @@ fn draw_credits(ui: &mut egui::Ui) {
                         "https://github.com/MOTHblank/pokeidle-addons",
                     );
                 });
+
+                ui.add_space(5.0);
+                ui.label(
+                    RichText::new(format!("{} {}", tr("Version"), env!("CARGO_PKG_VERSION")))
+                        .size(9.0)
+                        .color(DIM),
+                );
+
+                let latest_version = update_status
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.latest_version.clone());
+                if let Some(latest_version) = latest_version
+                    .filter(|latest| update::is_newer_version(latest, env!("CARGO_PKG_VERSION")))
+                {
+                    ui.add_space(4.0);
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(57, 255, 20))
+                        .corner_radius(5.0)
+                        .inner_margin(Margin::symmetric(6, 3))
+                        .show(ui, |ui| {
+                            ui.hyperlink_to(
+                                RichText::new(format!(
+                                    "{} · v{}",
+                                    tr("Update available"),
+                                    latest_version
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(Color32::from_rgb(12, 38, 10)),
+                                update::RELEASES_URL,
+                            );
+                        });
+                }
             });
         });
 }
