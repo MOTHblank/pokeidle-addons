@@ -621,7 +621,7 @@ impl KickManager {
     ) -> Result<(), String> {
         let mut desired = HashMap::new();
 
-        for stream in streams.iter().take(10) {
+        for stream in streams.iter() {
             let key = normalize(&stream.name);
             if key.is_empty() || !is_kick_url(&stream.url) {
                 continue;
