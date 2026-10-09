@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      2.1.0
-// @description  Keeps Twitch stream tabs at the lowest practical resource usage. Twitch chat pop-outs stay untouched.
+// @version      2.2.0
+// @description  Reduces Twitch stream and chat resource use while keeping live chat text and input available.
 // @match        https://www.twitch.tv/*
 // @match        https://www.twitch.tv/*/*
 // @match        https://player.twitch.tv/*
@@ -26,7 +26,7 @@
         isTwitch && /\/popout\/[^/]+\/chat(?:[/?]|$)/i.test(location.pathname);
 
     if (isTwitchChatPopout) {
-        console.info('[Moth] Twitch chat-only tab left untouched');
+        runChatLowResource();
         return;
     }
 
@@ -100,6 +100,43 @@
             });
 
         return videos[0] || null;
+    }
+
+
+    function runChatLowResource() {
+        const STYLE_ID = 'moth-twitch-low-resource-chat-css';
+        if (!document.getElementById(STYLE_ID)) {
+            const style = document.createElement('style');
+            style.id = STYLE_ID;
+            style.textContent = [
+                /* Defer painting off-screen lines while preserving live text and emotes. */
+                '[data-a-target="chat-line-message"], .chat-line__message {',
+                '  content-visibility: auto !important;',
+                '  contain: layout style paint !important;',
+                '  contain-intrinsic-size: auto 28px !important;',
+                '  animation: none !important;',
+                '  transition: none !important;',
+                '}',
+                '[data-a-target="chat-scrollable-area__message-container"], .chat-scrollable-area__message-container {',
+                '  contain: layout style !important;',
+                '  overflow-anchor: none !important;',
+                '}',
+                /* Decorative avatars cause extra image decoding and repainting. */
+                '[data-a-target="chat-avatar"], .chat-line__message-avatar, [data-a-target="user-avatar"] {',
+                '  display: none !important;',
+                '}',
+                /* Stop cosmetic motion only; keep controls, badges, and messages accessible. */
+                '[data-a-target="chat-room-component-layout"] *,',
+                '[data-a-target="chat-room-component-layout"] *::before,',
+                '[data-a-target="chat-room-component-layout"] *::after {',
+                '  scroll-behavior: auto !important;',
+                '  transition-duration: 0s !important;',
+                '}'
+            ].join(String.fromCharCode(10));
+            (document.head || document.documentElement)?.appendChild(style);
+        }
+
+        console.info('[Moth] Twitch chat low-resource mode active · live text/input preserved · off-screen lines paint lazily');
     }
 
     function runTwitch() {
