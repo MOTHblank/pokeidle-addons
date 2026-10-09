@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.2
+// @version      6.5.3
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -276,6 +276,7 @@
     const restockHealth = new Map();
     const restockSettledUntil = new Map();
     let itemCatalogLoadPromise = null;
+    let itemCatalogRetryTimer = null;
 
     let protocolGold = null;
     let activeProtocolSocket = null;
@@ -974,6 +975,28 @@
         }
     }
 
+    function syncBridgeMarketSnapshot() {
+        try {
+            const bridge = page.__mothControllerBridgeV1;
+            if (!bridge || typeof bridge.marketCatalogSnapshot !== 'function') {
+                return false;
+            }
+
+            const snapshot = bridge.marketCatalogSnapshot();
+            if (!snapshot?.ready) return false;
+
+            mergeBallCatalog(snapshot.balls);
+            mergeItemCatalog(snapshot.items);
+            if (snapshot.state) {
+                mergeProtocolState(snapshot.state);
+            }
+
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     function gameIsLoading() {
         const loading = q('#carregando');
         if (!loading) return false;
@@ -993,6 +1016,7 @@
             return Promise.resolve(null);
         }
 
+        if (itemCatalogRetryTimer !== null) return Promise.resolve(null);
         if (itemCatalogLoadPromise) return itemCatalogLoadPromise;
 
         itemCatalogLoadPromise = fetch('/assets/items.json', {
@@ -1007,6 +1031,18 @@
             })
             .then(payload => {
                 mergeItemCatalog(payload);
+                if (
+                    !restockPotionEntries().length &&
+                    !restockReviveEntries().length
+                ) {
+                    throw new Error('items catalog contains no restockable potion/revive entries');
+                }
+
+                if (itemCatalogRetryTimer !== null) {
+                    clearTimeout(itemCatalogRetryTimer);
+                    itemCatalogRetryTimer = null;
+                }
+
                 return itemCatalog;
             })
             .catch(error => {
@@ -1016,6 +1052,17 @@
                 );
 
                 itemCatalogLoadPromise = null;
+                if (itemCatalogRetryTimer === null) {
+                    itemCatalogRetryTimer = window.setTimeout(() => {
+                        itemCatalogRetryTimer = null;
+                        if (
+                            !restockPotionEntries().length &&
+                            !restockReviveEntries().length
+                        ) {
+                            ensureRestockItemCatalog();
+                        }
+                    }, 5000);
+                }
                 return null;
             })
             .finally(() => {
@@ -1485,6 +1532,16 @@
             return false;
         }
 
+        // Retry missing catalog data before the readiness guard; otherwise
+        // one failed initial fetch leaves the picker and restock permanently
+        // stuck on "Waiting for … catalog".
+        if (
+            !restockPotionEntries().length &&
+            !restockReviveEntries().length
+        ) {
+            ensureRestockItemCatalog();
+        }
+
         if (
             !socketReady() ||
             (!ballCatalog.size && !itemCatalog.size) ||
@@ -1492,10 +1549,6 @@
         ) {
             restockLastAction = 'waiting for server state';
             return false;
-        }
-
-        if (!itemCatalog.size) {
-            ensureRestockItemCatalog();
         }
 
         const now = Date.now();
@@ -1891,6 +1944,9 @@
                 return false;
             }
 
+            // The one-time welcome may have arrived before this addon attached
+            // to the bridge socket. Recover its catalog and latest state now.
+            syncBridgeMarketSnapshot();
             attachProtocolSocket(candidate);
             activeProtocolSocket = candidate;
             protocolHookInstalled = true;
@@ -1916,6 +1972,8 @@
     // Bridge may be installed by another userscript a moment later.
     installProtocolHook();
     setInterval(() => {
+        syncBridgeMarketSnapshot();
+
         const socket = activeProtocolSocket;
         if (!socket || socket.readyState !== page.WebSocket.OPEN) {
             adoptBridgeSocket();
@@ -3118,7 +3176,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.2 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.3 loaded');
     }
 
     if (document.readyState === 'loading') {
