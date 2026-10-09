@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.18
+// @version      1.7.19
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -320,6 +320,10 @@
             'filter.weakTo': 'Weak to',
             'filter.anyWeakness': 'Any weakness',
             'filter.weaknessLoading': 'Weakness: loading…',
+            'filter.matchAllWeaknesses': 'All selected',
+            'filter.matchAnyWeaknesses': 'Any selected',
+            'filter.weaknessSelected': '{count} selected',
+            'filter.clearWeakness': 'Clear selection',
             'filter.collection': 'Collection',
             'filter.caughtAndUncaught': 'Caught + uncaught',
             'filter.uncaughtOnly': 'Uncaught only',
@@ -470,6 +474,10 @@
             'filter.weakTo': 'Fraco contra',
             'filter.anyWeakness': 'Qualquer fraqueza',
             'filter.weaknessLoading': 'Fraqueza: carregando…',
+            'filter.matchAllWeaknesses': 'Todas selecionadas',
+            'filter.matchAnyWeaknesses': 'Qualquer selecionada',
+            'filter.weaknessSelected': '{count} selecionadas',
+            'filter.clearWeakness': 'Limpar seleção',
             'filter.collection': 'Coleção',
             'filter.caughtAndUncaught': 'Capturados + não capturados',
             'filter.uncaughtOnly': 'Só não capturados',
@@ -834,7 +842,8 @@
             minLevel: '',
             maxLevel: '',
             type: 'all',
-            weakness: 'all',
+            weakness: [],
+            weaknessMatchAll: false,
             availability: 'unlocked',
             captured: 'all',
             sort: 'xp',
@@ -858,6 +867,27 @@
                 ...defaults,
                 ...saved
             };
+
+            if (typeof next.weakness === 'string') {
+                next.weakness =
+                    next.weakness === 'all' || !next.weakness
+                        ? []
+                        : [next.weakness];
+            } else if (!Array.isArray(next.weakness)) {
+                next.weakness = [];
+            }
+
+            next.weakness = [
+                ...new Set(
+                    next.weakness
+                        .map(value => String(value).toUpperCase())
+                        .filter(value => STANDARD_TYPES.includes(value))
+                )
+            ];
+
+            next.weaknessMatchAll =
+                Boolean(next.weaknessMatchAll) &&
+                next.weakness.length > 1;
 
             const legacySorts = {
                 npc_desc: [
@@ -981,17 +1011,23 @@
         return Object.keys(
             defaults
         ).filter(
-            key =>
-                key !== 'sort' &&
-                key !== 'sortDirection' &&
-                String(
-                    state.filters[key] ??
-                    ''
-                ) !==
-                String(
-                    defaults[key] ??
-                    ''
-                )
+            key => {
+                if (key === 'sort' || key === 'sortDirection') {
+                    return false;
+                }
+
+                if (key === 'weakness') {
+                    return Array.isArray(state.filters.weakness) &&
+                        state.filters.weakness.length > 0;
+                }
+
+                if (key === 'weaknessMatchAll') {
+                    return Boolean(state.filters.weaknessMatchAll);
+                }
+
+                return String(state.filters[key] ?? '') !==
+                    String(defaults[key] ?? '');
+            }
         ).length;
     }
 
@@ -6803,7 +6839,14 @@
             state.filters.type;
 
         const weaknessFilter =
-            state.filters.weakness;
+            Array.isArray(state.filters.weakness)
+                ? state.filters.weakness
+                : state.filters.weakness && state.filters.weakness !== 'all'
+                    ? [state.filters.weakness]
+                    : [];
+
+        const weaknessMatchAll =
+            Boolean(state.filters.weaknessMatchAll);
 
         const captureFilter =
             state.filters.captured;
@@ -6852,18 +6895,22 @@
                 continue;
             }
 
-            if (
-                weaknessFilter !==
-                    'all' &&
-                (
-                    !types.length ||
-                    weaknessMultiplier(
-                        types,
-                        weaknessFilter
-                    ) <= 1
-                )
-            ) {
-                continue;
+            if (weaknessFilter.length) {
+                const matches = weaknessMatchAll
+                    ? weaknessFilter.every(
+                        attackType =>
+                            types.length &&
+                            weaknessMultiplier(types, attackType) > 1
+                    )
+                    : weaknessFilter.some(
+                        attackType =>
+                            types.length &&
+                            weaknessMultiplier(types, attackType) > 1
+                    );
+
+                if (!matches) {
+                    continue;
+                }
             }
 
             const hunt =
@@ -7445,6 +7492,40 @@
 
             .mha-search {
                 grid-column: span 2;
+            }
+
+            .mha-weakness-select {
+                height: 74px !important;
+                min-height: 74px;
+            }
+
+            .mha-weakness-mode {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+                margin-top: 2px;
+                font-size: 8px;
+            }
+
+            .mha-weakness-mode button {
+                width: auto;
+                min-width: 0;
+                height: 22px;
+                padding: 2px 6px;
+                font-size: 8px;
+                opacity: .65;
+            }
+
+            .mha-weakness-mode button.active {
+                opacity: 1;
+                font-weight: 700;
+                box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+            }
+
+            .mha-weakness-mode button:disabled {
+                opacity: .25;
+                cursor: default;
             }
 
             .mha-level-inputs {
@@ -8432,10 +8513,21 @@
                     <select data-mha-filter="type"></select>
                 </label>
 
-                <label class="mha-field">
+                <div class="mha-field">
                     <span>${tr('filter.weakTo')}</span>
-                    <select data-mha-filter="weakness"></select>
-                </label>
+                    <select
+                        data-mha-filter="weakness"
+                        class="mha-weakness-select"
+                        multiple
+                        size="4"
+                        aria-label="${escapeHtml(tr('filter.weakTo'))}"
+                    ></select>
+                    <div class="mha-weakness-mode">
+                        <button type="button" data-mha-weakness-mode="any">${tr('filter.matchAnyWeaknesses')}</button>
+                        <button type="button" data-mha-weakness-mode="all">${tr('filter.matchAllWeaknesses')}</button>
+                        <button type="button" data-mha-clear-weakness>${tr('filter.clearWeakness')}</button>
+                    </div>
+                </div>
 
                 <label class="mha-field">
                     <span>${tr('filter.collection')}</span>
@@ -8578,6 +8670,37 @@
             }
         );
 
+        const weaknessAnyMode =
+            q('[data-mha-weakness-mode="any"]', drawer);
+        const weaknessAllMode =
+            q('[data-mha-weakness-mode="all"]', drawer);
+
+        weaknessAnyMode?.addEventListener('click', () => {
+            if (state.filters.weaknessMatchAll) {
+                state.filters.weaknessMatchAll = false;
+                state.resultLimit = 120;
+                saveFilters();
+                renderDrawer();
+            }
+        });
+
+        weaknessAllMode?.addEventListener('click', () => {
+            if (state.filters.weakness.length > 1 && !state.filters.weaknessMatchAll) {
+                state.filters.weaknessMatchAll = true;
+                state.resultLimit = 120;
+                saveFilters();
+                renderDrawer();
+            }
+        });
+
+        q('[data-mha-clear-weakness]', drawer)?.addEventListener('click', () => {
+            state.filters.weakness = [];
+            state.filters.weaknessMatchAll = false;
+            state.resultLimit = 120;
+            saveFilters();
+            renderDrawer();
+        });
+
         for (
             const control of
             qa(
@@ -8601,14 +8724,22 @@
             control.addEventListener(
                 eventName,
                 () => {
-                    state.filters[
-                        key
-                    ] =
-                        control.value;
+                    if (key === 'weakness') {
+                        const selected =
+                            [...control.selectedOptions]
+                                .map(option => String(option.value).toUpperCase())
+                                .filter(value => STANDARD_TYPES.includes(value));
 
-                    state.resultLimit =
-                        120;
+                        state.filters.weakness = [...new Set(selected)];
 
+                        if (state.filters.weakness.length < 2) {
+                            state.filters.weaknessMatchAll = false;
+                        }
+                    } else {
+                        state.filters[key] = control.value;
+                    }
+
+                    state.resultLimit = 120;
                     saveFilters();
                     renderDrawer();
                 }
@@ -8745,33 +8876,42 @@
                 drawer
             );
 
-        const weakHtml =
-            selectOptions(
-                STANDARD_TYPES,
-                state.filters.weakness,
-                'all',
-                state.typeStatus ===
-                    'loading'
-                    ? tr(
-                        'filter.weaknessLoading'
-                    )
-                    : tr(
-                        'filter.anyWeakness'
-                    ),
-                typeLabel
-            );
+        const weaknessSelected =
+            Array.isArray(state.filters.weakness)
+                ? state.filters.weakness
+                : [];
 
-        if (
-            weakness.innerHTML !==
-            weakHtml
-        ) {
-            weakness.innerHTML =
-                weakHtml;
+        const weakHtml = STANDARD_TYPES
+            .map(value =>
+                '<option value="' + escapeHtml(value) + '">' +
+                escapeHtml(typeLabel(value)) + '</option>'
+            )
+            .join('');
+
+        if (weakness && weakness.innerHTML !== weakHtml) {
+            weakness.innerHTML = weakHtml;
         }
 
-        weakness.value =
-            state.filters.weakness;
+        if (weakness) {
+            for (const option of weakness.options) {
+                option.selected = weaknessSelected.includes(option.value);
+            }
+            weakness.title = weaknessSelected.length
+                ? tr('filter.weaknessSelected').replace('{count}', String(weaknessSelected.length))
+                : tr('filter.anyWeakness');
+        }
 
+        const weaknessAnyMode = q('[data-mha-weakness-mode="any"]', drawer);
+        const weaknessAllMode = q('[data-mha-weakness-mode="all"]', drawer);
+        const matchAll = Boolean(state.filters.weaknessMatchAll) && weaknessSelected.length > 1;
+
+        if (weaknessAnyMode) {
+            weaknessAnyMode.classList.toggle('active', !matchAll);
+        }
+        if (weaknessAllMode) {
+            weaknessAllMode.classList.toggle('active', matchAll);
+            weaknessAllMode.disabled = weaknessSelected.length < 2;
+        }
         for (
             const key of [
                 'availability',
@@ -8886,6 +9026,24 @@
                     )
                 )}</span></span>`;
 
+        const selectedWeaknesses =
+            Array.isArray(state.filters.weakness)
+                ? state.filters.weakness
+                : [];
+
+        const weaknessMarkup =
+            selectedWeaknesses
+                .map(attackType => {
+                    const multiplier = weaknessMultiplier(species.types, attackType);
+                    if (multiplier <= 1) {
+                        return '';
+                    }
+                    return '<span class="mha-matchup good mha-selected-weakness">' +
+                        escapeHtml(typeLabel(attackType)) + ' ' +
+                        escapeHtml(formatMultiplier(multiplier)) + '</span>';
+                })
+                .filter(Boolean)
+                .join('');
         const matchup =
             speciesMatchup(
                 species
@@ -9161,6 +9319,7 @@
                     ${marketMarkup}
                     ${matchupMarkup}
                     ${typeMarkup}
+                    ${weaknessMarkup}
                     ${capturedMarkup}
                 </div>
 
@@ -9914,15 +10073,16 @@
                     state.typesBySpecies.get(id) || []
                 );
 
-                const weakTo = types.length
-                    ? STANDARD_TYPES.filter(
-                        attackType =>
-                            weaknessMultiplier(
-                                types,
-                                attackType
-                            ) > 1
-                    )
+                const weaknessMultipliers = types.length
+                    ? STANDARD_TYPES
+                        .map(attackType => ({
+                            type: attackType,
+                            multiplier: weaknessMultiplier(types, attackType)
+                        }))
+                        .filter(entry => entry.multiplier > 1)
                     : [];
+
+                const weakTo = weaknessMultipliers.map(entry => entry.type);
 
                 const view = {
                     id,
@@ -9947,6 +10107,7 @@
                     ),
                     types,
                     weakTo,
+                    weaknessMultipliers,
                     captured: isCaptured(id),
                     captureCount: captureCount(id),
                     npcValue: Number(
@@ -10110,7 +10271,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.18 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.19 loaded'
         );
     }
 
