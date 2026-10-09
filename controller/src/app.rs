@@ -2069,27 +2069,44 @@ fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
 }
 
 fn bonus_chip(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::new()
-        .fill(ACCENT.linear_multiply(0.10))
-        .stroke(Stroke::new(1.0, ACCENT.linear_multiply(0.28)))
-        .corner_radius(7.0)
-        .inner_margin(Margin::symmetric(9, 6))
-        .show(ui, |ui| {
-            // Keep each bonus chip to one line. Wrapped labels can be allocated
-            // only the remaining width at the end of a row, causing one letter
-            // per line and extremely tall chips.
-            ui.add(
-                egui::Label::new(
-                    RichText::new(compact_text(text, 38))
-                        .size(10.0)
-                        .strong()
-                        .color(TEXT),
-                )
-                .truncate(),
-            );
-        });
-}
+    let display = compact_text(text, 38);
+    let measured = ui
+        .painter()
+        .layout_no_wrap(display.clone(), FontId::proportional(10.0), TEXT)
+        .size();
 
+    // Reserve the whole chip width before laying it out in a wrapping row.
+    // Otherwise egui can give a chip only the remaining few pixels in the row,
+    // causing each character to wrap vertically.
+    let max_width = (ui.max_rect().width() - 20.0).max(44.0);
+    let chip_width = (measured.x + 28.0).min(max_width);
+    let text_width = (chip_width - 20.0).max(24.0);
+    let chip_height = measured.y + 14.0;
+
+    ui.allocate_ui_with_layout(
+        egui::vec2(chip_width, chip_height),
+        Layout::left_to_right(Align::Center),
+        |chip_ui| {
+            egui::Frame::new()
+                .fill(ACCENT.linear_multiply(0.10))
+                .stroke(Stroke::new(1.0, ACCENT.linear_multiply(0.28)))
+                .corner_radius(7.0)
+                .inner_margin(Margin::symmetric(9, 6))
+                .show(chip_ui, |content_ui| {
+                    content_ui.add_sized(
+                        egui::vec2(text_width, measured.y),
+                        egui::Label::new(
+                            RichText::new(display)
+                                .size(10.0)
+                                .strong()
+                                .color(TEXT),
+                        )
+                        .truncate(),
+                    );
+                });
+        },
+    );
+}
 
 fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
