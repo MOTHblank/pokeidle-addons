@@ -96,6 +96,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
     }
 
     match en {
+        "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
@@ -408,6 +409,14 @@ impl GameSlot {
 }
 
 #[derive(Clone, Debug, Default)]
+struct IdleProgressTracker {
+    last_xp: Option<String>,
+    last_level: Option<u32>,
+    last_balls_used: Option<u32>,
+    unchanged_since: Option<Instant>,
+}
+
+#[derive(Clone, Debug, Default)]
 struct AccountSetup {
     profile_ready: bool,
     violentmonkey_installed: bool,
@@ -423,6 +432,7 @@ pub struct ControllerApp {
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
     tab_url_open: [bool; 4],
+    idle_progress: [IdleProgressTracker; 4],
     update_status: SharedUpdateStatus,
 }
 
@@ -445,6 +455,7 @@ impl ControllerApp {
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
             tab_url_open: [false; 4],
+            idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             update_status,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
@@ -511,6 +522,41 @@ impl ControllerApp {
                 slot.monitor = None;
             }
         }
+    }
+
+    fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
+        let tracker = &mut self.idle_progress[index];
+        let eligible = health.state == "Running"
+            && health.game_ready
+            && health.logged_in
+            && health.bridge_connected
+            && health.activity == "Hunting"
+            && !health.player_xp.is_empty();
+
+        if !eligible {
+            *tracker = IdleProgressTracker::default();
+            return false;
+        }
+
+        let xp = health.player_xp.clone();
+        let level = health.player_level;
+        let balls_used = health.autocatch_balls_used;
+        let changed = tracker.last_xp.as_ref() != Some(&xp)
+            || tracker.last_level != Some(level)
+            || tracker.last_balls_used != Some(balls_used);
+
+        if changed || tracker.unchanged_since.is_none() {
+            tracker.last_xp = Some(xp);
+            tracker.last_level = Some(level);
+            tracker.last_balls_used = Some(balls_used);
+            tracker.unchanged_since = Some(Instant::now());
+            return false;
+        }
+
+        tracker
+            .unchanged_since
+            .map(|since| since.elapsed() >= Duration::from_secs(5 * 60))
+            .unwrap_or(false)
     }
 
     fn set_status(&mut self, message: impl Into<String>, error: bool) {
@@ -1204,6 +1250,7 @@ fn draw_game_card(
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
+    let idle_warning = app.idle_warning_for(index, &health);
 
     egui::Frame::new()
         .fill(PANEL)
@@ -1271,6 +1318,16 @@ fn draw_game_card(
                     }
                 });
             });
+
+            if idle_warning {
+                ui.add_space(6.0);
+                ui.colored_label(
+                    WARN,
+                    RichText::new(tr("Idle warning: no EXP or Pokéballs used in 5 minutes"))
+                        .size(11.0)
+                        .strong(),
+                );
+            }
 
             ui.add_space(14.0);
 
