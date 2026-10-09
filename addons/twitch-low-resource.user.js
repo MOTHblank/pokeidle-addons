@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      2.2.0
+// @version      2.3.0
 // @description  Reduces Twitch stream and chat resource use while keeping live chat text and input available.
+// @match        https://pokeidle.io/app*
+// @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/*
 // @match        https://www.twitch.tv/*/*
 // @match        https://player.twitch.tv/*
@@ -20,6 +22,18 @@
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     const isTwitch = /(^|\.)twitch\.tv$/i.test(location.hostname);
+    const isPokéIdleApp = /(^|\.)pokeidle\.io$/i.test(location.hostname) && /^\/app(?:\/|$)/i.test(location.pathname);
+
+    // The controller checks the game page to confirm this userscript is enabled.
+    // This marker is separate from Twitch's live-mode CSS because the script is
+    // intentionally active on the game page only as an installation heartbeat.
+    if (isPokéIdleApp) {
+        const marker = document.createElement('meta');
+        marker.id = 'moth-twitch-low-resource-addon-ready';
+        marker.name = 'moth-twitch-low-resource-addon-ready';
+        (document.head || document.documentElement)?.appendChild(marker);
+        return;
+    }
 
     // Twitch popout chat is already the minimum viable Twitch surface.
     const isTwitchChatPopout =
