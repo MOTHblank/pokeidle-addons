@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.17
+// @version      1.7.18
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -376,10 +376,10 @@
             'hunt.current': 'Current hunt',
             'hunt.travel': 'Travel to this hunt',
             'hunt.measuredXp': 'measured {value} trainer XP/h',
-            'hunt.modeledXp': 'combat model {value} trainer XP/h',
-            'xp.waitingLead': 'Waiting for the active Pokémon before calculating trainer XP/hour.',
+            'hunt.modeledXp': 'model {value} trainer XP/h',
             'xp.lead': '{name} Lv {level} · lead · power {power}',
             'xp.warmStart': 'warm-started from nearest level',
+            'xp.baseline': 'upstream baseline model; personalized combat data will refine it',
             'xp.kills': '{count} kills',
             'xp.attacks': '{count} attacks',
             'xp.cadence': '{seconds}s attack cadence{detail}',
@@ -389,8 +389,6 @@
             'xp.hpSamples': '{count} HP samples',
             'xp.measuredHunt': '{count} measured hunt',
             'xp.measuredHunts': '{count} measured hunts',
-            'xp.calibrating': 'combat model calibrating',
-            'xp.learning': 'learning this lead Pokémon: waiting for real attack and kill events',
             'xp.killsPerHour': '{count} kills/h',
             'xp.pokemonPerHour': '{value} Pokémon XP/h',
             'xp.measuredShort': 'measured {value} XP/h',
@@ -528,10 +526,10 @@
             'hunt.current': 'Hunt atual',
             'hunt.travel': 'Ir para esta hunt',
             'hunt.measuredXp': 'medido {value} XP de treinador/h',
-            'hunt.modeledXp': 'modelo de combate {value} XP de treinador/h',
-            'xp.waitingLead': 'Aguardando o Pokémon ativo para calcular XP de treinador/hora.',
+            'hunt.modeledXp': 'modelo {value} XP de treinador/h',
             'xp.lead': '{name} Nv {level} · líder · poder {power}',
             'xp.warmStart': 'iniciado com dados do nível mais próximo',
+            'xp.baseline': 'modelo-base do jogo; dados reais de combate vão refiná-lo',
             'xp.kills': '{count} abates',
             'xp.attacks': '{count} ataques',
             'xp.cadence': '{seconds}s entre ataques{detail}',
@@ -541,8 +539,6 @@
             'xp.hpSamples': '{count} amostras de HP',
             'xp.measuredHunt': '{count} hunt medida',
             'xp.measuredHunts': '{count} hunts medidas',
-            'xp.calibrating': 'modelo de combate calibrando',
-            'xp.learning': 'aprendendo este Pokémon líder: aguardando ataques e abates reais',
             'xp.killsPerHour': '{count} abates/h',
             'xp.pokemonPerHour': '{value} XP de Pokémon/h',
             'xp.measuredShort': 'medido {value} XP/h',
@@ -754,6 +750,7 @@
         pokemons: new Map(),
         strongestPokemon: null,
         activePokemonId: null,
+        lastLeadPokemon: null,
 
         huntPerf: loadPerformance(),
 
@@ -1284,9 +1281,23 @@
                 )
             );
 
-        return (
+        const available =
             active ||
             state.strongestPokemon ||
+            null;
+
+        /*
+         * The game can briefly publish activeId=null between fights or while
+         * changing targets. Keep the last valid lead for recommendations
+         * instead of blanking the XP panel during that transient state.
+         */
+        if (available) {
+            state.lastLeadPokemon = available;
+        }
+
+        return (
+            available ||
+            state.lastLeadPokemon ||
             null
         );
     }
@@ -6090,29 +6101,55 @@
                 profile
             );
 
-        if (
-            !profile ||
-            !rawKillMs ||
-            rawKillMs <= 0
-        ) {
-            return remember({
-                value: null,
-                pokemonValue: null,
-                goldValue: null,
-                killsH: null,
-                killMs: null,
-                observed: false,
-                source:
-                    'learning',
-                samples: 0
-            });
-        }
+        /*
+         * Never hide recommendations while combat data is warming up. The
+         * upstream Hunt Analyser uses a stable baseline: 900 ms attack floor,
+         * 600 ms average movement, 2 s average move cooldown, and a 2.6 s
+         * wave pause spread across up to 16 spawns. Replace this baseline with
+         * the personalized combat model as soon as measured data is usable.
+         */
+        const hasPersonalizedModel =
+            Boolean(
+                profile &&
+                rawKillMs > 0
+            );
+
+        const species =
+            Array.isArray(hunt?.especies)
+                ? hunt.especies
+                : [];
+
+        const spawnPoints =
+            species.reduce(
+                (sum, row) =>
+                    sum +
+                    Math.max(
+                        1,
+                        Number(row?.pontos || 1)
+                    ),
+                0
+            ) || 1;
+
+        const mobsPerWave =
+            Math.max(
+                1,
+                Math.min(
+                    16,
+                    spawnPoints
+                )
+            );
+
+        const baselineKillMs =
+            UPSTREAM_GLOBAL_ATTACK_MS +
+            UPSTREAM_FALLBACK_MOVE_MS +
+            2000 +
+            UPSTREAM_WAVE_MS / mobsPerWave;
 
         const killMs =
-            rawKillMs *
-            predictionCalibration(
-                profile
-            );
+            hasPersonalizedModel
+                ? rawKillMs *
+                    predictionCalibration(profile)
+                : baselineKillMs;
 
         const killsH =
             3600000 /
@@ -6127,13 +6164,19 @@
         const trainerXpPerKill =
             Math.round(
                 baseXp *
-                profile.trainerXpMult
+                (
+                    Number(profile?.trainerXpMult) ||
+                    1
+                )
             );
 
         const pokemonXpPerKill =
             Math.round(
                 baseXp *
-                profile.pokemonXpMult
+                (
+                    Number(profile?.pokemonXpMult) ||
+                    1
+                )
             );
 
         return remember({
@@ -6149,9 +6192,11 @@
             observed:
                 false,
             source:
-                'combat model',
+                hasPersonalizedModel
+                    ? 'combat model'
+                    : 'baseline model',
             samples:
-                profile.moveSamples
+                Number(profile?.moveSamples) || 0
         });
     }
 
@@ -9033,7 +9078,7 @@
                     }
                 )
                 : tr(
-                    'xp.calibrating'
+                    'xp.baseline'
                 );
 
         const sub =
@@ -9143,17 +9188,6 @@
         const lead =
             leadPokemon();
 
-        if (!lead) {
-            host.innerHTML =
-                `<div class="mha-xp-note">${escapeHtml(
-                    tr(
-                        'xp.waitingLead'
-                    )
-                )}</div>`;
-
-            return;
-        }
-
         const ranked =
             rankedUnlockedHunts(
                 results
@@ -9195,25 +9229,28 @@
                 .length;
 
         const leadText =
-            tr(
-                'xp.lead',
-                {
-                    name:
-                        lead.nome ||
-                        'Pokémon',
-                    level:
-                        Number(
-                            lead.level ||
-                            0
-                        ),
-                    power:
-                        Math.round(
-                            pokemonPower(
-                                lead
+            lead
+                ? tr(
+                    'xp.lead',
+                    {
+                        name:
+                            lead.nome ||
+                            lead.name ||
+                            'Pokémon',
+                        level:
+                            Number(
+                                lead.level ||
+                                0
+                            ),
+                        power:
+                            Math.round(
+                                pokemonPower(
+                                    lead
+                                )
                             )
-                        )
-                }
-            );
+                    }
+                )
+                : tr('xp.baseline');
 
         const profileDetails =
             profile
@@ -9302,9 +9339,7 @@
                                     measuredHunts
                             }
                         )
-                        : tr(
-                            'xp.calibrating'
-                        )
+                        : tr('xp.baseline')
                 ) +
                   (
                       profileDetails
@@ -9312,9 +9347,7 @@
                             profileDetails
                           : ''
                   )
-                : tr(
-                    'xp.learning'
-                );
+                : tr('xp.baseline');
         const bestRows =
             usable
                 .slice(0, 5)
@@ -9411,7 +9444,8 @@
                         'xp.sectionSubtitle',
                         {
                             lead:
-                                lead.nome ||
+                                lead?.nome ||
+                                lead?.name ||
                                 'Pokémon'
                         }
                     )
@@ -10076,7 +10110,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.16 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.18 loaded'
         );
     }
 
