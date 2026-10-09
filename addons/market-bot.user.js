@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.29
+// @version      0.1.30
 // @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -22,6 +22,7 @@
     const BACKGROUND_MIN_GAP_MS = 3000;
     const RATE_LIMIT_BACKOFF_MS = 15000;
     const ITEM_MARKET_CAP_TTL_MS = 10 * 60 * 1000;
+    const ITEM_INVENTORY_COLLAPSED_KEY = 'moth-pokeidle-market-item-inventory-collapsed-v1';
 
     /*
      * Source-ready price table.
@@ -101,6 +102,9 @@
         lastScanAt: 0,
         scanTimer: null,
         watchOpen: false,
+        itemInventoryCollapsed: (() => {
+            try { return localStorage.getItem(ITEM_INVENTORY_COLLAPSED_KEY) === '1'; } catch { return false; }
+        })(),
         renderQueued: false,
         lastRenderAt: 0,
         baseline: loadBaseline(),
@@ -1994,8 +1998,15 @@
             '.moth-mw-sort{display:flex;align-items:center;gap:5px;margin-left:auto}',
             '.moth-mw-sort select{min-height:28px;padding:3px 7px;border:1px solid var(--mad-linha,#555);border-radius:5px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:10px}',
             '.moth-mw-inventory{margin:10px 0;padding:8px;border-radius:7px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
-            '.moth-mw-inventory-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:11px}',
+            '.moth-mw-inventory-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:11px}',
             '.moth-mw-inventory-head span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-inventory-toggle{display:inline-flex;align-items:center;gap:7px;border:0;padding:2px 4px;background:transparent;color:var(--sobre-mad,#eee);font:inherit;font-weight:700;cursor:pointer}',
+            '.moth-mw-inventory-toggle:hover{color:var(--sobre-mad,#fff);filter:brightness(1.2)}',
+            '.moth-mw-inventory-chevron{display:inline-block;min-width:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-inventory-body[hidden]{display:none!important}',
+            '.moth-mw-inventory-note{margin:0 0 7px;color:var(--sobre-mad-dim,#aaa);font-size:9px;line-height:1.4}',
+            '.moth-mw-list-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:12px 0 5px;font-size:11px}',
+            '.moth-mw-list-head span{font-size:9px;color:var(--sobre-mad-dim,#aaa)}',
             '.moth-mw-inventory-list{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:4px}',
             '.moth-mw-inventory-row{display:grid;grid-template-columns:minmax(130px,1.2fr) minmax(140px,1fr) minmax(140px,1fr);align-items:center;gap:8px;padding:5px;border-radius:5px;background:rgba(255,255,255,.025)}',
             '.moth-mw-inventory-name{display:flex;flex-direction:column;gap:2px;min-width:0}',
@@ -2127,14 +2138,23 @@
                 '</div>';
         }).join('');
 
+        const collapsed = Boolean(state.itemInventoryCollapsed);
+
         return '<div class="moth-mw-inventory">' +
-            '<div class="moth-mw-inventory-head"><b>Items for sale</b><span>' +
-            num(entries.length) + ' item types with active listings' +
+            '<div class="moth-mw-inventory-head">' +
+            '<button type="button" class="moth-mw-inventory-toggle" id="moth-mw-inventory-toggle" aria-expanded="' +
+            (!collapsed ? 'true' : 'false') + '">' +
+            '<span class="moth-mw-inventory-chevron" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span>' +
+            '<b>Items for sale</b></button>' +
+            '<span>' + num(entries.length) + ' item types with active listings' +
             (entries.length > 120 ? ' · showing first 120' : '') +
             '</span></div>' +
+            '<div class="moth-mw-inventory-body" id="moth-mw-inventory-body"' +
+            (collapsed ? ' hidden' : '') + '>' +
+            '<div class="moth-mw-inventory-note">This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.</div>' +
             '<div class="moth-mw-inventory-list">' +
             (rows || '<div class="moth-mw-empty">No market item inventory has arrived yet.</div>') +
-            '</div></div>';
+            '</div></div></div>';
     }
 
     function renderCandidate(candidate) {
@@ -2363,6 +2383,7 @@
             sortSelect() +
             '</div>' +
             renderItemInventory() +
+            '<div class="moth-mw-list-head"><b>Watch list</b><span>Filtered opportunities, not a complete copy of every market listing. Price sorting groups Coins and Gems separately.</span></div>' +
             '<div class="moth-mw-list">' +
             (candidates.length
                 ? candidates.map(renderCandidate).join('')
@@ -2373,6 +2394,26 @@
                 ? state.buyLog.map(row => '<div>' + new Date(row.at).toLocaleTimeString() + ' · ' + escapeHtml(row.text) + '</div>').join('')
                 : '<div>No purchases attempted this session.</div>') +
             '</div>';
+
+        const inventoryToggle = q('#moth-mw-inventory-toggle', panel);
+        inventoryToggle?.addEventListener('click', () => {
+            state.itemInventoryCollapsed = !state.itemInventoryCollapsed;
+            try {
+                localStorage.setItem(
+                    ITEM_INVENTORY_COLLAPSED_KEY,
+                    state.itemInventoryCollapsed ? '1' : '0'
+                );
+            } catch {}
+
+            const body = q('#moth-mw-inventory-body', panel);
+            if (body) body.hidden = state.itemInventoryCollapsed;
+            inventoryToggle.setAttribute(
+                'aria-expanded',
+                state.itemInventoryCollapsed ? 'false' : 'true'
+            );
+            const chevron = q('.moth-mw-inventory-chevron', inventoryToggle);
+            if (chevron) chevron.textContent = state.itemInventoryCollapsed ? '▸' : '▾';
+        });
 
         for (const input of qa('[data-moth-cfg]', panel)) {
             input.addEventListener('change', () => {
