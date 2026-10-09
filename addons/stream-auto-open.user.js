@@ -531,8 +531,13 @@
     }
 
     async function scheduledScan() {
+        const startedAt = Date.now();
         await runLiveScan('scheduled');
-        window.setTimeout(scheduledScan, LIVE_SCAN_INTERVAL_MS);
+        const elapsed = Date.now() - startedAt;
+        window.setTimeout(
+            scheduledScan,
+            Math.max(0, LIVE_SCAN_INTERVAL_MS - elapsed)
+        );
     }
 
     function ensureButton() {
