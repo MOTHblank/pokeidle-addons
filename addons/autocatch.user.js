@@ -2057,13 +2057,15 @@
     // WebSocket instance and Auto Catch only observes messages.
     installProtocolHook();
     setInterval(() => {
-        // If another addon wrapped the constructor first, re-check its marker
-        // and try the optional snapshot/socket recovery without requiring it.
+        // If another addon wrapped the constructor first, re-check its marker.
         installProtocolHook();
-        syncBridgeMarketSnapshot();
 
         const socket = activeProtocolSocket;
         if (!socket || socket.readyState !== page.WebSocket.OPEN) {
+            // Snapshot recovery is strictly a fallback for a missed welcome or
+            // disconnected socket; it must not overwrite the direct protocol
+            // stream while that stream is healthy.
+            syncBridgeMarketSnapshot();
             adoptBridgeSocket();
         }
     }, 1000);
