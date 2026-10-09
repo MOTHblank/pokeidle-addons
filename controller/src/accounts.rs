@@ -31,7 +31,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.16",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.17",
     ),
     (
         "Moth Watch",
