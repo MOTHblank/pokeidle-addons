@@ -684,9 +684,11 @@
             // live channels appear/disappear promptly without waiting for a
             // modal refresh or the next scheduled scan.
             const current = readLiveChannelsFromBridge();
-            if (current?.kickStateAvailable) {
+            if (current) {
+                // Clear stale entries if a refreshed complete state no longer
+                // contains KICK data; never keep channels from an old snapshot.
                 lastKickLive = current.kickLive;
-                lastKickStateAvailable = true;
+                lastKickStateAvailable = current.kickStateAvailable;
             }
 
             return {
