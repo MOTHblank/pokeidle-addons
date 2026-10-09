@@ -33,6 +33,7 @@ user_pref("network.prefetch-next", false);
 user_pref("network.predictor.enabled", false);
 user_pref("network.predictor.enable-prefetch", false);
 user_pref("network.dns.disablePrefetch", true);
+user_pref("layout.frame_rate", 15);
 
 // Firefox keeps preallocated content processes ready for future tabs.
 // Moth does not need that background process reserve.
@@ -180,6 +181,7 @@ fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
         ("browser.shell.checkDefaultBrowser", r#"user_pref("browser.shell.checkDefaultBrowser", false);"#),
         ("browser.urlbar.suggest.searches", r#"user_pref("browser.urlbar.suggest.searches", false);"#),
         ("network.dns.disablePrefetch", r#"user_pref("network.dns.disablePrefetch", true);"#),
+        ("layout.frame_rate", r#"user_pref("layout.frame_rate", 15);"#),
         ("dom.ipc.processPrelaunch.fission.number", r#"user_pref("dom.ipc.processPrelaunch.fission.number", 0);"#),
         ("dom.ipc.processCount", r#"user_pref("dom.ipc.processCount", 1);"#),
         ("media.autoplay.default", r#"user_pref("media.autoplay.default", 5);"#),
