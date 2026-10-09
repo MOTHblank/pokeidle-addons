@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.2.0
+// @version      5.2.1
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -28,11 +28,6 @@
     const nativeSetInterval = page.setInterval.bind(page);
     const nativeClearInterval = page.clearInterval.bind(page);
 
-    /*
-     * "Performance" is intentionally different from AFK/Capture Saver:
-     * it does NOT cap the scene. It removes superfluous UI/effects so the
-     * browser can spend as much of its frame budget as possible on campo.
-     */
     /*
      * Performance suspends campo.mjs map rendering entirely. This avoids
      * drawing a hidden scene and avoids native Economy mode, which disables
@@ -80,11 +75,6 @@
                 '{}'
             );
         } catch {}
-
-        // v3 called the adaptive-ish profile "balanced".
-        if (saved.profile === 'balanced') {
-            saved.profile = 'adaptive';
-        }
 
         if (!PROFILES[saved.profile]) {
             saved.profile = DEFAULTS.profile;
