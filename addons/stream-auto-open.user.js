@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.8.0
+// @version      6.9.0
 // @description  Opens current official Twitch chats as lightweight popouts and delegates KICK streams to the native normal-browser manager; refreshes every 2 minutes.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -188,61 +188,110 @@
         };
     }
 
+    function readLiveChannelsFromBridge() {
+        try {
+            const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const bridge = page.__mothControllerBridgeV1;
+            const snapshot = bridge && typeof bridge.snapshot === 'function'
+                ? bridge.snapshot()
+                : null;
+            const state = snapshot?.state;
+
+            if (!state) {
+                return null;
+            }
+
+            const twitchLives = state.twitch?.lives;
+            const kickOfficials = state.kick?.oficiais;
+            const hasTwitchState = Array.isArray(twitchLives);
+            const hasKickState = Array.isArray(kickOfficials);
+
+            if (!hasTwitchState && !hasKickState) {
+                return null;
+            }
+
+            const collected = new Map();
+
+            if (hasTwitchState) {
+                for (const channel of twitchLives) {
+                    const raw = channel?.login || channel?.name;
+                    const item = normalizeLiveLink('twitch', raw);
+                    if (item) {
+                        collected.set('twitch:' + text(item.name), item);
+                    }
+                }
+            }
+
+            const kickLive = [];
+            if (hasKickState) {
+                for (const channel of kickOfficials) {
+                    if (!channel?.aoVivo) {
+                        continue;
+                    }
+
+                    const raw = channel?.slug || channel?.login;
+                    const item = normalizeLiveLink('kick', raw);
+                    if (!item) {
+                        continue;
+                    }
+
+                    collected.set('kick:' + text(item.name), item);
+                    kickLive.push({
+                        name: item.name,
+                        url: item.url
+                    });
+                }
+            }
+
+            return {
+                live: collected,
+                kickStateAvailable: hasKickState,
+                kickLive
+            };
+        } catch (_) {
+            return null;
+        }
+    }
+
     async function collectOfficialLiveChannels() {
+        // Compatibility fallback for cases where the controller bridge has not
+        // attached yet. The normal path reads the game's current live state
+        // directly and does not need to open/close the bonus modals.
         const collected = new Map();
 
         const direct = collectLinks([
-            'a.tw-canal.ao-vivo[href]',
-            'a.kk-canal.ao-vivo[href]',
+            'a.tw-canal.ao-vivo[href*="twitch.tv/"]',
+            'a.kk-canal.ao-vivo[href*="kick.com/"]',
             '#tr-ativos .tr-ativo.twitch.tw-aovivo a[href*="twitch.tv/"]',
-            '#tr-ativos .tr-ativo.kick.kk-aovivo a[href*="kick.com/"]',
-            '#tw-corpo a.tw-canal.ao-vivo[href*="twitch.tv/"]',
-            '#kk-corpo a.kk-canal.ao-vivo[href*="kick.com/"]'
+            '#tr-ativos .tr-ativo.kick.kk-aovivo a[href*="kick.com/"]'
         ]);
 
         for (const item of direct) {
             collected.set(item.service + ':' + text(item.name), item);
         }
 
-        const targets = [
-            {
-                service: 'twitch',
-                row: '.tr-ativo.twitch.tw-aovivo',
-                body: '#tw-corpo',
-                links: '#tw-corpo a.tw-canal.ao-vivo[href*="twitch.tv/"]'
-            },
-            {
-                service: 'kick',
-                row: '.tr-ativo.kick.kk-aovivo',
-                body: '#kk-corpo',
-                links: '#kk-corpo a.kk-canal.ao-vivo[href*="kick.com/"]'
-            }
-        ];
+        const target = {
+            row: '.tr-ativo.twitch.tw-aovivo',
+            links: '#tw-corpo a.tw-canal.ao-vivo[href*="twitch.tv/"]'
+        };
+        const row = document.querySelector(target.row);
 
-        for (const target of targets) {
-            const row = document.querySelector(target.row);
-
-            if (!row) {
-                continue;
-            }
-
+        if (row) {
             try {
                 row.click();
             } catch (_) {
-                continue;
+                return collected;
             }
 
             for (let attempt = 0; attempt < 15; attempt += 1) {
-                const links = collectLinks([target.links]);
-
-                for (const item of links) {
+                for (const item of collectLinks([target.links])) {
                     collected.set(
                         item.service + ':' + text(item.name),
                         item
                     );
                 }
 
-                if (links.length) {
+                if ([...collected.values()].some(item => item.service === 'twitch')) {
                     break;
                 }
 
@@ -250,7 +299,6 @@
             }
 
             const close = document.getElementById('modal-fechar');
-
             if (close) {
                 try {
                     close.click();
@@ -425,29 +473,41 @@
                 };
             }
 
-            let live = new Map();
+            let bridgeData = readLiveChannelsFromBridge();
+            let live;
 
-            for (let attempt = 0; attempt < 10; attempt += 1) {
-                live = await collectOfficialLiveChannels();
+            if (bridgeData) {
+                // Fast path: game state already includes the current live
+                // channels, including KICK. No modal/UI scraping is needed.
+                live = bridgeData.live;
+            } else {
+                live = new Map();
+                for (let attempt = 0; attempt < 10; attempt += 1) {
+                    live = await collectOfficialLiveChannels();
 
-                if (live.size) {
-                    break;
+                    if (live.size) {
+                        break;
+                    }
+
+                    await sleep(500);
                 }
-
-                await sleep(500);
             }
 
             const rows = liveStateRows();
             const streamStateIsAvailable =
-                !!rows.twitch || !!rows.kick;
+                bridgeData !== null || !!rows.twitch || !!rows.kick;
 
-            lastKickStateAvailable = !!rows.kick;
-            lastKickLive = [...live.values()]
-                .filter(item => item.service === 'kick')
-                .map(item => ({
-                    name: item.name,
-                    url: item.url
-                }));
+            lastKickStateAvailable = bridgeData
+                ? bridgeData.kickStateAvailable
+                : !!rows.kick;
+            lastKickLive = bridgeData
+                ? bridgeData.kickLive
+                : [...live.values()]
+                    .filter(item => item.service === 'kick')
+                    .map(item => ({
+                        name: item.name,
+                        url: item.url
+                    }));
 
             const liveKeys = new Set();
             let opened = 0;
@@ -617,17 +677,27 @@
 
         const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     page.__mothKickScannerV1 = {
-        version: 1,
+        version: 2,
         snapshot() {
+            // The native monitor polls this API independently of the 2-minute
+            // Twitch tab scan. Read KICK's current game state on every poll so
+            // live channels appear/disappear promptly without waiting for a
+            // modal refresh or the next scheduled scan.
+            const current = readLiveChannelsFromBridge();
+            if (current?.kickStateAvailable) {
+                lastKickLive = current.kickLive;
+                lastKickStateAvailable = true;
+            }
+
             return {
                 live: lastKickLive.map(item => ({ ...item })),
                 stateAvailable: lastKickStateAvailable,
-                scannedAt: Number(document.getElementById(BUTTON_ID)?.dataset?.mothScanAt || 0) || 0
+                scannedAt: Date.now()
             };
         }
     };
 
-    console.info('[Moth] live stream scanner v6.8.0 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 2 minutes thereafter');
+    console.info('[Moth] live stream scanner v6.9.0 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 2 minutes thereafter');
     }
 
     start();
