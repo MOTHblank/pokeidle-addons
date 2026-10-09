@@ -866,6 +866,32 @@
         return { failures, delay };
     }
 
+    function expirePendingRestocks(now = Date.now()) {
+        let timedOut = null;
+
+        for (const [pendingKey, pending] of restockPending) {
+            if (now - pending.sentAt < RESTOCK_ACK_TIMEOUT_MS) continue;
+
+            restockPending.delete(pendingKey);
+            const health = markRestockTimedOut(pendingKey, now);
+            timedOut = { pending, health };
+        }
+
+        if (timedOut) {
+            restockLastAction =
+                (timedOut.pending.name || 'Purchase') +
+                ' confirmation timeout · ' +
+                (
+                    timedOut.health.failures >= 3
+                        ? '30s cooldown'
+                        : 'retry queued'
+                );
+            stats.status = 'Restock · ' + restockLastAction;
+        }
+
+        return timedOut;
+    }
+
     function confirmRestock(pendingKey, pending, bought = null) {
         if (!pending || restockPending.get(pendingKey) !== pending) {
             return false;
@@ -1527,8 +1553,14 @@
     }
 
     function maybeRestock() {
+        // Expire unacknowledged orders before readiness checks. If the game
+        // socket/catalog/gold snapshot disappears, the old order must not block
+        // all later restocking forever.
+        const now = Date.now();
+        const timedOut = expirePendingRestocks(now);
+
         if (!settings.enabled || !settings.restock?.enabled) {
-            restockLastAction = 'off';
+            if (!timedOut) restockLastAction = 'off';
             return false;
         }
 
@@ -1547,31 +1579,17 @@
             (!ballCatalog.size && !itemCatalog.size) ||
             protocolGold === null
         ) {
-            restockLastAction = 'waiting for server state';
+            if (!timedOut) {
+                restockLastAction = 'waiting for server state';
+            }
             return false;
         }
-
-        const now = Date.now();
-        let timedOut = null;
 
         /*
          * Only one purchase is allowed in flight. That makes purchase events
          * unambiguous and prevents several orders from being priced against
          * the same not-yet-updated gold snapshot.
          */
-        for (const [pendingKey, pending] of restockPending) {
-            if (now - pending.sentAt < RESTOCK_ACK_TIMEOUT_MS) continue;
-
-            restockPending.delete(pendingKey);
-            const health = markRestockTimedOut(
-                pendingKey,
-                now
-            );
-            timedOut = {
-                pending,
-                health
-            };
-        }
 
         if (restockPending.size) {
             const pending = restockPending.values().next().value;
@@ -3168,8 +3186,14 @@
         updateUI();
 
         setInterval(() => {
+            // Purchase acknowledgement expiry must keep running even when
+            // Auto Catch is paused and its main tick no longer runs.
+            if (restockPending.size) {
+                expirePendingRestocks(Date.now());
+            }
+
             installPanel();
-                scanTargets();
+            scanTargets();
             syncInventoryUsage();
             updateUI();
         }, 1000);
