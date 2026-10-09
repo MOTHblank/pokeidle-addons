@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.0.0
-// @description  Upstream-aware renderer and UI-loop optimizer with adaptive scene rate, native Optimized integration, and Auto Catch-safe throttling.
+// @version      5.1.0
+// @description  Performance+ page-wide animation-frame cap with measured scene rate, native Optimized integration, and Auto Catch-safe throttling.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -374,12 +374,7 @@
                 callback
             )
         ) {
-            return (
-                rafClassification.get(
-                    callback
-                ) ||
-                null
-            );
+            return rafClassification.get(callback);
         }
 
         const name =
@@ -424,10 +419,13 @@
                 true;
         }
 
+        /*
+         * Cap every page-world rAF callback, including loops not identified
+         * as campo/NPC. This limits JS-driven updates, not compositor refresh.
+         */
         rafClassification.set(
             callback,
-            kind ||
-                false
+            kind || 'page'
         );
 
         if (
@@ -529,7 +527,8 @@
             return 100;
         }
 
-        return 0;
+        // Cap other page animation loops to the selected Performance+ scene rate.
+        return intervalForMode(currentMode);
     }
 
     function installCampoHook() {
@@ -611,7 +610,10 @@
                                 'campo'
                         ) {
                             campoSkippedWindow++;
-                        } else {
+                        } else if (
+                            kind ===
+                                'npc'
+                        ) {
                             npcSkippedWindow++;
                         }
 
@@ -631,7 +633,10 @@
                             'campo'
                     ) {
                         campoRunsWindow++;
-                    } else {
+                    } else if (
+                        kind ===
+                            'npc'
+                    ) {
                         npcRunsWindow++;
                     }
 
@@ -1865,13 +1870,13 @@
 
             <div class="mpp-metrics">
                 <div class="mpp-metric">
-                    <b id="mpp-browser-fps">—</b>
-                    <span>browser FPS</span>
+                    <b id="mpp-performance-fps">—</b>
+                    <span>Performance+ FPS</span>
                 </div>
 
                 <div class="mpp-metric">
-                    <b id="mpp-scene-runs">0</b>
-                    <span>campo runs/s</span>
+                    <b id="mpp-scene-skips">0</b>
+                    <span>scene skipped/s</span>
                 </div>
 
                 <div class="mpp-metric">
@@ -2053,24 +2058,22 @@
 
             setText(
                 q(
-                    '#mpp-browser-fps',
+                    '#mpp-performance-fps',
                     panel
                 ),
                 document.hidden
                     ? 'BG'
-                    : Math.round(
-                        browserFps
-                    )
+                    : campoRunsPerSecond
             );
 
             setText(
                 q(
-                    '#mpp-scene-runs',
+                    '#mpp-scene-skips',
                     panel
                 ),
                 isNativeEconomy()
                     ? 'Eco'
-                    : campoRunsPerSecond
+                    : campoSkippedPerSecond
             );
 
             setText(
