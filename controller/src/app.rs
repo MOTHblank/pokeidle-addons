@@ -75,6 +75,7 @@ fn localize_status(message: String) -> String {
         ("Opened controller log · ", "Log do controlador aberto · "),
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened game", "Jogo aberto"),
+        (" opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.", " abriu o Firefox sem depuração remota para login do Google. Após entrar, feche essa janela e inicie esta conta normalmente pelo painel."),
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened ", "Aberto: "),
         ("Could not ", "Não foi possível "),
@@ -237,6 +238,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Account, browser and addon entry points" => "Pontos de acesso a contas, navegador e addons",
         "Close" => "Fechar",
         "Open Game" => "Abrir jogo",
+        "Google sign-in" => "Login do Google",
         "Addons" => "Addons",
         "Install Violentmonkey" => "Instalar Violentmonkey",
         "Violentmonkey" => "Violentmonkey",
@@ -698,6 +700,54 @@ impl ControllerApp {
         }
     }
 
+    fn open_game_for_google_sign_in(&mut self, profile: GameProfile) {
+        let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
+        self.refresh_processes();
+
+        // Google may reject authentication in a browser launched with a remote
+        // debugging/automation endpoint. Open a visible, non-debuggable window
+        // solely for the user to complete sign-in; normal launches keep BiDi.
+        if !self.stop_one(profile) {
+            return;
+        }
+
+        let config = match Config::for_profile(profile) {
+            Ok(config) => config,
+            Err(error) => {
+                self.set_status(format!("{}: {}", account_name, error), true);
+                return;
+            }
+        };
+
+        match firefox::launch_unmonitored(&config) {
+            Ok(child) => {
+                let pid = child.id();
+                self.games[index].child = Some(child);
+                self.games[index].monitor = None;
+                self.games[index].headless = false;
+                logging::info(&format!(
+                    "{} Firefox spawned for Google sign-in without remote debugging (PID {})",
+                    account_name, pid
+                ));
+                self.set_status(
+                    format!(
+                        "{} opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
+                        account_name
+                    ),
+                    false,
+                );
+            }
+            Err(error) => {
+                logging::error(&format!(
+                    "{} Google sign-in launch failed: {}",
+                    account_name, error
+                ));
+                self.set_status(format!("{}: {}", account_name, error), true);
+            }
+        }
+    }
+
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         // "Open Game" must use the controller-owned visible Firefox process.
         // The old accounts::open_game path spawned an unmonitored headless
@@ -710,6 +760,10 @@ impl ControllerApp {
 
         let result = match action {
             ProfileAction::Game => unreachable!("game action handled above"),
+            ProfileAction::GoogleSignIn => {
+                self.open_game_for_google_sign_in(profile);
+                return;
+            }
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Addons => accounts::open_addons(profile)
@@ -845,6 +899,7 @@ impl eframe::App for ControllerApp {
 #[derive(Clone, Copy)]
 enum ProfileAction {
     Game,
+    GoogleSignIn,
     Twitch,
     InstallViolentmonkey,
     Addons,
@@ -2213,6 +2268,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 ui.horizontal_wrapped(|ui| {
                                     profile_button(ui, tr("Open Game"), || {
                                         app.profile_action(profile, ProfileAction::Game)
+                                    });
+                                    profile_button(ui, tr("Google sign-in"), || {
+                                        app.profile_action(profile, ProfileAction::GoogleSignIn)
                                     });
                                     profile_button(ui, tr("Twitch"), || {
                                         app.profile_action(profile, ProfileAction::Twitch)
