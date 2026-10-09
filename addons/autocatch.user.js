@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.4
+// @version      6.5.5
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -277,6 +277,7 @@
     const restockSettledUntil = new Map();
     let itemCatalogLoadPromise = null;
     let itemCatalogRetryTimer = null;
+    let itemCatalogLoadingRetryTimer = null;
 
     let protocolGold = null;
     let activeProtocolSocket = null;
@@ -1040,7 +1041,12 @@
 
     function ensureRestockItemCatalog() {
         if (gameIsLoading()) {
-            window.setTimeout(ensureRestockItemCatalog, 750);
+            if (itemCatalogLoadingRetryTimer === null) {
+                itemCatalogLoadingRetryTimer = window.setTimeout(() => {
+                    itemCatalogLoadingRetryTimer = null;
+                    ensureRestockItemCatalog();
+                }, 750);
+            }
             return Promise.resolve(null);
         }
 
@@ -3272,7 +3278,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.4 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.5 loaded');
     }
 
     if (document.readyState === 'loading') {
