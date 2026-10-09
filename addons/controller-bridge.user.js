@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.7
+// @version      1.3.8
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -18,10 +18,11 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 9 &&
+        Number(existingBridge.version) >= 10 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function'
         && typeof existingBridge.streamStateSnapshot === 'function' &&
+        typeof existingBridge.marketCatalogSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
     ) {
         return;
@@ -31,6 +32,9 @@
     let gameSocket = null;
     let state = null;
     let statePokemon = new Map();
+    let marketCatalogReady = false;
+    let catalogoBolas = [];
+    let itensCompraveis = [];
     let hunts = [];
     let serverTypeChart = null;
     let huntAmplification = 1.5;
@@ -118,6 +122,16 @@
         }
 
         if (message.t === 'welcome') {
+            // Auto Catch+ can attach after this one-time frame, so retain shop
+            // catalogs instead of requiring every addon to be listening early.
+            catalogoBolas = Array.isArray(message.catalogoBolas)
+                ? copy(message.catalogoBolas) || []
+                : [];
+            itensCompraveis = Array.isArray(message.itensCompraveis)
+                ? copy(message.itensCompraveis) || []
+                : [];
+            marketCatalogReady = true;
+
             if (Array.isArray(message.hunts)) {
                 hunts = copy(message.hunts) || [];
             } else if (Array.isArray(message.estado?.hunts)) {
@@ -473,7 +487,19 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 9,
+        version: 10,
+        marketCatalogSnapshot() {
+            return {
+                ready: marketCatalogReady,
+                balls: copy(catalogoBolas) || [],
+                items: copy(itensCompraveis) || [],
+                state: state ? {
+                    gold: state.gold,
+                    balls: copy(state.balls),
+                    items: copy(state.items)
+                } : null
+            };
+        },
         streamStateSnapshot() {
             // Used by the stream scanner to read live state without calling
             // snapshot(), which itself queries the scanner diagnostics API.
