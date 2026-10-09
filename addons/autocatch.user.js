@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.3
+// @version      6.5.4
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -292,6 +292,8 @@
     let stats = freshStats();
     let protocolHookInstalled = false;
     const observedProtocolSockets = new WeakSet();
+    const AUTO_CATCH_WS_HOOK = '__mothAutoCatchProtocolHookV654';
+    let lastWebSocketHookTarget = null;
     let protocolSockets = 0;
     let protocolMessages = 0;
     let protocolCaptureSignals = 0;
@@ -1852,49 +1854,53 @@
         updateUI();
     }
 
-    function inspectIncomingProtocolMessage(data) {
+    function inspectIncomingProtocolMessage(data, sourceSocket = null) {
         protocolMessages++;
 
         const decoded = decodeProtocolData(data);
-
         if (!decoded) return;
 
+        // The welcome identifies the actual PokéIdle game socket and carries
+        // the shop's ball catalog. This is observed directly; Bridge is optional.
         if (decoded.t === 'welcome') {
-            mergeBallCatalog(
-                decoded.catalogoBolas
-            );
+            if (sourceSocket) activeProtocolSocket = sourceSocket;
+            protocolHookInstalled = true;
 
-            mergeItemCatalog(
-                decoded.itensCompraveis
-            );
-
-            mergeProtocolState(
-                decoded.estado
-            );
+            mergeBallCatalog(decoded.catalogoBolas);
+            mergeItemCatalog(decoded.itensCompraveis);
+            mergeProtocolState(decoded.estado);
 
             maybeRestock();
             updateUI();
-
             return;
+        }
+
+        // Ignore packets from auxiliary sockets once the game socket is known.
+        // If the page began before this hook could see the welcome, recover the
+        // active channel from a full state packet rather than remaining inert.
+        if (sourceSocket) {
+            if (
+                !activeProtocolSocket ||
+                activeProtocolSocket.readyState !== page.WebSocket.OPEN
+            ) {
+                if (decoded.t === 'estado' || decoded.t === 'batalha') {
+                    activeProtocolSocket = sourceSocket;
+                }
+            }
+
+            if (activeProtocolSocket && activeProtocolSocket !== sourceSocket) {
+                return;
+            }
         }
 
         if (decoded.t === 'estado') {
-            mergeProtocolState(
-                decoded.estado
-            );
-
+            mergeProtocolState(decoded.estado);
             maybeRestock();
             updateUI();
-
             return;
         }
 
-        if (
-            decoded.t !== 'batalha' ||
-            !Array.isArray(decoded.ev)
-        ) {
-            return;
-        }
+        if (decoded.t !== 'batalha' || !Array.isArray(decoded.ev)) return;
 
         for (const event of decoded.ev) {
             if (event?.k === 'bola') handleBallResult(event);
@@ -1913,36 +1919,30 @@
     function attachProtocolSocket(socket) {
         if (!socket || observedProtocolSockets.has(socket)) return false;
         observedProtocolSockets.add(socket);
-
         protocolSockets++;
-        activeProtocolSocket = socket;
 
         socket.addEventListener('close', () => {
             if (activeProtocolSocket === socket) {
                 activeProtocolSocket = null;
-                protocolHookInstalled = false;
             }
         });
 
         socket.addEventListener('message', event => {
             if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
                 event.data.text()
-                    .then(inspectIncomingProtocolMessage)
+                    .then(text => inspectIncomingProtocolMessage(text, socket))
                     .catch(() => {});
                 return;
             }
 
-            inspectIncomingProtocolMessage(event.data);
+            inspectIncomingProtocolMessage(event.data, socket);
         });
 
-        /*
-         * This is an instance-only send wrapper. Unlike replacing
-         * window.WebSocket, it cannot affect how the game constructs sockets.
-         */
+        // Observe outgoing traffic for diagnostics only; never block or modify it.
         try {
             const nativeSend = socket.send;
             socket.send = function(data) {
-                inspectOutgoingProtocolMessage(data);
+                try { inspectOutgoingProtocolMessage(data); } catch (_) {}
                 return nativeSend.call(this, data);
             };
         } catch {}
@@ -1951,6 +1951,8 @@
     }
 
     function adoptBridgeSocket() {
+        // Optional late-attach recovery. Auto Catch+ does not require Bridge:
+        // its own WebSocket constructor hook below observes the game's protocol.
         try {
             const bridge = page.__mothControllerBridgeV1;
             const candidate =
@@ -1962,11 +1964,14 @@
                 return false;
             }
 
-            // The one-time welcome may have arrived before this addon attached
-            // to the bridge socket. Recover its catalog and latest state now.
             syncBridgeMarketSnapshot();
             attachProtocolSocket(candidate);
-            activeProtocolSocket = candidate;
+            if (
+                !activeProtocolSocket ||
+                activeProtocolSocket.readyState !== page.WebSocket.OPEN
+            ) {
+                activeProtocolSocket = candidate;
+            }
             protocolHookInstalled = true;
             return true;
         } catch {
@@ -1975,21 +1980,86 @@
     }
 
     function installProtocolHook() {
-        if (adoptBridgeSocket()) return true;
+        let NativeWebSocket;
+        try {
+            NativeWebSocket = page.WebSocket;
+        } catch (_) {
+            return false;
+        }
 
-        /*
-         * Controller Bridge is the authoritative WebSocket observer. Do not
-         * install another global constructor hook here: the upstream client
-         * constructs its socket during boot, and another Proxy can interfere
-         * with that startup path.
-         */
-        protocolHookInstalled = false;
-        return false;
+        if (typeof NativeWebSocket !== 'function') {
+            protocolHookInstalled = false;
+            return false;
+        }
+
+        try {
+            // If Bridge or an earlier Auto Catch hook wrapped us, the marker
+            // passes through its Proxy. Avoid stacking duplicate wrappers.
+            if (NativeWebSocket[AUTO_CATCH_WS_HOOK] === true) {
+                protocolHookInstalled = true;
+                return true;
+            }
+        } catch (_) {}
+
+        if (NativeWebSocket === lastWebSocketHookTarget) {
+            return protocolHookInstalled;
+        }
+        lastWebSocketHookTarget = NativeWebSocket;
+
+        let WrappedWebSocket;
+        try {
+            WrappedWebSocket = new Proxy(NativeWebSocket, {
+                get(target, property, receiver) {
+                    if (property === AUTO_CATCH_WS_HOOK) return true;
+                    return Reflect.get(target, property, receiver);
+                },
+                construct(target, args, newTarget) {
+                    const socket = Reflect.construct(
+                        target,
+                        args,
+                        newTarget === WrappedWebSocket ? target : newTarget
+                    );
+
+                    // Instrumentation errors must never prevent the game socket
+                    // from being created or returned to PokéIdle.
+                    try {
+                        attachProtocolSocket(socket);
+                    } catch (error) {
+                        try {
+                            console.warn('[PokéIdle Auto Catch+] socket observation failed', error);
+                        } catch (_) {}
+                    }
+
+                    return socket;
+                }
+            });
+
+            page.WebSocket = WrappedWebSocket;
+            protocolHookInstalled =
+                page.WebSocket === WrappedWebSocket ||
+                page.WebSocket?.[AUTO_CATCH_WS_HOOK] === true;
+
+            if (!protocolHookInstalled) {
+                console.warn('[PokéIdle Auto Catch+] could not install independent WebSocket hook');
+            }
+        } catch (error) {
+            protocolHookInstalled = false;
+            try {
+                console.warn('[PokéIdle Auto Catch+] WebSocket hook failed; game startup will continue', error);
+            } catch (_) {}
+        }
+
+        return protocolHookInstalled;
     }
 
-    // Bridge may be installed by another userscript a moment later.
+    // Hook the native protocol independently of Controller Bridge. Both addons
+    // can wrap the same constructor safely; the game receives its original
+    // WebSocket instance and Auto Catch only observes messages.
     installProtocolHook();
     setInterval(() => {
+        // If another addon wrapped the constructor first, re-check its marker
+        // and try the optional snapshot/socket recovery without requiring it.
+        installProtocolHook();
         syncBridgeMarketSnapshot();
 
         const socket = activeProtocolSocket;
@@ -3200,7 +3270,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.3 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.4 loaded');
     }
 
     if (document.readyState === 'loading') {
