@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.5.0
+// @version      6.6.0
 // @description  Opens current official Twitch chats as lightweight popouts and delegates KICK streams to the native normal-browser manager; refreshes every 2 minutes.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -638,7 +638,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v6.5.0 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 2 minutes thereafter');
+    console.info('[Moth] live stream scanner v6.6.0 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 2 minutes thereafter');
     }
 
     start();
