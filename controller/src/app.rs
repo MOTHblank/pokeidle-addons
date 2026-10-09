@@ -413,7 +413,33 @@ struct IdleProgressTracker {
     last_xp: Option<String>,
     last_level: Option<u32>,
     last_balls_used: Option<u32>,
+    last_ball_stock: Vec<String>,
     unchanged_since: Option<Instant>,
+}
+
+fn ball_stock_decreased(previous: &[String], current: &[String]) -> bool {
+    previous.iter().any(|before| {
+        let Some((before_name, before_count)) = before.rsplit_once(' ') else {
+            return false;
+        };
+        let Ok(before_count) = before_count.parse::<u64>() else {
+            return false;
+        };
+
+        let after_count = current
+            .iter()
+            .find_map(|item| {
+                let (name, count) = item.rsplit_once(' ')?;
+                if name == before_name {
+                    count.parse::<u64>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        after_count < before_count
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -543,16 +569,19 @@ impl ControllerApp {
         let balls_used = health.autocatch_balls_used;
         let changed = tracker.last_xp.as_ref() != Some(&xp)
             || tracker.last_level != Some(level)
-            || tracker.last_balls_used != Some(balls_used);
+            || tracker.last_balls_used != Some(balls_used)
+            || ball_stock_decreased(&tracker.last_ball_stock, &health.ball_stock);
 
         if changed || tracker.unchanged_since.is_none() {
             tracker.last_xp = Some(xp);
             tracker.last_level = Some(level);
             tracker.last_balls_used = Some(balls_used);
+            tracker.last_ball_stock = health.ball_stock.clone();
             tracker.unchanged_since = Some(Instant::now());
             return false;
         }
 
+        tracker.last_ball_stock = health.ball_stock.clone();
         tracker
             .unchanged_since
             .map(|since| since.elapsed() >= Duration::from_secs(5 * 60))
