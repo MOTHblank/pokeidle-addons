@@ -878,7 +878,6 @@ fn probe_runtime_details(
                         url: url.to_string(),
                     })
                 })
-                .take(10)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
