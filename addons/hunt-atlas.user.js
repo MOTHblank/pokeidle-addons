@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.19
+// @version      1.7.20
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -7494,9 +7494,43 @@
                 grid-column: span 2;
             }
 
-            .mha-weakness-select {
-                height: 74px !important;
-                min-height: 74px;
+            .mha-weakness-options {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 4px;
+                max-height: 96px;
+                overflow-y: auto;
+                padding: 2px;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 5px;
+                background: rgba(0,0,0,.12);
+            }
+
+            .mha-weakness-option {
+                width: 100%;
+                min-width: 0;
+                min-height: 24px;
+                padding: 3px 4px;
+                border: 1px solid rgba(255,255,255,.10);
+                border-radius: 4px;
+                background: #211a1e;
+                color: #c8bec3;
+                font: inherit;
+                font-size: 8px;
+                line-height: 1.15;
+                cursor: pointer;
+            }
+
+            .mha-weakness-option.active {
+                border-color: rgba(102,176,255,.65);
+                background: rgba(102,176,255,.20);
+                color: #fff;
+                font-weight: 750;
+            }
+
+            .mha-weakness-option:focus-visible {
+                outline: 2px solid #66b0ff;
+                outline-offset: 1px;
             }
 
             .mha-weakness-mode {
@@ -8515,13 +8549,12 @@
 
                 <div class="mha-field">
                     <span>${tr('filter.weakTo')}</span>
-                    <select
-                        data-mha-filter="weakness"
-                        class="mha-weakness-select"
-                        multiple
-                        size="4"
+                    <div
+                        class="mha-weakness-options"
+                        data-mha-weakness-options
+                        role="group"
                         aria-label="${escapeHtml(tr('filter.weakTo'))}"
-                    ></select>
+                    ></div>
                     <div class="mha-weakness-mode">
                         <button type="button" data-mha-weakness-mode="any">${tr('filter.matchAnyWeaknesses')}</button>
                         <button type="button" data-mha-weakness-mode="all">${tr('filter.matchAllWeaknesses')}</button>
@@ -8691,6 +8724,39 @@
                 saveFilters();
                 renderDrawer();
             }
+        });
+
+        q('[data-mha-weakness-options]', drawer)?.addEventListener('click', event => {
+            const option = event.target.closest('[data-mha-weakness-option]');
+            if (!option) {
+                return;
+            }
+
+            const type = String(option.dataset.mhaWeaknessOption || '').toUpperCase();
+            if (!STANDARD_TYPES.includes(type)) {
+                return;
+            }
+
+            const selected = new Set(
+                Array.isArray(state.filters.weakness)
+                    ? state.filters.weakness
+                    : []
+            );
+
+            if (selected.has(type)) {
+                selected.delete(type);
+            } else {
+                selected.add(type);
+            }
+
+            state.filters.weakness = STANDARD_TYPES.filter(value => selected.has(value));
+            if (state.filters.weakness.length < 2) {
+                state.filters.weaknessMatchAll = false;
+            }
+
+            state.resultLimit = 120;
+            saveFilters();
+            renderDrawer();
         });
 
         q('[data-mha-clear-weakness]', drawer)?.addEventListener('click', () => {
@@ -8870,9 +8936,9 @@
         type.value =
             state.filters.type;
 
-        const weakness =
+        const weaknessOptions =
             q(
-                '[data-mha-filter="weakness"]',
+                '[data-mha-weakness-options]',
                 drawer
             );
 
@@ -8881,24 +8947,31 @@
                 ? state.filters.weakness
                 : [];
 
-        const weakHtml = STANDARD_TYPES
-            .map(value =>
-                '<option value="' + escapeHtml(value) + '">' +
-                escapeHtml(typeLabel(value)) + '</option>'
-            )
-            .join('');
+        const selectedWeaknessSet =
+            new Set(weaknessSelected);
 
-        if (weakness && weakness.innerHTML !== weakHtml) {
-            weakness.innerHTML = weakHtml;
+        const weaknessHtml =
+            STANDARD_TYPES
+                .map(value => {
+                    const selected = selectedWeaknessSet.has(value);
+                    return `<button
+                        type="button"
+                        class="mha-weakness-option${selected ? ' active' : ''}"
+                        data-mha-weakness-option="${escapeHtml(value)}"
+                        aria-pressed="${selected ? 'true' : 'false'}"
+                    >${escapeHtml(typeLabel(value))}</button>`;
+                })
+                .join('');
+
+        if (weaknessOptions && weaknessOptions.innerHTML !== weaknessHtml) {
+            weaknessOptions.innerHTML = weaknessHtml;
         }
 
-        if (weakness) {
-            for (const option of weakness.options) {
-                option.selected = weaknessSelected.includes(option.value);
-            }
-            weakness.title = weaknessSelected.length
-                ? tr('filter.weaknessSelected').replace('{count}', String(weaknessSelected.length))
-                : tr('filter.anyWeakness');
+        if (weaknessOptions) {
+            weaknessOptions.title =
+                weaknessSelected.length
+                    ? tr('filter.weaknessSelected').replace('{count}', String(weaknessSelected.length))
+                    : tr('filter.anyWeakness');
         }
 
         const weaknessAnyMode = q('[data-mha-weakness-mode="any"]', drawer);
@@ -10271,7 +10344,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.19 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.20 loaded'
         );
     }
 
