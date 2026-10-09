@@ -1119,7 +1119,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 fn multikick_link(streams: &[KickStream]) -> Option<(String, Vec<String>)> {
     let mut channels: Vec<String> = Vec::new();
 
-    for stream in streams.iter().take(10) {
+    for stream in streams.iter() {
         let url = stream.url.trim();
         let Some(path) = url
             .strip_prefix("https://kick.com/")
