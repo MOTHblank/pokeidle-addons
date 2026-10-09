@@ -531,7 +531,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
                     && typeof bridge.gameSnapshot === 'function'
                     && typeof bridge.socket === 'function';
             })()],
-            ['Twitch Low Resource', exists('#moth-twitch-low-resource-css')],
+            ['Twitch Low Resource', exists('#moth-twitch-low-resource-addon-ready') || exists('#moth-twitch-low-resource-css')],
             ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1],
             ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1']
         ];
@@ -778,7 +778,7 @@ fn build_tab_infos(
                 "id": id,
                 "method": "script.evaluate",
                 "params": {
-                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css') })",
+                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css') })",
                     "target": { "context": context.id },
                     "awaitPromise": false
                 }
