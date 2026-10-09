@@ -2075,7 +2075,18 @@ fn bonus_chip(ui: &mut egui::Ui, text: &str) {
         .corner_radius(7.0)
         .inner_margin(Margin::symmetric(9, 6))
         .show(ui, |ui| {
-            ui.label(RichText::new(compact_text(text, 38)).size(10.0).strong().color(TEXT));
+            // Keep each bonus chip to one line. Wrapped labels can be allocated
+            // only the remaining width at the end of a row, causing one letter
+            // per line and extremely tall chips.
+            ui.add(
+                egui::Label::new(
+                    RichText::new(compact_text(text, 38))
+                        .size(10.0)
+                        .strong()
+                        .color(TEXT),
+                )
+                .truncate(),
+            );
         });
 }
 
