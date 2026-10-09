@@ -7,7 +7,7 @@ use crate::monitor::{Health, MonitorHandle};
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
-use std::process::Child;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -288,9 +288,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No live KICK channels detected." => "Nenhum canal KICK ao vivo detectado.",
         "live KICK channels:" => "canais KICK ao vivo:",
         "Copy link" => "Copiar link",
-        "Open in regular browser" => "Abrir no navegador normal",
+        "Open live channels" => "Abrir canais ao vivo",
+        "Opened live KICK channels in the regular browser." => "Canais KICK ao vivo abertos no navegador normal.",
         "Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox." => "Link MultiKick copiado. Abra-o em um navegador normal, fora do Firefox gerenciado pelo controlador.",
-        "Copy this MultiKick link and open it in a regular browser, not inside the controller-managed Firefox." => "Copie este link MultiKick e abra-o em um navegador normal, não no Firefox gerenciado pelo controlador.",
+        "Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser." => "Copiar link copia uma URL do MultiKick; Abrir canais ao vivo abre cada transmissão individualmente no navegador normal.",
         "Dashboard · live health polling enabled" => "Painel · monitoramento de saúde ao vivo ativado",
         "Loaded" => "Carregado",
         "Auto Catch" => "Captura automática",
@@ -1078,6 +1079,51 @@ fn multikick_link(streams: &[KickStream]) -> Option<(String, Vec<String>)> {
     }
 }
 
+fn open_kick_channels_in_regular_browser(channels: &[String]) -> Result<usize, String> {
+    if channels.is_empty() {
+        return Err("no live KICK channels to open".to_string());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = channels;
+        return Err("opening live KICK channels is only supported on Windows".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let mut opened = 0usize;
+        for channel in channels {
+            if channel.is_empty()
+                || !channel
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+            {
+                continue;
+            }
+
+            let url = format!("https://kick.com/{channel}");
+            Command::new("explorer.exe")
+                .arg(&url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .spawn()
+                .map_err(|error| format!("could not open live KICK channel {channel}: {error}"))?;
+            opened += 1;
+        }
+
+        if opened == 0 {
+            Err("no valid live KICK channels to open".to_string())
+        } else {
+            Ok(opened)
+        }
+    }
+}
+
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
@@ -1459,10 +1505,18 @@ fn draw_game_card(
                                     false,
                                 );
                             }
-                            ui.hyperlink_to(tr("Open in regular browser"), link.clone());
+                            if ui.button(tr("Open live channels")).clicked() {
+                                match open_kick_channels_in_regular_browser(&channels) {
+                                    Ok(_) => app.set_status(
+                                        tr("Opened live KICK channels in the regular browser.").to_string(),
+                                        false,
+                                    ),
+                                    Err(error) => app.set_status(error, true),
+                                }
+                            }
                         });
                         ui.label(
-                            RichText::new(tr("Copy this MultiKick link and open it in a regular browser, not inside the controller-managed Firefox."))
+                            RichText::new(tr("Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser."))
                                 .size(9.0)
                                 .color(MUTED),
                         );
