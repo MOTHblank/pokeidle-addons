@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.6
+// @version      1.3.7
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -18,9 +18,10 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 8 &&
+        Number(existingBridge.version) >= 9 &&
         typeof existingBridge.snapshot === 'function' &&
-        typeof existingBridge.gameSnapshot === 'function' &&
+        typeof existingBridge.gameSnapshot === 'function'
+        && typeof existingBridge.streamStateSnapshot === 'function' &&
         typeof existingBridge.socket === 'function'
     ) {
         return;
@@ -472,7 +473,15 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 8,
+        version: 9,
+        streamStateSnapshot() {
+            // Used by the stream scanner to read live state without calling
+            // snapshot(), which itself queries the scanner diagnostics API.
+            return {
+                twitch: copy(state?.twitch),
+                kick: copy(state?.kick)
+            };
+        },
         snapshot,
         gameSnapshot,
         socket: bridgeSocket
