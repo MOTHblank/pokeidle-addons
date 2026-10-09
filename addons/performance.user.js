@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.1.0
-// @description  Performance+ page-wide animation-frame cap with measured scene rate, native Optimized integration, and Auto Catch-safe throttling.
+// @version      5.2.0
+// @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        unsafeWindow
@@ -33,6 +33,11 @@
      * it does NOT cap the scene. It removes superfluous UI/effects so the
      * browser can spend as much of its frame budget as possible on campo.
      */
+    /*
+     * Performance suspends campo.mjs map rendering entirely. This avoids
+     * drawing a hidden scene and avoids native Economy mode, which disables
+     * delivery of the defeated-Pokémon capture prompt.
+     */
     const PROFILES = {
         full: {
             label: 'Full',
@@ -46,49 +51,13 @@
             effects: 'full',
             nativeOptimized: false
         },
-        adaptive: {
-            label: 'Adaptive',
-            adaptive: true,
-            scene: '30',
-            idleScene: '5',
-            backgroundScene: '2',
-            idleSeconds: 45,
-            ui: 'lite',
-            idleUi: 'aggressive',
-            effects: 'reduced',
-            nativeOptimized: true
-        },
-        afk: {
-            label: 'AFK',
-            adaptive: false,
-            scene: '15',
-            idleScene: '5',
-            backgroundScene: '2',
-            idleSeconds: 20,
-            ui: 'lite',
-            idleUi: 'aggressive',
-            effects: 'reduced',
-            nativeOptimized: true
-        },
-        capture: {
-            label: 'Capture Saver',
-            adaptive: false,
-            scene: '10',
-            idleScene: '5',
-            backgroundScene: '2',
-            idleSeconds: 10,
-            ui: 'aggressive',
-            idleUi: 'aggressive',
-            effects: 'minimal',
-            nativeOptimized: true
-        },
         performance: {
             label: 'Performance',
             adaptive: false,
-            scene: '30',
-            idleScene: '15',
-            backgroundScene: '2',
-            idleSeconds: 30,
+            scene: 'paused',
+            idleScene: 'paused',
+            backgroundScene: 'paused',
+            idleSeconds: 0,
             ui: 'performance',
             idleUi: 'performance',
             effects: 'minimal',
@@ -98,7 +67,7 @@
 
     const DEFAULTS = {
         enabled: true,
-        profile: 'adaptive'
+        profile: 'performance'
     };
 
     function loadSettings() {
@@ -138,6 +107,7 @@
     const nativeRAF = page.requestAnimationFrame?.bind(page);
     const nativeCancelRAF = page.cancelAnimationFrame?.bind(page);
     const throttledRequests = new Map();
+    const suspendedCampoRequests = new Map();
     const rafState = new WeakMap();
     const rafClassification = new WeakMap();
     let nextSyntheticRafId = -1;
@@ -178,7 +148,7 @@
     }
 
     function profile() {
-        return PROFILES[settings.profile] || PROFILES.adaptive;
+        return PROFILES[settings.profile] || PROFILES.performance;
     }
 
     function isNativeEconomy() {
@@ -503,6 +473,10 @@
                 return 500;
             }
 
+            if (currentMode === 'paused') {
+                return 1000;
+            }
+
             if (
                 Date.now() <
                 interactionBoostUntil
@@ -527,7 +501,11 @@
             return 100;
         }
 
-        // Cap other page animation loops to the selected Performance+ scene rate.
+        // Keep decorative page-world loops nearly idle while the map renderer is paused.
+        if (currentMode === 'paused') {
+            return 1000;
+        }
+
         return intervalForMode(currentMode);
     }
 
@@ -554,8 +532,15 @@
                 );
             }
 
-            const publicId =
-                nextSyntheticRafId--;
+            const publicId = nextSyntheticRafId--;
+            if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
+                const pending = { actualId: null, cancelled: false, suspended: true };
+                throttledRequests.set(publicId, pending);
+                suspendedCampoRequests.set(publicId, callback);
+                return publicId;
+            }
+
+            const publicId = nextSyntheticRafId--;
 
             const pending = {
                 actualId: null,
@@ -571,6 +556,13 @@
                             publicId
                         );
 
+                        return;
+                    }
+
+                    if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
+                        pending.actualId = null;
+                        pending.suspended = true;
+                        suspendedCampoRequests.set(publicId, callback);
                         return;
                     }
 
@@ -689,6 +681,7 @@
                 );
             }
 
+            suspendedCampoRequests.delete(id);
             throttledRequests.delete(
                 id
             );
@@ -1344,19 +1337,12 @@
         }
 
         const p = profile();
-
-        if (p.adaptive) {
-            return adaptiveDecision;
-        }
-
         if (document.hidden) {
             return p.backgroundScene;
         }
-
         if (isIdleForProfile(p)) {
             return p.idleScene;
         }
-
         return p.scene;
     }
 
@@ -1366,25 +1352,7 @@
         }
 
         const p = profile();
-
-        if (
-            p.adaptive &&
-            !document.hidden &&
-            !isIdleForProfile(p)
-        ) {
-            /*
-             * Under heavy pressure we remove the log/chat render work too;
-             * when load recovers we return to the lighter move-HUD-only
-             * reduction.
-             */
-            return pressure === 'heavy'
-                ? 'aggressive'
-                : p.ui;
-        }
-
-        return isIdleForProfile(p)
-            ? p.idleUi
-            : p.ui;
+        return isIdleForProfile(p) ? p.idleUi : p.ui;
     }
 
     function syncChatPolicy() {
@@ -1396,9 +1364,32 @@
         restoreChat();
     }
 
+    function resumeSuspendedCampoLoops() {
+        const pendingRequests = [...suspendedCampoRequests.entries()];
+        suspendedCampoRequests.clear();
+
+        for (const [id, callback] of pendingRequests) {
+            const pending = throttledRequests.get(id);
+            if (!pending || pending.cancelled) {
+                continue;
+            }
+
+            throttledRequests.delete(id);
+            pending.cancelled = true;
+            try {
+                callback.call(page, performance.now());
+            } catch (error) {
+                console.warn('[PokéIdle Performance+] could not resume map renderer', error);
+            }
+        }
+    }
+
     function applyMode() {
-        currentMode =
-            calculateMode();
+        const previousMode = currentMode;
+        currentMode = calculateMode();
+        if (previousMode === 'paused' && currentMode !== 'paused') {
+            resumeSuspendedCampoLoops();
+        }
 
         currentUi =
             calculateUiLevel();
@@ -1568,6 +1559,38 @@
              */
             html.moth-ui-performance #ir-centro-conta {
                 display: none !important;
+            }
+
+            /* Map canvas and decorative overlays are hidden; the actual
+               campo.mjs rAF loop is suspended above, not merely made invisible. */
+            html.moth-ui-performance #palco > :not(#caidos) {
+                visibility: hidden !important;
+                pointer-events: none !important;
+            }
+
+            html.moth-ui-performance #palco {
+                background: transparent !important;
+            }
+
+            /* Capture is the sole scene surface kept interactive. */
+            html.moth-ui-performance #caidos:not(.hidden),
+            html.moth-ui-performance #caidos:not(.hidden) * {
+                visibility: visible !important;
+                pointer-events: auto !important;
+            }
+
+            html.moth-ui-performance #p-chat {
+                display: none !important;
+            }
+
+            /* Freeze CSS-driven animations for active and party Pokémon. */
+            html.moth-ui-performance :is(#ativo-card, #time-corpo),
+            html.moth-ui-performance :is(#ativo-card, #time-corpo) *,
+            html.moth-ui-performance :is(#ativo-card, #time-corpo) *::before,
+            html.moth-ui-performance :is(#ativo-card, #time-corpo) *::after {
+                animation-play-state: paused !important;
+                animation-duration: 0s !important;
+                transition: none !important;
             }
 
             html.moth-perf-reduced :is(
@@ -1895,9 +1918,6 @@
 
                 <select id="mpp-profile">
                     <option value="full">Full</option>
-                    <option value="adaptive">Adaptive</option>
-                    <option value="afk">AFK</option>
-                    <option value="capture">Capture Saver</option>
                     <option value="performance">Performance</option>
                 </select>
             </div>
@@ -2063,7 +2083,9 @@
                 ),
                 document.hidden
                     ? 'BG'
-                    : campoRunsPerSecond
+                    : currentMode === 'paused'
+                        ? 'Paused'
+                        : campoRunsPerSecond
             );
 
             setText(
@@ -2073,7 +2095,9 @@
                 ),
                 isNativeEconomy()
                     ? 'Eco'
-                    : campoSkippedPerSecond
+                    : currentMode === 'paused'
+                        ? 'Paused'
+                        : campoSkippedPerSecond
             );
 
             setText(
@@ -2122,7 +2146,7 @@
                 'performance'
             ) {
                 statusText =
-                    'Performance: 30fps active · 15fps idle · native Optimized · hot UI timers throttled · core controls preserved.';
+                    'Performance: map renderer paused · capture prompt preserved · chat hidden · party/active animations frozen · native Optimized.';
             } else if (
                 profile().adaptive
             ) {
