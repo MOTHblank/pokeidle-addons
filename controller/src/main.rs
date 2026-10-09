@@ -7,6 +7,7 @@ mod kick;
 mod firefox;
 mod monitor;
 mod logging;
+mod update;
 
 fn main() {
     if let Err(error) = app::run() {
