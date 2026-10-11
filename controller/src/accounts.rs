@@ -87,12 +87,6 @@ pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
     Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
 }
 
-pub fn open_game(profile: GameProfile) -> Result<(), String> {
-    let config = Config::for_profile(profile)?;
-    let _ = firefox::launch_unmonitored(&config)?;
-    Ok(())
-}
-
 pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
     if !violentmonkey_installed(profile)? {
         return Err(format!(
