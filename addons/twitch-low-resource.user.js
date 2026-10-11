@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      2.3.0
-// @description  Reduces Twitch stream and chat resource use while keeping live chat text and input available.
+// @version      3.0.0
+// @description  Aggressively reduces Twitch popout-chat work while keeping its Twitch connection alive.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/*
@@ -12,7 +12,7 @@
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // ==/UserScript==
 
@@ -24,14 +24,182 @@
     const isTwitch = /(^|\.)twitch\.tv$/i.test(location.hostname);
     const isPokéIdleApp = /(^|\.)pokeidle\.io$/i.test(location.hostname) && /^\/app(?:\/|$)/i.test(location.pathname);
 
+    /*
+     * Popout chat does not need to display or process messages for this setup.
+     * Filter incoming IRC chat lines before Twitch's UI listeners see them, while
+     * passing PING/keepalive, connection, room-state, and moderation events through.
+     */
+    function isTwitchIrcSocket(socket) {
+        try {
+            return new URL(socket.url, location.href).hostname.toLowerCase() === 'irc-ws.chat.twitch.tv';
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function filterIrcChatPayload(payload) {
+        if (typeof payload !== 'string') {
+            return { changed: false, drop: false, data: payload };
+        }
+
+        const separator = payload.includes('\r\n') ? '\r\n' : payload.includes('\n') ? '\n' : '\r';
+        const lines = payload.split(/\r\n|\n|\r/);
+        const kept = lines.filter(line => !/(?:^|\s)(?:PRIVMSG|USERNOTICE)\s+#/i.test(line));
+
+        if (kept.length === lines.length) {
+            return { changed: false, drop: false, data: payload };
+        }
+
+        const data = kept.join(separator);
+        return { changed: true, drop: !data.trim(), data };
+    }
+
+    function installChatMessageFilter() {
+        const NativeWebSocket = window.WebSocket;
+        if (!NativeWebSocket || NativeWebSocket.__mothTwitchChatFiltered) {
+            return false;
+        }
+
+        const nativeOnMessage = Object.getOwnPropertyDescriptor(NativeWebSocket.prototype, 'onmessage');
+        const listenerWrappers = new WeakMap();
+        const onMessageHandlers = new WeakMap();
+        const filteredEvents = new WeakMap();
+
+        function filterEvent(event) {
+            let result = filteredEvents.get(event);
+            if (result) return result;
+
+            result = filterIrcChatPayload(event?.data);
+            filteredEvents.set(event, result);
+            if (result.changed && !result.drop) {
+                try {
+                    Object.defineProperty(event, 'data', {
+                        configurable: true,
+                        get: () => result.data
+                    });
+                } catch (_) {
+                    // A synthetic filtered MessageEvent is used as a fallback below.
+                }
+            }
+            return result;
+        }
+
+        function deliverFiltered(socket, listener, thisArg, event) {
+            if (!isTwitchIrcSocket(socket)) {
+                return typeof listener === 'function'
+                    ? listener.call(thisArg, event)
+                    : listener.handleEvent.call(listener, event);
+            }
+
+            const result = filterEvent(event);
+            if (result.drop) return;
+
+            let deliveredEvent = event;
+            if (result.changed && event.data !== result.data) {
+                try {
+                    Object.defineProperty(event, 'data', {
+                        configurable: true,
+                        get: () => result.data
+                    });
+                } catch (_) {
+                    deliveredEvent = new MessageEvent('message', {
+                        data: result.data,
+                        origin: event.origin,
+                        lastEventId: event.lastEventId,
+                        bubbles: event.bubbles,
+                        cancelable: event.cancelable
+                    });
+                }
+            }
+
+            return typeof listener === 'function'
+                ? listener.call(thisArg, deliveredEvent)
+                : listener.handleEvent.call(listener, deliveredEvent);
+        }
+
+        function getWrapper(socket, listener) {
+            if (!listener || (typeof listener !== 'function' && typeof listener.handleEvent !== 'function')) {
+                return listener;
+            }
+
+            let map = listenerWrappers.get(socket);
+            if (!map) {
+                map = new Map();
+                listenerWrappers.set(socket, map);
+            }
+            if (map.has(listener)) return map.get(listener);
+
+            const wrapped = function (event) {
+                return deliverFiltered(socket, listener, this, event);
+            };
+            map.set(listener, wrapped);
+            return wrapped;
+        }
+
+        class LowResourceWebSocket extends NativeWebSocket {
+            constructor(url, protocols) {
+                if (protocols === undefined) super(url);
+                else super(url, protocols);
+            }
+
+            addEventListener(type, listener, options) {
+                if (type === 'message' && isTwitchIrcSocket(this)) {
+                    return super.addEventListener(type, getWrapper(this, listener), options);
+                }
+                return super.addEventListener(type, listener, options);
+            }
+
+            removeEventListener(type, listener, options) {
+                if (type === 'message' && isTwitchIrcSocket(this)) {
+                    const wrapped = listenerWrappers.get(this)?.get(listener) || listener;
+                    return super.removeEventListener(type, wrapped, options);
+                }
+                return super.removeEventListener(type, listener, options);
+            }
+
+            set onmessage(listener) {
+                if (!isTwitchIrcSocket(this) || !nativeOnMessage?.set) {
+                    if (nativeOnMessage?.set) nativeOnMessage.set.call(this, listener);
+                    return;
+                }
+
+                if (!listener) {
+                    onMessageHandlers.delete(this);
+                    nativeOnMessage.set.call(this, listener);
+                    return;
+                }
+
+                const wrapped = getWrapper(this, listener);
+                onMessageHandlers.set(this, { listener, wrapped });
+                nativeOnMessage.set.call(this, wrapped);
+            }
+
+            get onmessage() {
+                const saved = onMessageHandlers.get(this);
+                if (saved) return saved.listener;
+                return nativeOnMessage?.get ? nativeOnMessage.get.call(this) : null;
+            }
+        }
+
+        Object.defineProperty(LowResourceWebSocket, '__mothTwitchChatFiltered', { value: true });
+        window.WebSocket = LowResourceWebSocket;
+        return true;
+    }
+
     // The controller checks the game page to confirm this userscript is enabled.
     // This marker is separate from Twitch's live-mode CSS because the script is
     // intentionally active on the game page only as an installation heartbeat.
     if (isPokéIdleApp) {
-        const marker = document.createElement('meta');
-        marker.id = 'moth-twitch-low-resource-addon-ready';
-        marker.name = 'moth-twitch-low-resource-addon-ready';
-        (document.head || document.documentElement)?.appendChild(marker);
+        const markReady = () => {
+            if (document.getElementById('moth-twitch-low-resource-addon-ready')) return;
+            const marker = document.createElement('meta');
+            marker.id = 'moth-twitch-low-resource-addon-ready';
+            marker.name = 'moth-twitch-low-resource-addon-ready';
+            (document.head || document.documentElement)?.appendChild(marker);
+        };
+
+        if (document.head || document.documentElement) markReady();
+        else document.addEventListener('DOMContentLoaded', markReady, { once: true });
         return;
     }
 
@@ -40,6 +208,7 @@
         isTwitch && /\/popout\/[^/]+\/chat(?:[/?]|$)/i.test(location.pathname);
 
     if (isTwitchChatPopout) {
+        installChatMessageFilter();
         runChatLowResource();
         return;
     }
@@ -119,38 +288,33 @@
 
     function runChatLowResource() {
         const STYLE_ID = 'moth-twitch-low-resource-chat-css';
-        if (!document.getElementById(STYLE_ID)) {
+
+        const installStyles = () => {
+            if (document.getElementById(STYLE_ID)) return true;
+
             const style = document.createElement('style');
             style.id = STYLE_ID;
             style.textContent = [
-                /* Defer painting off-screen lines while preserving live text and emotes. */
-                '[data-a-target="chat-line-message"], .chat-line__message {',
-                '  content-visibility: auto !important;',
-                '  contain: layout style paint !important;',
-                '  contain-intrinsic-size: auto 28px !important;',
-                '  animation: none !important;',
-                '  transition: none !important;',
-                '}',
-                '[data-a-target="chat-scrollable-area__message-container"], .chat-scrollable-area__message-container {',
-                '  contain: layout style !important;',
-                '  overflow-anchor: none !important;',
-                '}',
-                /* Decorative avatars cause extra image decoding and repainting. */
-                '[data-a-target="chat-avatar"], .chat-line__message-avatar, [data-a-target="user-avatar"] {',
-                '  display: none !important;',
-                '}',
-                /* Stop cosmetic motion only; keep controls, badges, and messages accessible. */
-                '[data-a-target="chat-room-component-layout"] *,',
-                '[data-a-target="chat-room-component-layout"] *::before,',
-                '[data-a-target="chat-room-component-layout"] *::after {',
-                '  scroll-behavior: auto !important;',
-                '  transition-duration: 0s !important;',
-                '}'
-            ].join(String.fromCharCode(10));
-            (document.head || document.documentElement)?.appendChild(style);
+                /* Keep the Twitch page/session alive, but remove all chat painting and layout. */
+                'html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #0e0e10 !important; }',
+                '[data-a-target="chat-room-component-layout"], .chat-room__content, .chat-room__container { display: none !important; }',
+                /* Fallbacks for Twitch DOM variations. */
+                '[data-a-target="chat-scrollable-area__message-container"], .chat-scrollable-area__message-container { display: none !important; }',
+                '[data-a-target="chat-input"], [data-a-target="chat-input-container"], .chat-input, .chat-input__textarea { display: none !important; }',
+                '*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; caret-color: transparent !important; }'
+            ].join('\n');
+
+            const host = document.head || document.documentElement;
+            if (!host) return false;
+            host.appendChild(style);
+            return true;
+        };
+
+        if (!installStyles()) {
+            document.addEventListener('DOMContentLoaded', installStyles, { once: true });
         }
 
-        console.info('[Moth] Twitch chat low-resource mode active · live text/input preserved · off-screen lines paint lazily');
+        console.info('[Moth] Twitch popout low-resource mode active · incoming PRIVMSG/USERNOTICE suppressed · keepalive/control events preserved · chat UI hidden');
     }
 
     function runTwitch() {
