@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.36
+// @version      0.1.37
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -110,6 +110,7 @@
         })(),
         renderQueued: false,
         lastRenderAt: 0,
+        lastLocale: null,
         baseline: loadBaseline(),
         forceBaselineNext: false,
         pokemonReference: loadPokemonReference(),
@@ -152,6 +153,142 @@
             .trim();
     }
 
+    // Use Hunt Atlas's locale priority: game setting ("idioma"), document language, then browser language.
+    function currentLocale() {
+        let gameLanguage = null;
+        try { gameLanguage = localStorage.getItem('idioma'); } catch {}
+        if (gameLanguage) return gameLanguage === 'pt' ? 'pt-BR' : 'en';
+        const htmlLanguage = String(document.documentElement?.lang || '').toLowerCase();
+        if (htmlLanguage) return htmlLanguage.startsWith('pt') ? 'pt-BR' : 'en';
+        return String(navigator.language || '').toLowerCase().startsWith('pt') ? 'pt-BR' : 'en';
+    }
+
+    const PT_BR = Object.freeze({
+        'Underpriced listings and market sniper settings': 'Ofertas abaixo do preço e configurações de compra no mercado',
+        'Scan now': 'Escanear agora', 'Moth Watch views': 'Seções do Moth Watch',
+        'Opportunities': 'Oportunidades', 'Market inventory': 'Estoque do mercado',
+        'Automation & budget': 'Automação e orçamento', 'Activity & references': 'Atividade e referências',
+        'Search listings': 'Buscar ofertas', 'Search item, Pokémon, seller…': 'Buscar item, Pokémon ou vendedor…',
+        'Currency': 'Moeda', 'All': 'Todas', 'Coins': 'Moedas', 'Gems': 'Gemas',
+        'Type': 'Tipo', 'Items': 'Itens', 'Diamonds': 'Diamantes', 'Sort': 'Ordenar',
+        'Biggest discount': 'Maior desconto', 'Newest detected': 'Detectadas mais recentemente',
+        'Price: low → high': 'Preço: menor → maior', 'Price: high → low': 'Preço: maior → menor',
+        'Reference: high → low': 'Referência: maior → menor', 'Quantity: high → low': 'Quantidade: maior → menor',
+        'Name: A → Z': 'Nome: A → Z', '1 matching listing': '1 oferta correspondente',
+        '{count} matching listings': '{count} ofertas correspondentes',
+        '{count} matching listings · purchases are serialized while awaiting server confirmation': '{count} ofertas correspondentes · compras são serializadas até a confirmação do servidor',
+        'Watch threshold: {value}% of reference': 'Limite de alerta: {value}% da referência',
+        'Auto-buy: {status}': 'Compra automática: {status}', 'ON': 'LIGADA', 'OFF': 'DESLIGADA',
+        'Items: {items} · Pokémon: {pokemon} · Diamonds: {diamonds}': 'Itens: {items} · Pokémon: {pokemon} · Diamantes: {diamonds}',
+        'Load Coin offers': 'Carregar ofertas em moedas', 'No Coin offers': 'Sem ofertas em moedas',
+        'Load Gem offers': 'Carregar ofertas em gemas', 'No Gem offers': 'Sem ofertas em gemas',
+        'Items for sale': 'Itens à venda', 'item type with active listings': 'tipo de item com ofertas ativas',
+        'item types with active listings': 'tipos de item com ofertas ativas',
+        ' · showing first {count}': ' · mostrando os primeiros {count}',
+        'This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.': 'Este resumo mostra o menor preço ativo de cada item. A lista de oportunidades exibe ofertas dentro do limite definido (além das carregadas manualmente). Use os botões para consultar todas as ofertas de um item em moedas ou gemas.',
+        'No market item inventory has arrived yet.': 'O inventário de itens do mercado ainda não chegou.',
+        'Current market median · {count} listings': 'Mediana atual do mercado · {count} ofertas',
+        ' · server 7d avg {value} ignored': ' · média do servidor em 7 dias ({value}) ignorada',
+        'live 7d avg / unit': 'média real de 7 dias por unidade',
+        'frozen fallback / unit': 'referência alternativa salva por unidade',
+        'no sale-price reference': 'sem referência de preço de venda',
+        'active market median': 'mediana atual do mercado', 'completed-sale reference': 'referência de vendas concluídas',
+        'no completed-sale reference': 'sem referência de vendas concluídas',
+        'sales median · {count} sales': 'mediana das vendas · {count} vendas',
+        '1 unit sold': '1 unidade vendida', '{count} units sold': '{count} unidades vendidas',
+        '1 sale': '1 venda', '{count} sales': '{count} vendas', '1 listing': '1 oferta', '{count} listings': '{count} ofertas',
+        'units': 'unidades', 'diamonds': 'diamantes', 'total': 'total', 'listed': 'anunciado',
+        ' / unit': ' / unidade', 'auto-buy range': 'faixa de compra automática', 'watch range': 'faixa de alerta',
+        'Seller: {seller}': 'Vendedor: {seller}', 'retained · {seconds}s': 'reservada · {seconds}s',
+        'available': 'disponível', 'Buying…': 'Comprando…', 'Wait': 'Aguardar', 'Tried recently': 'Tentativa recente', 'Buy': 'Comprar',
+        'No matching opportunities. Try a wider watch threshold or inspect Market inventory.': 'Nenhuma oportunidade corresponde aos filtros. Aumente o limite de alerta ou consulte o estoque do mercado.',
+        'Browse item types, then load the offers for a selected currency.': 'Navegue pelos tipos de item e carregue as ofertas na moeda desejada.',
+        'Monitoring rules': 'Regras de monitoramento',
+        'These settings only decide what is scanned and shown; they do not authorize purchases.': 'Estas opções definem o que será analisado e exibido; não autorizam compras.',
+        'Watch rules': 'Regras de monitoramento', 'Watch price threshold': 'Limite de preço para alertas',
+        'Scan interval': 'Intervalo de varredura', 'seconds': 'segundos',
+        'Watch items': 'Monitorar itens', 'Watch Pokémon': 'Monitorar Pokémon', 'Watch diamonds': 'Monitorar diamantes',
+        'Automatic purchases': 'Compras automáticas',
+        'Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.': 'Mantenha esta chave principal desligada até revisar o limite de preço, as moedas permitidas e os limites de gastos.',
+        'Enable automatic buying': 'Ativar compras automáticas', 'Auto-buy price threshold': 'Limite de preço para compra automática',
+        'Auto-buy items': 'Comprar itens automaticamente', 'Auto-buy Pokémon': 'Comprar Pokémon automaticamente',
+        'Auto-buy diamonds': 'Comprar diamantes automaticamente', 'Allow Coin purchases': 'Permitir compras com moedas',
+        'Allow Gem purchases': 'Permitir compras com gemas', 'Buy whole item batch': 'Comprar o lote inteiro de itens',
+        'Spending limits': 'Limites de gastos', 'Keep Coins in reserve': 'Manter moedas reservadas',
+        'Keep Gems in reserve': 'Manter gemas reservadas', 'Maximum Coins per purchase': 'Máximo de moedas por compra',
+        'Maximum Gems per purchase': 'Máximo de gemas por compra', '0 = no extra cap': '0 = sem limite adicional',
+        'Reference confidence': 'Confiabilidade das referências', 'Minimum sold item units': 'Mínimo de unidades de item vendidas',
+        'Minimum Pokémon sale samples': 'Mínimo de vendas de Pokémon na amostra', 'Pokémon history pages': 'Páginas do histórico de Pokémon',
+        'Price references': 'Referências de preço', 'Inspect and refresh reference data used to judge offers.': 'Consulte e atualize as referências usadas para avaliar ofertas.',
+        'Item references:': 'Referências de itens:', 'live server 7-day averages with a saved fallback captured': 'médias do servidor em 7 dias, com referência alternativa salva em',
+        ' item types; ': ' tipos de item; ', ' Coin references; ': ' referências em moedas; ', ' Gem references.': ' referências em gemas.',
+        'Suspicious prices: ': 'Preços suspeitos: ', ' Coin · ': ' moedas · ', ' Gem.': ' gemas.',
+        'Refresh saved fallback': 'Atualizar referência alternativa salva', 'Copy reference data': 'Copiar dados de referência',
+        'Recent activity': 'Atividade recente', 'Purchase attempts, confirmations, and errors.': 'Tentativas de compra, confirmações e erros.',
+        'No purchase attempts recorded this session.': 'Nenhuma tentativa de compra registrada nesta sessão.',
+        'Moth Watch': 'Moth Watch', 'waiting': 'aguardando', 'live': 'ao vivo', 'disabled': 'desativado',
+        'queued': 'na fila', 'scanning': 'analisando', 'rate-limit backoff': 'pausa por limite de requisições',
+        'history ready': 'histórico pronto', 'waiting for game': 'aguardando o jogo', 'history cached': 'histórico em cache',
+        'loading history': 'carregando histórico', 'paused while browsing': 'pausado durante a navegação',
+        'watching': 'monitorando', 'disconnected': 'desconectado', 'retrying after timeout': 'nova tentativa após tempo limite',
+        'scanning · Gems': 'analisando · gemas', 'scanning · Coins': 'analisando · moedas',
+        'live · Gems': 'ao vivo · gemas', 'live · Coins': 'ao vivo · moedas',
+        'Purchase confirmed · listing #{id}': 'Compra confirmada · oferta #{id}',
+        'Reference data copied to clipboard': 'Dados de referência copiados para a área de transferência',
+        'Could not copy reference data': 'Não foi possível copiar os dados de referência',
+        'Purchase not sent; check balance, reserve, listing availability, and pending purchase status': 'Compra não enviada; confira saldo, reservas, disponibilidade da oferta e se há compra pendente',
+        'Server rate limit · background scans paused for 15s': 'Limite de requisições do servidor · varreduras em segundo plano pausadas por 15 s',
+        'Baseline frozen: {count} market items': 'Referência inicial salva: {count} itens do mercado',
+        'Baseline expanded with {count} missing Coin/Gem reference': 'Referência inicial ampliada com {count} referência ausente de moedas/gemas',
+        'Baseline expanded with {count} missing Coin/Gem references': 'Referência inicial ampliada com {count} referências ausentes de moedas/gemas',
+        'Pokémon reference refreshed: {count} buckets': 'Referências de Pokémon atualizadas: {count} grupos',
+        'Purchase refused: {message}': 'Compra recusada: {message}',
+        'Skipped: not enough spendable balance for {name}': 'Ignorado: saldo disponível insuficiente para {name}',
+        'no reference captured yet': 'nenhuma referência capturada ainda',
+        'loading {name} offers': 'carregando ofertas de {name}'
+    });
+
+    function tr(key, params = null) {
+        const value = currentLocale() === 'pt-BR' ? (PT_BR[key] ?? key) : key;
+        if (!params) return value;
+        return value.replace(/\{(\w+)\}/g, (whole, name) =>
+            params[name] !== undefined ? String(params[name]) : whole
+        );
+    }
+
+    function displayStatus(value) {
+        const text = String(value || 'waiting');
+        if (currentLocale() !== 'pt-BR') return text;
+        const loadingOffers = /^loading (.+) offers$/.exec(text);
+        if (loadingOffers) return tr('loading {name} offers', { name: loadingOffers[1] });
+        if (text === 'scanning · gems') return tr('scanning · Gems');
+        if (text === 'scanning · coins') return tr('scanning · Coins');
+        if (text === 'live · gems') return tr('live · Gems');
+        if (text === 'live · coins') return tr('live · Coins');
+        return tr(text);
+    }
+
+    function translateLog(value) {
+        const text = String(value || '');
+        if (currentLocale() !== 'pt-BR') return text;
+        if (PT_BR[text]) return PT_BR[text];
+        let match = /^Baseline frozen: (\d+) market items$/.exec(text);
+        if (match) return tr('Baseline frozen: {count} market items', { count: num(Number(match[1])) });
+        match = /^Baseline expanded with (\d+) missing Coin\/Gem references?$/.exec(text);
+        if (match) return tr(Number(match[1]) === 1
+            ? 'Baseline expanded with {count} missing Coin/Gem reference'
+            : 'Baseline expanded with {count} missing Coin/Gem references', { count: num(Number(match[1])) });
+        match = /^Pokémon reference refreshed: (\d+) buckets$/.exec(text);
+        if (match) return tr('Pokémon reference refreshed: {count} buckets', { count: num(Number(match[1])) });
+        match = /^Purchase confirmed · listing #(\d+)$/.exec(text);
+        if (match) return tr('Purchase confirmed · listing #{id}', { id: match[1] });
+        match = /^Skipped: not enough spendable balance for (.+)$/.exec(text);
+        if (match) return tr('Skipped: not enough spendable balance for {name}', { name: match[1] });
+        match = /^Purchase refused: (.+)$/.exec(text);
+        if (match) return tr('Purchase refused: {message}', { message: match[1] });
+        return text;
+    }
+
     function escapeHtml(value) {
         return String(value == null ? '' : value)
             .replaceAll('&', '&amp;')
@@ -162,7 +299,7 @@
     }
 
     function num(value) {
-        return Number(value || 0).toLocaleString();
+        return Number(value || 0).toLocaleString(state.lastLocale || currentLocale());
     }
 
     function pct(value) {
@@ -2048,13 +2185,18 @@
             '.moth-mw-config label{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:var(--sobre-mad-dim,#bbb)}',
             '.moth-mw-config input[type=number]{width:76px;padding:3px 5px;border:1px solid var(--mad-linha,#555);border-radius:4px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff)}',
             '.moth-mw-config input[type=checkbox]{flex:none}',
+            '.moth-mw-config .moth-mw-checkbox-control{display:flex!important;flex-direction:row!important;align-items:center!important;justify-content:flex-start!important;gap:8px!important;min-height:24px;min-width:0}',
+            '.moth-mw-config .moth-mw-checkbox-control::before,.moth-mw-config .moth-mw-checkbox-control::after,.moth-mw-config .moth-mw-checkbox-control>label::before,.moth-mw-config .moth-mw-checkbox-control>label::after{content:none!important;display:none!important}',
+            '.moth-mw-config .moth-mw-checkbox-control>label{display:block!important;flex:1;min-width:0;margin:0;padding:0;cursor:pointer;font:inherit;color:inherit;justify-content:flex-start!important}',
+            '.moth-mw-config .moth-mw-checkbox-control>input[type=checkbox]{appearance:auto!important;-webkit-appearance:checkbox!important;position:static!important;inset:auto!important;display:inline-block!important;visibility:visible!important;opacity:1!important;transform:none!important;flex:0 0 16px!important;width:16px!important;height:16px!important;margin:0!important;padding:0!important;accent-color:var(--rx,#84325f)}',
             '.moth-mw-baseline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px;font-size:9px;color:var(--sobre-mad-dim,#aaa)}',
             '.moth-mw-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:7px 8px;border-radius:7px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
             '.moth-mw-filter-group{display:flex;align-items:center;gap:4px;flex-wrap:wrap}',
             '.moth-mw-filter-label{font-size:9px;font-weight:700;color:var(--sobre-mad-dim,#aaa);margin-right:2px}',
-            '.moth-mw-filter{display:inline-flex;align-items:center;gap:4px;min-height:28px}',
+            '.moth-mw-filter{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:4px 7px;border:1px solid var(--mad-linha,#3a2824);border-radius:5px;background:var(--mad,#5a413b);color:var(--sobre-mad,#fff);font:inherit;font-size:10px;cursor:pointer}',
             '.moth-mw-filter img{width:16px;height:16px;object-fit:contain}',
-            '.moth-mw-filter.on{filter:brightness(1.18);box-shadow:inset 0 0 0 2px var(--rx,#84325f)}',
+            '.moth-mw-filter.on{background:var(--rx,#84325f);color:#fff;filter:none;box-shadow:inset 0 0 0 1px var(--rx-esc,#5d2345)}',
+            '.moth-mw-filter:focus-visible,.moth-mw-btn:focus-visible,.moth-mw-tab:focus-visible{outline:2px solid var(--rx,#84325f);outline-offset:2px}',
             '.moth-mw-sort{display:flex;align-items:center;gap:5px;margin-left:auto}',
             '.moth-mw-sort select{min-height:28px;padding:3px 7px;border:1px solid var(--mad-linha,#555);border-radius:5px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:10px}',
             '.moth-mw-inventory{margin:10px 0;padding:8px;border-radius:7px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
@@ -2222,20 +2364,21 @@
         const help = CONFIG_HELP[key] || '';
         const limit = CONFIG_LIMITS[key] || { min: 0, max: Number.MAX_SAFE_INTEGER };
         const helpMarkup = help
-            ? '<small class="moth-mw-setting-help">' + escapeHtml(help) + '</small>'
+            ? '<small class="moth-mw-setting-help">' + escapeHtml(tr(help)) + '</small>'
             : '';
         const field = type === 'checkbox'
-            ? '<label class="moth-mw-setting-control"><input type="checkbox" data-moth-cfg="' +
-                escapeHtml(key) + '"' + (value ? ' checked' : '') + '><span>' + escapeHtml(label) + '</span></label>'
+            ? '<div class="moth-mw-setting-control moth-mw-checkbox-control"><input id="moth-mw-cfg-' + escapeHtml(key) +
+                '" type="checkbox" data-moth-cfg="' + escapeHtml(key) + '"' + (value ? ' checked' : '') +
+                '><label for="moth-mw-cfg-' + escapeHtml(key) + '">' + escapeHtml(tr(label)) + '</label></div>'
             : type === 'range'
                 ? '<div class="moth-mw-range-head"><label for="moth-mw-cfg-' + escapeHtml(key) + '">' +
-                    escapeHtml(label) + '</label><output data-moth-cfg-value="' + escapeHtml(key) + '">' +
+                    escapeHtml(tr(label)) + '</label><output data-moth-cfg-value="' + escapeHtml(key) + '">' +
                     escapeHtml(value) + '%</output></div>' +
                     '<input id="moth-mw-cfg-' + escapeHtml(key) + '" class="moth-mw-range" type="range" data-moth-cfg="' +
                     escapeHtml(key) + '" value="' + escapeHtml(value) + '" min="' + limit.min + '" max="' + limit.max + '" step="1">' +
                     '<div class="moth-mw-range-scale"><span>' + limit.min + '%</span><span>' + limit.max + '%</span></div>'
-                : '<label class="moth-mw-setting-control"><span>' + escapeHtml(label) +
-                    (suffix ? ' <small>' + escapeHtml(suffix) + '</small>' : '') +
+                : '<label class="moth-mw-setting-control"><span>' + escapeHtml(tr(label)) +
+                    (suffix ? ' <small>' + escapeHtml(tr(suffix)) + '</small>' : '') +
                     '</span><input type="number" data-moth-cfg="' + escapeHtml(key) + '" value="' +
                     escapeHtml(value) + '" min="' + limit.min + '" max="' + limit.max + '" step="1"></label>';
         return '<div class="moth-mw-setting">' + field + helpMarkup + '</div>';
@@ -2243,111 +2386,77 @@
 
     function renderItemInventory() {
         const entries = Object.entries(state.itemSummary || {})
-            .map(([rawId, row]) => ({
-                itemId: Number(rawId),
-                row: row || {},
-                name: catalogName(rawId)
-            }))
-            .filter(entry =>
-                Number.isFinite(entry.itemId) &&
-                entry.itemId > 0 &&
-                Number(entry.row.anuncios || 0) > 0
-            )
-            .sort((a, b) => a.name.localeCompare(b.name));
-
+            .map(([rawId, row]) => ({ itemId: Number(rawId), row: row || {}, name: catalogName(rawId) }))
+            .filter(entry => Number.isFinite(entry.itemId) && entry.itemId > 0 && Number(entry.row.anuncios || 0) > 0)
+            .sort((a, b) => a.name.localeCompare(b.name, currentLocale()));
         const rows = entries.slice(0, 120).map(entry => {
-            const row = entry.row;
-            const coinPrice = Number(row.minGold);
-            const gemPrice = Number(row.minOrb);
+            const row = entry.row, coinPrice = Number(row.minGold), gemPrice = Number(row.minOrb);
             const coinButton = Number.isFinite(coinPrice) && coinPrice > 0
-                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' +
-                    entry.itemId + '" data-moth-item-currency="gold">Load Coin offers</button>'
-                : '<button type="button" class="moth-mw-btn" disabled>No Coin offers</button>';
+                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' + entry.itemId + '" data-moth-item-currency="gold">' + escapeHtml(tr('Load Coin offers')) + '</button>'
+                : '<button type="button" class="moth-mw-btn" disabled>' + escapeHtml(tr('No Coin offers')) + '</button>';
             const gemButton = Number.isFinite(gemPrice) && gemPrice > 0
-                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' +
-                    entry.itemId + '" data-moth-item-currency="orb">Load Gem offers</button>'
-                : '<button type="button" class="moth-mw-btn" disabled>No Gem offers</button>';
-
-            return '<div class="moth-mw-inventory-row">' +
-                '<div class="moth-mw-inventory-name"><b>' + escapeHtml(entry.name) +
-                '</b><span>' + num(row.anuncios) + ' listing' +
-                (Number(row.anuncios) === 1 ? '' : 's') + '</span></div>' +
-                '<div class="moth-mw-inventory-price">' +
-                (coinPrice > 0 ? money(coinPrice, 'gold') : '<span class="moth-mw-meta">Coins —</span>') +
-                coinButton + '</div>' +
-                '<div class="moth-mw-inventory-price">' +
-                (gemPrice > 0 ? money(gemPrice, 'orb') : '<span class="moth-mw-meta">Gems —</span>') +
-                gemButton + '</div>' +
-                '</div>';
+                ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' + entry.itemId + '" data-moth-item-currency="orb">' + escapeHtml(tr('Load Gem offers')) + '</button>'
+                : '<button type="button" class="moth-mw-btn" disabled>' + escapeHtml(tr('No Gem offers')) + '</button>';
+            const count = Number(row.anuncios) || 0;
+            return '<div class="moth-mw-inventory-row"><div class="moth-mw-inventory-name"><b>' + escapeHtml(entry.name) + '</b><span>' +
+                escapeHtml(tr(count === 1 ? '1 listing' : '{count} listings', { count: num(count) })) + '</span></div>' +
+                '<div class="moth-mw-inventory-price">' + (coinPrice > 0 ? money(coinPrice, 'gold') : '<span class="moth-mw-meta">' + escapeHtml(tr('Coins')) + ' —</span>') +
+                coinButton + '</div><div class="moth-mw-inventory-price">' +
+                (gemPrice > 0 ? money(gemPrice, 'orb') : '<span class="moth-mw-meta">' + escapeHtml(tr('Gems')) + ' —</span>') + gemButton + '</div></div>';
         }).join('');
-
         const collapsed = Boolean(state.itemInventoryCollapsed);
-
-        return '<div class="moth-mw-inventory">' +
-            '<div class="moth-mw-inventory-head">' +
-            '<button type="button" class="moth-mw-inventory-toggle" id="moth-mw-inventory-toggle" aria-expanded="' +
-            (!collapsed ? 'true' : 'false') + '">' +
-            '<span class="moth-mw-inventory-chevron" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span>' +
-            '<b>Items for sale</b></button>' +
-            '<span>' + num(entries.length) + ' item types with active listings' +
-            (entries.length > 120 ? ' · showing first 120' : '') +
-            '</span></div>' +
-            '<div class="moth-mw-inventory-body" id="moth-mw-inventory-body"' +
-            (collapsed ? ' hidden' : '') + '>' +
-            '<div class="moth-mw-inventory-note">This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.</div>' +
-            '<div class="moth-mw-inventory-list">' +
-            (rows || '<div class="moth-mw-empty">No market item inventory has arrived yet.</div>') +
+        return '<div class="moth-mw-inventory"><div class="moth-mw-inventory-head">' +
+            '<button type="button" class="moth-mw-inventory-toggle" id="moth-mw-inventory-toggle" aria-expanded="' + (!collapsed ? 'true' : 'false') + '">' +
+            '<span class="moth-mw-inventory-chevron" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span><b>' + escapeHtml(tr('Items for sale')) + '</b></button>' +
+            '<span>' + num(entries.length) + ' ' + escapeHtml(tr(entries.length === 1 ? 'item type with active listings' : 'item types with active listings')) +
+            (entries.length > 120 ? escapeHtml(tr(' · showing first {count}', { count: 120 })) : '') + '</span></div>' +
+            '<div class="moth-mw-inventory-body" id="moth-mw-inventory-body"' + (collapsed ? ' hidden' : '') + '>' +
+            '<div class="moth-mw-inventory-note">' + escapeHtml(tr('This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.')) + '</div>' +
+            '<div class="moth-mw-inventory-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No market item inventory has arrived yet.')) + '</div>') +
             '</div></div></div>';
     }
 
     function renderCandidate(candidate) {
         const discount = Math.max(0, 1 - candidate.ratio);
-        const retainedSeconds = candidate.retainedUntil > serverNow()
-            ? Math.ceil((candidate.retainedUntil - serverNow()) / 1000)
-            : 0;
+        const retainedSeconds = candidate.retainedUntil > serverNow() ? Math.ceil((candidate.retainedUntil - serverNow()) / 1000) : 0;
         const attemptedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
         const recentlyAttempted = attemptedUntil > Date.now();
         const canBuy = !state.pendingBuy && !recentlyAttempted && !retainedSeconds && purchaseQuantity(candidate) > 0;
         const auto = candidateCanAutoBuy(candidate);
-        const total = candidate.kind === 'item' || candidate.kind === 'diamond'
-            ? candidate.price * candidate.qty
-            : candidate.price;
-        const referenceLabel = candidate.kind === 'item'
-            ? candidate.referenceSource === 'active-median'
-                ? 'current market median · ' + num(candidate.activeReferenceListings) + ' listings' +
-                    (candidate.serverAverage > candidate.average
-                        ? ' · server 7d avg ' + num(Math.round(candidate.serverAverage)) + ' ignored'
-                        : '')
-                : candidate.average > 0
-                    ? (candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
-                        ' · ' + num(candidate.samples) + ' unit' + (candidate.samples === 1 ? '' : 's') + ' sold'
-                    : 'no sale-price reference'
-            : candidate.kind === 'diamond'
-                ? (candidate.average > 0
-                    ? (candidate.referenceSource === 'active-median' ? 'active market median' : 'completed-sale reference') +
-                        ' · ' + num(candidate.samples) + ' sales'
-                    : 'no completed-sale reference')
-                : 'sales median · ' + num(candidate.samples) + ' sale' + (candidate.samples === 1 ? '' : 's');
+        const total = candidate.kind === 'item' || candidate.kind === 'diamond' ? candidate.price * candidate.qty : candidate.price;
+        let referenceLabel;
+        if (candidate.kind === 'item') {
+            if (candidate.referenceSource === 'active-median') {
+                referenceLabel = tr('Current market median · {count} listings', { count: num(candidate.activeReferenceListings) });
+                if (candidate.serverAverage > candidate.average) referenceLabel += tr(' · server 7d avg {value} ignored', { value: num(Math.round(candidate.serverAverage)) });
+            } else if (candidate.average > 0) {
+                referenceLabel = tr(candidate.referenceSource === 'live-7d' ? 'live 7d avg / unit' : 'frozen fallback / unit') +
+                    ' · ' + tr(candidate.samples === 1 ? '1 unit sold' : '{count} units sold', { count: num(candidate.samples) });
+            } else referenceLabel = tr('no sale-price reference');
+        } else if (candidate.kind === 'diamond') {
+            referenceLabel = candidate.average > 0
+                ? tr(candidate.referenceSource === 'active-median' ? 'active market median' : 'completed-sale reference') + ' · ' +
+                    tr(candidate.samples === 1 ? '1 sale' : '{count} sales', { count: num(candidate.samples) })
+                : tr('no completed-sale reference');
+        } else referenceLabel = tr('sales median · {count} sales', { count: num(candidate.samples) });
 
+        const kind = candidate.kind === 'pokemon' ? tr('Pokémon') : candidate.kind === 'diamond' ? tr('Diamonds') : tr('Items');
+        const quantityLabel = candidate.kind === 'diamond' ? tr('diamonds') : tr('units');
+        const availableLabel = retainedSeconds ? tr('retained · {seconds}s', { seconds: retainedSeconds }) : tr('available');
+        const buyLabel = state.pendingBuy?.candidateKey === candidate.key ? tr('Buying…')
+            : retainedSeconds ? tr('Wait') : recentlyAttempted ? tr('Tried recently') : tr('Buy');
         return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
-            '<div class="moth-mw-name"><b><span class="moth-mw-kind">' + escapeHtml(candidate.kind) + '</span>' +
-            escapeHtml(candidate.name) + '</b><span>' +
+            '<div class="moth-mw-name"><b><span class="moth-mw-kind">' + escapeHtml(kind) + '</span>' + escapeHtml(candidate.name) + '</b><span>' +
             ((candidate.kind === 'item' || candidate.kind === 'diamond')
-                ? num(candidate.qty) + (candidate.kind === 'diamond' ? ' diamonds' : ' units') + ' · total ' + num(total)
-                : 'completed-sales reference') +
-            '</span></div>' +
-            '<div><div>' + money(candidate.price, candidate.currency) + '</div><div class="moth-mw-meta">listed' +
-            ((candidate.kind === 'item' || candidate.kind === 'diamond') && candidate.qty > 1 ? ' / unit' : '') + '</div></div>' +
-            '<div class="moth-mw-ref"><div>' + money(Math.round(candidate.average), candidate.currency) +
-            '</div><div class="moth-mw-meta">' + escapeHtml(referenceLabel) + '</div></div>' +
-            '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' +
-            (auto ? 'auto-buy range' : 'watch range') + '</div></div>' +
-            '<div class="moth-mw-seller"><b>Seller: ' + escapeHtml(candidate.seller) + '</b><div class="moth-mw-meta">' +
-            (retainedSeconds ? 'retained · ' + retainedSeconds + 's' : 'available') + '</div></div>' +
-            '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' +
-            (canBuy ? '' : ' disabled') + '>' +
-            (state.pendingBuy?.candidateKey === candidate.key ? 'Buying…' : retainedSeconds ? 'Wait' : recentlyAttempted ? 'Tried recently' : 'Buy') + '</button>' +
-            '</div>';
+                ? num(candidate.qty) + ' ' + escapeHtml(quantityLabel) + ' · ' + escapeHtml(tr('total')) + ' ' + num(total)
+                : escapeHtml(tr('completed-sale reference'))) + '</span></div>' +
+            '<div><div>' + money(candidate.price, candidate.currency) + '</div><div class="moth-mw-meta">' + escapeHtml(tr('listed')) +
+            ((candidate.kind === 'item' || candidate.kind === 'diamond') && candidate.qty > 1 ? escapeHtml(tr(' / unit')) : '') + '</div></div>' +
+            '<div class="moth-mw-ref"><div>' + money(Math.round(candidate.average), candidate.currency) + '</div><div class="moth-mw-meta">' + escapeHtml(referenceLabel) + '</div></div>' +
+            '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' + escapeHtml(tr(auto ? 'auto-buy range' : 'watch range')) + '</div></div>' +
+            '<div class="moth-mw-seller"><b>' + escapeHtml(tr('Seller: {seller}', { seller: candidate.seller })) + '</b><div class="moth-mw-meta">' + escapeHtml(availableLabel) + '</div></div>' +
+            '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' + (canBuy ? '' : ' disabled') + '>' +
+            escapeHtml(buyLabel) + '</button></div>';
     }
 
     function updateCandidateRows(list, candidates) {
@@ -2493,50 +2602,43 @@
 
     function sortSelect() {
         const options = [
-            ['discount', 'Biggest discount'],
-            ['newest', 'Newest detected'],
-            ['price-asc', 'Price: low → high'],
-            ['price-desc', 'Price: high → low'],
-            ['reference-desc', 'Reference: high → low'],
-            ['quantity-desc', 'Quantity: high → low'],
-            ['name', 'Name: A → Z']
+            ['discount', 'Biggest discount'], ['newest', 'Newest detected'], ['price-asc', 'Price: low → high'],
+            ['price-desc', 'Price: high → low'], ['reference-desc', 'Reference: high → low'],
+            ['quantity-desc', 'Quantity: high → low'], ['name', 'Name: A → Z']
         ];
-
-        return '<label class="moth-mw-sort"><span class="moth-mw-filter-label">Sort</span>' +
-            '<select id="moth-mw-sort">' +
-            options.map(([value, label]) =>
-                '<option value="' + value + '"' + (config.viewSort === value ? ' selected' : '') + '>' +
-                escapeHtml(label) + '</option>'
-            ).join('') +
-            '</select></label>';
+        return '<label class="moth-mw-sort"><span class="moth-mw-filter-label">' + escapeHtml(tr('Sort')) + '</span><select id="moth-mw-sort">' +
+            options.map(([value, label]) => '<option value="' + value + '"' + (config.viewSort === value ? ' selected' : '') + '>' +
+                escapeHtml(tr(label)) + '</option>').join('') + '</select></label>';
     }
-
     function filterButton(label, group, value, active, icon) {
-        const nativeClass = group === 'currency' ? 'cm-moeda' : 'cm-filtro';
-        return '<button type="button" class="' + nativeClass + ' moth-mw-filter' + (active ? ' on' : '') + '"' +
+        return '<button type="button" class="moth-mw-filter' + (active ? ' on' : '') + '"' +
             ' data-moth-filter="' + escapeHtml(group) + '" data-moth-value="' + escapeHtml(value) + '"' +
             ' aria-pressed="' + (active ? 'true' : 'false') + '">' +
-            (icon ? '<img src="' + escapeHtml(icon) + '" alt="">' : '') +
-            escapeHtml(label) +
-            '</button>';
+            (icon ? '<img src="' + escapeHtml(icon) + '" alt="">' : '') + escapeHtml(tr(label)) + '</button>';
     }
 
     function renderWatch(forceViewBuild = false) {
         const panel = q('#moth-market-watch-panel');
         if (!panel || !state.watchOpen) return;
+        const locale = currentLocale();
+        if (state.lastLocale !== locale) {
+            state.lastLocale = locale;
+            if (panel.dataset.mothWatchShell) delete panel.dataset.mothWatchShell;
+            forceViewBuild = true;
+        }
         const views = ['opportunities', 'inventory', 'automation', 'activity'];
         if (!views.includes(state.watchView)) state.watchView = 'opportunities';
 
         if (!panel.dataset.mothWatchShell) {
             panel.innerHTML =
                 '<div class="moth-mw-head"><div><h3>Moth Watch</h3><span class="moth-mw-status" id="moth-mw-status"></span></div>' +
-                '<span class="moth-mw-spacer"></span><button type="button" class="moth-mw-btn" id="moth-mw-scan">Scan now</button></div>' +
+                '<span class="moth-mw-spacer"></span><button type="button" class="moth-mw-btn" id="moth-mw-scan">' + escapeHtml(tr('Scan now')) + '</button></div>' +
                 '<div class="moth-mw-overview" id="moth-mw-overview"></div>' +
-                '<nav class="moth-mw-tabs" aria-label="Moth Watch views">' +
-                '<button type="button" class="moth-mw-tab" data-moth-view="opportunities">Opportunities</button>' +
-                '<button type="button" class="moth-mw-tab" data-moth-view="inventory">Market inventory</button>' +
-                '<button type="button" class="moth-mw-tab" data-moth-view="automation">Automation & budget</button>' +
-                '<button type="button" class="moth-mw-tab" data-moth-view="activity">Activity & references</button></nav>' +
+                '<nav class="moth-mw-tabs" aria-label="' + escapeHtml(tr('Moth Watch views')) + '">' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="opportunities">' + escapeHtml(tr('Opportunities')) + '</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="inventory">' + escapeHtml(tr('Market inventory')) + '</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="automation">' + escapeHtml(tr('Automation & budget')) + '</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="activity">' + escapeHtml(tr('Activity & references')) + '</button></nav>' +
                 '<div class="moth-mw-workspace"><div id="moth-mw-view-content"></div></div>';
             panel.dataset.mothWatchShell = '1';
             bindWatchEvents(panel);
@@ -2553,17 +2655,20 @@
             const visibleWithoutReference = manuallyLoaded || (c.kind === 'diamond' && !(Number(c.average) > 0));
             return (visibleWithoutReference || c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100)) && candidateVisible(c);
         }).sort(candidateSort);
-        const captured = state.baseline.capturedAt ? new Date(state.baseline.capturedAt).toLocaleString() : 'not captured yet';
+        const captured = state.baseline.capturedAt ? new Date(state.baseline.capturedAt).toLocaleString(locale) : tr('no reference captured yet');
 
         const status = q('#moth-mw-status', panel);
-        const statusText = 'Items: ' + state.itemStatus + ' · Pokémon: ' + state.pokemonStatus + ' · Diamonds: ' + state.diamondStatus;
+        const statusText = tr('Items: {items} · Pokémon: {pokemon} · Diamonds: {diamonds}', {
+            items: displayStatus(state.itemStatus), pokemon: displayStatus(state.pokemonStatus), diamonds: displayStatus(state.diamondStatus)
+        });
         if (status && status.textContent !== statusText) status.textContent = statusText;
 
         const overview = q('#moth-mw-overview', panel);
-        const overviewHtml = '<b>' + num(candidates.length) + ' matching listing' + (candidates.length === 1 ? '' : 's') + '</b>' +
-            '<span>' + num(state.gold) + ' Coins · ' + num(state.orbs) + ' Gems</span>' +
-            '<span>Watch threshold: ' + num(config.watchPercent) + '% of reference</span>' +
-            '<span>Auto-buy: ' + (config.autoBuy ? 'ON' : 'OFF') + '</span>';
+        const countLabel = tr(candidates.length === 1 ? '1 matching listing' : '{count} matching listings', { count: num(candidates.length) });
+        const overviewHtml = '<b>' + escapeHtml(countLabel) + '</b>' +
+            '<span>' + num(state.gold) + ' ' + escapeHtml(tr('Coins')) + ' · ' + num(state.orbs) + ' ' + escapeHtml(tr('Gems')) + '</span>' +
+            '<span>' + escapeHtml(tr('Watch threshold: {value}% of reference', { value: num(config.watchPercent) })) + '</span>' +
+            '<span>' + escapeHtml(tr('Auto-buy: {status}', { status: tr(config.autoBuy ? 'ON' : 'OFF') })) + '</span>';
         if (overview && overview.innerHTML !== overviewHtml) overview.innerHTML = overviewHtml;
 
         for (const button of qa('[data-moth-view]', panel)) {
@@ -2581,31 +2686,34 @@
             if (state.watchView === 'opportunities') {
                 content.innerHTML =
                     '<div class="moth-mw-filters" id="moth-mw-opportunity-filters">' +
-                    '<input type="search" id="moth-mw-search" aria-label="Search listings" placeholder="Search item, Pokémon, seller…" value="' + escapeHtml(state.opportunitySearch) + '">' +
-                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Currency</span>' +
+                    '<input type="search" id="moth-mw-search" aria-label="' + escapeHtml(tr('Search listings')) + '" placeholder="' + escapeHtml(tr('Search item, Pokémon, seller…')) + '" value="' + escapeHtml(state.opportunitySearch) + '">' +
+                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">' + escapeHtml(tr('Currency')) + '</span>' +
                     filterButton('All', 'currency', 'all', currencyFilter === 'all', '') +
                     filterButton('Coins', 'currency', 'gold', currencyFilter === 'gold', '/assets/site/assets/ui/moeda-ouro.png') +
                     filterButton('Gems', 'currency', 'orb', currencyFilter === 'orb', '/img/moeda-gema.png') + '</div>' +
-                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Type</span>' +
+                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">' + escapeHtml(tr('Type')) + '</span>' +
                     filterButton('All', 'kind', 'all', kindFilter === 'all', '') +
                     filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
                     filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
                     filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') + '</div>' +
                     sortSelect() + '</div>' +
-                    '<div class="moth-mw-section-title"><h4>Opportunities</h4><span id="moth-mw-opportunity-count"></span></div>' +
+                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Opportunities')) + '</h4><span id="moth-mw-opportunity-count"></span></div>' +
                     '<div class="moth-mw-list" id="moth-mw-opportunity-list"></div>';
             } else if (state.watchView === 'inventory') {
-                content.innerHTML = '<div class="moth-mw-section-title"><h4>Market inventory</h4><span>Browse item types, then load the offers for a selected currency.</span></div><div id="moth-mw-inventory-content"></div>';
+                content.innerHTML = '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Market inventory')) + '</h4><span>' +
+                    escapeHtml(tr('Browse item types, then load the offers for a selected currency.')) + '</span></div><div id="moth-mw-inventory-content"></div>';
             } else if (state.watchView === 'automation') {
                 content.innerHTML =
-                    '<div class="moth-mw-section-title"><h4>Monitoring rules</h4><span>These settings only decide what is scanned and shown; they do not authorize purchases.</span></div>' +
+                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Monitoring rules')) + '</h4><span>' +
+                    escapeHtml(tr('These settings only decide what is scanned and shown; they do not authorize purchases.')) + '</span></div>' +
                     '<div class="moth-mw-settings-grid">' +
-                    '<section class="moth-mw-settings-card"><h4>Watch rules</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Watch rules')) + '</h4><div class="moth-mw-config">' +
                     configField('Watch price threshold', 'watchPercent', 'range', '%') +
                     configField('Scan interval', 'scanSeconds', 'number', 'seconds') +
                     configField('Watch items', 'scanItems', 'checkbox') + configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
                     configField('Watch diamonds', 'scanDiamonds', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><p class="moth-mw-setting-help">Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.</p><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Automatic purchases')) + '</h4><p class="moth-mw-setting-help">' +
+                    escapeHtml(tr('Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.')) + '</p><div class="moth-mw-config">' +
                     configField('Enable automatic buying', 'autoBuy', 'checkbox') +
                     configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
                     configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
@@ -2613,20 +2721,22 @@
                     configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
                     configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
                     configField('Buy whole item batch', 'buyWholeItemBatch', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>Spending limits</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Spending limits')) + '</h4><div class="moth-mw-config">' +
                     configField('Keep Coins in reserve', 'goldReserve', 'number', '') +
                     configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
                     configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
                     configField('Maximum Gems per purchase', 'maxGemsPerBuy', 'number', '0 = no extra cap') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>Reference confidence</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Reference confidence')) + '</h4><div class="moth-mw-config">' +
                     configField('Minimum sold item units', 'minItemUnits', 'number', '') +
                     configField('Minimum Pokémon sale samples', 'minPokemonSamples', 'number', '') +
                     configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') + '</div></section></div>';
             } else {
                 content.innerHTML =
-                    '<div class="moth-mw-section-title"><h4>Price references</h4><span>Inspect and refresh reference data used to judge offers.</span></div>' +
+                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Price references')) + '</h4><span>' +
+                    escapeHtml(tr('Inspect and refresh reference data used to judge offers.')) + '</span></div>' +
                     '<div class="moth-mw-reference-tools" id="moth-mw-reference-tools"></div>' +
-                    '<div class="moth-mw-section-title"><h4>Recent activity</h4><span>Purchase attempts, confirmations, and errors.</span></div>' +
+                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Recent activity')) + '</h4><span>' +
+                    escapeHtml(tr('Purchase attempts, confirmations, and errors.')) + '</span></div>' +
                     '<div class="moth-mw-log" id="moth-mw-activity-log"></div>';
             }
             if (state.watchView === 'automation') content.dataset.settingsSignature = settingsSignature;
@@ -2642,7 +2752,7 @@
             const sort = q('#moth-mw-sort', content);
             if (sort && sort.value !== config.viewSort) sort.value = config.viewSort;
             const count = q('#moth-mw-opportunity-count', content);
-            if (count) count.textContent = num(candidates.length) + ' matching listings · purchases are serialized while awaiting server confirmation';
+            if (count) count.textContent = tr('{count} matching listings · purchases are serialized while awaiting server confirmation', { count: num(candidates.length) });
             const list = q('#moth-mw-opportunity-list', content);
             updateCandidateRows(list, candidates);
         } else if (state.watchView === 'inventory') {
@@ -2657,18 +2767,19 @@
             }
         } else if (state.watchView === 'activity') {
             const refs = q('#moth-mw-reference-tools', content);
-            const html = '<div class="moth-mw-reference-info"><b>Item references:</b> live server 7-day averages with a saved fallback captured ' +
-                escapeHtml(captured) + '. ' + num(baseline.items) + ' item types; ' + num(baseline.gold) + ' Coin references; ' +
-                num(baseline.orb) + ' Gem references.<br>Suspicious prices: ' + num(state.itemScanStats.goldSuspicious) + '/' +
-                num(state.itemScanStats.goldChecked) + ' Coin · ' + num(state.itemScanStats.orbSuspicious) + '/' +
-                num(state.itemScanStats.orbChecked) + ' Gem.</div>' +
-                '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">Refresh saved fallback</button>' +
-                '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">Copy reference data</button>';
+            const html = '<div class="moth-mw-reference-info"><b>' + escapeHtml(tr('Item references:')) + '</b> ' +
+                escapeHtml(tr('live server 7-day averages with a saved fallback captured')) + ' ' + escapeHtml(captured) + '. ' +
+                num(baseline.items) + escapeHtml(tr(' item types; ')) + num(baseline.gold) + escapeHtml(tr(' Coin references; ')) +
+                num(baseline.orb) + escapeHtml(tr(' Gem references.')) + '<br>' + escapeHtml(tr('Suspicious prices: ')) +
+                num(state.itemScanStats.goldSuspicious) + '/' + num(state.itemScanStats.goldChecked) + escapeHtml(tr(' Coin · ')) +
+                num(state.itemScanStats.orbSuspicious) + '/' + num(state.itemScanStats.orbChecked) + escapeHtml(tr(' Gem.')) + '</div>' +
+                '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">' + escapeHtml(tr('Refresh saved fallback')) + '</button>' +
+                '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">' + escapeHtml(tr('Copy reference data')) + '</button>';
             if (refs && refs.innerHTML !== html) refs.innerHTML = html;
             const log = q('#moth-mw-activity-log', content);
             const logHtml = state.buyLog.length ? state.buyLog.map(row =>
-                '<div>' + new Date(row.at).toLocaleTimeString() + ' · ' + escapeHtml(row.text) + '</div>').join('') :
-                '<div>No purchase attempts recorded this session.</div>';
+                '<div>' + new Date(row.at).toLocaleTimeString(currentLocale()) + ' · ' + escapeHtml(translateLog(row.text)) + '</div>').join('') :
+                '<div>' + escapeHtml(tr('No purchase attempts recorded this session.')) + '</div>';
             if (log && log.innerHTML !== logHtml) log.innerHTML = logHtml;
         }
     }
@@ -2678,6 +2789,8 @@
         panel.dataset.mothWatchEvents = '1';
 
         panel.addEventListener('click', event => {
+            // Keep native market delegated handlers from processing Moth Watch clicks.
+            event.stopPropagation();
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
             const tab = target.closest('[data-moth-view]');
@@ -2918,11 +3031,17 @@
             host.appendChild(button);
         }
 
+        const label = button.querySelector('span');
+        const translatedLabel = tr('Moth Watch');
+        if (label && label.textContent !== translatedLabel) label.textContent = translatedLabel;
+        button.title = tr('Underpriced listings and market sniper settings');
+
         return button;
     }
 
     function ensureUi() {
         injectStyle();
+        if (state.watchOpen && state.lastLocale !== currentLocale()) renderWatch(true);
 
         /*
          * Current PokéIdle: RMT is a normal top-menu entry that opens the
@@ -3265,7 +3384,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.36 loaded');
+        console.info('[Moth Watch] v0.1.37 loaded');
     }
 
     bootstrap();
