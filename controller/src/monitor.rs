@@ -58,7 +58,6 @@ pub struct Health {
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
-    pub stream_bonus_last: String,
     pub stream_bonus_pct: f32,
     pub stream_watching: Vec<String>,
     pub stream_live_bonus: Vec<String>,
@@ -110,7 +109,6 @@ impl Default for Health {
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
-            stream_bonus_last: String::new(),
             stream_bonus_pct: 0.0,
             stream_watching: Vec::new(),
             stream_live_bonus: Vec::new(),
@@ -232,7 +230,6 @@ struct RuntimeProbe {
     stream_scan_live: u32,
     stream_scan_opened: u32,
     stream_bonus: String,
-    stream_bonus_last: String,
     stream_bonus_pct: f32,
     stream_watching: Vec<String>,
     stream_live_bonus: Vec<String>,
@@ -279,7 +276,6 @@ struct Probe {
     gold: u64,
     orbs: u64,
     stream_bonus: String,
-    stream_bonus_last: String,
     stream_bonus_pct: f32,
     stream_watching: Vec<String>,
     stream_live_bonus: Vec<String>,
@@ -375,9 +371,6 @@ fn monitor_loop(
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
                         current.stream_bonus = probe.stream_bonus.clone();
-                        if !probe.stream_bonus.is_empty() {
-                            current.stream_bonus_last = probe.stream_bonus.clone();
-                        }
                         current.stream_bonus_pct = probe.stream_bonus_pct;
                         current.stream_watching = probe.stream_watching;
                         current.stream_live_bonus = probe.stream_live_bonus;
@@ -705,11 +698,6 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         } else {
             runtime.stream_bonus.clone()
         },
-        stream_bonus_last: if runtime.stream_bonus_last.is_empty() {
-            page.get("streamBonus").and_then(Value::as_str).unwrap_or_default().to_string()
-        } else {
-            runtime.stream_bonus_last.clone()
-        },
         stream_bonus_pct: runtime.stream_bonus_pct,
         stream_watching: runtime.stream_watching,
         stream_live_bonus: runtime.stream_live_bonus,
@@ -869,13 +857,11 @@ fn probe_runtime_details(
             items
                 .iter()
                 .filter_map(|item| {
-                    let name = item.get("name").and_then(Value::as_str)?.trim();
                     let url = item.get("url").and_then(Value::as_str)?.trim();
-                    if name.is_empty() || url.is_empty() {
+                    if url.is_empty() {
                         return None;
                     }
                     Some(KickStream {
-                        name: name.to_string(),
                         url: url.to_string(),
                     })
                 })
@@ -1036,12 +1022,6 @@ fn probe_runtime_details(
         String::new()
     };
 
-    let stream_bonus_last = state
-        .get("lastStreamBonus")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-
     let mut xp_sources = Vec::new();
 
     if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
@@ -1105,16 +1085,8 @@ fn probe_runtime_details(
         xp_sources.push("Shop XP boost active".to_string());
     }
 
-    if !stream_bonus_last.is_empty()
-        && !xp_sources.iter().any(|item| item == &stream_bonus_last)
-    {
-        xp_sources.push(format!("Last seen: {}", stream_bonus_last));
-    }
-
-    for bonus in [stream_bonus.clone(), stream_bonus_last.clone()] {
-        if !bonus.is_empty() && !xp_bonuses.iter().any(|item| item == &bonus) {
-            xp_bonuses.push(bonus);
-        }
+    if !stream_bonus.is_empty() && !xp_bonuses.iter().any(|item| item == &stream_bonus) {
+        xp_bonuses.push(stream_bonus.clone());
     }
 
     Ok(RuntimeProbe {
@@ -1138,7 +1110,6 @@ fn probe_runtime_details(
         stream_scan_live: state.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_bonus,
-        stream_bonus_last,
         stream_bonus_pct,
         stream_watching,
         stream_live_bonus: live_names,
