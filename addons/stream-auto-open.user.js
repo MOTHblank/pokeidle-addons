@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      6.9.1
-// @description  Opens current official Twitch chats as lightweight popouts and delegates KICK streams to the native normal-browser manager; refreshes every 2 minutes.
+// @version      7.0.0
+// @description  Opens all current Twitch chat channels in one low-resource popout per Firefox profile; KICK streams remain delegated to the Rust controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -24,6 +24,8 @@
 
     let scanInProgress = false;
     const openStreams = new Map();
+    const MULTI_CHAT_KEY = 'twitch:multi-chat';
+    let multiChatSignature = '';
     let lastKickLive = [];
     let lastKickStateAvailable = false;
 
@@ -338,27 +340,26 @@
         });
     }
 
-    function openStream(item) {
-        // KICK channels are reported to the Rust interface, where they are
-        // combined into one MultiKick link for the user to open in a regular
-        // browser. Neither this userscript nor the controller opens KICK streams.
-        if (item.service === 'kick') {
-            return false;
-        }
+    function openMultiChat(items) {
+        const channels = [...new Set(
+            items
+                .map(item => channelName(item?.name).toLowerCase())
+                .filter(Boolean)
+        )].sort((a, b) => a.localeCompare(b));
 
-        // Twitch still uses its lightweight chat popout.
-        const targetUrl = item.chat;
+        if (!channels.length) return false;
 
-        if (!targetUrl) {
-            return false;
-        }
-
-        const key = item.service + ':' + text(item.name);
-        const current = openStreams.get(key);
-
-        if (current && !current.closed) {
+        const signature = channels.join(',');
+        const current = openStreams.get(MULTI_CHAT_KEY);
+        if (current && !current.closed && signature === multiChatSignature) {
             return true;
         }
+
+        const baseUrl = chatUrl('twitch', channels[0]);
+        if (!baseUrl) return false;
+
+        const target = new URL(baseUrl);
+        target.searchParams.set('moth-channels', channels.join(','));
 
         try {
             if (typeof GM_openInTab !== 'function') {
@@ -366,24 +367,26 @@
                 return false;
             }
 
-            const tab = GM_openInTab(targetUrl, {
+            // Open the replacement before closing the old tab so a failed
+            // open never loses all Twitch chat connections.
+            const tab = GM_openInTab(target.toString(), {
                 active: false,
                 insert: true,
                 setParent: true
             });
 
-            if (!tab) {
-                return false;
+            if (!tab) return false;
+
+            if (current && !current.closed) {
+                try { current.close(); } catch (_) {}
             }
 
-            openStreams.set(key, tab);
+            openStreams.set(MULTI_CHAT_KEY, tab);
+            multiChatSignature = signature;
+            console.info('[Moth] one Twitch chat popout configured for', channels.length, 'channel(s):', channels.join(', '));
             return true;
         } catch (error) {
-            console.error(
-                '[Moth] failed to open stream:',
-                targetUrl,
-                error
-            );
+            console.error('[Moth] failed to open consolidated Twitch chat:', target.toString(), error);
             return false;
         }
     }
@@ -429,6 +432,9 @@
                 } catch (_) {}
 
                 openStreams.delete(key);
+                if (key === MULTI_CHAT_KEY) {
+                    multiChatSignature = '';
+                }
             }
         }
     }
@@ -509,27 +515,42 @@
                     }));
 
             const liveKeys = new Set();
+            const twitchByKey = new Map();
             let opened = 0;
 
             for (const item of live.values()) {
-                const key =
-                    item.service + ':' + text(item.name);
-
+                const key = item.service + ':' + text(item.name);
                 liveKeys.add(key);
 
-                if (item.service === 'kick') {
-                    continue;
-                }
-
-                if (openStream(item)) {
-                    opened += 1;
+                if (item.service === 'twitch') {
+                    twitchByKey.set(key, item);
                 }
             }
 
-            // Only close old streams when PokéIdle actually exposed its stream
-            // state. A transient server/UI delay must never wipe valid chats.
+            // Keep Twitch channels that PokéIdle reports as actively rewarding
+            // even during a transient omission from its ordinary live list.
+            const protectedKeys = streamStateIsAvailable
+                ? rewardedTwitchKeys()
+                : new Set();
+
+            for (const key of protectedKeys) {
+                if (!key.startsWith('twitch:') || twitchByKey.has(key)) continue;
+
+                const item = normalizeLiveLink('twitch', key.slice('twitch:'.length));
+                if (item) twitchByKey.set(key, item);
+            }
+
+            const twitchChannels = [...twitchByKey.values()];
+            if (twitchChannels.length) {
+                liveKeys.add(MULTI_CHAT_KEY);
+                if (openMultiChat(twitchChannels)) {
+                    opened = 1;
+                }
+            }
+
+            // Only close the consolidated chat when PokéIdle actually exposed
+            // its stream state; an empty/transient read must not close valid chats.
             if (streamStateIsAvailable) {
-                const protectedKeys = rewardedTwitchKeys();
                 closeStreamsNotLive(liveKeys, protectedKeys);
             }
 
@@ -598,10 +619,10 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.title = 'Open current live Twitch chat and KICK watch pages';
+        button.title = 'Open one Twitch chat tab for all current live channels; KICK streams are handled by the controller.';
         button.setAttribute(
             'aria-label',
-            'Open current live Twitch and KICK streams'
+            'Open all current live Twitch chats in one tab'
         );
 
         const style = window.getComputedStyle(inventory);
