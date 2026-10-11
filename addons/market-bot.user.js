@@ -277,7 +277,8 @@
         'Waiting for market response for {name}…': 'Aguardando resposta do mercado para {name}…',
         'No offers found for {name} in {currency}.': 'Nenhuma oferta encontrada para {name} em {currency}.',
         'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.',
-        'no offers found': 'nenhuma oferta encontrada'
+        'no offers found': 'nenhuma oferta encontrada',
+        'market request timed out': 'tempo limite da consulta ao mercado'
     });
 
     function tr(key, params = null) {
@@ -747,6 +748,7 @@
         if (queuedIndex >= 0) {
             if (state.selectedItemFocus?.key === key && queuedIndex > 0) {
                 const [job] = state.detailQueue.splice(queuedIndex, 1);
+                job.enqueuedAt = now;
                 state.detailQueue.unshift(job);
                 scheduleItemDetailPump(0);
             }
@@ -809,6 +811,26 @@
         }
 
         if (!state.detailQueue.length) return;
+        const queuedJob = state.detailQueue[0];
+        if (
+            state.selectedItemFocus?.key === queuedJob.key &&
+            Date.now() - Number(queuedJob.enqueuedAt || Date.now()) >= 20000
+        ) {
+            state.detailQueue.shift();
+            state.detailQueued.delete(queuedJob.key);
+            state.itemDetailStatus = {
+                key: queuedJob.key,
+                itemId: queuedJob.itemId,
+                currency: queuedJob.currency,
+                status: 'timeout',
+                at: Date.now()
+            };
+            state.itemStatus = 'market request timed out';
+            queueRender();
+            if (state.detailQueue.length) scheduleItemDetailPump(0);
+            return;
+        }
+
         if (!state.socket || state.socket.readyState !== 1) {
             scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
             return;
