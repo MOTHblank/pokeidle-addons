@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.0.0
-// @description  Aggressively reduces Twitch popout-chat work while keeping its Twitch connection alive.
+// @version      3.1.0
+// @description  Joins multiple Twitch chats through one lightweight popout connection and discards unused chat events.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/*
@@ -23,6 +23,27 @@
 
     const isTwitch = /(^|\.)twitch\.tv$/i.test(location.hostname);
     const isPokéIdleApp = /(^|\.)pokeidle\.io$/i.test(location.hostname) && /^\/app(?:\/|$)/i.test(location.pathname);
+    const popoutMatch = isTwitch && location.pathname.match(/^\/popout\/([^/]+)\/chat(?:\/|$)/i);
+    const isTwitchChatPopout = !!popoutMatch;
+
+    function normalizeTwitchChannel(raw) {
+        const value = String(raw || '').trim().replace(/^#/, '').toLowerCase();
+        return /^[a-z0-9_]{1,25}$/.test(value) ? value : '';
+    }
+
+    const requestedMultiChatChannels = (() => {
+        if (!isTwitchChatPopout) return [];
+        let primary = '';
+        try { primary = decodeURIComponent(popoutMatch[1]); } catch (_) { primary = popoutMatch[1]; }
+        const queryChannels = new URLSearchParams(location.search)
+            .getAll('moth-channels')
+            .flatMap(value => value.split(','));
+        const values = [primary, ...queryChannels]
+            .map(normalizeTwitchChannel)
+            .filter(Boolean);
+        return [...new Set(values)].slice(0, 100);
+    })();
+    const isMultiChannelChat = requestedMultiChatChannels.length > 1;
 
     /*
      * Popout chat does not need to display or process messages for this setup.
@@ -44,7 +65,28 @@
 
         const separator = payload.includes('\r\n') ? '\r\n' : payload.includes('\n') ? '\n' : '\r';
         const lines = payload.split(/\r\n|\n|\r/);
-        const kept = lines.filter(line => !/(?:^|\s)(?:PRIVMSG|USERNOTICE)\s+#/i.test(line));
+        const kept = [];
+        const channelStateCommands = new Set([
+            'JOIN', 'PART', '353', '366', 'ROOMSTATE', 'USERSTATE',
+            'CLEARCHAT', 'CLEARMSG'
+        ]);
+
+        for (const line of lines) {
+            const match = line.match(/^(?:@[^ ]+\s+)?(?::[^ ]+\s+)?([A-Z0-9]+)(?:\s+([^ :]+))?/i);
+            const command = match ? match[1].toUpperCase() : '';
+            const target = match ? match[2] || '' : '';
+
+            if (command === 'PRIVMSG' || command === 'USERNOTICE') continue;
+
+            if (isMultiChannelChat) {
+                if (channelStateCommands.has(command)) continue;
+                if ((command === 'NOTICE' || command === 'MODE') && (target.startsWith('#') || line.includes(' #'))) {
+                    continue;
+                }
+            }
+
+            kept.push(line);
+        }
 
         if (kept.length === lines.length) {
             return { changed: false, drop: false, data: payload };
@@ -64,6 +106,9 @@
         const listenerWrappers = new WeakMap();
         const onMessageHandlers = new WeakMap();
         const filteredEvents = new WeakMap();
+        const multiJoinStarted = new WeakSet();
+        const joinBatchSize = 20;
+        const joinBatchDelayMs = 10_500;
 
         function filterEvent(event) {
             let result = filteredEvents.get(event);
@@ -142,6 +187,45 @@
                 else super(url, protocols);
             }
 
+            send(data) {
+                if (!isMultiChannelChat || !isTwitchIrcSocket(this) || typeof data !== 'string') {
+                    return super.send(data);
+                }
+
+                const pieces = data.split(/(\r\n|\n|\r)/);
+                for (let i = 0; i < pieces.length; i += 2) {
+                    const match = pieces[i].match(/^((?:@[^\s]+\s+)?JOIN\s+)(.+)$/i);
+                    if (!match || multiJoinStarted.has(this)) continue;
+
+                    multiJoinStarted.add(this);
+                    const batches = [];
+                    for (let start = 0; start < requestedMultiChatChannels.length; start += joinBatchSize) {
+                        batches.push(requestedMultiChatChannels.slice(start, start + joinBatchSize));
+                    }
+
+                    pieces[i] = match[1] + batches[0].map(channel => '#' + channel).join(',');
+                    for (let batchIndex = 1; batchIndex < batches.length; batchIndex += 1) {
+                        const batch = batches[batchIndex];
+                        window.setTimeout(() => {
+                            if (this.readyState !== NativeWebSocket.OPEN) return;
+                            try {
+                                NativeWebSocket.prototype.send.call(
+                                    this,
+                                    'JOIN ' + batch.map(channel => '#' + channel).join(',')
+                                );
+                            } catch (error) {
+                                console.warn('[Moth] Could not join next Twitch chat batch:', error);
+                            }
+                        }, batchIndex * joinBatchDelayMs);
+                    }
+
+                    console.info('[Moth] Multi-chat joined', batches[0].length, 'channel(s);', requestedMultiChatChannels.length, 'targeted in', batches.length, 'batch(es)');
+                    return super.send(pieces.join(''));
+                }
+
+                return super.send(data);
+            }
+
             addEventListener(type, listener, options) {
                 if (type === 'message' && isTwitchIrcSocket(this)) {
                     return super.addEventListener(type, getWrapper(this, listener), options);
@@ -203,10 +287,7 @@
         return;
     }
 
-    // Twitch popout chat is already the minimum viable Twitch surface.
-    const isTwitchChatPopout =
-        isTwitch && /\/popout\/[^/]+\/chat(?:[/?]|$)/i.test(location.pathname);
-
+    // One popout socket can join all current Twitch channels for this Firefox profile.
     if (isTwitchChatPopout) {
         installChatMessageFilter();
         runChatLowResource();
