@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.35
+// @version      0.1.36
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2091,6 +2091,16 @@
             '.moth-mw-settings-card h4{margin:0 0 8px;font-size:12px}',
             '.moth-mw-settings-card .moth-mw-config{display:grid;grid-template-columns:1fr;gap:8px;margin:0;padding:0;background:transparent;box-shadow:none}',
             '.moth-mw-settings-card .moth-mw-config label{font-size:11px}',
+            '.moth-mw-setting{min-width:0;display:flex;flex-direction:column;gap:4px;padding:4px 0}',
+            '.moth-mw-setting-help{display:block;font-size:10px;line-height:1.4;color:var(--sobre-mad-dim,#999)}',
+            '.moth-mw-setting-control{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px}',
+            '.moth-mw-setting-control>span{flex:1}',
+            '.moth-mw-setting-control input[type=number]{width:110px;max-width:42%;font-size:11px;padding:5px 6px}',
+            '.moth-mw-setting-control input[type=checkbox]{width:16px;height:16px;accent-color:var(--rx,#84325f)}',
+            '.moth-mw-range-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px}',
+            '.moth-mw-range-head output{font-weight:800;font-size:12px;color:var(--sobre-mad,#fff);font-variant-numeric:tabular-nums}',
+            '.moth-mw-range{width:100%;accent-color:var(--rx,#84325f);cursor:pointer}',
+            '.moth-mw-range-scale{display:flex;justify-content:space-between;color:var(--sobre-mad-dim,#888);font-size:9px}',
             '.moth-mw-reference-tools{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:9px;padding:10px;border-radius:8px;background:var(--vao,#21191d)}',
             '.moth-mw-reference-tools .moth-mw-reference-info{flex:1;min-width:230px;font-size:10px;color:var(--sobre-mad-dim,#aaa);line-height:1.5}',
             '.moth-mw-row{display:grid;grid-template-columns:minmax(170px,1.4fr) 120px 110px 90px minmax(110px,.8fr) auto;gap:7px;align-items:center;padding:7px;border-radius:6px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
@@ -2165,15 +2175,70 @@
         }
     }
 
+    const CONFIG_HELP = Object.freeze({
+        watchPercent: 'Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.',
+        scanSeconds: 'How often the market scanner checks again. Lower finds changes sooner but sends requests more often.',
+        scanItems: 'Scan ordinary market items and let you inspect their current offers.',
+        scanPokemon: 'Scan Pokémon listings and compare them with completed-sale history.',
+        scanDiamonds: 'Scan diamond listings and compare prices when a reference is available.',
+        autoBuy: 'Master switch. Automatic buying still requires a category, currency, price, and budget to pass all checks.',
+        autoBuyPercent: 'Maximum price for automatic buying, as a share of the reference. 40% means at least 60% below reference.',
+        autoBuyItems: 'Allow automatic purchases of ordinary items.',
+        autoBuyPokemon: 'Allow automatic purchases of Pokémon when enough sale samples exist.',
+        autoBuyDiamonds: 'Allow automatic purchases of diamonds when a usable reference exists.',
+        buyCoins: 'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.',
+        buyGems: 'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.',
+        buyWholeItemBatch: 'When enabled, buy as many units from an item listing as the budget allows. Turn off to request one unit.',
+        goldReserve: 'Money that must remain untouched. This is subtracted before calculating an affordable purchase.',
+        gemReserve: 'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.',
+        maxCoinsPerBuy: 'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.',
+        maxGemsPerBuy: 'Maximum Gem spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.',
+        minItemUnits: 'Require at least this many sold units before using an item reference for automatic buying.',
+        minPokemonSamples: 'Require this many completed Pokémon sales before automatic buying can use that reference.',
+        pokemonHistoryPages: 'How many pages of completed-sale history to read. More pages take longer and use more requests.'
+    });
+    const CONFIG_LIMITS = Object.freeze({
+        watchPercent: { min: 1, max: 100 },
+        autoBuyPercent: { min: 1, max: 100 },
+        scanSeconds: { min: 1, max: 120 },
+        minItemUnits: { min: 1, max: 1000000 },
+        minPokemonSamples: { min: 1, max: 1000000 },
+        pokemonHistoryPages: { min: 1, max: 50 },
+        goldReserve: { min: 0, max: Number.MAX_SAFE_INTEGER },
+        gemReserve: { min: 0, max: Number.MAX_SAFE_INTEGER },
+        maxCoinsPerBuy: { min: 0, max: Number.MAX_SAFE_INTEGER },
+        maxGemsPerBuy: { min: 0, max: Number.MAX_SAFE_INTEGER }
+    });
+
+    function normalizedConfigValue(key, raw) {
+        const limits = CONFIG_LIMITS[key] || { min: 0, max: Number.MAX_SAFE_INTEGER };
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return Number(config[key]) || limits.min;
+        return Math.min(limits.max, Math.max(limits.min, Math.round(value)));
+    }
+
     function configField(label, key, type, suffix) {
         const value = config[key];
-        if (type === 'checkbox') {
-            return '<label><span>' + escapeHtml(label) + '</span><input type="checkbox" data-moth-cfg="' +
-                escapeHtml(key) + '"' + (value ? ' checked' : '') + '></label>';
-        }
-        return '<label><span>' + escapeHtml(label) + (suffix ? ' <small>' + escapeHtml(suffix) + '</small>' : '') +
-            '</span><input type="number" data-moth-cfg="' + escapeHtml(key) + '" value="' +
-            escapeHtml(value) + '" min="0" step="1"></label>';
+        const help = CONFIG_HELP[key] || '';
+        const limit = CONFIG_LIMITS[key] || { min: 0, max: Number.MAX_SAFE_INTEGER };
+        const helpMarkup = help
+            ? '<small class="moth-mw-setting-help">' + escapeHtml(help) + '</small>'
+            : '';
+        const field = type === 'checkbox'
+            ? '<label class="moth-mw-setting-control"><input type="checkbox" data-moth-cfg="' +
+                escapeHtml(key) + '"' + (value ? ' checked' : '') + '><span>' + escapeHtml(label) + '</span></label>'
+            : type === 'range'
+                ? '<div class="moth-mw-range-head"><label for="moth-mw-cfg-' + escapeHtml(key) + '">' +
+                    escapeHtml(label) + '</label><output data-moth-cfg-value="' + escapeHtml(key) + '">' +
+                    escapeHtml(value) + '%</output></div>' +
+                    '<input id="moth-mw-cfg-' + escapeHtml(key) + '" class="moth-mw-range" type="range" data-moth-cfg="' +
+                    escapeHtml(key) + '" value="' + escapeHtml(value) + '" min="' + limit.min + '" max="' + limit.max + '" step="1">' +
+                    '<div class="moth-mw-range-scale"><span>' + limit.min + '%</span><span>' + limit.max + '%</span></div>'
+                : '<label class="moth-mw-setting-control"><span>' + escapeHtml(label) +
+                    (suffix ? ' <small>' + escapeHtml(suffix) + '</small>' : '') +
+                    '</span><input type="number" data-moth-cfg="' + escapeHtml(key) + '" value="' +
+                    escapeHtml(value) + '" min="' + limit.min + '" max="' + limit.max + '" step="1"></label>';
+        return '<div class="moth-mw-setting">' + field + helpMarkup + '</div>';
     }
 
     function renderItemInventory() {
@@ -2533,16 +2598,16 @@
                 content.innerHTML = '<div class="moth-mw-section-title"><h4>Market inventory</h4><span>Browse item types, then load the offers for a selected currency.</span></div><div id="moth-mw-inventory-content"></div>';
             } else if (state.watchView === 'automation') {
                 content.innerHTML =
-                    '<div class="moth-mw-section-title"><h4>Watching</h4><span>Choose what to scan and how far below reference an offer must be.</span></div>' +
+                    '<div class="moth-mw-section-title"><h4>Monitoring rules</h4><span>These settings only decide what is scanned and shown; they do not authorize purchases.</span></div>' +
                     '<div class="moth-mw-settings-grid">' +
                     '<section class="moth-mw-settings-card"><h4>Watch rules</h4><div class="moth-mw-config">' +
-                    configField('Watch at or below reference', 'watchPercent', 'number', '%') +
+                    configField('Watch price threshold', 'watchPercent', 'range', '%') +
                     configField('Scan interval', 'scanSeconds', 'number', 'seconds') +
                     configField('Watch items', 'scanItems', 'checkbox') + configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
                     configField('Watch diamonds', 'scanDiamonds', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><p class="moth-mw-setting-help">All purchase switches start off. Turn on the master switch only after checking the budget and allowed currencies.</p><div class="moth-mw-config">' +
                     configField('Enable automatic buying', 'autoBuy', 'checkbox') +
-                    configField('Auto-buy at or below reference', 'autoBuyPercent', 'number', '%') +
+                    configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
                     configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
                     configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
                     configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
@@ -2686,10 +2751,17 @@
 
         panel.addEventListener('input', event => {
             const target = event.target instanceof Element ? event.target : null;
-            if (!target || !target.matches('#moth-mw-search')) return;
-            state.opportunitySearch = target.value;
-            try { localStorage.setItem('moth-pokeidle-market-watch-search-v1', state.opportunitySearch); } catch {}
-            renderWatch();
+            if (!target) return;
+            if (target.matches('#moth-mw-search')) {
+                state.opportunitySearch = target.value;
+                try { localStorage.setItem('moth-pokeidle-market-watch-search-v1', state.opportunitySearch); } catch {}
+                renderWatch();
+                return;
+            }
+            if (target.matches('input[type="range"][data-moth-cfg]')) {
+                const output = q('[data-moth-cfg-value="' + target.dataset.mothCfg + '"]', panel);
+                if (output) output.textContent = target.value + '%';
+            }
         });
 
         panel.addEventListener('change', event => {
@@ -2698,7 +2770,11 @@
             if (target.matches('[data-moth-cfg]')) {
                 const key = target.dataset.mothCfg;
                 if (!(key in DEFAULTS)) return;
-                config[key] = target.type === 'checkbox' ? target.checked : Math.max(0, Number(target.value) || 0);
+                config[key] = target.type === 'checkbox' ? target.checked : normalizedConfigValue(key, target.value);
+                if (target.matches('input[type="range"]')) {
+                    const output = q('[data-moth-cfg-value="' + key + '"]', panel);
+                    if (output) output.textContent = config[key] + '%';
+                }
                 saveConfig();
                 if (key === 'pokemonHistoryPages' || key === 'minPokemonSamples') ensurePokemonHistory(true);
                 runScan(true);
@@ -3189,7 +3265,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.35 loaded');
+        console.info('[Moth Watch] v0.1.36 loaded');
     }
 
     bootstrap();
