@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.3.0
+// @version      5.4.0
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -20,8 +20,7 @@
     const NATIVE_OPT_OWNER_KEY = 'moth-pokeidle-performance-native-opt-owner';
     const NATIVE_OPT_BASE_KEY = 'moth-pokeidle-performance-native-opt-base';
     const TRIGGER_ID = 'moth-performance-trigger';
-    const DETAILS_TRIGGER_ID = 'moth-performance-details-trigger';
-    const PANEL_ID = 'moth-performance-panel';
+    const TELEMETRY_ID = 'moth-performance-telemetry';
     const STYLE_ID = 'moth-performance-style';
 
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -1714,8 +1713,7 @@
                 opacity: .55 !important;
             }
 
-            #${TRIGGER_ID},
-            #${DETAILS_TRIGGER_ID} {
+            #${TRIGGER_ID} {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
@@ -1741,86 +1739,15 @@
                 border-color: rgba(100,210,130,.35) !important;
             }
 
-            #${DETAILS_TRIGGER_ID} {
-                margin-left: 4px !important;
-                border-radius: 5px !important;
-                opacity: .8 !important;
-            }
-
             #${TRIGGER_ID}.warning {
                 color: #ffd27c !important;
                 border-color: rgba(255,190,80,.38) !important;
             }
 
-            #${PANEL_ID} {
-                margin: 7px 0 9px !important;
-                padding: 8px !important;
-                border: 1px solid rgba(255,255,255,.12) !important;
-                border-radius: 7px !important;
-                background: rgba(20,16,19,.65) !important;
-                color: #eee !important;
-                font: 10px/1.25 system-ui,sans-serif !important;
-            }
-
-            #${PANEL_ID}[hidden] {
+            #${TELEMETRY_ID} {
                 display: none !important;
             }
 
-            #${PANEL_ID} * {
-                box-sizing: border-box !important;
-            }
-
-            #${PANEL_ID} .mpp-head,
-            #${PANEL_ID} .mpp-row {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-
-            #${PANEL_ID} .mpp-head {
-                margin-bottom: 7px;
-            }
-
-            #${PANEL_ID} .mpp-head strong,
-            #${PANEL_ID} .mpp-row label {
-                flex: 1;
-            }
-
-            #${PANEL_ID} .mpp-metrics {
-                display: grid;
-                grid-template-columns: repeat(4,1fr);
-                gap: 4px;
-                margin-bottom: 7px;
-            }
-
-            #${PANEL_ID} .mpp-metric {
-                padding: 4px;
-                border-radius: 5px;
-                background: rgba(255,255,255,.05);
-                text-align: center;
-            }
-
-            #${PANEL_ID} .mpp-metric b {
-                display: block;
-                font-size: 11px;
-            }
-
-            #${PANEL_ID} .mpp-metric span {
-                color: #998f93;
-                font-size: 8px;
-            }
-
-            #${PANEL_ID} .mpp-row {
-                min-height: 27px;
-            }
-
-            #${PANEL_ID} .mpp-status {
-                margin-top: 6px;
-                padding-top: 6px;
-                border-top: 1px solid rgba(255,255,255,.07);
-                color: #a89da2;
-                font-size: 9px;
-            }
         `;
 
         (
@@ -1892,65 +1819,27 @@
     // Light control UI
     // ------------------------------------------------------------------
 
-    function ensurePanel() {
-        let panel =
-            q('#' + PANEL_ID);
+    function ensureTelemetry() {
+        let telemetry = q('#' + TELEMETRY_ID);
 
-        if (panel) {
-            return panel;
+        if (!telemetry) {
+            telemetry = document.createElement('div');
+            telemetry.id = TELEMETRY_ID;
+            telemetry.hidden = true;
+            telemetry.setAttribute('aria-hidden', 'true');
+            (document.body || document.documentElement)?.appendChild(telemetry);
         }
 
-        const host =
-            q('#auto-corpo');
+        for (const id of ['mpp-browser-fps', 'mpp-scene-runs']) {
+            if (q('#' + id, telemetry)) continue;
 
-        if (!host) {
-            return null;
+            const value = document.createElement('span');
+            value.id = id;
+            value.textContent = '0';
+            telemetry.appendChild(value);
         }
 
-        panel =
-            document.createElement(
-                'section'
-            );
-
-        panel.id = PANEL_ID;
-        panel.hidden = true;
-
-        panel.innerHTML = `
-            <div class="mpp-head">
-                <strong>Performance+</strong>
-                <span id="mpp-enabled-label">On</span>
-            </div>
-
-            <div class="mpp-metrics">
-                <div class="mpp-metric">
-                    <b id="mpp-performance-fps">—</b>
-                    <span>Performance+ FPS</span>
-                </div>
-
-                <div class="mpp-metric">
-                    <b id="mpp-scene-skips">0</b>
-                    <span>scene skipped/s</span>
-                </div>
-
-                <div class="mpp-metric">
-                    <b id="mpp-ui-skips">0</b>
-                    <span>UI skips/s</span>
-                </div>
-
-                <div class="mpp-metric">
-                    <b id="mpp-long">0</b>
-                    <span>long ms/s</span>
-                </div>
-            </div>
-
-            <div class="mpp-status" id="mpp-status">
-                Loading campo.mjs hook…
-            </div>
-        `;
-
-        host.prepend(panel);
-
-        return panel;
+        return telemetry;
     }
 
     function ensureTrigger() {
@@ -1960,7 +1849,7 @@
 
         installStyles();
         installCampoHook();
-        ensurePanel();
+        ensureTelemetry();
 
         const header =
             q('#p-auto .painel-cab-auto') ||
@@ -1986,39 +1875,13 @@
             });
         }
 
-        let detailsTrigger = q('#' + DETAILS_TRIGGER_ID);
-        if (!detailsTrigger) {
-            detailsTrigger = document.createElement('button');
-            detailsTrigger.type = 'button';
-            detailsTrigger.id = DETAILS_TRIGGER_ID;
-            detailsTrigger.textContent = 'Stats';
-            detailsTrigger.title = 'Show Performance+ statistics';
-            detailsTrigger.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                const panel = ensurePanel();
-                if (panel) {
-                    panel.hidden = !panel.hidden;
-                }
-            });
-        }
-
         const collapse = q('#btn-auto-toggle', header);
         if (collapse) {
             if (trigger.parentElement !== header) {
                 header.insertBefore(trigger, collapse);
             }
-            if (detailsTrigger.parentElement !== header) {
-                header.insertBefore(detailsTrigger, collapse);
-            }
-        } else {
-            if (trigger.parentElement !== header) {
-                header.appendChild(trigger);
-            }
-            if (detailsTrigger.parentElement !== header) {
-                header.appendChild(detailsTrigger);
-            }
+        } else if (trigger.parentElement !== header) {
+            header.appendChild(trigger);
         }
 
         return true;
@@ -2028,90 +1891,17 @@
         const trigger =
             q('#' + TRIGGER_ID);
 
-        const panel =
-            q('#' + PANEL_ID);
-
-        if (panel) {
-            setText(
-                q('#mpp-enabled-label', panel),
-                settings.enabled ? 'On' : 'Off'
-            );
-
-            setText(
-                q(
-                    '#mpp-performance-fps',
-                    panel
-                ),
-                document.hidden
-                    ? 'BG'
-                    : currentMode === 'paused'
-                        ? 'Paused'
-                        : campoRunsPerSecond
-            );
-
-            setText(
-                q(
-                    '#mpp-scene-skips',
-                    panel
-                ),
-                isNativeEconomy()
-                    ? 'Eco'
-                    : currentMode === 'paused'
-                        ? 'Paused'
-                        : campoSkippedPerSecond
-            );
-
-            setText(
-                q(
-                    '#mpp-ui-skips',
-                    panel
-                ),
-                uiTimerSkippedPerSecond
-            );
-
-            setText(
-                q(
-                    '#mpp-long',
-                    panel
-                ),
-                Math.round(
-                    longTaskMsPerSecond
-                )
-            );
-
-            const status =
-                q(
-                    '#mpp-status',
-                    panel
-                );
-
-            let statusText;
-
-            if (isNativeEconomy()) {
-                statusText =
-                    'Native Economy is active; Auto Catch cannot receive fallen targets.';
-            } else if (
-                !campoHookInstalled ||
-                !uiTimerHookInstalled
-            ) {
-                statusText =
-                    'Could not install one or more page-world performance hooks.';
-            } else if (!campoLoopFound) {
-                statusText =
-                    'Hook ready; waiting for campo.mjs renderer.';
-            } else if (!settings.enabled) {
-                statusText =
-                    'campo.mjs renderer found; Performance+ disabled.';
-            } else {
-                statusText =
-                    'Performance: map renderer paused · capture prompt preserved · chat hidden · party/active animations frozen · native Optimized.';
-            }
-
-            setText(
-                status,
-                statusText
-            );
-        }
+        ensureTelemetry();
+        setText(
+            q('#mpp-browser-fps'),
+            document.hidden || currentMode === 'paused'
+                ? 0
+                : Math.round(campoRunsPerSecond)
+        );
+        setText(
+            q('#mpp-scene-runs'),
+            Math.round(campoRunsPerSecond)
+        );
 
         if (!trigger) {
             return;
@@ -2202,7 +1992,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v5.0.0 loaded'
+            '[PokéIdle Performance+] v5.4.0 loaded'
         );
     }
 
