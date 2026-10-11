@@ -102,7 +102,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
         "LAUNCH ENABLED" => "INICIAR HABILITADAS",
-        "MINIMIZE" => "MINIMIZAR",
+        "MINIMIZE TO TASKBAR" => "MINIMIZAR NA BARRA DE TAREFAS",
+        "Minimize this window to the Windows taskbar" => "Minimiza esta janela para a barra de tarefas do Windows",
         "Accounts" => "Contas",
         "◫  Accounts" => "◫  Contas",
         "Account Manager" => "Gerenciador de contas",
@@ -949,7 +950,7 @@ impl eframe::App for ControllerApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(tr("MINIMIZE"))
+                                    RichText::new(tr("MINIMIZE TO TASKBAR"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -958,6 +959,7 @@ impl eframe::App for ControllerApp {
                                 .stroke(Stroke::new(1.0, BORDER))
                                 .corner_radius(8.0),
                             )
+                            .on_hover_text(tr("Minimize this window to the Windows taskbar"))
                             .clicked()
                         {
                             ui.ctx().send_viewport_cmd(
