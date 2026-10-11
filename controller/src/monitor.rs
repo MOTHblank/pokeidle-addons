@@ -869,13 +869,11 @@ fn probe_runtime_details(
             items
                 .iter()
                 .filter_map(|item| {
-                    let name = item.get("name").and_then(Value::as_str)?.trim();
                     let url = item.get("url").and_then(Value::as_str)?.trim();
-                    if name.is_empty() || url.is_empty() {
+                    if url.is_empty() {
                         return None;
                     }
                     Some(KickStream {
-                        name: name.to_string(),
                         url: url.to_string(),
                     })
                 })
