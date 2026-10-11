@@ -245,7 +245,27 @@
         'Purchase refused: {message}': 'Compra recusada: {message}',
         'Skipped: not enough spendable balance for {name}': 'Ignorado: saldo disponível insuficiente para {name}',
         'no reference captured yet': 'nenhuma referência capturada ainda',
-        'loading {name} offers': 'carregando ofertas de {name}'
+        'loading {name} offers': 'carregando ofertas de {name}',
+        'Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.': 'Mostra uma oferta quando o preço estiver nesta proporção ou abaixo da referência. 70% significa pelo menos 30% abaixo da referência.',
+        'How often the market scanner checks again. Lower finds changes sooner but sends requests more often.': 'Define a frequência das consultas ao mercado. Intervalos menores encontram mudanças mais cedo, mas enviam mais requisições.',
+        'Scan ordinary market items and let you inspect their current offers.': 'Analisa itens comuns do mercado e permite consultar as ofertas atuais.',
+        'Scan Pokémon listings and compare them with completed-sale history.': 'Analisa anúncios de Pokémon e compara os preços com o histórico de vendas concluídas.',
+        'Scan diamond listings and compare prices when a reference is available.': 'Analisa anúncios de diamantes e compara os preços quando há uma referência disponível.',
+        'Master switch. Automatic buying still requires a category, currency, price, and budget to pass all checks.': 'Chave geral. Para comprar automaticamente, a categoria, a moeda, o preço e o orçamento ainda precisam passar por todas as verificações.',
+        'Maximum price for automatic buying, as a share of the reference. 40% means at least 60% below reference.': 'Preço máximo para compras automáticas em relação à referência. 40% significa pelo menos 60% abaixo da referência.',
+        'Allow automatic purchases of ordinary items.': 'Permite comprar itens comuns automaticamente.',
+        'Allow automatic purchases of Pokémon when enough sale samples exist.': 'Permite comprar Pokémon automaticamente quando há amostras de vendas suficientes.',
+        'Allow automatic purchases of diamonds when a usable reference exists.': 'Permite comprar diamantes automaticamente quando há uma referência utilizável.',
+        'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com moedas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
+        'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com gemas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
+        'When enabled, buy as many units from an item listing as the budget allows. Turn off to request one unit.': 'Quando ativado, compra tantas unidades de um anúncio quanto o orçamento permitir. Desative para solicitar apenas uma unidade.',
+        'Money that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de moedas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
+        'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de gemas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
+        'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em moedas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
+        'Maximum Gem spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em gemas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
+        'Require at least this many sold units before using an item reference for automatic buying.': 'Exige pelo menos essa quantidade de unidades vendidas antes de usar a referência de um item em compras automáticas.',
+        'Require this many completed Pokémon sales before automatic buying can use that reference.': 'Exige essa quantidade de vendas concluídas de Pokémon antes de usar a referência em compras automáticas.',
+        'How many pages of completed-sale history to read. More pages take longer and use more requests.': 'Quantidade de páginas do histórico de vendas concluídas a consultar. Mais páginas demoram mais e fazem mais requisições.'
     });
 
     function tr(key, params = null) {
