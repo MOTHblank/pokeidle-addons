@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.37
+// @version      0.1.38
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -95,7 +95,10 @@
         candidates: new Map(),
         detailQueue: [],
         detailQueued: new Set(),
+        detailPending: null,
         lastDetailRequest: new Map(),
+        selectedItemFocus: null,
+        itemDetailStatus: null,
         pendingBuy: null,
         attemptedListings: new Map(),
         buyLog: [],
@@ -265,7 +268,15 @@
         'Maximum Gem spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em gemas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
         'Require at least this many sold units before using an item reference for automatic buying.': 'Exige pelo menos essa quantidade de unidades vendidas antes de usar a referência de um item em compras automáticas.',
         'Require this many completed Pokémon sales before automatic buying can use that reference.': 'Exige essa quantidade de vendas concluídas de Pokémon antes de usar a referência em compras automáticas.',
-        'How many pages of completed-sale history to read. More pages take longer and use more requests.': 'Quantidade de páginas do histórico de vendas concluídas a consultar. Mais páginas demoram mais e fazem mais requisições.'
+        'How many pages of completed-sale history to read. More pages take longer and use more requests.': 'Quantidade de páginas do histórico de vendas concluídas a consultar. Mais páginas demoram mais e fazem mais requisições.',
+        'Regular market': 'Mercado normal',
+        'Return to regular market': 'Voltar ao mercado normal',
+        'Open Moth Watch': 'Abrir Moth Watch',
+        'Showing offers for {name} in {currency}.': 'Exibindo ofertas de {name} em {currency}.',
+        'Show all opportunities': 'Mostrar todas as oportunidades',
+        'Waiting for market response for {name}…': 'Aguardando resposta do mercado para {name}…',
+        'No offers found for {name} in {currency}.': 'Nenhuma oferta encontrada para {name} em {currency}.',
+        'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.'
     });
 
     function tr(key, params = null) {
@@ -730,7 +741,7 @@
     function queueItemDetail(itemId, currency) {
         const key = String(itemId) + ':' + currency;
         const now = Date.now();
-        if (state.detailQueued.has(key)) return;
+        if (state.detailQueued.has(key) || state.detailPending?.key === key) return;
         if (now - Number(state.lastDetailRequest.get(key) || 0) < Math.max(1000, config.scanSeconds * 800)) return;
         state.detailQueued.add(key);
         state.detailQueue.push({ itemId: Number(itemId), currency: currency, key: key });
@@ -745,9 +756,50 @@
         }, Math.max(0, Number(delay) || 0));
     }
 
+    function finishItemDetailRequest(pending, result) {
+        if (!pending || state.detailPending?.key !== pending.key) return;
+        state.detailPending = null;
+        if (state.detailPumpTimer) {
+            clearTimeout(state.detailPumpTimer);
+            state.detailPumpTimer = null;
+        }
+        if (state.selectedItemFocus?.key === pending.key) {
+            state.itemDetailStatus = {
+                key: pending.key,
+                itemId: pending.itemId,
+                currency: pending.currency,
+                status: result,
+                at: Date.now()
+            };
+            if (result === 'loaded') {
+                state.itemStatus = 'live';
+            } else if (result === 'empty') {
+                state.itemStatus = 'no offers for ' + catalogName(pending.itemId);
+            }
+        }
+        queueRender();
+        if (state.detailQueue.length) {
+            scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
+        }
+    }
+
     function pumpItemDetails() {
+        if (state.detailPending) {
+            const pending = state.detailPending;
+            const elapsed = Date.now() - Number(pending.sentAt || 0);
+            const remaining = 6500 - elapsed;
+            if (remaining > 0) {
+                scheduleItemDetailPump(remaining + 25);
+                return;
+            }
+            finishItemDetailRequest(pending, 'timeout');
+        }
+
         if (!state.detailQueue.length) return;
-        if (!state.socket || state.socket.readyState !== 1) return;
+        if (!state.socket || state.socket.readyState !== 1) {
+            scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
+            return;
+        }
 
         const delay = backgroundDelayMs();
         if (delay > 0) {
@@ -764,10 +816,13 @@
         state.detailQueue.shift();
         state.detailQueued.delete(job.key);
         state.lastDetailRequest.set(job.key, Date.now());
-
-        if (state.detailQueue.length) {
-            scheduleItemDetailPump(BACKGROUND_MIN_GAP_MS);
-        }
+        state.detailPending = {
+            itemId: job.itemId,
+            currency: job.currency,
+            key: job.key,
+            sentAt: Date.now()
+        };
+        scheduleItemDetailPump(6525);
     }
 
     function discoveryRatio() {
@@ -903,10 +958,39 @@
     }
 
     function handleItemListings(message) {
-        const itemId = Number(message.itemId);
-        const currency = message.moeda === 'orb' ? 'orb' : 'gold';
+        const rawItemId = Number(message.itemId ?? message.item?.id ?? message.item?.itemId);
+        const hasResponseItemId = Number.isFinite(rawItemId) && rawItemId > 0;
+        const responseCurrency = message.moeda === 'orb' || message.moeda === 'gold'
+            ? message.moeda
+            : null;
+        const pending = state.detailPending;
+        const pendingMatches =
+            !!pending &&
+            (!hasResponseItemId || rawItemId === pending.itemId) &&
+            (!responseCurrency || responseCurrency === pending.currency);
+
+        const itemId = hasResponseItemId
+            ? rawItemId
+            : pendingMatches
+                ? pending.itemId
+                : NaN;
+        const currency = responseCurrency || (pendingMatches ? pending.currency : 'gold');
         const lines = Array.isArray(message.linhas) ? message.linhas : [];
 
+        if (!Number.isFinite(itemId) || itemId <= 0) return;
+        if (pending && hasResponseItemId && rawItemId !== pending.itemId) {
+            // This can be a response from the native market instead of our queued detail request.
+            processItemListingPayload(itemId, currency, lines);
+            return;
+        }
+
+        if (pendingMatches) {
+            finishItemDetailRequest(pending, lines.length ? 'loaded' : 'empty');
+        }
+        processItemListingPayload(itemId, currency, lines);
+    }
+
+    function processItemListingPayload(itemId, currency, lines) {
         const activePrices = lines
             .map(listing => Number(listing && listing.preco))
             .filter(price => Number.isFinite(price) && price > 0);
@@ -2188,7 +2272,7 @@
         style.id = 'moth-market-watch-style';
         style.textContent = [
             '#moth-market-watch-tab{white-space:nowrap}',
-            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
+            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel):not(.cm-topo){display:none!important}',
             '#moth-market-watch-panel{display:none;width:100%;height:100%;min-height:420px;overflow:auto;padding:10px;color:var(--sobre-mad,#eee)}',
             '#modal-corpo.moth-watch-active>#moth-market-watch-panel{display:block!important}',
             '.cm-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
@@ -2237,6 +2321,7 @@
             '.moth-mw-inventory-price{display:flex;align-items:center;justify-content:space-between;gap:5px;flex-wrap:wrap}',
             '@media(max-width:720px){.moth-mw-inventory-row{grid-template-columns:1fr;gap:5px}.moth-mw-inventory-price{justify-content:flex-start}}',
             '.moth-mw-list{display:grid;gap:5px}',
+            '.moth-mw-item-focus{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:7px 9px;border-radius:6px;background:var(--vao,#21191d);font-size:10px;color:var(--sobre-mad-dim,#bbb)}',
             '.moth-mw-workspace{display:flex;flex-direction:column;gap:9px;min-height:0}',
             '.moth-mw-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:4px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
             '.moth-mw-tab{flex:1;min-width:110px;border:0;border-radius:6px;padding:8px 10px;background:transparent;color:var(--sobre-mad-dim,#bbb);font-size:11px;font-weight:700;cursor:pointer}',
@@ -2483,7 +2568,23 @@
         if (!list) return;
 
         if (!candidates.length) {
-            const empty = '<div class="moth-mw-empty">No matching opportunities. Try a wider watch threshold or inspect Market inventory.</div>';
+            const focus = state.selectedItemFocus;
+            let emptyText = tr('No matching opportunities. Try a wider watch threshold or inspect Market inventory.');
+            if (focus) {
+                const requestStatus = state.itemDetailStatus?.key === focus.key ? state.itemDetailStatus.status : 'idle';
+                if (requestStatus === 'loading' || state.detailPending?.key === focus.key ||
+                    state.detailQueue.some(job => job.key === focus.key)) {
+                    emptyText = tr('Waiting for market response for {name}…', { name: catalogName(focus.itemId) });
+                } else if (requestStatus === 'timeout') {
+                    emptyText = tr('Market did not respond for {name}. Try loading the offers again.', { name: catalogName(focus.itemId) });
+                } else {
+                    emptyText = tr('No offers found for {name} in {currency}.', {
+                        name: catalogName(focus.itemId),
+                        currency: tr(focus.currency === 'orb' ? 'Gems' : 'Coins')
+                    });
+                }
+            }
+            const empty = '<div class="moth-mw-empty">' + escapeHtml(emptyText) + '</div>';
             if (list.children.length !== 1 || !list.firstElementChild.classList.contains('moth-mw-empty') ||
                 list.firstElementChild.outerHTML !== empty) {
                 list.innerHTML = empty;
@@ -2670,6 +2771,8 @@
         const searchTerm = normalize(state.opportunitySearch);
         const candidates = Array.from(state.candidates.values()).filter(c => {
             if (searchTerm && ![c.name, c.seller, c.kind, c.listingId].some(value => normalize(value).includes(searchTerm))) return false;
+            const focus = state.selectedItemFocus;
+            if (focus && (c.kind !== 'item' || Number(c.itemId) !== focus.itemId || c.currency !== focus.currency)) return false;
             const manuallyLoaded = c.kind === 'item' && state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
             // Unreferenced diamonds remain inspectable. Referenced diamonds must meet the watch threshold.
             const visibleWithoutReference = manuallyLoaded || (c.kind === 'diamond' && !(Number(c.average) > 0));
@@ -2718,6 +2821,7 @@
                     filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') + '</div>' +
                     sortSelect() + '</div>' +
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Opportunities')) + '</h4><span id="moth-mw-opportunity-count"></span></div>' +
+                    '<div class="moth-mw-item-focus" id="moth-mw-item-focus"></div>' +
                     '<div class="moth-mw-list" id="moth-mw-opportunity-list"></div>';
             } else if (state.watchView === 'inventory') {
                 content.innerHTML = '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Market inventory')) + '</h4><span>' +
@@ -2773,6 +2877,19 @@
             if (sort && sort.value !== config.viewSort) sort.value = config.viewSort;
             const count = q('#moth-mw-opportunity-count', content);
             if (count) count.textContent = tr('{count} matching listings · purchases are serialized while awaiting server confirmation', { count: num(candidates.length) });
+            const focusBanner = q('#moth-mw-item-focus', content);
+            if (focusBanner) {
+                const focus = state.selectedItemFocus;
+                if (focus) {
+                    const name = catalogName(focus.itemId);
+                    const currencyLabel = tr(focus.currency === 'orb' ? 'Gems' : 'Coins');
+                    focusBanner.innerHTML =
+                        '<span>' + escapeHtml(tr('Showing offers for {name} in {currency}.', { name, currency: currencyLabel })) + '</span>' +
+                        '<button type="button" class="moth-mw-btn" id="moth-mw-clear-item-focus">' + escapeHtml(tr('Show all opportunities')) + '</button>';
+                } else {
+                    focusBanner.innerHTML = '';
+                }
+            }
             const list = q('#moth-mw-opportunity-list', content);
             updateCandidateRows(list, candidates);
         } else if (state.watchView === 'inventory') {
@@ -2844,12 +2961,27 @@
                 const currency = itemButton.dataset.mothItemCurrency === 'orb' ? 'orb' : 'gold';
                 if (!(itemId > 0)) return;
                 const key = String(itemId) + ':' + currency;
+                state.selectedItemFocus = { itemId, currency, key };
+                state.itemDetailStatus = { key, itemId, currency, status: 'loading', at: Date.now() };
                 state.loadedItemKeys.add(key);
                 state.lastDetailRequest.delete(key);
+                state.opportunitySearch = '';
+                config.viewKind = 'item';
+                config.viewCurrency = currency;
+                config.viewSort = 'price-asc';
+                saveConfig();
                 queueItemDetail(itemId, currency);
                 state.itemStatus = 'loading ' + catalogName(itemId) + ' offers';
                 state.watchView = 'opportunities';
                 try { localStorage.setItem('moth-pokeidle-market-watch-view-v1', 'opportunities'); } catch {}
+                renderWatch(true);
+                return;
+            }
+            if (target.closest('#moth-mw-clear-item-focus')) {
+                state.selectedItemFocus = null;
+                config.viewKind = 'all';
+                config.viewCurrency = 'all';
+                saveConfig();
                 renderWatch(true);
                 return;
             }
@@ -2969,10 +3101,8 @@
         const button =
             q('#moth-market-watch-tab');
 
-        if (button) {
-            button.classList.add('on');
-            button.setAttribute('aria-pressed', 'true');
-        }
+        if (button) button.classList.add('on');
+        updateWatchButtonLabel(button);
 
         /*
          * Paint the UI first. Market/history requests can continue from the
@@ -3004,10 +3134,17 @@
         const button =
             q('#moth-market-watch-tab');
 
-        if (button) {
-            button.classList.remove('on');
-            button.setAttribute('aria-pressed', 'false');
-        }
+        if (button) button.classList.remove('on');
+        updateWatchButtonLabel(button);
+    }
+
+    function updateWatchButtonLabel(button = q('#moth-market-watch-tab')) {
+        if (!button) return;
+        const label = button.querySelector('span');
+        const text = tr(state.watchOpen ? 'Regular market' : 'Moth Watch');
+        if (label && label.textContent !== text) label.textContent = text;
+        button.title = tr(state.watchOpen ? 'Return to regular market' : 'Open Moth Watch');
+        button.setAttribute('aria-pressed', state.watchOpen ? 'true' : 'false');
     }
 
     function installWatchButton(host) {
@@ -3051,11 +3188,7 @@
             host.appendChild(button);
         }
 
-        const label = button.querySelector('span');
-        const translatedLabel = tr('Moth Watch');
-        if (label && label.textContent !== translatedLabel) label.textContent = translatedLabel;
-        button.title = tr('Underpriced listings and market sniper settings');
-
+        updateWatchButtonLabel(button);
         return button;
     }
 
@@ -3404,7 +3537,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.37 loaded');
+        console.info('[Moth Watch] v0.1.38 loaded');
     }
 
     bootstrap();
