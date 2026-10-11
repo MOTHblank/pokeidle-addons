@@ -103,6 +103,8 @@
         scanTimer: null,
         watchOpen: false,
         watchView: (() => { try { const value = localStorage.getItem('moth-pokeidle-market-watch-view-v1'); return ['opportunities', 'inventory', 'automation', 'activity'].includes(value) ? value : 'opportunities'; } catch { return 'opportunities'; } })(),
+        opportunitySearch: (() => { try { return localStorage.getItem('moth-pokeidle-market-watch-search-v1') || ''; } catch { return ''; } })(),
+        firstSeenCache: new Map(),
         itemInventoryCollapsed: (() => {
             try { return localStorage.getItem(ITEM_INVENTORY_COLLAPSED_KEY) === '1'; } catch { return false; }
         })(),
@@ -729,8 +731,14 @@
     }
 
     function addCandidate(candidate) {
+        const now = Date.now();
         const previous = state.candidates.get(candidate.key);
+        const cached = state.firstSeenCache.get(candidate.key);
+        const cachedIsFresh = cached && now - Number(cached.lastSeenAt || 0) <= 60 * 60 * 1000;
         if (previous && Number(previous.firstSeenAt) > 0) candidate.firstSeenAt = previous.firstSeenAt;
+        else if (cachedIsFresh && Number(cached.firstSeenAt) > 0) candidate.firstSeenAt = cached.firstSeenAt;
+        candidate.firstSeenAt = Number(candidate.firstSeenAt) > 0 ? Number(candidate.firstSeenAt) : now;
+        state.firstSeenCache.set(candidate.key, { firstSeenAt: candidate.firstSeenAt, lastSeenAt: now });
         state.candidates.set(candidate.key, candidate);
         scheduleCandidateRelease(candidate);
         maybeAutoBuy(candidate);
@@ -1761,6 +1769,9 @@
         for (const [id, until] of state.attemptedListings) {
             if (until < Date.now()) state.attemptedListings.delete(id);
         }
+        for (const [key, seen] of state.firstSeenCache) {
+            if (nowServer - Number(seen.lastSeenAt || 0) > 60 * 60 * 1000) state.firstSeenCache.delete(key);
+        }
     }
 
     function decodeMessage(data) {
@@ -2059,6 +2070,7 @@
             '.moth-mw-overview{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 10px;border-radius:7px;background:var(--vao,#21191d)}',
             '.moth-mw-overview b{font-size:12px}',
             '.moth-mw-overview span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '#moth-mw-search{flex:1;min-width:180px;min-height:28px;padding:5px 8px;border:1px solid var(--mad-linha,#555);border-radius:5px;background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:11px}',
             '.moth-mw-section-title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:4px 0 7px}',
             '.moth-mw-section-title h4{margin:0;font-size:13px}',
             '.moth-mw-section-title span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
@@ -2380,7 +2392,9 @@
         const baseline = baselineStats();
         const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency) ? config.viewCurrency : 'all';
         const kindFilter = ['item', 'pokemon', 'diamond'].includes(config.viewKind) ? config.viewKind : 'all';
+        const searchTerm = normalize(state.opportunitySearch);
         const candidates = Array.from(state.candidates.values()).filter(c => {
+            if (searchTerm && ![c.name, c.seller, c.kind, c.listingId].some(value => normalize(value).includes(searchTerm))) return false;
             const manuallyLoaded = c.kind === 'item' && state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
             // Unreferenced diamonds remain inspectable. Referenced diamonds must meet the watch threshold.
             const visibleWithoutReference = manuallyLoaded || (c.kind === 'diamond' && !(Number(c.average) > 0));
@@ -2410,6 +2424,7 @@
             if (state.watchView === 'opportunities') {
                 content.innerHTML =
                     '<div class="moth-mw-filters" id="moth-mw-opportunity-filters">' +
+                    '<input type="search" id="moth-mw-search" aria-label="Search listings" placeholder="Search item, Pokémon, seller…" value="' + escapeHtml(state.opportunitySearch) + '">' +
                     '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Currency</span>' +
                     filterButton('All', 'currency', 'all', currencyFilter === 'all', '') +
                     filterButton('Coins', 'currency', 'gold', currencyFilter === 'gold', '/assets/site/assets/ui/moeda-ouro.png') +
@@ -2549,6 +2564,17 @@
                 renderWatch(true);
                 return;
             }
+            const inventoryToggle = target.closest('#moth-mw-inventory-toggle');
+            if (inventoryToggle) {
+                state.itemInventoryCollapsed = !state.itemInventoryCollapsed;
+                try { localStorage.setItem(ITEM_INVENTORY_COLLAPSED_KEY, state.itemInventoryCollapsed ? '1' : '0'); } catch {}
+                const body = q('#moth-mw-inventory-body', panel);
+                if (body) body.hidden = state.itemInventoryCollapsed;
+                inventoryToggle.setAttribute('aria-expanded', state.itemInventoryCollapsed ? 'false' : 'true');
+                const chevron = q('.moth-mw-inventory-chevron', inventoryToggle);
+                if (chevron) chevron.textContent = state.itemInventoryCollapsed ? '▸' : '▾';
+                return;
+            }
             const filter = target.closest('[data-moth-filter]');
             if (filter) {
                 const group = filter.dataset.mothFilter, value = filter.dataset.mothValue;
@@ -2565,6 +2591,14 @@
                 if (candidate && !tryBuy(candidate, true)) addLog('Purchase not sent; check balance, reserve, listing availability, and pending purchase status');
                 queueRender();
             }
+        });
+
+        panel.addEventListener('input', event => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target || !target.matches('#moth-mw-search')) return;
+            state.opportunitySearch = target.value;
+            try { localStorage.setItem('moth-pokeidle-market-watch-search-v1', state.opportunitySearch); } catch {}
+            renderWatch();
         });
 
         panel.addEventListener('change', event => {
