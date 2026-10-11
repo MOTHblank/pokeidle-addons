@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.34
+// @version      0.1.35
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2285,6 +2285,80 @@
             '</div>';
     }
 
+    function updateCandidateRows(list, candidates) {
+        if (!list) return;
+
+        if (!candidates.length) {
+            const empty = '<div class="moth-mw-empty">No matching opportunities. Try a wider watch threshold or inspect Market inventory.</div>';
+            if (list.children.length !== 1 || !list.firstElementChild.classList.contains('moth-mw-empty') ||
+                list.firstElementChild.outerHTML !== empty) {
+                list.innerHTML = empty;
+            }
+            return;
+        }
+
+        const existing = new Map();
+        for (const row of Array.from(list.children)) {
+            const button = row.querySelector('[data-moth-buy]');
+            const key = button?.dataset?.mothBuy;
+            if (key && !existing.has(key)) {
+                existing.set(key, row);
+            } else {
+                row.remove();
+            }
+        }
+
+        for (let index = 0; index < candidates.length; index += 1) {
+            const candidate = candidates[index];
+            const html = renderCandidate(candidate);
+            const template = document.createElement('template');
+            template.innerHTML = html.trim();
+            const fresh = template.content.firstElementChild;
+            if (!fresh) continue;
+
+            let row = existing.get(candidate.key);
+            if (!row) {
+                row = fresh;
+            } else {
+                // Patch a row in place. In particular, preserve the Buy button
+                // element/focus while its state changes to "Buying…" or "Tried recently".
+                row.className = fresh.className;
+                const oldChildren = Array.from(row.children);
+                const newChildren = Array.from(fresh.children);
+                if (oldChildren.length !== newChildren.length) {
+                    row.innerHTML = fresh.innerHTML;
+                } else {
+                    for (let childIndex = 0; childIndex < oldChildren.length; childIndex += 1) {
+                        const oldChild = oldChildren[childIndex];
+                        const newChild = newChildren[childIndex];
+                        if (oldChild.matches('[data-moth-buy]') && newChild.matches('[data-moth-buy]')) {
+                            oldChild.className = newChild.className;
+                            oldChild.disabled = newChild.disabled;
+                            oldChild.dataset.mothBuy = newChild.dataset.mothBuy;
+                            oldChild.textContent = newChild.textContent;
+                            for (const attr of Array.from(oldChild.attributes)) {
+                                if (!newChild.hasAttribute(attr.name) && attr.name !== 'data-moth-buy') {
+                                    oldChild.removeAttribute(attr.name);
+                                }
+                            }
+                            for (const attr of Array.from(newChild.attributes)) {
+                                oldChild.setAttribute(attr.name, attr.value);
+                            }
+                        } else if (oldChild.innerHTML !== newChild.innerHTML) {
+                            oldChild.innerHTML = newChild.innerHTML;
+                        }
+                    }
+                }
+            }
+
+            const reference = list.children[index] || null;
+            if (row !== reference) list.insertBefore(row, reference);
+            existing.delete(candidate.key);
+        }
+
+        for (const row of existing.values()) row.remove();
+    }
+
     function candidateVisible(candidate) {
         if (!candidate) return false;
 
@@ -2505,9 +2579,7 @@
             const count = q('#moth-mw-opportunity-count', content);
             if (count) count.textContent = num(candidates.length) + ' matching listings · purchases are serialized while awaiting server confirmation';
             const list = q('#moth-mw-opportunity-list', content);
-            const html = candidates.length ? candidates.map(renderCandidate).join('') :
-                '<div class="moth-mw-empty">No matching opportunities. Try a wider watch threshold or inspect Market inventory.</div>';
-            if (list && list.innerHTML !== html) list.innerHTML = html;
+            updateCandidateRows(list, candidates);
         } else if (state.watchView === 'inventory') {
             const host = q('#moth-mw-inventory-content', content);
             const html = renderItemInventory();
@@ -3117,7 +3189,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.34 loaded');
+        console.info('[Moth Watch] v0.1.35 loaded');
     }
 
     bootstrap();
