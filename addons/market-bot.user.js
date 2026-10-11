@@ -276,7 +276,8 @@
         'Show all opportunities': 'Mostrar todas as oportunidades',
         'Waiting for market response for {name}…': 'Aguardando resposta do mercado para {name}…',
         'No offers found for {name} in {currency}.': 'Nenhuma oferta encontrada para {name} em {currency}.',
-        'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.'
+        'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.',
+        'no offers found': 'nenhuma oferta encontrada'
     });
 
     function tr(key, params = null) {
@@ -741,10 +742,21 @@
     function queueItemDetail(itemId, currency) {
         const key = String(itemId) + ':' + currency;
         const now = Date.now();
-        if (state.detailQueued.has(key) || state.detailPending?.key === key) return;
+        if (state.detailPending?.key === key) return;
+        const queuedIndex = state.detailQueue.findIndex(job => job.key === key);
+        if (queuedIndex >= 0) {
+            if (state.selectedItemFocus?.key === key && queuedIndex > 0) {
+                const [job] = state.detailQueue.splice(queuedIndex, 1);
+                state.detailQueue.unshift(job);
+                scheduleItemDetailPump(0);
+            }
+            return;
+        }
         if (now - Number(state.lastDetailRequest.get(key) || 0) < Math.max(1000, config.scanSeconds * 800)) return;
         state.detailQueued.add(key);
-        state.detailQueue.push({ itemId: Number(itemId), currency: currency, key: key });
+        const job = { itemId: Number(itemId), currency: currency, key: key, enqueuedAt: now };
+        if (state.selectedItemFocus?.key === key) state.detailQueue.unshift(job);
+        else state.detailQueue.push(job);
         scheduleItemDetailPump(0);
     }
 
@@ -774,7 +786,7 @@
             if (result === 'loaded') {
                 state.itemStatus = 'live';
             } else if (result === 'empty') {
-                state.itemStatus = 'no offers for ' + catalogName(pending.itemId);
+                state.itemStatus = 'no offers found';
             }
         }
         queueRender();
@@ -793,6 +805,7 @@
                 return;
             }
             finishItemDetailRequest(pending, 'timeout');
+            return;
         }
 
         if (!state.detailQueue.length) return;
@@ -2272,7 +2285,7 @@
         style.id = 'moth-market-watch-style';
         style.textContent = [
             '#moth-market-watch-tab{white-space:nowrap}',
-            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel):not(.cm-topo){display:none!important}',
+            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel):not(:has(#moth-market-watch-tab)){display:none!important}',
             '#moth-market-watch-panel{display:none;width:100%;height:100%;min-height:420px;overflow:auto;padding:10px;color:var(--sobre-mad,#eee)}',
             '#modal-corpo.moth-watch-active>#moth-market-watch-panel{display:block!important}',
             '.cm-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
