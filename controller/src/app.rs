@@ -12,6 +12,14 @@ use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(windows)]
+use std::sync::Arc;
+#[cfg(windows)]
+use tray_icon::{
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
+};
+
 static PT_BR: AtomicBool = AtomicBool::new(true);
 
 fn pt_br() -> bool {
@@ -102,8 +110,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
         "LAUNCH ENABLED" => "INICIAR HABILITADAS",
-        "MINIMIZE TO TASKBAR" => "MINIMIZAR NA BARRA DE TAREFAS",
-        "Minimize this window to the Windows taskbar" => "Minimiza esta janela para a barra de tarefas do Windows",
+        "MINIMIZE TO TRAY" => "MINIMIZAR NA BANDEJA",
+        "Hide this window in the system tray; click the tray icon to restore it" => "Oculta esta janela na bandeja do sistema; clique no ícone para restaurá-la",
+        "System tray is unavailable; the window cannot be hidden." => "A bandeja do sistema está indisponível; a janela não pode ser ocultada.",
         "Accounts" => "Contas",
         "◫  Accounts" => "◫  Contas",
         "Account Manager" => "Gerenciador de contas",
@@ -450,6 +459,158 @@ struct AccountSetup {
     violentmonkey_installed: bool,
 }
 
+#[cfg(windows)]
+struct TrayRuntime {
+    _icon: TrayIcon,
+    stop_worker: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl TrayRuntime {
+    fn new(ctx: egui::Context) -> Result<Self, String> {
+        let menu = Menu::new();
+        let show_item = MenuItem::new("Mostrar / Show Moth", true, None);
+        let separator = PredefinedMenuItem::separator();
+        let quit_item = MenuItem::new("Sair / Exit", true, None);
+
+        menu.append(&show_item)
+            .map_err(|error| format!("could not add tray Show menu item: {error}"))?;
+        menu.append(&separator)
+            .map_err(|error| format!("could not add tray separator: {error}"))?;
+        menu.append(&quit_item)
+            .map_err(|error| format!("could not add tray Exit menu item: {error}"))?;
+
+        let icon = TrayIconBuilder::new()
+            .with_id("moth-pokeidle-controller")
+            .with_tooltip("Moth · PokéIdle")
+            .with_icon(make_tray_icon()?)
+            .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false)
+            .build()
+            .map_err(|error| format!("could not create system tray icon: {error}"))?;
+
+        let tray_id = icon.id().clone();
+        let show_id = show_item.id().clone();
+        let quit_id = quit_item.id().clone();
+        let stop_worker = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop_worker);
+
+        let worker = std::thread::Builder::new()
+            .name("moth-tray-events".to_string())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) {
+                    while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+                        match event {
+                            TrayIconEvent::Click {
+                                id,
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } if id == tray_id => {
+                                restore_from_tray(&ctx);
+                            }
+                            TrayIconEvent::DoubleClick {
+                                id,
+                                button: MouseButton::Left,
+                                ..
+                            } if id == tray_id => {
+                                restore_from_tray(&ctx);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    while let Ok(event) = MenuEvent::receiver().try_recv() {
+                        if event.id == show_id {
+                            restore_from_tray(&ctx);
+                        } else if event.id == quit_id {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            ctx.request_repaint();
+                        }
+                    }
+
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+            })
+            .map_err(|error| format!("could not start tray event worker: {error}"))?;
+
+        Ok(Self {
+            _icon: icon,
+            stop_worker,
+            worker: Some(worker),
+        })
+    }
+
+    fn shutdown(&mut self) {
+        self.stop_worker.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for TrayRuntime {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(windows)]
+fn restore_from_tray(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    ctx.request_repaint();
+}
+
+#[cfg(windows)]
+fn make_tray_icon() -> Result<tray_icon::Icon, String> {
+    const SIZE: u32 = 32;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+
+    for y in 0..SIZE as i32 {
+        for x in 0..SIZE as i32 {
+            let dx = x - 16;
+            let dy = y - 16;
+            let in_badge = dx * dx + dy * dy <= 225;
+
+            let upper_left = ((x as f32 - 10.0) / 6.0).powi(2)
+                + ((y as f32 - 12.0) / 5.0).powi(2)
+                <= 1.0;
+            let upper_right = ((x as f32 - 22.0) / 6.0).powi(2)
+                + ((y as f32 - 12.0) / 5.0).powi(2)
+                <= 1.0;
+            let lower_left = ((x as f32 - 11.0) / 5.0).powi(2)
+                + ((y as f32 - 20.0) / 4.0).powi(2)
+                <= 1.0;
+            let lower_right = ((x as f32 - 21.0) / 5.0).powi(2)
+                + ((y as f32 - 20.0) / 4.0).powi(2)
+                <= 1.0;
+            let body = (15..=17).contains(&x) && (8..=24).contains(&y);
+
+            let color = if body {
+                [245, 242, 255, 255]
+            } else if upper_left || upper_right {
+                [123, 97, 255, 255]
+            } else if lower_left || lower_right {
+                [76, 160, 255, 255]
+            } else if in_badge {
+                [18, 21, 33, 255]
+            } else {
+                [0, 0, 0, 0]
+            };
+
+            let offset = ((y as u32 * SIZE + x as u32) * 4) as usize;
+            rgba[offset..offset + 4].copy_from_slice(&color);
+        }
+    }
+
+    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE)
+        .map_err(|error| format!("could not create tray icon image: {error}"))
+}
+
 pub struct ControllerApp {
     games: [GameSlot; 4],
     show_accounts: bool,
@@ -462,6 +623,8 @@ pub struct ControllerApp {
     tab_url_open: [bool; 4],
     idle_progress: [IdleProgressTracker; 4],
     update_status: SharedUpdateStatus,
+    #[cfg(windows)]
+    tray: Option<TrayRuntime>,
 }
 
 impl ControllerApp {
@@ -471,6 +634,15 @@ impl ControllerApp {
         logging::init();
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
+
+        #[cfg(windows)]
+        let tray = match TrayRuntime::new(cc.egui_ctx.clone()) {
+            Ok(tray) => Some(tray),
+            Err(error) => {
+                logging::warn(&format!("system tray initialization failed: {error}"));
+                None
+            }
+        };
 
         Self {
             games: std::array::from_fn(|i| {
@@ -485,6 +657,8 @@ impl ControllerApp {
             tab_url_open: [false; 4],
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             update_status,
+            #[cfg(windows)]
+            tray,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -864,6 +1038,11 @@ impl ControllerApp {
 
 impl Drop for ControllerApp {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(tray) = self.tray.as_mut() {
+            tray.shutdown();
+        }
+
         for slot in &mut self.games {
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.stop();
@@ -950,7 +1129,7 @@ impl eframe::App for ControllerApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new(tr("MINIMIZE TO TASKBAR"))
+                                    RichText::new(tr("MINIMIZE TO TRAY"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -959,12 +1138,27 @@ impl eframe::App for ControllerApp {
                                 .stroke(Stroke::new(1.0, BORDER))
                                 .corner_radius(8.0),
                             )
-                            .on_hover_text(tr("Minimize this window to the Windows taskbar"))
+                            .on_hover_text(tr("Hide this window in the system tray; click the tray icon to restore it"))
                             .clicked()
                         {
-                            ui.ctx().send_viewport_cmd(
-                                egui::ViewportCommand::Minimized(true),
-                            );
+                            #[cfg(windows)]
+                            {
+                                if self.tray.is_some() {
+                                    ui.ctx().send_viewport_cmd(
+                                        egui::ViewportCommand::Visible(false),
+                                    );
+                                    logging::info("controller window hidden to system tray");
+                                } else {
+                                    self.set_status(
+                                        tr("System tray is unavailable; the window cannot be hidden.").to_string(),
+                                        true,
+                                    );
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                self.set_status("System tray is only supported on Windows.".to_string(), true);
+                            }
                         }
                     });
                 });
