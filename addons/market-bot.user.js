@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.31
+// @version      0.1.32
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2419,7 +2419,11 @@
 
         const content = q('#moth-mw-view-content', panel);
         const viewChanged = content.dataset.view !== state.watchView;
-        if (forceViewBuild || viewChanged) {
+        const settingsSignature = JSON.stringify(Object.keys(DEFAULTS).sort().map(key => [key, config[key]]));
+        const settingsChanged = state.watchView === 'automation' && !viewChanged &&
+            content.dataset.settingsSignature !== settingsSignature &&
+            !(panel.contains(document.activeElement) && document.activeElement.matches('input'));
+        if (forceViewBuild || viewChanged || settingsChanged) {
             content.dataset.view = state.watchView;
             if (state.watchView === 'opportunities') {
                 content.innerHTML =
@@ -2472,6 +2476,7 @@
                     '<div class="moth-mw-section-title"><h4>Recent activity</h4><span>Purchase attempts, confirmations, and errors.</span></div>' +
                     '<div class="moth-mw-log" id="moth-mw-activity-log"></div>';
             }
+            if (state.watchView === 'automation') content.dataset.settingsSignature = settingsSignature;
         }
 
         if (state.watchView === 'opportunities') {
@@ -3098,7 +3103,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.31 loaded');
+        console.info('[Moth Watch] v0.1.32 loaded');
     }
 
     bootstrap();
