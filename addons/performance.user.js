@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.2.2
+// @version      5.3.0
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -14,11 +14,13 @@
 (() => {
     'use strict';
 
-    const STORAGE_KEY = 'moth-pokeidle-performance-v6';
+    const STORAGE_KEY = 'moth-pokeidle-performance-v7';
+    const PREVIOUS_KEY = 'moth-pokeidle-performance-v6';
     const LEGACY_KEY = 'moth-pokeidle-performance-v5';
     const NATIVE_OPT_OWNER_KEY = 'moth-pokeidle-performance-native-opt-owner';
     const NATIVE_OPT_BASE_KEY = 'moth-pokeidle-performance-native-opt-base';
     const TRIGGER_ID = 'moth-performance-trigger';
+    const DETAILS_TRIGGER_ID = 'moth-performance-details-trigger';
     const PANEL_ID = 'moth-performance-panel';
     const STYLE_ID = 'moth-performance-style';
 
@@ -34,18 +36,6 @@
      * delivery of the defeated-Pokémon capture prompt.
      */
     const PROFILES = {
-        full: {
-            label: 'Full',
-            adaptive: false,
-            scene: 'full',
-            idleScene: 'full',
-            backgroundScene: 'full',
-            idleSeconds: 0,
-            ui: 'off',
-            idleUi: 'off',
-            effects: 'full',
-            nativeOptimized: false
-        },
         performance: {
             label: 'Performance',
             adaptive: false,
@@ -61,29 +51,43 @@
     };
 
     const DEFAULTS = {
-        enabled: true,
-        profile: 'performance'
+        enabled: true
     };
 
     function loadSettings() {
         let saved = {};
+        const currentSettings = localStorage.getItem(STORAGE_KEY);
+        const isUpgrade = currentSettings === null;
 
         try {
             saved = JSON.parse(
-                localStorage.getItem(STORAGE_KEY) ||
+                currentSettings ||
+                localStorage.getItem(PREVIOUS_KEY) ||
                 localStorage.getItem(LEGACY_KEY) ||
                 '{}'
             );
         } catch {}
 
-        if (!PROFILES[saved.profile]) {
-            saved.profile = DEFAULTS.profile;
+        // Older releases could persist OFF or the removed Full profile.
+        // Start enabled once on upgrade, then preserve the user's new toggle choice.
+        const loaded = {
+            ...DEFAULTS,
+            ...saved,
+            enabled: isUpgrade
+                ? true
+                : typeof saved.enabled === 'boolean'
+                    ? saved.enabled
+                    : DEFAULTS.enabled
+        };
+        delete loaded.profile;
+
+        if (isUpgrade) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
+            } catch {}
         }
 
-        return {
-            ...DEFAULTS,
-            ...saved
-        };
+        return loaded;
     }
 
     let settings = loadSettings();
@@ -138,7 +142,7 @@
     }
 
     function profile() {
-        return PROFILES[settings.profile] || PROFILES.performance;
+        return PROFILES.performance;
     }
 
     function isNativeEconomy() {
@@ -1707,7 +1711,8 @@
                 opacity: .55 !important;
             }
 
-            #${TRIGGER_ID} {
+            #${TRIGGER_ID},
+            #${DETAILS_TRIGGER_ID} {
                 display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
@@ -1731,6 +1736,12 @@
             #${TRIGGER_ID}.working {
                 color: #8fe0a5 !important;
                 border-color: rgba(100,210,130,.35) !important;
+            }
+
+            #${DETAILS_TRIGGER_ID} {
+                margin-left: 4px !important;
+                border-radius: 5px !important;
+                opacity: .8 !important;
             }
 
             #${TRIGGER_ID}.warning {
@@ -1800,16 +1811,6 @@
                 min-height: 27px;
             }
 
-            #${PANEL_ID} select {
-                width: 120px;
-                padding: 3px 4px;
-                border: 1px solid rgba(255,255,255,.12);
-                border-radius: 4px;
-                background: #211a1e;
-                color: #fff;
-                font: inherit;
-            }
-
             #${PANEL_ID} .mpp-status {
                 margin-top: 6px;
                 padding-top: 6px;
@@ -1870,28 +1871,6 @@
         }
     }
 
-    function setChecked(el, value) {
-        if (
-            el &&
-            el.checked !==
-                Boolean(value)
-        ) {
-            el.checked =
-                Boolean(value);
-        }
-    }
-
-    function setValue(el, value) {
-        if (
-            el &&
-            el.value !==
-                String(value)
-        ) {
-            el.value =
-                String(value);
-        }
-    }
-
     function setClass(el, className, enabled) {
         if (
             el &&
@@ -1936,10 +1915,7 @@
         panel.innerHTML = `
             <div class="mpp-head">
                 <strong>Performance+</strong>
-                <label>
-                    <input id="mpp-enabled" type="checkbox">
-                    On
-                </label>
+                <span id="mpp-enabled-label">On</span>
             </div>
 
             <div class="mpp-metrics">
@@ -1964,57 +1940,12 @@
                 </div>
             </div>
 
-            <div class="mpp-row">
-                <label>Profile</label>
-
-                <select id="mpp-profile">
-                    <option value="full">Full</option>
-                    <option value="performance">Performance</option>
-                </select>
-            </div>
-
             <div class="mpp-status" id="mpp-status">
                 Loading campo.mjs hook…
             </div>
         `;
 
         host.prepend(panel);
-
-        q(
-            '#mpp-enabled',
-            panel
-        ).addEventListener(
-            'change',
-            event => {
-                settings.enabled =
-                    event.target.checked;
-
-                saveSettings();
-                applyMode();
-            }
-        );
-
-        q(
-            '#mpp-profile',
-            panel
-        ).addEventListener(
-            'change',
-            event => {
-                settings.profile =
-                    event.target.value;
-
-                lastActivity =
-                    Date.now();
-
-                interactionBoostUntil =
-                    Date.now() + 2500;
-
-                adaptiveDecision = '30';
-
-                saveSettings();
-                applyMode();
-            }
-        );
 
         return panel;
     }
@@ -2028,13 +1959,6 @@
         installCampoHook();
         ensurePanel();
 
-        let trigger =
-            q('#' + TRIGGER_ID);
-
-        if (trigger) {
-            return true;
-        }
-
         const header =
             q('#p-auto .painel-cab-auto') ||
             q('#p-auto .painel-cab');
@@ -2043,61 +1967,55 @@
             return false;
         }
 
-        trigger =
-            document.createElement(
-                'button'
-            );
-
-        trigger.type = 'button';
-        trigger.id = TRIGGER_ID;
-        trigger.textContent =
-            'Perf · load';
-
-        trigger.title =
-            'Performance+ loaded';
-
-        trigger.addEventListener(
-            'click',
-            event => {
+        let trigger = q('#' + TRIGGER_ID);
+        if (!trigger) {
+            trigger = document.createElement('button');
+            trigger.type = 'button';
+            trigger.id = TRIGGER_ID;
+            trigger.title = 'Toggle Performance+ on or off';
+            trigger.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
 
-                const autoToggle =
-                    q('#btn-auto-toggle');
+                settings.enabled = !settings.enabled;
+                saveSettings();
+                applyMode();
+            });
+        }
 
-                if (
-                    autoToggle?.getAttribute(
-                        'aria-expanded'
-                    ) === 'false'
-                ) {
-                    autoToggle.click();
-                }
+        let detailsTrigger = q('#' + DETAILS_TRIGGER_ID);
+        if (!detailsTrigger) {
+            detailsTrigger = document.createElement('button');
+            detailsTrigger.type = 'button';
+            detailsTrigger.id = DETAILS_TRIGGER_ID;
+            detailsTrigger.textContent = 'Stats';
+            detailsTrigger.title = 'Show Performance+ statistics';
+            detailsTrigger.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
 
-                const panel =
-                    ensurePanel();
-
+                const panel = ensurePanel();
                 if (panel) {
-                    panel.hidden =
-                        !panel.hidden;
+                    panel.hidden = !panel.hidden;
                 }
-            }
-        );
+            });
+        }
 
-        const collapse =
-            q(
-                '#btn-auto-toggle',
-                header
-            );
-
+        const collapse = q('#btn-auto-toggle', header);
         if (collapse) {
-            header.insertBefore(
-                trigger,
-                collapse
-            );
+            if (trigger.parentElement !== header) {
+                header.insertBefore(trigger, collapse);
+            }
+            if (detailsTrigger.parentElement !== header) {
+                header.insertBefore(detailsTrigger, collapse);
+            }
         } else {
-            header.appendChild(
-                trigger
-            );
+            if (trigger.parentElement !== header) {
+                header.appendChild(trigger);
+            }
+            if (detailsTrigger.parentElement !== header) {
+                header.appendChild(detailsTrigger);
+            }
         }
 
         return true;
@@ -2111,20 +2029,9 @@
             q('#' + PANEL_ID);
 
         if (panel) {
-            setChecked(
-                q(
-                    '#mpp-enabled',
-                    panel
-                ),
-                settings.enabled
-            );
-
-            setValue(
-                q(
-                    '#mpp-profile',
-                    panel
-                ),
-                settings.profile
+            setText(
+                q('#mpp-enabled-label', panel),
+                settings.enabled ? 'On' : 'Off'
             );
 
             setText(
@@ -2192,52 +2099,9 @@
             } else if (!settings.enabled) {
                 statusText =
                     'campo.mjs renderer found; Performance+ disabled.';
-            } else if (
-                settings.profile ===
-                'performance'
-            ) {
-                statusText =
-                    'Performance: map renderer paused · capture prompt preserved · chat hidden · party/active animations frozen · native Optimized.';
-            } else if (
-                profile().adaptive
-            ) {
-                statusText =
-                    'Adaptive · ' +
-                    pressure +
-                    ' load · ' +
-                    labelForMode(
-                        currentMode
-                    ) +
-                    ' · ' +
-                    Math.round(
-                        jankPerSecond * 10
-                    ) / 10 +
-                    ' jank/s · scene skipped ' +
-                    campoSkippedPerSecond +
-                    '/s · UI skipped ' +
-                    uiTimerSkippedPerSecond +
-                    '/s' +
-                    (
-                        npcLoopFound
-                            ? ' · NPC ' +
-                              npcRunsPerSecond +
-                              '/s'
-                            : ''
-                    ) +
-                    '.';
             } else {
                 statusText =
-                    'Upstream render/UI loops targeted · scene skipped ' +
-                    campoSkippedPerSecond +
-                    '/s · UI skipped ' +
-                    uiTimerSkippedPerSecond +
-                    '/s · native Optimized ' +
-                    (
-                        nativeOptimizedEnabled()
-                            ? 'on'
-                            : 'off'
-                    ) +
-                    '.';
+                    'Performance: map renderer paused · capture prompt preserved · chat hidden · party/active animations frozen · native Optimized.';
             }
 
             setText(
@@ -2254,57 +2118,33 @@
         let working = false;
         let warning = false;
 
-        if (isNativeEconomy()) {
-            triggerText =
-                'Perf · Native Eco';
-
+        if (!settings.enabled) {
+            triggerText = 'Performance+ OFF';
+        } else if (isNativeEconomy()) {
+            triggerText = 'Performance+ ON · Native Eco';
             warning = true;
-        } else if (!settings.enabled) {
-            triggerText =
-                'Perf · Off';
         } else if (
             !campoHookInstalled ||
             !uiTimerHookInstalled
         ) {
-            triggerText =
-                'Perf · hook!';
-
+            triggerText = 'Performance+ ON · Hook!';
             warning = true;
         } else if (!campoLoopFound) {
-            triggerText =
-                'Perf · campo…';
-
+            triggerText = 'Performance+ ON · Loading…';
             warning = true;
         } else {
-            triggerText =
-                'Perf · ' +
-                labelForMode(
-                    currentMode
-                ) +
-                ' · ' +
-                labelForUi(
-                    currentUi
-                );
-
+            triggerText = 'Performance+ ON';
             working = true;
         }
 
-        setText(
-            trigger,
-            triggerText
-        );
+        setText(trigger, triggerText);
+        trigger.setAttribute('aria-pressed', String(settings.enabled));
+        trigger.title = settings.enabled
+            ? 'Turn Performance+ off'
+            : 'Turn Performance+ on';
 
-        setClass(
-            trigger,
-            'working',
-            working
-        );
-
-        setClass(
-            trigger,
-            'warning',
-            warning
-        );
+        setClass(trigger, 'working', working);
+        setClass(trigger, 'warning', warning);
     }
 
     // ------------------------------------------------------------------
