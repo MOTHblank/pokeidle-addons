@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.32
+// @version      0.1.33
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -2228,7 +2228,9 @@
         const retainedSeconds = candidate.retainedUntil > serverNow()
             ? Math.ceil((candidate.retainedUntil - serverNow()) / 1000)
             : 0;
-        const canBuy = !state.pendingBuy && !retainedSeconds && purchaseQuantity(candidate) > 0;
+        const attemptedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
+        const recentlyAttempted = attemptedUntil > Date.now();
+        const canBuy = !state.pendingBuy && !recentlyAttempted && !retainedSeconds && purchaseQuantity(candidate) > 0;
         const auto = candidateCanAutoBuy(candidate);
         const total = candidate.kind === 'item' || candidate.kind === 'diamond'
             ? candidate.price * candidate.qty
@@ -2267,7 +2269,7 @@
             (retainedSeconds ? 'retained · ' + retainedSeconds + 's' : 'available') + '</div></div>' +
             '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' +
             (canBuy ? '' : ' disabled') + '>' +
-            (state.pendingBuy?.candidateKey === candidate.key ? 'Buying…' : retainedSeconds ? 'Wait' : 'Buy') + '</button>' +
+            (state.pendingBuy?.candidateKey === candidate.key ? 'Buying…' : retainedSeconds ? 'Wait' : recentlyAttempted ? 'Tried recently' : 'Buy') + '</button>' +
             '</div>';
     }
 
@@ -3103,7 +3105,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.32 loaded');
+        console.info('[Moth Watch] v0.1.33 loaded');
     }
 
     bootstrap();
