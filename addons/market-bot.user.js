@@ -2605,7 +2605,7 @@
                     configField('Scan interval', 'scanSeconds', 'number', 'seconds') +
                     configField('Watch items', 'scanItems', 'checkbox') + configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
                     configField('Watch diamonds', 'scanDiamonds', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><p class="moth-mw-setting-help">All purchase switches start off. Turn on the master switch only after checking the budget and allowed currencies.</p><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><p class="moth-mw-setting-help">Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.</p><div class="moth-mw-config">' +
                     configField('Enable automatic buying', 'autoBuy', 'checkbox') +
                     configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
                     configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
