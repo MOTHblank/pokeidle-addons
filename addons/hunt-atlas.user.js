@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.20
+// @version      1.7.21
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -9664,7 +9664,7 @@
                 )
                 : false;
 
-        host.innerHTML = `
+        const html = `
             <div class="mha-xp-heading">
                 <strong>${escapeHtml(
                     tr(
@@ -9793,6 +9793,12 @@
                 </div>
             </div>
         `;
+
+        // This summary is polled with the drawer, but should only replace its
+        // DOM when the rendered content changed. Preserving existing nodes
+        // prevents needless repaint/focus churn and avoids re-binding handlers.
+        if (host.innerHTML === html) return;
+        host.innerHTML = html;
 
         const detailsToggle =
             q(
@@ -10344,7 +10350,7 @@
         );
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.20 loaded'
+            '[PokéIdle Hunt Atlas] v1.7.21 loaded'
         );
     }
 
