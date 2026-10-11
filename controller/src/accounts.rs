@@ -35,7 +35,7 @@ pub const ADDONS: &[(&str, &str)] = &[
     ),
     (
         "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.28",
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.38",
     ),
 
 ];
@@ -85,12 +85,6 @@ pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
     let config = Config::for_profile(profile)?;
     firefox::open_url(&config, VIOLENTMONKEY_INSTALL)?;
     Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
-}
-
-pub fn open_game(profile: GameProfile) -> Result<(), String> {
-    let config = Config::for_profile(profile)?;
-    let _ = firefox::launch_unmonitored(&config)?;
-    Ok(())
 }
 
 pub fn open_addons(profile: GameProfile) -> Result<usize, String> {

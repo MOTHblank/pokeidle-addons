@@ -201,7 +201,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Watching:" => "Assistindo:",
         "LIVE BONUS AVAILABLE" => "BÔNUS DE LIVE DISPONÍVEL",
         "Open chat:" => "Abra o chat:",
-        "No active bonus" => "Nenhum bônus ativo",
         "No Twitch bonus detected" => "Nenhum bônus da Twitch detectado",
         "OPEN" => "ABERTA",
         "XP BONUS SOURCES" => "FONTES DE BÔNUS DE XP",
@@ -350,7 +349,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Balance" => "Saldo",
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
-        "last seen" => "visto pela última vez",
         "Twitch uses this Firefox profile for its session. All actions target this account." => "A Twitch usa este perfil do Firefox para sua sessão. Todas as ações usam esta conta.",
         "addon installers" => "instaladores de addons",
         "addon installers opened" => "instaladores de addons abertos",
@@ -1007,10 +1005,8 @@ impl ControllerApp {
     }
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
-        // "Open Game" must use the controller-owned visible Firefox process.
-        // The old accounts::open_game path spawned an unmonitored headless
-        // process with the same profile, leaving it alive and locking the
-        // profile against later launches.
+        // "Open Game" uses the controller-owned visible Firefox process so it
+        // remains interactive and is tracked by the dashboard's process monitor.
         if let ProfileAction::Game = action {
             self.set_browser_mode(profile, false);
             return;
@@ -2072,24 +2068,6 @@ fn draw_game_card(
                             .size(10.0)
                             .color(TEXT),
                         );
-                    } else if !health.stream_bonus_last.is_empty() {
-                        let last_seen = if health.last_game_message_ms > 0 {
-                            format!(" · {}", format_time(health.last_game_message_ms))
-                        } else {
-                            String::new()
-                        };
-
-                        ui.label(
-                            RichText::new(format!(
-                                "{} · {}{}: {}",
-                                tr("No active bonus"),
-                                last_seen,
-                                tr("last seen"),
-                                health.stream_bonus_last
-                            ))
-                            .size(10.0)
-                            .color(WARN),
-                        );
                     } else {
                         ui.label(
                             RichText::new(tr("No Twitch bonus detected"))
@@ -2376,41 +2354,6 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 
-fn game_selector(
-    account_names: &[String; 4],
-    ui: &mut egui::Ui,
-    selected: &mut GameProfile,
-) {
-    ui.horizontal(|ui| {
-        for profile in GameProfile::ALL {
-            let active = *selected == profile;
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new(account_names[profile.index()].as_str())
-                            .size(10.0)
-                            .strong()
-                            .color(if active { TEXT } else { MUTED }),
-                    )
-                    .fill(if active {
-                        ACCENT.linear_multiply(0.22)
-                    } else {
-                        PANEL_ALT
-                    })
-                    .stroke(Stroke::new(
-                        1.0,
-                        if active { ACCENT } else { BORDER },
-                    ))
-                    .corner_radius(7.0),
-                )
-                .clicked()
-            {
-                *selected = profile;
-            }
-        }
-    });
-}
-
 fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
     egui::Frame::new()
         .fill(PANEL_ALT)
@@ -2491,20 +2434,6 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
                 }
             });
         });
-}
-
-fn hunt_change_cooldown_label(milliseconds: u64) -> String {
-    if pt_br() {
-        format!(
-            "Troca de hunt disponível em {:.1}s",
-            milliseconds as f32 / 1000.0
-        )
-    } else {
-        format!(
-            "Hunt change available in {:.1}s",
-            milliseconds as f32 / 1000.0
-        )
-    }
 }
 
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
@@ -2919,13 +2848,6 @@ fn format_pct(value: f32) -> String {
     } else {
         format!("{:.1}", value)
     }
-}
-
-fn format_time(timestamp_ms: u64) -> String {
-    let seconds = timestamp_ms / 1000;
-    let minute = (seconds / 60) % 60;
-    let hour = (seconds / 3600) % 24;
-    format!("{:02}:{:02}", hour, minute)
 }
 
 fn format_number(value: u64) -> String {
