@@ -56,7 +56,10 @@
 
     function loadSettings() {
         let saved = {};
-        const currentSettings = localStorage.getItem(STORAGE_KEY);
+        let currentSettings = null;
+        try {
+            currentSettings = localStorage.getItem(STORAGE_KEY);
+        } catch {}
         const isUpgrade = currentSettings === null;
 
         try {
