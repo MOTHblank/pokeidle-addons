@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.5
+// @version      6.5.6
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -15,6 +15,8 @@
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;
+    // Lower idle DOM/inventory polling overhead without changing active throw timing.
+    const IDLE_POLL_INTERVAL_MS = 250;
     const RESULT_TIMEOUT_MS = 1000;
     const RESTOCK_ACK_TIMEOUT_MS = 10000;
     const RESTOCK_SETTLE_MS = 2000;
@@ -2112,6 +2114,26 @@
         timer = setTimeout(tick, Math.min(normalDelay, requested));
     }
 
+    // Used only when no target is eligible: new targets remain on screen long
+    // enough that polling every 100 ms is unnecessary. Active throw scheduling
+    // below keeps the user's configured interval.
+    function scheduleIdle(delayMs = null) {
+        clearTimeout(timer);
+        timer = null;
+
+        if (!settings.enabled) return;
+
+        const normalDelay = Math.max(
+            MIN_INTERVAL_MS,
+            Number(settings.intervalMs) || MIN_INTERVAL_MS
+        );
+        const requested = delayMs === null || delayMs === undefined
+            ? IDLE_POLL_INTERVAL_MS
+            : Math.max(IDLE_POLL_INTERVAL_MS, Number(delayMs) || 0);
+
+        timer = setTimeout(tick, Math.max(normalDelay, requested));
+    }
+
     function tick() {
         timer = null;
 
@@ -2131,7 +2153,7 @@
         ) {
             stats.status = 'Waiting for target';
             updateUI();
-            schedule();
+            scheduleIdle();
             return;
         }
 
@@ -2145,7 +2167,7 @@
                 : 'Waiting for new fallen Pokémon';
 
             updateUI();
-            schedule(retryDelay);
+            scheduleIdle(retryDelay);
             return;
         }
 
@@ -2154,7 +2176,7 @@
         if (!choice) {
             stats.status = 'No allowed balls';
             updateUI();
-            schedule();
+            scheduleIdle();
             return;
         }
 
@@ -3263,12 +3285,25 @@
         syncInventoryUsage();
         updateUI();
 
+        let lastPausedMaintenanceAt = 0;
+
         setInterval(() => {
             // Purchase acknowledgement expiry must keep running even when
             // Auto Catch is paused and its main tick no longer runs.
             if (restockPending.size) {
-                expirePendingRestocks(Date.now());
+                const timedOut = expirePendingRestocks(Date.now());
+                if (timedOut) updateUI();
             }
+
+            // When enabled, tick() already performs these jobs at the active
+            // capture cadence. Avoid duplicating DOM scans and UI sync here.
+            if (settings.enabled) return;
+
+            // While paused, repair the panel and refresh its display every
+            // three seconds rather than scanning inventory and targets each second.
+            const now = Date.now();
+            if (now - lastPausedMaintenanceAt < 3000) return;
+            lastPausedMaintenanceAt = now;
 
             installPanel();
             scanTargets();
@@ -3278,7 +3313,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.5 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.6 loaded');
     }
 
     if (document.readyState === 'loading') {
