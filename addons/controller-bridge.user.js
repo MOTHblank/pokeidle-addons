@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.8
+// @version      1.3.9
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -18,7 +18,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 10 &&
+        Number(existingBridge.version) >= 11 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function'
         && typeof existingBridge.streamStateSnapshot === 'function' &&
@@ -68,23 +68,29 @@
         if (full || cheio || !state) {
             state = { ...rest };
             statePokemon = new Map(
-                (Array.isArray(pokemons) ? pokemons : []).map(p => [p?.id, p])
+                (Array.isArray(pokemons) ? pokemons : [])
+                    .filter(pokemon => pokemon?.id != null)
+                    .map(pokemon => [String(pokemon.id), pokemon])
             );
-            return buildState();
+            return state;
         }
 
         Object.assign(state, rest);
 
         if (Array.isArray(pokemons)) {
-            statePokemon = new Map(pokemons.map(p => [p?.id, p]));
+            statePokemon = new Map(
+                pokemons
+                    .filter(pokemon => pokemon?.id != null)
+                    .map(pokemon => [String(pokemon.id), pokemon])
+            );
         }
 
         for (const pokemon of pkMud || []) {
-            if (pokemon?.id != null) statePokemon.set(pokemon.id, pokemon);
+            if (pokemon?.id != null) statePokemon.set(String(pokemon.id), pokemon);
         }
 
         for (const id of pkFora || []) {
-            statePokemon.delete(id);
+            statePokemon.delete(String(id));
         }
 
         if (dexMud || dexFora) {
@@ -92,13 +98,7 @@
             for (const id of dexFora || []) delete state.pokedex[id];
         }
 
-        return buildState();
-    }
-
-    function buildState() {
-        return state
-            ? { ...state, pokemons: [...statePokemon.values()] }
-            : null;
+        return state;
     }
     function incoming(data, sourceSocket = null) {
         if (typeof data !== 'string') return;
@@ -289,7 +289,7 @@
         const id = state?.activeId;
         return id == null
             ? null
-            : (state?.pokemons || []).find(p => Number(p?.id) === Number(id)) || null;
+            : statePokemon.get(String(id)) || null;
     }
 
     function bodyTextBonus() {
@@ -477,7 +477,7 @@
                 casa: copy(state?.casa),
                 boss: copy(state?.boss),
                 evento: copy(state?.evento),
-                pokemons: copy(state?.pokemons) || [],
+                pokemons: copy([...statePokemon.values()]) || [],
                 pokedex: copy(state?.pokedex) || {}
             },
             hunts: copy(hunts) || [],
@@ -487,7 +487,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 10,
+        version: 11,
         marketCatalogSnapshot() {
             return {
                 ready: marketCatalogReady,
