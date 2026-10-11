@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.30
-// @description  Community Market watchlist and configurable underprice sniper using completed-sale references.
+// @version      0.1.31
+// @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js
@@ -102,6 +102,7 @@
         lastScanAt: 0,
         scanTimer: null,
         watchOpen: false,
+        watchView: (() => { try { const value = localStorage.getItem('moth-pokeidle-market-watch-view-v1'); return ['opportunities', 'inventory', 'automation', 'activity'].includes(value) ? value : 'opportunities'; } catch { return 'opportunities'; } })(),
         itemInventoryCollapsed: (() => {
             try { return localStorage.getItem(ITEM_INVENTORY_COLLAPSED_KEY) === '1'; } catch { return false; }
         })(),
@@ -728,6 +729,8 @@
     }
 
     function addCandidate(candidate) {
+        const previous = state.candidates.get(candidate.key);
+        if (previous && Number(previous.firstSeenAt) > 0) candidate.firstSeenAt = previous.firstSeenAt;
         state.candidates.set(candidate.key, candidate);
         scheduleCandidateRelease(candidate);
         maybeAutoBuy(candidate);
@@ -1420,7 +1423,13 @@
         }
 
         const listingId = Number(request.id);
-        const currency = request.moeda === 'orb' ? 'orb' : 'gold';
+        if (!Number.isSafeInteger(listingId) || listingId <= 0) {
+            return controllerResult({ ok: false, error: 'invalid listing id', source: 'validation' });
+        }
+        if (request.moeda !== 'gold' && request.moeda !== 'orb') {
+            return controllerResult({ ok: false, error: 'unsupported currency', source: 'validation', listingId });
+        }
+        const currency = request.moeda;
         const candidate = Array.from(state.candidates.values()).find(item =>
             Number(item.listingId) === listingId &&
             item.currency === currency
@@ -1435,30 +1444,58 @@
         }
 
         /*
-         * Native Moth Controller may display a listing before Moth Watch's
-         * scanner has classified it. Use the same authenticated game socket
-         * and exact market.comprar payload in that case.
+         * Native Controller can display a listing before the userscript has
+         * classified it. Keep the direct manual path, but apply spending,
+         * reserve, and duplicate-purchase guards just like candidate buys.
          */
-        const qty = Math.max(1, Number(request.qtd || 1));
+        if (!state.socket || state.socket.readyState !== 1) {
+            return controllerResult({ ok: false, error: 'game websocket is not open', source: 'direct', listingId });
+        }
+        if (state.pendingBuy) {
+            return controllerResult({ ok: false, error: 'another purchase is awaiting server confirmation', source: 'guard', listingId });
+        }
+        if (state.attemptedListings.get(listingId) > Date.now()) {
+            return controllerResult({ ok: false, error: 'this listing was already attempted recently', source: 'guard', listingId });
+        }
         const price = Number(request.preco);
-        const sent = send({
-            t: 'market.comprar',
-            id: listingId,
-            qtd: qty,
-            preco: price,
-            moeda: currency
-        });
-
-        if (sent) {
-            addLog('BUY · listing #' + listingId + ' · native controller');
+        const requestedQty = Math.floor(Number(request.qtd || 1));
+        if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(requestedQty) || requestedQty < 1) {
+            return controllerResult({ ok: false, error: 'invalid price or quantity', source: 'validation', listingId });
         }
 
-        return controllerResult({
-            ok: sent,
-            source: 'direct',
-            listingId,
-            error: sent ? '' : 'game websocket is not open'
-        });
+        const available = Math.max(0, balanceFor(currency) - reserveFor(currency));
+        const extraCap = maxSpendFor(currency);
+        const budget = extraCap > 0 ? Math.min(available, extraCap) : available;
+        const affordableQty = Math.floor(budget / price);
+        const requestedLimit = config.buyWholeItemBatch ? requestedQty : 1;
+        const qty = Math.min(requestedLimit, affordableQty);
+        if (qty < 1) {
+            return controllerResult({ ok: false, error: 'purchase exceeds spendable balance or configured cap', source: 'guard', listingId });
+        }
+
+        const now = Date.now();
+        const candidateKey = 'native:' + listingId + ':' + currency;
+        state.pendingBuy = {
+            listingId, candidateKey, currency, unitPrice: price, qty,
+            spend: price * qty, balanceBefore: balanceFor(currency), sentAt: now, manual: true
+        };
+        state.attemptedListings.set(listingId, now + 15000);
+        const sent = send({ t: 'market.comprar', id: listingId, qtd: qty, preco: price, moeda: currency });
+        if (!sent) {
+            state.pendingBuy = null;
+            state.attemptedListings.delete(listingId);
+            return controllerResult({ ok: false, error: 'game websocket is not open', source: 'direct', listingId });
+        }
+
+        addLog('BUY · controller listing #' + listingId + ' · ' + qty + ' × ' + num(price) +
+            ' ' + (currency === 'orb' ? 'Gems' : 'Coins'));
+        queueRender();
+        setTimeout(() => {
+            if (state.pendingBuy?.listingId === listingId && state.pendingBuy?.candidateKey === candidateKey) {
+                finishPendingBuy('settle-timeout');
+            }
+        }, 5000);
+        return controllerResult({ ok: true, source: 'direct', listingId });
     }
 
     function configureFromController(patch) {
@@ -2015,6 +2052,23 @@
             '.moth-mw-inventory-price{display:flex;align-items:center;justify-content:space-between;gap:5px;flex-wrap:wrap}',
             '@media(max-width:720px){.moth-mw-inventory-row{grid-template-columns:1fr;gap:5px}.moth-mw-inventory-price{justify-content:flex-start}}',
             '.moth-mw-list{display:grid;gap:5px}',
+            '.moth-mw-workspace{display:flex;flex-direction:column;gap:9px;min-height:0}',
+            '.moth-mw-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:4px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-tab{flex:1;min-width:110px;border:0;border-radius:6px;padding:8px 10px;background:transparent;color:var(--sobre-mad-dim,#bbb);font-size:11px;font-weight:700;cursor:pointer}',
+            '.moth-mw-tab[aria-selected=true]{background:var(--rx,#84325f);color:#fff}',
+            '.moth-mw-overview{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 10px;border-radius:7px;background:var(--vao,#21191d)}',
+            '.moth-mw-overview b{font-size:12px}',
+            '.moth-mw-overview span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-section-title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:4px 0 7px}',
+            '.moth-mw-section-title h4{margin:0;font-size:13px}',
+            '.moth-mw-section-title span{font-size:10px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:9px}',
+            '.moth-mw-settings-card{min-width:0;padding:10px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-settings-card h4{margin:0 0 8px;font-size:12px}',
+            '.moth-mw-settings-card .moth-mw-config{display:grid;grid-template-columns:1fr;gap:8px;margin:0;padding:0;background:transparent;box-shadow:none}',
+            '.moth-mw-settings-card .moth-mw-config label{font-size:11px}',
+            '.moth-mw-reference-tools{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:9px;padding:10px;border-radius:8px;background:var(--vao,#21191d)}',
+            '.moth-mw-reference-tools .moth-mw-reference-info{flex:1;min-width:230px;font-size:10px;color:var(--sobre-mad-dim,#aaa);line-height:1.5}',
             '.moth-mw-row{display:grid;grid-template-columns:minmax(170px,1.4fr) 120px 110px 90px minmax(110px,.8fr) auto;gap:7px;align-items:center;padding:7px;border-radius:6px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 2px var(--mad-linha,#3a2824)}',
             '.moth-mw-row.deep{box-shadow:inset 0 0 0 2px var(--rx,#84325f),inset 0 0 0 4px var(--rx-esc,#5d2345)}',
             '.moth-mw-name{min-width:0}.moth-mw-name b,.moth-mw-name span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -2200,7 +2254,8 @@
             '<div class="moth-mw-seller"><b>Seller: ' + escapeHtml(candidate.seller) + '</b><div class="moth-mw-meta">' +
             (retainedSeconds ? 'retained · ' + retainedSeconds + 's' : 'available') + '</div></div>' +
             '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' +
-            (canBuy ? '' : ' disabled') + '>' + (retainedSeconds ? 'Wait' : 'Buy') + '</button>' +
+            (canBuy ? '' : ' disabled') + '>' +
+            (state.pendingBuy?.candidateKey === candidate.key ? 'Buying…' : retainedSeconds ? 'Wait' : 'Buy') + '</button>' +
             '</div>';
     }
 
@@ -2301,199 +2356,236 @@
             '</button>';
     }
 
-    function renderWatch() {
+    function renderWatch(forceViewBuild = false) {
         const panel = q('#moth-market-watch-panel');
         if (!panel || !state.watchOpen) return;
-        if (panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
+        const views = ['opportunities', 'inventory', 'automation', 'activity'];
+        if (!views.includes(state.watchView)) state.watchView = 'opportunities';
+
+        if (!panel.dataset.mothWatchShell) {
+            panel.innerHTML =
+                '<div class="moth-mw-head"><div><h3>Moth Watch</h3><span class="moth-mw-status" id="moth-mw-status"></span></div>' +
+                '<span class="moth-mw-spacer"></span><button type="button" class="moth-mw-btn" id="moth-mw-scan">Scan now</button></div>' +
+                '<div class="moth-mw-overview" id="moth-mw-overview"></div>' +
+                '<nav class="moth-mw-tabs" aria-label="Moth Watch views">' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="opportunities">Opportunities</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="inventory">Market inventory</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="automation">Automation & budget</button>' +
+                '<button type="button" class="moth-mw-tab" data-moth-view="activity">Activity & references</button></nav>' +
+                '<div class="moth-mw-workspace"><div id="moth-mw-view-content"></div></div>';
+            panel.dataset.mothWatchShell = '1';
+            bindWatchEvents(panel);
+        }
 
         const baseline = baselineStats();
         const currencyFilter = ['gold', 'orb'].includes(config.viewCurrency) ? config.viewCurrency : 'all';
         const kindFilter = ['item', 'pokemon', 'diamond'].includes(config.viewKind) ? config.viewKind : 'all';
-        const candidates = Array.from(state.candidates.values())
-            .filter(c => {
-                const manuallyLoadedItem = c.kind === 'item' &&
-                    state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
-                const visibleAtAnyPrice = c.kind === 'diamond' || manuallyLoadedItem;
-                return (visibleAtAnyPrice ||
-                    c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100)) &&
-                    candidateVisible(c);
-            })
-            .sort(candidateSort);
+        const candidates = Array.from(state.candidates.values()).filter(c => {
+            const manuallyLoaded = c.kind === 'item' && state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
+            // Unreferenced diamonds remain inspectable. Referenced diamonds must meet the watch threshold.
+            const visibleWithoutReference = manuallyLoaded || (c.kind === 'diamond' && !(Number(c.average) > 0));
+            return (visibleWithoutReference || c.ratio <= Math.max(0.01, Number(config.watchPercent) / 100)) && candidateVisible(c);
+        }).sort(candidateSort);
+        const captured = state.baseline.capturedAt ? new Date(state.baseline.capturedAt).toLocaleString() : 'not captured yet';
 
-        const captured = state.baseline.capturedAt
-            ? new Date(state.baseline.capturedAt).toLocaleString()
-            : 'not frozen yet';
+        const status = q('#moth-mw-status', panel);
+        const statusText = 'Items: ' + state.itemStatus + ' · Pokémon: ' + state.pokemonStatus + ' · Diamonds: ' + state.diamondStatus;
+        if (status && status.textContent !== statusText) status.textContent = statusText;
 
-        panel.innerHTML =
-            '<div class="moth-mw-head">' +
-            '<h3>Moth Watch</h3>' +
-            '<span class="moth-mw-status">Items: ' + escapeHtml(state.itemStatus) +
-            ' · Pokémon: ' + escapeHtml(state.pokemonStatus) +
-            ' · Diamonds: ' + escapeHtml(state.diamondStatus) +
-            ' · ' + num(state.protocolMessages) + ' protocol messages</span>' +
-            '<span class="moth-mw-spacer"></span>' +
-            '<button type="button" class="moth-mw-btn" id="moth-mw-scan">Scan now</button>' +
-            '</div>' +
-            '<div class="moth-mw-config">' +
-            configField('Watch prices ≤ baseline', 'watchPercent', 'number', '%') +
-            configField('Auto-buy prices ≤ baseline', 'autoBuyPercent', 'number', '%') +
-            configField('Scan every', 'scanSeconds', 'number', 'seconds') +
-            configField('Auto-buy', 'autoBuy', 'checkbox') +
-            configField('Watch items', 'scanItems', 'checkbox') +
-            configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
-            configField('Watch diamonds', 'scanDiamonds', 'checkbox') +
-            configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
-            configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
-            configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
-            configField('Buy Coin listings', 'buyCoins', 'checkbox') +
-            configField('Buy Gem listings', 'buyGems', 'checkbox') +
-            configField('Take full item batch', 'buyWholeItemBatch', 'checkbox') +
-            configField('Keep Coins', 'goldReserve', 'number', '') +
-            configField('Keep Gems', 'gemReserve', 'number', '') +
-            configField('Max Coins / buy', 'maxCoinsPerBuy', 'number', '0 = unlimited') +
-            configField('Max Gems / buy', 'maxGemsPerBuy', 'number', '0 = unlimited') +
-            configField('Min item units in average', 'minItemUnits', 'number', '') +
-            configField('Min Pokémon sale samples', 'minPokemonSamples', 'number', '') +
-            configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') +
-            '</div>' +
-            '<div class="moth-mw-baseline">' +
-            '<b>Item references:</b> live server 7d averages · frozen fallback ' + escapeHtml(captured) +
-            ' · ' + num(baseline.items) + ' items · ' + num(baseline.gold) + ' Coin references · ' +
-            num(baseline.orb) + ' Gem references' +
-            ' · current irregular: ' + num(state.itemScanStats.goldSuspicious) + '/' +
-            num(state.itemScanStats.goldChecked) + ' Coin · ' +
-            num(state.itemScanStats.orbSuspicious) + '/' +
-            num(state.itemScanStats.orbChecked) + ' Gem' +
-            '<span class="moth-mw-spacer"></span>' +
-            '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">Freeze current 7d averages</button>' +
-            '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">Export baseline JSON</button>' +
-            '</div>' +
-            '<div class="moth-mw-filters">' +
-            '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Currency</span>' +
-            filterButton('All', 'currency', 'all', currencyFilter === 'all', '') +
-            filterButton('Coins', 'currency', 'gold', currencyFilter === 'gold', '/assets/site/assets/ui/moeda-ouro.png') +
-            filterButton('Gems', 'currency', 'orb', currencyFilter === 'orb', '/img/moeda-gema.png') +
-            '</div>' +
-            '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Type</span>' +
-            filterButton('All', 'kind', 'all', kindFilter === 'all', '') +
-            filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
-            filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
-            filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') +
-            '</div>' +
-            sortSelect() +
-            '</div>' +
-            renderItemInventory() +
-            '<div class="moth-mw-list-head"><b>Watch list</b><span>Filtered opportunities, not a complete copy of every market listing. Price sorting groups Coins and Gems separately.</span></div>' +
-            '<div class="moth-mw-list">' +
-            (candidates.length
-                ? candidates.map(renderCandidate).join('')
-                : '<div class="moth-mw-empty">No listings currently below the watch threshold.</div>') +
-            '</div>' +
-            '<div class="moth-mw-log"><b>Recent bot activity</b>' +
-            (state.buyLog.length
-                ? state.buyLog.map(row => '<div>' + new Date(row.at).toLocaleTimeString() + ' · ' + escapeHtml(row.text) + '</div>').join('')
-                : '<div>No purchases attempted this session.</div>') +
-            '</div>';
+        const overview = q('#moth-mw-overview', panel);
+        const overviewHtml = '<b>' + num(candidates.length) + ' matching listing' + (candidates.length === 1 ? '' : 's') + '</b>' +
+            '<span>' + num(state.gold) + ' Coins · ' + num(state.orbs) + ' Gems</span>' +
+            '<span>Watch threshold: ' + num(config.watchPercent) + '% of reference</span>' +
+            '<span>Auto-buy: ' + (config.autoBuy ? 'ON' : 'OFF') + '</span>';
+        if (overview && overview.innerHTML !== overviewHtml) overview.innerHTML = overviewHtml;
 
-        const inventoryToggle = q('#moth-mw-inventory-toggle', panel);
-        inventoryToggle?.addEventListener('click', () => {
-            state.itemInventoryCollapsed = !state.itemInventoryCollapsed;
-            try {
-                localStorage.setItem(
-                    ITEM_INVENTORY_COLLAPSED_KEY,
-                    state.itemInventoryCollapsed ? '1' : '0'
-                );
-            } catch {}
-
-            const body = q('#moth-mw-inventory-body', panel);
-            if (body) body.hidden = state.itemInventoryCollapsed;
-            inventoryToggle.setAttribute(
-                'aria-expanded',
-                state.itemInventoryCollapsed ? 'false' : 'true'
-            );
-            const chevron = q('.moth-mw-inventory-chevron', inventoryToggle);
-            if (chevron) chevron.textContent = state.itemInventoryCollapsed ? '▸' : '▾';
-        });
-
-        for (const input of qa('[data-moth-cfg]', panel)) {
-            input.addEventListener('change', () => {
-                const key = input.dataset.mothCfg;
-                if (!(key in DEFAULTS)) return;
-                config[key] = input.type === 'checkbox'
-                    ? input.checked
-                    : Math.max(0, Number(input.value) || 0);
-                saveConfig();
-                if (key === 'pokemonHistoryPages' || key === 'minPokemonSamples') {
-                    ensurePokemonHistory(true);
-                }
-                runScan(true);
-                queueRender();
-            });
+        for (const button of qa('[data-moth-view]', panel)) {
+            button.setAttribute('aria-selected', button.dataset.mothView === state.watchView ? 'true' : 'false');
         }
 
-        for (const button of qa('[data-moth-item-scan]', panel)) {
-            button.addEventListener('click', () => {
-                const itemId = Number(button.dataset.mothItemScan);
-                const currency = button.dataset.mothItemCurrency === 'orb' ? 'orb' : 'gold';
+        const content = q('#moth-mw-view-content', panel);
+        const viewChanged = content.dataset.view !== state.watchView;
+        if (forceViewBuild || viewChanged) {
+            content.dataset.view = state.watchView;
+            if (state.watchView === 'opportunities') {
+                content.innerHTML =
+                    '<div class="moth-mw-filters" id="moth-mw-opportunity-filters">' +
+                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Currency</span>' +
+                    filterButton('All', 'currency', 'all', currencyFilter === 'all', '') +
+                    filterButton('Coins', 'currency', 'gold', currencyFilter === 'gold', '/assets/site/assets/ui/moeda-ouro.png') +
+                    filterButton('Gems', 'currency', 'orb', currencyFilter === 'orb', '/img/moeda-gema.png') + '</div>' +
+                    '<div class="moth-mw-filter-group"><span class="moth-mw-filter-label">Type</span>' +
+                    filterButton('All', 'kind', 'all', kindFilter === 'all', '') +
+                    filterButton('Items', 'kind', 'item', kindFilter === 'item', '/assets/site/assets/ui/menu-bolsa.png') +
+                    filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
+                    filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') + '</div>' +
+                    sortSelect() + '</div>' +
+                    '<div class="moth-mw-section-title"><h4>Opportunities</h4><span id="moth-mw-opportunity-count"></span></div>' +
+                    '<div class="moth-mw-list" id="moth-mw-opportunity-list"></div>';
+            } else if (state.watchView === 'inventory') {
+                content.innerHTML = '<div class="moth-mw-section-title"><h4>Market inventory</h4><span>Browse item types, then load the offers for a selected currency.</span></div><div id="moth-mw-inventory-content"></div>';
+            } else if (state.watchView === 'automation') {
+                content.innerHTML =
+                    '<div class="moth-mw-section-title"><h4>Watching</h4><span>Choose what to scan and how far below reference an offer must be.</span></div>' +
+                    '<div class="moth-mw-settings-grid">' +
+                    '<section class="moth-mw-settings-card"><h4>Watch rules</h4><div class="moth-mw-config">' +
+                    configField('Watch at or below reference', 'watchPercent', 'number', '%') +
+                    configField('Scan interval', 'scanSeconds', 'number', 'seconds') +
+                    configField('Watch items', 'scanItems', 'checkbox') + configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
+                    configField('Watch diamonds', 'scanDiamonds', 'checkbox') + '</div></section>' +
+                    '<section class="moth-mw-settings-card"><h4>Automatic purchases</h4><div class="moth-mw-config">' +
+                    configField('Enable automatic buying', 'autoBuy', 'checkbox') +
+                    configField('Auto-buy at or below reference', 'autoBuyPercent', 'number', '%') +
+                    configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
+                    configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
+                    configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
+                    configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
+                    configField('Buy whole item batch', 'buyWholeItemBatch', 'checkbox') + '</div></section>' +
+                    '<section class="moth-mw-settings-card"><h4>Spending limits</h4><div class="moth-mw-config">' +
+                    configField('Keep Coins in reserve', 'goldReserve', 'number', '') +
+                    configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
+                    configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
+                    configField('Maximum Gems per purchase', 'maxGemsPerBuy', 'number', '0 = no extra cap') + '</div></section>' +
+                    '<section class="moth-mw-settings-card"><h4>Reference confidence</h4><div class="moth-mw-config">' +
+                    configField('Minimum sold item units', 'minItemUnits', 'number', '') +
+                    configField('Minimum Pokémon sale samples', 'minPokemonSamples', 'number', '') +
+                    configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') + '</div></section></div>';
+            } else {
+                content.innerHTML =
+                    '<div class="moth-mw-section-title"><h4>Price references</h4><span>Inspect and refresh reference data used to judge offers.</span></div>' +
+                    '<div class="moth-mw-reference-tools" id="moth-mw-reference-tools"></div>' +
+                    '<div class="moth-mw-section-title"><h4>Recent activity</h4><span>Purchase attempts, confirmations, and errors.</span></div>' +
+                    '<div class="moth-mw-log" id="moth-mw-activity-log"></div>';
+            }
+        }
+
+        if (state.watchView === 'opportunities') {
+            const filterHost = q('#moth-mw-opportunity-filters', content);
+            for (const button of qa('[data-moth-filter]', filterHost)) {
+                const active = (button.dataset.mothFilter === 'currency' ? currencyFilter : kindFilter) === button.dataset.mothValue;
+                button.classList.toggle('on', active);
+                button.setAttribute('aria-pressed', active ? 'true' : 'false');
+            }
+            const sort = q('#moth-mw-sort', content);
+            if (sort && sort.value !== config.viewSort) sort.value = config.viewSort;
+            const count = q('#moth-mw-opportunity-count', content);
+            if (count) count.textContent = num(candidates.length) + ' matching listings · purchases are serialized while awaiting server confirmation';
+            const list = q('#moth-mw-opportunity-list', content);
+            const html = candidates.length ? candidates.map(renderCandidate).join('') :
+                '<div class="moth-mw-empty">No matching opportunities. Try a wider watch threshold or inspect Market inventory.</div>';
+            if (list && list.innerHTML !== html) list.innerHTML = html;
+        } else if (state.watchView === 'inventory') {
+            const host = q('#moth-mw-inventory-content', content);
+            const html = renderItemInventory();
+            if (host && host.innerHTML !== html) {
+                const oldScroller = q('.moth-mw-inventory-list', host);
+                const scrollTop = oldScroller ? oldScroller.scrollTop : 0;
+                host.innerHTML = html;
+                const newScroller = q('.moth-mw-inventory-list', host);
+                if (newScroller) newScroller.scrollTop = scrollTop;
+            }
+        } else if (state.watchView === 'activity') {
+            const refs = q('#moth-mw-reference-tools', content);
+            const html = '<div class="moth-mw-reference-info"><b>Item references:</b> live server 7-day averages with a saved fallback captured ' +
+                escapeHtml(captured) + '. ' + num(baseline.items) + ' item types; ' + num(baseline.gold) + ' Coin references; ' +
+                num(baseline.orb) + ' Gem references.<br>Suspicious prices: ' + num(state.itemScanStats.goldSuspicious) + '/' +
+                num(state.itemScanStats.goldChecked) + ' Coin · ' + num(state.itemScanStats.orbSuspicious) + '/' +
+                num(state.itemScanStats.orbChecked) + ' Gem.</div>' +
+                '<button type="button" class="moth-mw-btn" id="moth-mw-refresh-baseline">Refresh saved fallback</button>' +
+                '<button type="button" class="moth-mw-btn" id="moth-mw-export-baseline">Copy reference data</button>';
+            if (refs && refs.innerHTML !== html) refs.innerHTML = html;
+            const log = q('#moth-mw-activity-log', content);
+            const logHtml = state.buyLog.length ? state.buyLog.map(row =>
+                '<div>' + new Date(row.at).toLocaleTimeString() + ' · ' + escapeHtml(row.text) + '</div>').join('') :
+                '<div>No purchase attempts recorded this session.</div>';
+            if (log && log.innerHTML !== logHtml) log.innerHTML = logHtml;
+        }
+    }
+
+    function bindWatchEvents(panel) {
+        if (panel.dataset.mothWatchEvents) return;
+        panel.dataset.mothWatchEvents = '1';
+
+        panel.addEventListener('click', event => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) return;
+            const tab = target.closest('[data-moth-view]');
+            if (tab) {
+                const view = tab.dataset.mothView;
+                if (!['opportunities', 'inventory', 'automation', 'activity'].includes(view)) return;
+                state.watchView = view;
+                try { localStorage.setItem('moth-pokeidle-market-watch-view-v1', view); } catch {}
+                renderWatch(true);
+                return;
+            }
+            if (target.closest('#moth-mw-scan')) { runScan(true); return; }
+            if (target.closest('#moth-mw-refresh-baseline')) {
+                state.forceBaselineNext = true;
+                state.baseline = emptyBaseline();
+                saveBaseline();
+                requestItemSummary();
+                queueRender();
+                return;
+            }
+            if (target.closest('#moth-mw-export-baseline')) {
+                void copyText(exportBaselineText()).then(ok => {
+                    addLog(ok ? 'Reference data copied to clipboard' : 'Could not copy reference data');
+                    queueRender();
+                });
+                return;
+            }
+            const itemButton = target.closest('[data-moth-item-scan]');
+            if (itemButton) {
+                const itemId = Number(itemButton.dataset.mothItemScan);
+                const currency = itemButton.dataset.mothItemCurrency === 'orb' ? 'orb' : 'gold';
                 if (!(itemId > 0)) return;
                 const key = String(itemId) + ':' + currency;
                 state.loadedItemKeys.add(key);
                 state.lastDetailRequest.delete(key);
                 queueItemDetail(itemId, currency);
                 state.itemStatus = 'loading ' + catalogName(itemId) + ' offers';
-                queueRender();
-            });
-        }
-
-        for (const button of qa('[data-moth-filter]', panel)) {
-            button.addEventListener('click', () => {
-                const group = button.dataset.mothFilter;
-                const value = button.dataset.mothValue;
-
-                if (group === 'currency' && ['all', 'gold', 'orb'].includes(value)) {
-                    config.viewCurrency = value;
-                } else if (group === 'kind' && ['all', 'item', 'pokemon'].includes(value)) {
-                    config.viewKind = value;
-                } else {
-                    return;
-                }
-
+                state.watchView = 'opportunities';
+                try { localStorage.setItem('moth-pokeidle-market-watch-view-v1', 'opportunities'); } catch {}
+                renderWatch(true);
+                return;
+            }
+            const filter = target.closest('[data-moth-filter]');
+            if (filter) {
+                const group = filter.dataset.mothFilter, value = filter.dataset.mothValue;
+                if (group === 'currency' && ['all', 'gold', 'orb'].includes(value)) config.viewCurrency = value;
+                else if (group === 'kind' && ['all', 'item', 'pokemon', 'diamond'].includes(value)) config.viewKind = value;
+                else return;
                 saveConfig();
+                renderWatch();
+                return;
+            }
+            const buy = target.closest('[data-moth-buy]');
+            if (buy) {
+                const candidate = state.candidates.get(buy.dataset.mothBuy);
+                if (candidate && !tryBuy(candidate, true)) addLog('Purchase not sent; check balance, reserve, listing availability, and pending purchase status');
                 queueRender();
-            });
-        }
-
-        const sort = q('#moth-mw-sort', panel);
-        if (sort) {
-            sort.addEventListener('change', () => {
-                config.viewSort = sort.value;
-                saveConfig();
-                queueRender();
-            });
-        }
-
-        q('#moth-mw-scan', panel).addEventListener('click', () => runScan(true));
-
-        q('#moth-mw-refresh-baseline', panel).addEventListener('click', () => {
-            state.forceBaselineNext = true;
-            state.baseline = emptyBaseline();
-            saveBaseline();
-            requestItemSummary();
-            queueRender();
+            }
         });
 
-        q('#moth-mw-export-baseline', panel).addEventListener('click', async () => {
-            const ok = await copyText(exportBaselineText());
-            addLog(ok ? 'Baseline source copied to clipboard' : 'Could not copy baseline');
-            queueRender();
+        panel.addEventListener('change', event => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) return;
+            if (target.matches('[data-moth-cfg]')) {
+                const key = target.dataset.mothCfg;
+                if (!(key in DEFAULTS)) return;
+                config[key] = target.type === 'checkbox' ? target.checked : Math.max(0, Number(target.value) || 0);
+                saveConfig();
+                if (key === 'pokemonHistoryPages' || key === 'minPokemonSamples') ensurePokemonHistory(true);
+                runScan(true);
+                queueRender();
+                return;
+            }
+            if (target.matches('#moth-mw-sort')) {
+                config.viewSort = target.value;
+                saveConfig();
+                renderWatch();
+            }
         });
-
-        for (const button of qa('[data-moth-buy]', panel)) {
-            button.addEventListener('click', () => {
-                const candidate = state.candidates.get(button.dataset.mothBuy);
-                if (candidate) tryBuy(candidate, true);
-            });
-        }
     }
 
     function queueRender() {
@@ -2972,7 +3064,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.29 loaded');
+        console.info('[Moth Watch] v0.1.31 loaded');
     }
 
     bootstrap();
