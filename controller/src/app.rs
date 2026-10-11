@@ -102,6 +102,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
         "LAUNCH ENABLED" => "INICIAR HABILITADAS",
+        "MINIMIZE" => "MINIMIZAR",
         "Accounts" => "Contas",
         "◫  Accounts" => "◫  Contas",
         "Account Manager" => "Gerenciador de contas",
@@ -941,6 +942,27 @@ impl eframe::App for ControllerApp {
                             .clicked()
                         {
                             self.launch_enabled();
+                        }
+
+                        ui.add_space(8.0);
+
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(tr("MINIMIZE"))
+                                        .size(12.0)
+                                        .strong()
+                                        .color(TEXT),
+                                )
+                                .fill(PANEL)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
+                            ui.ctx().send_viewport_cmd(
+                                egui::ViewportCommand::Minimized(true),
+                            );
                         }
                     });
                 });
