@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.6
+// @version      6.5.7
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -2161,13 +2161,25 @@
 
         if (!state) {
             const retryDelay = nextRetryDelay(states);
+            const failedTargetWaitingForRetry = states.some(
+                candidate =>
+                    candidate.lastResult === 'failed' &&
+                    retryDelayForState(candidate) !== null
+            );
 
             stats.status = retryDelay !== null
                 ? 'Waiting for result'
                 : 'Waiting for new fallen Pokémon';
 
             updateUI();
-            scheduleIdle(retryDelay);
+
+            // Failed captures retain the exact configured retry behavior.
+            // Only pending server results / no-target waits use the slower idle poll.
+            if (failedTargetWaitingForRetry) {
+                schedule(retryDelay);
+            } else {
+                scheduleIdle(retryDelay);
+            }
             return;
         }
 
@@ -3313,7 +3325,7 @@
 
         if (settings.enabled) tick();
 
-        console.info('[PokéIdle Auto Catch+] v6.5.6 loaded');
+        console.info('[PokéIdle Auto Catch+] v6.5.7 loaded');
     }
 
     if (document.readyState === 'loading') {
