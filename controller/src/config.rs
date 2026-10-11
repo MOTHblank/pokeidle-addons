@@ -167,38 +167,6 @@ impl Config {
         })
     }
 
-    pub fn profiles_dir() -> Result<PathBuf, String> {
-        Ok(data_root()?.join("Profiles"))
-    }
-
-    pub fn kick_profile_dir(&self) -> PathBuf {
-        data_root()
-            .expect("Moth data root must be available on Windows")
-            .join("KickProfiles")
-            .join(self.profile.name())
-    }
-
-    pub fn kick_firefox_executable() -> Result<PathBuf, String> {
-        // Use the same Firefox selection order as the game profiles. In
-        // particular, do not silently switch a KICK account to an older
-        // standard Firefox when Firefox Developer Edition is the browser Moth
-        // is already using successfully.
-        if let Some(path) = env::var_os("MOTH_FIREFOX") {
-            let path = PathBuf::from(path);
-            if path.is_file() {
-                return Ok(path);
-            }
-        }
-
-        firefox_developer_candidates()
-            .into_iter()
-            .chain(firefox_standard_candidates())
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                "Firefox was not found for the dedicated KICK browser. Install Firefox.".to_string()
-            })
-    }
-
     pub fn legacy_profile_dir(&self) -> Result<PathBuf, String> {
         Ok(data_root()?.join("Profiles").join(self.profile.legacy_name()))
     }
