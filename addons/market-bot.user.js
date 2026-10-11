@@ -1340,7 +1340,7 @@
         ));
     }
 
-    function tryBuy(candidate, manual) {
+    function tryBuy(candidate, manual, requestedQuantity = null) {
         if (!candidate || state.pendingBuy) return false;
         if (!manual && !candidateCanAutoBuy(candidate)) return false;
         if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
@@ -1349,8 +1349,12 @@
         const blockedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
         if (blockedUntil > now) return false;
 
-        const qty = purchaseQuantity(candidate);
-        if (qty < 1) {
+        const affordableQuantity = purchaseQuantity(candidate);
+        const requestedLimit = requestedQuantity == null
+            ? affordableQuantity
+            : Math.floor(Number(requestedQuantity));
+        const qty = Math.min(affordableQuantity, requestedLimit);
+        if (!Number.isFinite(qty) || qty < 1) {
             if (manual) addLog('Skipped: not enough spendable balance for ' + candidate.name);
             return false;
         }
@@ -1422,7 +1426,10 @@
     }
 
     function buyFromController(request) {
-        if (!request || !Number(request.id) || !Number(request.preco)) {
+        if (!request ||
+            !Number.isSafeInteger(Number(request.id)) || Number(request.id) <= 0 ||
+            !Number.isFinite(Number(request.preco)) || Number(request.preco) <= 0 ||
+            (request.qtd != null && (!Number.isFinite(Number(request.qtd)) || Math.floor(Number(request.qtd)) < 1))) {
             return controllerResult({
                 ok: false,
                 error: 'invalid market purchase request',
@@ -1431,9 +1438,6 @@
         }
 
         const listingId = Number(request.id);
-        if (!Number.isSafeInteger(listingId) || listingId <= 0) {
-            return controllerResult({ ok: false, error: 'invalid listing id', source: 'validation' });
-        }
         if (request.moeda !== 'gold' && request.moeda !== 'orb') {
             return controllerResult({ ok: false, error: 'unsupported currency', source: 'validation', listingId });
         }
@@ -1444,8 +1448,16 @@
         );
 
         if (candidate) {
+            const requestedPrice = Number(request.preco);
+            const candidateUnitPrice = candidate.kind === 'pokemon'
+                ? Number(candidate.unitPrice || candidate.price)
+                : Number(candidate.price);
+            if (Math.abs(candidateUnitPrice - requestedPrice) > Math.max(0.000001, candidateUnitPrice * 0.000001)) {
+                return controllerResult({ ok: false, error: 'listing price changed; refresh the market listing', source: 'validation', listingId });
+            }
+            const requestedQty = request.qtd == null ? null : Math.floor(Number(request.qtd));
             return controllerResult({
-                ok: tryBuy(candidate, true),
+                ok: tryBuy(candidate, true, requestedQty),
                 source: 'candidate',
                 listingId
             });
