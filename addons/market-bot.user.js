@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.33
+// @version      0.1.34
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -3117,7 +3117,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.33 loaded');
+        console.info('[Moth Watch] v0.1.34 loaded');
     }
 
     bootstrap();
