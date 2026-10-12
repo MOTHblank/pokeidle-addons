@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.41
+// @version      0.1.42
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -58,6 +58,10 @@
         buyCoins: false,
         buyGems: false,
         buyWholeItemBatch: true,
+        autoSellEnabled: false,
+        autoSellRules: [],
+        fixedRulesEnabled: false,
+        fixedItemRules: [],
         goldReserve: 0,
         gemReserve: 0,
         maxCoinsPerBuy: 0,
@@ -79,6 +83,10 @@
         nick: '',
         gold: 0,
         orbs: 0,
+        ownedItems: new Map(),
+        ownListings: [],
+        ownListingsAt: 0,
+        ownListingsPendingAt: 0,
         catalog: new Map(),
         itemNames: new Map(),
         creatureNames: new Map(),
@@ -102,6 +110,9 @@
         itemOfferDetails: new Map(),
         sellRecommendationKey: null,
         pendingBuy: null,
+        pendingSell: null,
+        automationLastRunAt: 0,
+        itemSummaryAt: 0,
         attemptedListings: new Map(),
         buyLog: [],
         lastScanAt: 0,
@@ -295,7 +306,34 @@
         'Low confidence': 'Baixa confiança',
         'Waiting for market data…': 'Aguardando dados do mercado…',
         'No reliable recommendation yet.': 'Ainda não há dados suficientes para uma recomendação confiável.',
-        'Based on completed sales first; unusually cheap active listings are treated as possible dumps.': 'Prioriza vendas concluídas; anúncios ativos excepcionalmente baratos são tratados como possíveis liquidações.'
+        'Based on completed sales first; unusually cheap active listings are treated as possible dumps.': 'Prioriza vendas concluídas; anúncios ativos excepcionalmente baratos são tratados como possíveis liquidações.',
+        'Experimental auto-sell': 'Venda automática experimental',
+        'Enable experimental auto-sell': 'Ativar venda automática experimental',
+        'Automatically list selected owned items. Moth Watch waits if the same item/currency already has an open listing.': 'Anuncia automaticamente os itens selecionados que você possui. O Moth Watch espera se o mesmo item/moeda já tiver um anúncio aberto.',
+        'Recommended': 'Recomendado',
+        'Patient': 'Paciente',
+        'Keep quantity': 'Manter quantidade',
+        'Max units per listing': 'Máx. de unidades por anúncio',
+        '0 = all available': '0 = tudo disponível',
+        'Add auto-sell item': 'Adicionar item à venda automática',
+        'No auto-sell items configured.': 'Nenhum item configurado para venda automática.',
+        'Fixed item rules': 'Regras fixas por item',
+        'Enable fixed item rules': 'Ativar regras fixas por item',
+        'Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.': 'Use limites exatos, por exemplo: comprar Cocoon Stone por até 30.000 e vender por 45.000. Estas regras são independentes da compra automática por porcentagem.',
+        'Buy at or below': 'Comprar por até',
+        'Sell at': 'Vender por',
+        'Max units per purchase': 'Máx. de unidades por compra',
+        'Add fixed rule': 'Adicionar regra fixa',
+        'No fixed item rules configured.': 'Nenhuma regra fixa configurada.',
+        'Enabled': 'Ativada',
+        'Sell': 'Vender',
+        'Remove': 'Remover',
+        'Item': 'Item',
+        'Price mode': 'Modo de preço',
+        'Market catalog is not loaded yet.': 'O catálogo do mercado ainda não foi carregado.',
+        'Owned: {owned} · listed: {listed}': 'Possui: {owned} · anunciado: {listed}',
+        'Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.': 'Experimental: as recomendações podem mudar com os dados do mercado. Mantenha desativado até revisar cada item selecionado.',
+        'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.'
     });
 
     function tr(key, params = null) {
@@ -364,6 +402,44 @@
         return '<span class="moth-mw-money"><img src="' + src + '" alt="">' + num(value) + '</span>';
     }
 
+
+    function sanitizeAutoSellRules(value) {
+        if (!Array.isArray(value)) return [];
+        return value.map((rule, index) => {
+            const itemId = Math.floor(Number(rule?.itemId));
+            if (!(itemId > 0)) return null;
+            return {
+                id: String(rule?.id || ('autosell-' + index + '-' + itemId)),
+                itemId,
+                currency: rule?.currency === 'orb' ? 'orb' : 'gold',
+                mode: rule?.mode === 'patient' ? 'patient' : 'recommended',
+                enabled: rule?.enabled !== false,
+                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
+                maxSellQty: Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0))
+            };
+        }).filter(Boolean);
+    }
+
+    function sanitizeFixedItemRules(value) {
+        if (!Array.isArray(value)) return [];
+        return value.map((rule, index) => {
+            const itemId = Math.floor(Number(rule?.itemId));
+            if (!(itemId > 0)) return null;
+            return {
+                id: String(rule?.id || ('fixed-' + index + '-' + itemId)),
+                itemId,
+                currency: rule?.currency === 'orb' ? 'orb' : 'gold',
+                buyEnabled: rule?.buyEnabled !== false && Number(rule?.buyMax) > 0,
+                buyMax: Math.max(0, Math.floor(Number(rule?.buyMax) || 0)),
+                buyQtyLimit: Math.max(0, Math.floor(Number(rule?.buyQtyLimit) || 0)),
+                sellEnabled: rule?.sellEnabled !== false && Number(rule?.sellPrice) > 0,
+                sellPrice: Math.max(0, Math.floor(Number(rule?.sellPrice) || 0)),
+                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
+                maxSellQty: Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0))
+            };
+        }).filter(Boolean);
+    }
+
     function loadConfig() {
         let saved = {};
         try {
@@ -371,6 +447,8 @@
         } catch {}
 
         const loaded = Object.assign({}, DEFAULTS, saved);
+        loaded.autoSellRules = sanitizeAutoSellRules(saved.autoSellRules);
+        loaded.fixedItemRules = sanitizeFixedItemRules(saved.fixedItemRules);
         try {
             /*
              * Existing settings stored the child auto-buy toggles as ON even
@@ -506,6 +584,7 @@
 
         const previousGold = state.gold;
         const previousOrbs = state.orbs;
+        let itemsChanged = false;
 
         if (Number(snapshot.servidorAgora) > 0) {
             state.serverClockOffset = Date.now() - Number(snapshot.servidorAgora);
@@ -520,12 +599,24 @@
         if (full || Object.prototype.hasOwnProperty.call(snapshot, 'orbs')) {
             if (Number.isFinite(Number(snapshot.orbs))) state.orbs = Number(snapshot.orbs);
         }
+        if ((full || Object.prototype.hasOwnProperty.call(snapshot, 'items')) &&
+            snapshot.items && typeof snapshot.items === 'object' && !Array.isArray(snapshot.items)) {
+            if (full) state.ownedItems.clear();
+            for (const [rawId, rawQty] of Object.entries(snapshot.items)) {
+                const itemId = Number(rawId);
+                const qty = Math.max(0, Math.floor(Number(rawQty) || 0));
+                if (Number.isFinite(itemId) && itemId > 0) {
+                    state.ownedItems.set(itemId, qty);
+                    itemsChanged = true;
+                }
+            }
+        }
 
         if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 4500) {
             finishPendingBuy('timeout');
         }
 
-        if (state.watchOpen && (previousGold !== state.gold || previousOrbs !== state.orbs)) {
+        if (state.watchOpen && (previousGold !== state.gold || previousOrbs !== state.orbs || itemsChanged)) {
             queueRender();
         }
     }
@@ -802,6 +893,9 @@
         }
 
         const activeMedian = stableAsks.length ? median(stableAsks) : 0;
+        const activeP75 = stableAsks.length
+            ? stableAsks[Math.min(stableAsks.length - 1, Math.floor((stableAsks.length - 1) * 0.75))]
+            : 0;
         let raw = 0;
         let confidence = 'low';
 
@@ -822,8 +916,19 @@
             confidence = stableAsks.length >= 4 ? 'medium' : 'low';
         }
 
+        let patientRaw = raw;
+        if (hasSoldAverage) {
+            patientRaw = Math.max(
+                raw,
+                Math.min(Math.max(soldAverage * 1.10, activeP75 || 0), soldAverage * 1.25)
+            );
+        } else if (activeP75 > 0) {
+            patientRaw = Math.max(raw, activeP75);
+        }
+
         return {
             price: roundSellRecommendation(raw),
+            patientPrice: roundSellRecommendation(patientRaw),
             soldAverage: hasSoldAverage ? soldAverage : 0,
             soldUnits,
             activeMedian: Number(activeMedian) || 0,
@@ -1281,6 +1386,7 @@
     function handleItemSummary(message) {
         state.itemSummary = message.resumo || {};
         state.liveItemAverages = message.medias || {};
+        state.itemSummaryAt = Date.now();
         state.itemStatus = 'live';
 
         if (!state.baseline.capturedAt || state.forceBaselineNext) {
@@ -1807,9 +1913,9 @@
         ));
     }
 
-    function tryBuy(candidate, manual, requestedQuantity = null) {
-        if (!candidate || state.pendingBuy) return false;
-        if (!manual && !candidateCanAutoBuy(candidate)) return false;
+    function tryBuy(candidate, manual, requestedQuantity = null, fixedRule = false) {
+        if (!candidate || state.pendingBuy || state.pendingSell) return false;
+        if (!manual && !fixedRule && !candidateCanAutoBuy(candidate)) return false;
         if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
 
         const now = Date.now();
@@ -1859,7 +1965,7 @@
         }
 
         addLog(
-            (manual ? 'BUY' : 'AUTO BUY') + ' · ' +
+            (fixedRule ? 'RULE BUY' : manual ? 'BUY' : 'AUTO BUY') + ' · ' +
             candidate.name + ' · ' + qty + ' × ' + num(unitPrice) + ' ' +
             (candidate.currency === 'orb' ? 'Gems' : 'Coins') +
             ' · ' + Math.round((1 - candidate.ratio) * 100) + '% under reference'
@@ -2109,8 +2215,8 @@
         if (state.buyLog.length > 12) state.buyLog.length = 12;
     }
 
-    function requestItemSummary() {
-        if (!config.enabled || !config.scanItems) return false;
+    function requestItemSummary(forceForAutomation = false) {
+        if (!config.enabled || (!config.scanItems && !forceForAutomation)) return false;
 
         const delay = backgroundDelayMs();
         if (delay > 0) {
@@ -2118,7 +2224,7 @@
             if (!state.itemSummaryRetryTimer) {
                 state.itemSummaryRetryTimer = setTimeout(() => {
                     state.itemSummaryRetryTimer = null;
-                    requestItemSummary();
+                    requestItemSummary(forceForAutomation);
                 }, delay + 25);
             }
             return true;
@@ -2209,6 +2315,191 @@
             state.diamondStatus = 'scanning · ' + (currency === 'orb' ? 'Gems' : 'Coins');
         }
         return sent;
+    }
+
+
+    function ownedQuantity(itemId) {
+        return Math.max(0, Number(state.ownedItems.get(Number(itemId)) || 0));
+    }
+
+    function ownListedQuantity(itemId, currency) {
+        return state.ownListings.reduce((total, listing) => {
+            if (!listing || Number(listing.itemId) !== Number(itemId)) return total;
+            if ((listing.moeda === 'orb' ? 'orb' : 'gold') !== currency) return total;
+            if (listing.estado && listing.estado !== 'aberto') return total;
+            return total + Math.max(1, Number(listing.qtd || 1));
+        }, 0);
+    }
+
+    function handleOwnListings(message) {
+        state.ownListings = Array.isArray(message.linhas) ? message.linhas.slice() : [];
+        state.ownListingsAt = Date.now();
+        state.ownListingsPendingAt = 0;
+        queueRender();
+    }
+
+    function requestOwnListings() {
+        const now = Date.now();
+        if (state.ownListingsPendingAt && now - state.ownListingsPendingAt < 6000) return false;
+        if (!sendBackground({ t: 'market.meus' })) return false;
+        state.ownListingsPendingAt = now;
+        return true;
+    }
+
+    function finishPendingSell(reason) {
+        const pending = state.pendingSell;
+        if (!pending) return;
+        state.pendingSell = null;
+        state.ownListingsAt = 0;
+        state.ownListingsPendingAt = 0;
+        if (reason === 'server-confirmed') {
+            addLog('AUTO SELL · ' + pending.name + ' · ' + pending.qty + ' × ' +
+                num(pending.price) + ' ' + (pending.currency === 'orb' ? 'Gems' : 'Coins') +
+                ' · confirmed');
+        } else if (reason === 'refused') {
+            addLog('AUTO SELL · ' + pending.name + ' · refused');
+        }
+        setTimeout(requestOwnListings, 500);
+        queueRender();
+    }
+
+    function sendItemSale(itemId, currency, qty, price, source) {
+        if (state.pendingSell || state.pendingBuy) return false;
+        itemId = Number(itemId);
+        qty = Math.floor(Number(qty));
+        price = Math.floor(Number(price));
+        if (!(itemId > 0) || !(qty > 0) || !(price > 0)) return false;
+        if (qty > ownedQuantity(itemId)) return false;
+        if (ownListedQuantity(itemId, currency) > 0) return false;
+
+        const sent = send({
+            t: 'market.criar',
+            tipo: 'item',
+            itemId,
+            pokemonId: null,
+            caixaId: null,
+            casaId: null,
+            bicicletaId: null,
+            qtd: qty,
+            preco: price,
+            moeda: currency,
+            dias: null
+        });
+        if (!sent) return false;
+
+        state.pendingSell = {
+            itemId, currency, qty, price,
+            source: String(source || 'AUTO SELL'),
+            name: catalogName(itemId),
+            sentAt: Date.now()
+        };
+        addLog(String(source || 'AUTO SELL') + ' · ' + catalogName(itemId) + ' · ' +
+            qty + ' × ' + num(price) + ' ' + (currency === 'orb' ? 'Gems' : 'Coins'));
+        setTimeout(() => {
+            if (state.pendingSell && Date.now() - state.pendingSell.sentAt >= 6000) {
+                finishPendingSell('timeout');
+            }
+        }, 6100);
+        return true;
+    }
+
+    function automationDetail(itemId, currency) {
+        const key = String(itemId) + ':' + currency;
+        state.loadedItemKeys.add(key);
+        const detail = state.itemOfferDetails.get(key);
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 12000) {
+            queueItemDetail(itemId, currency);
+        }
+        return detail;
+    }
+
+    function fixedRuleCandidate(rule) {
+        const detail = state.itemOfferDetails.get(String(rule.itemId) + ':' + rule.currency);
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 20000) return null;
+        return Array.from(state.candidates.values())
+            .filter(candidate =>
+                candidate.kind === 'item' &&
+                Number(candidate.itemId) === Number(rule.itemId) &&
+                candidate.currency === rule.currency &&
+                Number(candidate.price) > 0 &&
+                Number(candidate.price) <= Number(rule.buyMax || 0) &&
+                (!candidate.retainedUntil || candidate.retainedUntil <= serverNow())
+            )
+            .sort((a, b) => Number(a.price) - Number(b.price) || Number(a.listingId) - Number(b.listingId))[0] || null;
+    }
+
+    function automationSellQuantity(rule) {
+        const available = Math.max(0, ownedQuantity(rule.itemId) - Math.max(0, Number(rule.keepQty || 0)));
+        const cap = Math.max(0, Number(rule.maxSellQty || 0));
+        return Math.floor(cap > 0 ? Math.min(available, cap) : available);
+    }
+
+    function runMarketAutomation() {
+        if (!config.enabled || gameIsLoading()) return;
+        if (!state.socket || state.socket.readyState !== 1) return;
+        if (q('#modal .cm-folha')) return;
+        if (state.pendingBuy || state.pendingSell) return;
+
+        const now = Date.now();
+        if (now - Number(state.automationLastRunAt || 0) < 1000) return;
+        state.automationLastRunAt = now;
+
+        const fixedRules = config.fixedRulesEnabled ? sanitizeFixedItemRules(config.fixedItemRules) : [];
+        const autoSellRules = config.autoSellEnabled ? sanitizeAutoSellRules(config.autoSellRules) : [];
+        const hasSellRules =
+            fixedRules.some(rule => rule.sellEnabled && rule.sellPrice > 0) ||
+            autoSellRules.some(rule => rule.enabled);
+
+        if (hasSellRules && now - Number(state.ownListingsAt || 0) > 15000) {
+            requestOwnListings();
+            return;
+        }
+
+        if (autoSellRules.length && now - Number(state.itemSummaryAt || 0) > 30000) {
+            requestItemSummary(true);
+            return;
+        }
+
+        for (const rule of fixedRules) {
+            if (rule.buyEnabled && rule.buyMax > 0) automationDetail(rule.itemId, rule.currency);
+        }
+        for (const rule of autoSellRules) {
+            if (rule.enabled && automationSellQuantity(rule) > 0) automationDetail(rule.itemId, rule.currency);
+        }
+
+        for (const rule of fixedRules) {
+            if (!rule.buyEnabled || !(rule.buyMax > 0)) continue;
+            const candidate = fixedRuleCandidate(rule);
+            if (!candidate) continue;
+            const limit = rule.buyQtyLimit > 0 ? rule.buyQtyLimit : null;
+            if (tryBuy(candidate, false, limit, true)) return;
+        }
+
+        for (const rule of fixedRules) {
+            if (!rule.sellEnabled || !(rule.sellPrice > 0)) continue;
+            const qty = automationSellQuantity(rule);
+            if (qty < 1 || ownListedQuantity(rule.itemId, rule.currency) > 0) continue;
+            if (sendItemSale(rule.itemId, rule.currency, qty, rule.sellPrice, 'RULE SELL')) return;
+        }
+
+        const fixedSellKeys = new Set(
+            fixedRules.filter(rule => rule.sellEnabled && rule.sellPrice > 0)
+                .map(rule => String(rule.itemId) + ':' + rule.currency)
+        );
+        for (const rule of autoSellRules) {
+            if (!rule.enabled) continue;
+            const key = String(rule.itemId) + ':' + rule.currency;
+            if (fixedSellKeys.has(key)) continue;
+            const qty = automationSellQuantity(rule);
+            if (qty < 1 || ownListedQuantity(rule.itemId, rule.currency) > 0) continue;
+            const recommendation = sellPriceRecommendation(rule.itemId, rule.currency);
+            const price = rule.mode === 'patient'
+                ? Number(recommendation.patientPrice || 0)
+                : Number(recommendation.price || 0);
+            if (!(price > 0)) continue;
+            if (sendItemSale(rule.itemId, rule.currency, qty, price,
+                rule.mode === 'patient' ? 'PATIENT SELL' : 'RECOMMENDED SELL')) return;
+        }
     }
 
     function runScan(force) {
@@ -2313,6 +2604,9 @@
             if (state.pendingBuy) {
                 addLog('Purchase refused: ' + String(message.chave || message.msg || 'server error'));
                 finishPendingBuy('refused');
+            } else if (state.pendingSell) {
+                addLog('AUTO SELL · refused · ' + String(message.chave || message.msg || 'server error'));
+                finishPendingSell('refused');
             }
             return;
         }
@@ -2327,7 +2621,9 @@
             for (const event of message.ev || []) {
                 if (event && event.k === 'marketComprado' && state.pendingBuy) {
                     finishPendingBuy('server-confirmed');
-                    break;
+                }
+                if (event && event.k === 'marketCriado' && state.pendingSell) {
+                    finishPendingSell('server-confirmed');
                 }
             }
             return;
@@ -2362,6 +2658,10 @@
             }
         }
 
+        if (message.aba === 'meus') {
+            handleOwnListings(message);
+            return;
+        }
         if (message.aba === 'itens') {
             handleItemSummary(message);
             return;
@@ -2583,6 +2883,17 @@
             '.moth-mw-settings-card .moth-mw-config label{font-size:11px}',
             '.moth-mw-setting{min-width:0;display:flex;flex-direction:column;gap:4px;padding:4px 0}',
             '.moth-mw-setting-help{display:block;font-size:10px;line-height:1.4;color:var(--sobre-mad-dim,#999)}',
+            '.moth-mw-automation-block{margin-top:12px;padding:10px;border:1px solid var(--mad-linha,#3a2824);border-radius:8px;background:var(--vao,#21191d)}',
+            '.moth-mw-rule-add{display:grid;grid-template-columns:minmax(150px,1.4fr) auto auto minmax(90px,.6fr) minmax(90px,.6fr) auto;gap:6px;align-items:end;margin:9px 0}',
+            '.moth-mw-rule-add.fixed{grid-template-columns:minmax(140px,1.3fr) auto repeat(5,minmax(82px,.65fr)) auto}',
+            '.moth-mw-rule-add label,.moth-mw-rule-row label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:var(--sobre-mad-dim,#aaa);min-width:0}',
+            '.moth-mw-rule-add input,.moth-mw-rule-add select,.moth-mw-rule-row input,.moth-mw-rule-row select{min-width:0;width:100%;box-sizing:border-box}',
+            '.moth-mw-rule-list{display:grid;gap:6px}',
+            '.moth-mw-rule-row{display:grid;grid-template-columns:auto minmax(130px,1.3fr) minmax(85px,.65fr) minmax(95px,.7fr) minmax(85px,.6fr) minmax(100px,.7fr) auto;gap:7px;align-items:end;padding:7px;border-radius:6px;background:rgba(255,255,255,.035)}',
+            '.moth-mw-rule-row.fixed{grid-template-columns:minmax(130px,1.2fr) minmax(85px,.6fr) auto minmax(90px,.65fr) minmax(90px,.65fr) auto minmax(90px,.65fr) minmax(80px,.55fr) minmax(90px,.65fr) auto}',
+            '.moth-mw-rule-name{display:flex;flex-direction:column;gap:2px;min-width:0}.moth-mw-rule-name b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.moth-mw-rule-name small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-rule-toggle{display:flex!important;flex-direction:row!important;align-items:center!important;gap:4px!important;color:var(--sobre-mad,#eee)!important}.moth-mw-rule-toggle input{width:auto!important;flex:none}',
+            '@media(max-width:900px){.moth-mw-rule-add,.moth-mw-rule-add.fixed,.moth-mw-rule-row,.moth-mw-rule-row.fixed{grid-template-columns:1fr 1fr}.moth-mw-rule-name{grid-column:1/-1}}',
             '.moth-mw-setting-control{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px}',
             '.moth-mw-setting-control>span{flex:1}',
             '.moth-mw-setting-control input[type=number]{width:110px;max-width:42%;font-size:11px;padding:5px 6px}',
@@ -3023,6 +3334,119 @@
             (icon ? '<img src="' + escapeHtml(icon) + '" alt="">' : '') + escapeHtml(tr(label)) + '</button>';
     }
 
+
+    function newAutomationRuleId(prefix) {
+        return prefix + '-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 100000).toString(36);
+    }
+
+    function automationItemIds() {
+        const ids = new Set();
+        for (const id of state.catalog.keys()) if (Number(id) > 0) ids.add(Number(id));
+        for (const id of Object.keys(state.itemSummary || {})) if (Number(id) > 0) ids.add(Number(id));
+        return Array.from(ids).sort((a, b) => catalogName(a).localeCompare(catalogName(b), currentLocale()));
+    }
+
+    function automationItemOptions(selected = 0) {
+        const ids = automationItemIds();
+        if (!ids.length) return '<option value="">' + escapeHtml(tr('Market catalog is not loaded yet.')) + '</option>';
+        return ids.map(itemId =>
+            '<option value="' + itemId + '"' + (Number(selected) === itemId ? ' selected' : '') + '>' +
+            escapeHtml(catalogName(itemId)) + '</option>'
+        ).join('');
+    }
+
+    function automationRuleStatus(itemId, currency) {
+        return tr('Owned: {owned} · listed: {listed}', {
+            owned: num(ownedQuantity(itemId)),
+            listed: num(ownListedQuantity(itemId, currency))
+        });
+    }
+
+    function autoSellRulesHtml() {
+        const rules = sanitizeAutoSellRules(config.autoSellRules);
+        const rows = rules.map(rule =>
+            '<div class="moth-mw-rule-row" data-moth-auto-sell-row="' + escapeHtml(rule.id) + '">' +
+            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-auto-sell-field="enabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.enabled ? ' checked' : '') + '> ' + escapeHtml(tr('Enabled')) + '</label>' +
+            '<div class="moth-mw-rule-name"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b><small>' +
+            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
+            '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-auto-sell-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
+            '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
+            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
+            '<label><span>' + escapeHtml(tr('Price mode')) + '</span><select data-moth-auto-sell-field="mode" data-rule-id="' + escapeHtml(rule.id) + '">' +
+            '<option value="recommended"' + (rule.mode === 'recommended' ? ' selected' : '') + '>' + escapeHtml(tr('Recommended')) + '</option>' +
+            '<option value="patient"' + (rule.mode === 'patient' ? ' selected' : '') + '>' + escapeHtml(tr('Patient')) + '</option></select></label>' +
+            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
+            '" data-moth-auto-sell-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input type="number" min="0" step="1" value="' + rule.maxSellQty +
+            '" data-moth-auto-sell-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"><small>' + escapeHtml(tr('0 = all available')) + '</small></label>' +
+            '<button type="button" class="moth-mw-btn" data-moth-remove-auto-sell="' + escapeHtml(rule.id) + '">' + escapeHtml(tr('Remove')) + '</button>' +
+            '</div>'
+        ).join('');
+
+        return '<section class="moth-mw-automation-block"><div class="moth-mw-section-title"><h4>' +
+            escapeHtml(tr('Experimental auto-sell')) + '</h4><span>' +
+            escapeHtml(tr('Automatically list selected owned items. Moth Watch waits if the same item/currency already has an open listing.')) +
+            '</span></div><p class="moth-mw-setting-help">' +
+            escapeHtml(tr('Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.')) +
+            '</p><div class="moth-mw-config">' +
+            configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox') + '</div>' +
+            '<div class="moth-mw-rule-add"><select id="moth-auto-sell-item">' + automationItemOptions() + '</select>' +
+            '<select id="moth-auto-sell-currency"><option value="gold">' + escapeHtml(tr('Coins')) + '</option><option value="orb">' +
+            escapeHtml(tr('Gems')) + '</option></select><select id="moth-auto-sell-mode"><option value="recommended">' +
+            escapeHtml(tr('Recommended')) + '</option><option value="patient">' + escapeHtml(tr('Patient')) + '</option></select>' +
+            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-auto-sell-keep" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input id="moth-auto-sell-max" type="number" min="0" step="1" value="0"></label>' +
+            '<button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">' + escapeHtml(tr('Add auto-sell item')) + '</button></div>' +
+            '<div class="moth-mw-rule-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No auto-sell items configured.')) + '</div>') +
+            '</div></section>';
+    }
+
+    function fixedRulesHtml() {
+        const rules = sanitizeFixedItemRules(config.fixedItemRules);
+        const rows = rules.map(rule =>
+            '<div class="moth-mw-rule-row fixed" data-moth-fixed-row="' + escapeHtml(rule.id) + '">' +
+            '<div class="moth-mw-rule-name"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b><small>' +
+            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
+            '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-fixed-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
+            '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
+            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
+            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-fixed-field="buyEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.buyEnabled ? ' checked' : '') + '> ' + escapeHtml(tr('Buy')) + '</label>' +
+            '<label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input type="number" min="0" step="1" value="' + rule.buyMax +
+            '" data-moth-fixed-field="buyMax" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per purchase')) + '</span><input type="number" min="0" step="1" value="' + rule.buyQtyLimit +
+            '" data-moth-fixed-field="buyQtyLimit" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-fixed-field="sellEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.sellEnabled ? ' checked' : '') + '> ' + escapeHtml(tr('Sell')) + '</label>' +
+            '<label><span>' + escapeHtml(tr('Sell at')) + '</span><input type="number" min="0" step="1" value="' + rule.sellPrice +
+            '" data-moth-fixed-field="sellPrice" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
+            '" data-moth-fixed-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input type="number" min="0" step="1" value="' + rule.maxSellQty +
+            '" data-moth-fixed-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<button type="button" class="moth-mw-btn" data-moth-remove-fixed="' + escapeHtml(rule.id) + '">' + escapeHtml(tr('Remove')) + '</button>' +
+            '</div>'
+        ).join('');
+
+        return '<section class="moth-mw-automation-block"><div class="moth-mw-section-title"><h4>' +
+            escapeHtml(tr('Fixed item rules')) + '</h4><span>' +
+            escapeHtml(tr('Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.')) +
+            '</span></div><p class="moth-mw-setting-help">' +
+            escapeHtml(tr('Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.')) +
+            '</p><div class="moth-mw-config">' + configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox') + '</div>' +
+            '<div class="moth-mw-rule-add fixed"><select id="moth-fixed-item">' + automationItemOptions() + '</select>' +
+            '<select id="moth-fixed-currency"><option value="gold">' + escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select>' +
+            '<label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input id="moth-fixed-buy" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Sell at')) + '</span><input id="moth-fixed-sell" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-fixed-keep" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per purchase')) + '</span><input id="moth-fixed-buy-limit" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input id="moth-fixed-sell-limit" type="number" min="0" step="1" value="0"></label>' +
+            '<button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">' + escapeHtml(tr('Add fixed rule')) + '</button></div>' +
+            '<div class="moth-mw-rule-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No fixed item rules configured.')) + '</div>') +
+            '</div></section>';
+    }
+
     function renderWatch(forceViewBuild = false) {
         const panel = q('#moth-market-watch-panel');
         if (!panel || !state.watchOpen) return;
@@ -3135,7 +3559,8 @@
                     '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Reference confidence')) + '</h4><div class="moth-mw-config">' +
                     configField('Minimum sold item units', 'minItemUnits', 'number', '') +
                     configField('Minimum Pokémon sale samples', 'minPokemonSamples', 'number', '') +
-                    configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') + '</div></section></div>';
+                    configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') + '</div></section></div>' +
+                    autoSellRulesHtml() + fixedRulesHtml();
             } else {
                 content.innerHTML =
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Price references')) + '</h4><span>' +
@@ -3224,6 +3649,60 @@
                 });
                 return;
             }
+            if (target.closest('#moth-add-auto-sell')) {
+                const itemId = Number(q('#moth-auto-sell-item', panel)?.value);
+                if (!(itemId > 0)) return;
+                const currency = q('#moth-auto-sell-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
+                const mode = q('#moth-auto-sell-mode', panel)?.value === 'patient' ? 'patient' : 'recommended';
+                const keepQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-keep', panel)?.value) || 0));
+                const maxSellQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-max', panel)?.value) || 0));
+                const rules = sanitizeAutoSellRules(config.autoSellRules);
+                if (!rules.some(rule => rule.itemId === itemId && rule.currency === currency)) {
+                    rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty, maxSellQty });
+                    config.autoSellRules = rules;
+                    saveConfig();
+                }
+                renderWatch(true);
+                return;
+            }
+            const removeAutoSell = target.closest('[data-moth-remove-auto-sell]');
+            if (removeAutoSell) {
+                config.autoSellRules = sanitizeAutoSellRules(config.autoSellRules)
+                    .filter(rule => rule.id !== removeAutoSell.dataset.mothRemoveAutoSell);
+                saveConfig();
+                renderWatch(true);
+                return;
+            }
+            if (target.closest('#moth-add-fixed-rule')) {
+                const itemId = Number(q('#moth-fixed-item', panel)?.value);
+                if (!(itemId > 0)) return;
+                const currency = q('#moth-fixed-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
+                const buyMax = Math.max(0, Math.floor(Number(q('#moth-fixed-buy', panel)?.value) || 0));
+                const sellPrice = Math.max(0, Math.floor(Number(q('#moth-fixed-sell', panel)?.value) || 0));
+                const keepQty = Math.max(0, Math.floor(Number(q('#moth-fixed-keep', panel)?.value) || 0));
+                const buyQtyLimit = Math.max(0, Math.floor(Number(q('#moth-fixed-buy-limit', panel)?.value) || 0));
+                const maxSellQty = Math.max(0, Math.floor(Number(q('#moth-fixed-sell-limit', panel)?.value) || 0));
+                const rules = sanitizeFixedItemRules(config.fixedItemRules);
+                if (!rules.some(rule => rule.itemId === itemId && rule.currency === currency)) {
+                    rules.push({
+                        id: newAutomationRuleId('fixed'), itemId, currency,
+                        buyEnabled: buyMax > 0, buyMax, buyQtyLimit,
+                        sellEnabled: sellPrice > 0, sellPrice, keepQty, maxSellQty
+                    });
+                    config.fixedItemRules = rules;
+                    saveConfig();
+                }
+                renderWatch(true);
+                return;
+            }
+            const removeFixed = target.closest('[data-moth-remove-fixed]');
+            if (removeFixed) {
+                config.fixedItemRules = sanitizeFixedItemRules(config.fixedItemRules)
+                    .filter(rule => rule.id !== removeFixed.dataset.mothRemoveFixed);
+                saveConfig();
+                renderWatch(true);
+                return;
+            }
             const itemButton = target.closest('[data-moth-item-scan]');
             if (itemButton) {
                 const itemId = Number(itemButton.dataset.mothItemScan);
@@ -3291,6 +3770,38 @@
         panel.addEventListener('change', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
+            if (target.matches('[data-moth-auto-sell-field]')) {
+                const id = target.dataset.ruleId;
+                const field = target.dataset.mothAutoSellField;
+                const rules = sanitizeAutoSellRules(config.autoSellRules);
+                const rule = rules.find(entry => entry.id === id);
+                if (!rule) return;
+                if (field === 'enabled') rule.enabled = target.checked;
+                else if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
+                else if (field === 'mode') rule.mode = target.value === 'patient' ? 'patient' : 'recommended';
+                else if (field === 'keepQty' || field === 'maxSellQty') rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
+                else return;
+                config.autoSellRules = rules;
+                saveConfig();
+                queueRender();
+                return;
+            }
+            if (target.matches('[data-moth-fixed-field]')) {
+                const id = target.dataset.ruleId;
+                const field = target.dataset.mothFixedField;
+                const rules = sanitizeFixedItemRules(config.fixedItemRules);
+                const rule = rules.find(entry => entry.id === id);
+                if (!rule) return;
+                if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
+                else if (field === 'buyEnabled' || field === 'sellEnabled') rule[field] = target.checked;
+                else if (['buyMax', 'buyQtyLimit', 'sellPrice', 'keepQty', 'maxSellQty'].includes(field)) {
+                    rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
+                } else return;
+                config.fixedItemRules = rules;
+                saveConfig();
+                queueRender();
+                return;
+            }
             if (target.matches('[data-moth-cfg]')) {
                 const key = target.dataset.mothCfg;
                 if (!(key in DEFAULTS)) return;
@@ -3722,8 +4233,12 @@
             adoptBridgeSocket();
             ensureUi();
             runScan(false);
+            runMarketAutomation();
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
                 finishPendingBuy('watchdog');
+            }
+            if (state.pendingSell && Date.now() - state.pendingSell.sentAt > 6500) {
+                finishPendingSell('watchdog');
             }
             }, 1000);
 
@@ -3797,7 +4312,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.41 loaded');
+        console.info('[Moth Watch] v0.1.42 loaded');
     }
 
     bootstrap();
