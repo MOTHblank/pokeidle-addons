@@ -19,10 +19,10 @@ Instale estes componentes antes de configurar o controlador:
 
    O controlador procura primeiro o Firefox Developer Edition. A própria edição Developer usa caminho e perfil próprios, o que permite mantê-la separada de outras instalações do Firefox.
 
-2. **Firemin**  
+2. **Firemin (somente Windows)**  
    [Baixar Firemin](https://rizonesoft.com/downloads/firemin/)
 
-   O Firemin é opcional, mas recomendado para reduzir o uso de memória do Firefox quando os perfis ficam abertos por longos períodos. Deixe o Firemin em execução e configure-o para monitorar o Firefox Developer Edition.
+   O Firemin é opcional no Windows, mas pode ajudar a reduzir a memória do Firefox em sessões longas. Configure-o para monitorar o Firefox Developer Edition. **Não é necessário no Linux.**
 
 
 ## Primeira configuração
@@ -294,11 +294,12 @@ The dashboard uses vertical scrolling rather than shrinking account cards. Wide 
 **MOTHblank** · [Google Play](https://play.google.com/store/apps/developer?id=MOTHblank) · [X](https://x.com/MOTHblank) · [WhatsApp / Pix](https://wa.me/+5537999933376)
 
 
-## Linux controller support
+## Versão para Linux (experimental)
 
-The Rust controller supports Linux desktop sessions with X11 or Wayland. Install
-Firefox Developer Edition (or Firefox), Violentmonkey, and `xdg-utils`. Linux
-profile storage is under `$XDG_DATA_HOME/Moth/PokeIdle` or, by default,
-`~/.local/share/Moth/PokeIdle`; set `MOTH_FIREFOX` to an executable path
-if Firefox is not found. Windows and Linux profiles are separate. The Windows
-system tray is not available on Linux. See [controller/README.md](controller/README.md).
+A partir da **v0.1.3**, a página de [Releases](https://github.com/MOTHblank/pokeidle-addons/releases) também oferece um arquivo `moth-controller-v0.1.3-linux-x86_64.tar.gz`. Ele contém o executável nativo e instruções em português.
+
+Extraia o arquivo e execute `chmod +x moth-controller && ./moth-controller` em um terminal dentro da pasta extraída.
+
+É necessário ter uma sessão gráfica **X11 ou Wayland**, **Firefox Developer Edition** (ou Firefox), **Violentmonkey**, `curl`, `xdg-utils` e as bibliotecas gráficas correspondentes à distribuição. O executável é compilado em Ubuntu 22.04 (x86_64) para ampliar a compatibilidade com distribuições Linux atuais, mas ainda não foi validado em todas elas.
+
+Os dados ficam em `$XDG_DATA_HOME/Moth/PokeIdle` ou, por padrão, em `~/.local/share/Moth/PokeIdle`. Caso o Firefox não seja detectado, defina `MOTH_FIREFOX=/caminho/para/firefox`. Os perfis do Windows e Linux são separados; no Linux ainda não existe integração com a bandeja do sistema. Consulte [controller/README.md](controller/README.md) para mais informações.
