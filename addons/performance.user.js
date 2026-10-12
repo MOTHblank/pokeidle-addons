@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.5.1
+// @version      5.5.2
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.2');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -88,8 +88,7 @@
     let interactionBoostUntil = 0;
     // Apply the saved choice before app.js creates its first Campo instance.
     let currentMode = settings.enabled ? 'paused' : 'full';
-    let currentUi = settings.enabled ? 'performance' : 'off';
-    let chatCollapsedByAddon = false;
+
 
     // Exact campo.mjs loop hook state.
     const nativeRAF = page.requestAnimationFrame?.bind(page);
@@ -115,22 +114,8 @@
     let nextSyntheticRafId = -1;
     let campoHookInstalled = false;
     let campoLoopFound = false;
-    let npcLoopFound = false;
     let campoRunsWindow = 0;
-    let campoSkippedWindow = 0;
     let campoRunsPerSecond = 0;
-    let campoSkippedPerSecond = 0;
-
-    // Count actual Campo loop executions, never browser/compositor frames.
-    let uiTimerRunsWindow = 0;
-    let uiTimerSkippedWindow = 0;
-    let uiTimerRunsPerSecond = 0;
-    let uiTimerSkippedPerSecond = 0;
-
-    let npcRunsWindow = 0;
-    let npcSkippedWindow = 0;
-    let npcRunsPerSecond = 0;
-    let npcSkippedPerSecond = 0;
 
     function saveSettings() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
@@ -338,8 +323,7 @@
             kind =
                 'npc';
 
-            npcLoopFound =
-                true;
+
         } else if (
             scheduleComesFromCampo()
         ) {
@@ -472,18 +456,6 @@
                                 .lastRun <
                             interval
                     ) {
-                        if (
-                            kind ===
-                                'campo'
-                        ) {
-                            campoSkippedWindow++;
-                        } else if (
-                            kind ===
-                                'npc'
-                        ) {
-                            npcSkippedWindow++;
-                        }
-
                         pending.actualId =
                             nativeRAF(
                                 gate
@@ -500,11 +472,6 @@
                             'campo'
                     ) {
                         campoRunsWindow++;
-                    } else if (
-                        kind ===
-                            'npc'
-                    ) {
-                        npcRunsWindow++;
                     }
 
                     throttledRequests.delete(
@@ -830,15 +797,11 @@
                             lastRun <
                             minimum
                     ) {
-                        uiTimerSkippedWindow++;
-
                         return;
                     }
 
                     lastRun =
                         now;
-
-                    uiTimerRunsWindow++;
 
                     return callback.apply(
                         this,
@@ -886,58 +849,8 @@
     // UI performance levels
     // ------------------------------------------------------------------
 
-    function collapseChat() {
-        const button =
-            q('#btn-chat-toggle');
-
-        if (!button) {
-            return;
-        }
-
-        if (
-            button.getAttribute(
-                'aria-expanded'
-            ) !== 'false'
-        ) {
-            button.click();
-            chatCollapsedByAddon = true;
-        }
-    }
-
-    function restoreChat() {
-        if (!chatCollapsedByAddon) {
-            return;
-        }
-
-        const button =
-            q('#btn-chat-toggle');
-
-        if (
-            button?.getAttribute(
-                'aria-expanded'
-            ) === 'false'
-        ) {
-            button.click();
-        }
-
-        chatCollapsedByAddon = false;
-    }
-
     function calculateMode() {
         return settings.enabled ? 'paused' : 'full';
-    }
-
-    function calculateUiLevel() {
-        return settings.enabled ? 'performance' : 'off';
-    }
-
-    function syncChatPolicy() {
-        /*
-         * Performance+ no longer changes chat expansion state at all.
-         * Collapsing a core communication panel is too intrusive and can
-         * leave the interface looking broken after profile/script changes.
-         */
-        restoreChat();
     }
 
     function resumeSuspendedCampoLoops() {
@@ -968,9 +881,6 @@
             resumeSuspendedCampoLoops();
         }
 
-        currentUi =
-            calculateUiLevel();
-
         const html =
             document.documentElement;
 
@@ -981,7 +891,6 @@
 
         syncSpriteTimerMode();
         syncNativeOptimized();
-        syncChatPolicy();
         updateUI();
     }
 
@@ -1020,8 +929,6 @@
              * reposicionarGolpesPainel produced repeated style/layout work.
              * In an idle game the move HUD is informational, not an input.
              */
-            html.moth-ui-lite #golpes-painel,
-            html.moth-ui-aggressive #golpes-painel,
             html.moth-ui-performance #golpes-painel {
                 display: none !important;
             }
@@ -1030,11 +937,8 @@
              * Aggressive UI Lite stops painting frequently-changing
              * informational feeds. Capture controls/history are NOT here.
              */
-            html.moth-ui-aggressive #hud-log,
             html.moth-ui-performance #hud-log,
-            html.moth-ui-aggressive .evento-faixa,
             html.moth-ui-performance .evento-faixa,
-            html.moth-ui-aggressive #musica-player,
             html.moth-ui-performance #musica-player {
                 display: none !important;
             }
@@ -1330,31 +1234,8 @@
     // ------------------------------------------------------------------
 
     nativeSetInterval(() => {
-        campoRunsPerSecond =
-            campoRunsWindow;
-
-        campoSkippedPerSecond =
-            campoSkippedWindow;
-
-        uiTimerRunsPerSecond =
-            uiTimerRunsWindow;
-
-        uiTimerSkippedPerSecond =
-            uiTimerSkippedWindow;
-
-        npcRunsPerSecond =
-            npcRunsWindow;
-
-        npcSkippedPerSecond =
-            npcSkippedWindow;
-
+        campoRunsPerSecond = campoRunsWindow;
         campoRunsWindow = 0;
-        campoSkippedWindow = 0;
-        uiTimerRunsWindow = 0;
-        uiTimerSkippedWindow = 0;
-        npcRunsWindow = 0;
-        npcSkippedWindow = 0;
-
         pruneSuspendedCampoLoops();
         applyMode();
     }, 1000);
@@ -1373,7 +1254,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v5.5.1 loaded'
+            '[PokéIdle Performance+] v5.5.2 loaded'
         );
     }
 
