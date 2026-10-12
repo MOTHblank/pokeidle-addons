@@ -166,7 +166,7 @@ jobs:
               echo 'A versão já foi publicada. Não será substituída automaticamente.'
               exit 1
             fi
-            gh release edit "$tag" --title "$titulo" --notes-file "$notas"
+            gh release edit "$tag" --target "$GITHUB_SHA" --title "$titulo" --notes-file "$notas"
             gh release upload "$tag" dist/* --clobber
           else
             gh release create "$tag" dist/* \
