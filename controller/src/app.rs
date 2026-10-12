@@ -209,6 +209,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "OPEN TABS" => "ABAS ABERTAS",
         "No top-level tabs reported" => "Nenhuma aba principal detectada",
         "custom tab requested" => "nova aba personalizada solicitada",
+        "custom tab queued" => "aba personalizada na fila",
+        "Tab" => "Aba",
         "Enter a URL." => "Digite uma URL.",
         "Open a custom URL in this Firefox profile" => "Abrir uma URL personalizada neste perfil do Firefox",
         "https://example.com" => "https://exemplo.com",
@@ -743,7 +745,16 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        let mut command_feedback = Vec::new();
         for slot in &mut self.games {
+            if let Some(monitor) = slot.monitor.as_ref() {
+                while let Some(result) = monitor.take_command_feedback() {
+                    command_feedback.push((
+                        self.accounts[slot.profile.index()].name.clone(),
+                        result,
+                    ));
+                }
+            }
             let exited = match slot.child.as_mut() {
                 Some(child) => match child.try_wait() {
                     Ok(Some(_)) => true,
@@ -787,6 +798,12 @@ impl ControllerApp {
                     slot.orphaned_pid = None;
                 }
             }
+        }
+        for (account_name, result) in command_feedback {
+            self.set_status(
+                format!("{} · {} #{}: {}", account_name, tr("Tab"), result.id, result.message),
+                !result.ok,
+            );
         }
     }
 
@@ -2039,20 +2056,23 @@ fn draw_game_card(
 
                                     if valid_url {
                                         if let Some(monitor) = app.games[index].monitor.as_ref() {
-                                            monitor.send(json!({
+                                            match monitor.send(json!({
                                                 "t": "browser.openTab",
                                                 "url": candidate
-                                            }));
-                                            app.tab_url_input[index].clear();
-                                            app.tab_url_open[index] = false;
-                                            app.set_status(
-                                                format!(
-                                                    "{} · {}",
-                                                    &account_name,
-                                                    tr("custom tab requested")
+                                            })) {
+                                                Ok(id) => {
+                                                    app.tab_url_input[index].clear();
+                                                    app.tab_url_open[index] = false;
+                                                    app.set_status(
+                                                        format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
+                                                        false,
+                                                    );
+                                                }
+                                                Err(error) => app.set_status(
+                                                    format!("{}: {}", &account_name, error),
+                                                    true,
                                                 ),
-                                                false,
-                                            );
+                                            }
                                         } else {
                                             app.set_status(
                                                 format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
