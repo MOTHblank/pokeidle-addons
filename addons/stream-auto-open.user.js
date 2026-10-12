@@ -37,6 +37,7 @@
     let multiChatSignature = '';
     let lastKickLive = [];
     let lastKickStateAvailable = false;
+    let lastKickObservedAt = 0;
 
     const excludedTwitch = new Set([
         'directory', 'downloads', 'jobs', 'p', 'search',
@@ -514,14 +515,14 @@
             lastKickStateAvailable = bridgeData
                 ? bridgeData.kickStateAvailable
                 : !!rows.kick;
-            lastKickLive = bridgeData
-                ? bridgeData.kickLive
-                : [...live.values()]
-                    .filter(item => item.service === 'kick')
-                    .map(item => ({
-                        name: item.name,
-                        url: item.url
-                    }));
+            lastKickLive = lastKickStateAvailable
+                ? bridgeData
+                    ? bridgeData.kickLive
+                    : [...live.values()]
+                        .filter(item => item.service === 'kick')
+                        .map(item => ({ name: item.name, url: item.url }))
+                : [];
+            if (lastKickStateAvailable) lastKickObservedAt = Date.now();
 
             const liveKeys = new Set();
             const twitchByKey = new Map();
@@ -713,17 +714,19 @@
             // live channels appear/disappear promptly without waiting for a
             // modal refresh or the next scheduled scan.
             const current = readLiveChannelsFromBridge();
-            if (current) {
-                // Clear stale entries if a refreshed complete state no longer
-                // contains KICK data; never keep channels from an old snapshot.
+            if (current?.kickStateAvailable) {
                 lastKickLive = current.kickLive;
-                lastKickStateAvailable = current.kickStateAvailable;
+                lastKickStateAvailable = true;
+                lastKickObservedAt = Date.now();
+            } else {
+                lastKickLive = [];
+                lastKickStateAvailable = false;
             }
 
             return {
                 live: lastKickLive.map(item => ({ ...item })),
                 stateAvailable: lastKickStateAvailable,
-                scannedAt: Date.now()
+                scannedAt: lastKickObservedAt
             };
         }
     };
