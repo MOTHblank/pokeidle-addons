@@ -1481,7 +1481,7 @@ impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
         if self.account_setup_checked_at
-            .map(|when| when.elapsed() >= Duration::from_secs(30))
+            .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
             .unwrap_or(true)
         {
             self.refresh_account_setup();
@@ -2990,7 +2990,7 @@ fn addon_needs_attention(
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
     if app
         .account_setup_checked_at
-        .map(|checked| checked.elapsed() >= Duration::from_secs(5))
+        .map(|checked| checked.elapsed() >= Duration::from_secs(30))
         .unwrap_or(true)
     {
         app.refresh_account_setup();
