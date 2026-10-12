@@ -943,6 +943,21 @@ impl ControllerApp {
         let account_name = self.account_name(profile);
         let slot = &mut self.games[index];
 
+        // Stop also works after restarting the controller, before any attempt
+        // to launch that profile has made the orphan process visible.
+        if slot.child.is_none() && slot.orphaned_pid.is_none() {
+            if let Ok(config) = Config::for_profile(profile) {
+                match firefox::find_profile_process(&config) {
+                    Ok(Some(pid)) => slot.orphaned_pid = Some(pid),
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.set_status(format!("{}: {}", account_name, error), true);
+                        return false;
+                    }
+                }
+            }
+        }
+
         if let Some(mut child) = slot.child.take() {
             logging::info(&format!(
                 "stopping {} Firefox PID {}", account_name, child.id()
@@ -997,7 +1012,11 @@ impl ControllerApp {
                 self.launch_one(profile);
             }
         }
-        self.set_status("Launch enabled requested · monitoring will update as Firefox becomes ready", false);
+        // Keep any launch error visible rather than overwriting it with a
+        // success-shaped summary when a profile is already in use.
+        if !self.status_error {
+            self.set_status("Launch enabled requested · monitoring will update as Firefox becomes ready", false);
+        }
     }
 
     fn stop_all(&mut self) {
@@ -1068,11 +1087,30 @@ impl ControllerApp {
             }
         };
 
+        // Google sign-in uses the same profile with debugging disabled; it
+        // still must not race another Firefox that owns that profile.
+        match firefox::find_profile_process(&config) {
+            Ok(Some(pid)) => {
+                self.games[index].orphaned_pid = Some(pid);
+                self.set_status(
+                    format!("{}: Firefox already uses this profile (PID {}). Use Stop before launching.", account_name, pid),
+                    true,
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.set_status(format!("{}: {}", account_name, error), true);
+                return;
+            }
+        }
+
         match firefox::launch_unmonitored(&config) {
             Ok(child) => {
                 let pid = child.id();
                 self.games[index].child = Some(child);
                 self.games[index].monitor = None;
+                self.games[index].orphaned_pid = None;
                 self.games[index].headless = false;
                 logging::info(&format!(
                     "{} Firefox spawned for Google sign-in without remote debugging (PID {})",
@@ -1132,10 +1170,6 @@ impl Drop for ControllerApp {
         }
 
         for slot in &mut self.games {
-            if let Some(monitor) = slot.monitor.as_ref() {
-                monitor.stop();
-            }
-
             if let Some(mut child) = slot.child.take() {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
                 logging::info(&format!(
@@ -1146,6 +1180,9 @@ impl Drop for ControllerApp {
                 if let Err(error) = firefox::stop_child(&mut child, slot.monitor.as_ref()) {
                     logging::error(&format!("{} shutdown failed: {}", account_name, error));
                 }
+            }
+            if let Some(monitor) = slot.monitor.take() {
+                monitor.stop();
             }
             // Recovered processes are intentionally not owned by this controller
             // instance. Only an explicit Stop action may close those browsers.
