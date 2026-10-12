@@ -116,6 +116,77 @@ test('Rules UI has prices and stock reserve but no obsolete quantity fields', ()
     assert.ok(html.includes('Buy every available unit'));
 });
 
+
+test('Shiny Pokémon only use Gems; ordinary Pokémon remain eligible for both currencies', () => {
+    const policyCode = section('    function pokemonCurrencyAllowed(', '    function median(');
+    const policy = new Function('speciesIdOf', 'levelBand', policyCode +
+        '\nreturn { pokemonCurrencyAllowed, pokemonBucketKeys };')(
+        ficha => ficha.speciesId, () => 10
+    );
+    const shiny = { speciesId: 25, shiny: true, potencia: 3, level: 20 };
+    const regular = { speciesId: 25, shiny: false, potencia: 3, level: 20 };
+
+    assert.equal(policy.pokemonCurrencyAllowed(shiny, 'gold'), false);
+    assert.equal(policy.pokemonCurrencyAllowed(shiny, 'orb'), true);
+    assert.equal(policy.pokemonCurrencyAllowed(regular, 'gold'), true);
+    assert.equal(policy.pokemonCurrencyAllowed(regular, 'orb'), true);
+    assert.deepEqual(policy.pokemonBucketKeys(shiny, 'gold'), []);
+    assert.ok(policy.pokemonBucketKeys(shiny, 'orb').every(k => k.startsWith('orb|')));
+    assert.ok(policy.pokemonBucketKeys(regular, 'gold').every(k => k.startsWith('gold|')));
+
+    const sampleHistory = new Function('pokemonCurrencyAllowed', 'pokemonBucketKeys',
+        section('    function addPokemonHistorySample(', '    function finalizePokemonHistory(') +
+        '\nreturn addPokemonHistorySample;')(
+        policy.pokemonCurrencyAllowed, policy.pokemonBucketKeys
+    );
+    const working = new Map();
+    sampleHistory({ tipo: 'pokemon', ficha: shiny, moeda: 'gold', preco: 2000 }, working);
+    assert.equal(working.size, 0, 'Old Shiny Coin sales must be ignored');
+    sampleHistory({ tipo: 'pokemon', ficha: shiny, moeda: 'orb', preco: 100 }, working);
+    assert.ok(working.size > 0, 'Shiny Gem sales remain valid');
+    sampleHistory({ tipo: 'pokemon', ficha: regular, moeda: 'gold', preco: 3000 }, working);
+    assert.ok([...working.keys()].some(k => k.startsWith('gold|')));
+});
+
+test('Shiny Coin purchases are blocked by both auto-buy and purchase quantity guards', () => {
+    const policyCode = section('    function pokemonCurrencyAllowed(', '    function pokemonBucketKeys(');
+    const policy = new Function(policyCode + '\nreturn pokemonCurrencyAllowed;')();
+    const config = {
+        autoBuy: true, autoBuyPercent: 40, autoBuyPokemon: true,
+        minPokemonSamples: 3
+    };
+    const logic = section('    function candidateCanAutoBuy(', '    function tryBuy(');
+    const buy = new Function('config', 'pokemonCurrencyAllowed',
+        'currencyAllowed', 'serverNow', 'balanceFor', 'reserveFor', 'maxSpendFor',
+        logic + '\nreturn { candidateCanAutoBuy, purchaseQuantity };')(
+        config, policy, () => true, () => Date.now(),
+        () => 10000, () => 0, () => 0
+    );
+    const candidate = {
+        kind: 'pokemon', currency: 'gold', ficha: { shiny: true },
+        price: 500, unitPrice: 500, qty: 1, ratio: 0.2, samples: 10
+    };
+    assert.equal(buy.candidateCanAutoBuy(candidate), false);
+    assert.equal(buy.purchaseQuantity(candidate), 0);
+    candidate.currency = 'orb';
+    assert.equal(buy.candidateCanAutoBuy(candidate), true);
+    assert.equal(buy.purchaseQuantity(candidate), 1);
+    candidate.currency = 'gold';
+    candidate.ficha = { shiny: false };
+    assert.equal(buy.candidateCanAutoBuy(candidate), true);
+    assert.equal(buy.purchaseQuantity(candidate), 1);
+});
+
+test('Controller manual purchase validates supplied Shiny metadata', () => {
+    const buyCode = section('    function buyFromController(', '    function configureFromController(');
+    assert.match(buyCode, /const requestFicha = request\.ficha \|\| request\.pokemon \|\| null;/);
+    assert.match(buyCode, /currency === 'gold'/);
+    assert.match(buyCode, /shiny Pokémon listings require Gems/);
+    assert.match(buyCode, /ok: tryBuy\(candidate, true, requestedQty\)/);
+    // The native Controller may not provide Pokémon metadata. In that case
+    // only the game's own server-side rules can reliably reject an invalid order.
+});
+
 test('Userscript metadata and monitor version stay aligned', () => {
     const version = script.match(/\/\/ @version\s+([\d.]+)/)?.[1];
     const marker = script.match(/data-moth-addon-version-market-bot', '([\d.]+)'/)?.[1];
