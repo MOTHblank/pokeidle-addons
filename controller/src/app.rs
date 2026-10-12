@@ -1281,12 +1281,14 @@ impl eframe::App for ControllerApp {
                             self.launch_enabled();
                         }
 
-                        ui.add_space(8.0);
+                        #[cfg(windows)]
+                        {
+                            ui.add_space(8.0);
 
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(tr("MINIMIZE TO TRAY"))
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(tr("MINIMIZE TO TRAY"))
                                         .size(12.0)
                                         .strong()
                                         .color(TEXT),
@@ -1312,10 +1314,7 @@ impl eframe::App for ControllerApp {
                                     );
                                 }
                             }
-                            #[cfg(not(windows))]
-                            {
-                                self.set_status("System tray is only supported on Windows.".to_string(), true);
-                            }
+                        }
                         }
                     });
                 });
