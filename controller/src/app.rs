@@ -893,7 +893,7 @@ impl ControllerApp {
 
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
         let tracker = &mut self.idle_progress[index];
-        let eligible = health.state == "Running"
+        let eligible = health.telemetry_is_fresh()
             && health.game_ready
             && health.logged_in
             && health.bridge_connected
