@@ -387,6 +387,36 @@ struct Probe {
     kick_state_available: bool,
 }
 
+const MONITOR_ISSUE_LOG_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+// Long-lived Firefox sessions can lose their BiDi connection without stopping
+// gameplay. Retry normally, but avoid writing the same warning every five seconds.
+#[derive(Default)]
+struct MonitorIssueReporter {
+    last_logged: Option<(String, Instant)>,
+}
+
+impl MonitorIssueReporter {
+    fn should_log(&self, message: &str) -> bool {
+        self.last_logged.as_ref().is_none_or(|(previous, at)| {
+            previous != message || at.elapsed() >= MONITOR_ISSUE_LOG_INTERVAL
+        })
+    }
+
+    fn report(&mut self, message: String) {
+        if self.should_log(&message) {
+            logging::warn(&message);
+            self.last_logged = Some((message, Instant::now()));
+        }
+    }
+
+    fn recovered(&mut self, port: u16) {
+        if self.last_logged.take().is_some() {
+            logging::info(&format!("BiDi telemetry resumed on port {}", port));
+        }
+    }
+}
+
 fn monitor_loop(
     port: u16,
     headless: bool,
@@ -396,6 +426,7 @@ fn monitor_loop(
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
 ) {
     let mut session: Option<BrowserSession> = None;
+    let mut issues = MonitorIssueReporter::default();
 
     loop {
         expire_pending_commands(&commands);
@@ -418,7 +449,7 @@ fn monitor_loop(
                     }
                 }
                 Err(error) => {
-                    logging::warn(&format!(
+                    issues.report(format!(
                         "BiDi session setup on port {} failed: {}",
                         port, error
                     ));
@@ -464,6 +495,7 @@ fn monitor_loop(
 
             match probe_page(browser_session, headless) {
                 Ok(probe) => {
+                    issues.recovered(port);
                     if let Ok(mut current) = health.lock() {
                         current.state = "Running".to_string();
                         current.url = probe.url;
@@ -517,7 +549,7 @@ fn monitor_loop(
                     }
                 }
                 Err(error) => {
-                    logging::warn(&format!(
+                    issues.report(format!(
                         "BiDi page probe on port {} failed: {}",
                         port, error
                     ));
@@ -546,11 +578,6 @@ fn monitor_loop(
 }
 
 fn open_session(port: u16) -> Result<BrowserSession, String> {
-    logging::info(&format!(
-        "connecting to Firefox BiDi on 127.0.0.1:{}",
-        port
-    ));
-
     let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
         .map_err(|error| error.to_string())?;
     // Bounded I/O prevents an unanswered read from freezing monitoring forever.
@@ -1548,6 +1575,23 @@ mod command_tests {
         health.state = "Reconnecting".to_string();
         assert!(!health.telemetry_is_fresh());
         assert!(health.telemetry_age().is_some());
+    }
+
+    #[test]
+    fn repeated_monitor_errors_are_rate_limited() {
+        use super::{MonitorIssueReporter, MONITOR_ISSUE_LOG_INTERVAL};
+        use std::time::Instant;
+
+        let mut reporter = MonitorIssueReporter::default();
+        assert!(reporter.should_log("connection failed"));
+        reporter.last_logged = Some(("connection failed".to_string(), Instant::now()));
+        assert!(!reporter.should_log("connection failed"));
+        assert!(reporter.should_log("different failure"));
+        reporter.last_logged = Some((
+            "connection failed".to_string(),
+            Instant::now() - MONITOR_ISSUE_LOG_INTERVAL,
+        ));
+        assert!(reporter.should_log("connection failed"));
     }
 
     #[test]
