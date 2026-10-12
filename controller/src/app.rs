@@ -1785,7 +1785,7 @@ fn draw_game_card(
                         .size(14.0)
                         .strong()
                         .color(TEXT),
-                ).truncate()).on_hover_text(&account_name);
+                ).truncate()).on_hover_text(account_name.as_str());
 
                 ui.add_space(8.0);
                 status_badge(ui, &health, running);
@@ -2932,7 +2932,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
                                     let vm_chip = status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
                                     if let Some(error) = &setup.check_error {
-                                        vm_chip.on_hover_text(error);
+                                        vm_chip.on_hover_text(error.as_str());
                                     }
                                     status_chip(ui, "Twitch", twitch_label, twitch_open);
 
