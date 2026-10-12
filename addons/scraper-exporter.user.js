@@ -529,6 +529,7 @@
         state.complete = false;
         state.files.clear();
         state.errors = [];
+        state.unresolvedDynamicPaths.clear();
         state.attempted = 0;
         state.startedAt = Date.now();
         state.finishedAt = 0;
@@ -646,13 +647,16 @@
                 });
             }
             state.complete = !state.cancelRequested && !capped &&
-                !state.errors.length && cursor >= queue.length;
+                !state.errors.length && !state.unresolvedDynamicPaths.size &&
+                cursor >= queue.length;
             state.running = false;
             state.finishedAt = Date.now();
             state.status = (state.cancelRequested ? 'Cancelled' :
                 state.complete ? 'Complete' : 'Partial capture') +
                 ' · ' + state.files.size + ' files · ' +
-                state.errors.length + ' skipped';
+                state.errors.length + ' failed' +
+                (state.unresolvedDynamicPaths.size
+                    ? ' · ' + state.unresolvedDynamicPaths.size + ' unresolved dynamic paths' : '');
             updateUI();
         }
     }
@@ -689,6 +693,9 @@
                 totalBytes(),
             complete: state.complete,
             cancelled: state.cancelRequested,
+            observedStaticAssetCount: observedAssets.size,
+            unresolvedDynamicPaths: [...state.unresolvedDynamicPaths].sort(),
+            coverage: 'public client assets discoverable in this session; dynamic assets not yet observed may remain',
             attemptedCount: state.attempted,
             discoveredCount: state.discovered,
             limits: {
@@ -1218,7 +1225,7 @@
                 <button type="button" data-mus-tar disabled>Export TAR</button>
                 <button type="button" data-mus-manifest disabled>Manifest</button>
             </div>
-            <div class="mus-hint">Public client assets only. No API or account endpoints. Partial exports are marked in the manifest.</div>
+            <div class="mus-hint">Only public client assets are captured. Dynamic paths not observed are reported, never guessed. Partial exports are flagged in the manifest.</div>
 
             <div class="mus-errors" data-mus-error-list></div>
         `;
@@ -1331,7 +1338,7 @@
             root
         ).textContent =
             String(
-                state.errors.length
+                state.errors.length + state.unresolvedDynamicPaths.size
             );
 
         const scan =
@@ -1380,6 +1387,9 @@
                     item =>
                         `<div>${escapeHtml(new URL(item.url, location.href).pathname)} — ${escapeHtml(item.error)}</div>`
                 )
+                .join('') +
+            [...state.unresolvedDynamicPaths].slice(0, 8)
+                .map(path => `<div>Unresolved dynamic path (not fetched): ${escapeHtml(path)}</div>`)
                 .join('');
     }
 
@@ -1387,6 +1397,16 @@
         injectStyle();
         ensureButton();
         ensurePanel();
+
+        // Collect late-loading assets such as map manifests when the player travels.
+        try {
+            if (typeof PerformanceObserver === 'function') {
+                const observer = new PerformanceObserver(list => {
+                    for (const entry of list.getEntries()) observeAsset(entry);
+                });
+                observer.observe({ type: 'resource', buffered: true });
+            }
+        } catch {}
 
         setInterval(
             ensureButton,
