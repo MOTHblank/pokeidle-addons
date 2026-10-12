@@ -1,19 +1,19 @@
-name: Preparar release v0.1.3 (Windows e Linux)
+name: Publicar release v0.1.4 (Windows e Linux)
 
 on:
   workflow_dispatch:
-  # Ao adicionar as notas da v0.1.3, prepara automaticamente um rascunho.
+  # As notas de v0.1.4 disparam a compilação, validação e publicação.
   # Alterações normais no código não publicam versões por acidente.
   push:
     branches: [master]
     paths:
-      - '.github/release-notes/v0.1.3.md'
+      - '.github/release-notes/v0.1.4.md'
 
 permissions:
   contents: read
 
 concurrency:
-  group: preparar-release-v0.1.3
+  group: publicar-release-v0.1.4
   cancel-in-progress: false
 
 jobs:
@@ -30,8 +30,8 @@ jobs:
         run: |
           set -euo pipefail
           versao="$(grep -m1 '^version = ' controller/Cargo.toml | cut -d '"' -f 2)"
-          test "$versao" = "0.1.3" || { echo "Cargo.toml deve estar em 0.1.3, não $versao"; exit 1; }
-          test -s .github/release-notes/v0.1.3.md || { echo "Notas de lançamento ausentes"; exit 1; }
+          test "$versao" = "0.1.4" || { echo "Cargo.toml deve estar em 0.1.4, não $versao"; exit 1; }
+          test -s .github/release-notes/v0.1.4.md || { echo "Notas de lançamento ausentes"; exit 1; }
 
   windows:
     name: Windows x86_64
@@ -61,7 +61,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $arquivo = 'moth-controller-v0.1.3-windows-x86_64.exe'
+          $arquivo = 'moth-controller-v0.1.4-windows-x86_64.exe'
           Copy-Item 'controller/target/release/moth-controller.exe' "dist/$arquivo"
           $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
@@ -69,7 +69,7 @@ jobs:
       - name: Enviar artefato Windows
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.3-windows
+          name: moth-controller-v0.1.4-windows
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -115,20 +115,20 @@ jobs:
           mkdir -p dist pacote
           install -m755 controller/target/release/moth-controller pacote/moth-controller
           cp .github/release-notes/LEIA-ME-LINUX.md pacote/LEIA-ME-LINUX.md
-          arquivo=moth-controller-v0.1.3-linux-x86_64.tar.gz
+          arquivo=moth-controller-v0.1.4-linux-x86_64.tar.gz
           tar -czf "dist/$arquivo" -C pacote moth-controller LEIA-ME-LINUX.md
           (cd dist && sha256sum "$arquivo" > "$arquivo.sha256")
 
       - name: Enviar artefato Linux
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.3-linux
+          name: moth-controller-v0.1.4-linux
           path: dist/*
           if-no-files-found: error
           retention-days: 14
 
-  rascunho:
-    name: Criar release em rascunho
+  publicar:
+    name: Publicar release após validação
     needs: [validar, windows, linux]
     runs-on: ubuntu-22.04
     permissions:
@@ -140,7 +140,7 @@ jobs:
       - name: Baixar os dois pacotes
         uses: actions/download-artifact@v4
         with:
-          pattern: moth-controller-v0.1.3-*
+          pattern: moth-controller-v0.1.4-*
           path: dist
           merge-multiple: true
 
@@ -148,29 +148,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s dist/moth-controller-v0.1.3-windows-x86_64.exe
-          test -s dist/moth-controller-v0.1.3-linux-x86_64.tar.gz
+          test -s dist/moth-controller-v0.1.4-windows-x86_64.exe
+          test -s dist/moth-controller-v0.1.4-linux-x86_64.tar.gz
           (cd dist && for arquivo in *.sha256; do sed -i 's/\r$//' "$arquivo"; done && sha256sum -c ./*.sha256)
 
-      - name: Criar ou atualizar somente o rascunho
+      - name: Publicar v0.1.4 somente após testes e checksums
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=v0.1.3
-          notas=.github/release-notes/v0.1.3.md
-          titulo='Moth Controller v0.1.3 — Windows e Linux'
+          tag=v0.1.4
+          notas=.github/release-notes/v0.1.4.md
+          titulo='Moth Controller v0.1.4 — Windows e Linux'
+          # Never overwrite an existing published release. Preserve its binaries.
           if gh release view "$tag" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" != 'true' ]]; then
-              echo 'A versão já foi publicada. Não será substituída automaticamente.'
-              exit 1
-            fi
-            gh release edit "$tag" --target "$GITHUB_SHA" --title "$titulo" --notes-file "$notas"
-            gh release upload "$tag" dist/* --clobber
-          else
-            gh release create "$tag" dist/* \
-              --draft --target "$GITHUB_SHA" \
-              --title "$titulo" --notes-file "$notas"
+            echo "A versão $tag já existe. Não será substituída automaticamente."
+            exit 1
           fi
-          echo 'Rascunho preparado. Revise os arquivos antes de publicar.'
+          gh release create "$tag" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "$titulo" --notes-file "$notas"
+          echo "Release $tag publicada com Windows, Linux e checksums."
