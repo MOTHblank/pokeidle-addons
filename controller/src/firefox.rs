@@ -3,6 +3,7 @@ use crate::logging;
 use crate::monitor::MonitorHandle;
 use std::fs;
 use std::io;
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -65,6 +66,7 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     })?;
 
     provision_profile(&config.profile_dir)?;
+    ensure_debug_port_available(config.remote_debug_port)?;
     logging::info(&format!("starting Firefox: executable={} profile={} port={} mode={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, if headless { "headless" } else { "visible" }, config.url));
 
     let mut command = Command::new(&config.firefox_executable);
@@ -283,9 +285,16 @@ pub fn stop_child(child: &mut Child, monitor: Option<&MonitorHandle>) -> Result<
         "Firefox PID {} did not exit gracefully; forcing termination",
         child.id()
     ));
-    child.kill().map_err(|error| format!("could not terminate Firefox: {error}"))?;
-    child.wait().map_err(|error| format!("could not reap Firefox: {error}"))?;
-    Ok(())
+    match child.kill() {
+        Ok(()) => {
+            child.wait().map_err(|error| format!("could not reap Firefox: {error}"))?;
+            Ok(())
+        }
+        Err(error) => match child.try_wait() {
+            Ok(Some(_)) => Ok(()), // exited between the last poll and kill
+            _ => Err(format!("could not terminate Firefox: {error}")),
+        },
+    }
 }
 
 fn wait_child(child: &mut Child, timeout: Duration) -> Result<bool, String> {
@@ -453,4 +462,28 @@ unsafe extern "system" {
     fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
     fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
     fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+}
+
+
+/// A stale debugging listener might belong to another Firefox profile. If
+/// that happened, browser.close could shut down an unrelated browser.
+fn ensure_debug_port_available(port: u16) -> Result<(), String> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|error| {
+        format!("Firefox BiDi port {port} is already in use or unavailable: {error}")
+    })?;
+    drop(listener);
+    Ok(())
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::ensure_debug_port_available;
+    use std::net::TcpListener;
+
+    #[test]
+    fn occupied_debugging_port_is_rejected() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("local TCP bind");
+        let port = listener.local_addr().expect("listener address").port();
+        assert!(ensure_debug_port_available(port).is_err());
+    }
 }
