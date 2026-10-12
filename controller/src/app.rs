@@ -1779,13 +1779,13 @@ fn draw_game_card(
         .corner_radius(12.0)
         .inner_margin(16.0)
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(&account_name)
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(
+                    RichText::new(compact_text(&account_name, 28))
                         .size(14.0)
                         .strong()
                         .color(TEXT),
-                );
+                ).truncate()).on_hover_text(&account_name);
 
                 ui.add_space(8.0);
                 status_badge(ui, &health, running);
@@ -3186,7 +3186,7 @@ pub fn run() -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Moth · PokéIdle")
             .with_inner_size([1120.0, 720.0])
-            .with_min_inner_size([960.0, 640.0]),
+            .with_min_inner_size([800.0, 560.0]),
         ..Default::default()
     };
 
