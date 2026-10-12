@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.1.1
+// @version      3.1.3
 // @description  Joins multiple Twitch chats through one lightweight popout connection and discards unused chat events.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.3');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -118,6 +118,67 @@
         const multiJoinStarted = new WeakSet();
         const joinBatchSize = 20;
         const joinBatchDelayMs = 10_500;
+        const activeIrcSockets = new Set();
+        const joinedBySocket = new WeakMap();
+        let desiredChannels = requestedMultiChatChannels.slice();
+        let rosterRevision = 0;
+
+        function sendIrc(socket, command) {
+            if (socket.readyState !== NativeWebSocket.OPEN) return false;
+            try {
+                NativeWebSocket.prototype.send.call(socket, command);
+                return true;
+            } catch (error) {
+                console.warn('[Moth] IRC membership update failed:', error);
+                return false;
+            }
+        }
+
+        // Update the same IRC socket when the game changes the rewarded streams.
+        function reconcileChannels(socket, revision) {
+            if (socket.readyState !== NativeWebSocket.OPEN) return;
+            const current = joinedBySocket.get(socket) || new Set(requestedMultiChatChannels);
+            const next = new Set(desiredChannels);
+            const added = [...next].filter(channel => !current.has(channel));
+            const removed = [...current].filter(channel => !next.has(channel));
+            // Track only memberships actually sent to IRC. A newer roster may
+            // cancel a delayed batch before it runs; it must not be mistaken
+            // for an already-joined channel.
+
+            // Join replacements before leaving old channels: do not introduce
+            // an avoidable reward gap when a live channel disappears.
+            const batches = [];
+            for (let i = 0; i < added.length; i += joinBatchSize) {
+                batches.push(added.slice(i, i + joinBatchSize));
+            }
+            batches.forEach((batch, index) => {
+                window.setTimeout(() => {
+                    if (revision !== rosterRevision) return;
+                    if (sendIrc(socket, 'JOIN ' + batch.map(channel => '#' + channel).join(','))) {
+                        for (const channel of batch) current.add(channel);
+                    }
+                }, index * joinBatchDelayMs);
+            });
+            window.setTimeout(() => {
+                if (revision !== rosterRevision) return;
+                if (removed.length &&
+                    sendIrc(socket, 'PART ' + removed.map(channel => '#' + channel).join(','))) {
+                    for (const channel of removed) current.delete(channel);
+                }
+            }, batches.length ? (batches.length - 1) * joinBatchDelayMs + 1500 : 0);
+        }
+
+        window.addEventListener('moth:channels-changed', event => {
+            const next = [...new Set(String(event.detail || '')
+                .split(',').map(normalizeTwitchChannel).filter(Boolean))];
+            if (next.join(',') === desiredChannels.join(',')) return;
+            desiredChannels = next;
+            rosterRevision += 1;
+            for (const socket of activeIrcSockets) {
+                reconcileChannels(socket, rosterRevision);
+            }
+            console.info('[Moth] IRC roster updated without opening a new tab:', next.length);
+        });
 
         function filterEvent(event) {
             let result = filteredEvents.get(event);
@@ -194,10 +255,15 @@
             constructor(url, protocols) {
                 if (protocols === undefined) super(url);
                 else super(url, protocols);
+                if (isTwitchIrcSocket(this)) {
+                    activeIrcSockets.add(this);
+                    joinedBySocket.set(this, new Set(requestedMultiChatChannels));
+                    this.addEventListener('close', () => activeIrcSockets.delete(this));
+                }
             }
 
             send(data) {
-                if (!isMultiChannelChat || !isTwitchIrcSocket(this) || typeof data !== 'string') {
+                if (desiredChannels.length < 2 || !isTwitchIrcSocket(this) || typeof data !== 'string') {
                     return super.send(data);
                 }
 
@@ -208,27 +274,26 @@
 
                     multiJoinStarted.add(this);
                     const batches = [];
-                    for (let start = 0; start < requestedMultiChatChannels.length; start += joinBatchSize) {
-                        batches.push(requestedMultiChatChannels.slice(start, start + joinBatchSize));
+                    for (let start = 0; start < desiredChannels.length; start += joinBatchSize) {
+                        batches.push(desiredChannels.slice(start, start + joinBatchSize));
                     }
 
+                    joinedBySocket.set(this, new Set(batches[0]));
+                    const initialRevision = rosterRevision;
                     pieces[i] = match[1] + batches[0].map(channel => '#' + channel).join(',');
                     for (let batchIndex = 1; batchIndex < batches.length; batchIndex += 1) {
                         const batch = batches[batchIndex];
                         window.setTimeout(() => {
-                            if (this.readyState !== NativeWebSocket.OPEN) return;
-                            try {
-                                NativeWebSocket.prototype.send.call(
-                                    this,
-                                    'JOIN ' + batch.map(channel => '#' + channel).join(',')
-                                );
-                            } catch (error) {
-                                console.warn('[Moth] Could not join next Twitch chat batch:', error);
+                            if (initialRevision !== rosterRevision) return;
+                            if (sendIrc(this, 'JOIN ' + batch.map(channel => '#' + channel).join(','))) {
+                                const joined = joinedBySocket.get(this) || new Set();
+                                for (const channel of batch) joined.add(channel);
+                                joinedBySocket.set(this, joined);
                             }
                         }, batchIndex * joinBatchDelayMs);
                     }
 
-                    console.info('[Moth] Multi-chat joined', batches[0].length, 'channel(s);', requestedMultiChatChannels.length, 'targeted in', batches.length, 'batch(es)');
+                    console.info('[Moth] Multi-chat joined', batches[0].length, 'channel(s);', desiredChannels.length, 'targeted in', batches.length, 'batch(es)');
                     return super.send(pieces.join(''));
                 }
 
