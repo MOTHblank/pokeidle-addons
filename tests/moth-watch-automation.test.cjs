@@ -164,3 +164,99 @@ test('Userscript version and monitor attribute match, with valid syntax and Port
     assert.ok(dict['Enable rule-based buying']);
     assert.ok(dict['Rule-based buying is on, but no Buy rules are active. Create or enable a rule first.']);
 });
+
+
+test('General scans slow to 30 seconds only while background rule buying is active', () => {
+    let clock = 100000;
+    const state = {
+        socket: { readyState: 1 }, watchOpen: false, lastScanAt: 0,
+        ruleItemKeys: new Set(['106:gold'])
+    };
+    const config = {
+        enabled: true, fixedRulesEnabled: true, scanSeconds: 5,
+        scanItems: true, scanPokemon: true, scanDiamonds: true
+    };
+    const calls = [];
+    const runScan = new Function('state', 'config', 'Date', 'BACKGROUND_SCAN_WITH_RULES_MS',
+        'gameIsLoading', 'requestItemSummary', 'ensurePokemonHistory',
+        'startPokemonScan', 'requestDiamondListings', 'pruneCandidates', 'queueRender',
+        section('    function runScan(force)', '    function pruneCandidates(') +
+        '\nreturn runScan;')(state, config, {now: () => clock}, 30000,
+        () => false, () => calls.push('items'), () => calls.push('history'),
+        () => calls.push('pokemon'), () => calls.push('diamond'),
+        () => calls.push('prune'), () => calls.push('render'));
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 1);
+    clock += 20000;
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 1, 'Closed buying mode throttles general scans');
+    clock += 10000;
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 2);
+    state.watchOpen = true;
+    clock += 5000;
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 3, 'Opening Watch restores configured interval');
+    state.watchOpen = false;
+    config.fixedRulesEnabled = false;
+    clock += 5000;
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 4, 'Watch-only mode preserves configured speed');
+    config.fixedRulesEnabled = true;
+    clock += 1000;
+    runScan(true);
+    assert.equal(calls.filter(x => x === 'items').length, 5, 'Manual scan always bypasses throttle');
+    state.ruleItemKeys.clear();
+    clock += 5000;
+    runScan(false);
+    assert.equal(calls.filter(x => x === 'items').length, 6, 'No active rules does not impose throttle');
+});
+
+test('Individual purchase rules reuse recent listing details', () => {
+    let clock = 100000;
+    const key = '106:gold', old = { updatedAt: clock - 25000, offers: [] };
+    const state = { ruleItemKeys: new Set(), itemOfferDetails: new Map([[key, old]]) };
+    const queued = [];
+    const detail = new Function('state', 'Date', 'RULE_DETAIL_REFRESH_MS', 'queueItemDetail',
+        section('    function automationDetail(', '    function fixedRuleCandidate(') +
+        '\nreturn automationDetail;')(
+        state, {now: () => clock}, 30000, (...params) => queued.push(params));
+    assert.equal(detail(106, 'gold'), old);
+    assert.deepEqual(queued, [], 'Recent details should not be fetched again');
+    clock += 5001;
+    detail(106, 'gold');
+    assert.deepEqual(queued, [[106, 'gold']]);
+    assert.ok(state.ruleItemKeys.has(key));
+});
+
+test('Closed-panel buying defers discovery-only item details, but not statistics or open-panel discovery', () => {
+    const state = {
+        itemSummary: {106: {anuncios: 1, minGold: 100, minOrb: 0}},
+        liveItemAverages: {'106': {gold:{average:200}}},
+        baseline: {items: {}}, ruleItemKeys: new Set(['106:gold']), watchOpen: false
+    };
+    const config = { watchPercent: 70, fixedRulesEnabled: true };
+    const queued = [];
+    const scan = new Function('state', 'config', 'itemReference', 'queueItemDetail',
+        section('    function discoveryRatio(', '    function removeCandidateGroup(') +
+        '\nreturn scanSuspiciousItemSummaries;')(
+        state, config, (id, currency) => currency === 'gold' ? { average: 200 } : null,
+        (...args) => queued.push(args));
+    scan();
+    assert.equal(state.itemScanStats.goldSuspicious, 1);
+    assert.deepEqual(queued, [], 'Background discovery must not compete with rule lookups');
+    state.watchOpen = true;
+    scan();
+    assert.deepEqual(queued, [[106,'gold']], 'Open panel continues regular discovery');
+    state.watchOpen = false;
+    config.fixedRulesEnabled = false;
+    scan();
+    assert.deepEqual(queued, [[106,'gold'],[106,'gold']], 'Watch-only mode keeps discovery');
+});
+
+test('Rule lookup gets a chance to send before general background requests', () => {
+    const timerCode = section('        state.scanTimer = setInterval(() => {', '        /*\n         * Observe only the modal shell.');
+    assert.ok(timerCode.indexOf('runMarketAutomation();') < timerCode.indexOf('runScan(false);'));
+    assert.ok(timerCode.indexOf('pumpItemDetails();') < timerCode.indexOf('runScan(false);'));
+    assert.match(timerCode, /!state\.detailPending/);
+});
