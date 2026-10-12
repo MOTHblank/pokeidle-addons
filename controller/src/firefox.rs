@@ -370,13 +370,7 @@ pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
         if args.is_empty() {
             continue;
         }
-        let executable = args[0].rsplit(|byte| *byte == b'/').next().unwrap_or_default();
-        if !executable.starts_with(b"firefox") {
-            continue;
-        }
-        if args.windows(2).any(|pair| {
-            (pair[0] == b"--profile" || pair[0] == b"-profile") && pair[1] == desired
-        }) || args.iter().any(|arg| arg.starts_with(b"--profile=") && &arg[10..] == desired) {
+        if linux_command_has_profile(&args, desired) {
             found.push(pid);
         }
     }
@@ -385,6 +379,32 @@ pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
         logging::warn("Multiple Firefox processes advertise the same Linux profile");
     }
     Ok(found.into_iter().next())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_command_has_profile(args: &[&[u8]], desired: &[u8]) -> bool {
+    let Some(executable) = args.first().copied() else { return false; };
+    let executable = executable.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    if !executable.starts_with(b"firefox") {
+        return false;
+    }
+    args.windows(2).any(|pair| {
+        (pair[0] == b"--profile" || pair[0] == b"-profile") && pair[1] == desired
+    }) || args.iter().any(|arg| arg.starts_with(b"--profile=") && &arg[10..] == desired)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_process_tests {
+    use super::linux_command_has_profile;
+    #[test]
+    fn only_accept_exact_firefox_profile() {
+        let args: &[&[u8]] = &[b"/usr/lib/firefox/firefox", b"--profile", b"/tmp/Game1", b"--new-window"];
+        assert!(linux_command_has_profile(args, b"/tmp/Game1"));
+        assert!(!linux_command_has_profile(args, b"/tmp/Game2"));
+        assert!(!linux_command_has_profile(args, b"/tmp/Game"));
+        assert!(!linux_command_has_profile(&[b"/usr/bin/chrome", b"--profile", b"/tmp/Game1"], b"/tmp/Game1"));
+        assert!(linux_command_has_profile(&[b"firefox-bin", b"--profile=/tmp/Game1"], b"/tmp/Game1"));
+    }
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
