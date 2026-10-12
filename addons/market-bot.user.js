@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.43
+// @version      0.1.44
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -113,6 +113,7 @@
         pendingSell: null,
         automationLastRunAt: 0,
         itemSummaryAt: 0,
+        automationNotice: null,
         attemptedListings: new Map(),
         buyLog: [],
         lastScanAt: 0,
@@ -220,7 +221,6 @@
         'No matching opportunities. Try a wider watch threshold or inspect Market inventory.': 'Nenhuma oportunidade corresponde aos filtros. Aumente o limite de alerta ou consulte o estoque do mercado.',
         'Browse item types, then load the offers for a selected currency.': 'Navegue pelos tipos de item e carregue as ofertas na moeda desejada.',
         'Monitoring rules': 'Regras de monitoramento',
-        'These settings only decide what is scanned and shown; they do not authorize purchases.': 'Estas opções definem o que será analisado e exibido; não autorizam compras.',
         'Watch rules': 'Regras de monitoramento', 'Watch price threshold': 'Limite de preço para alertas',
         'Scan interval': 'Intervalo de varredura', 'seconds': 'segundos',
         'Watch items': 'Monitorar itens', 'Watch Pokémon': 'Monitorar Pokémon', 'Watch diamonds': 'Monitorar diamantes',
@@ -334,7 +334,41 @@
         'Owned: {owned} · listed: {listed}': 'Possui: {owned} · anunciado: {listed}',
         'target: {price}': 'alvo: {price}',
         'Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.': 'Experimental: as recomendações podem mudar com os dados do mercado. Mantenha desativado até revisar cada item selecionado.',
-        'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.'
+        'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.',
+        'Automation status': 'Status da automação',
+        'Review the systems that can place market orders, then set spending safeguards and advanced monitoring.': 'Revise os sistemas que podem enviar ordens ao mercado e depois ajuste os limites de segurança e o monitoramento avançado.',
+        'Automation: {summary}': 'Automação: {summary}',
+        'Fixed {status}': 'Fixas {status}',
+        'Auto-sell {status}': 'Venda auto {status}',
+        'Auto-buy {status}': 'Compra auto {status}',
+        'Active': 'Ativa',
+        'Inactive': 'Inativa',
+        '{count} active rule': '{count} regra ativa',
+        '{count} active rules': '{count} regras ativas',
+        'No automated market orders are enabled.': 'Nenhuma ordem automática de mercado está ativada.',
+        'Fixed rules are deterministic: exact buy and sell prices win over recommendation-based selling for the same item.': 'Regras fixas são determinísticas: preços exatos de compra e venda têm prioridade sobre vendas por recomendação do mesmo item.',
+        'Percentage auto-buy': 'Compra automática por porcentagem',
+        'Spending safeguards': 'Limites de segurança',
+        'Advanced monitoring & references': 'Monitoramento e referências avançados',
+        'Scanning and reference-quality controls. These do not authorize orders by themselves.': 'Controles de varredura e qualidade das referências. Sozinhos, eles não autorizam ordens.',
+        'Find item': 'Buscar item',
+        'Search items…': 'Buscar itens…',
+        'Buy all affordable units': 'Comprar todas as unidades possíveis',
+        'Sell all available units': 'Vender todas as unidades disponíveis',
+        'Per purchase': 'Por compra',
+        'Per listing': 'Por anúncio',
+        'Recommended {price}': 'Recomendado {price}',
+        'Patient {price}': 'Paciente {price}',
+        'No price yet': 'Sem preço ainda',
+        'Rule added: {name}.': 'Regra adicionada: {name}.',
+        'Rule removed: {name}.': 'Regra removida: {name}.',
+        'A rule for {name} in this currency already exists.': 'Já existe uma regra para {name} nesta moeda.',
+        'Choose an item before adding a rule.': 'Escolha um item antes de adicionar a regra.',
+        'Set a buy price, a sell price, or both before adding a fixed rule.': 'Defina um preço de compra, de venda ou ambos antes de adicionar uma regra fixa.',
+        'Safe default: one unit. Use the explicit “all” option only when you really want it.': 'Padrão seguro: uma unidade. Use a opção explícita “todas” somente quando realmente quiser.',
+        'Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.': 'A venda automática experimental usa recomendações ao vivo. Revise os dois alvos antes de ativar a chave geral.',
+        'Recommended target': 'Alvo recomendado',
+        'Patient target': 'Alvo paciente'
     });
 
     function tr(key, params = null) {
@@ -409,6 +443,8 @@
         return value.map((rule, index) => {
             const itemId = Math.floor(Number(rule?.itemId));
             if (!(itemId > 0)) return null;
+            const rawMaxSellQty = Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0));
+            const sellAll = typeof rule?.sellAll === 'boolean' ? rule.sellAll : rawMaxSellQty === 0;
             return {
                 id: String(rule?.id || ('autosell-' + index + '-' + itemId)),
                 itemId,
@@ -416,7 +452,8 @@
                 mode: rule?.mode === 'patient' ? 'patient' : 'recommended',
                 enabled: rule?.enabled !== false,
                 keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
-                maxSellQty: Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0))
+                maxSellQty: Math.max(1, rawMaxSellQty || 1),
+                sellAll
             };
         }).filter(Boolean);
     }
@@ -426,17 +463,23 @@
         return value.map((rule, index) => {
             const itemId = Math.floor(Number(rule?.itemId));
             if (!(itemId > 0)) return null;
+            const rawBuyQtyLimit = Math.max(0, Math.floor(Number(rule?.buyQtyLimit) || 0));
+            const rawMaxSellQty = Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0));
+            const buyAll = typeof rule?.buyAll === 'boolean' ? rule.buyAll : rawBuyQtyLimit === 0;
+            const sellAll = typeof rule?.sellAll === 'boolean' ? rule.sellAll : rawMaxSellQty === 0;
             return {
                 id: String(rule?.id || ('fixed-' + index + '-' + itemId)),
                 itemId,
                 currency: rule?.currency === 'orb' ? 'orb' : 'gold',
                 buyEnabled: rule?.buyEnabled !== false && Number(rule?.buyMax) > 0,
                 buyMax: Math.max(0, Math.floor(Number(rule?.buyMax) || 0)),
-                buyQtyLimit: Math.max(0, Math.floor(Number(rule?.buyQtyLimit) || 0)),
+                buyQtyLimit: Math.max(1, rawBuyQtyLimit || 1),
+                buyAll,
                 sellEnabled: rule?.sellEnabled !== false && Number(rule?.sellPrice) > 0,
                 sellPrice: Math.max(0, Math.floor(Number(rule?.sellPrice) || 0)),
                 keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
-                maxSellQty: Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0))
+                maxSellQty: Math.max(1, rawMaxSellQty || 1),
+                sellAll
             };
         }).filter(Boolean);
     }
@@ -2431,8 +2474,8 @@
 
     function automationSellQuantity(rule) {
         const available = Math.max(0, ownedQuantity(rule.itemId) - Math.max(0, Number(rule.keepQty || 0)));
-        const cap = Math.max(0, Number(rule.maxSellQty || 0));
-        return Math.floor(cap > 0 ? Math.min(available, cap) : available);
+        if (rule.sellAll) return Math.floor(available);
+        return Math.floor(Math.min(available, Math.max(1, Number(rule.maxSellQty || 1))));
     }
 
     function runMarketAutomation() {
@@ -2472,7 +2515,7 @@
             if (!rule.buyEnabled || !(rule.buyMax > 0)) continue;
             const candidate = fixedRuleCandidate(rule);
             if (!candidate) continue;
-            const limit = rule.buyQtyLimit > 0 ? rule.buyQtyLimit : null;
+            const limit = rule.buyAll ? null : Math.max(1, Number(rule.buyQtyLimit || 1));
             if (tryBuy(candidate, false, limit, true)) return;
         }
 
@@ -2884,17 +2927,32 @@
             '.moth-mw-settings-card .moth-mw-config label{font-size:11px}',
             '.moth-mw-setting{min-width:0;display:flex;flex-direction:column;gap:4px;padding:4px 0}',
             '.moth-mw-setting-help{display:block;font-size:10px;line-height:1.4;color:var(--sobre-mad-dim,#999)}',
-            '.moth-mw-automation-block{margin-top:12px;padding:10px;border:1px solid var(--mad-linha,#3a2824);border-radius:8px;background:var(--vao,#21191d)}',
-            '.moth-mw-rule-add{display:grid;grid-template-columns:minmax(150px,1.4fr) auto auto minmax(90px,.6fr) minmax(90px,.6fr) auto;gap:6px;align-items:end;margin:9px 0}',
-            '.moth-mw-rule-add.fixed{grid-template-columns:minmax(140px,1.3fr) auto repeat(5,minmax(82px,.65fr)) auto}',
-            '.moth-mw-rule-add label,.moth-mw-rule-row label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:var(--sobre-mad-dim,#aaa);min-width:0}',
-            '.moth-mw-rule-add input,.moth-mw-rule-add select,.moth-mw-rule-row input,.moth-mw-rule-row select{min-width:0;width:100%;box-sizing:border-box}',
-            '.moth-mw-rule-list{display:grid;gap:6px}',
-            '.moth-mw-rule-row{display:grid;grid-template-columns:auto minmax(130px,1.3fr) minmax(85px,.65fr) minmax(95px,.7fr) minmax(85px,.6fr) minmax(100px,.7fr) auto;gap:7px;align-items:end;padding:7px;border-radius:6px;background:rgba(255,255,255,.035)}',
-            '.moth-mw-rule-row.fixed{grid-template-columns:minmax(130px,1.2fr) minmax(85px,.6fr) auto minmax(90px,.65fr) minmax(90px,.65fr) auto minmax(90px,.65fr) minmax(80px,.55fr) minmax(90px,.65fr) auto}',
-            '.moth-mw-rule-name{display:flex;flex-direction:column;gap:2px;min-width:0}.moth-mw-rule-name b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.moth-mw-rule-name small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}',
-            '.moth-mw-rule-toggle{display:flex!important;flex-direction:row!important;align-items:center!important;gap:4px!important;color:var(--sobre-mad,#eee)!important}.moth-mw-rule-toggle input{width:auto!important;flex:none}',
-            '@media(max-width:900px){.moth-mw-rule-add,.moth-mw-rule-add.fixed,.moth-mw-rule-row,.moth-mw-rule-row.fixed{grid-template-columns:1fr 1fr}.moth-mw-rule-name{grid-column:1/-1}}',
+            '.moth-mw-automation-block{margin-top:12px;padding:11px;border:1px solid var(--mad-linha,#3a2824);border-radius:9px;background:var(--vao,#21191d)}',
+            '.moth-mw-automation-block.primary{border-color:color-mix(in srgb,var(--rx,#84325f) 52%,var(--mad-linha,#3a2824))}',
+            '.moth-mw-automation-status{padding:11px;border-radius:9px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-auto-status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}',
+            '.moth-mw-auto-status-pill{display:flex;align-items:center;gap:8px;min-width:0;padding:8px;border-radius:7px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-auto-status-pill.on{box-shadow:inset 0 0 0 1px var(--rx,#84325f);background:color-mix(in srgb,var(--vao,#21191d) 82%,var(--rx,#84325f) 18%)}',
+            '.moth-mw-auto-dot{width:8px;height:8px;border-radius:50%;background:var(--sobre-mad-dim,#777);flex:none}.moth-mw-auto-status-pill.on .moth-mw-auto-dot{background:var(--seta,#efc66b)}',
+            '.moth-mw-auto-status-pill div{min-width:0;display:flex;flex-direction:column;gap:2px}.moth-mw-auto-status-pill b{font-size:10px}.moth-mw-auto-status-pill small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-master-row{margin:8px 0}.moth-mw-master-row .moth-mw-setting{padding:0}.moth-mw-master-row .moth-mw-setting-help{display:none}',
+            '.moth-mw-rule-add-card{display:grid;gap:8px;margin:9px 0 11px;padding:9px;border-radius:8px;background:rgba(255,255,255,.03);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-rule-add-search{display:grid;grid-template-columns:minmax(150px,.8fr) minmax(190px,1.2fr);gap:7px}.moth-mw-rule-add-fields{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:7px}.moth-mw-rule-add-fields.fixed{grid-template-columns:repeat(6,minmax(95px,1fr))}',
+            '.moth-mw-rule-add-card label,.moth-mw-rule-card label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:var(--sobre-mad-dim,#aaa);min-width:0}',
+            '.moth-mw-rule-add-card input,.moth-mw-rule-add-card select,.moth-mw-rule-card input,.moth-mw-rule-card select{min-width:0;width:100%;box-sizing:border-box}',
+            '.moth-mw-rule-add-checks,.moth-mw-rule-add-actions,.moth-mw-rule-card-foot{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.moth-mw-rule-add-actions{justify-content:space-between}.moth-mw-rule-add-actions>span,.moth-mw-rule-note{font-size:9px;color:var(--sobre-mad-dim,#aaa);line-height:1.35;flex:1;min-width:190px}',
+            '.moth-mw-rule-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:8px}',
+            '.moth-mw-rule-card{display:grid;gap:8px;min-width:0;padding:9px;border-radius:8px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
+            '.moth-mw-rule-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px}.moth-mw-rule-title{display:flex;flex-direction:column;gap:2px;min-width:0}.moth-mw-rule-title>b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.moth-mw-rule-title>small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}',
+            '.moth-mw-rule-card-head>label{min-width:92px}.moth-mw-rule-fields{display:grid;grid-template-columns:repeat(4,minmax(82px,1fr));gap:7px}.moth-mw-rule-fields.compact{grid-template-columns:repeat(2,minmax(86px,1fr))}',
+            '.moth-mw-fixed-sides{display:grid;grid-template-columns:1fr 1fr;gap:8px}.moth-mw-rule-side{display:grid;gap:7px;padding:8px;border-radius:7px;background:rgba(0,0,0,.08);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-rule-side-head{display:flex;align-items:center;justify-content:space-between}',
+            '.moth-mw-switch,.moth-mw-checkline{display:flex!important;flex-direction:row!important;align-items:center!important;gap:6px!important;color:var(--sobre-mad,#eee)!important}.moth-mw-switch input,.moth-mw-checkline input{width:auto!important;flex:none}',
+            '.moth-mw-targets{display:grid;grid-template-columns:1fr 1fr;gap:6px}.moth-mw-target-chip{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:6px 7px;border-radius:6px;background:rgba(0,0,0,.1);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-target-chip.selected{box-shadow:inset 0 0 0 1px var(--rx,#84325f);background:color-mix(in srgb,var(--vao,#21191d) 84%,var(--rx,#84325f) 16%)}.moth-mw-target-chip small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}.moth-mw-target-chip b{font-size:11px}',
+            '.moth-mw-btn.danger{background:transparent;color:#e7a4a4;box-shadow:inset 0 0 0 1px rgba(210,90,90,.55)}.moth-mw-btn.danger:hover{background:rgba(180,60,60,.13)}',
+            '.moth-mw-rule-notice{margin:8px 0;padding:7px 9px;border-radius:6px;font-size:10px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-rule-notice.warn{box-shadow:inset 0 0 0 1px var(--seta,#efc66b)}.moth-mw-rule-notice.ok{box-shadow:inset 0 0 0 1px var(--rx,#84325f)}',
+            '.moth-mw-advanced{margin-top:12px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-advanced>summary{padding:10px 11px;cursor:pointer;font-size:11px;font-weight:800}.moth-mw-advanced-body{padding:0 10px 10px}.moth-mw-advanced-note{font-size:9px;color:var(--sobre-mad-dim,#aaa);margin:0 0 8px}',
+            '@media(max-width:900px){.moth-mw-auto-status-grid{grid-template-columns:1fr}.moth-mw-rule-add-search,.moth-mw-rule-add-fields,.moth-mw-rule-add-fields.fixed,.moth-mw-fixed-sides{grid-template-columns:1fr 1fr}.moth-mw-rule-list{grid-template-columns:1fr}}',
+            '@media(max-width:620px){.moth-mw-rule-add-search,.moth-mw-rule-add-fields,.moth-mw-rule-add-fields.fixed,.moth-mw-fixed-sides,.moth-mw-rule-fields,.moth-mw-rule-fields.compact,.moth-mw-targets{grid-template-columns:1fr}.moth-mw-rule-card-head{flex-direction:column}.moth-mw-rule-card-head>label{width:100%}}',
             '.moth-mw-setting-control{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px}',
             '.moth-mw-setting-control>span{flex:1}',
             '.moth-mw-setting-control input[type=number]{width:110px;max-width:42%;font-size:11px;padding:5px 6px}',
@@ -3336,6 +3394,126 @@
     }
 
 
+
+    function setAutomationNotice(text, kind = 'info') {
+        state.automationNotice = { text: String(text || ''), kind, at: Date.now() };
+        queueRender();
+        setTimeout(() => {
+            if (state.automationNotice && Date.now() - state.automationNotice.at >= 4200) {
+                state.automationNotice = null;
+                queueRender();
+            }
+        }, 4300);
+    }
+
+    function automationNoticeHtml() {
+        const n = state.automationNotice;
+        if (!n?.text) return '<div class="moth-mw-rule-notice" id="moth-mw-rule-notice" hidden></div>';
+        return '<div class="moth-mw-rule-notice ' + escapeHtml(n.kind || 'info') +
+            '" id="moth-mw-rule-notice" role="status">' + escapeHtml(n.text) + '</div>';
+    }
+
+    function fixedAutomationActiveCount() {
+        if (!config.fixedRulesEnabled) return 0;
+        return sanitizeFixedItemRules(config.fixedItemRules)
+            .filter(r => (r.buyEnabled && r.buyMax > 0) || (r.sellEnabled && r.sellPrice > 0)).length;
+    }
+
+    function autoSellActiveCount() {
+        if (!config.autoSellEnabled) return 0;
+        return sanitizeAutoSellRules(config.autoSellRules).filter(r => r.enabled).length;
+    }
+
+    function percentageAutoBuyActive() {
+        return Boolean(config.autoBuy &&
+            (config.autoBuyItems || config.autoBuyPokemon || config.autoBuyDiamonds) &&
+            (config.buyCoins || config.buyGems));
+    }
+
+    function automationOverviewSummary() {
+        const fixed = fixedAutomationActiveCount(), sell = autoSellActiveCount(), autoBuy = percentageAutoBuyActive();
+        return tr('Fixed {status}', { status: tr(fixed ? 'ON' : 'OFF') }) + ' · ' +
+            tr('Auto-sell {status}', { status: tr(sell ? 'ON' : 'OFF') }) + ' · ' +
+            tr('Auto-buy {status}', { status: tr(autoBuy ? 'ON' : 'OFF') });
+    }
+
+    function automationStatusPanelHtml() {
+        const fixed = fixedAutomationActiveCount(), sell = autoSellActiveCount(), autoBuy = percentageAutoBuyActive();
+        const total = fixed + sell + (autoBuy ? 1 : 0);
+        const pill = (label, active, detail) =>
+            '<div class="moth-mw-auto-status-pill ' + (active ? 'on' : 'off') + '">' +
+            '<span class="moth-mw-auto-dot" aria-hidden="true"></span><div><b>' + escapeHtml(label) +
+            '</b><small>' + escapeHtml(detail) + '</small></div></div>';
+        return '<section class="moth-mw-automation-status" id="moth-mw-automation-status">' +
+            '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Automation status')) + '</h4><span>' +
+            escapeHtml(total ? tr(total === 1 ? '{count} active rule' : '{count} active rules', { count: num(total) }) :
+                tr('No automated market orders are enabled.')) + '</span></div>' +
+            '<div class="moth-mw-auto-status-grid">' +
+            pill(tr('Fixed item rules'), fixed > 0, tr(fixed === 1 ? '{count} active rule' : '{count} active rules', { count: num(fixed) })) +
+            pill(tr('Experimental auto-sell'), sell > 0, tr(sell === 1 ? '{count} active rule' : '{count} active rules', { count: num(sell) })) +
+            pill(tr('Percentage auto-buy'), autoBuy, tr(autoBuy ? 'Active' : 'Inactive')) +
+            '</div></section>';
+    }
+
+    function autoSellTargets(rule) {
+        const r = sellPriceRecommendation(rule.itemId, rule.currency);
+        return { recommended: Number(r.price || 0), patient: Number(r.patientPrice || 0) };
+    }
+
+    function autoSellTargetsHtml(rule) {
+        const t = autoSellTargets(rule);
+        const chip = (label, price, selected) =>
+            '<span class="moth-mw-target-chip' + (selected ? ' selected' : '') + '"><small>' +
+            escapeHtml(label) + '</small><b>' + escapeHtml(price > 0 ? num(price) : tr('No price yet')) + '</b></span>';
+        return chip(tr('Recommended target'), t.recommended, rule.mode === 'recommended') +
+            chip(tr('Patient target'), t.patient, rule.mode === 'patient');
+    }
+
+    function refreshAutomationLive(content) {
+        if (!content) return;
+        const statusHost = q('#moth-mw-automation-status', content);
+        if (statusHost) {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = automationStatusPanelHtml().trim();
+            const fresh = tpl.content.firstElementChild;
+            if (fresh && statusHost.innerHTML !== fresh.innerHTML) statusHost.innerHTML = fresh.innerHTML;
+        }
+        const autoRules = new Map(sanitizeAutoSellRules(config.autoSellRules).map(r => [r.id, r]));
+        const fixedRules = new Map(sanitizeFixedItemRules(config.fixedItemRules).map(r => [r.id, r]));
+        for (const node of qa('[data-moth-rule-status]', content)) {
+            const r = node.dataset.ruleType === 'auto-sell' ? autoRules.get(node.dataset.ruleId) : fixedRules.get(node.dataset.ruleId);
+            if (!r) continue;
+            const next = automationRuleStatus(r.itemId, r.currency);
+            if (node.textContent !== next) node.textContent = next;
+        }
+        for (const node of qa('[data-moth-auto-targets]', content)) {
+            const r = autoRules.get(node.dataset.ruleId);
+            if (!r) continue;
+            const next = autoSellTargetsHtml(r);
+            if (node.innerHTML !== next) node.innerHTML = next;
+        }
+        const host = q('#moth-mw-rule-notice', content), n = state.automationNotice;
+        if (host) {
+            if (!n?.text) {
+                host.hidden = true; host.textContent = ''; host.className = 'moth-mw-rule-notice';
+            } else {
+                host.hidden = false; host.className = 'moth-mw-rule-notice ' + (n.kind || 'info'); host.textContent = n.text;
+            }
+        }
+    }
+
+    function filterAutomationItemSelect(input, select) {
+        if (!input || !select) return;
+        const term = normalize(input.value);
+        let first = null;
+        for (const option of Array.from(select.options)) {
+            const visible = !term || normalize(option.textContent).includes(term);
+            option.hidden = !visible;
+            if (visible && !first && option.value) first = option;
+        }
+        if (select.selectedOptions?.[0]?.hidden && first) select.value = first.value;
+    }
+
     function newAutomationRuleId(prefix) {
         return prefix + '-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 100000).toString(36);
     }
@@ -3363,23 +3541,17 @@
         });
     }
 
-    function autoSellRuleStatus(rule) {
-        const base = automationRuleStatus(rule.itemId, rule.currency);
-        const recommendation = sellPriceRecommendation(rule.itemId, rule.currency);
-        const target = rule.mode === 'patient'
-            ? Number(recommendation.patientPrice || 0)
-            : Number(recommendation.price || 0);
-        return target > 0 ? base + ' · ' + tr('target: {price}', { price: num(target) }) : base;
-    }
-
     function autoSellRulesHtml() {
         const rules = sanitizeAutoSellRules(config.autoSellRules);
-        const rows = rules.map(rule =>
-            '<div class="moth-mw-rule-row" data-moth-auto-sell-row="' + escapeHtml(rule.id) + '">' +
-            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-auto-sell-field="enabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.enabled ? ' checked' : '') + '> ' + escapeHtml(tr('Enabled')) + '</label>' +
-            '<div class="moth-mw-rule-name"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b><small>' +
-            escapeHtml(autoSellRuleStatus(rule)) + '</small></div>' +
+        const cards = rules.map(rule =>
+            '<article class="moth-mw-rule-card" data-moth-auto-sell-row="' + escapeHtml(rule.id) + '">' +
+            '<div class="moth-mw-rule-card-head"><div class="moth-mw-rule-title"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b>' +
+            '<small data-moth-rule-status data-rule-type="auto-sell" data-rule-id="' + escapeHtml(rule.id) + '">' +
+            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
+            '<label class="moth-mw-switch"><input type="checkbox" data-moth-auto-sell-field="enabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.enabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Enabled')) + '</span></label></div>' +
+            '<div class="moth-mw-targets" data-moth-auto-targets data-rule-id="' + escapeHtml(rule.id) + '">' + autoSellTargetsHtml(rule) + '</div>' +
+            '<div class="moth-mw-rule-fields">' +
             '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-auto-sell-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
             '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
             '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
@@ -3388,73 +3560,89 @@
             '<option value="patient"' + (rule.mode === 'patient' ? ' selected' : '') + '>' + escapeHtml(tr('Patient')) + '</option></select></label>' +
             '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
             '" data-moth-auto-sell-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input type="number" min="0" step="1" value="' + rule.maxSellQty +
-            '" data-moth-auto-sell-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"><small>' + escapeHtml(tr('0 = all available')) + '</small></label>' +
-            '<button type="button" class="moth-mw-btn" data-moth-remove-auto-sell="' + escapeHtml(rule.id) + '">' + escapeHtml(tr('Remove')) + '</button>' +
-            '</div>'
+            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input type="number" min="1" step="1" value="' + rule.maxSellQty +
+            '" data-moth-auto-sell-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.sellAll ? ' disabled' : '') + '></label></div>' +
+            '<div class="moth-mw-rule-card-foot"><label class="moth-mw-checkline"><input type="checkbox" data-moth-auto-sell-field="sellAll" data-rule-id="' +
+            escapeHtml(rule.id) + '"' + (rule.sellAll ? ' checked' : '') + '> ' + escapeHtml(tr('Sell all available units')) + '</label>' +
+            '<button type="button" class="moth-mw-btn danger" data-moth-remove-auto-sell="' + escapeHtml(rule.id) + '">' +
+            escapeHtml(tr('Remove')) + '</button></div></article>'
         ).join('');
-
-        return '<section class="moth-mw-automation-block"><div class="moth-mw-section-title"><h4>' +
+        return '<section class="moth-mw-automation-block primary"><div class="moth-mw-section-title"><h4>' +
             escapeHtml(tr('Experimental auto-sell')) + '</h4><span>' +
             escapeHtml(tr('Automatically list selected owned items. Moth Watch waits if the same item/currency already has an open listing.')) +
             '</span></div><p class="moth-mw-setting-help">' +
-            escapeHtml(tr('Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.')) +
-            '</p><div class="moth-mw-config">' +
-            configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox') + '</div>' +
-            '<div class="moth-mw-rule-add"><select id="moth-auto-sell-item">' + automationItemOptions() + '</select>' +
-            '<select id="moth-auto-sell-currency"><option value="gold">' + escapeHtml(tr('Coins')) + '</option><option value="orb">' +
-            escapeHtml(tr('Gems')) + '</option></select><select id="moth-auto-sell-mode"><option value="recommended">' +
-            escapeHtml(tr('Recommended')) + '</option><option value="patient">' + escapeHtml(tr('Patient')) + '</option></select>' +
+            escapeHtml(tr('Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.')) +
+            '</p><div class="moth-mw-master-row">' + configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox') + '</div>' +
+            '<div class="moth-mw-rule-add-card"><div class="moth-mw-rule-add-search"><label><span>' + escapeHtml(tr('Find item')) +
+            '</span><input type="search" id="moth-auto-sell-search" placeholder="' + escapeHtml(tr('Search items…')) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Item')) + '</span><select id="moth-auto-sell-item">' + automationItemOptions() + '</select></label></div>' +
+            '<div class="moth-mw-rule-add-fields"><label><span>' + escapeHtml(tr('Currency')) + '</span><select id="moth-auto-sell-currency"><option value="gold">' +
+            escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select></label>' +
+            '<label><span>' + escapeHtml(tr('Price mode')) + '</span><select id="moth-auto-sell-mode"><option value="recommended">' +
+            escapeHtml(tr('Recommended')) + '</option><option value="patient">' + escapeHtml(tr('Patient')) + '</option></select></label>' +
             '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-auto-sell-keep" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input id="moth-auto-sell-max" type="number" min="0" step="1" value="0"></label>' +
-            '<button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">' + escapeHtml(tr('Add auto-sell item')) + '</button></div>' +
-            '<div class="moth-mw-rule-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No auto-sell items configured.')) + '</div>') +
-            '</div></section>';
+            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input id="moth-auto-sell-max" type="number" min="1" step="1" value="1"></label></div>' +
+            '<label class="moth-mw-checkline"><input id="moth-auto-sell-all" type="checkbox"> ' + escapeHtml(tr('Sell all available units')) + '</label>' +
+            '<div class="moth-mw-rule-add-actions"><span>' + escapeHtml(tr('Safe default: one unit. Use the explicit “all” option only when you really want it.')) +
+            '</span><button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">' + escapeHtml(tr('Add auto-sell item')) + '</button></div></div>' +
+            '<div class="moth-mw-rule-list">' + (cards || '<div class="moth-mw-empty">' + escapeHtml(tr('No auto-sell items configured.')) + '</div>') + '</div></section>';
     }
 
     function fixedRulesHtml() {
         const rules = sanitizeFixedItemRules(config.fixedItemRules);
-        const rows = rules.map(rule =>
-            '<div class="moth-mw-rule-row fixed" data-moth-fixed-row="' + escapeHtml(rule.id) + '">' +
-            '<div class="moth-mw-rule-name"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b><small>' +
+        const cards = rules.map(rule =>
+            '<article class="moth-mw-rule-card fixed" data-moth-fixed-row="' + escapeHtml(rule.id) + '">' +
+            '<div class="moth-mw-rule-card-head"><div class="moth-mw-rule-title"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b>' +
+            '<small data-moth-rule-status data-rule-type="fixed" data-rule-id="' + escapeHtml(rule.id) + '">' +
             escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
             '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-fixed-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
             '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
-            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
-            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-fixed-field="buyEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.buyEnabled ? ' checked' : '') + '> ' + escapeHtml(tr('Buy')) + '</label>' +
-            '<label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input type="number" min="0" step="1" value="' + rule.buyMax +
-            '" data-moth-fixed-field="buyMax" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per purchase')) + '</span><input type="number" min="0" step="1" value="' + rule.buyQtyLimit +
-            '" data-moth-fixed-field="buyQtyLimit" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-fixed-field="sellEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.sellEnabled ? ' checked' : '') + '> ' + escapeHtml(tr('Sell')) + '</label>' +
-            '<label><span>' + escapeHtml(tr('Sell at')) + '</span><input type="number" min="0" step="1" value="' + rule.sellPrice +
-            '" data-moth-fixed-field="sellPrice" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label></div>' +
+            '<div class="moth-mw-fixed-sides"><section class="moth-mw-rule-side buy"><div class="moth-mw-rule-side-head">' +
+            '<label class="moth-mw-switch"><input type="checkbox" data-moth-fixed-field="buyEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.buyEnabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Buy')) + '</span></label></div>' +
+            '<div class="moth-mw-rule-fields compact"><label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input type="number" min="0" step="1" value="' +
+            rule.buyMax + '" data-moth-fixed-field="buyMax" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Per purchase')) + '</span><input type="number" min="1" step="1" value="' + rule.buyQtyLimit +
+            '" data-moth-fixed-field="buyQtyLimit" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.buyAll ? ' disabled' : '') + '></label></div>' +
+            '<label class="moth-mw-checkline"><input type="checkbox" data-moth-fixed-field="buyAll" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.buyAll ? ' checked' : '') + '> ' + escapeHtml(tr('Buy all affordable units')) + '</label></section>' +
+            '<section class="moth-mw-rule-side sell"><div class="moth-mw-rule-side-head">' +
+            '<label class="moth-mw-switch"><input type="checkbox" data-moth-fixed-field="sellEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.sellEnabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Sell')) + '</span></label></div>' +
+            '<div class="moth-mw-rule-fields compact"><label><span>' + escapeHtml(tr('Sell at')) + '</span><input type="number" min="0" step="1" value="' +
+            rule.sellPrice + '" data-moth-fixed-field="sellPrice" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
             '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
             '" data-moth-fixed-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input type="number" min="0" step="1" value="' + rule.maxSellQty +
-            '" data-moth-fixed-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<button type="button" class="moth-mw-btn" data-moth-remove-fixed="' + escapeHtml(rule.id) + '">' + escapeHtml(tr('Remove')) + '</button>' +
-            '</div>'
-        ).join('');
-
-        return '<section class="moth-mw-automation-block"><div class="moth-mw-section-title"><h4>' +
-            escapeHtml(tr('Fixed item rules')) + '</h4><span>' +
-            escapeHtml(tr('Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.')) +
-            '</span></div><p class="moth-mw-setting-help">' +
+            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input type="number" min="1" step="1" value="' + rule.maxSellQty +
+            '" data-moth-fixed-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.sellAll ? ' disabled' : '') + '></label></div>' +
+            '<label class="moth-mw-checkline"><input type="checkbox" data-moth-fixed-field="sellAll" data-rule-id="' + escapeHtml(rule.id) + '"' +
+            (rule.sellAll ? ' checked' : '') + '> ' + escapeHtml(tr('Sell all available units')) + '</label></section></div>' +
+            '<div class="moth-mw-rule-card-foot"><span class="moth-mw-rule-note">' +
             escapeHtml(tr('Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.')) +
-            '</p><div class="moth-mw-config">' + configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox') + '</div>' +
-            '<div class="moth-mw-rule-add fixed"><select id="moth-fixed-item">' + automationItemOptions() + '</select>' +
-            '<select id="moth-fixed-currency"><option value="gold">' + escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select>' +
+            '</span><button type="button" class="moth-mw-btn danger" data-moth-remove-fixed="' + escapeHtml(rule.id) + '">' +
+            escapeHtml(tr('Remove')) + '</button></div></article>'
+        ).join('');
+        return '<section class="moth-mw-automation-block primary"><div class="moth-mw-section-title"><h4>' +
+            escapeHtml(tr('Fixed item rules')) + '</h4><span>' +
+            escapeHtml(tr('Fixed rules are deterministic: exact buy and sell prices win over recommendation-based selling for the same item.')) +
+            '</span></div><div class="moth-mw-master-row">' + configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox') + '</div>' +
+            '<div class="moth-mw-rule-add-card"><div class="moth-mw-rule-add-search"><label><span>' + escapeHtml(tr('Find item')) +
+            '</span><input type="search" id="moth-fixed-search" placeholder="' + escapeHtml(tr('Search items…')) + '"></label>' +
+            '<label><span>' + escapeHtml(tr('Item')) + '</span><select id="moth-fixed-item">' + automationItemOptions() + '</select></label></div>' +
+            '<div class="moth-mw-rule-add-fields fixed"><label><span>' + escapeHtml(tr('Currency')) + '</span><select id="moth-fixed-currency"><option value="gold">' +
+            escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select></label>' +
             '<label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input id="moth-fixed-buy" type="number" min="0" step="1" value="0"></label>' +
+            '<label><span>' + escapeHtml(tr('Per purchase')) + '</span><input id="moth-fixed-buy-limit" type="number" min="1" step="1" value="1"></label>' +
             '<label><span>' + escapeHtml(tr('Sell at')) + '</span><input id="moth-fixed-sell" type="number" min="0" step="1" value="0"></label>' +
             '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-fixed-keep" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per purchase')) + '</span><input id="moth-fixed-buy-limit" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Max units per listing')) + '</span><input id="moth-fixed-sell-limit" type="number" min="0" step="1" value="0"></label>' +
-            '<button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">' + escapeHtml(tr('Add fixed rule')) + '</button></div>' +
-            '<div class="moth-mw-rule-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No fixed item rules configured.')) + '</div>') +
-            '</div></section>';
+            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input id="moth-fixed-sell-limit" type="number" min="1" step="1" value="1"></label></div>' +
+            '<div class="moth-mw-rule-add-checks"><label class="moth-mw-checkline"><input id="moth-fixed-buy-all" type="checkbox"> ' +
+            escapeHtml(tr('Buy all affordable units')) + '</label><label class="moth-mw-checkline"><input id="moth-fixed-sell-all" type="checkbox"> ' +
+            escapeHtml(tr('Sell all available units')) + '</label></div>' +
+            '<div class="moth-mw-rule-add-actions"><span>' + escapeHtml(tr('Safe default: one unit. Use the explicit “all” option only when you really want it.')) +
+            '</span><button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">' + escapeHtml(tr('Add fixed rule')) + '</button></div></div>' +
+            '<div class="moth-mw-rule-list">' + (cards || '<div class="moth-mw-empty">' + escapeHtml(tr('No fixed item rules configured.')) + '</div>') + '</div></section>';
     }
 
     function renderWatch(forceViewBuild = false) {
@@ -3508,7 +3696,7 @@
         const overviewHtml = '<b>' + escapeHtml(countLabel) + '</b>' +
             '<span>' + num(state.gold) + ' ' + escapeHtml(tr('Coins')) + ' · ' + num(state.orbs) + ' ' + escapeHtml(tr('Gems')) + '</span>' +
             '<span>' + escapeHtml(tr('Watch threshold: {value}% of reference', { value: num(config.watchPercent) })) + '</span>' +
-            '<span>' + escapeHtml(tr('Auto-buy: {status}', { status: tr(config.autoBuy ? 'ON' : 'OFF') })) + '</span>';
+            '<span class="moth-mw-overview-automation">' + escapeHtml(tr('Automation: {summary}', { summary: automationOverviewSummary() })) + '</span>';
         if (overview && overview.innerHTML !== overviewHtml) overview.innerHTML = overviewHtml;
 
         for (const button of qa('[data-moth-view]', panel)) {
@@ -3544,33 +3732,36 @@
                     escapeHtml(tr('Browse item types, then load the offers for a selected currency.')) + '</span></div><div id="moth-mw-inventory-content"></div>';
             } else if (state.watchView === 'automation') {
                 content.innerHTML =
-                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Monitoring rules')) + '</h4><span>' +
-                    escapeHtml(tr('These settings only decide what is scanned and shown; they do not authorize purchases.')) + '</span></div>' +
+                    '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Automation status')) + '</h4><span>' +
+                    escapeHtml(tr('Review the systems that can place market orders, then set spending safeguards and advanced monitoring.')) + '</span></div>' +
+                    automationNoticeHtml() + automationStatusPanelHtml() + fixedRulesHtml() + autoSellRulesHtml() +
                     '<div class="moth-mw-settings-grid">' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Watch rules')) + '</h4><div class="moth-mw-config">' +
-                    configField('Watch price threshold', 'watchPercent', 'range', '%') +
-                    configField('Scan interval', 'scanSeconds', 'number', 'seconds') +
-                    configField('Watch items', 'scanItems', 'checkbox') + configField('Watch Pokémon', 'scanPokemon', 'checkbox') +
-                    configField('Watch diamonds', 'scanDiamonds', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Automatic purchases')) + '</h4><p class="moth-mw-setting-help">' +
-                    escapeHtml(tr('Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.')) + '</p><div class="moth-mw-config">' +
-                    configField('Enable automatic buying', 'autoBuy', 'checkbox') +
-                    configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
-                    configField('Auto-buy items', 'autoBuyItems', 'checkbox') +
-                    configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
-                    configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
-                    configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
-                    configField('Buy whole item batch', 'buyWholeItemBatch', 'checkbox') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Spending limits')) + '</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Spending safeguards')) + '</h4><div class="moth-mw-config">' +
                     configField('Keep Coins in reserve', 'goldReserve', 'number', '') +
                     configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
                     configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
                     configField('Maximum Gems per purchase', 'maxGemsPerBuy', 'number', '0 = no extra cap') + '</div></section>' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Reference confidence')) + '</h4><div class="moth-mw-config">' +
-                    configField('Minimum sold item units', 'minItemUnits', 'number', '') +
+                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Percentage auto-buy')) + '</h4><p class="moth-mw-setting-help">' +
+                    escapeHtml(tr('Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.')) +
+                    '</p><div class="moth-mw-config">' +
+                    configField('Enable automatic buying', 'autoBuy', 'checkbox') +
+                    configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
+                    configField('Auto-buy items', 'autoBuyItems', 'checkbox') + configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
+                    configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
+                    configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
+                    configField('Buy whole item batch', 'buyWholeItemBatch', 'checkbox') + '</div></section></div>' +
+                    '<details class="moth-mw-advanced"><summary>' + escapeHtml(tr('Advanced monitoring & references')) +
+                    '</summary><div class="moth-mw-advanced-body"><p class="moth-mw-advanced-note">' +
+                    escapeHtml(tr('Scanning and reference-quality controls. These do not authorize orders by themselves.')) +
+                    '</p><div class="moth-mw-settings-grid"><section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Watch rules')) +
+                    '</h4><div class="moth-mw-config">' + configField('Watch price threshold', 'watchPercent', 'range', '%') +
+                    configField('Scan interval', 'scanSeconds', 'number', 'seconds') + configField('Watch items', 'scanItems', 'checkbox') +
+                    configField('Watch Pokémon', 'scanPokemon', 'checkbox') + configField('Watch diamonds', 'scanDiamonds', 'checkbox') +
+                    '</div></section><section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Reference confidence')) +
+                    '</h4><div class="moth-mw-config">' + configField('Minimum sold item units', 'minItemUnits', 'number', '') +
                     configField('Minimum Pokémon sale samples', 'minPokemonSamples', 'number', '') +
-                    configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') + '</div></section></div>' +
-                    autoSellRulesHtml() + fixedRulesHtml();
+                    configField('Pokémon history pages', 'pokemonHistoryPages', 'number', '') +
+                    '</div></section></div></div></details>';
             } else {
                 content.innerHTML =
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Price references')) + '</h4><span>' +
@@ -3606,6 +3797,8 @@
                 const newScroller = q('.moth-mw-inventory-list', host);
                 if (newScroller) newScroller.scrollTop = scrollTop;
             }
+        } else if (state.watchView === 'automation') {
+            refreshAutomationLive(content);
         } else if (state.watchView === 'activity') {
             const refs = q('#moth-mw-reference-tools', content);
             const html = '<div class="moth-mw-reference-info"><b>' + escapeHtml(tr('Item references:')) + '</b> ' +
@@ -3661,57 +3854,53 @@
             }
             if (target.closest('#moth-add-auto-sell')) {
                 const itemId = Number(q('#moth-auto-sell-item', panel)?.value);
-                if (!(itemId > 0)) return;
+                if (!(itemId > 0)) { setAutomationNotice(tr('Choose an item before adding a rule.'), 'warn'); return; }
                 const currency = q('#moth-auto-sell-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
                 const mode = q('#moth-auto-sell-mode', panel)?.value === 'patient' ? 'patient' : 'recommended';
                 const keepQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-keep', panel)?.value) || 0));
-                const maxSellQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-max', panel)?.value) || 0));
-                const rules = sanitizeAutoSellRules(config.autoSellRules);
-                if (!rules.some(rule => rule.itemId === itemId && rule.currency === currency)) {
-                    rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty, maxSellQty });
-                    config.autoSellRules = rules;
-                    saveConfig();
+                const maxSellQty = Math.max(1, Math.floor(Number(q('#moth-auto-sell-max', panel)?.value) || 1));
+                const sellAll = Boolean(q('#moth-auto-sell-all', panel)?.checked);
+                const rules = sanitizeAutoSellRules(config.autoSellRules), name = catalogName(itemId);
+                if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
+                    setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
                 }
-                renderWatch(true);
-                return;
+                rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty, maxSellQty, sellAll });
+                config.autoSellRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
             }
             const removeAutoSell = target.closest('[data-moth-remove-auto-sell]');
             if (removeAutoSell) {
-                config.autoSellRules = sanitizeAutoSellRules(config.autoSellRules)
-                    .filter(rule => rule.id !== removeAutoSell.dataset.mothRemoveAutoSell);
-                saveConfig();
-                renderWatch(true);
-                return;
+                const rules = sanitizeAutoSellRules(config.autoSellRules);
+                const removed = rules.find(r => r.id === removeAutoSell.dataset.mothRemoveAutoSell);
+                config.autoSellRules = rules.filter(r => r.id !== removeAutoSell.dataset.mothRemoveAutoSell);
+                saveConfig(); setAutomationNotice(tr('Rule removed: {name}.', { name: removed ? catalogName(removed.itemId) : tr('Item') }), 'ok'); renderWatch(true); return;
             }
             if (target.closest('#moth-add-fixed-rule')) {
                 const itemId = Number(q('#moth-fixed-item', panel)?.value);
-                if (!(itemId > 0)) return;
+                if (!(itemId > 0)) { setAutomationNotice(tr('Choose an item before adding a rule.'), 'warn'); return; }
                 const currency = q('#moth-fixed-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
                 const buyMax = Math.max(0, Math.floor(Number(q('#moth-fixed-buy', panel)?.value) || 0));
                 const sellPrice = Math.max(0, Math.floor(Number(q('#moth-fixed-sell', panel)?.value) || 0));
-                const keepQty = Math.max(0, Math.floor(Number(q('#moth-fixed-keep', panel)?.value) || 0));
-                const buyQtyLimit = Math.max(0, Math.floor(Number(q('#moth-fixed-buy-limit', panel)?.value) || 0));
-                const maxSellQty = Math.max(0, Math.floor(Number(q('#moth-fixed-sell-limit', panel)?.value) || 0));
-                const rules = sanitizeFixedItemRules(config.fixedItemRules);
-                if (!rules.some(rule => rule.itemId === itemId && rule.currency === currency)) {
-                    rules.push({
-                        id: newAutomationRuleId('fixed'), itemId, currency,
-                        buyEnabled: buyMax > 0, buyMax, buyQtyLimit,
-                        sellEnabled: sellPrice > 0, sellPrice, keepQty, maxSellQty
-                    });
-                    config.fixedItemRules = rules;
-                    saveConfig();
+                if (!(buyMax > 0) && !(sellPrice > 0)) {
+                    setAutomationNotice(tr('Set a buy price, a sell price, or both before adding a fixed rule.'), 'warn'); return;
                 }
-                renderWatch(true);
-                return;
+                const keepQty = Math.max(0, Math.floor(Number(q('#moth-fixed-keep', panel)?.value) || 0));
+                const buyQtyLimit = Math.max(1, Math.floor(Number(q('#moth-fixed-buy-limit', panel)?.value) || 1));
+                const maxSellQty = Math.max(1, Math.floor(Number(q('#moth-fixed-sell-limit', panel)?.value) || 1));
+                const buyAll = Boolean(q('#moth-fixed-buy-all', panel)?.checked), sellAll = Boolean(q('#moth-fixed-sell-all', panel)?.checked);
+                const rules = sanitizeFixedItemRules(config.fixedItemRules), name = catalogName(itemId);
+                if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
+                    setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
+                }
+                rules.push({ id: newAutomationRuleId('fixed'), itemId, currency, buyEnabled: buyMax > 0, buyMax, buyQtyLimit, buyAll,
+                    sellEnabled: sellPrice > 0, sellPrice, keepQty, maxSellQty, sellAll });
+                config.fixedItemRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
             }
             const removeFixed = target.closest('[data-moth-remove-fixed]');
             if (removeFixed) {
-                config.fixedItemRules = sanitizeFixedItemRules(config.fixedItemRules)
-                    .filter(rule => rule.id !== removeFixed.dataset.mothRemoveFixed);
-                saveConfig();
-                renderWatch(true);
-                return;
+                const rules = sanitizeFixedItemRules(config.fixedItemRules);
+                const removed = rules.find(r => r.id === removeFixed.dataset.mothRemoveFixed);
+                config.fixedItemRules = rules.filter(r => r.id !== removeFixed.dataset.mothRemoveFixed);
+                saveConfig(); setAutomationNotice(tr('Rule removed: {name}.', { name: removed ? catalogName(removed.itemId) : tr('Item') }), 'ok'); renderWatch(true); return;
             }
             const itemButton = target.closest('[data-moth-item-scan]');
             if (itemButton) {
@@ -3771,6 +3960,8 @@
                 renderWatch();
                 return;
             }
+            if (target.matches('#moth-auto-sell-search')) { filterAutomationItemSelect(target, q('#moth-auto-sell-item', panel)); return; }
+            if (target.matches('#moth-fixed-search')) { filterAutomationItemSelect(target, q('#moth-fixed-item', panel)); return; }
             if (target.matches('input[type="range"][data-moth-cfg]')) {
                 const output = q('[data-moth-cfg-value="' + target.dataset.mothCfg + '"]', panel);
                 if (output) output.textContent = target.value + '%';
@@ -3780,6 +3971,9 @@
         panel.addEventListener('change', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
+            if (target.matches('#moth-auto-sell-all')) { const x=q('#moth-auto-sell-max',panel); if(x)x.disabled=target.checked; return; }
+            if (target.matches('#moth-fixed-buy-all')) { const x=q('#moth-fixed-buy-limit',panel); if(x)x.disabled=target.checked; return; }
+            if (target.matches('#moth-fixed-sell-all')) { const x=q('#moth-fixed-sell-limit',panel); if(x)x.disabled=target.checked; return; }
             if (target.matches('[data-moth-auto-sell-field]')) {
                 const id = target.dataset.ruleId;
                 const field = target.dataset.mothAutoSellField;
@@ -3789,7 +3983,9 @@
                 if (field === 'enabled') rule.enabled = target.checked;
                 else if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
                 else if (field === 'mode') rule.mode = target.value === 'patient' ? 'patient' : 'recommended';
-                else if (field === 'keepQty' || field === 'maxSellQty') rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
+                else if (field === 'keepQty') rule.keepQty = Math.max(0, Math.floor(Number(target.value) || 0));
+                else if (field === 'maxSellQty') rule.maxSellQty = Math.max(1, Math.floor(Number(target.value) || 1));
+                else if (field === 'sellAll') rule.sellAll = target.checked;
                 else return;
                 config.autoSellRules = rules;
                 saveConfig();
@@ -3803,10 +3999,10 @@
                 const rule = rules.find(entry => entry.id === id);
                 if (!rule) return;
                 if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
-                else if (field === 'buyEnabled' || field === 'sellEnabled') rule[field] = target.checked;
-                else if (['buyMax', 'buyQtyLimit', 'sellPrice', 'keepQty', 'maxSellQty'].includes(field)) {
-                    rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
-                } else return;
+                else if (field === 'buyEnabled' || field === 'sellEnabled' || field === 'buyAll' || field === 'sellAll') rule[field] = target.checked;
+                else if (field === 'buyQtyLimit' || field === 'maxSellQty') rule[field] = Math.max(1, Math.floor(Number(target.value) || 1));
+                else if (['buyMax', 'sellPrice', 'keepQty'].includes(field)) rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
+                else return;
                 config.fixedItemRules = rules;
                 saveConfig();
                 queueRender();
@@ -4322,7 +4518,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.43 loaded');
+        console.info('[Moth Watch] v0.1.44 loaded');
     }
 
     bootstrap();
