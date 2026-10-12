@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.48
+// @version      0.1.49
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.48');
+        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.49');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -196,6 +196,7 @@
         'Automation & budget': 'Automação e orçamento', 'Activity & references': 'Atividade e referências',
         'Search listings': 'Buscar ofertas', 'Search item, Pokémon, seller…': 'Buscar item, Pokémon ou vendedor…',
         'Currency': 'Moeda', 'All': 'Todas', 'Coins': 'Moedas', 'Gems': 'Gemas',
+        'Shiny Pokémon can only be listed for Gems. Old Coin listings are ignored.': 'Pokémon Shiny só podem ser anunciados por Gemas. Anúncios antigos em Moedas são ignorados.',
         'Type': 'Tipo', 'Items': 'Itens', 'Diamonds': 'Diamantes', 'Sort': 'Ordenar',
         'Biggest discount': 'Maior desconto', 'Newest detected': 'Detectadas mais recentemente',
         'Price: low → high': 'Preço: menor → maior', 'Price: high → low': 'Preço: maior → menor',
@@ -1484,7 +1485,14 @@
         return shiny + species + ' · P' + power + ' · Lv ' + level;
     }
 
+    // PokéIdle v1.269.5: shiny Pokémon cannot be listed for Coins.
+    // Do not mix historical Coin sales into shiny price references.
+    function pokemonCurrencyAllowed(ficha, currency) {
+        return currency === 'orb' || !ficha?.shiny;
+    }
+
     function pokemonBucketKeys(ficha, currency) {
+        if (!pokemonCurrencyAllowed(ficha, currency)) return [];
         const speciesId = speciesIdOf(ficha);
         if (!speciesId) return [];
         const shiny = ficha && ficha.shiny ? 1 : 0;
@@ -1517,6 +1525,7 @@
     function addPokemonHistorySample(line, working) {
         if (!line || line.tipo !== 'pokemon' || !line.ficha) return;
         const currency = line.moeda === 'orb' ? 'orb' : 'gold';
+        if (!pokemonCurrencyAllowed(line.ficha, currency)) return;
         const price = Number(line.bruto != null ? line.bruto : line.preco);
         if (!Number.isFinite(price) || price <= 0) return;
 
@@ -1557,6 +1566,7 @@
     }
 
     function pokemonReferenceFor(ficha, currency) {
+        if (!pokemonCurrencyAllowed(ficha, currency)) return null;
         const minSamples = Math.max(1, Number(config.minPokemonSamples || 1));
         const values = state.pokemonReference.values || {};
 
@@ -1856,6 +1866,7 @@
 
         for (const listing of lines) {
             if (!listing || !listing.ficha || isOwnListing(listing)) continue;
+            if (!pokemonCurrencyAllowed(listing.ficha, currency)) continue;
             const price = Number(listing.preco) * Math.max(1, Number(listing.qtd || 1));
             if (!Number.isFinite(price) || price <= 0) continue;
 
@@ -1915,6 +1926,8 @@
 
     function candidateCanAutoBuy(candidate) {
         if (!config.autoBuy || !candidate) return false;
+        if (candidate.kind === 'pokemon' &&
+            !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) return false;
         if (!currencyAllowed(candidate.currency)) return false;
         if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
         if (candidate.ratio > autoThresholdFor(candidate)) return false;
@@ -1935,6 +1948,8 @@
     }
 
     function purchaseQuantity(candidate) {
+        if (candidate.kind === 'pokemon' &&
+            !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) return 0;
         const balance = balanceFor(candidate.currency);
         const available = Math.max(0, balance - reserveFor(candidate.currency));
         const cap = maxSpendFor(candidate.currency);
@@ -1956,6 +1971,11 @@
 
     function tryBuy(candidate, manual, requestedQuantity = null, fixedRule = false) {
         if (!candidate || state.pendingBuy || state.pendingSell) return false;
+        if (candidate.kind === 'pokemon' &&
+            !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) {
+            if (manual) addLog('Skipped: shiny Pokémon require Gems');
+            return false;
+        }
         if (!manual && !fixedRule && !candidateCanAutoBuy(candidate)) return false;
         if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
 
@@ -2056,6 +2076,17 @@
             return controllerResult({ ok: false, error: 'unsupported currency', source: 'validation', listingId });
         }
         const currency = request.moeda;
+        // Controller-originated orders can arrive before our market scan.
+        // Inspect any supplied Pokémon metadata; unknown metadata is left
+        // to the game's authoritative validation.
+        const requestFicha = request.ficha || request.pokemon || null;
+        if (currency === 'gold' &&
+            (requestFicha?.shiny || (request.tipo === 'pokemon' && request.shiny))) {
+            return controllerResult({
+                ok: false, error: 'shiny Pokémon listings require Gems',
+                source: 'validation', listingId
+            });
+        }
         const candidate = Array.from(state.candidates.values()).find(item =>
             Number(item.listingId) === listingId &&
             item.currency === currency
@@ -3868,6 +3899,9 @@
                     filterButton('Pokémon', 'kind', 'pokemon', kindFilter === 'pokemon', '/assets/site/assets/ui/ball-poke.png') +
                     filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') + '</div>' +
                     sortSelect() + '</div>' +
+                    '<div class="moth-mw-inventory-note">' +
+                    escapeHtml(tr('Shiny Pokémon can only be listed for Gems. Old Coin listings are ignored.')) +
+                    '</div>' +
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Opportunities')) + '</h4><span id="moth-mw-opportunity-count"></span></div>' +
                     '<div class="moth-mw-list" id="moth-mw-opportunity-list"></div>';
             } else if (state.watchView === 'inventory') {
