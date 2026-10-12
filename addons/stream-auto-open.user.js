@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.0.2
-// @description  Opens all current Twitch chat channels in one low-resource popout per Firefox profile; KICK streams remain delegated to the Rust controller.
+// @version      7.1.0
+// @description  Replaces one consolidated Twitch chat tab every five minutes; KICK channels remain delegated to Rust.
 // @match        https://pokeidle.io/app*
 // @match        https://www.twitch.tv/popout/*/chat*
+// @grant        window.close
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @run-at       document-start
@@ -19,35 +20,58 @@
 (() => {
     'use strict';
 
-    const ROSTER_KEY = 'moth-twitch-consolidated-roster-v1';
-    // The SAME userscript runs in the Twitch popout. Violentmonkey storage
-    // propagates changes across domains in this Firefox profile, allowing us
-    // to update IRC memberships without reloading the rewarding chat.
-    if (location.hostname === 'www.twitch.tv' &&
-        /^\/popout\/[^/]+\/chat(?:\/|$)/i.test(location.pathname)) {
-        const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-        const broadcast = roster => {
-            try {
-                page.dispatchEvent(new CustomEvent('moth:channels-changed', {
-                    detail: String(roster || '')
-                }));
-            } catch (error) {
-                console.warn('[Moth] Twitch channel update failed:', error);
-            }
+    // Per-Firefox-profile handshake. The newest chat announces readiness
+    // before the preceding managed tab is closed, even when /app was reloaded.
+    const CHAT_TARGET_KEY = 'moth-twitch-chat-target-v2';
+    const CHAT_ACTIVE_KEY = 'moth-twitch-chat-active-v2';
+    const CHAT_READY_TIMEOUT_MS = 45_000;
+    const isManagedPopout = location.hostname === 'www.twitch.tv' &&
+        /^\/popout\/[^/]+\/chat(?:\/|$)/i.test(location.pathname) &&
+        new URLSearchParams(location.search).has('moth-channels');
+
+    if (isManagedPopout) {
+        const generation = new URLSearchParams(location.search)
+            .get('moth-generation') || '';
+        const closeIfSuperseded = active => {
+            if (!active || active === generation) return;
+            // Explicit userscript permission allows closing tabs opened by
+            // the scanner, without relying on stale GM_openInTab handles.
+            try { window.close(); }
+            catch (error) { console.warn('[Moth] could not close old Twitch chat:', error); }
         };
         if (typeof GM_addValueChangeListener === 'function') {
-            GM_addValueChangeListener(ROSTER_KEY, (_key, _old, value) => broadcast(value));
+            GM_addValueChangeListener(CHAT_ACTIVE_KEY, (_key, _old, active) =>
+                closeIfSuperseded(String(active || '')));
         }
-        if (typeof GM_getValue === 'function') {
-            // Give Twitch Low Resource a chance to attach its event listener.
-            setTimeout(() => broadcast(GM_getValue(ROSTER_KEY, '')), 500);
+
+        // Twitch's load event follows initialization of the popout document.
+        // Never announce an obsolete request: another scan might already have
+        // opened a newer candidate by the time this page finishes loading.
+        const announceReady = () => {
+            try {
+                if (!generation ||
+                    GM_getValue(CHAT_TARGET_KEY, '') !== generation) return;
+                GM_setValue(CHAT_ACTIVE_KEY, generation);
+                console.info('[Moth] refreshed multi-chat ready:', generation);
+            } catch (error) {
+                console.warn('[Moth] multi-chat ready handshake failed:', error);
+            }
+        };
+        if (document.readyState === 'complete') {
+            setTimeout(announceReady, 1000);
+        } else {
+            window.addEventListener('load', () => setTimeout(announceReady, 1000), { once: true });
         }
+        // Catch a stale managed tab restored by Firefox after a newer one
+        // already replaced it, but never close personal/manual Twitch tabs.
+        try { closeIfSuperseded(String(GM_getValue(CHAT_ACTIVE_KEY, ''))); }
+        catch (_) {}
         return;
     }
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.0.2');
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.1.0');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -64,7 +88,8 @@
     let scanInProgress = false;
     const openStreams = new Map();
     const MULTI_CHAT_KEY = 'twitch:multi-chat';
-    let multiChatSignature = '';
+    let pendingReplacement = null;
+    let nextChatGeneration = 0;
     let lastKickLive = [];
     let lastKickStateAvailable = false;
     let lastKickObservedAt = 0;
@@ -380,69 +405,101 @@
         });
     }
 
-    function openMultiChat(items) {
-        const channels = [...new Set(
-            items
-                .map(item => channelName(item?.name).toLowerCase())
-                .filter(Boolean)
-        )].sort((a, b) => a.localeCompare(b));
+    function closeChatHandle(tab) {
+        if (!tab || tab.closed) return;
+        try { tab.close(); }
+        catch (error) { console.warn('[Moth] could not close replaced chat:', error); }
+    }
 
+    function onChatActivated(active) {
+        const pending = pendingReplacement;
+        if (!pending || String(active || '') !== pending.generation) return;
+        pendingReplacement = null;
+        window.clearTimeout(pending.timeout);
+        closeChatHandle(pending.previous);
+        console.info('[Moth] fresh Twitch multi-chat activated; previous tab retired:',
+            pending.channelCount, 'channel(s)');
+    }
+
+    if (typeof GM_addValueChangeListener === 'function') {
+        GM_addValueChangeListener(CHAT_ACTIVE_KEY, (_key, _old, value) =>
+            onChatActivated(value));
+    }
+
+    function openMultiChat(items) {
+        const channels = [...new Set(items
+            .map(item => channelName(item?.name).toLowerCase())
+            .filter(name => /^[a-z0-9_]{1,25}$/.test(name))
+        )].sort((a, b) => a.localeCompare(b));
         if (!channels.length) return false;
 
-        const signature = channels.join(',');
-        const current = openStreams.get(MULTI_CHAT_KEY);
-        if (current && !current.closed) {
-            if (signature === multiChatSignature) return true;
-            // Send an in-place roster update to the existing popout. The low
-            // resource script changes JOIN/PART on its current IRC socket.
-            if (typeof GM_setValue === 'function') {
-                try {
-                    GM_setValue(ROSTER_KEY, signature);
-                    multiChatSignature = signature;
-                    console.info('[Moth] updated existing Twitch chat membership:', signature);
-                    return true;
-                } catch (error) {
-                    console.warn('[Moth] failed to update live Twitch membership:', error);
-                }
-            }
-            // Storage API unavailable: retain the old replacement fallback.
-        }
+        // The scheduled scan is fixed at five minutes, but manual scans may
+        // overlap with Twitch's loading phase. Only one replacement can be
+        // pending per game-page instance.
+        if (pendingReplacement) return true;
 
         const baseUrl = chatUrl('twitch', channels[0]);
-        if (!baseUrl) return false;
+        if (!baseUrl || typeof GM_openInTab !== 'function') {
+            console.error('[Moth] cannot open Twitch popout');
+            return false;
+        }
 
         const target = new URL(baseUrl);
         target.searchParams.set('moth-channels', channels.join(','));
+        const generation = Date.now().toString(36) + '-' +
+            (++nextChatGeneration).toString(36) + '-' +
+            Math.random().toString(36).slice(2, 10);
+        target.searchParams.set('moth-generation', generation);
 
+        const previous = openStreams.get(MULTI_CHAT_KEY) || null;
+        let previousTarget = '';
         try {
-            if (typeof GM_openInTab !== 'function') {
-                console.error('[Moth] GM_openInTab is unavailable');
-                return false;
-            }
-
-            if (typeof GM_setValue === 'function') {
-                GM_setValue(ROSTER_KEY, signature);
-            }
-
-            // Only open a new tab at first launch or if a previous tab closed.
+            previousTarget = String(GM_getValue(CHAT_TARGET_KEY, '') || '');
+            // Set intent BEFORE opening. A fast-loading Twitch tab must see
+            // its generation as the current target when it announces ready.
+            GM_setValue(CHAT_TARGET_KEY, generation);
             const tab = GM_openInTab(target.toString(), {
                 active: false,
-                insert: true,
-                setParent: true
+                insert: true
             });
-
-            if (!tab) return false;
-
-            if (current && !current.closed) {
-                try { current.close(); } catch (_) {}
+            if (!tab || typeof tab.close !== 'function') {
+                throw new Error('GM_openInTab did not return a tab control');
             }
 
             openStreams.set(MULTI_CHAT_KEY, tab);
-            multiChatSignature = signature;
-            console.info('[Moth] one Twitch chat popout configured for', channels.length, 'channel(s):', channels.join(', '));
+            const pending = {
+                generation, tab, previous, previousTarget,
+                channelCount: channels.length, timeout: null
+            };
+            pendingReplacement = pending;
+            pending.timeout = window.setTimeout(() => {
+                if (pendingReplacement !== pending) return;
+                pendingReplacement = null;
+                // A tab that never loaded must not replace the working one.
+                closeChatHandle(tab);
+                if (openStreams.get(MULTI_CHAT_KEY) === tab) {
+                    if (previous && !previous.closed) openStreams.set(MULTI_CHAT_KEY, previous);
+                    else openStreams.delete(MULTI_CHAT_KEY);
+                }
+                try {
+                    if (GM_getValue(CHAT_TARGET_KEY, '') === generation) {
+                        GM_setValue(CHAT_TARGET_KEY, previousTarget);
+                    }
+                } catch (_) {}
+                console.warn('[Moth] replacement Twitch chat did not become ready; retaining previous chat');
+            }, CHAT_READY_TIMEOUT_MS);
+            // The callback can fire immediately in some userscript managers.
+            onChatActivated(GM_getValue(CHAT_ACTIVE_KEY, ''));
+            console.info('[Moth] opening fresh Twitch multi-chat:',
+                channels.length, 'channels; scan rotation every five minutes');
             return true;
         } catch (error) {
-            console.error('[Moth] failed to open consolidated Twitch chat:', target.toString(), error);
+            try {
+                if (GM_getValue(CHAT_TARGET_KEY, '') === generation) {
+                    GM_setValue(CHAT_TARGET_KEY, previousTarget);
+                }
+            } catch (_) {}
+            console.error('[Moth] failed to open Twitch multi-chat:', error);
             return false;
         }
     }
@@ -489,7 +546,16 @@
 
                 openStreams.delete(key);
                 if (key === MULTI_CHAT_KEY) {
-                    multiChatSignature = '';
+                    if (pendingReplacement) {
+                        window.clearTimeout(pendingReplacement.timeout);
+                        pendingReplacement = null;
+                    }
+                    // This only runs after an authoritative empty-live scan.
+                    // Notify managed popouts, including older untracked ones.
+                    try {
+                        GM_setValue(CHAT_TARGET_KEY, '');
+                        GM_setValue(CHAT_ACTIVE_KEY, 'stop-' + Date.now());
+                    } catch (_) {}
                 }
             }
         }
@@ -607,9 +673,6 @@
             // Only close the consolidated chat when PokéIdle actually exposed
             // its stream state; an empty/transient read must not close valid chats.
             if (streamStateIsAvailable) {
-                if (!twitchChannels.length && typeof GM_setValue === 'function') {
-                    try { GM_setValue(ROSTER_KEY, ''); } catch (_) {}
-                }
                 closeStreamsNotLive(liveKeys, protectedKeys);
             }
 
@@ -780,7 +843,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v7.0.2 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 5 minutes thereafter');
+    console.info('[Moth] live stream scanner v7.1.0 ready · fresh all-channel Twitch popout every 5 minutes · KICK stays in Rust');
     }
 
     start();
