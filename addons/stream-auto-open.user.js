@@ -719,7 +719,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v6.9.1 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 2 minutes thereafter');
+    console.info('[Moth] live stream scanner v6.9.1 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 5 minutes thereafter');
     }
 
     start();
