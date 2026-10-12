@@ -150,7 +150,7 @@ jobs:
           set -euo pipefail
           test -s dist/moth-controller-v0.1.3-windows-x86_64.exe
           test -s dist/moth-controller-v0.1.3-linux-x86_64.tar.gz
-          (cd dist && sha256sum -c ./*.sha256)
+          (cd dist && for arquivo in *.sha256; do sed -i 's/\r$//' "$arquivo"; done && sha256sum -c ./*.sha256)
 
       - name: Criar ou atualizar somente o rascunho
         shell: bash
