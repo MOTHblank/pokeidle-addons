@@ -149,7 +149,8 @@ pub struct AddonVersionStatus {
 
 pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
 
-/// Check versions at launch, daily thereafter, and immediately on manual request.\n/// All HTTP work stays off the UI thread.
+/// Check versions at launch, daily thereafter, and immediately on manual request.
+/// All HTTP work stays off the UI thread.
 pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
     let worker_status = Arc::clone(&status);
