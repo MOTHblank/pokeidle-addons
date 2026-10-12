@@ -372,6 +372,7 @@
         'List every owned unit except the quantity kept in inventory.': 'Anuncia todas as unidades disponíveis no inventário, descontando as que você decidiu manter.',
         'Only set the prices for the actions you want. 0 disables that action.': 'Preencha apenas os preços das ações desejadas. Valor 0 desativa a compra ou a venda.',
         'Adding a rule does not enable the master switch.': 'Adicionar uma regra não ativa a automação. Use a chave geral acima para ligá-la.',
+        'Automatic buying may use your entire available balance when reserves and spending limits are set to zero.': 'Com reservas e limites por compra em zero, as compras automáticas podem gastar todo o saldo disponível. Ajuste esses limites antes de ativar.',
         'Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.': 'A venda automática experimental usa recomendações ao vivo. Revise os dois alvos antes de ativar a chave geral.',
         'Recommended target': 'Alvo recomendado',
         'Patient target': 'Alvo paciente'
@@ -3045,6 +3046,7 @@
             '#moth-mw-view-content[data-view=automation] .moth-mw-target-chip b{font-size:13px}',
             '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card{padding:16px}',
             '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card h4{font-size:15px;margin-bottom:9px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-budget-warning{margin:0 0 12px;font-size:12px;line-height:1.5;color:var(--sobre-mad,#eee)}',
             '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card .moth-mw-config{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 15px}',
             '#moth-mw-view-content[data-view=automation] .moth-mw-settings-card .moth-mw-config label{font-size:12px;line-height:1.4}',
             '#moth-mw-view-content[data-view=automation] .moth-mw-settings-card h4{font-size:14px}',
@@ -3876,7 +3878,10 @@
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Automation status')) + '</h4><span>' +
                     escapeHtml(tr('Review the systems that can place market orders, then set spending safeguards and advanced monitoring.')) + '</span></div>' +
                     automationNoticeHtml() + automationStatusPanelHtml() +
-                    '<section class="moth-mw-settings-card moth-mw-budget-card"><h4>' + escapeHtml(tr('Spending safeguards')) + '</h4><div class="moth-mw-config">' +
+                    '<section class="moth-mw-settings-card moth-mw-budget-card"><h4>' + escapeHtml(tr('Spending safeguards')) + '</h4>' +
+                    '<p class="moth-mw-budget-warning">' +
+                    escapeHtml(tr('Automatic buying may use your entire available balance when reserves and spending limits are set to zero.')) +
+                    '</p><div class="moth-mw-config">' +
                     configField('Keep Coins in reserve', 'goldReserve', 'number', '') +
                     configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
                     configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
