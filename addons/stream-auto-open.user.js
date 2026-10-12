@@ -317,6 +317,7 @@
 
             return {
                 live: collected,
+                twitchStateAvailable: hasTwitchState,
                 kickStateAvailable: hasKickState,
                 kickLive
             };
@@ -551,17 +552,9 @@
                 } catch (_) {}
 
                 openStreams.delete(key);
-                if (key === MULTI_CHAT_KEY) {
-                    if (pendingReplacement) {
-                        window.clearTimeout(pendingReplacement.timeout);
-                        pendingReplacement = null;
-                    }
-                    // This only runs after an authoritative empty-live scan.
-                    // Notify managed popouts, including older untracked ones.
-                    try {
-                        GM_setValue(CHAT_TARGET_KEY, '');
-                        GM_setValue(CHAT_ACTIVE_KEY, 'stop-' + Date.now());
-                    } catch (_) {}
+                if (key === MULTI_CHAT_KEY && pendingReplacement) {
+                    window.clearTimeout(pendingReplacement.timeout);
+                    pendingReplacement = null;
                 }
             }
         }
@@ -627,8 +620,8 @@
             }
 
             const rows = liveStateRows();
-            const streamStateIsAvailable =
-                bridgeData !== null || !!rows.twitch || !!rows.kick;
+            const twitchStateIsAvailable =
+                bridgeData ? bridgeData.twitchStateAvailable : !!rows.twitch;
 
             lastKickStateAvailable = bridgeData
                 ? bridgeData.kickStateAvailable
@@ -657,7 +650,7 @@
 
             // Keep Twitch channels that PokéIdle reports as actively rewarding
             // even during a transient omission from its ordinary live list.
-            const protectedKeys = streamStateIsAvailable
+            const protectedKeys = twitchStateIsAvailable
                 ? rewardedTwitchKeys()
                 : new Set();
 
@@ -678,7 +671,18 @@
 
             // Only close the consolidated chat when PokéIdle actually exposed
             // its stream state; an empty/transient read must not close valid chats.
-            if (streamStateIsAvailable) {
+            if (twitchStateIsAvailable) {
+                if (!twitchChannels.length) {
+                    // Clear old consolidated popouts even if this /app page was
+                    // reloaded and has no tab handles left in openStreams.
+                    try {
+                        const active = String(GM_getValue(CHAT_ACTIVE_KEY, '') || '');
+                        if (!active.startsWith('stop-')) {
+                            GM_setValue(CHAT_TARGET_KEY, '');
+                            GM_setValue(CHAT_ACTIVE_KEY, 'stop-' + Date.now());
+                        }
+                    } catch (_) {}
+                }
                 closeStreamsNotLive(liveKeys, protectedKeys);
             }
 
