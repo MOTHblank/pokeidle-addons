@@ -41,6 +41,7 @@ pub struct Health {
     pub addon_versions: BTreeMap<String, String>,
     pub twitch_tabs: u8,
     pub twitch_low_resource_ok: u8,
+    pub performance_enabled: Option<bool>,
     pub performance_fps: String,
     pub performance_scene_runs: String,
     pub pokemon_level: String,
@@ -95,6 +96,7 @@ impl Default for Health {
             addon_versions: BTreeMap::new(),
             twitch_tabs: 0,
             twitch_low_resource_ok: 0,
+            performance_enabled: None,
             performance_fps: String::new(),
             performance_scene_runs: String::new(),
             pokemon_level: String::new(),
@@ -187,7 +189,7 @@ pub struct MonitorHandle {
 }
 
 impl MonitorHandle {
-    pub fn start(port: u16) -> Self {
+    pub fn start(port: u16, headless: bool) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let commands = Arc::new(Mutex::new(CommandMailbox::default()));
@@ -198,7 +200,7 @@ impl MonitorHandle {
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, shared, stop_worker, command_queue, close_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker);
         });
 
         Self { health, stop, commands, close_request }
@@ -353,6 +355,7 @@ struct Probe {
     addon_versions: BTreeMap<String, String>,
     twitch_tabs: u8,
     twitch_low_resource_ok: u8,
+    performance_enabled: Option<bool>,
     performance_fps: String,
     performance_scene_runs: String,
     pokemon_level: String,
@@ -386,6 +389,7 @@ struct Probe {
 
 fn monitor_loop(
     port: u16,
+    headless: bool,
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
@@ -458,7 +462,7 @@ fn monitor_loop(
         if let Some(browser_session) = session.as_mut() {
             flush_commands(browser_session, &commands);
 
-            match probe_page(browser_session) {
+            match probe_page(browser_session, headless) {
                 Ok(probe) => {
                     if let Ok(mut current) = health.lock() {
                         current.state = "Running".to_string();
@@ -478,6 +482,7 @@ fn monitor_loop(
                         current.addon_versions = probe.addon_versions;
                         current.twitch_tabs = probe.twitch_tabs;
                         current.twitch_low_resource_ok = probe.twitch_low_resource_ok;
+                        current.performance_enabled = probe.performance_enabled;
                         current.performance_fps = probe.performance_fps;
                         current.performance_scene_runs = probe.performance_scene_runs;
                         current.pokemon_level = probe.pokemon_level;
@@ -573,7 +578,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
     })
 }
 
-fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
+fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, String> {
     let tree_id = session.next_id;
     session.next_id += 1;
 
@@ -609,6 +614,17 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
     session.next_id += 1;
 
     let expression = r#"(() => {
+        const html = document.documentElement;
+        const forcePerformance = __MOTH_HEADLESS__;
+        if (html && html.hasAttribute('data-moth-performance-force-on') !== forcePerformance) {
+            html.toggleAttribute('data-moth-performance-force-on', forcePerformance);
+            document.dispatchEvent(new Event('moth-performance-policy-change'));
+        }
+        const performanceState = html?.getAttribute('data-moth-performance-active')
+            ?? document.querySelector('#moth-performance-trigger')?.getAttribute('aria-pressed');
+        const performanceEnabled = performanceState === '1' || performanceState === 'true'
+            ? true : performanceState === '0' || performanceState === 'false' ? false : null;
+
         const text = (selector) => {
             const el = document.querySelector(selector);
             return el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
@@ -701,6 +717,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             addonMissing: addonChecks.filter(entry => !entry.ok).map(entry => entry.name),
             addonVersions: Object.fromEntries(addonChecks.filter(entry => entry.ok)
                 .map(entry => [entry.key + '.user.js', entry.version])),
+            performanceEnabled,
             performanceFps: text('#mpp-browser-fps'),
             performanceSceneRuns: text('#mpp-scene-runs'),
             playerLevel,
@@ -718,6 +735,8 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             })()
         });
     })()"#;
+
+    let expression = expression.replace("__MOTH_HEADLESS__", if headless { "true" } else { "false" });
 
     let result = send_and_wait(
         &mut session.socket,
@@ -842,6 +861,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         addon_versions,
         twitch_tabs,
         twitch_low_resource_ok,
+        performance_enabled: page.get("performanceEnabled").and_then(Value::as_bool),
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
         performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),
         pokemon_level: runtime.pokemon_level,

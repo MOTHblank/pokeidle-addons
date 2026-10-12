@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.5.2
+// @version      5.5.3
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.2');
+        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.3');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -85,9 +85,25 @@
     }
 
     let settings = loadSettings();
+    // Headless Firefox forces Performance+ only for the monitored session.
+    // Preserve the saved toggle for the next visible session.
+    const FORCE_ON_ATTR = 'data-moth-performance-force-on';
+    const ACTIVE_ATTR = 'data-moth-performance-active';
+    let forcedOn = document.documentElement?.hasAttribute(FORCE_ON_ATTR) ?? false;
+    const isEnabled = () => settings.enabled || forcedOn;
+
+    function refreshHeadlessPolicy() {
+        forcedOn = document.documentElement?.hasAttribute(FORCE_ON_ATTR) ?? false;
+    }
+
+    document.addEventListener('moth-performance-policy-change', () => {
+        refreshHeadlessPolicy();
+        applyMode();
+    });
+
     let interactionBoostUntil = 0;
     // Apply the saved choice before app.js creates its first Campo instance.
-    let currentMode = settings.enabled ? 'paused' : 'full';
+    let currentMode = isEnabled() ? 'paused' : 'full';
 
 
     // Exact campo.mjs loop hook state.
@@ -242,7 +258,7 @@
     }
 
     function syncNativeOptimized() {
-        const shouldForce = settings.enabled && !isNativeEconomy();
+        const shouldForce = isEnabled() && !isNativeEconomy();
 
         if (shouldForce) {
             forceNativeOptimized();
@@ -362,7 +378,7 @@
     }
 
     function intervalForRafKind(kind) {
-        if (!settings.enabled) return 0;
+        if (!isEnabled()) return 0;
         if (kind !== 'npc') return 0; // Campo rendering is suspended entirely.
         if (document.hidden) return 500;
         // On user input, keep NPC action buttons attached to their targets.
@@ -394,7 +410,7 @@
             }
 
             const publicId = nextSyntheticRafId--;
-            if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
+            if (kind === 'campo' && isEnabled() && currentMode === 'paused') {
                 const pending = { actualId: null, cancelled: false, suspended: true };
                 throttledRequests.set(publicId, pending);
                 suspendedCampoRequests.set(publicId, weakCampoCallback(callback));
@@ -418,7 +434,7 @@
                         return;
                     }
 
-                    if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
+                    if (kind === 'campo' && isEnabled() && currentMode === 'paused') {
                         pending.actualId = null;
                         pending.suspended = true;
                         suspendedCampoRequests.set(publicId, weakCampoCallback(callback));
@@ -567,7 +583,7 @@
     const SPRITE_MAINTENANCE_MS = 15000;
     let spriteTimerId = -1000000;
     let spriteMaintenanceId = null;
-    let spriteTimerMode = settings.enabled;
+    let spriteTimerMode = isEnabled();
 
     function spriteTimerTick(record) {
         if (!spriteTimers.has(record.id)) return;
@@ -585,7 +601,7 @@
     }
 
     function ensureSpriteMaintenance() {
-        if (spriteMaintenanceId != null || !spriteTimers.size || !settings.enabled) return;
+        if (spriteMaintenanceId != null || !spriteTimers.size || !isEnabled()) return;
         spriteMaintenanceId = nativeSetInterval(() => {
             for (const record of [...spriteTimers.values()]) spriteTimerTick(record);
         }, SPRITE_MAINTENANCE_MS);
@@ -602,7 +618,7 @@
         const id = spriteTimerId--;
         const record = { id, callback, delay, args, nativeId: null };
         spriteTimers.set(id, record);
-        if (settings.enabled) ensureSpriteMaintenance();
+        if (isEnabled()) ensureSpriteMaintenance();
         else startSpriteNativeTimer(record);
         return id;
     }
@@ -616,9 +632,9 @@
     }
 
     function syncSpriteTimerMode() {
-        if (spriteTimerMode === settings.enabled) return;
-        spriteTimerMode = settings.enabled;
-        if (settings.enabled) {
+        if (spriteTimerMode === isEnabled()) return;
+        spriteTimerMode = isEnabled();
+        if (isEnabled()) {
             for (const record of spriteTimers.values()) {
                 if (record.nativeId != null) nativeClearInterval(record.nativeId);
                 record.nativeId = null;
@@ -729,7 +745,7 @@
     }
 
     function uiTimerMinimum(kind) {
-        if (!settings.enabled) return 0;
+        if (!isEnabled()) return 0;
         // Any recent user interaction restores native cadence temporarily.
         if (Date.now() < interactionBoostUntil) return 0;
 
@@ -850,7 +866,7 @@
     // ------------------------------------------------------------------
 
     function calculateMode() {
-        return settings.enabled ? 'paused' : 'full';
+        return isEnabled() ? 'paused' : 'full';
     }
 
     function resumeSuspendedCampoLoops() {
@@ -884,9 +900,11 @@
         const html =
             document.documentElement;
 
-        html.classList.toggle('moth-perf-minimal', settings.enabled);
+        // The dashboard reads this state, never the browser's frame rate.
+        html.setAttribute(ACTIVE_ATTR, isEnabled() ? '1' : '0');
+        html.classList.toggle('moth-perf-minimal', isEnabled());
 
-        html.classList.toggle('moth-ui-performance', settings.enabled);
+        html.classList.toggle('moth-ui-performance', isEnabled());
         html.classList.remove('moth-ui-lite', 'moth-ui-aggressive');
 
         syncSpriteTimerMode();
@@ -1158,6 +1176,8 @@
                 event.preventDefault();
                 event.stopPropagation();
 
+                if (forcedOn) return;
+
                 settings.enabled = !settings.enabled;
                 saveSettings();
                 applyMode();
@@ -1200,7 +1220,7 @@
         let working = false;
         let warning = false;
 
-        if (!settings.enabled) {
+        if (!isEnabled()) {
             triggerText = 'Performance+ OFF';
         } else if (isNativeEconomy()) {
             triggerText = 'Performance+ ON · Native Eco';
@@ -1219,11 +1239,13 @@
             working = true;
         }
 
-        setText(trigger, triggerText);
-        trigger.setAttribute('aria-pressed', String(settings.enabled));
-        trigger.title = settings.enabled
-            ? 'Turn Performance+ off'
-            : 'Turn Performance+ on';
+        setText(trigger, forcedOn ? triggerText + ' · Headless' : triggerText);
+        trigger.setAttribute('aria-pressed', String(isEnabled()));
+        trigger.title = forcedOn
+            ? 'Performance+ is required while Firefox is headless'
+            : isEnabled()
+                ? 'Turn Performance+ off'
+                : 'Turn Performance+ on';
 
         setClass(trigger, 'working', working);
         setClass(trigger, 'warning', warning);
@@ -1234,6 +1256,8 @@
     // ------------------------------------------------------------------
 
     nativeSetInterval(() => {
+        // Fallback if the policy event does not cross userscript worlds.
+        refreshHeadlessPolicy();
         campoRunsPerSecond = campoRunsWindow;
         campoRunsWindow = 0;
         pruneSuspendedCampoLoops();
@@ -1241,6 +1265,7 @@
     }, 1000);
 
     function bootstrap() {
+        refreshHeadlessPolicy();
         installStyles();
         installCampoHook();
         ensureTrigger();
@@ -1254,7 +1279,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v5.5.2 loaded'
+            '[PokéIdle Performance+] v5.5.3 loaded'
         );
     }
 
