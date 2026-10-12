@@ -196,6 +196,17 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Checking addons on GitHub…" => "Consultando addons no GitHub…",
         "Opening addon installers…" => "Abrindo instaladores de addons…",
         "Installer details" => "Detalhes da instalação",
+        "Addon versions" => "Versões dos addons",
+        "Updates" => "Atualizações",
+        "outdated" => "desatualizados",
+        "unverified" => "não verificados",
+        "Current" => "Atual",
+        "Version unknown" => "Versão desconhecida",
+        "Checking GitHub versions…" => "Consultando versões no GitHub…",
+        "GitHub version check unavailable" => "Verificação de versões no GitHub indisponível",
+        "Launch an account to inspect running script versions." => "Inicie uma conta para verificar as versões dos scripts em execução.",
+        "Violentmonkey handles automatic updates. Reload the game after it installs a new version." => "O Violentmonkey realiza atualizações automáticas. Recarregue o jogo após instalar uma nova versão.",
+        "Older addons do not report their version; allow Violentmonkey to update them." => "Addons antigos não informam a versão; permita que o Violentmonkey os atualize.",
         "Recent events" => "Eventos recentes",
         "No events yet" => "Nenhum evento ainda",
         "running" => "em execução",
@@ -703,6 +714,7 @@ pub struct ControllerApp {
     tab_url_open: [bool; 4],
     idle_progress: [IdleProgressTracker; 4],
     update_status: SharedUpdateStatus,
+    addon_version_status: update::SharedAddonVersionStatus,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
 }
@@ -714,6 +726,7 @@ impl ControllerApp {
         logging::init();
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
+        let addon_version_status = update::start_addon_version_check();
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
 
         #[cfg(windows)]
@@ -743,6 +756,7 @@ impl ControllerApp {
             tab_url_open: [false; 4],
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             update_status,
+            addon_version_status,
             #[cfg(windows)]
             tray,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
@@ -2773,6 +2787,19 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
         });
 }
 
+fn addon_label(file: &str) -> &str {
+    match file {
+        "autocatch.user.js" => "Auto Catch+",
+        "controller-bridge.user.js" => "Controller Bridge",
+        "hunt-atlas.user.js" => "Hunt Atlas",
+        "market-bot.user.js" => "Moth Watch",
+        "performance.user.js" => "Performance+",
+        "stream-auto-open.user.js" => "Stream Scanner",
+        "twitch-low-resource.user.js" => "Twitch Low Resource",
+        _ => file,
+    }
+}
+
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
     if app
         .account_setup_checked_at
@@ -2782,6 +2809,8 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
         app.refresh_account_setup();
     }
 
+    let remote_addons = app.addon_version_status.lock()
+        .map(|state| state.clone()).unwrap_or_default();
     let mut open = app.show_accounts;
     egui::Window::new(tr("Account Manager"))
         .open(&mut open)
@@ -2951,6 +2980,59 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     } else {
                                         status_chip(ui, tr("Scripts"), tr("Not checked"), false);
                                     }
+                                });
+
+                                // A userscript can be installed but not running in the game.
+                                // Only report versions the running script has actually exposed.
+                                if running && health.telemetry_is_fresh() && remote_addons.checked {
+                                    let outdated = remote_addons.versions.iter().filter(|(file, latest)| {
+                                        health.addon_versions.get(*file)
+                                            .is_some_and(|installed| update::is_newer_version(latest, installed))
+                                    }).count();
+                                    let unknown = remote_addons.versions.keys()
+                                        .filter(|file| !health.addon_versions.contains_key(*file)).count();
+                                    status_chip(
+                                        ui,
+                                        tr("Updates"),
+                                        &format!("{outdated} {} · {unknown} {}", tr("outdated"), tr("unverified")),
+                                        outdated == 0 && unknown == 0,
+                                    );
+                                }
+
+                                ui.collapsing(tr("Addon versions"), |ui| {
+                                    if !running || !health.telemetry_is_fresh() {
+                                        ui.label(tr("Launch an account to inspect running script versions."));
+                                    } else if !remote_addons.checked {
+                                        ui.label(tr(if remote_addons.error.is_some() {
+                                            "GitHub version check unavailable"
+                                        } else {
+                                            "Checking GitHub versions…"
+                                        }));
+                                        if let Some(error) = &remote_addons.error {
+                                            ui.label(RichText::new(error).size(9.0).color(DIM));
+                                        }
+                                    } else {
+                                        for (file, latest) in &remote_addons.versions {
+                                            let label = addon_label(file);
+                                            match health.addon_versions.get(file) {
+                                                Some(installed) if update::is_newer_version(latest, installed) => {
+                                                    ui.colored_label(WARN, format!("{label}: {installed} → {latest} ({})", tr("outdated")));
+                                                }
+                                                Some(installed) => {
+                                                    ui.colored_label(GOOD, format!("{label}: {installed} ({})", tr("Current")));
+                                                }
+                                                None => {
+                                                    ui.colored_label(DIM, format!("{label}: {} · {latest}", tr("Version unknown")));
+                                                }
+                                            }
+                                        }
+                                        if remote_addons.versions.keys().any(|file| !health.addon_versions.contains_key(file)) {
+                                            ui.label(RichText::new(tr("Older addons do not report their version; allow Violentmonkey to update them."))
+                                                .size(9.0).color(DIM));
+                                        }
+                                    }
+                                    ui.label(RichText::new(tr("Violentmonkey handles automatic updates. Reload the game after it installs a new version."))
+                                        .size(9.0).color(DIM));
                                 });
 
                                 ui.add_space(8.0);

@@ -1,7 +1,7 @@
 use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{
@@ -38,6 +38,7 @@ pub struct Health {
     pub addon_ok: u8,
     pub addon_total: u8,
     pub addon_missing: Vec<String>,
+    pub addon_versions: BTreeMap<String, String>,
     pub twitch_tabs: u8,
     pub twitch_low_resource_ok: u8,
     pub performance_fps: String,
@@ -91,6 +92,7 @@ impl Default for Health {
             addon_ok: 0,
             addon_total: 7,
             addon_missing: Vec::new(),
+            addon_versions: BTreeMap::new(),
             twitch_tabs: 0,
             twitch_low_resource_ok: 0,
             performance_fps: String::new(),
@@ -348,6 +350,7 @@ struct Probe {
     addon_ok: u8,
     addon_total: u8,
     addon_missing: Vec<String>,
+    addon_versions: BTreeMap<String, String>,
     twitch_tabs: u8,
     twitch_low_resource_ok: u8,
     performance_fps: String,
@@ -472,6 +475,7 @@ fn monitor_loop(
                         current.addon_ok = probe.addon_ok;
                         current.addon_total = probe.addon_total;
                         current.addon_missing = probe.addon_missing;
+                        current.addon_versions = probe.addon_versions;
                         current.twitch_tabs = probe.twitch_tabs;
                         current.twitch_low_resource_ok = probe.twitch_low_resource_ok;
                         current.performance_fps = probe.performance_fps;
@@ -645,9 +649,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         }
 
         const addonChecks = [
-            ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle')],
-            ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger')],
-            ['Stream Scanner', exists('#moth-scan-live-streams')],
+            ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle'), 'autocatch'],
+            ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger'), 'performance'],
+            ['Stream Scanner', exists('#moth-scan-live-streams'), 'stream-auto-open'],
             ['Controller Bridge', (() => {
                 const bridge = window.__mothControllerBridgeV1;
                 return !!bridge
@@ -656,10 +660,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
                     && typeof bridge.gameSnapshot === 'function'
                     && typeof bridge.streamStateSnapshot === 'function'
                     && typeof bridge.socket === 'function';
-            })()],
-            ['Twitch Low Resource', exists('#moth-twitch-low-resource-addon-ready') || exists('#moth-twitch-low-resource-css')],
-            ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1],
-            ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1']
+            })(), 'controller-bridge'],
+            ['Twitch Low Resource', exists('#moth-twitch-low-resource-addon-ready') || exists('#moth-twitch-low-resource-css'), 'twitch-low-resource'],
+            ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1, 'hunt-atlas'],
+            ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1', 'market-bot']
         ];
 
         return JSON.stringify({
@@ -676,6 +680,10 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             economyMode: document.documentElement.classList.contains('modo-economia'),
             addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
             addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
+            addonVersions: Object.fromEntries(addonChecks
+                .filter(([, ok]) => ok)
+                .map(([, , key]) => [key + '.user.js', document.documentElement?.getAttribute('data-moth-addon-version-' + key) || ''])
+                .filter(([, version]) => version)),
             performanceFps: text('#mpp-browser-fps'),
             performanceSceneRuns: text('#mpp-scene-runs'),
             playerLevel,
@@ -728,6 +736,19 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         })
+        .unwrap_or_default();
+
+    // Older scripts have no marker; never infer their installed version.
+    let addon_versions: BTreeMap<String, String> = page
+        .get("addonVersions")
+        .and_then(Value::as_object)
+        .map(|entries| entries.iter().filter_map(|(file, version)| {
+            let version = version.as_str()?;
+            if version.len() > 40 || !version.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-')) {
+                return None;
+            }
+            Some((file.clone(), version.to_string()))
+        }).collect())
         .unwrap_or_default();
 
     let addon_ok = 7u8.saturating_sub(addon_missing.len() as u8);
@@ -799,6 +820,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         addon_ok,
         addon_total: 7,
         addon_missing,
+        addon_versions,
         twitch_tabs,
         twitch_low_resource_ok,
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
