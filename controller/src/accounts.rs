@@ -112,7 +112,13 @@ pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
     Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
 }
 
-pub fn open_addons(profile: GameProfile, mut progress: impl FnMut(String)) -> Result<usize, String> {
+/// Opens installers for all addons on first setup, or only explicitly selected
+/// scripts when repairing a profile. Opening a tab does not imply installation.
+pub fn open_addons(
+    profile: GameProfile,
+    requested: Option<&[String]>,
+    mut progress: impl FnMut(String),
+) -> Result<usize, String> {
     if !violentmonkey_installed(profile)? {
         return Err(format!(
             "Violentmonkey is not installed and active in {}. Use \"Install Violentmonkey\" first.",
@@ -120,7 +126,7 @@ pub fn open_addons(profile: GameProfile, mut progress: impl FnMut(String)) -> Re
         ));
     }
 
-    let files = discover_addon_files()?;
+    let files = select_addon_files(discover_addon_files()?, requested)?;
     let config = Config::for_profile(profile)?;
     let mut opened = 0usize;
     let mut failures = Vec::new();
@@ -154,6 +160,42 @@ pub fn open_addons(profile: GameProfile, mut progress: impl FnMut(String)) -> Re
     }
 }
 
+/// Selected names must be present in the live repository list. Do not let UI
+/// input turn into arbitrary URLs, and do not silently install every script.
+fn select_addon_files(
+    available: Vec<String>,
+    requested: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    let Some(requested) = requested else { return Ok(available); };
+    if requested.is_empty() {
+        return Err("Select at least one addon to repair.".to_string());
+    }
+    let mut selected = Vec::new();
+    for file in requested {
+        if !available.contains(file) {
+            return Err(format!("Addon no longer published: {file}"));
+        }
+        if !selected.contains(file) {
+            selected.push(file.clone());
+        }
+    }
+    Ok(selected)
+}
+
+const SETUP_MARKER: &str = ".moth-setup-complete";
+
+/// This marker records only that the user completed initial onboarding.
+pub fn setup_complete(profile: GameProfile) -> Result<bool, String> {
+    Ok(Config::for_profile(profile)?.profile_dir.join(SETUP_MARKER).is_file())
+}
+
+pub fn complete_setup(profile: GameProfile) -> Result<(), String> {
+    let path = Config::for_profile(profile)?.profile_dir;
+    std::fs::create_dir_all(&path).map_err(|e| format!("Could not save setup progress: {e}"))?;
+    std::fs::write(path.join(SETUP_MARKER), b"1\n")
+        .map_err(|e| format!("Could not save setup progress: {e}"))
+}
+
 pub fn open_login(profile: GameProfile, url: &str, service: &str) -> Result<String, String> {
     let config = Config::for_profile(profile)?;
     firefox::open_url(&config, url)?;
@@ -174,7 +216,7 @@ pub fn open_profile_folder(profile: GameProfile) -> Result<(), String> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{installer_url, parse_addon_files};
+    use super::{installer_url, parse_addon_files, select_addon_files};
     use serde_json::json;
     #[test]
     fn discovers_only_userscripts_and_never_uses_pinned_versions() {
@@ -190,6 +232,16 @@ mod tests {
         assert!(url.ends_with("?moth_install=123"));
         assert!(!url.contains("?v="));
     }
+    #[test]
+    fn repairs_only_selected_addons() {
+        let available = vec!["one.user.js".to_string(), "two.user.js".to_string()];
+        let requested = vec!["two.user.js".to_string(), "two.user.js".to_string()];
+        assert_eq!(select_addon_files(available.clone(), Some(&requested)).unwrap(), vec!["two.user.js"]);
+        assert_eq!(select_addon_files(available.clone(), None).unwrap(), available);
+        assert!(select_addon_files(available.clone(), Some(&[])).is_err());
+        assert!(select_addon_files(available, Some(&["unknown.user.js".to_string()])).is_err());
+    }
+
     #[test]
     fn empty_addon_list_is_an_error() {
         assert!(parse_addon_files(&json!([])).is_err());

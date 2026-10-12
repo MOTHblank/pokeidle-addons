@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc::{self, Sender, RecvTimeoutError}, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -142,6 +142,7 @@ fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
 #[derive(Debug, Clone, Default)]
 pub struct AddonVersionStatus {
     pub checked: bool,
+    pub checking: bool,
     pub versions: BTreeMap<String, String>,
     pub error: Option<String>,
 }
@@ -149,14 +150,19 @@ pub struct AddonVersionStatus {
 pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
 
 /// Refresh metadata on a worker every six hours without blocking the UI.
-pub fn start_addon_version_check() -> SharedAddonVersionStatus {
+pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
     let worker_status = Arc::clone(&status);
+    let (tx, rx) = mpsc::channel::<()>();
     let spawn_result = thread::Builder::new()
         .name("addon-version-check".to_string())
         .spawn(move || loop {
+            if let Ok(mut state) = worker_status.lock() {
+                state.checking = true;
+            }
             let result = fetch_addon_versions();
             if let Ok(mut state) = worker_status.lock() {
+                state.checking = false;
                 match result {
                     Ok(versions) => {
                         state.versions = versions;
@@ -165,17 +171,27 @@ pub fn start_addon_version_check() -> SharedAddonVersionStatus {
                     }
                     Err(error) => {
                         crate::logging::warn(&format!("addon version check failed: {error}"));
+                        // Never present old remote data as freshly checked.
                         state.checked = false;
                         state.error = Some(error);
                     }
                 }
             }
-            thread::sleep(Duration::from_secs(6 * 60 * 60));
+            match rx.recv_timeout(Duration::from_secs(6 * 60 * 60)) {
+                Ok(()) | Err(RecvTimeoutError::Timeout) => {
+                    // Coalesce multiple requests made during the same scan.
+                    while rx.try_recv().is_ok() {}
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
         });
     if let Err(error) = spawn_result {
         crate::logging::warn(&format!("could not start addon version check: {error}"));
+        if let Ok(mut state) = status.lock() {
+            state.error = Some(error.to_string());
+        }
     }
-    status
+    (status, tx)
 }
 
 fn fetch_addon_versions() -> Result<BTreeMap<String, String>, String> {

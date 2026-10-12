@@ -7,7 +7,7 @@ use crate::monitor::{Health, MonitorHandle};
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -197,6 +197,44 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Opening addon installers…" => "Abrindo instaladores de addons…",
         "Installer details" => "Detalhes da instalação",
         "Addon versions" => "Versões dos addons",
+        "Manage Addons" => "Gerenciar addons",
+        "Manage addons" => "Gerenciar addons",
+        "Check now" => "Verificar agora",
+        "Checking for updates…" => "Verificando atualizações…",
+        "Checking GitHub addon versions…" => "Verificando versões dos addons no GitHub…",
+        "Update check requested" => "Verificação de atualizações solicitada",
+        "Could not request addon update check" => "Não foi possível solicitar a verificação de addons",
+        "Repair selected" => "Reparar selecionados",
+        "Install all (first setup)" => "Instalar todos (primeira configuração)",
+        "Choose the scripts to reinstall." => "Selecione os scripts que deseja reinstalar.",
+        "No addons selected" => "Nenhum addon selecionado",
+        "Switch to visible Firefox before opening installers." => "Mude para o Firefox visível antes de abrir os instaladores.",
+        "Select only the affected scripts. Installers open in this Firefox profile; confirm installation in Violentmonkey." => "Selecione somente os scripts afetados. Os instaladores abrem neste perfil do Firefox; confirme a instalação no Violentmonkey.",
+        "This only opens installers, it does not confirm installation." => "Esta ação apenas abre instaladores, não confirma a instalação.",
+        "Running" => "Em execução",
+        "Not detected in game" => "Não detectado no jogo",
+        "Running, version not reported" => "Em execução, versão não informada",
+        "Not checked yet" => "Ainda não verificado",
+        "Up to date" => "Atualizado",
+        "Setup needed" => "Configuração necessária",
+        "addons need attention" => "addons precisam de atenção",
+        "addon needs attention" => "addon precisa de atenção",
+        "Initial setup" => "Configuração inicial",
+        "Complete these steps once for this profile." => "Conclua estas etapas uma vez para este perfil.",
+        "Firefox profile created" => "Perfil do Firefox criado",
+        "Violentmonkey installed" => "Violentmonkey instalado",
+        "Game signed in" => "Jogo conectado",
+        "Scripts detected" => "Scripts detectados",
+        "Finish setup" => "Concluir configuração",
+        "You can finish with only the addons you want. Unverified steps are not automatically considered complete." => "Você pode concluir apenas com os addons que deseja. Etapas não verificadas não são consideradas concluídas automaticamente.",
+        "Show setup guide" => "Mostrar guia de configuração",
+        "Hide setup guide" => "Ocultar guia de configuração",
+        "Setup completed" => "Configuração concluída",
+        "Could not save setup progress" => "Não foi possível salvar o progresso da configuração",
+        "Install Violentmonkey before completing setup." => "Instale o Violentmonkey antes de concluir a configuração.",
+        "Live addon status requires the game to be running and monitored." => "O status dos addons exige que o jogo esteja em execução e monitorado.",
+        "Open Account Manager to resolve addon problems" => "Abra o Gerenciador de contas para resolver problemas dos addons",
+        "Reload the game only when you choose; an automatic reload could interrupt gameplay." => "Recarregue o jogo somente quando desejar; uma recarga automática poderia interromper a partida.",
         "Updates" => "Atualizações",
         "outdated" => "desatualizados",
         "unverified" => "não verificados",
@@ -299,7 +337,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Name" => "Nome",
         "Level" => "Nível",
         "Wait" => "Aguarde",
-        "Current" => "Atual",
         "Go" => "Ir",
         "Gold" => "Ouro",
         "Gems" => "Gemas",
@@ -323,7 +360,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "listing" => "oferta",
         "live" => "ao vivo",
         "opened" => "abertas",
-        "Running" => "Em execução",
         "Connecting" => "Conectando",
         "Reconnecting" => "Reconectando",
         "is already running." => "já está em execução.",
@@ -531,6 +567,7 @@ fn ball_stock_decreased(previous: &[String], current: &[String]) -> bool {
 struct AccountSetup {
     profile_ready: bool,
     violentmonkey_installed: bool,
+    setup_complete: bool,
     check_error: Option<String>,
 }
 
@@ -708,6 +745,11 @@ pub struct ControllerApp {
     addon_install_rx: Receiver<AddonInstallEvent>,
     addon_install_busy: [bool; 4],
     addon_install_details: [Vec<String>; 4],
+    addon_selection: [BTreeSet<String>; 4],
+    addon_selection_initialized: [bool; 4],
+    addon_manager_open: [bool; 4],
+    addon_focus: Option<usize>,
+    show_setup_guide: [bool; 4],
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
@@ -715,6 +757,7 @@ pub struct ControllerApp {
     idle_progress: [IdleProgressTracker; 4],
     update_status: SharedUpdateStatus,
     addon_version_status: update::SharedAddonVersionStatus,
+    addon_refresh_tx: Sender<()>,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
 }
@@ -726,7 +769,7 @@ impl ControllerApp {
         logging::init();
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
-        let addon_version_status = update::start_addon_version_check();
+        let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
 
         #[cfg(windows)]
@@ -750,6 +793,11 @@ impl ControllerApp {
             addon_install_rx,
             addon_install_busy: [false; 4],
             addon_install_details: std::array::from_fn(|_| Vec::new()),
+            addon_selection: std::array::from_fn(|_| BTreeSet::new()),
+            addon_selection_initialized: [false; 4],
+            addon_manager_open: [false; 4],
+            addon_focus: None,
+            show_setup_guide: [false; 4],
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
@@ -757,6 +805,7 @@ impl ControllerApp {
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             update_status,
             addon_version_status,
+            addon_refresh_tx,
             #[cfg(windows)]
             tray,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
@@ -807,9 +856,24 @@ impl ControllerApp {
                 Err(error) => (false, Some(error)),
             };
 
+            let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
+            // Mark fully verified profiles automatically, without treating
+            // an absent script marker as evidence of an installation.
+            if !setup_complete && vm_installed {
+                let health = self.games[index].health();
+                if health.telemetry_is_fresh() && health.logged_in
+                    && health.addon_total > 0 && health.addon_ok == health.addon_total
+                {
+                    match accounts::complete_setup(profile) {
+                        Ok(()) => setup_complete = true,
+                        Err(error) => logging::warn(&error),
+                    }
+                }
+            }
             self.account_setup[index] = AccountSetup {
                 profile_ready: config.profile_dir.exists(),
                 violentmonkey_installed: vm_installed,
+                setup_complete,
                 check_error,
             };
         }
@@ -957,7 +1021,23 @@ impl ControllerApp {
         }
     }
 
-    fn start_addon_install(&mut self, profile: GameProfile) {
+    fn open_addon_manager(&mut self, profile: GameProfile) {
+        let index = profile.index();
+        self.show_accounts = true;
+        self.addon_manager_open[index] = true;
+        self.addon_focus = Some(index);
+    }
+
+    fn request_addon_refresh(&mut self) {
+        match self.addon_refresh_tx.send(()) {
+            Ok(()) => self.set_status(tr("Update check requested"), false),
+            Err(error) => self.set_status(
+                format!("{}: {error}", tr("Could not request addon update check")), true
+            ),
+        }
+    }
+
+    fn start_addon_install(&mut self, profile: GameProfile, selected: Option<Vec<String>>) {
         let index = profile.index();
         if self.addon_install_busy[index] {
             self.set_status(format!("{} · {}", self.account_name(profile), tr("Installer already running")), true);
@@ -972,7 +1052,7 @@ impl ControllerApp {
             .name(format!("moth-addons-{}", profile.label()))
             .spawn(move || {
                 let progress_tx = tx.clone();
-                let result = accounts::open_addons(profile, |message| {
+                let result = accounts::open_addons(profile, selected.as_deref(), |message| {
                     let _ = progress_tx.send(AddonInstallEvent::Progress { index, message });
                 });
                 let _ = tx.send(AddonInstallEvent::Finished { index, result });
@@ -1304,11 +1384,6 @@ impl ControllerApp {
             return;
         }
 
-        if let ProfileAction::Addons = action {
-            self.start_addon_install(profile);
-            return;
-        }
-
         let result = match action {
             ProfileAction::Game => unreachable!("game action handled above"),
             ProfileAction::GoogleSignIn => {
@@ -1317,7 +1392,6 @@ impl ControllerApp {
             }
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
-            ProfileAction::Addons => unreachable!("addon action handled above"),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
         };
 
@@ -1359,6 +1433,12 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        if self.account_setup_checked_at
+            .map(|when| when.elapsed() >= Duration::from_secs(30))
+            .unwrap_or(true)
+        {
+            self.refresh_account_setup();
+        }
 
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
 
@@ -1496,7 +1576,6 @@ enum ProfileAction {
     GoogleSignIn,
     Twitch,
     InstallViolentmonkey,
-    Addons,
     Folder,
 }
 
@@ -1786,6 +1865,10 @@ fn draw_game_card(
     let health = app.games[index].health();
     let running = app.games[index].is_running();
     let idle_warning = app.idle_warning_for(index, &health);
+    let addon_versions = app.addon_version_status.lock()
+        .map(|status| status.clone()).unwrap_or_default();
+    let addon_problems = addon_needs_attention(&health, running, &addon_versions);
+    let needs_setup = !app.account_setup[index].setup_complete;
 
     egui::Frame::new()
         .fill(PANEL)
@@ -1854,6 +1937,26 @@ fn draw_game_card(
                     }
                 });
             });
+
+            if needs_setup || addon_problems > 0 {
+                ui.add_space(7.0);
+                let title = if needs_setup {
+                    tr("Setup needed").to_string()
+                } else {
+                    format!("{addon_problems} {}", tr(if addon_problems == 1 {
+                        "addon needs attention"
+                    } else {
+                        "addons need attention"
+                    }))
+                };
+                let response = ui.add(egui::Button::new(
+                    RichText::new(format!("⚠ {title}  ›"))
+                        .size(11.0).strong().color(WARN),
+                ).fill(PANEL_ALT).stroke(Stroke::new(1.0, WARN.linear_multiply(0.35))));
+                if response.on_hover_text(tr("Open Account Manager to resolve addon problems")).clicked() {
+                    app.open_addon_manager(profile);
+                }
+            }
 
             if running && app.games[index].orphaned_pid.is_none() && !health.telemetry_is_fresh() {
                 let freshness = match health.telemetry_age() {
@@ -2787,6 +2890,17 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
         });
 }
 
+
+/// Only classify a script as missing if the monitored game explicitly reports
+/// it missing. Unmonitored/headless-loading accounts cannot be called broken.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AddonCondition {
+    Current,
+    Outdated,
+    NotDetected,
+    Unverified,
+}
+
 fn addon_label(file: &str) -> &str {
     match file {
         "autocatch.user.js" => "Auto Catch+",
@@ -2798,6 +2912,38 @@ fn addon_label(file: &str) -> &str {
         "twitch-low-resource.user.js" => "Twitch Low Resource",
         _ => file,
     }
+}
+
+fn addon_condition(
+    health: &Health,
+    running: bool,
+    latest: &update::AddonVersionStatus,
+    file: &str,
+) -> AddonCondition {
+    if !running || !health.telemetry_is_fresh() || !latest.checked {
+        return AddonCondition::Unverified;
+    }
+    if let Some(installed) = health.addon_versions.get(file) {
+        if latest.versions.get(file).is_some_and(|v| update::is_newer_version(v, installed)) {
+            AddonCondition::Outdated
+        } else {
+            AddonCondition::Current
+        }
+    } else if health.addon_missing.iter().any(|name| name == addon_label(file)) {
+        AddonCondition::NotDetected
+    } else {
+        AddonCondition::Unverified
+    }
+}
+
+fn addon_needs_attention(
+    health: &Health, running: bool, latest: &update::AddonVersionStatus,
+) -> usize {
+    if !latest.checked { return 0; }
+    latest.versions.keys().filter(|file| matches!(
+        addon_condition(health, running, latest, file),
+        AddonCondition::Outdated | AddonCondition::NotDetected
+    )).count()
 }
 
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
@@ -2858,7 +3004,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                         let mut changed = false;
 
-                        egui::Frame::new()
+                        let card = egui::Frame::new()
                             .fill(PANEL_ALT)
                             .stroke(Stroke::new(1.0, BORDER))
                             .corner_radius(10.0)
@@ -2982,58 +3128,184 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     }
                                 });
 
-                                // A userscript can be installed but not running in the game.
-                                // Only report versions the running script has actually exposed.
-                                if running && health.telemetry_is_fresh() && remote_addons.checked {
-                                    let outdated = remote_addons.versions.iter().filter(|(file, latest)| {
-                                        health.addon_versions.get(*file)
-                                            .is_some_and(|installed| update::is_newer_version(latest, installed))
-                                    }).count();
-                                    let unknown = remote_addons.versions.keys()
-                                        .filter(|file| !health.addon_versions.contains_key(*file)).count();
-                                    status_chip(
-                                        ui,
-                                        tr("Updates"),
-                                        &format!("{outdated} {} · {unknown} {}", tr("outdated"), tr("unverified")),
-                                        outdated == 0 && unknown == 0,
-                                    );
+                                if enabled && (!setup.setup_complete || app.show_setup_guide[index]) {
+                                    ui.add_space(9.0);
+                                    egui::Frame::new()
+                                        .fill(PANEL)
+                                        .corner_radius(7.0)
+                                        .inner_margin(10.0)
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(RichText::new(tr("Initial setup")).strong().color(TEXT));
+                                                if setup.setup_complete && ui.small_button(tr("Hide setup guide")).clicked() {
+                                                    app.show_setup_guide[index] = false;
+                                                }
+                                            });
+                                            ui.label(RichText::new(tr("Complete these steps once for this profile."))
+                                                .size(10.0).color(MUTED));
+                                            ui.horizontal_wrapped(|ui| {
+                                                status_chip(ui, tr("Firefox profile created"), if setup.profile_ready { "✓" } else { "…" }, setup.profile_ready);
+                                                status_chip(ui, tr("Violentmonkey installed"), if setup.violentmonkey_installed { "✓" } else { "…" }, setup.violentmonkey_installed);
+                                                let verified = running && health.telemetry_is_fresh();
+                                                status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
+                                                status_chip(ui, tr("Scripts detected"),
+                                                    if verified { &format!("{}/{}", health.addon_ok, health.addon_total) } else { "—" },
+                                                    verified && health.addon_total > 0 && health.addon_ok == health.addon_total);
+                                            });
+                                            ui.label(RichText::new(tr("You can finish with only the addons you want. Unverified steps are not automatically considered complete."))
+                                                .size(9.0).color(DIM));
+                                            ui.horizontal_wrapped(|ui| {
+                                                if !setup.violentmonkey_installed {
+                                                    if ui.button(tr("Install Violentmonkey")).clicked() {
+                                                        app.profile_action(profile, ProfileAction::InstallViolentmonkey);
+                                                    }
+                                                } else {
+                                                    if ui.button(tr("Manage Addons")).clicked() {
+                                                        app.open_addon_manager(profile);
+                                                    }
+                                                }
+                                                if ui.add_enabled(setup.profile_ready && setup.violentmonkey_installed,
+                                                    egui::Button::new(tr("Finish setup"))).clicked()
+                                                {
+                                                    match accounts::complete_setup(profile) {
+                                                        Ok(()) => {
+                                                            app.account_setup[index].setup_complete = true;
+                                                            app.show_setup_guide[index] = false;
+                                                            app.set_status(tr("Setup completed"), false);
+                                                        }
+                                                        Err(error) => app.set_status(error, true),
+                                                    }
+                                                }
+                                            });
+                                        });
+                                } else if enabled {
+                                    if ui.small_button(tr("Show setup guide")).clicked() {
+                                        app.show_setup_guide[index] = true;
+                                    }
                                 }
 
-                                ui.collapsing(tr("Addon versions"), |ui| {
-                                    if !running || !health.telemetry_is_fresh() {
-                                        ui.label(tr("Launch an account to inspect running script versions."));
-                                    } else if !remote_addons.checked {
-                                        ui.label(tr(if remote_addons.error.is_some() {
-                                            "GitHub version check unavailable"
-                                        } else {
-                                            "Checking GitHub versions…"
-                                        }));
-                                        if let Some(error) = &remote_addons.error {
-                                            ui.label(RichText::new(error).size(9.0).color(DIM));
-                                        }
-                                    } else {
-                                        for (file, latest) in &remote_addons.versions {
-                                            let label = addon_label(file);
-                                            match health.addon_versions.get(file) {
-                                                Some(installed) if update::is_newer_version(latest, installed) => {
-                                                    ui.colored_label(WARN, format!("{label}: {installed} → {latest} ({})", tr("outdated")));
+                                ui.add_space(8.0);
+                                let attention = addon_needs_attention(&health, running, &remote_addons);
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.button(tr("Manage Addons")).clicked() {
+                                        app.addon_manager_open[index] = !app.addon_manager_open[index];
+                                    }
+                                    if attention > 0 {
+                                        ui.colored_label(WARN, format!("{attention} {}",
+                                            tr(if attention == 1 { "addon needs attention" } else { "addons need attention" })));
+                                    }
+                                });
+
+                                if app.addon_manager_open[index] {
+                                    egui::Frame::new()
+                                        .fill(PANEL)
+                                        .stroke(Stroke::new(1.0, BORDER))
+                                        .corner_radius(8.0)
+                                        .inner_margin(12.0)
+                                        .show(ui, |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(RichText::new(tr("Manage Addons"))
+                                                    .size(13.0).strong().color(TEXT));
+                                                if ui.add_enabled(!remote_addons.checking,
+                                                    egui::Button::new(tr("Check now"))).clicked()
+                                                {
+                                                    app.request_addon_refresh();
                                                 }
-                                                Some(installed) => {
-                                                    ui.colored_label(GOOD, format!("{label}: {installed} ({})", tr("Current")));
+                                                if remote_addons.checking {
+                                                    ui.spinner();
+                                                    ui.label(tr("Checking for updates…"));
                                                 }
-                                                None => {
-                                                    ui.colored_label(DIM, format!("{label}: {} · {latest}", tr("Version unknown")));
+                                            });
+                                            if !running || !health.telemetry_is_fresh() {
+                                                ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
+                                                    .size(10.0).color(DIM));
+                                            }
+                                            if !remote_addons.checked {
+                                                ui.label(RichText::new(tr(if remote_addons.error.is_some() {
+                                                    "GitHub version check unavailable"
+                                                } else {
+                                                    "Checking GitHub versions…"
+                                                })).size(10.0).color(WARN));
+                                                if let Some(error) = &remote_addons.error {
+                                                    ui.label(RichText::new(error.as_str()).size(9.0).color(DIM));
+                                                }
+                                            } else {
+                                                if !app.addon_selection_initialized[index]
+                                                    && running && health.telemetry_is_fresh()
+                                                {
+                                                    for file in remote_addons.versions.keys() {
+                                                        if matches!(addon_condition(&health, running, &remote_addons, file),
+                                                            AddonCondition::Outdated | AddonCondition::NotDetected)
+                                                        {
+                                                            app.addon_selection[index].insert(file.clone());
+                                                        }
+                                                    }
+                                                    app.addon_selection_initialized[index] = true;
+                                                }
+                                                for (file, latest) in &remote_addons.versions {
+                                                    let condition = addon_condition(&health, running, &remote_addons, file);
+                                                    let mut checked = app.addon_selection[index].contains(file);
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        if ui.checkbox(&mut checked, "").changed() {
+                                                            if checked {
+                                                                app.addon_selection[index].insert(file.clone());
+                                                            } else {
+                                                                app.addon_selection[index].remove(file);
+                                                            }
+                                                        }
+                                                        ui.label(RichText::new(addon_label(file)).size(11.0).strong().color(TEXT));
+                                                        let (label, color) = match condition {
+                                                            AddonCondition::Current => (tr("Up to date"), GOOD),
+                                                            AddonCondition::Outdated => (tr("outdated"), WARN),
+                                                            AddonCondition::NotDetected => (tr("Not detected in game"), WARN),
+                                                            AddonCondition::Unverified => {
+                                                                if running && health.telemetry_is_fresh() && remote_addons.checked {
+                                                                    (tr("Running, version not reported"), DIM)
+                                                                } else {
+                                                                    (tr("Not checked yet"), DIM)
+                                                                }
+                                                            }
+                                                        };
+                                                        let versions = match health.addon_versions.get(file) {
+                                                            Some(installed) => format!("v{installed} → v{latest}"),
+                                                            None => format!("v{latest}"),
+                                                        };
+                                                        ui.label(RichText::new(versions).size(10.0).color(DIM));
+                                                        ui.label(RichText::new(label).size(10.0).color(color));
+                                                    });
                                                 }
                                             }
-                                        }
-                                        if remote_addons.versions.keys().any(|file| !health.addon_versions.contains_key(file)) {
-                                            ui.label(RichText::new(tr("Older addons do not report their version; allow Violentmonkey to update them."))
+                                            ui.add_space(7.0);
+                                            ui.label(RichText::new(tr("Select only the affected scripts. Installers open in this Firefox profile; confirm installation in Violentmonkey."))
                                                 .size(9.0).color(DIM));
-                                        }
-                                    }
-                                    ui.label(RichText::new(tr("Violentmonkey handles automatic updates. Reload the game after it installs a new version."))
-                                        .size(9.0).color(DIM));
-                                });
+                                            let installer_visible = !running || !app.games[index].headless;
+                                            if !installer_visible {
+                                                ui.colored_label(WARN, tr("Switch to visible Firefox before opening installers."));
+                                                if ui.button(tr("Restart visible")).clicked() {
+                                                    app.set_browser_mode(profile, false);
+                                                }
+                                            }
+                                            ui.horizontal_wrapped(|ui| {
+                                                let can_repair = setup.violentmonkey_installed && installer_visible
+                                                    && remote_addons.checked
+                                                    && !app.addon_selection[index].is_empty()
+                                                    && !app.addon_install_busy[index];
+                                                if ui.add_enabled(can_repair, egui::Button::new(tr("Repair selected"))).clicked() {
+                                                    let selected: Vec<String> = app.addon_selection[index].iter().cloned().collect();
+                                                    app.start_addon_install(profile, Some(selected));
+                                                }
+                                                if ui.add_enabled(setup.violentmonkey_installed && installer_visible && !app.addon_install_busy[index],
+                                                    egui::Button::new(tr("Install all (first setup)"))).clicked()
+                                                {
+                                                    app.start_addon_install(profile, None);
+                                                }
+                                            });
+                                            ui.label(RichText::new(tr("This only opens installers, it does not confirm installation."))
+                                                .size(9.0).color(DIM));
+                                            ui.label(RichText::new(tr("Reload the game only when you choose; an automatic reload could interrupt gameplay."))
+                                                .size(9.0).color(DIM));
+                                        });
+                                }
 
                                 ui.add_space(8.0);
 
@@ -3060,16 +3332,16 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     profile_button(ui, tr("Install Violentmonkey"), || {
                                         app.profile_action(profile, ProfileAction::InstallViolentmonkey)
                                     });
-                                    ui.add_enabled_ui(!app.addon_install_busy[index], |ui| {
-                                        profile_button(ui, tr("Addons"), || {
-                                            app.profile_action(profile, ProfileAction::Addons)
-                                        });
-                                    });
+                                    // All addon actions live under Manage Addons above.
                                     profile_button(ui, tr("Profile folder"), || {
                                         app.profile_action(profile, ProfileAction::Folder)
                                     });
                                 });
                             });
+                        if app.addon_focus == Some(index) {
+                            ui.scroll_to_rect(card.response.rect, Some(egui::Align::Center));
+                            app.addon_focus = None;
+                        }
 
                         if app.addon_install_busy[index] {
                             ui.horizontal(|ui| {
