@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.50
+// @version      0.1.51
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.50');
+        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.51');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -28,6 +28,8 @@
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
     const BACKGROUND_MIN_GAP_MS = 3000;
+    const BACKGROUND_SCAN_WITH_RULES_MS = 30000;
+    const RULE_DETAIL_REFRESH_MS = 30000;
     const RATE_LIMIT_BACKOFF_MS = 15000;
     const ITEM_MARKET_CAP_TTL_MS = 10 * 60 * 1000;
     const ITEM_INVENTORY_COLLAPSED_KEY = 'moth-pokeidle-market-item-inventory-collapsed-v1';
@@ -312,7 +314,7 @@
         "no reference captured yet": "nenhuma referência capturada ainda",
         "loading {name} offers": "carregando ofertas de {name}",
         "Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.": "Mostra uma oferta quando o preço estiver nesta proporção ou abaixo da referência. 70% significa pelo menos 30% abaixo da referência.",
-        "How often the market scanner checks again. Lower finds changes sooner but sends requests more often.": "Define a frequência das consultas ao mercado. Intervalos menores encontram mudanças mais cedo, mas enviam mais requisições.",
+        "How often the market scanner checks again. Lower finds changes sooner but sends requests more often. With buying rules active and Watch closed, general scans slow to at least 30 seconds.": "Define a frequência das consultas ao mercado. Intervalos menores encontram mudanças mais cedo, mas enviam mais requisições. Com regras de compra ativas e o Moth Watch fechado, as consultas gerais passam a ocorrer a cada 30 segundos ou mais.",
         "Scan ordinary market items and let you inspect their current offers.": "Analisa itens comuns do mercado e permite consultar as ofertas atuais.",
         "Scan Pokémon listings and compare them with completed-sale history.": "Analisa anúncios de Pokémon e compara os preços com o histórico de vendas concluídas.",
         "Scan diamond listings and compare prices when a reference is available.": "Analisa anúncios de diamantes e compara os preços quando há uma referência disponível.",
@@ -1218,7 +1220,11 @@
                 if (!Number.isFinite(min) || min <= 0) continue;
                 if (min <= Number(ref.average) * scanRatio) {
                     stats[suspiciousKey]++;
-                    queueItemDetail(id, currency);
+                    // Prioritize configured purchases when the Watch panel is
+                    // closed. Opportunity discovery resumes when opened.
+                    if (state.watchOpen || !config.fixedRulesEnabled || !state.ruleItemKeys.size) {
+                        queueItemDetail(id, currency);
+                    }
                 }
             }
         }
@@ -2320,7 +2326,7 @@
         const key = String(itemId) + ':' + currency;
         state.ruleItemKeys.add(key);
         const detail = state.itemOfferDetails.get(key);
-        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 20000) queueItemDetail(itemId, currency);
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > RULE_DETAIL_REFRESH_MS) queueItemDetail(itemId, currency);
         return detail;
     }
 
@@ -2380,7 +2386,12 @@
         if (!state.socket || state.socket.readyState !== 1) return;
 
         const now = Date.now();
-        const interval = Math.max(1, Number(config.scanSeconds || 5)) * 1000;
+        const userInterval = Math.max(1, Number(config.scanSeconds || 5)) * 1000;
+        // Only slow general scans in closed-panel buying mode. User-selected
+        // scan frequency and manual scan commands stay intact otherwise.
+        const interval = !state.watchOpen && config.fixedRulesEnabled && state.ruleItemKeys.size
+            ? Math.max(userInterval, BACKGROUND_SCAN_WITH_RULES_MS)
+            : userInterval;
         if (!force && now - state.lastScanAt < interval) return;
         state.lastScanAt = now;
 
@@ -2931,7 +2942,7 @@
 
     const CONFIG_HELP = Object.freeze({
         watchPercent: 'Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.',
-        scanSeconds: 'How often the market scanner checks again. Lower finds changes sooner but sends requests more often.',
+        scanSeconds: 'How often the market scanner checks again. Lower finds changes sooner but sends requests more often. With buying rules active and Watch closed, general scans slow to at least 30 seconds.',
         scanItems: 'Scan ordinary market items and let you inspect their current offers.',
         scanPokemon: 'Scan Pokémon listings and compare them with completed-sale history.',
         scanDiamonds: 'Scan diamond listings and compare prices when a reference is available.',
@@ -4208,8 +4219,12 @@
         state.scanTimer = setInterval(() => {
             adoptBridgeSocket();
             ensureUi();
-            runScan(false);
             runMarketAutomation();
+            // Give queued rule listings first use of the shared request slot.
+            if (!state.detailPending && state.detailQueue.some(job => state.ruleItemKeys.has(job.key))) {
+                pumpItemDetails();
+            }
+            runScan(false);
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
                 finishPendingBuy('watchdog');
             }
@@ -4285,7 +4300,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.50 loaded');
+        console.info('[Moth Watch] v0.1.51 loaded');
     }
 
     bootstrap();
