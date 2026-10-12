@@ -66,7 +66,7 @@ fn fetch_latest_version() -> Result<String, String> {
             RELEASE_API_URL,
         ])
         .output()
-        .map_err(|error| format!("could not run curl.exe: {error}"))?;
+        .map_err(|error| format!("could not run curl: {error}"))?;
 
     if !output.status.success() {
         return Err(format!("curl exited with status {}", output.status));
