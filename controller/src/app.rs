@@ -2829,33 +2829,38 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
 
                 ui.add_space(3.0);
 
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(tr("by MOTHblank"))
-                            .size(9.0)
-                            .color(MUTED),
-                    );
-                    ui.label(RichText::new("·").size(9.0).color(DIM));
-                    ui.hyperlink_to(
-                        tr("Google Play"),
-                        "https://play.google.com/store/apps/developer?id=MOTHblank",
-                    );
-                    ui.label(RichText::new("·").size(9.0).color(DIM));
-                    ui.hyperlink_to(
-                        tr("X"),
-                        "https://x.com/MOTHblank",
-                    );
-                    ui.label(RichText::new("·").size(9.0).color(DIM));
-                    ui.hyperlink_to(
-                        tr("WhatsApp / Pix"),
-                        "https://wa.me/+5537999933376",
-                    );
-                    ui.label(RichText::new("·").size(9.0).color(DIM));
-                    ui.hyperlink_to(
-                        tr("source code"),
-                        "https://github.com/MOTHblank/pokeidle-addons",
-                    );
-                });
+                ui.label(
+                    RichText::new(tr("by MOTHblank"))
+                        .size(10.0)
+                        .color(MUTED),
+                );
+
+                // Keep the links in aligned rows. A wrapped run of independent
+                // separators and default-sized hyperlinks breaks in narrow sidebars.
+                egui::Grid::new("sidebar_credits_links")
+                    .num_columns(2)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.hyperlink_to(
+                            RichText::new(tr("Google Play")).size(10.0),
+                            "https://play.google.com/store/apps/developer?id=MOTHblank",
+                        );
+                        ui.hyperlink_to(
+                            RichText::new(tr("X")).size(10.0),
+                            "https://x.com/MOTHblank",
+                        );
+                        ui.end_row();
+
+                        ui.hyperlink_to(
+                            RichText::new(tr("WhatsApp / Pix")).size(10.0),
+                            "https://wa.me/+5537999933376",
+                        );
+                        ui.hyperlink_to(
+                            RichText::new(tr("source code")).size(10.0),
+                            "https://github.com/MOTHblank/pokeidle-addons",
+                        );
+                        ui.end_row();
+                    });
 
                 ui.add_space(5.0);
                 ui.label(
