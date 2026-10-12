@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.39
+// @version      0.1.40
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -189,7 +189,7 @@
         'Items for sale': 'Itens à venda', 'item type with active listings': 'tipo de item com ofertas ativas',
         'item types with active listings': 'tipos de item com ofertas ativas',
         ' · showing first {count}': ' · mostrando os primeiros {count}',
-        'This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.': 'Este resumo mostra o menor preço ativo de cada item. A lista de oportunidades exibe ofertas dentro do limite definido (além das carregadas manualmente). Use os botões para consultar todas as ofertas de um item em moedas ou gemas.',
+        'This summary shows the lowest active market price for every item. Use Load Coin/Gem offers to expand all current listings under the selected item. Loaded listings also remain available in Opportunities.': 'Este resumo mostra o menor preço ativo de cada item. Use Carregar ofertas em moedas/gemas para expandir todos os anúncios do item selecionado. Os anúncios carregados também ficam disponíveis em Oportunidades.',
         'No market item inventory has arrived yet.': 'O inventário de itens do mercado ainda não chegou.',
         'Current market median · {count} listings': 'Mediana atual do mercado · {count} ofertas',
         ' · server 7d avg {value} ignored': ' · média do servidor em 7 dias ({value}) ignorada',
@@ -273,11 +273,6 @@
         'Regular market': 'Mercado normal',
         'Return to regular market': 'Voltar ao mercado normal',
         'Open Moth Watch': 'Abrir Moth Watch',
-        'Showing offers for {name} in {currency}.': 'Exibindo ofertas de {name} em {currency}.',
-        'Show all opportunities': 'Mostrar todas as oportunidades',
-        'Waiting for market response for {name}…': 'Aguardando resposta do mercado para {name}…',
-        'No offers found for {name} in {currency}.': 'Nenhuma oferta encontrada para {name} em {currency}.',
-        'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.',
         'no offers found': 'nenhuma oferta encontrada',
         'market request timed out': 'tempo limite da consulta ao mercado',
         'Offers': 'Ofertas',
@@ -2357,7 +2352,6 @@
             '.moth-mw-inventory-price{display:flex;align-items:center;justify-content:space-between;gap:5px;flex-wrap:wrap}',
             '@media(max-width:720px){.moth-mw-inventory-row{grid-template-columns:1fr;gap:5px}.moth-mw-inventory-price{justify-content:flex-start}}',
             '.moth-mw-list{display:grid;gap:5px}',
-            '.moth-mw-item-focus{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:7px 9px;border-radius:6px;background:var(--vao,#21191d);font-size:10px;color:var(--sobre-mad-dim,#bbb)}',
             '.moth-mw-item-offers{grid-column:1/-1;padding:8px;border:1px solid var(--mad-linha,#3a2824);border-radius:6px;background:var(--vao,#21191d);min-width:0}',
             '.moth-mw-item-offers-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;font-size:10px}',
             '.moth-mw-offer-list{display:grid;gap:4px}',
@@ -2615,7 +2609,7 @@
             '<span>' + num(entries.length) + ' ' + escapeHtml(tr(entries.length === 1 ? 'item type with active listings' : 'item types with active listings')) +
             (entries.length > 120 ? escapeHtml(tr(' · showing first {count}', { count: 120 })) : '') + '</span></div>' +
             '<div class="moth-mw-inventory-body" id="moth-mw-inventory-body"' + (collapsed ? ' hidden' : '') + '>' +
-            '<div class="moth-mw-inventory-note">' + escapeHtml(tr('This summary shows the lowest active market price for every item. The Watch list below only shows offers that pass your watch threshold (plus offers you explicitly load); use Load Coin/Gem offers to inspect all current offers for an item.')) + '</div>' +
+            '<div class="moth-mw-inventory-note">' + escapeHtml(tr('This summary shows the lowest active market price for every item. Use Load Coin/Gem offers to expand all current listings under the selected item. Loaded listings also remain available in Opportunities.')) + '</div>' +
             '<div class="moth-mw-inventory-list">' + (rows || '<div class="moth-mw-empty">' + escapeHtml(tr('No market item inventory has arrived yet.')) + '</div>') +
             '</div></div></div>';
     }
@@ -2667,23 +2661,9 @@
         if (!list) return;
 
         if (!candidates.length) {
-            const focus = state.selectedItemFocus;
-            let emptyText = tr('No matching opportunities. Try a wider watch threshold or inspect Market inventory.');
-            if (focus) {
-                const requestStatus = state.itemDetailStatus?.key === focus.key ? state.itemDetailStatus.status : 'idle';
-                if (requestStatus === 'loading' || state.detailPending?.key === focus.key ||
-                    state.detailQueue.some(job => job.key === focus.key)) {
-                    emptyText = tr('Waiting for market response for {name}…', { name: catalogName(focus.itemId) });
-                } else if (requestStatus === 'timeout') {
-                    emptyText = tr('Market did not respond for {name}. Try loading the offers again.', { name: catalogName(focus.itemId) });
-                } else {
-                    emptyText = tr('No offers found for {name} in {currency}.', {
-                        name: catalogName(focus.itemId),
-                        currency: tr(focus.currency === 'orb' ? 'Gems' : 'Coins')
-                    });
-                }
-            }
-            const empty = '<div class="moth-mw-empty">' + escapeHtml(emptyText) + '</div>';
+            const empty = '<div class="moth-mw-empty">' +
+                escapeHtml(tr('No matching opportunities. Try a wider watch threshold or inspect Market inventory.')) +
+                '</div>';
             if (list.children.length !== 1 || !list.firstElementChild.classList.contains('moth-mw-empty') ||
                 list.firstElementChild.outerHTML !== empty) {
                 list.innerHTML = empty;
@@ -3610,7 +3590,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.39 loaded');
+        console.info('[Moth Watch] v0.1.40 loaded');
     }
 
     bootstrap();
