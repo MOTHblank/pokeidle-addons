@@ -2135,10 +2135,18 @@ fn draw_game_card(
             );
             ui.add_space(6.0);
 
-            let performance_value = if health.performance_fps.is_empty() {
-                tr("Loaded").to_string()
+            // A browser FPS cap does not establish that Performance+ is enabled.
+            let performance_active = health.telemetry_is_fresh()
+                && health.performance_enabled == Some(true);
+            let performance_value = if !health.telemetry_is_fresh() {
+                tr("Not checked yet").to_string()
             } else {
-                format!("{} FPS", health.performance_fps)
+                match health.performance_enabled {
+                    Some(false) => tr("Off").to_string(),
+                    Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
+                    Some(true) => format!("{} FPS", health.performance_fps),
+                    None => tr("Not detected in game").to_string(),
+                }
             };
 
             ui.horizontal_wrapped(|ui| {
@@ -2180,7 +2188,7 @@ fn draw_game_card(
                         true,
                     );
                 }
-                automation_badge(ui, tr("Performance+"), &performance_value, true);
+                automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
             });
 
             ui.add_space(12.0);
