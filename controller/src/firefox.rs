@@ -223,32 +223,6 @@ fn format_spawn_error(error: io::Error) -> String {
 }
 
 
-pub fn open_url(config: &Config, url: &str) -> Result<(), String> {
-    if !url.starts_with("https://") {
-        return Err("refusing to open a non-HTTPS URL".to_string());
-    }
-
-    fs::create_dir_all(&config.profile_dir).map_err(|error| {
-        format!(
-            "could not create profile directory {}: {error}",
-            config.profile_dir.display()
-        )
-    })?;
-
-    Command::new(&config.firefox_executable)
-        .arg("--profile")
-        .arg(&config.profile_dir)
-        .arg("--new-tab")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(format_spawn_error)
-}
-
-
 /// Stop only the Firefox process started by this controller. Prefer a clean
 /// WebDriver BiDi browser.close (headless and visible); then try window close
 /// for visible or sign-in browsers. Force termination is the final fallback.

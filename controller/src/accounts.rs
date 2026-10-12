@@ -1,5 +1,4 @@
 use crate::config::{Config, GameProfile};
-use crate::firefox;
 use serde_json::Value;
 use std::process::Command;
 
@@ -106,17 +105,12 @@ pub fn violentmonkey_installed(profile: GameProfile) -> Result<bool, String> {
     }))
 }
 
-pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
-    let config = Config::for_profile(profile)?;
-    firefox::open_url(&config, VIOLENTMONKEY_INSTALL)?;
-    Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
-}
-
 /// Opens installers for all addons on first setup, or only explicitly selected
 /// scripts when repairing a profile. Opening a tab does not imply installation.
 pub fn open_addons(
     profile: GameProfile,
     requested: Option<&[String]>,
+    mut open_tab: impl FnMut(&str) -> Result<(), String>,
     mut progress: impl FnMut(String),
 ) -> Result<usize, String> {
     if !violentmonkey_installed(profile)? {
@@ -127,7 +121,6 @@ pub fn open_addons(
     }
 
     let files = select_addon_files(discover_addon_files()?, requested)?;
-    let config = Config::for_profile(profile)?;
     let mut opened = 0usize;
     let mut failures = Vec::new();
 
@@ -137,10 +130,10 @@ pub fn open_addons(
         .as_nanos();
     for file in files {
         let url = installer_url(&file, nonce);
-        match firefox::open_url(&config, &url) {
+        match open_tab(&url) {
             Ok(()) => {
                 opened += 1;
-                progress(format!("{file}: installer opened"));
+                progress(format!("{file}: installer tab queued (awaiting Firefox confirmation)"));
             }
             Err(error) => {
                 let message = format!("{file}: {error}");
@@ -154,7 +147,7 @@ pub fn open_addons(
         Ok(opened)
     } else {
         Err(format!(
-            "Opened {opened} addon installers, but some failed:\n{}",
+            "Queued {opened} addon installers, but some failed:\n{}",
             failures.join("\n")
         ))
     }
@@ -194,12 +187,6 @@ pub fn complete_setup(profile: GameProfile) -> Result<(), String> {
     std::fs::create_dir_all(&path).map_err(|e| format!("Could not save setup progress: {e}"))?;
     std::fs::write(path.join(SETUP_MARKER), b"1\n")
         .map_err(|e| format!("Could not save setup progress: {e}"))
-}
-
-pub fn open_login(profile: GameProfile, url: &str, service: &str) -> Result<String, String> {
-    let config = Config::for_profile(profile)?;
-    firefox::open_url(&config, url)?;
-    Ok(format!("{service} opened in {}.", profile.label()))
 }
 
 pub fn open_profile_folder(profile: GameProfile) -> Result<(), String> {
