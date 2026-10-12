@@ -205,7 +205,7 @@
         const add = (raw, moduleImport = false) => {
             if (!raw) return;
             // Bare module specifiers are package names, not URL paths.
-            if (moduleImport && !/^(?:.{1,2}/|/|https?://)/i.test(raw)) return;
+            if (moduleImport && !/^(?:\.{1,2}\/|\/|https?:\/\/)/i.test(raw)) return;
 
             const normalized =
                 normalizeUrl(
