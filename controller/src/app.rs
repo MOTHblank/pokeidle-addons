@@ -1708,7 +1708,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-                    runtime_row(ui, "Poll", "5 sec", MUTED);
+                    runtime_row(ui, "Poll", "30 sec", MUTED);
                 });
 
             ui.add_space(12.0);
