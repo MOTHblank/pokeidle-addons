@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.38
+// @version      0.1.39
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -99,6 +99,7 @@
         lastDetailRequest: new Map(),
         selectedItemFocus: null,
         itemDetailStatus: null,
+        itemOfferDetails: new Map(),
         pendingBuy: null,
         attemptedListings: new Map(),
         buyLog: [],
@@ -278,7 +279,15 @@
         'No offers found for {name} in {currency}.': 'Nenhuma oferta encontrada para {name} em {currency}.',
         'Market did not respond for {name}. Try loading the offers again.': 'O mercado não respondeu para {name}. Tente carregar as ofertas novamente.',
         'no offers found': 'nenhuma oferta encontrada',
-        'market request timed out': 'tempo limite da consulta ao mercado'
+        'market request timed out': 'tempo limite da consulta ao mercado',
+        'Offers': 'Ofertas',
+        'Hide offers': 'Ocultar ofertas',
+        'Own listing': 'Seu anúncio',
+        'Offer count: {count}': '{count} ofertas',
+        'Waiting for the market to return offers…': 'Aguardando o mercado retornar as ofertas…',
+        'No offers found in this currency.': 'Nenhuma oferta encontrada nesta moeda.',
+        'Market did not respond. Load offers again.': 'O mercado não respondeu. Carregue as ofertas novamente.',
+        'Refreshing offers…': 'Atualizando ofertas…'
     });
 
     function tr(key, params = null) {
@@ -993,94 +1002,85 @@
     }
 
     function handleItemListings(message) {
-        const rawItemId = Number(message.itemId ?? message.item?.id ?? message.item?.itemId);
-        const hasResponseItemId = Number.isFinite(rawItemId) && rawItemId > 0;
-        const responseCurrency = message.moeda === 'orb' || message.moeda === 'gold'
-            ? message.moeda
-            : null;
-        const pending = state.detailPending;
-        const pendingMatches =
-            !!pending &&
-            (!hasResponseItemId || rawItemId === pending.itemId) &&
-            (!responseCurrency || responseCurrency === pending.currency);
-
-        const itemId = hasResponseItemId
-            ? rawItemId
-            : pendingMatches
-                ? pending.itemId
-                : NaN;
-        const currency = responseCurrency || (pendingMatches ? pending.currency : 'gold');
+        // Matches upstream Community Market response fields: itemId, moeda and linhas.
+        const itemId = Number(message.itemId);
+        const currency = message.moeda === 'orb' || message.moeda === 'gold' ? message.moeda : null;
+        if (!Number.isFinite(itemId) || itemId <= 0 || !currency) return;
         const lines = Array.isArray(message.linhas) ? message.linhas : [];
-
-        if (!Number.isFinite(itemId) || itemId <= 0) return;
-        if (pending && hasResponseItemId && rawItemId !== pending.itemId) {
-            // This can be a response from the native market instead of our queued detail request.
-            processItemListingPayload(itemId, currency, lines);
-            return;
-        }
-
-        if (pendingMatches) {
+        const pending = state.detailPending;
+        if (pending && pending.itemId === itemId && pending.currency === currency) {
             finishItemDetailRequest(pending, lines.length ? 'loaded' : 'empty');
         }
         processItemListingPayload(itemId, currency, lines);
     }
 
     function processItemListingPayload(itemId, currency, lines) {
-        const activePrices = lines
+        const detailKey = String(itemId) + ':' + currency;
+        const offers = Array.isArray(lines) ? lines.slice() : [];
+        const explicitlyLoaded = state.loadedItemKeys.has(detailKey);
+        const selected = state.selectedItemFocus?.key === detailKey;
+        if (explicitlyLoaded || selected) {
+            state.itemOfferDetails.set(detailKey, { itemId, currency, offers, updatedAt: Date.now() });
+            state.itemDetailStatus = {
+                key: detailKey,
+                itemId,
+                currency,
+                status: offers.length ? 'loaded' : 'empty',
+                at: Date.now()
+            };
+        }
+
+        const activePrices = offers
             .map(listing => Number(listing && listing.preco))
             .filter(price => Number.isFinite(price) && price > 0);
-
-        const capKey = String(itemId) + ':' + currency;
         if (activePrices.length >= 3) {
-            state.itemMarketCaps.set(capKey, {
+            state.itemMarketCaps.set(detailKey, {
                 median: median(activePrices),
                 count: activePrices.length,
                 updatedAt: Date.now()
             });
         } else {
-            state.itemMarketCaps.delete(capKey);
+            state.itemMarketCaps.delete(detailKey);
         }
 
         const ref = itemReference(itemId, currency);
-        const manualKey = String(itemId) + ':' + currency;
-        const explicitlyLoaded = state.loadedItemKeys.has(manualKey);
-        if (!ref && !explicitlyLoaded) return;
+        if (!ref && !explicitlyLoaded) {
+            queueRender();
+            return;
+        }
 
         const group = 'item:' + itemId + ':' + currency + ':';
         removeCandidateGroup(group);
-
         const scanRatio = discoveryRatio();
-        for (const listing of lines) {
+        for (const listing of offers) {
             if (!listing || isOwnListing(listing)) continue;
             const price = Number(listing.preco);
             const qty = Math.max(1, Number(listing.qtd || 1));
             if (!Number.isFinite(price) || price <= 0) continue;
-            const ratio = ref && Number(ref.average) > 0
-                ? price / Number(ref.average)
-                : 1;
+            const ratio = ref && Number(ref.average) > 0 ? price / Number(ref.average) : 1;
             if (ref && ratio > scanRatio && !explicitlyLoaded) continue;
-
             addCandidate({
                 key: group + listing.id,
                 kind: 'item',
                 listingId: Number(listing.id),
-                itemId: itemId,
+                itemId,
                 name: ref && ref.name || catalogName(itemId),
-                currency: currency,
-                price: price,
+                currency,
+                price,
                 average: ref ? Number(ref.average) || 0 : 0,
                 samples: ref ? Number(ref.units) || 0 : 0,
                 referenceSource: ref ? ref.source : 'none',
                 activeReferenceListings: ref ? Number(ref.activeListings || 0) : 0,
                 serverAverage: ref ? Number(ref.serverAverage || 0) : 0,
-                ratio: ratio,
-                qty: qty,
+                ratio,
+                qty,
                 seller: String(listing.vendedor || '—'),
                 retainedUntil: retentionUntil(listing),
                 firstSeenAt: Date.now(),
                 seenAt: Date.now()
             });
         }
+        queueRender();
     }
 
     function itemMediaFor(id) {
@@ -2307,7 +2307,8 @@
         style.id = 'moth-market-watch-style';
         style.textContent = [
             '#moth-market-watch-tab{white-space:nowrap}',
-            '#modal-corpo.moth-watch-active>:not(#moth-market-watch-panel):not(:has(#moth-market-watch-tab)){display:none!important}',
+            '#modal-corpo.moth-watch-active>.cm-corpo{display:none!important}',
+            '#modal-corpo.moth-watch-active>:not(.cm-topo):not(.cm-corpo):not(#moth-market-watch-panel){display:none!important}',
             '#moth-market-watch-panel{display:none;width:100%;height:100%;min-height:420px;overflow:auto;padding:10px;color:var(--sobre-mad,#eee)}',
             '#modal-corpo.moth-watch-active>#moth-market-watch-panel{display:block!important}',
             '.cm-corpo.moth-watch-active>:not(#moth-market-watch-panel){display:none!important}',
@@ -2357,6 +2358,13 @@
             '@media(max-width:720px){.moth-mw-inventory-row{grid-template-columns:1fr;gap:5px}.moth-mw-inventory-price{justify-content:flex-start}}',
             '.moth-mw-list{display:grid;gap:5px}',
             '.moth-mw-item-focus{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:7px 9px;border-radius:6px;background:var(--vao,#21191d);font-size:10px;color:var(--sobre-mad-dim,#bbb)}',
+            '.moth-mw-item-offers{grid-column:1/-1;padding:8px;border:1px solid var(--mad-linha,#3a2824);border-radius:6px;background:var(--vao,#21191d);min-width:0}',
+            '.moth-mw-item-offers-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:7px;font-size:10px}',
+            '.moth-mw-offer-list{display:grid;gap:4px}',
+            '.moth-mw-offer-row{display:grid;grid-template-columns:minmax(100px,1fr) auto auto minmax(55px,auto) auto;align-items:center;gap:8px;padding:5px 7px;border-radius:4px;background:var(--mad,#2a2025);font-size:10px;min-width:0}',
+            '.moth-mw-offer-seller{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}',
+            '.moth-mw-offer-meta{color:var(--sobre-mad-dim,#aaa);white-space:nowrap}',
+            '@media(max-width:720px){.moth-mw-offer-row{grid-template-columns:minmax(90px,1fr) auto auto;gap:6px}.moth-mw-offer-id{display:none}}',
             '.moth-mw-workspace{display:flex;flex-direction:column;gap:9px;min-height:0}',
             '.moth-mw-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:4px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
             '.moth-mw-tab{flex:1;min-width:110px;border:0;border-radius:6px;padding:8px 10px;background:transparent;color:var(--sobre-mad-dim,#bbb);font-size:11px;font-weight:700;cursor:pointer}',
@@ -2529,6 +2537,60 @@
             .map(([rawId, row]) => ({ itemId: Number(rawId), row: row || {}, name: catalogName(rawId) }))
             .filter(entry => Number.isFinite(entry.itemId) && entry.itemId > 0 && Number(entry.row.anuncios || 0) > 0)
             .sort((a, b) => a.name.localeCompare(b.name, currentLocale()));
+
+        const renderOffers = (entry, currency) => {
+            const key = String(entry.itemId) + ':' + currency;
+            if (state.selectedItemFocus?.key !== key) return '';
+            const status = state.itemDetailStatus?.key === key ? state.itemDetailStatus.status : 'idle';
+            const detail = state.itemOfferDetails.get(key);
+            const queued = state.detailQueue.some(job => job.key === key) || state.detailQueued.has(key);
+            const pending = state.detailPending?.key === key;
+            const loading = status === 'loading' || queued || pending;
+            const currencyName = tr(currency === 'orb' ? 'Gems' : 'Coins');
+            let content = '';
+
+            if (detail && detail.offers.length) {
+                const offers = detail.offers.slice().sort((a, b) => {
+                    const priceDiff = Number(a?.preco || 0) - Number(b?.preco || 0);
+                    return priceDiff || Number(a?.id || 0) - Number(b?.id || 0);
+                });
+                content = '<div class="moth-mw-offer-list">' + offers.map(offer => {
+                    const price = Number(offer && offer.preco);
+                    if (!offer || !Number.isFinite(price) || price <= 0) return '';
+                    const listingId = Number(offer.id);
+                    const own = isOwnListing(offer);
+                    const candidateKey = 'item:' + entry.itemId + ':' + currency + ':' + offer.id;
+                    const candidate = Number.isFinite(listingId) && listingId > 0 ? state.candidates.get(candidateKey) : null;
+                    const qty = Math.max(1, Number(offer.qtd || 1));
+                    const action = !own && candidate
+                        ? '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '">' + escapeHtml(tr('Buy')) + '</button>'
+                        : own
+                            ? '<span class="moth-mw-offer-meta">' + escapeHtml(tr('Own listing')) + '</span>'
+                            : '<span class="moth-mw-offer-meta">—</span>';
+                    return '<div class="moth-mw-offer-row">' +
+                        '<span class="moth-mw-offer-seller" title="' + escapeHtml(String(offer.vendedor || '—')) + '">' + escapeHtml(String(offer.vendedor || '—')) + '</span>' +
+                        '<span class="moth-mw-offer-meta">' + num(qty) + ' ' + escapeHtml(tr('units')) + '</span>' +
+                        '<b>' + money(price, currency) + '</b>' +
+                        '<span class="moth-mw-offer-meta moth-mw-offer-id">#' + (Number.isFinite(listingId) ? num(listingId) : '—') + '</span>' +
+                        action + '</div>';
+                }).filter(Boolean).join('') + '</div>';
+            } else if (loading || status === 'idle') {
+                content = '<div class="moth-mw-empty">' + escapeHtml(tr('Waiting for the market to return offers…')) + '</div>';
+            } else if (status === 'timeout') {
+                content = '<div class="moth-mw-empty">' + escapeHtml(tr('Market did not respond. Load offers again.')) + '</div>';
+            } else {
+                content = '<div class="moth-mw-empty">' + escapeHtml(tr('No offers found in this currency.')) + '</div>';
+            }
+
+            const statusText = loading && detail ? '<span>' + escapeHtml(tr('Refreshing offers…')) + '</span>' : '';
+            return '<div class="moth-mw-item-offers">' +
+                '<div class="moth-mw-item-offers-head"><b>' + escapeHtml(tr('Offers')) + ' · ' + escapeHtml(currencyName) +
+                ' · ' + escapeHtml(tr('Offer count: {count}', { count: num(detail?.offers?.length || 0) })) + '</b>' +
+                statusText +
+                '<button type="button" class="moth-mw-btn" data-moth-hide-offers="1">' + escapeHtml(tr('Hide offers')) + '</button></div>' +
+                content + '</div>';
+        };
+
         const rows = entries.slice(0, 120).map(entry => {
             const row = entry.row, coinPrice = Number(row.minGold), gemPrice = Number(row.minOrb);
             const coinButton = Number.isFinite(coinPrice) && coinPrice > 0
@@ -2538,11 +2600,13 @@
                 ? '<button type="button" class="moth-mw-btn" data-moth-item-scan="' + entry.itemId + '" data-moth-item-currency="orb">' + escapeHtml(tr('Load Gem offers')) + '</button>'
                 : '<button type="button" class="moth-mw-btn" disabled>' + escapeHtml(tr('No Gem offers')) + '</button>';
             const count = Number(row.anuncios) || 0;
-            return '<div class="moth-mw-inventory-row"><div class="moth-mw-inventory-name"><b>' + escapeHtml(entry.name) + '</b><span>' +
+            return '<div class="moth-mw-inventory-entry">' +
+                '<div class="moth-mw-inventory-row"><div class="moth-mw-inventory-name"><b>' + escapeHtml(entry.name) + '</b><span>' +
                 escapeHtml(tr(count === 1 ? '1 listing' : '{count} listings', { count: num(count) })) + '</span></div>' +
                 '<div class="moth-mw-inventory-price">' + (coinPrice > 0 ? money(coinPrice, 'gold') : '<span class="moth-mw-meta">' + escapeHtml(tr('Coins')) + ' —</span>') +
                 coinButton + '</div><div class="moth-mw-inventory-price">' +
-                (gemPrice > 0 ? money(gemPrice, 'orb') : '<span class="moth-mw-meta">' + escapeHtml(tr('Gems')) + ' —</span>') + gemButton + '</div></div>';
+                (gemPrice > 0 ? money(gemPrice, 'orb') : '<span class="moth-mw-meta">' + escapeHtml(tr('Gems')) + ' —</span>') + gemButton + '</div></div>' +
+                renderOffers(entry, 'gold') + renderOffers(entry, 'orb') + '</div>';
         }).join('');
         const collapsed = Boolean(state.itemInventoryCollapsed);
         return '<div class="moth-mw-inventory"><div class="moth-mw-inventory-head">' +
@@ -2806,8 +2870,6 @@
         const searchTerm = normalize(state.opportunitySearch);
         const candidates = Array.from(state.candidates.values()).filter(c => {
             if (searchTerm && ![c.name, c.seller, c.kind, c.listingId].some(value => normalize(value).includes(searchTerm))) return false;
-            const focus = state.selectedItemFocus;
-            if (focus && (c.kind !== 'item' || Number(c.itemId) !== focus.itemId || c.currency !== focus.currency)) return false;
             const manuallyLoaded = c.kind === 'item' && state.loadedItemKeys.has(String(c.itemId) + ':' + c.currency);
             // Unreferenced diamonds remain inspectable. Referenced diamonds must meet the watch threshold.
             const visibleWithoutReference = manuallyLoaded || (c.kind === 'diamond' && !(Number(c.average) > 0));
@@ -2856,7 +2918,6 @@
                     filterButton('Diamonds', 'kind', 'diamond', kindFilter === 'diamond', '/img/moeda-gema.png') + '</div>' +
                     sortSelect() + '</div>' +
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Opportunities')) + '</h4><span id="moth-mw-opportunity-count"></span></div>' +
-                    '<div class="moth-mw-item-focus" id="moth-mw-item-focus"></div>' +
                     '<div class="moth-mw-list" id="moth-mw-opportunity-list"></div>';
             } else if (state.watchView === 'inventory') {
                 content.innerHTML = '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Market inventory')) + '</h4><span>' +
@@ -2912,19 +2973,6 @@
             if (sort && sort.value !== config.viewSort) sort.value = config.viewSort;
             const count = q('#moth-mw-opportunity-count', content);
             if (count) count.textContent = tr('{count} matching listings · purchases are serialized while awaiting server confirmation', { count: num(candidates.length) });
-            const focusBanner = q('#moth-mw-item-focus', content);
-            if (focusBanner) {
-                const focus = state.selectedItemFocus;
-                if (focus) {
-                    const name = catalogName(focus.itemId);
-                    const currencyLabel = tr(focus.currency === 'orb' ? 'Gems' : 'Coins');
-                    focusBanner.innerHTML =
-                        '<span>' + escapeHtml(tr('Showing offers for {name} in {currency}.', { name, currency: currencyLabel })) + '</span>' +
-                        '<button type="button" class="moth-mw-btn" id="moth-mw-clear-item-focus">' + escapeHtml(tr('Show all opportunities')) + '</button>';
-                } else {
-                    focusBanner.innerHTML = '';
-                }
-            }
             const list = q('#moth-mw-opportunity-list', content);
             updateCandidateRows(list, candidates);
         } else if (state.watchView === 'inventory') {
@@ -3000,23 +3048,13 @@
                 state.itemDetailStatus = { key, itemId, currency, status: 'loading', at: Date.now() };
                 state.loadedItemKeys.add(key);
                 state.lastDetailRequest.delete(key);
-                state.opportunitySearch = '';
-                config.viewKind = 'item';
-                config.viewCurrency = currency;
-                config.viewSort = 'price-asc';
-                saveConfig();
                 queueItemDetail(itemId, currency);
                 state.itemStatus = 'loading ' + catalogName(itemId) + ' offers';
-                state.watchView = 'opportunities';
-                try { localStorage.setItem('moth-pokeidle-market-watch-view-v1', 'opportunities'); } catch {}
                 renderWatch(true);
                 return;
             }
-            if (target.closest('#moth-mw-clear-item-focus')) {
+            if (target.closest('[data-moth-hide-offers]')) {
                 state.selectedItemFocus = null;
-                config.viewKind = 'all';
-                config.viewCurrency = 'all';
-                saveConfig();
                 renderWatch(true);
                 return;
             }
@@ -3572,7 +3610,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.38 loaded');
+        console.info('[Moth Watch] v0.1.39 loaded');
     }
 
     bootstrap();
