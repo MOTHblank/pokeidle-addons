@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.40
+// @version      0.1.41
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -100,6 +100,7 @@
         selectedItemFocus: null,
         itemDetailStatus: null,
         itemOfferDetails: new Map(),
+        sellRecommendationKey: null,
         pendingBuy: null,
         attemptedListings: new Map(),
         buyLog: [],
@@ -282,7 +283,19 @@
         'Waiting for the market to return offers…': 'Aguardando o mercado retornar as ofertas…',
         'No offers found in this currency.': 'Nenhuma oferta encontrada nesta moeda.',
         'Market did not respond. Load offers again.': 'O mercado não respondeu. Carregue as ofertas novamente.',
-        'Refreshing offers…': 'Atualizando ofertas…'
+        'Refreshing offers…': 'Atualizando ofertas…',
+        'Moth Watch recommended price': 'Preço recomendado pelo Moth Watch',
+        'Use recommended price': 'Usar preço recomendado',
+        '7d sold average': 'Média vendida em 7 dias',
+        'stable active median': 'Mediana dos anúncios estáveis',
+        'sold units': 'unidades vendidas',
+        'current asks': 'anúncios atuais',
+        'High confidence': 'Alta confiança',
+        'Medium confidence': 'Confiança média',
+        'Low confidence': 'Baixa confiança',
+        'Waiting for market data…': 'Aguardando dados do mercado…',
+        'No reliable recommendation yet.': 'Ainda não há dados suficientes para uma recomendação confiável.',
+        'Based on completed sales first; unusually cheap active listings are treated as possible dumps.': 'Prioriza vendas concluídas; anúncios ativos excepcionalmente baratos são tratados como possíveis liquidações.'
     });
 
     function tr(key, params = null) {
@@ -744,13 +757,195 @@
         return historical;
     }
 
+
+    function roundSellRecommendation(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return 0;
+        let step = 1;
+        if (n >= 1000000000) step = 10000000;
+        else if (n >= 100000000) step = 1000000;
+        else if (n >= 10000000) step = 100000;
+        else if (n >= 1000000) step = 10000;
+        else if (n >= 100000) step = 1000;
+        else if (n >= 10000) step = 500;
+        else if (n >= 1000) step = 100;
+        else if (n >= 100) step = 10;
+        return Math.max(1, Math.round(n / step) * step);
+    }
+
+    function sellPriceRecommendation(itemId, currency) {
+        const liveRow = itemMediaFor(itemId);
+        const sold = liveRow ? liveRow[currency] : null;
+        const soldAverage = Number(sold?.media);
+        const soldUnits = Number(sold?.unidades || 0);
+        const hasSoldAverage = Number.isFinite(soldAverage) && soldAverage > 0;
+
+        const key = String(itemId) + ':' + currency;
+        const detail = state.itemOfferDetails.get(key);
+        const asks = (detail?.offers || [])
+            .filter(offer => offer && !isOwnListing(offer))
+            .map(offer => Number(offer.preco))
+            .filter(price => Number.isFinite(price) && price > 0)
+            .sort((a, b) => a - b);
+
+        let stableAsks = asks;
+        if (hasSoldAverage && asks.length) {
+            const band = asks.filter(price =>
+                price >= soldAverage * 0.65 &&
+                price <= soldAverage * 1.60
+            );
+            if (band.length >= 2) stableAsks = band;
+        } else if (asks.length >= 5) {
+            const trim = Math.max(1, Math.floor(asks.length * 0.20));
+            stableAsks = asks.slice(trim, asks.length - trim);
+            if (!stableAsks.length) stableAsks = asks;
+        }
+
+        const activeMedian = stableAsks.length ? median(stableAsks) : 0;
+        let raw = 0;
+        let confidence = 'low';
+
+        if (hasSoldAverage) {
+            // Completed sales are the primary signal. A stronger current market can raise
+            // the target, but only modestly; cheap dump listings never drag it downward.
+            raw = soldAverage;
+            if (activeMedian > soldAverage) {
+                raw = Math.min(activeMedian, soldAverage * 1.15);
+            }
+            if (soldUnits >= Math.max(10, Number(config.minItemUnits || 5)) && stableAsks.length >= 3) {
+                confidence = 'high';
+            } else if (soldUnits >= Number(config.minItemUnits || 5) || stableAsks.length >= 3) {
+                confidence = 'medium';
+            }
+        } else if (activeMedian > 0) {
+            raw = activeMedian;
+            confidence = stableAsks.length >= 4 ? 'medium' : 'low';
+        }
+
+        return {
+            price: roundSellRecommendation(raw),
+            soldAverage: hasSoldAverage ? soldAverage : 0,
+            soldUnits,
+            activeMedian: Number(activeMedian) || 0,
+            activeCount: asks.length,
+            stableCount: stableAsks.length,
+            confidence
+        };
+    }
+
+    function sellRecommendationCurrency(corpo) {
+        const active = corpo?.querySelector('.cm-moeda.on[data-moeda]');
+        return active?.dataset?.moeda === 'orb' ? 'orb' : 'gold';
+    }
+
+    function ensureSellPriceRecommendation() {
+        const corpo = q('#modal .cm-folha-corpo');
+        const input = corpo?.querySelector('#cm-preco');
+        const itemNode = corpo?.querySelector('.dlg-ator-fig[data-dlg-item]');
+        const refs = corpo?.querySelector('#cm-preco-refs');
+
+        if (!corpo || !input || !itemNode || !refs) {
+            state.sellRecommendationKey = null;
+            return;
+        }
+
+        const itemId = Number(itemNode.dataset.dlgItem);
+        if (!Number.isFinite(itemId) || itemId <= 0) {
+            state.sellRecommendationKey = null;
+            return;
+        }
+
+        const currency = sellRecommendationCurrency(corpo);
+        const key = String(itemId) + ':' + currency;
+        if (state.sellRecommendationKey !== key) {
+            state.sellRecommendationKey = key;
+            state.lastDetailRequest.delete(key);
+            queueItemDetail(itemId, currency);
+        }
+
+        let host = corpo.querySelector('#moth-sell-recommendation');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'moth-sell-recommendation';
+            host.className = 'moth-sell-recommendation';
+            refs.insertAdjacentElement('afterend', host);
+        }
+
+        const recommendation = sellPriceRecommendation(itemId, currency);
+        const currencyIcon = currency === 'orb'
+            ? '/img/moeda-gema.png'
+            : '/assets/site/assets/ui/moeda-ouro.png';
+        const confidenceLabel =
+            recommendation.confidence === 'high'
+                ? tr('High confidence')
+                : recommendation.confidence === 'medium'
+                    ? tr('Medium confidence')
+                    : tr('Low confidence');
+
+        if (!(recommendation.price > 0)) {
+            host.innerHTML =
+                '<div class="moth-sell-rec-head"><b>' + escapeHtml(tr('Moth Watch recommended price')) + '</b>' +
+                '<span>' + escapeHtml(tr('Waiting for market data…')) + '</span></div>' +
+                '<div class="moth-sell-rec-note">' + escapeHtml(tr('No reliable recommendation yet.')) + '</div>';
+        } else {
+            const evidence = [];
+            if (recommendation.soldAverage > 0) {
+                evidence.push(
+                    tr('7d sold average') + ': ' + num(Math.round(recommendation.soldAverage)) +
+                    ' · ' + num(recommendation.soldUnits) + ' ' + tr('sold units')
+                );
+            }
+            if (recommendation.activeMedian > 0) {
+                evidence.push(
+                    tr('stable active median') + ': ' + num(Math.round(recommendation.activeMedian)) +
+                    ' · ' + num(recommendation.activeCount) + ' ' + tr('current asks')
+                );
+            }
+
+            host.innerHTML =
+                '<div class="moth-sell-rec-head"><b>' + escapeHtml(tr('Moth Watch recommended price')) + '</b>' +
+                '<span class="moth-sell-confidence ' + escapeHtml(recommendation.confidence) + '">' +
+                escapeHtml(confidenceLabel) + '</span></div>' +
+                '<button type="button" class="moth-sell-rec-price" data-moth-sell-price="' + recommendation.price + '">' +
+                '<img src="' + escapeHtml(currencyIcon) + '" alt="">' +
+                '<strong>' + num(recommendation.price) + '</strong>' +
+                '<span>' + escapeHtml(tr('Use recommended price')) + '</span></button>' +
+                (evidence.length
+                    ? '<div class="moth-sell-rec-evidence">' + evidence.map(escapeHtml).join('<br>') + '</div>'
+                    : '') +
+                '<div class="moth-sell-rec-note">' +
+                escapeHtml(tr('Based on completed sales first; unusually cheap active listings are treated as possible dumps.')) +
+                '</div>';
+
+            const useButton = host.querySelector('[data-moth-sell-price]');
+            if (useButton) {
+                useButton.onclick = () => {
+                    const value = Number(useButton.dataset.mothSellPrice);
+                    if (!(value > 0)) return;
+                    input.value = String(value);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                };
+            }
+        }
+
+        if (!corpo.dataset.mothSellCurrencyWatch) {
+            corpo.dataset.mothSellCurrencyWatch = '1';
+            corpo.querySelector('.cm-moedas')?.addEventListener('click', () => {
+                setTimeout(() => {
+                    state.sellRecommendationKey = null;
+                    ensureSellPriceRecommendation();
+                }, 0);
+            });
+        }
+    }
+
     function queueItemDetail(itemId, currency) {
         const key = String(itemId) + ':' + currency;
         const now = Date.now();
         if (state.detailPending?.key === key) return;
         const queuedIndex = state.detailQueue.findIndex(job => job.key === key);
         if (queuedIndex >= 0) {
-            if (state.selectedItemFocus?.key === key && queuedIndex > 0) {
+            if ((state.selectedItemFocus?.key === key || state.sellRecommendationKey === key) && queuedIndex > 0) {
                 const [job] = state.detailQueue.splice(queuedIndex, 1);
                 job.enqueuedAt = now;
                 state.detailQueue.unshift(job);
@@ -761,7 +956,7 @@
         if (now - Number(state.lastDetailRequest.get(key) || 0) < Math.max(1000, config.scanSeconds * 800)) return;
         state.detailQueued.add(key);
         const job = { itemId: Number(itemId), currency: currency, key: key, enqueuedAt: now };
-        if (state.selectedItemFocus?.key === key) state.detailQueue.unshift(job);
+        if (state.selectedItemFocus?.key === key || state.sellRecommendationKey === key) state.detailQueue.unshift(job);
         else state.detailQueue.push(job);
         scheduleItemDetailPump(0);
     }
@@ -1014,7 +1209,8 @@
         const offers = Array.isArray(lines) ? lines.slice() : [];
         const explicitlyLoaded = state.loadedItemKeys.has(detailKey);
         const selected = state.selectedItemFocus?.key === detailKey;
-        if (explicitlyLoaded || selected) {
+        const neededForSell = state.sellRecommendationKey === detailKey;
+        if (explicitlyLoaded || selected || neededForSell) {
             state.itemOfferDetails.set(detailKey, { itemId, currency, offers, updatedAt: Date.now() });
             state.itemDetailStatus = {
                 key: detailKey,
@@ -2302,6 +2498,16 @@
         style.id = 'moth-market-watch-style';
         style.textContent = [
             '#moth-market-watch-tab{white-space:nowrap}',
+            '.moth-sell-recommendation{margin:7px 0 10px;padding:8px 9px;border:1px solid var(--rx,#84325f);border-radius:7px;background:color-mix(in srgb,var(--vao,#21191d) 88%,var(--rx,#84325f) 12%);display:grid;gap:6px}',
+            '.moth-sell-rec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px}',
+            '.moth-sell-rec-head>b{font-size:11px}',
+            '.moth-sell-confidence{font-size:9px;opacity:.85}',
+            '.moth-sell-rec-price{display:flex;align-items:center;gap:7px;width:max-content;max-width:100%;border:1px solid var(--rx,#84325f);border-radius:6px;background:var(--mad,#2a2025);color:inherit;padding:6px 9px;cursor:pointer;font:inherit}',
+            '.moth-sell-rec-price:hover{filter:brightness(1.08)}',
+            '.moth-sell-rec-price img{width:18px;height:18px;object-fit:contain}',
+            '.moth-sell-rec-price strong{font-size:14px}',
+            '.moth-sell-rec-price span{font-size:9px;opacity:.8}',
+            '.moth-sell-rec-evidence,.moth-sell-rec-note{font-size:9px;line-height:1.35;color:var(--sobre-mad-dim,#aaa)}',
             '#modal-corpo.moth-watch-active>.cm-corpo{display:none!important}',
             '#modal-corpo.moth-watch-active>:not(.cm-topo):not(.cm-corpo):not(#moth-market-watch-panel){display:none!important}',
             '#moth-market-watch-panel{display:none;width:100%;height:100%;min-height:420px;overflow:auto;padding:10px;color:var(--sobre-mad,#eee)}',
@@ -3247,6 +3453,7 @@
 
     function ensureUi() {
         injectStyle();
+        ensureSellPriceRecommendation();
         if (state.watchOpen && state.lastLocale !== currentLocale()) renderWatch(true);
 
         /*
@@ -3590,7 +3797,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.40 loaded');
+        console.info('[Moth Watch] v0.1.41 loaded');
     }
 
     bootstrap();
