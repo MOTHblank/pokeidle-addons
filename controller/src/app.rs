@@ -85,6 +85,17 @@ fn localize_status(message: String) -> String {
         ("Firefox already uses this profile", "O Firefox já está usando este perfil"),
         ("Close the existing Firefox profile before switching modes.", "Feche o perfil do Firefox existente antes de trocar de modo."),
         ("Use Stop before launching.", "Use Parar antes de iniciar."),
+        ("Firefox profile inspection failed: ", "Falha ao verificar os perfis do Firefox: "),
+        ("could not inspect running Firefox profiles: ", "não foi possível verificar os perfis ativos do Firefox: "),
+        ("Firefox BiDi port ", "A porta BiDi do Firefox "),
+        (" is already in use or unavailable: ", " já está em uso ou indisponível: "),
+        ("Firefox profile process changed; refresh and try again", "O processo do perfil do Firefox mudou; atualize e tente novamente"),
+        ("Firefox profile process changed during shutdown", "O processo do perfil do Firefox mudou durante o encerramento"),
+        ("could not terminate recovered Firefox: ", "não foi possível encerrar o Firefox recuperado: "),
+        ("recovered Firefox did not exit after termination request", "O Firefox recuperado não encerrou após a solicitação"),
+        ("could not check Firefox process: ", "não foi possível verificar o processo do Firefox: "),
+        ("could not terminate Firefox: ", "não foi possível encerrar o Firefox: "),
+        ("could not reap Firefox: ", "não foi possível finalizar a limpeza do processo do Firefox: "),
         ("Opened controller log · ", "Log do controlador aberto · "),
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened game", "Jogo aberto"),
@@ -1644,7 +1655,7 @@ fn draw_game_card(
                 ui.add_space(8.0);
                 status_badge(ui, &health, running);
 
-                if running {
+                if running && app.games[index].orphaned_pid.is_none() {
                     let mode_label = if app.games[index].headless { tr("Show Firefox") } else { tr("Hide Firefox") };
                     let mode_headless = !app.games[index].headless;
                     let clicked = ui
