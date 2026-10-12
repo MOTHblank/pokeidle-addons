@@ -149,7 +149,7 @@ pub struct AddonVersionStatus {
 
 pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
 
-/// Check versions at launch, daily thereafter, and immediately on manual request.
+/// Check versions at launch, every four hours thereafter, and immediately on manual request.
 /// All HTTP work stays off the UI thread.
 pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
@@ -178,7 +178,7 @@ pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
                     }
                 }
             }
-            match rx.recv_timeout(Duration::from_secs(24 * 60 * 60)) {
+            match rx.recv_timeout(Duration::from_secs(4 * 60 * 60)) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => {
                     // Coalesce multiple requests made during the same scan.
                     while rx.try_recv().is_ok() {}
