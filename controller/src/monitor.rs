@@ -648,23 +648,41 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
                     : 'Center';
         }
 
-        const addonChecks = [
-            ['Auto Catch+', exists('#moth-ac-panel') || exists('#moth-ac-toggle'), 'autocatch'],
-            ['Performance+', exists('#moth-performance-panel') || exists('#moth-performance-trigger'), 'performance'],
-            ['Stream Scanner', exists('#moth-scan-live-streams'), 'stream-auto-open'],
-            ['Controller Bridge', (() => {
+        // Count only scripts reporting a version in this profile, rather than
+        // treating every available userscript as mandatory.
+        const readiness = {
+            'autocatch': exists('#moth-ac-panel') || exists('#moth-ac-toggle'),
+            'performance': exists('#moth-performance-panel') || exists('#moth-performance-trigger'),
+            'stream-auto-open': exists('#moth-scan-live-streams'),
+            'controller-bridge': (() => {
                 const bridge = window.__mothControllerBridgeV1;
-                return !!bridge
-                    && Number(bridge.version) >= 9
+                return !!bridge && Number(bridge.version) >= 9
                     && typeof bridge.snapshot === 'function'
                     && typeof bridge.gameSnapshot === 'function'
                     && typeof bridge.streamStateSnapshot === 'function'
                     && typeof bridge.socket === 'function';
-            })(), 'controller-bridge'],
-            ['Twitch Low Resource', exists('#moth-twitch-low-resource-addon-ready') || exists('#moth-twitch-low-resource-css'), 'twitch-low-resource'],
-            ['Hunt Atlas', !!window.__mothHuntAtlasControllerV1, 'hunt-atlas'],
-            ['Moth Watch', !!window.__mothMarketWatchControllerV1 || document.documentElement?.dataset?.mothWatchReady === '1', 'market-bot']
-        ];
+            })(),
+            'twitch-low-resource': exists('#moth-twitch-low-resource-addon-ready') ||
+                exists('#moth-twitch-low-resource-css'),
+            'hunt-atlas': !!window.__mothHuntAtlasControllerV1,
+            'market-bot': !!window.__mothMarketWatchControllerV1 ||
+                document.documentElement?.dataset?.mothWatchReady === '1'
+        };
+        const displayNames = {
+            'autocatch': 'Auto Catch+', 'performance': 'Performance+',
+            'stream-auto-open': 'Stream Scanner', 'controller-bridge': 'Controller Bridge',
+            'twitch-low-resource': 'Twitch Low Resource', 'hunt-atlas': 'Hunt Atlas',
+            'market-bot': 'Moth Watch'
+        };
+        const prefix = 'data-moth-addon-version-';
+        const addonChecks = [...(document.documentElement?.attributes || [])]
+            .filter(attr => attr.name.startsWith(prefix))
+            .map(attr => {
+                const key = attr.name.slice(prefix.length);
+                const version = String(attr.value || '');
+                return { key, name: displayNames[key] || key, version,
+                    ok: Object.hasOwn(readiness, key) ? !!readiness[key] : !!version };
+            }).filter(entry => entry.key && entry.version);
 
         return JSON.stringify({
             url: location.href,
@@ -678,12 +696,11 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
             activePokemon,
             fallenCount: document.querySelector('#caidos-lista')?.children.length || 0,
             economyMode: document.documentElement.classList.contains('modo-economia'),
-            addons: addonChecks.filter(([, ok]) => ok).map(([name]) => name),
-            addonMissing: addonChecks.filter(([, ok]) => !ok).map(([name]) => name),
-            addonVersions: Object.fromEntries(addonChecks
-                .filter(([, ok]) => ok)
-                .map(([, , key]) => [key + '.user.js', document.documentElement?.getAttribute('data-moth-addon-version-' + key) || ''])
-                .filter(([, version]) => version)),
+            addons: addonChecks.filter(entry => entry.ok).map(entry => entry.name),
+            addonTotal: addonChecks.length,
+            addonMissing: addonChecks.filter(entry => !entry.ok).map(entry => entry.name),
+            addonVersions: Object.fromEntries(addonChecks.filter(entry => entry.ok)
+                .map(entry => [entry.key + '.user.js', entry.version])),
             performanceFps: text('#mpp-browser-fps'),
             performanceSceneRuns: text('#mpp-scene-runs'),
             playerLevel,
@@ -751,7 +768,9 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         }).collect())
         .unwrap_or_default();
 
-    let addon_ok = 7u8.saturating_sub(addon_missing.len() as u8);
+    let addon_total = page.get("addonTotal").and_then(Value::as_u64)
+        .unwrap_or(0).min(u8::MAX as u64) as u8;
+    let addon_ok = addon_total.saturating_sub(addon_missing.len().min(u8::MAX as usize) as u8);
 
     // The upstream game intentionally performs several large downloads and CPU-heavy
     // catalog transforms before the login screen appears. Do not compete with that boot
@@ -818,7 +837,7 @@ fn probe_page(session: &mut BrowserSession) -> Result<Probe, String> {
         },
         economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
         addon_ok,
-        addon_total: 7,
+        addon_total,
         addon_missing,
         addon_versions,
         twitch_tabs,
