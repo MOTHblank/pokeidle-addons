@@ -538,6 +538,71 @@ struct IdleProgressTracker {
     last_balls_used: Option<u32>,
     last_ball_stock: Vec<String>,
     unchanged_since: Option<Instant>,
+    last_sample_at: Option<Instant>,
+    warning: bool,
+}
+
+impl IdleProgressTracker {
+    /// Progress is evaluated only when a new successful BiDi sample arrives.
+    /// Re-rendering the same sample must never produce a false inactivity alert.
+    fn observe(&mut self, health: &Health) -> bool {
+        let Some(sample_at) = health.last_successful_probe_at else {
+            return false;
+        };
+        if self.last_sample_at == Some(sample_at) {
+            return self.warning;
+        }
+
+        let xp = health.player_xp.clone();
+        let level = health.player_level;
+        let balls_used = health.autocatch_balls_used;
+        let changed = self.last_xp.as_ref() != Some(&xp)
+            || self.last_level != Some(level)
+            || self.last_balls_used != Some(balls_used)
+            || ball_stock_decreased(&self.last_ball_stock, &health.ball_stock);
+
+        if changed || self.unchanged_since.is_none() {
+            self.last_xp = Some(xp);
+            self.last_level = Some(level);
+            self.last_balls_used = Some(balls_used);
+            self.unchanged_since = Some(sample_at);
+            self.warning = false;
+        } else {
+            self.warning = self.unchanged_since.is_some_and(|since| {
+                sample_at.duration_since(since) >= Duration::from_secs(5 * 60)
+            });
+        }
+
+        self.last_ball_stock = health.ball_stock.clone();
+        self.last_sample_at = Some(sample_at);
+        self.warning
+    }
+}
+
+#[cfg(test)]
+mod idle_progress_tests {
+    use super::{Health, IdleProgressTracker};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn unchanged_rendering_does_not_create_an_idle_warning() {
+        let base = Instant::now() - Duration::from_secs(11 * 60);
+        let mut sample = Health::default();
+        sample.player_xp = "100".to_string();
+        sample.player_level = 5;
+        sample.last_successful_probe_at = Some(base);
+        let mut tracker = IdleProgressTracker::default();
+
+        assert!(!tracker.observe(&sample));
+        for _ in 0..100 {
+            assert!(!tracker.observe(&sample));
+        }
+        sample.last_successful_probe_at = Some(base + Duration::from_secs(5 * 60));
+        assert!(tracker.observe(&sample));
+        sample.player_xp = "101".to_string();
+        sample.last_successful_probe_at = Some(base + Duration::from_secs(10 * 60));
+        assert!(!tracker.observe(&sample));
+    }
 }
 
 fn ball_stock_decreased(previous: &[String], current: &[String]) -> bool {
@@ -985,28 +1050,7 @@ impl ControllerApp {
             return false;
         }
 
-        let xp = health.player_xp.clone();
-        let level = health.player_level;
-        let balls_used = health.autocatch_balls_used;
-        let changed = tracker.last_xp.as_ref() != Some(&xp)
-            || tracker.last_level != Some(level)
-            || tracker.last_balls_used != Some(balls_used)
-            || ball_stock_decreased(&tracker.last_ball_stock, &health.ball_stock);
-
-        if changed || tracker.unchanged_since.is_none() {
-            tracker.last_xp = Some(xp);
-            tracker.last_level = Some(level);
-            tracker.last_balls_used = Some(balls_used);
-            tracker.last_ball_stock = health.ball_stock.clone();
-            tracker.unchanged_since = Some(Instant::now());
-            return false;
-        }
-
-        tracker.last_ball_stock = health.ball_stock.clone();
-        tracker
-            .unchanged_since
-            .map(|since| since.elapsed() >= Duration::from_secs(5 * 60))
-            .unwrap_or(false)
+        tracker.observe(health)
     }
 
     fn set_status(&mut self, message: impl Into<String>, error: bool) {
@@ -1443,7 +1487,7 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(5));
 
         draw_sidebar(self, ui);
 
@@ -1708,7 +1752,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-                    runtime_row(ui, "Poll", "30 sec", MUTED);
+                    runtime_row(ui, "Poll", "5 min", MUTED);
                 });
 
             ui.add_space(12.0);
