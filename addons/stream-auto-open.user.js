@@ -1,13 +1,17 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.0.1
+// @version      7.0.2
 // @description  Opens all current Twitch chat channels in one low-resource popout per Firefox profile; KICK streams remain delegated to the Rust controller.
 // @match        https://pokeidle.io/app*
+// @match        https://www.twitch.tv/popout/*/chat*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
 // @run-at       document-start
 // @grant        GM_openInTab
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // @grant        unsafeWindow
 // @noframes
 // ==/UserScript==
@@ -15,9 +19,35 @@
 (() => {
     'use strict';
 
+    const ROSTER_KEY = 'moth-twitch-consolidated-roster-v1';
+    // The SAME userscript runs in the Twitch popout. Violentmonkey storage
+    // propagates changes across domains in this Firefox profile, allowing us
+    // to update IRC memberships without reloading the rewarding chat.
+    if (location.hostname === 'www.twitch.tv' &&
+        /^\/popout\/[^/]+\/chat(?:\/|$)/i.test(location.pathname)) {
+        const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        const broadcast = roster => {
+            try {
+                page.dispatchEvent(new CustomEvent('moth:channels-changed', {
+                    detail: String(roster || '')
+                }));
+            } catch (error) {
+                console.warn('[Moth] Twitch channel update failed:', error);
+            }
+        };
+        if (typeof GM_addValueChangeListener === 'function') {
+            GM_addValueChangeListener(ROSTER_KEY, (_key, _old, value) => broadcast(value));
+        }
+        if (typeof GM_getValue === 'function') {
+            // Give Twitch Low Resource a chance to attach its event listener.
+            setTimeout(() => broadcast(GM_getValue(ROSTER_KEY, '')), 500);
+        }
+        return;
+    }
+
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.0.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.0.2');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -361,8 +391,21 @@
 
         const signature = channels.join(',');
         const current = openStreams.get(MULTI_CHAT_KEY);
-        if (current && !current.closed && signature === multiChatSignature) {
-            return true;
+        if (current && !current.closed) {
+            if (signature === multiChatSignature) return true;
+            // Send an in-place roster update to the existing popout. The low
+            // resource script changes JOIN/PART on its current IRC socket.
+            if (typeof GM_setValue === 'function') {
+                try {
+                    GM_setValue(ROSTER_KEY, signature);
+                    multiChatSignature = signature;
+                    console.info('[Moth] updated existing Twitch chat membership:', signature);
+                    return true;
+                } catch (error) {
+                    console.warn('[Moth] failed to update live Twitch membership:', error);
+                }
+            }
+            // Storage API unavailable: retain the old replacement fallback.
         }
 
         const baseUrl = chatUrl('twitch', channels[0]);
@@ -377,8 +420,11 @@
                 return false;
             }
 
-            // Open the replacement before closing the old tab so a failed
-            // open never loses all Twitch chat connections.
+            if (typeof GM_setValue === 'function') {
+                GM_setValue(ROSTER_KEY, signature);
+            }
+
+            // Only open a new tab at first launch or if a previous tab closed.
             const tab = GM_openInTab(target.toString(), {
                 active: false,
                 insert: true,
@@ -561,6 +607,9 @@
             // Only close the consolidated chat when PokéIdle actually exposed
             // its stream state; an empty/transient read must not close valid chats.
             if (streamStateIsAvailable) {
+                if (!twitchChannels.length && typeof GM_setValue === 'function') {
+                    try { GM_setValue(ROSTER_KEY, ''); } catch (_) {}
+                }
                 closeStreamsNotLive(liveKeys, protectedKeys);
             }
 
@@ -731,7 +780,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v6.9.1 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 5 minutes thereafter');
+    console.info('[Moth] live stream scanner v7.0.2 ready · KICK channels are shown as a MultiKick link in Rust · first scan 30s after page load · every 5 minutes thereafter');
     }
 
     start();
