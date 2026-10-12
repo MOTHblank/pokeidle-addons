@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.44
+// @version      0.1.45
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -220,7 +220,6 @@
         'available': 'disponível', 'Buying…': 'Comprando…', 'Wait': 'Aguardar', 'Tried recently': 'Tentativa recente', 'Buy': 'Comprar',
         'No matching opportunities. Try a wider watch threshold or inspect Market inventory.': 'Nenhuma oportunidade corresponde aos filtros. Aumente o limite de alerta ou consulte o estoque do mercado.',
         'Browse item types, then load the offers for a selected currency.': 'Navegue pelos tipos de item e carregue as ofertas na moeda desejada.',
-        'Monitoring rules': 'Regras de monitoramento',
         'Watch rules': 'Regras de monitoramento', 'Watch price threshold': 'Limite de preço para alertas',
         'Scan interval': 'Intervalo de varredura', 'seconds': 'segundos',
         'Watch items': 'Monitorar itens', 'Watch Pokémon': 'Monitorar Pokémon', 'Watch diamonds': 'Monitorar diamantes',
@@ -314,7 +313,6 @@
         'Patient': 'Paciente',
         'Keep quantity': 'Manter quantidade',
         'Max units per listing': 'Máx. de unidades por anúncio',
-        '0 = all available': '0 = tudo disponível',
         'Add auto-sell item': 'Adicionar item à venda automática',
         'No auto-sell items configured.': 'Nenhum item configurado para venda automática.',
         'Fixed item rules': 'Regras fixas por item',
@@ -332,7 +330,6 @@
         'Price mode': 'Modo de preço',
         'Market catalog is not loaded yet.': 'O catálogo do mercado ainda não foi carregado.',
         'Owned: {owned} · listed: {listed}': 'Possui: {owned} · anunciado: {listed}',
-        'target: {price}': 'alvo: {price}',
         'Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.': 'Experimental: as recomendações podem mudar com os dados do mercado. Mantenha desativado até revisar cada item selecionado.',
         'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.',
         'Automation status': 'Status da automação',
@@ -357,8 +354,6 @@
         'Sell all available units': 'Vender todas as unidades disponíveis',
         'Per purchase': 'Por compra',
         'Per listing': 'Por anúncio',
-        'Recommended {price}': 'Recomendado {price}',
-        'Patient {price}': 'Paciente {price}',
         'No price yet': 'Sem preço ainda',
         'Rule added: {name}.': 'Regra adicionada: {name}.',
         'Rule removed: {name}.': 'Regra removida: {name}.',
@@ -4518,7 +4513,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.44 loaded');
+        console.info('[Moth Watch] v0.1.45 loaded');
     }
 
     bootstrap();
