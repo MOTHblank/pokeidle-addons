@@ -81,6 +81,10 @@ fn localize_status(message: String) -> String {
         (" could not close Firefox: ", " não foi possível fechar o Firefox: "),
         ("Launch Both requested · monitoring will update as Firefox becomes ready", "Iniciar ambos solicitado · o monitor atualizará quando o Firefox estiver pronto"),
         ("All Firefox instances closed.", "Todas as instâncias do Firefox foram fechadas."),
+        ("Some Firefox instances could not be stopped; check the log.", "Algumas instâncias do Firefox não puderam ser fechadas; consulte o log."),
+        ("Firefox already uses this profile", "O Firefox já está usando este perfil"),
+        ("Close the existing Firefox profile before switching modes.", "Feche o perfil do Firefox existente antes de trocar de modo."),
+        ("Use Stop before launching.", "Use Parar antes de iniciar."),
         ("Opened controller log · ", "Log do controlador aberto · "),
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened game", "Jogo aberto"),
@@ -152,6 +156,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Monitor" => "Monitor",
         "Poll" => "Consulta",
         "HEADLESS" => "OCULTO",
+        "EXISTING" => "EXISTENTE",
         "VISIBLE" => "VISÍVEL",
         "MIXED" => "MISTO",
         "Rust rewrite · Windows" => "Reescrita em Rust · Windows",
@@ -390,6 +395,7 @@ struct GameSlot {
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
+    orphaned_pid: Option<u32>,
 }
 
 impl GameSlot {
@@ -399,17 +405,29 @@ impl GameSlot {
             child: None,
             monitor: None,
             headless: true,
+            orphaned_pid: None,
         }
     }
 
     fn is_running(&mut self) -> bool {
-        match self.child.as_mut() {
-            Some(child) => matches!(child.try_wait(), Ok(None)),
-            None => false,
+        if self.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None))) {
+            return true;
         }
+        if let Some(pid) = self.orphaned_pid {
+            if firefox::process_alive(pid) {
+                return true;
+            }
+            self.orphaned_pid = None;
+        }
+        false
     }
 
     fn health(&self) -> Health {
+        if self.orphaned_pid.is_some() {
+            let mut health = Health::default();
+            health.state = "Existing Firefox".to_string();
+            return health;
+        }
         self.monitor
             .as_ref()
             .map(MonitorHandle::health)
@@ -708,18 +726,47 @@ impl ControllerApp {
     fn refresh_processes(&mut self) {
         for slot in &mut self.games {
             let exited = match slot.child.as_mut() {
-                Some(child) => !matches!(child.try_wait(), Ok(None)),
+                Some(child) => match child.try_wait() {
+                    Ok(Some(_)) => true,
+                    Ok(None) => false,
+                    Err(error) => {
+                        logging::warn(&format!(
+                            "{} Firefox process check failed: {error}", slot.profile.label()
+                        ));
+                        false
+                    }
+                },
                 None => false,
             };
-
             if exited {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
-                logging::info(&format!("{} Firefox process exited", account_name));
-                if let Some(monitor) = slot.monitor.as_ref() {
+                logging::info(&format!("{} Firefox child process exited", account_name));
+                if let Some(monitor) = slot.monitor.take() {
                     monitor.stop();
                 }
                 slot.child = None;
-                slot.monitor = None;
+
+                // Firefox can outlive the original launcher handle. Recover the
+                // exact-profile PID rather than silently starting a duplicate.
+                match Config::for_profile(slot.profile)
+                    .and_then(|config| firefox::find_profile_process(&config))
+                {
+                    Ok(Some(pid)) => {
+                        slot.orphaned_pid = Some(pid);
+                        logging::warn(&format!(
+                            "{} still has a Firefox profile process (PID {})", account_name, pid
+                        ));
+                    }
+                    Ok(None) => slot.orphaned_pid = None,
+                    Err(error) => logging::warn(&format!(
+                        "{} profile recovery failed: {}", account_name, error
+                    )),
+                }
+            }
+            if let Some(pid) = slot.orphaned_pid {
+                if !firefox::process_alive(pid) {
+                    slot.orphaned_pid = None;
+                }
             }
         }
     }
@@ -781,10 +828,6 @@ impl ControllerApp {
             return;
         }
 
-        self.games[index].child = None;
-        self.games[index].monitor = None;
-        self.games[index].headless = headless;
-
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
             Err(error) => {
@@ -792,6 +835,32 @@ impl ControllerApp {
                 return;
             }
         };
+
+        // An existing Firefox may own this profile even if the controller was
+        // restarted or its Child handle was lost. Never spawn over that session.
+        match firefox::find_profile_process(&config) {
+            Ok(Some(pid)) => {
+                self.games[index].orphaned_pid = Some(pid);
+                self.set_status(
+                    format!(
+                        "{}: Firefox already uses this profile (PID {}). Use Stop before launching.",
+                        account_name, pid
+                    ),
+                    true,
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.set_status(format!("{}: {}", account_name, error), true);
+                return;
+            }
+        }
+
+        self.games[index].child = None;
+        self.games[index].monitor = None;
+        self.games[index].orphaned_pid = None;
+        self.games[index].headless = headless;
 
         logging::info(&format!(
             "launching {} with Firefox profile {} on BiDi port {}",
@@ -830,6 +899,14 @@ impl ControllerApp {
         let index = Self::game_index(profile);
         self.refresh_processes();
 
+        if self.games[index].orphaned_pid.is_some() {
+            self.set_status(
+                format!("{}: Close the existing Firefox profile before switching modes.", self.account_name(profile)),
+                true,
+            );
+            return;
+        }
+
         if !self.games[index].is_running() {
             self.games[index].headless = headless;
             self.launch_one_mode(profile, headless);
@@ -866,43 +943,51 @@ impl ControllerApp {
         let account_name = self.account_name(profile);
         let slot = &mut self.games[index];
 
-        if let Some(monitor) = slot.monitor.as_ref() {
-            monitor.stop();
-        }
-
-        let Some(mut child) = slot.child.take() else {
-            slot.monitor = None;
+        if let Some(mut child) = slot.child.take() {
+            logging::info(&format!(
+                "stopping {} Firefox PID {}", account_name, child.id()
+            ));
+            match firefox::stop_child(&mut child, slot.monitor.as_ref()) {
+                Ok(()) => {
+                    if let Some(monitor) = slot.monitor.take() {
+                        monitor.stop();
+                    }
+                    slot.orphaned_pid = None;
+                    self.set_status(format!("{} Firefox closed.", account_name), false);
+                    true
+                }
+                Err(error) => {
+                    logging::error(&format!("{} Firefox shutdown failed: {}", account_name, error));
+                    slot.child = Some(child);
+                    self.set_status(format!("{}: could not close Firefox: {}", account_name, error), true);
+                    false
+                }
+            }
+        } else if let Some(pid) = slot.orphaned_pid {
+            // Stop was explicitly clicked; never terminate a recovered process
+            // automatically when the controller itself exits.
+            let result = Config::for_profile(profile)
+                .and_then(|config| firefox::stop_existing(&config, pid));
+            match result {
+                Ok(()) => {
+                    slot.orphaned_pid = None;
+                    if let Some(monitor) = slot.monitor.take() {
+                        monitor.stop();
+                    }
+                    self.set_status(format!("{} Firefox closed.", account_name), false);
+                    true
+                }
+                Err(error) => {
+                    self.set_status(format!("{}: could not close Firefox: {}", account_name, error), true);
+                    false
+                }
+            }
+        } else {
+            if let Some(monitor) = slot.monitor.take() {
+                monitor.stop();
+            }
             self.set_status(format!("{} is already stopped.", account_name), false);
-            return true;
-        };
-
-        logging::info(&format!(
-            "stopping {} Firefox PID {}",
-            account_name,
-            child.id()
-        ));
-
-        match child.kill() {
-            Ok(()) => {
-                let _ = child.wait();
-                slot.monitor = None;
-                self.set_status(format!("{} Firefox closed.", account_name), false);
-                true
-            }
-            Err(error) => {
-                logging::error(&format!(
-                    "failed to stop {} Firefox PID {}: {}",
-                    account_name,
-                    child.id(),
-                    error
-                ));
-                slot.child = Some(child);
-                self.set_status(
-                    format!("{}: could not close Firefox: {}", account_name, error),
-                    true,
-                );
-                false
-            }
+            true
         }
     }
 
@@ -916,10 +1001,17 @@ impl ControllerApp {
     }
 
     fn stop_all(&mut self) {
+        let mut all_stopped = true;
         for profile in GameProfile::ALL {
-            self.stop_one(profile);
+            if !self.stop_one(profile) {
+                all_stopped = false;
+            }
         }
-        self.set_status("All Firefox instances closed.", false);
+        if all_stopped {
+            self.set_status("All Firefox instances closed.", false);
+        } else {
+            self.set_status("Some Firefox instances could not be stopped; check the log.", true);
+        }
     }
 
     fn open_logs(&mut self) {
@@ -1051,9 +1143,12 @@ impl Drop for ControllerApp {
                     account_name,
                     child.id()
                 ));
-                let _ = child.kill();
-                let _ = child.wait();
+                if let Err(error) = firefox::stop_child(&mut child, slot.monitor.as_ref()) {
+                    logging::error(&format!("{} shutdown failed: {}", account_name, error));
+                }
             }
+            // Recovered processes are intentionally not owned by this controller
+            // instance. Only an explicit Stop action may close those browsers.
         }
     }
 }
@@ -2697,6 +2792,8 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
         ("HUNTING", GOOD)
     } else if health.state == "Running" && health.logged_in {
         ("ONLINE", GOOD)
+    } else if health.state == "Existing Firefox" {
+        ("EXISTING", WARN)
     } else if health.state == "Connecting" || health.state == "Reconnecting" {
         ("CONNECTING", WARN)
     } else if health.state == "Running" && !health.logged_in {
