@@ -3576,108 +3576,149 @@
         });
     }
 
+    function ruleNumber(label, attrs, value, min = 0) {
+        return `<label class="moth-mw-rule-field"><span>${escapeHtml(tr(label))}</span><input type="number" inputmode="numeric" min="${min}" step="1" value="${escapeHtml(String(value))}" ${attrs}></label>`;
+    }
+
+    function ruleCurrency(attrs, currency) {
+        return `<label class="moth-mw-rule-field"><span>${escapeHtml(tr('Currency'))}</span><select ${attrs}>
+            <option value="gold"${currency === 'gold' ? ' selected' : ''}>${escapeHtml(tr('Coins'))}</option>
+            <option value="orb"${currency === 'orb' ? ' selected' : ''}>${escapeHtml(tr('Gems'))}</option>
+        </select></label>`;
+    }
+
+    function ruleSwitch(label, attrs, checked) {
+        return `<label class="moth-mw-switch moth-mw-rule-toggle"><input type="checkbox" ${attrs}${checked ? ' checked' : ''}><span>${escapeHtml(tr(label))}</span></label>`;
+    }
+
     function autoSellRulesHtml() {
         const rules = sanitizeAutoSellRules(config.autoSellRules);
-        const cards = rules.map(rule =>
-            '<article class="moth-mw-rule-card" data-moth-auto-sell-row="' + escapeHtml(rule.id) + '">' +
-            '<div class="moth-mw-rule-card-head"><div class="moth-mw-rule-title"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b>' +
-            '<small data-moth-rule-status data-rule-type="auto-sell" data-rule-id="' + escapeHtml(rule.id) + '">' +
-            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
-            '<label class="moth-mw-switch"><input type="checkbox" data-moth-auto-sell-field="enabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.enabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Enabled')) + '</span></label></div>' +
-            '<div class="moth-mw-targets" data-moth-auto-targets data-rule-id="' + escapeHtml(rule.id) + '">' + autoSellTargetsHtml(rule) + '</div>' +
-            '<div class="moth-mw-rule-fields">' +
-            '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-auto-sell-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
-            '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
-            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
-            '<label><span>' + escapeHtml(tr('Price mode')) + '</span><select data-moth-auto-sell-field="mode" data-rule-id="' + escapeHtml(rule.id) + '">' +
-            '<option value="recommended"' + (rule.mode === 'recommended' ? ' selected' : '') + '>' + escapeHtml(tr('Recommended')) + '</option>' +
-            '<option value="patient"' + (rule.mode === 'patient' ? ' selected' : '') + '>' + escapeHtml(tr('Patient')) + '</option></select></label>' +
-            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
-            '" data-moth-auto-sell-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input type="number" min="1" step="1" value="' + rule.maxSellQty +
-            '" data-moth-auto-sell-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.sellAll ? ' disabled' : '') + '></label></div>' +
-            '<div class="moth-mw-rule-card-foot"><label class="moth-mw-checkline"><input type="checkbox" data-moth-auto-sell-field="sellAll" data-rule-id="' +
-            escapeHtml(rule.id) + '"' + (rule.sellAll ? ' checked' : '') + '> ' + escapeHtml(tr('Sell all available units')) + '</label>' +
-            '<button type="button" class="moth-mw-btn danger" data-moth-remove-auto-sell="' + escapeHtml(rule.id) + '">' +
-            escapeHtml(tr('Remove')) + '</button></div></article>'
-        ).join('');
-        return '<section class="moth-mw-automation-block primary"><div class="moth-mw-section-title"><h4>' +
-            escapeHtml(tr('Experimental auto-sell')) + '</h4><span>' +
-            escapeHtml(tr('Automatically list selected owned items. Moth Watch waits if the same item/currency already has an open listing.')) +
-            '</span></div><p class="moth-mw-setting-help">' +
-            escapeHtml(tr('Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.')) +
-            '</p><div class="moth-mw-master-row">' + configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox') + '</div>' +
-            '<div class="moth-mw-rule-add-card"><div class="moth-mw-rule-add-search"><label><span>' + escapeHtml(tr('Find item')) +
-            '</span><input type="search" id="moth-auto-sell-search" placeholder="' + escapeHtml(tr('Search items…')) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Item')) + '</span><select id="moth-auto-sell-item">' + automationItemOptions() + '</select></label></div>' +
-            '<div class="moth-mw-rule-add-fields"><label><span>' + escapeHtml(tr('Currency')) + '</span><select id="moth-auto-sell-currency"><option value="gold">' +
-            escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select></label>' +
-            '<label><span>' + escapeHtml(tr('Price mode')) + '</span><select id="moth-auto-sell-mode"><option value="recommended">' +
-            escapeHtml(tr('Recommended')) + '</option><option value="patient">' + escapeHtml(tr('Patient')) + '</option></select></label>' +
-            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-auto-sell-keep" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input id="moth-auto-sell-max" type="number" min="1" step="1" value="1"></label></div>' +
-            '<label class="moth-mw-checkline"><input id="moth-auto-sell-all" type="checkbox"> ' + escapeHtml(tr('Sell all available units')) + '</label>' +
-            '<div class="moth-mw-rule-add-actions"><span>' + escapeHtml(tr('Safe default: one unit. Use the explicit “all” option only when you really want it.')) +
-            '</span><button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">' + escapeHtml(tr('Add auto-sell item')) + '</button></div></div>' +
-            '<div class="moth-mw-rule-list">' + (cards || '<div class="moth-mw-empty">' + escapeHtml(tr('No auto-sell items configured.')) + '</div>') + '</div></section>';
+        const cards = rules.map(rule => {
+            const id = escapeHtml(rule.id);
+            return `<article class="moth-mw-rule-card" data-moth-auto-sell-row="${id}">
+                <div class="moth-mw-rule-card-head">
+                    <div class="moth-mw-rule-title">
+                        <b>${escapeHtml(catalogName(rule.itemId))}</b>
+                        <small data-moth-rule-status data-rule-type="auto-sell" data-rule-id="${id}">${escapeHtml(automationRuleStatus(rule.itemId, rule.currency))}</small>
+                    </div>
+                    ${ruleSwitch('Enabled', `data-moth-auto-sell-field="enabled" data-rule-id="${id}"`, rule.enabled)}
+                </div>
+                <div class="moth-mw-rule-fields">
+                    ${ruleCurrency(`data-moth-auto-sell-field="currency" data-rule-id="${id}"`, rule.currency)}
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Price mode'))}</span>
+                        <select data-moth-auto-sell-field="mode" data-rule-id="${id}">
+                            <option value="recommended"${rule.mode === 'recommended' ? ' selected' : ''}>${escapeHtml(tr('Recommended'))}</option>
+                            <option value="patient"${rule.mode === 'patient' ? ' selected' : ''}>${escapeHtml(tr('Patient'))}</option>
+                        </select>
+                    </label>
+                    ${ruleNumber('Keep quantity', `data-moth-auto-sell-field="keepQty" data-rule-id="${id}"`, rule.keepQty)}
+                </div>
+                <div class="moth-mw-targets" data-moth-auto-targets data-rule-id="${id}">${autoSellTargetsHtml(rule)}</div>
+                <div class="moth-mw-rule-card-foot">
+                    <span class="moth-mw-rule-note">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</span>
+                    <button type="button" class="moth-mw-btn danger" data-moth-remove-auto-sell="${id}">${escapeHtml(tr('Remove'))}</button>
+                </div>
+            </article>`;
+        }).join('');
+        return `<section class="moth-mw-automation-block">
+            <div class="moth-mw-block-heading"><h4>${escapeHtml(tr('Experimental auto-sell'))}</h4>
+                <p>${escapeHtml(tr('Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.'))}</p>
+            </div>
+            <div class="moth-mw-master-row">${configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox')}</div>
+            <div class="moth-mw-rule-add-card">
+                <h5>${escapeHtml(tr('Create an auto-sell rule'))}</h5>
+                <div class="moth-mw-rule-add-search">
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Find item'))}</span><input type="search" id="moth-auto-sell-search" placeholder="${escapeHtml(tr('Search items…'))}"></label>
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Item'))}</span><select id="moth-auto-sell-item">${automationItemOptions()}</select></label>
+                </div>
+                <div class="moth-mw-rule-add-fields">
+                    ${ruleCurrency('id="moth-auto-sell-currency"', 'gold')}
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Price mode'))}</span><select id="moth-auto-sell-mode">
+                        <option value="recommended">${escapeHtml(tr('Recommended'))}</option>
+                        <option value="patient">${escapeHtml(tr('Patient'))}</option>
+                    </select></label>
+                    ${ruleNumber('Keep quantity', 'id="moth-auto-sell-keep"', 0)}
+                </div>
+                <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
+                <div class="moth-mw-rule-add-actions">
+                    <span>${escapeHtml(tr('Adding a rule does not enable the master switch.'))}</span>
+                    <button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">${escapeHtml(tr('Add auto-sell item'))}</button>
+                </div>
+            </div>
+            <h5 class="moth-mw-rule-list-title">${escapeHtml(tr('Configured rules'))} (${rules.length})</h5>
+            <div class="moth-mw-rule-list">${cards || `<div class="moth-mw-empty">${escapeHtml(tr('No auto-sell items configured.'))}</div>`}</div>
+        </section>`;
     }
 
     function fixedRulesHtml() {
         const rules = sanitizeFixedItemRules(config.fixedItemRules);
-        const cards = rules.map(rule =>
-            '<article class="moth-mw-rule-card fixed" data-moth-fixed-row="' + escapeHtml(rule.id) + '">' +
-            '<div class="moth-mw-rule-card-head"><div class="moth-mw-rule-title"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b>' +
-            '<small data-moth-rule-status data-rule-type="fixed" data-rule-id="' + escapeHtml(rule.id) + '">' +
-            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
-            '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-fixed-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
-            '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
-            '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label></div>' +
-            '<div class="moth-mw-fixed-sides"><section class="moth-mw-rule-side buy"><div class="moth-mw-rule-side-head">' +
-            '<label class="moth-mw-switch"><input type="checkbox" data-moth-fixed-field="buyEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.buyEnabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Buy')) + '</span></label></div>' +
-            '<div class="moth-mw-rule-fields compact"><label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input type="number" min="0" step="1" value="' +
-            rule.buyMax + '" data-moth-fixed-field="buyMax" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Per purchase')) + '</span><input type="number" min="1" step="1" value="' + rule.buyQtyLimit +
-            '" data-moth-fixed-field="buyQtyLimit" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.buyAll ? ' disabled' : '') + '></label></div>' +
-            '<label class="moth-mw-checkline"><input type="checkbox" data-moth-fixed-field="buyAll" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.buyAll ? ' checked' : '') + '> ' + escapeHtml(tr('Buy all affordable units')) + '</label></section>' +
-            '<section class="moth-mw-rule-side sell"><div class="moth-mw-rule-side-head">' +
-            '<label class="moth-mw-switch"><input type="checkbox" data-moth-fixed-field="sellEnabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.sellEnabled ? ' checked' : '') + '><span>' + escapeHtml(tr('Sell')) + '</span></label></div>' +
-            '<div class="moth-mw-rule-fields compact"><label><span>' + escapeHtml(tr('Sell at')) + '</span><input type="number" min="0" step="1" value="' +
-            rule.sellPrice + '" data-moth-fixed-field="sellPrice" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input type="number" min="0" step="1" value="' + rule.keepQty +
-            '" data-moth-fixed-field="keepQty" data-rule-id="' + escapeHtml(rule.id) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input type="number" min="1" step="1" value="' + rule.maxSellQty +
-            '" data-moth-fixed-field="maxSellQty" data-rule-id="' + escapeHtml(rule.id) + '"' + (rule.sellAll ? ' disabled' : '') + '></label></div>' +
-            '<label class="moth-mw-checkline"><input type="checkbox" data-moth-fixed-field="sellAll" data-rule-id="' + escapeHtml(rule.id) + '"' +
-            (rule.sellAll ? ' checked' : '') + '> ' + escapeHtml(tr('Sell all available units')) + '</label></section></div>' +
-            '<div class="moth-mw-rule-card-foot"><span class="moth-mw-rule-note">' +
-            escapeHtml(tr('Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.')) +
-            '</span><button type="button" class="moth-mw-btn danger" data-moth-remove-fixed="' + escapeHtml(rule.id) + '">' +
-            escapeHtml(tr('Remove')) + '</button></div></article>'
-        ).join('');
-        return '<section class="moth-mw-automation-block primary"><div class="moth-mw-section-title"><h4>' +
-            escapeHtml(tr('Fixed item rules')) + '</h4><span>' +
-            escapeHtml(tr('Fixed rules are deterministic: exact buy and sell prices win over recommendation-based selling for the same item.')) +
-            '</span></div><div class="moth-mw-master-row">' + configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox') + '</div>' +
-            '<div class="moth-mw-rule-add-card"><div class="moth-mw-rule-add-search"><label><span>' + escapeHtml(tr('Find item')) +
-            '</span><input type="search" id="moth-fixed-search" placeholder="' + escapeHtml(tr('Search items…')) + '"></label>' +
-            '<label><span>' + escapeHtml(tr('Item')) + '</span><select id="moth-fixed-item">' + automationItemOptions() + '</select></label></div>' +
-            '<div class="moth-mw-rule-add-fields fixed"><label><span>' + escapeHtml(tr('Currency')) + '</span><select id="moth-fixed-currency"><option value="gold">' +
-            escapeHtml(tr('Coins')) + '</option><option value="orb">' + escapeHtml(tr('Gems')) + '</option></select></label>' +
-            '<label><span>' + escapeHtml(tr('Buy at or below')) + '</span><input id="moth-fixed-buy" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Per purchase')) + '</span><input id="moth-fixed-buy-limit" type="number" min="1" step="1" value="1"></label>' +
-            '<label><span>' + escapeHtml(tr('Sell at')) + '</span><input id="moth-fixed-sell" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Keep quantity')) + '</span><input id="moth-fixed-keep" type="number" min="0" step="1" value="0"></label>' +
-            '<label><span>' + escapeHtml(tr('Per listing')) + '</span><input id="moth-fixed-sell-limit" type="number" min="1" step="1" value="1"></label></div>' +
-            '<div class="moth-mw-rule-add-checks"><label class="moth-mw-checkline"><input id="moth-fixed-buy-all" type="checkbox"> ' +
-            escapeHtml(tr('Buy all affordable units')) + '</label><label class="moth-mw-checkline"><input id="moth-fixed-sell-all" type="checkbox"> ' +
-            escapeHtml(tr('Sell all available units')) + '</label></div>' +
-            '<div class="moth-mw-rule-add-actions"><span>' + escapeHtml(tr('Safe default: one unit. Use the explicit “all” option only when you really want it.')) +
-            '</span><button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">' + escapeHtml(tr('Add fixed rule')) + '</button></div></div>' +
-            '<div class="moth-mw-rule-list">' + (cards || '<div class="moth-mw-empty">' + escapeHtml(tr('No fixed item rules configured.')) + '</div>') + '</div></section>';
+        const cards = rules.map(rule => {
+            const id = escapeHtml(rule.id);
+            return `<article class="moth-mw-rule-card fixed" data-moth-fixed-row="${id}">
+                <div class="moth-mw-rule-card-head">
+                    <div class="moth-mw-rule-title"><b>${escapeHtml(catalogName(rule.itemId))}</b>
+                        <small data-moth-rule-status data-rule-type="fixed" data-rule-id="${id}">${escapeHtml(automationRuleStatus(rule.itemId, rule.currency))}</small>
+                    </div>
+                    ${ruleCurrency(`data-moth-fixed-field="currency" data-rule-id="${id}"`, rule.currency)}
+                </div>
+                <div class="moth-mw-rule-compose">
+                    <section class="moth-mw-rule-side buy">
+                        <div class="moth-mw-rule-side-head">${ruleSwitch('Buy', `data-moth-fixed-field="buyEnabled" data-rule-id="${id}"`, rule.buyEnabled)}</div>
+                        ${ruleNumber('Buy at or below', `data-moth-fixed-field="buyMax" data-rule-id="${id}"`, rule.buyMax)}
+                        <p class="moth-mw-rule-hint">${escapeHtml(tr('Buy every available unit affordable within reserves and purchase limits.'))}</p>
+                    </section>
+                    <section class="moth-mw-rule-side sell">
+                        <div class="moth-mw-rule-side-head">${ruleSwitch('Sell', `data-moth-fixed-field="sellEnabled" data-rule-id="${id}"`, rule.sellEnabled)}</div>
+                        <div class="moth-mw-rule-fields compact">
+                            ${ruleNumber('Sell at', `data-moth-fixed-field="sellPrice" data-rule-id="${id}"`, rule.sellPrice)}
+                            ${ruleNumber('Keep quantity', `data-moth-fixed-field="keepQty" data-rule-id="${id}"`, rule.keepQty)}
+                        </div>
+                        <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
+                    </section>
+                </div>
+                <div class="moth-mw-rule-card-foot">
+                    <span class="moth-mw-rule-note">${escapeHtml(tr('Price per unit'))}</span>
+                    <button type="button" class="moth-mw-btn danger" data-moth-remove-fixed="${id}">${escapeHtml(tr('Remove'))}</button>
+                </div>
+            </article>`;
+        }).join('');
+        return `<section class="moth-mw-automation-block primary">
+            <div class="moth-mw-block-heading"><h4>${escapeHtml(tr('Fixed item rules'))}</h4>
+                <p>${escapeHtml(tr('Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.'))}</p>
+            </div>
+            <div class="moth-mw-master-row">${configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox')}</div>
+            <div class="moth-mw-rule-add-card">
+                <h5>${escapeHtml(tr('Create a fixed rule'))}</h5>
+                <div class="moth-mw-rule-add-search">
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Find item'))}</span>
+                        <input type="search" id="moth-fixed-search" placeholder="${escapeHtml(tr('Search items…'))}"></label>
+                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Item'))}</span><select id="moth-fixed-item">${automationItemOptions()}</select></label>
+                    ${ruleCurrency('id="moth-fixed-currency"', 'gold')}
+                </div>
+                <div class="moth-mw-rule-compose">
+                    <section class="moth-mw-rule-side buy">
+                        <h6>${escapeHtml(tr('Buy'))}</h6>
+                        ${ruleNumber('Buy at or below', 'id="moth-fixed-buy"', 0)}
+                        <p class="moth-mw-rule-hint">${escapeHtml(tr('Buy every available unit affordable within reserves and purchase limits.'))}</p>
+                    </section>
+                    <section class="moth-mw-rule-side sell">
+                        <h6>${escapeHtml(tr('Sell'))}</h6>
+                        <div class="moth-mw-rule-fields compact">
+                            ${ruleNumber('Sell at', 'id="moth-fixed-sell"', 0)}
+                            ${ruleNumber('Keep quantity', 'id="moth-fixed-keep"', 0)}
+                        </div>
+                        <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
+                    </section>
+                </div>
+                <p class="moth-mw-rule-hint">${escapeHtml(tr('Only set the prices for the actions you want. 0 disables that action.'))}</p>
+                <div class="moth-mw-rule-add-actions">
+                    <span>${escapeHtml(tr('Adding a rule does not enable the master switch.'))}</span>
+                    <button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">${escapeHtml(tr('Add fixed rule'))}</button>
+                </div>
+            </div>
+            <h5 class="moth-mw-rule-list-title">${escapeHtml(tr('Configured rules'))} (${rules.length})</h5>
+            <div class="moth-mw-rule-list">${cards || `<div class="moth-mw-empty">${escapeHtml(tr('No fixed item rules configured.'))}</div>`}</div>
+        </section>`;
     }
 
     function renderWatch(forceViewBuild = false) {
