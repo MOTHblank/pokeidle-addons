@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Upstream Scraper & Exporter
 // @namespace    moth.pokeidle
-// @version      1.1.0
+// @version      1.1.1
 // @description  Captures public PokéIdle client assets into a TAR and verified manifest, with limits and cancellation.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -184,11 +184,12 @@
             add(value);
         }
 
-        for (
-            const entry of
-            performance.getEntriesByType('resource')
-        ) {
-            add(entry.name);
+        // Resource Timing also contains authenticated XHR/fetch requests.
+        // Only DOM-style static asset initiators belong in a code snapshot.
+        for (const entry of performance.getEntriesByType('resource')) {
+            if (['script', 'link', 'css'].includes(entry.initiatorType)) {
+                add(entry.name);
+            }
         }
 
         return [...urls];
@@ -251,6 +252,26 @@
                     )
                 ) {
                     add(match[1], true);
+                }
+            }
+        }
+
+        if (
+            /(?:javascript|ecmascript)/i.test(contentType) ||
+            /\.(?:js|mjs)$/i.test(path)
+        ) {
+            // Large PokéIdle bundles fetch JSON game data at runtime, not
+            // through ES module imports. Discover literal static references
+            // without executing code or making arbitrary API requests.
+            const assetPatterns = [
+                /\bfetch\s*\(\s*['"`]([^'"`]+)['"`]/g,
+                /['"`]((?:\/|\.{1,2}\/)[^'"`\s?#]+\.(?:json|mjs|js|css|html?|csv|txt|xml|map)(?:\?[^'"`\s]*)?)['"`]/g,
+                /\/\/[#@]\s*sourceMappingURL\s*=\s*(\S+)/g
+            ];
+            for (const pattern of assetPatterns) {
+                let match;
+                while ((match = pattern.exec(text))) {
+                    add(match[1]);
                 }
             }
         }
@@ -1319,7 +1340,7 @@
         );
 
         console.info(
-            '[PokéIdle Upstream Scraper] v1.1.0 loaded'
+            '[PokéIdle Upstream Scraper] v1.1.1 loaded'
         );
     }
 
