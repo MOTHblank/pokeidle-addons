@@ -111,6 +111,11 @@ fn localize_status(message: String) -> String {
         ("switching Firefox to ", "mudando o Firefox para o modo "),
         (" mode...", " ..."),
         ("started · ", "iniciado · "),
+        (": installer opened", ": instalador aberto"),
+        ("installer opened", "instalador aberto"),
+        ("could not list addons from GitHub: ", "não foi possível listar addons no GitHub: "),
+        ("GitHub addon list unavailable", "lista de addons do GitHub indisponível"),
+        ("could not start addon installer", "não foi possível iniciar o instalador de addons"),
     ] {
         value = value.replace(en, pt);
     }
@@ -180,6 +185,24 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Live state for both isolated Firefox profiles" => "Estado atual dos dois perfis isolados do Firefox",
         "Show Firefox" => "Mostrar Firefox",
         "Hide Firefox" => "Ocultar Firefox",
+        "Restart visible" => "Reiniciar visível",
+        "Restart headless" => "Reiniciar oculto",
+        "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
+        "Telemetry stale" => "Telemetria desatualizada",
+        "Waiting for first telemetry sample" => "Aguardando primeira leitura da telemetria",
+        "The displayed metrics may be out of date." => "Os dados exibidos podem estar desatualizados.",
+        "STALE" => "DESATUALIZADO",
+        "Installer already running" => "O instalador já está em execução",
+        "Checking addons on GitHub…" => "Consultando addons no GitHub…",
+        "Opening addon installers…" => "Abrindo instaladores de addons…",
+        "Installer details" => "Detalhes da instalação",
+        "Recent events" => "Eventos recentes",
+        "No events yet" => "Nenhum evento ainda",
+        "running" => "em execução",
+        "First scan 30s · 5 min" => "Primeiro scan em 30 s · a cada 5 min",
+        "Idle detection unavailable without Controller Bridge telemetry" => "Detecção de inatividade indisponível sem telemetria do Controller Bridge",
+        "Profile folder exists" => "Pasta do perfil existente",
+        "Registered" => "Registrada",
         "Stop" => "Parar",
         "Launch" => "Iniciar",
         "CURRENT ACTIVITY" => "ATIVIDADE ATUAL",
@@ -705,7 +728,7 @@ impl ControllerApp {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
             show_accounts: false,
-            status: localize_status("Ready · launch only the profiles you need".to_string()),
+            status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
             addon_install_tx,
@@ -895,7 +918,7 @@ impl ControllerApp {
     }
 
     fn set_status(&mut self, message: impl Into<String>, error: bool) {
-        self.status = localize_status(message.into());
+        self.status = message.into();
         self.status_error = error;
         self.events.push_front(UiEvent {
             at: Instant::now(),
@@ -1420,11 +1443,12 @@ impl eframe::App for ControllerApp {
                     let dot_color = if self.status_error { BAD } else { GOOD };
                     ui.colored_label(dot_color, "●");
                     ui.add_space(6.0);
+                    let localized = localize_status(self.status.clone());
                     ui.add(egui::Label::new(
-                        RichText::new(&self.status)
+                        RichText::new(&localized)
                             .size(12.0)
                             .color(if self.status_error { TEXT } else { MUTED }),
-                    ).truncate()).on_hover_text(&self.status);
+                    ).truncate()).on_hover_text(localized);
                 });
             });
 
@@ -1818,6 +1842,13 @@ fn draw_game_card(
                 ).on_hover_text(
                     health.last_error.as_deref().unwrap_or(tr("The displayed metrics may be out of date."))
                 );
+            }
+
+            if running && health.game_ready && health.logged_in
+                && health.activity == "Hunting" && !health.bridge_connected {
+                ui.add_space(4.0);
+                ui.label(RichText::new(tr("Idle detection unavailable without Controller Bridge telemetry"))
+                    .size(10.0).color(DIM));
             }
 
             if idle_warning {
@@ -2639,7 +2670,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!("{age}s {}", tr("ago")))
                             .size(9.0).color(DIM));
-                        ui.label(RichText::new(&event.message)
+                        ui.label(RichText::new(localize_status(event.message.clone()))
                             .size(10.0).color(if event.is_error { BAD } else { MUTED }));
                     });
                 }
@@ -2868,12 +2899,12 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                 ui.horizontal_wrapped(|ui| {
                                     let profile_label = if setup.profile_ready {
-                                        tr("Profile ready")
+                                        tr("Profile folder exists")
                                     } else {
                                         tr("Not configured")
                                     };
                                     let vm_label = if setup.violentmonkey_installed {
-                                        tr("Installed")
+                                        tr("Registered")
                                     } else {
                                         tr("Not installed")
                                     };
