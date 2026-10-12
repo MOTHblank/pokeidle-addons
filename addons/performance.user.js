@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.4.1
+// @version      5.5.0
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.4.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.0');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -113,6 +113,20 @@
     const nativeCancelRAF = page.cancelAnimationFrame?.bind(page);
     const throttledRequests = new Map();
     const suspendedCampoRequests = new Map();
+    // A suspended replay callback must not keep an otherwise destroyed Campo
+    // and its canvas alive merely because Performance+ is enabled.
+    const weakCampoCallback = callback => typeof WeakRef === 'function'
+        ? new WeakRef(callback)
+        : { deref: () => callback };
+
+    function pruneSuspendedCampoLoops() {
+        for (const [id, ref] of suspendedCampoRequests) {
+            if (!ref.deref()) {
+                suspendedCampoRequests.delete(id);
+                throttledRequests.delete(id);
+            }
+        }
+    }
     const rafState = new WeakMap();
     const rafClassification = new WeakMap();
     let nextSyntheticRafId = -1;
@@ -312,72 +326,6 @@
         restoreNativeOptimized
     );
 
-    // Upstream sprites.mjs paints active/team Pokémon into DOM canvases via
-    // a 220ms setInterval. CSS animation rules do not stop that canvas drawing.
-    // Let each sprite canvas paint one frame, then skip clear/draw operations
-    // while Performance is active; Full mode resumes the original calls.
-    const spriteCanvasDrawCount = new WeakMap();
-
-    function installPokemonSpriteFreezeHook() {
-        const contextType = page.CanvasRenderingContext2D;
-        const prototype = contextType?.prototype;
-        if (!prototype?.drawImage || !prototype?.clearRect) {
-            return false;
-        }
-        if (prototype.drawImage.__mothPerformanceSpriteFreeze) {
-            return true;
-        }
-
-        const originalDrawImage = prototype.drawImage;
-        const originalClearRect = prototype.clearRect;
-        const isActiveOrPartySprite = canvas =>
-            Boolean(canvas?.closest?.('#ativo-card, #time-corpo'));
-
-        const guardedDrawImage = function (...args) {
-            const canvas = this.canvas;
-            if (!isActiveOrPartySprite(canvas)) {
-                return originalDrawImage.apply(this, args);
-            }
-
-            const previousFrames = spriteCanvasDrawCount.get(canvas) || 0;
-            if (settings.enabled && currentMode === 'paused' && previousFrames > 0) {
-                return;
-            }
-
-            const result = originalDrawImage.apply(this, args);
-            spriteCanvasDrawCount.set(canvas, previousFrames + 1);
-            return result;
-        };
-        Object.defineProperty(guardedDrawImage, '__mothPerformanceSpriteFreeze', {
-            value: true
-        });
-
-        const guardedClearRect = function (...args) {
-            const canvas = this.canvas;
-            if (
-                isActiveOrPartySprite(canvas) &&
-                settings.enabled &&
-                currentMode === 'paused' &&
-                (spriteCanvasDrawCount.get(canvas) || 0) > 0
-            ) {
-                return;
-            }
-            return originalClearRect.apply(this, args);
-        };
-
-        try {
-            prototype.drawImage = guardedDrawImage;
-            prototype.clearRect = guardedClearRect;
-            return prototype.drawImage === guardedDrawImage &&
-                prototype.clearRect === guardedClearRect;
-        } catch (error) {
-            console.warn('[PokéIdle Performance+] Pokémon sprite freeze hook failed', error);
-            return false;
-        }
-    }
-
-    installPokemonSpriteFreezeHook();
-
     // ------------------------------------------------------------------
     // Upstream-aware requestAnimationFrame throttling
     // ------------------------------------------------------------------
@@ -461,10 +409,8 @@
          * Cap every page-world rAF callback, including loops not identified
          * as campo/NPC. This limits JS-driven updates, not compositor refresh.
          */
-        rafClassification.set(
-            callback,
-            kind || 'page'
-        );
+        // Do not throttle unknown rAF callers; some drive controls/modals.
+        rafClassification.set(callback, kind);
 
         if (
             kind ===
@@ -569,12 +515,7 @@
             return 100;
         }
 
-        // Keep decorative page-world loops nearly idle while the map renderer is paused.
-        if (currentMode === 'paused') {
-            return 1000;
-        }
-
-        return intervalForMode(currentMode);
+        return 0;
     }
 
     function installCampoHook() {
@@ -604,7 +545,7 @@
             if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
                 const pending = { actualId: null, cancelled: false, suspended: true };
                 throttledRequests.set(publicId, pending);
-                suspendedCampoRequests.set(publicId, callback);
+                suspendedCampoRequests.set(publicId, weakCampoCallback(callback));
                 return publicId;
             }
 
@@ -628,7 +569,7 @@
                     if (kind === 'campo' && settings.enabled && currentMode === 'paused') {
                         pending.actualId = null;
                         pending.suspended = true;
-                        suspendedCampoRequests.set(publicId, callback);
+                        suspendedCampoRequests.set(publicId, weakCampoCallback(callback));
                         return;
                     }
 
@@ -783,6 +724,77 @@
     const uiTimerClassification =
         new WeakMap();
 
+    // sprites.mjs: spriteAnimado paints the first frame synchronously, then
+    // starts a 220ms animation timer per canvas. Preserve that first image.
+    // In Performance mode one shared cleanup pass replaces all the timers;
+    // otherwise their native 220ms cadence runs unchanged.
+    const spriteTimers = new Map();
+    const SPRITE_MAINTENANCE_MS = 15000;
+    let spriteTimerId = -1000000;
+    let spriteMaintenanceId = null;
+    let spriteTimerMode = settings.enabled;
+
+    function spriteTimerTick(record) {
+        if (!spriteTimers.has(record.id)) return;
+        try {
+            record.callback.apply(page, record.args);
+        } catch (error) {
+            console.error('[PokéIdle Performance+] sprite timer error', error);
+        }
+    }
+
+    function stopSpriteMaintenance() {
+        if (spriteMaintenanceId == null) return;
+        nativeClearInterval(spriteMaintenanceId);
+        spriteMaintenanceId = null;
+    }
+
+    function ensureSpriteMaintenance() {
+        if (spriteMaintenanceId != null || !spriteTimers.size || !settings.enabled) return;
+        spriteMaintenanceId = nativeSetInterval(() => {
+            for (const record of [...spriteTimers.values()]) spriteTimerTick(record);
+        }, SPRITE_MAINTENANCE_MS);
+    }
+
+    function startSpriteNativeTimer(record) {
+        if (record.nativeId != null) return;
+        record.nativeId = nativeSetInterval(
+            () => spriteTimerTick(record), record.delay
+        );
+    }
+
+    function registerSpriteTimer(callback, delay, args) {
+        const id = spriteTimerId--;
+        const record = { id, callback, delay, args, nativeId: null };
+        spriteTimers.set(id, record);
+        if (settings.enabled) ensureSpriteMaintenance();
+        else startSpriteNativeTimer(record);
+        return id;
+    }
+
+    function mothClearInterval(id) {
+        const record = spriteTimers.get(id);
+        if (!record) return nativeClearInterval(id);
+        spriteTimers.delete(id);
+        if (record.nativeId != null) nativeClearInterval(record.nativeId);
+        if (!spriteTimers.size) stopSpriteMaintenance();
+    }
+
+    function syncSpriteTimerMode() {
+        if (spriteTimerMode === settings.enabled) return;
+        spriteTimerMode = settings.enabled;
+        if (settings.enabled) {
+            for (const record of spriteTimers.values()) {
+                if (record.nativeId != null) nativeClearInterval(record.nativeId);
+                record.nativeId = null;
+            }
+            ensureSpriteMaintenance();
+        } else {
+            stopSpriteMaintenance();
+            for (const record of spriteTimers.values()) startSpriteNativeTimer(record);
+        }
+    }
+
     let uiTimerHookInstalled =
         false;
 
@@ -821,10 +833,18 @@
                 callback
             );
 
-        let kind =
-            null;
+        // Exact spriteAnimado() closure (sprites.mjs). A timer-only hook avoids
+        // wrapping every Canvas2D drawImage/clearRect call on the page.
+        const isSpriteTimer = Number(delay) === 220 &&
+            /\bcv\.isConnected\b/.test(source) &&
+            /\bclearInterval\s*\(\s*timer\s*\)/.test(source) &&
+            /\bpintar\s*\(\s*\)/.test(source);
 
-        if (
+        let kind = isSpriteTimer ? 'sprite' : null;
+
+        if (kind === 'sprite') {
+            // Already classified by callsite signature.
+        } else if (
             name ===
                 'tiqueCentroSaida'
         ) {
@@ -1001,6 +1021,10 @@
                     delay
                 );
 
+            if (kind === 'sprite') {
+                return registerSpriteTimer(callback, delay, args);
+            }
+
             if (!kind) {
                 return nativeSetInterval(
                     callback,
@@ -1061,7 +1085,7 @@
              * IDs are native interval IDs; clearInterval needs no mapping.
              */
             page.clearInterval =
-                nativeClearInterval;
+                mothClearInterval;
 
             uiTimerHookInstalled =
                 page.setInterval ===
@@ -1434,9 +1458,10 @@
         const pendingRequests = [...suspendedCampoRequests.entries()];
         suspendedCampoRequests.clear();
 
-        for (const [id, callback] of pendingRequests) {
+        for (const [id, weak] of pendingRequests) {
             const pending = throttledRequests.get(id);
-            if (!pending || pending.cancelled) {
+            const callback = weak.deref();
+            if (!pending || pending.cancelled || !callback) {
                 continue;
             }
 
@@ -1496,6 +1521,7 @@
                 currentMode === '2'
         );
 
+        syncSpriteTimerMode();
         syncNativeOptimized();
         syncChatPolicy();
         updateUI();
@@ -1981,6 +2007,7 @@
 
         prunePerformanceSamples();
         updateAdaptiveDecision();
+        pruneSuspendedCampoLoops();
         applyMode();
     }, 1000);
 
@@ -2001,7 +2028,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v5.4.0 loaded'
+            '[PokéIdle Performance+] v5.5.0 loaded'
         );
     }
 
