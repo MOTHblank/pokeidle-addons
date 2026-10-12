@@ -70,6 +70,8 @@ pub struct Health {
     pub kick_streams: Vec<KickStream>,
     pub kick_state_available: bool,
     pub last_error: Option<String>,
+    /// Time of last successful telemetry sample (kept on transient disconnects).
+    pub last_successful_probe_at: Option<Instant>,
 }
 
 impl Default for Health {
@@ -121,11 +123,21 @@ impl Default for Health {
             kick_streams: Vec::new(),
             kick_state_available: false,
             last_error: None,
+            last_successful_probe_at: None,
         }
     }
 }
 
 impl Health {
+    pub fn telemetry_age(&self) -> Option<Duration> {
+        self.last_successful_probe_at.map(|at| at.elapsed())
+    }
+
+    pub fn telemetry_is_fresh(&self) -> bool {
+        self.state == "Running"
+            && self.telemetry_age().is_some_and(|age| age < Duration::from_secs(12))
+    }
+
     pub fn summary(&self) -> String {
         if self.state != "Running" {
             return self
@@ -491,6 +503,7 @@ fn monitor_loop(
                         current.kick_streams = probe.kick_streams;
                         current.kick_state_available = probe.kick_state_available;
                         current.last_error = None;
+                        current.last_successful_probe_at = Some(Instant::now());
                     }
                 }
                 Err(error) => {
