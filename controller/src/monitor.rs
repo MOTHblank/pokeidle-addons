@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    mpsc, Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
@@ -168,6 +168,7 @@ pub struct MonitorHandle {
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<Vec<Value>>>,
+    close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
 }
 
 impl MonitorHandle {
@@ -175,15 +176,17 @@ impl MonitorHandle {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let commands = Arc::new(Mutex::new(Vec::new()));
+        let close_request = Arc::new(Mutex::new(None));
+        let close_worker = Arc::clone(&close_request);
         let shared = Arc::clone(&health);
         let stop_worker = Arc::clone(&stop);
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, shared, stop_worker, command_queue);
+            monitor_loop(port, shared, stop_worker, command_queue, close_worker);
         });
 
-        Self { health, stop, commands }
+        Self { health, stop, commands, close_request }
     }
 
     pub fn send(&self, payload: Value) {
@@ -196,8 +199,27 @@ impl MonitorHandle {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
     }
 
+    /// Ask Firefox to shut down through the existing BiDi session. Creating
+    /// a second session just for browser.close can fail while this one is active.
+    pub fn close_browser(&self, timeout: Duration) -> Result<(), String> {
+        let (reply, received) = mpsc::channel();
+        let mut pending = self.close_request.lock()
+            .map_err(|_| "BiDi close request lock poisoned".to_string())?;
+        if pending.is_some() {
+            return Err("Firefox close is already pending".to_string());
+        }
+        *pending = Some(reply);
+        drop(pending);
+
+        received.recv_timeout(timeout)
+            .map_err(|error| format!("BiDi browser.close did not respond: {error}"))?
+    }
+
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Ok(mut pending) = self.close_request.lock() {
+            pending.take();
+        }
     }
 }
 
@@ -293,6 +315,7 @@ fn monitor_loop(
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<Vec<Value>>>,
+    close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
 ) {
     let mut session: Option<BrowserSession> = None;
 
@@ -327,6 +350,32 @@ fn monitor_loop(
                         current.logged_in = false;
                     }
                 }
+            }
+        }
+
+        // Handle shutdown before probing; browser.close invalidates this socket.
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
+        if let Some(reply) = reply {
+            let result = match session.as_mut() {
+                Some(browser_session) => {
+                    let id = browser_session.next_id;
+                    browser_session.next_id += 1;
+                    send_and_wait(
+                        &mut browser_session.socket,
+                        id,
+                        json!({ "id": id, "method": "browser.close", "params": {} }),
+                    ).map(|_| ())
+                }
+                None => Err("Firefox BiDi session is not connected".to_string()),
+            };
+            let closed = result.is_ok();
+            let _ = reply.send(result);
+            if closed {
+                logging::info(&format!("Firefox browser.close accepted on port {}", port));
+                break;
             }
         }
 
@@ -403,7 +452,9 @@ fn monitor_loop(
         }
 
         for _ in 0..50 {
-            if stop.load(Ordering::Relaxed) {
+            if stop.load(Ordering::Relaxed)
+                || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+            {
                 break;
             }
             thread::sleep(Duration::from_millis(100));
