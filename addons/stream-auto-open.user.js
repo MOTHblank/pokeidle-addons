@@ -64,8 +64,14 @@
         }
         // Catch a stale managed tab restored by Firefox after a newer one
         // already replaced it, but never close personal/manual Twitch tabs.
-        try { closeIfSuperseded(String(GM_getValue(CHAT_ACTIVE_KEY, ''))); }
-        catch (_) {}
+        try {
+            // The current active generation is normally the OLD tab while a
+            // replacement is loading. Never close the replacement before it
+            // has had a chance to announce that it is ready.
+            if (GM_getValue(CHAT_TARGET_KEY, '') !== generation) {
+                closeIfSuperseded(String(GM_getValue(CHAT_ACTIVE_KEY, '')));
+            }
+        } catch (_) {}
         return;
     }
 
