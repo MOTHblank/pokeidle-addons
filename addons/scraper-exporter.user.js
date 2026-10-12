@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         PokéIdle Upstream Scraper & Exporter
 // @namespace    moth.pokeidle
-// @version      1.0.1
-// @description  Mirrors PokéIdle's same-origin client code and exports a repo-ready upstream/ TAR plus manifest.
+// @version      1.1.0
+// @description  Captures public PokéIdle client assets into a TAR and verified manifest, with limits and cancellation.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
 // @grant        none
+// @noframes
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -17,13 +18,21 @@
     const STYLE_ID = 'moth-upstream-scraper-style';
 
     const MAX_FILES = 350;
+    const MAX_DISCOVERED = 1000;
     const MAX_TEXT_BYTES = 3 * 1024 * 1024;
+    const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+    const FETCH_TIMEOUT_MS = 15000;
 
     const state = {
         running: false,
+        cancelRequested: false,
+        currentRequest: null,
+        complete: false,
         files: new Map(),
         errors: [],
         status: 'Not scanned yet',
+        attempted: 0,
+        discovered: 0,
         startedAt: 0,
         finishedAt: 0
     };
@@ -46,13 +55,23 @@
     function normalizeUrl(value, base = location.href) {
         try {
             const url = new URL(value, base);
+            if (url.origin !== location.origin ||
+                !/^https?:$/.test(url.protocol) ||
+                url.username || url.password) {
+                return null;
+            }
 
-            if (url.origin !== location.origin) {
+            // Never crawl account endpoints or URLs with arbitrary query data.
+            // Only conventional static-asset cache-busters are accepted.
+            if (/\/(?:api|auth|account|accounts|user|users|profile|session|login|logout|admin|private|graphql|socket)(?:\/|$)/i.test(url.pathname)) {
+                return null;
+            }
+            if ([...url.searchParams.keys()].some(key =>
+                !/^(?:v|ver|version|build|hash|t|_)$/i.test(key))) {
                 return null;
             }
 
             url.hash = '';
-
             return url.href;
         } catch {
             return null;
@@ -62,45 +81,28 @@
     function resourcePath(urlValue, contentType = '') {
         const url = new URL(urlValue);
         let pathname = decodeURIComponent(url.pathname);
-
-        if (
-            pathname === '/' ||
-            pathname === '/app' ||
-            pathname === '/app/'
-        ) {
+        if (pathname === '/' || pathname === '/app' || pathname === '/app/') {
             return 'upstream/app.html';
         }
 
-        pathname = pathname
-            .replace(/^\/+/, '')
-            .replace(/\/+$/g, '');
-
-        if (!pathname) {
-            pathname = 'index.html';
-        }
-
-        if (
-            !/\.[a-z0-9]{1,8}$/i.test(pathname)
-        ) {
-            if (/html/i.test(contentType)) {
-                pathname += '.html';
-            }
+        pathname = pathname.replace(/^\/+/, '').replace(/\/+$/g, '');
+        if (!pathname) pathname = 'index.html';
+        if (!/\.[a-z0-9]{1,8}$/i.test(pathname) && /html/i.test(contentType)) {
+            pathname += '.html';
         }
 
         const safe = pathname
             .split('/')
-            .filter(
-                part =>
-                    part &&
-                    part !== '.' &&
-                    part !== '..'
-            )
-            .map(part =>
-                part.replace(/[<>:"|?*]/g, '_')
-            )
+            .filter(part => part && part !== '.' && part !== '..')
+            .map(part => part.replace(/[\\<>:"|?*\x00-\x1f\x7f]/g, '_'))
             .join('/');
 
-        return 'upstream/' + safe;
+        return 'upstream/' + (safe || 'index.html');
+    }
+
+    function addHashSuffix(path, suffix) {
+        const extension = path.match(/\.[^/.]+$/)?.[0] || '';
+        return path.slice(0, path.length - extension.length) + suffix + extension;
     }
 
     function isTextCandidate(urlValue) {
@@ -200,8 +202,10 @@
         const discovered =
             new Set();
 
-        const add = raw => {
+        const add = (raw, moduleImport = false) => {
             if (!raw) return;
+            // Bare module specifiers are package names, not URL paths.
+            if (moduleImport && !/^(?:.{1,2}/|/|https?://)/i.test(raw)) return;
 
             const normalized =
                 normalizeUrl(
@@ -246,7 +250,7 @@
                             pattern.exec(text)
                     )
                 ) {
-                    add(match[1]);
+                    add(match[1], true);
                 }
             }
         }
@@ -321,86 +325,76 @@
     }
 
     async function fetchText(url) {
-        const response =
-            await fetch(
-                url,
-                {
-                    credentials:
-                        'same-origin',
-                    cache:
-                        'no-store'
+        const controller = new AbortController();
+        state.currentRequest = controller;
+        let timedOut = false;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, FETCH_TIMEOUT_MS);
+
+        try {
+            const response = await fetch(url, {
+                // Static client assets should be downloadable without account cookies.
+                credentials: 'omit',
+                cache: 'no-store',
+                signal: controller.signal
+            });
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+
+            const finalUrl = normalizeUrl(response.url || url);
+            if (!finalUrl || !isTextCandidate(finalUrl)) {
+                throw new Error('Redirected outside permitted client assets');
+            }
+
+            const type = response.headers.get('content-type') || '';
+            if (!isTextContentType(type)) {
+                throw new Error('Non-text response: ' + type);
+            }
+
+            const length = Number(response.headers.get('content-length') || 0);
+            if (length > MAX_TEXT_BYTES) {
+                throw new Error('Too large (' + length + ' bytes)');
+            }
+            if (!response.body) {
+                throw new Error('Response streaming is unavailable');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8', { fatal: true });
+            let text = '';
+            let bytes = 0;
+            while (true) {
+                if (state.cancelRequested) {
+                    controller.abort();
+                    throw new Error('Cancelled');
                 }
-            );
+                const { value, done } = await reader.read();
+                if (done) break;
+                bytes += value.byteLength;
+                if (bytes > MAX_TEXT_BYTES) {
+                    controller.abort();
+                    throw new Error('Too large (' + bytes + ' bytes)');
+                }
+                text += decoder.decode(value, { stream: true });
+            }
+            text += decoder.decode();
 
-        if (!response.ok) {
-            throw new Error(
-                'HTTP ' +
-                response.status
-            );
+            return {
+                text,
+                bytes,
+                contentType: type.split(';')[0].trim(),
+                finalUrl
+            };
+        } catch (error) {
+            if (timedOut) {
+                throw new Error('Timed out after ' + (FETCH_TIMEOUT_MS / 1000) + ' seconds');
+            }
+            throw error;
+        } finally {
+            clearTimeout(timer);
+            if (state.currentRequest === controller) state.currentRequest = null;
         }
-
-        const type =
-            response.headers.get(
-                'content-type'
-            ) || '';
-
-        if (
-            !isTextContentType(type)
-        ) {
-            throw new Error(
-                'non-text ' +
-                type
-            );
-        }
-
-        const length =
-            Number(
-                response.headers.get(
-                    'content-length'
-                ) ||
-                0
-            );
-
-        if (
-            length >
-            MAX_TEXT_BYTES
-        ) {
-            throw new Error(
-                'too large (' +
-                length +
-                ' bytes)'
-            );
-        }
-
-        const text =
-            await response.text();
-
-        const bytes =
-            new TextEncoder()
-                .encode(text)
-                .byteLength;
-
-        if (
-            bytes >
-            MAX_TEXT_BYTES
-        ) {
-            throw new Error(
-                'too large (' +
-                bytes +
-                ' bytes)'
-            );
-        }
-
-        return {
-            text,
-            bytes,
-            contentType:
-                type.split(';')[0]
-                    .trim(),
-            finalUrl:
-                response.url ||
-                url
-        };
     }
 
     function inferVersion() {
@@ -444,146 +438,148 @@
         );
     }
 
+    function cancelScrape() {
+        if (!state.running || state.cancelRequested) return;
+        state.cancelRequested = true;
+        state.status = 'Cancelling…';
+        state.currentRequest?.abort();
+        updateUI();
+    }
+
     async function scrape() {
-        if (state.running) {
-            return;
-        }
+        if (state.running) return;
 
         state.running = true;
+        state.cancelRequested = false;
+        state.complete = false;
         state.files.clear();
         state.errors = [];
-        state.startedAt =
-            Date.now();
+        state.attempted = 0;
+        state.startedAt = Date.now();
         state.finishedAt = 0;
-        state.status =
-            'Discovering resources…';
-
+        state.status = 'Discovering resources…';
         updateUI();
 
-        const queue =
-            collectInitialUrls();
-
-        const queued =
-            new Set(queue);
-
+        const queue = collectInitialUrls();
+        const queued = new Set(queue);
         let cursor = 0;
+        let capped = false;
 
-        while (
-            cursor < queue.length &&
-            state.files.size <
-                MAX_FILES
-        ) {
-            const url =
-                queue[cursor++];
-
-            state.status =
-                `Fetching ${state.files.size + 1} · ${new URL(url).pathname}`;
-
-            updateUI();
-
-            try {
-                const result =
-                    await fetchText(
-                        url
-                    );
-
-                const path =
-                    resourcePath(
-                        result.finalUrl,
-                        result.contentType
-                    );
-
-                const hash =
-                    await sha256(
-                        result.text
-                    );
-
-                state.files.set(
-                    path,
-                    {
-                        path,
-                        url:
-                            result.finalUrl,
-                        contentType:
-                            result.contentType,
-                        bytes:
-                            result.bytes,
-                        sha256:
-                            hash,
-                        text:
-                            result.text
-                    }
-                );
-
-                for (
-                    const dependency of
-                    extractImports(
-                        result.text,
-                        result.finalUrl,
-                        result.contentType
-                    )
-                ) {
-                    if (
-                        !queued.has(
-                            dependency
-                        )
-                    ) {
-                        queued.add(
-                            dependency
-                        );
-
-                        queue.push(
-                            dependency
-                        );
-                    }
-                }
-            } catch (error) {
-                state.errors.push({
-                    url,
-                    error:
-                        String(
-                            (error && error.message) ||
-                            error
-                        )
-                });
-            }
-
-            /*
-             * Yield occasionally so the game UI remains responsive during a
-             * large recursive scrape.
-             */
-            if (
-                cursor % 8 === 0
-            ) {
-                await new Promise(
-                    resolve =>
-                        setTimeout(
-                            resolve,
-                            0
-                        )
-                );
-            }
+        // Do not let recursively discovered imports grow an unbounded queue.
+        if (queue.length > MAX_DISCOVERED) {
+            queue.length = MAX_DISCOVERED;
+            capped = true;
         }
+        const enqueue = url => {
+            if (queued.has(url)) return;
+            if (queue.length >= MAX_DISCOVERED) {
+                capped = true;
+                return;
+            }
+            queued.add(url);
+            queue.push(url);
+        };
 
-        state.running = false;
-        state.finishedAt =
-            Date.now();
+        try {
+            while (cursor < queue.length &&
+                   state.files.size < MAX_FILES &&
+                   !state.cancelRequested) {
+                const url = queue[cursor++];
+                state.attempted = cursor;
+                state.status = 'Scanning ' + cursor + '/' + queue.length +
+                    ' · ' + new URL(url).pathname;
+                updateUI();
 
-        if (
-            state.files.size >=
-            MAX_FILES
-        ) {
+                try {
+                    const result = await fetchText(url);
+                    if (state.cancelRequested) break;
+
+                    const hash = await sha256(result.text);
+                    const originalPath = resourcePath(result.finalUrl, result.contentType);
+                    let path = originalPath;
+                    let collision = 0;
+
+                    // Query variants can contain distinct builds. Never silently
+                    // replace one version with another in the exported archive.
+                    while (path === 'upstream/manifest.json' || state.files.has(path)) {
+                        if (state.files.get(path)?.sha256 === hash) {
+                            path = null; // Same bytes: keep one copy.
+                            break;
+                        }
+                        collision++;
+                        path = addHashSuffix(originalPath,
+                            '~' + hash.slice(0, 12) +
+                            (collision > 1 ? '-' + collision : ''));
+                    }
+
+                    if (path) {
+                        if (totalBytes() + result.bytes > MAX_TOTAL_BYTES) {
+                            capped = true;
+                            state.errors.push({
+                                url: '(scraper)',
+                                error: 'Reached ' + prettyBytes(MAX_TOTAL_BYTES) +
+                                    ' total text limit'
+                            });
+                            break;
+                        }
+                        state.files.set(path, {
+                            path,
+                            url: result.finalUrl,
+                            contentType: result.contentType,
+                            bytes: result.bytes,
+                            sha256: hash,
+                            text: result.text
+                        });
+                    }
+
+                    for (const dependency of extractImports(
+                        result.text, result.finalUrl, result.contentType)) {
+                        enqueue(dependency);
+                    }
+                } catch (error) {
+                    if (state.cancelRequested) break;
+                    state.errors.push({
+                        url,
+                        error: String((error && error.message) || error)
+                    });
+                }
+
+                // Yield to the game instead of monopolizing its UI thread.
+                if (cursor % 8 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+        } catch (error) {
             state.errors.push({
                 url: '(scraper)',
-                error:
-                    `Stopped at MAX_FILES=${MAX_FILES}`
+                error: 'Unexpected scrape error: ' +
+                    String((error && error.message) || error)
             });
+        } finally {
+            state.discovered = queue.length;
+            if (state.files.size >= MAX_FILES && cursor < queue.length) {
+                capped = true;
+                state.errors.push({
+                    url: '(scraper)',
+                    error: 'Reached MAX_FILES=' + MAX_FILES
+                });
+            }
+            if (capped) {
+                state.errors.push({
+                    url: '(scraper)',
+                    error: 'Capture stopped or limited; see skipped resources'
+                });
+            }
+            state.complete = !state.cancelRequested && !capped &&
+                !state.errors.length && cursor >= queue.length;
+            state.running = false;
+            state.finishedAt = Date.now();
+            state.status = (state.cancelRequested ? 'Cancelled' :
+                state.complete ? 'Complete' : 'Partial capture') +
+                ' · ' + state.files.size + ' files · ' +
+                state.errors.length + ' skipped';
+            updateUI();
         }
-
-        state.status =
-            `Ready · ${state.files.size} files · ${state.errors.length} skipped`;
-
-        updateUI();
     }
 
     function totalBytes() {
@@ -616,6 +612,17 @@
                 state.files.size,
             totalBytes:
                 totalBytes(),
+            complete: state.complete,
+            cancelled: state.cancelRequested,
+            attemptedCount: state.attempted,
+            discoveredCount: state.discovered,
+            limits: {
+                maxFiles: MAX_FILES,
+                maxDiscovered: MAX_DISCOVERED,
+                maxFileBytes: MAX_TEXT_BYTES,
+                maxTotalBytes: MAX_TOTAL_BYTES,
+                timeoutMs: FETCH_TIMEOUT_MS
+            },
             files:
                 [...state.files.values()]
                     .map(file => ({
@@ -762,238 +769,97 @@
         );
     }
 
-    function tarHeader(
-        name,
-        size,
-        mtime
-    ) {
-        const header =
-            new Uint8Array(
-                512
-            );
+    const tarEncoder = new TextEncoder();
 
-        let filename =
-            name;
+    function ustarPath(name) {
+        const encoded = tarEncoder.encode(name);
+        if (encoded.length <= 100) return { filename: name, prefix: '' };
 
-        let prefix =
-            '';
-
-        if (
-            filename.length >
-            100
-        ) {
-            const cut =
-                filename.lastIndexOf(
-                    '/',
-                    155
-                );
-
-            if (
-                cut > 0 &&
-                filename.length -
-                    cut -
-                    1 <=
-                    100
-            ) {
-                prefix =
-                    filename.slice(
-                        0,
-                        cut
-                    );
-
-                filename =
-                    filename.slice(
-                        cut + 1
-                    );
+        // USTAR limits are BYTES (not JavaScript UTF-16 string lengths).
+        for (let cut = name.lastIndexOf('/'); cut > 0;
+             cut = name.lastIndexOf('/', cut - 1)) {
+            const prefix = name.slice(0, cut);
+            const filename = name.slice(cut + 1);
+            if (tarEncoder.encode(prefix).length <= 155 &&
+                tarEncoder.encode(filename).length <= 100) {
+                return { filename, prefix };
             }
         }
+        return null;
+    }
 
-        tarString(
-            header,
-            0,
-            100,
-            filename
-        );
-
-        tarOctal(
-            header,
-            100,
-            8,
-            420
-        );
-
-        tarOctal(
-            header,
-            108,
-            8,
-            0
-        );
-
-        tarOctal(
-            header,
-            116,
-            8,
-            0
-        );
-
-        tarOctal(
-            header,
-            124,
-            12,
-            size
-        );
-
-        tarOctal(
-            header,
-            136,
-            12,
-            Math.floor(
-                mtime /
-                1000
-            )
-        );
-
-        for (
-            let i = 148;
-            i < 156;
-            i++
-        ) {
-            header[i] =
-                32;
+    function paxPathRecord(path) {
+        const line = 'path=' + path + '\n';
+        const byteLength = tarEncoder.encode(line).length;
+        let digits = 1;
+        while (true) {
+            const length = byteLength + digits + 1;
+            if (String(length).length === digits) {
+                return tarEncoder.encode(length + ' ' + line);
+            }
+            digits = String(length).length;
         }
+    }
 
-        header[156] =
-            '0'.charCodeAt(0);
+    function tarHeader(name, size, mtime, type = '0') {
+        const path = ustarPath(name);
+        if (!path) throw new Error('Cannot fit TAR header: ' + name);
+        const header = new Uint8Array(512);
 
-        tarString(
-            header,
-            257,
-            6,
-            'ustar'
-        );
-
-        tarString(
-            header,
-            263,
-            2,
-            '00'
-        );
-
-        tarString(
-            header,
-            345,
-            155,
-            prefix
-        );
+        tarString(header, 0, 100, path.filename);
+        tarOctal(header, 100, 8, 420);
+        tarOctal(header, 108, 8, 0);
+        tarOctal(header, 116, 8, 0);
+        tarOctal(header, 124, 12, size);
+        tarOctal(header, 136, 12, Math.floor(mtime / 1000));
+        for (let i = 148; i < 156; i++) header[i] = 32;
+        header[156] = type.charCodeAt(0);
+        tarString(header, 257, 6, 'ustar');
+        tarString(header, 263, 2, '00');
+        tarString(header, 345, 155, path.prefix);
 
         let checksum = 0;
-
-        for (
-            const byte of
-            header
-        ) {
-            checksum +=
-                byte;
-        }
-
-        const checksumText =
-            checksum
-                .toString(8)
-                .padStart(
-                    6,
-                    '0'
-                )
-                .slice(-6) +
-            '\0 ';
-
-        tarString(
-            header,
-            148,
-            8,
-            checksumText
-        );
-
+        for (const byte of header) checksum += byte;
+        const checksumText = checksum.toString(8)
+            .padStart(6, '0').slice(-6) + '\0 ';
+        tarString(header, 148, 8, checksumText);
         return header;
     }
 
     function tarParts() {
-        const encoder =
-            new TextEncoder();
-
-        const manifest =
-            JSON.stringify(
-                manifestObject(),
-                null,
-                2
-            ) + '\n';
-
+        const encoder = new TextEncoder();
+        const manifest = JSON.stringify(manifestObject(), null, 2) + '\n';
         const entries = [
-            ...[...state.files.values()]
-                .map(file => ({
-                    path:
-                        file.path,
-                    bytes:
-                        encoder.encode(
-                            file.text
-                        )
-                })),
+            ...[...state.files.values()].map(file => ({
+                path: file.path,
+                bytes: encoder.encode(file.text)
+            })),
             {
-                path:
-                    'upstream/manifest.json',
-                bytes:
-                    encoder.encode(
-                        manifest
-                    )
+                path: 'upstream/manifest.json',
+                bytes: encoder.encode(manifest)
             }
-        ]
-            .sort(
-                (a, b) =>
-                    a.path.localeCompare(
-                        b.path
-                    )
-            );
+        ].sort((a, b) => a.path.localeCompare(b.path));
 
         const parts = [];
+        const mtime = state.finishedAt || Date.now();
+        const append = (name, bytes, type = '0') => {
+            parts.push(tarHeader(name, bytes.byteLength, mtime, type));
+            parts.push(bytes);
+            const remainder = bytes.byteLength % 512;
+            if (remainder) parts.push(new Uint8Array(512 - remainder));
+        };
 
-        for (
-            const entry of
-            entries
-        ) {
-            parts.push(
-                tarHeader(
-                    entry.path,
-                    entry.bytes
-                        .byteLength,
-                    state.finishedAt ||
-                        Date.now()
-                )
-            );
-
-            parts.push(
-                entry.bytes
-            );
-
-            const remainder =
-                entry.bytes
-                    .byteLength %
-                512;
-
-            if (remainder) {
-                parts.push(
-                    new Uint8Array(
-                        512 -
-                        remainder
-                    )
-                );
+        entries.forEach((entry, index) => {
+            if (!ustarPath(entry.path)) {
+                // POSIX PAX preserves filenames USTAR cannot represent.
+                append('PaxHeaders/' + index, paxPathRecord(entry.path), 'x');
+                append('upstream/long-file-' + index, entry.bytes);
+            } else {
+                append(entry.path, entry.bytes);
             }
-        }
+        });
 
-        parts.push(
-            new Uint8Array(
-                1024
-            )
-        );
-
+        parts.push(new Uint8Array(1024));
         return parts;
     }
 
@@ -1157,6 +1023,12 @@
                 flex:1;
             }
 
+            .mus-hint {
+                margin-top:7px;
+                color:#93898e;
+                font-size:9px;
+            }
+
             .mus-errors {
                 max-height:120px;
                 overflow:auto;
@@ -1267,9 +1139,11 @@
 
             <div class="mus-actions">
                 <button type="button" data-mus-scan>Scan</button>
+                <button type="button" data-mus-cancel disabled>Cancel</button>
                 <button type="button" data-mus-tar disabled>Export TAR</button>
                 <button type="button" data-mus-manifest disabled>Manifest</button>
             </div>
+            <div class="mus-hint">Public client assets only. No API or account endpoints. Partial exports are marked in the manifest.</div>
 
             <div class="mus-errors" data-mus-error-list></div>
         `;
@@ -1295,6 +1169,14 @@
         ).addEventListener(
             'click',
             scrape
+        );
+
+        q(
+            '[data-mus-cancel]',
+            root
+        ).addEventListener(
+            'click',
+            cancelScrape
         );
 
         q(
@@ -1386,6 +1268,9 @@
         scan.disabled =
             state.running;
 
+        const cancel = q('[data-mus-cancel]', root);
+        cancel.disabled = !state.running || state.cancelRequested;
+
         scan.textContent =
             state.running
                 ? 'Scanning…'
@@ -1434,7 +1319,7 @@
         );
 
         console.info(
-            '[PokéIdle Upstream Scraper] v1.0.1 loaded'
+            '[PokéIdle Upstream Scraper] v1.1.0 loaded'
         );
     }
 
