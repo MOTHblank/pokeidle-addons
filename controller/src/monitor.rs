@@ -582,7 +582,7 @@ fn monitor_loop(
         }
 
         // Interrupt the longer polling interval for browser commands and close
-        // requests; they must not wait 30 seconds for a periodic telemetry scan.
+        // requests; they must not wait for the next five-minute telemetry scan.
         for _ in 0..(poll_interval.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
