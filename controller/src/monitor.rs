@@ -1475,6 +1475,21 @@ mod command_tests {
     use super::{validate_open_tab, MAX_COMMAND_QUEUE};
     use serde_json::json;
     #[test]
+    fn telemetry_is_not_current_until_a_probe_succeeds() {
+        let mut health = super::Health::default();
+        assert!(!health.telemetry_is_fresh());
+        health.state = "Running".to_string();
+        assert!(!health.telemetry_is_fresh());
+
+        health.last_successful_probe_at = Some(std::time::Instant::now());
+        assert!(health.telemetry_is_fresh());
+
+        health.state = "Reconnecting".to_string();
+        assert!(!health.telemetry_is_fresh());
+        assert!(health.telemetry_age().is_some());
+    }
+
+    #[test]
     fn allow_http_and_https_tabs() {
         assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"https://example.com"})).is_ok());
         assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"http://localhost:3000"})).is_ok());
