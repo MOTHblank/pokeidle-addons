@@ -379,6 +379,7 @@ fn monitor_loop(
     let mut session: Option<BrowserSession> = None;
 
     loop {
+        expire_pending_commands(&commands);
         if stop.load(Ordering::Relaxed) {
             logging::info(&format!("BiDi monitor on port {} stopping", port));
             end_session(&mut session);
@@ -1299,6 +1300,23 @@ fn open_custom_tab(
 
     logging::info(&format!("opened custom browser tab: {}", url));
     Ok(())
+}
+
+/// Discard old requests even if Firefox never becomes available; commands
+/// should not unexpectedly open tabs several minutes after a user click.
+fn expire_pending_commands(mailbox: &Arc<Mutex<CommandMailbox>>) {
+    let Ok(mut queue) = mailbox.lock() else { return; };
+    while queue.pending.front().is_some_and(|command| command.queued_at.elapsed() > COMMAND_MAX_WAIT) {
+        let Some(command) = queue.pending.pop_front() else { break; };
+        if queue.feedback.len() >= MAX_COMMAND_QUEUE {
+            queue.feedback.pop_front();
+        }
+        queue.feedback.push_back(CommandFeedback {
+            id: command.id,
+            ok: false,
+            message: "tab command expired while waiting for Firefox".to_string(),
+        });
+    }
 }
 
 fn flush_commands(
