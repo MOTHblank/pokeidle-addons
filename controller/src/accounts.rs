@@ -112,7 +112,7 @@ pub fn open_violentmonkey(profile: GameProfile) -> Result<String, String> {
     Ok(format!("Violentmonkey installer opened in {}.", profile.label()))
 }
 
-pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
+pub fn open_addons(profile: GameProfile, mut progress: impl FnMut(String)) -> Result<usize, String> {
     if !violentmonkey_installed(profile)? {
         return Err(format!(
             "Violentmonkey is not installed and active in {}. Use \"Install Violentmonkey\" first.",
@@ -132,8 +132,15 @@ pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
     for file in files {
         let url = installer_url(&file, nonce);
         match firefox::open_url(&config, &url) {
-            Ok(()) => opened += 1,
-            Err(error) => failures.push(format!("{file}: {error}")),
+            Ok(()) => {
+                opened += 1;
+                progress(format!("{file}: installer opened"));
+            }
+            Err(error) => {
+                let message = format!("{file}: {error}");
+                progress(message.clone());
+                failures.push(message);
+            }
         }
     }
 
