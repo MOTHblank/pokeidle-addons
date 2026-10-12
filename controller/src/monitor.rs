@@ -1,6 +1,7 @@
 use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{
@@ -8,7 +9,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -167,7 +168,7 @@ impl Health {
 pub struct MonitorHandle {
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
-    commands: Arc<Mutex<Vec<Value>>>,
+    commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
 }
 
@@ -175,7 +176,7 @@ impl MonitorHandle {
     pub fn start(port: u16) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let commands = Arc::new(Mutex::new(Vec::new()));
+        let commands = Arc::new(Mutex::new(CommandMailbox::default()));
         let close_request = Arc::new(Mutex::new(None));
         let close_worker = Arc::clone(&close_request);
         let shared = Arc::clone(&health);
@@ -189,10 +190,25 @@ impl MonitorHandle {
         Self { health, stop, commands, close_request }
     }
 
-    pub fn send(&self, payload: Value) {
-        if let Ok(mut commands) = self.commands.lock() {
-            commands.push(payload);
+    /// A queued command is not reported as successful until Firefox acknowledges it.
+    pub fn send(&self, payload: Value) -> Result<u64, String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("browser monitor is stopped".to_string());
         }
+        validate_open_tab(&payload)?;
+        let mut mailbox = self.commands.lock()
+            .map_err(|_| "browser command mailbox is unavailable".to_string())?;
+        if mailbox.pending.len() >= MAX_COMMAND_QUEUE {
+            return Err("browser command queue is full".to_string());
+        }
+        mailbox.next_id += 1;
+        let id = mailbox.next_id;
+        mailbox.pending.push_back(QueuedCommand { id, payload, queued_at: Instant::now() });
+        Ok(id)
+    }
+
+    pub fn take_command_feedback(&self) -> Option<CommandFeedback> {
+        self.commands.lock().ok().and_then(|mut mailbox| mailbox.feedback.pop_front())
     }
 
     pub fn health(&self) -> Health {
@@ -220,7 +236,50 @@ impl MonitorHandle {
         if let Ok(mut pending) = self.close_request.lock() {
             pending.take();
         }
+        if let Ok(mut mailbox) = self.commands.lock() {
+            mailbox.pending.clear();
+        }
     }
+}
+
+const MAX_COMMAND_QUEUE: usize = 16;
+const COMMAND_MAX_WAIT: Duration = Duration::from_secs(45);
+
+#[derive(Clone, Debug)]
+pub struct CommandFeedback {
+    pub id: u64,
+    pub ok: bool,
+    pub message: String,
+}
+
+struct QueuedCommand {
+    id: u64,
+    payload: Value,
+    queued_at: Instant,
+}
+
+#[derive(Default)]
+struct CommandMailbox {
+    next_id: u64,
+    pending: VecDeque<QueuedCommand>,
+    feedback: VecDeque<CommandFeedback>,
+}
+
+fn validate_open_tab(payload: &Value) -> Result<&str, String> {
+    if payload.get("t").and_then(Value::as_str) != Some("browser.openTab") {
+        return Err("unsupported browser command".to_string());
+    }
+    let url = payload.get("url").and_then(Value::as_str)
+        .map(str::trim).unwrap_or_default();
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))
+        .ok_or_else(|| "tab URL must use http:// or https://".to_string())?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.chars().any(char::is_whitespace)
+        || authority.starts_with(':') || authority.contains('@')
+    {
+        return Err("tab URL has an invalid host".to_string());
+    }
+    Ok(url)
 }
 
 struct BrowserSession {
@@ -314,7 +373,7 @@ fn monitor_loop(
     port: u16,
     health: Arc<Mutex<Health>>,
     stop: Arc<AtomicBool>,
-    commands: Arc<Mutex<Vec<Value>>>,
+    commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
 ) {
     let mut session: Option<BrowserSession> = None;
@@ -470,6 +529,13 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
 
     let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
         .map_err(|error| error.to_string())?;
+    // Bounded I/O prevents an unanswered read from freezing monitoring forever.
+    if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
+        stream.set_read_timeout(Some(Duration::from_secs(4)))
+            .map_err(|error| format!("BiDi read timeout setup failed: {error}"))?;
+        stream.set_write_timeout(Some(Duration::from_secs(4)))
+            .map_err(|error| format!("BiDi write timeout setup failed: {error}"))?;
+    }
 
     send_and_wait(
         &mut socket,
@@ -1237,32 +1303,39 @@ fn open_custom_tab(
 
 fn flush_commands(
     session: &mut BrowserSession,
-    commands: &Arc<Mutex<Vec<Value>>>,
+    mailbox: &Arc<Mutex<CommandMailbox>>,
 ) {
-    let pending = match commands.lock() {
-        Ok(mut commands) => std::mem::take(&mut *commands),
-        Err(_) => Vec::new(),
-    };
-
-    for payload in pending {
-        if payload.get("t").and_then(Value::as_str) != Some("browser.openTab") {
-            logging::warn("unsupported controller command dropped");
-            continue;
-        }
-
-        let url = payload
-            .get("url")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-
-        if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
-            logging::warn("custom browser tab rejected: URL must use http:// or https://");
-            continue;
-        }
-
-        if let Err(error) = open_custom_tab(session, url) {
-            logging::warn(&format!("custom browser tab failed: {}", error));
+    loop {
+        let command = match mailbox.lock() {
+            Ok(mut queue) => queue.pending.pop_front(),
+            Err(_) => {
+                logging::error("browser command mailbox lock poisoned");
+                return;
+            }
+        };
+        let Some(command) = command else { break; };
+        let outcome = if command.queued_at.elapsed() > COMMAND_MAX_WAIT {
+            Err("tab command expired while waiting for Firefox".to_string())
+        } else {
+            match validate_open_tab(&command.payload) {
+                Ok(url) => open_custom_tab(session, url),
+                Err(error) => Err(error),
+            }
+        };
+        let (ok, message) = match outcome {
+            Ok(()) => (true, "tab opened".to_string()),
+            Err(error) => {
+                // No blind retry: Firefox might have created the tab before
+                // losing the acknowledgement.
+                logging::warn(&format!("browser command #{} failed: {}", command.id, error));
+                (false, error)
+            }
+        };
+        if let Ok(mut queue) = mailbox.lock() {
+            if queue.feedback.len() >= MAX_COMMAND_QUEUE {
+                queue.feedback.pop_front();
+            }
+            queue.feedback.push_back(CommandFeedback { id: command.id, ok, message });
         }
     }
 }
@@ -1363,5 +1436,22 @@ where
         }
 
         return Ok(value);
+    }
+}
+#[cfg(test)]
+mod command_tests {
+    use super::{validate_open_tab, MAX_COMMAND_QUEUE};
+    use serde_json::json;
+    #[test]
+    fn allow_http_and_https_tabs() {
+        assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"https://example.com"})).is_ok());
+        assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"http://localhost:3000"})).is_ok());
+    }
+    #[test]
+    fn reject_invalid_tabs_and_unknown_commands() {
+        assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"file:///etc/passwd"})).is_err());
+        assert!(validate_open_tab(&json!({"t":"browser.openTab","url":"https://"})).is_err());
+        assert!(validate_open_tab(&json!({"t":"invalid","url":"https://example.com"})).is_err());
+        assert_eq!(MAX_COMMAND_QUEUE, 16);
     }
 }
