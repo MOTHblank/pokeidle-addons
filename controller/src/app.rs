@@ -3148,8 +3148,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 status_chip(ui, tr("Violentmonkey installed"), if setup.violentmonkey_installed { "✓" } else { "…" }, setup.violentmonkey_installed);
                                                 let verified = running && health.telemetry_is_fresh();
                                                 status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
+                                                let script_count = format!("{}/{}", health.addon_ok, health.addon_total);
                                                 status_chip(ui, tr("Scripts detected"),
-                                                    if verified { &format!("{}/{}", health.addon_ok, health.addon_total) } else { "—" },
+                                                    if verified { script_count.as_str() } else { "—" },
                                                     verified && health.addon_total > 0 && health.addon_ok == health.addon_total);
                                             });
                                             ui.label(RichText::new(tr("You can finish with only the addons you want. Unverified steps are not automatically considered complete."))
