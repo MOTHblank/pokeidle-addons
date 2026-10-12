@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.47
+// @version      0.1.48
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.47');
+        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.48');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -282,7 +282,6 @@
         'Allow automatic purchases of diamonds when a usable reference exists.': 'Permite comprar diamantes automaticamente quando há uma referência utilizável.',
         'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com moedas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
         'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com gemas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
-        'When enabled, buy as many units from an item listing as the budget allows. Turn off to request one unit.': 'Quando ativado, compra tantas unidades de um anúncio quanto o orçamento permitir. Desative para solicitar apenas uma unidade.',
         'Money that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de moedas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
         'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de gemas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
         'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em moedas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
@@ -369,7 +368,14 @@
         'A rule for {name} in this currency already exists.': 'Já existe uma regra para {name} nesta moeda.',
         'Choose an item before adding a rule.': 'Escolha um item antes de adicionar a regra.',
         'Set a buy price, a sell price, or both before adding a fixed rule.': 'Defina um preço de compra, de venda ou ambos antes de adicionar uma regra fixa.',
-        'Safe default: one unit. Use the explicit “all” option only when you really want it.': 'Padrão seguro: uma unidade. Use a opção explícita “todas” somente quando realmente quiser.',
+        'Create a fixed rule': 'Criar regra fixa',
+        'Create an auto-sell rule': 'Criar regra de venda automática',
+        'Configured rules': 'Regras cadastradas',
+        'Price per unit': 'Preços por unidade',
+        'Buy every available unit affordable within reserves and purchase limits.': 'Compra todas as unidades disponíveis no anúncio que couberem no saldo, nas reservas e no limite por compra.',
+        'List every owned unit except the quantity kept in inventory.': 'Anuncia todas as unidades disponíveis no inventário, descontando as que você decidiu manter.',
+        'Only set the prices for the actions you want. 0 disables that action.': 'Preencha apenas os preços das ações desejadas. Valor 0 desativa a compra ou a venda.',
+        'Adding a rule does not enable the master switch.': 'Adicionar uma regra não ativa a automação. Use a chave geral acima para ligá-la.',
         'Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.': 'A venda automática experimental usa recomendações ao vivo. Revise os dois alvos antes de ativar a chave geral.',
         'Recommended target': 'Alvo recomendado',
         'Patient target': 'Alvo paciente'
@@ -483,6 +489,9 @@
         } catch {}
 
         const loaded = Object.assign({}, DEFAULTS, saved);
+        // The old global one-unit switch no longer exists. All purchases now
+        // honor the explicit budget and the actual offer quantity.
+        delete loaded.buyWholeItemBatch;
         loaded.autoSellRules = sanitizeAutoSellRules(saved.autoSellRules);
         loaded.fixedItemRules = sanitizeFixedItemRules(saved.fixedItemRules);
         try {
@@ -2989,6 +2998,64 @@
             '.moth-mw-advanced{margin-top:12px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-advanced>summary{padding:10px 11px;cursor:pointer;font-size:11px;font-weight:800}.moth-mw-advanced-body{padding:0 10px 10px}.moth-mw-advanced-note{font-size:9px;color:var(--sobre-mad-dim,#aaa);margin:0 0 8px}',
             '@media(max-width:900px){.moth-mw-auto-status-grid{grid-template-columns:1fr}.moth-mw-rule-add-search,.moth-mw-rule-add-fields,.moth-mw-rule-add-fields.fixed,.moth-mw-fixed-sides{grid-template-columns:1fr 1fr}.moth-mw-rule-list{grid-template-columns:1fr}}',
             '@media(max-width:620px){.moth-mw-rule-add-search,.moth-mw-rule-add-fields,.moth-mw-rule-add-fields.fixed,.moth-mw-fixed-sides,.moth-mw-rule-fields,.moth-mw-rule-fields.compact,.moth-mw-targets{grid-template-columns:1fr}.moth-mw-rule-card-head{flex-direction:column}.moth-mw-rule-card-head>label{width:100%}}',
+            '/* Automation workspace: readable at normal zoom, with no six-column forms. */',
+            '#moth-mw-view-content[data-view=automation]{display:grid;gap:14px;min-width:0;font-size:13px;line-height:1.5}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-section-title{margin:2px 0 0;align-items:flex-start;flex-direction:column;gap:3px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-section-title h4{font-size:16px;line-height:1.35}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-section-title span{font-size:12px;line-height:1.5}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-automation-block{margin:0;padding:17px;border-radius:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-automation-status{padding:15px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-auto-status-grid{gap:10px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-auto-status-pill{padding:11px;gap:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-auto-status-pill b{font-size:12px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-auto-status-pill small{font-size:11px;line-height:1.3}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-block-heading{margin-bottom:12px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-block-heading h4{margin:0 0 5px;font-size:16px;line-height:1.3;color:var(--sobre-mad,#fff)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-block-heading p{margin:0;color:var(--sobre-mad-dim,#c2b5bb);font-size:12px;line-height:1.5;max-width:75ch}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-master-row{margin:0 0 14px;padding:11px 13px;border:1px solid var(--mad-linha,#604850);border-radius:8px;background:rgba(255,255,255,.045)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-master-row label{font-size:13px;font-weight:700}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-card{gap:14px;margin:0 0 17px;padding:15px;background:rgba(0,0,0,.12);border:1px solid var(--mad-linha,#604850);box-shadow:none;border-radius:9px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-card h5,.moth-mw-rule-list-title{margin:0;font-size:14px;font-weight:800;color:var(--sobre-mad,#fff)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search{grid-template-columns:minmax(125px,.9fr) minmax(175px,1.4fr) minmax(110px,.7fr);gap:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-fields{grid-template-columns:repeat(3,minmax(120px,1fr));gap:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-field{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:12px;font-weight:650;color:var(--sobre-mad,#eee)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-field>span{font-size:12px;color:var(--sobre-mad,#e3d8dc);line-height:1.4}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-field input,#moth-mw-view-content[data-view=automation] .moth-mw-rule-field select{min-height:38px;padding:8px 10px;border-radius:7px;border:1px solid var(--mad-linha,#6b555d);background:var(--vao2,#171115);color:var(--sobre-mad,#fff);font-size:13px;line-height:1.3;max-width:100%;box-sizing:border-box}',
+            '#moth-mw-view-content[data-view=automation] input:focus-visible,#moth-mw-view-content[data-view=automation] select:focus-visible{outline:2px solid var(--rx,#a64b7d);outline-offset:2px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-compose{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:0}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-side{padding:14px;gap:11px;align-content:start;background:rgba(255,255,255,.025);border:1px solid var(--mad-linha,#56404d);box-shadow:none}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-side.buy{border-left:3px solid #82bda4}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-side.sell{border-left:3px solid #d6b077}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-side h6{margin:0;font-size:13px;font-weight:800;color:var(--sobre-mad,#fff)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-hint{margin:0;font-size:11px;line-height:1.55;color:var(--sobre-mad-dim,#c4b9bf)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-actions{gap:13px;align-items:center}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-actions>span{font-size:11px;line-height:1.5;min-width:160px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-btn.primary{min-height:37px;padding:9px 15px;font-size:12px;font-weight:800}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-list{grid-template-columns:1fr;gap:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-card{padding:15px;gap:12px;border-radius:9px;background:rgba(255,255,255,.035)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-card-head{align-items:center;flex-wrap:wrap}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-title>b{font-size:14px;white-space:normal;overflow:visible;line-height:1.3}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-title>small{font-size:11px;line-height:1.4}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-card-head>.moth-mw-rule-field{min-width:110px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields.compact{grid-template-columns:repeat(2,minmax(0,1fr))}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-card-foot{border-top:1px solid var(--mad-linha,#604850);padding-top:11px;justify-content:space-between}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-note{font-size:11px;line-height:1.5}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-toggle{font-size:12px;cursor:pointer}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-rule-toggle input{width:18px!important;height:18px!important;accent-color:var(--rx,#84325f)}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-targets{gap:9px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-target-chip{padding:9px 11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-target-chip small{font-size:11px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-target-chip b{font-size:13px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card{padding:16px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card h4{font-size:15px;margin-bottom:9px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-budget-card .moth-mw-config{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 15px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-settings-card .moth-mw-config label{font-size:12px;line-height:1.4}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-settings-card h4{font-size:14px}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-setting-help{font-size:11px;line-height:1.5}',
+            '#moth-mw-view-content[data-view=automation] .moth-mw-advanced>summary{font-size:13px;padding:13px}',
+            '@media(max-width:900px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+            '@media(max-width:620px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search,#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-compose,#moth-mw-view-content[data-view=automation] .moth-mw-budget-card .moth-mw-config,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields.compact{grid-template-columns:1fr}#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-actions .moth-mw-btn{width:100%}}',
             '.moth-mw-setting-control{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px}',
             '.moth-mw-setting-control>span{flex:1}',
             '.moth-mw-setting-control input[type=number]{width:110px;max-width:42%;font-size:11px;padding:5px 6px}',
@@ -3810,13 +3877,14 @@
                 content.innerHTML =
                     '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Automation status')) + '</h4><span>' +
                     escapeHtml(tr('Review the systems that can place market orders, then set spending safeguards and advanced monitoring.')) + '</span></div>' +
-                    automationNoticeHtml() + automationStatusPanelHtml() + fixedRulesHtml() + autoSellRulesHtml() +
-                    '<div class="moth-mw-settings-grid">' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Spending safeguards')) + '</h4><div class="moth-mw-config">' +
+                    automationNoticeHtml() + automationStatusPanelHtml() +
+                    '<section class="moth-mw-settings-card moth-mw-budget-card"><h4>' + escapeHtml(tr('Spending safeguards')) + '</h4><div class="moth-mw-config">' +
                     configField('Keep Coins in reserve', 'goldReserve', 'number', '') +
                     configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
                     configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
                     configField('Maximum Gems per purchase', 'maxGemsPerBuy', 'number', '0 = no extra cap') + '</div></section>' +
+                    fixedRulesHtml() + autoSellRulesHtml() +
+                    '<div class="moth-mw-settings-grid">' +
                     '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Percentage auto-buy')) + '</h4><p class="moth-mw-setting-help">' +
                     escapeHtml(tr('Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.')) +
                     '</p><div class="moth-mw-config">' +
