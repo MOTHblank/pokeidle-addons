@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.1.2
+// @version      3.1.3
 // @description  Joins multiple Twitch chats through one lightweight popout connection and discards unused chat events.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.2');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.3');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -124,9 +124,14 @@
         let rosterRevision = 0;
 
         function sendIrc(socket, command) {
-            if (socket.readyState !== NativeWebSocket.OPEN) return;
-            try { NativeWebSocket.prototype.send.call(socket, command); }
-            catch (error) { console.warn('[Moth] IRC membership update failed:', error); }
+            if (socket.readyState !== NativeWebSocket.OPEN) return false;
+            try {
+                NativeWebSocket.prototype.send.call(socket, command);
+                return true;
+            } catch (error) {
+                console.warn('[Moth] IRC membership update failed:', error);
+                return false;
+            }
         }
 
         // Update the same IRC socket when the game changes the rewarded streams.
@@ -136,7 +141,9 @@
             const next = new Set(desiredChannels);
             const added = [...next].filter(channel => !current.has(channel));
             const removed = [...current].filter(channel => !next.has(channel));
-            joinedBySocket.set(socket, next);
+            // Track only memberships actually sent to IRC. A newer roster may
+            // cancel a delayed batch before it runs; it must not be mistaken
+            // for an already-joined channel.
 
             // Join replacements before leaving old channels: do not introduce
             // an avoidable reward gap when a live channel disappears.
@@ -147,12 +154,17 @@
             batches.forEach((batch, index) => {
                 window.setTimeout(() => {
                     if (revision !== rosterRevision) return;
-                    sendIrc(socket, 'JOIN ' + batch.map(channel => '#' + channel).join(','));
+                    if (sendIrc(socket, 'JOIN ' + batch.map(channel => '#' + channel).join(','))) {
+                        for (const channel of batch) current.add(channel);
+                    }
                 }, index * joinBatchDelayMs);
             });
             window.setTimeout(() => {
                 if (revision !== rosterRevision) return;
-                if (removed.length) sendIrc(socket, 'PART ' + removed.map(channel => '#' + channel).join(','));
+                if (removed.length &&
+                    sendIrc(socket, 'PART ' + removed.map(channel => '#' + channel).join(','))) {
+                    for (const channel of removed) current.delete(channel);
+                }
             }, batches.length ? (batches.length - 1) * joinBatchDelayMs + 1500 : 0);
         }
 
@@ -266,19 +278,17 @@
                         batches.push(desiredChannels.slice(start, start + joinBatchSize));
                     }
 
-                    joinedBySocket.set(this, new Set(desiredChannels));
+                    joinedBySocket.set(this, new Set(batches[0]));
+                    const initialRevision = rosterRevision;
                     pieces[i] = match[1] + batches[0].map(channel => '#' + channel).join(',');
                     for (let batchIndex = 1; batchIndex < batches.length; batchIndex += 1) {
                         const batch = batches[batchIndex];
                         window.setTimeout(() => {
-                            if (this.readyState !== NativeWebSocket.OPEN) return;
-                            try {
-                                NativeWebSocket.prototype.send.call(
-                                    this,
-                                    'JOIN ' + batch.map(channel => '#' + channel).join(',')
-                                );
-                            } catch (error) {
-                                console.warn('[Moth] Could not join next Twitch chat batch:', error);
+                            if (initialRevision !== rosterRevision) return;
+                            if (sendIrc(this, 'JOIN ' + batch.map(channel => '#' + channel).join(','))) {
+                                const joined = joinedBySocket.get(this) || new Set();
+                                for (const channel of batch) joined.add(channel);
+                                joinedBySocket.set(this, joined);
                             }
                         }, batchIndex * joinBatchDelayMs);
                     }
