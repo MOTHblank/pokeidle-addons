@@ -2141,8 +2141,7 @@
             'autoBuyPokemon',
             'autoBuyDiamonds',
             'buyCoins',
-            'buyGems',
-            'buyWholeItemBatch'
+            'buyGems'
         ];
         const numberKeys = [
             'scanSeconds',
@@ -3894,13 +3893,11 @@
                 const currency = q('#moth-auto-sell-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
                 const mode = q('#moth-auto-sell-mode', panel)?.value === 'patient' ? 'patient' : 'recommended';
                 const keepQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-keep', panel)?.value) || 0));
-                const maxSellQty = Math.max(1, Math.floor(Number(q('#moth-auto-sell-max', panel)?.value) || 1));
-                const sellAll = Boolean(q('#moth-auto-sell-all', panel)?.checked);
                 const rules = sanitizeAutoSellRules(config.autoSellRules), name = catalogName(itemId);
                 if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
                     setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
                 }
-                rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty, maxSellQty, sellAll });
+                rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty });
                 config.autoSellRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
             }
             const removeAutoSell = target.closest('[data-moth-remove-auto-sell]');
@@ -3920,15 +3917,12 @@
                     setAutomationNotice(tr('Set a buy price, a sell price, or both before adding a fixed rule.'), 'warn'); return;
                 }
                 const keepQty = Math.max(0, Math.floor(Number(q('#moth-fixed-keep', panel)?.value) || 0));
-                const buyQtyLimit = Math.max(1, Math.floor(Number(q('#moth-fixed-buy-limit', panel)?.value) || 1));
-                const maxSellQty = Math.max(1, Math.floor(Number(q('#moth-fixed-sell-limit', panel)?.value) || 1));
-                const buyAll = Boolean(q('#moth-fixed-buy-all', panel)?.checked), sellAll = Boolean(q('#moth-fixed-sell-all', panel)?.checked);
                 const rules = sanitizeFixedItemRules(config.fixedItemRules), name = catalogName(itemId);
                 if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
                     setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
                 }
-                rules.push({ id: newAutomationRuleId('fixed'), itemId, currency, buyEnabled: buyMax > 0, buyMax, buyQtyLimit, buyAll,
-                    sellEnabled: sellPrice > 0, sellPrice, keepQty, maxSellQty, sellAll });
+                rules.push({ id: newAutomationRuleId('fixed'), itemId, currency, buyEnabled: buyMax > 0, buyMax,
+                    sellEnabled: sellPrice > 0, sellPrice, keepQty });
                 config.fixedItemRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
             }
             const removeFixed = target.closest('[data-moth-remove-fixed]');
@@ -4007,9 +4001,6 @@
         panel.addEventListener('change', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
-            if (target.matches('#moth-auto-sell-all')) { const x=q('#moth-auto-sell-max',panel); if(x)x.disabled=target.checked; return; }
-            if (target.matches('#moth-fixed-buy-all')) { const x=q('#moth-fixed-buy-limit',panel); if(x)x.disabled=target.checked; return; }
-            if (target.matches('#moth-fixed-sell-all')) { const x=q('#moth-fixed-sell-limit',panel); if(x)x.disabled=target.checked; return; }
             if (target.matches('[data-moth-auto-sell-field]')) {
                 const id = target.dataset.ruleId;
                 const field = target.dataset.mothAutoSellField;
@@ -4020,8 +4011,6 @@
                 else if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
                 else if (field === 'mode') rule.mode = target.value === 'patient' ? 'patient' : 'recommended';
                 else if (field === 'keepQty') rule.keepQty = Math.max(0, Math.floor(Number(target.value) || 0));
-                else if (field === 'maxSellQty') rule.maxSellQty = Math.max(1, Math.floor(Number(target.value) || 1));
-                else if (field === 'sellAll') rule.sellAll = target.checked;
                 else return;
                 config.autoSellRules = rules;
                 saveConfig();
@@ -4035,8 +4024,7 @@
                 const rule = rules.find(entry => entry.id === id);
                 if (!rule) return;
                 if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
-                else if (field === 'buyEnabled' || field === 'sellEnabled' || field === 'buyAll' || field === 'sellAll') rule[field] = target.checked;
-                else if (field === 'buyQtyLimit' || field === 'maxSellQty') rule[field] = Math.max(1, Math.floor(Number(target.value) || 1));
+                else if (field === 'buyEnabled' || field === 'sellEnabled') rule[field] = target.checked;
                 else if (['buyMax', 'sellPrice', 'keepQty'].includes(field)) rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
                 else return;
                 config.fixedItemRules = rules;
@@ -4349,7 +4337,6 @@
             autoBuyDiamonds: !!config.autoBuyDiamonds,
             buyCoins: !!config.buyCoins,
             buyGems: !!config.buyGems,
-            buyWholeItemBatch: !!config.buyWholeItemBatch,
             goldReserve: Math.max(0, Number(config.goldReserve) || 0),
             gemReserve: Math.max(0, Number(config.gemReserve) || 0),
             maxCoinsPerBuy: Math.max(0, Number(config.maxCoinsPerBuy) || 0),
