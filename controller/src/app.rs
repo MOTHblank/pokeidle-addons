@@ -421,8 +421,13 @@ impl GameSlot {
     }
 
     fn is_running(&mut self) -> bool {
-        if self.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(None))) {
-            return true;
+        if let Some(child) = self.child.as_mut() {
+            // On an OS inspection error, conservatively keep ownership rather
+            // than offer a duplicate launch into a potentially locked profile.
+            match child.try_wait() {
+                Ok(None) | Err(_) => return true,
+                Ok(Some(_)) => {}
+            }
         }
         if let Some(pid) = self.orphaned_pid {
             if firefox::process_alive(pid) {
