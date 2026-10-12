@@ -405,7 +405,8 @@ fn monitor_loop(
                     session = Some(browser_session);
 
                     if let Ok(mut current) = health.lock() {
-                        current.state = "Running".to_string();
+                        // A live socket is not yet a successful telemetry sample.
+                        current.state = "Connecting".to_string();
                         current.last_error = None;
                     }
                 }
