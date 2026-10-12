@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Upstream Scraper & Exporter
 // @namespace    moth.pokeidle
-// @version      1.1.1
+// @version      1.2.0
 // @description  Captures public PokéIdle client assets into a TAR and verified manifest, with limits and cancellation.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -23,6 +23,8 @@
     const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
     const FETCH_TIMEOUT_MS = 15000;
 
+    // In-memory list of actual public asset URLs (not response bodies).
+    const observedAssets = new Set();
     const state = {
         running: false,
         cancelRequested: false,
@@ -30,6 +32,7 @@
         complete: false,
         files: new Map(),
         errors: [],
+        unresolvedDynamicPaths: new Set(),
         status: 'Not scanned yet',
         attempted: 0,
         discovered: 0,
@@ -52,9 +55,19 @@
             .replaceAll("'", '&#039;');
     }
 
+    function isDynamicTemplate(value) {
+        const raw = String(value || '');
+        let decoded = raw;
+        try { decoded = decodeURIComponent(raw); } catch {}
+        return /\$\{|\{[A-Za-z_$][^}]*\}|%24%7b|%7b/i.test(raw) ||
+            /\$\{|\{[A-Za-z_$][^}]*\}/i.test(decoded);
+    }
+
     function normalizeUrl(value, base = location.href) {
         try {
+            if (isDynamicTemplate(value)) return null;
             const url = new URL(value, base);
+            if (isDynamicTemplate(url.pathname)) return null;
             if (url.origin !== location.origin ||
                 !/^https?:$/.test(url.protocol) ||
                 url.username || url.password) {
@@ -138,6 +151,15 @@
         );
     }
 
+    function observeAsset(entry) {
+        if (!['script', 'link', 'css', 'fetch', 'xmlhttprequest'].includes(entry?.initiatorType)) return;
+        const url = normalizeUrl(entry.name);
+        if (!url || !isTextCandidate(url)) return;
+        if (['fetch', 'xmlhttprequest'].includes(entry.initiatorType) &&
+            !/^\/(?:assets(?:-packs)?|shared|static)\//i.test(new URL(url).pathname)) return;
+        if (observedAssets.size < MAX_DISCOVERED) observedAssets.add(url);
+    }
+
     function collectInitialUrls() {
         const urls = new Set();
 
@@ -184,14 +206,11 @@
             add(value);
         }
 
-        // Resource Timing also contains authenticated XHR/fetch requests.
-        // Only DOM-style static asset initiators belong in a code snapshot.
-        for (const entry of performance.getEntriesByType('resource')) {
-            if (['script', 'link', 'css'].includes(entry.initiatorType)) {
-                add(entry.name);
-            }
-        }
-
+        // Include concrete dynamic assets fetched by the game, never API responses.
+        try {
+            for (const entry of performance.getEntriesByType('resource')) observeAsset(entry);
+        } catch {}
+        for (const url of observedAssets) add(url);
         return [...urls];
     }
 
@@ -205,6 +224,13 @@
 
         const add = (raw, moduleImport = false) => {
             if (!raw) return;
+            if (isDynamicTemplate(raw)) {
+                if (state.unresolvedDynamicPaths.size < 100 &&
+                    /\.(?:json|js|mjs|css|map)(?:\?|$)/i.test(raw)) {
+                    state.unresolvedDynamicPaths.add(String(raw).slice(0, 180));
+                }
+                return;
+            }
             // Bare module specifiers are package names, not URL paths.
             if (moduleImport && !/^(?:\.{1,2}\/|\/|https?:\/\/)/i.test(raw)) return;
 
@@ -271,9 +297,15 @@
             for (const pattern of assetPatterns) {
                 let match;
                 while ((match = pattern.exec(text))) {
-                    add(match[1]);
+                    const url = normalizeUrl(match[1], sourceUrl);
+                    if (url &&
+                        (/^\/(?:assets(?:-packs)?|shared|static)\//i.test(new URL(url).pathname) ||
+                         /\.(?:js|mjs|css|map)$/i.test(new URL(url).pathname))) add(match[1]);
                 }
             }
+            // Template placeholders are diagnostics, not network requests.
+            const dynamic = /\$\{[^}]+\}[^'"`\s]{0,100}\.(?:json|mjs|js|css|map)/g;
+            for (const match of text.matchAll(dynamic)) add(match[0]);
         }
 
         if (
@@ -319,6 +351,28 @@
                     el.getAttribute('src') ||
                     el.getAttribute('href')
                 );
+            }
+        }
+
+        // Public index JSON can point at concrete category manifest URLs.
+        if (/json/i.test(contentType) &&
+            /^\/(?:assets(?:-packs)?|static)\/.*(?:index|manifest|version|categories|asset-packs)[^/]*\.json$/i.test(path)) {
+            try {
+                const stack = [JSON.parse(text)];
+                let visited = 0;
+                while (stack.length && visited++ < 40000) {
+                    const value = stack.pop();
+                    if (typeof value === 'string') {
+                        if (/\.(?:json|mjs|js|css|map)(?:\?|$)/i.test(value)) add(value);
+                    } else if (Array.isArray(value)) {
+                        for (const row of value) stack.push(row);
+                    } else if (value && typeof value === 'object') {
+                        for (const row of Object.values(value)) stack.push(row);
+                    }
+                }
+            } catch (error) {
+                state.errors.push({ url: sourceUrl, error: 'Invalid asset index: ' +
+                    String(error?.message || error) });
             }
         }
 
@@ -1340,7 +1394,7 @@
         );
 
         console.info(
-            '[PokéIdle Upstream Scraper] v1.1.1 loaded'
+            '[PokéIdle Upstream Scraper] v1.2.0 loaded'
         );
     }
 
