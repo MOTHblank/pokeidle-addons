@@ -13,7 +13,8 @@ Use a release executable built for your operating system:
 - Linux: `moth-controller`
 
 On Linux, install Firefox (Developer Edition is preferred), the Violentmonkey
-extension, and your distribution's `xdg-utils` package (provides `xdg-open`).
+extension, and your distribution's `xdg-utils` and `curl` packages
+(for desktop opening and retrieving the live addon list).
 A desktop session with X11 or Wayland is required for the controller GUI and
 visible Firefox. Headless mode remains an optional per-account browser mode.
 
@@ -39,7 +40,8 @@ automatically copy profiles between operating systems.
 2. Use **Google sign-in** when browser automation prevents authentication; it
    launches visible Firefox without the remote-debugging endpoint.
 3. Use **Install Violentmonkey** and then **Addons** inside each Firefox
-   profile. The Addons action builds fresh URLs to the current `master` scripts.
+   profile. The Addons action queries the current GitHub `addons/` directory and
+builds fresh URLs to each `.user.js` file on `master`.
    Versions are read from each userscript's own `@version` metadata by
    Violentmonkey, not pinned in the controller's installer list.
 4. Return to the main dashboard to launch, monitor, switch visible/headless
