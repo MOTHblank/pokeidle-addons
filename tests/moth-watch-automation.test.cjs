@@ -157,9 +157,9 @@ test('Shiny Coin purchases are blocked by both auto-buy and purchase quantity gu
     };
     const logic = section('    function candidateCanAutoBuy(', '    function tryBuy(');
     const buy = new Function('config', 'pokemonCurrencyAllowed',
-        'currencyAllowed', 'serverNow', 'balanceFor', 'reserveFor', 'maxSpendFor',
+        'currencyAllowed', 'serverNow', 'autoThresholdFor', 'balanceFor', 'reserveFor', 'maxSpendFor',
         logic + '\nreturn { candidateCanAutoBuy, purchaseQuantity };')(
-        config, policy, () => true, () => Date.now(),
+        config, policy, () => true, () => Date.now(), () => 0.4,
         () => 10000, () => 0, () => 0
     );
     const candidate = {
