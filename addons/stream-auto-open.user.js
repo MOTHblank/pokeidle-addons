@@ -18,7 +18,7 @@
     const BUTTON_ID = 'moth-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';
 
-    const LIVE_SCAN_INTERVAL_MS = 2 * 60 * 1000;
+    const LIVE_SCAN_INTERVAL_MS = 5 * 60 * 1000;
     const INITIAL_SCAN_DELAY_MS = 30 * 1000;
     const UI_RECHECK_INTERVAL_MS = 30 * 1000;
 
@@ -699,7 +699,7 @@
     page.__mothKickScannerV1 = {
         version: 2,
         snapshot() {
-            // The native monitor polls this API independently of the 2-minute
+            // The native monitor polls this API independently of the 5-minute
             // Twitch tab scan. Read KICK's current game state on every poll so
             // live channels appear/disappear promptly without waiting for a
             // modal refresh or the next scheduled scan.
