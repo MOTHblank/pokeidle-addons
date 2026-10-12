@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.1.0
+// @version      7.1.1
 // @description  Replaces one consolidated Twitch chat tab every five minutes; KICK channels remain delegated to Rust.
 // @match        https://pokeidle.io/app*
 // @match        https://www.twitch.tv/popout/*/chat*
@@ -77,7 +77,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.1.0');
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.1.1');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -853,7 +853,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v7.1.0 ready · fresh all-channel Twitch popout every 5 minutes · KICK stays in Rust');
+    console.info('[Moth] live stream scanner v7.1.1 ready · fresh all-channel Twitch popout every 5 minutes · KICK stays in Rust');
     }
 
     start();
