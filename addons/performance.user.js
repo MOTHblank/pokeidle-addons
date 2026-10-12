@@ -38,26 +38,9 @@
     const nativeSetInterval = page.setInterval.bind(page);
     const nativeClearInterval = page.clearInterval.bind(page);
 
-    /*
-     * Performance suspends campo.mjs map rendering entirely. This avoids
-     * drawing a hidden scene and avoids native Economy mode, which disables
-     * delivery of the defeated-Pokémon capture prompt.
-     */
-    const PROFILES = {
-        performance: {
-            label: 'Performance',
-            adaptive: false,
-            scene: 'paused',
-            idleScene: 'paused',
-            backgroundScene: 'paused',
-            idleSeconds: 0,
-            ui: 'performance',
-            idleUi: 'performance',
-            effects: 'minimal',
-            nativeOptimized: true
-        }
-    };
-
+    // ON is always the strongest safe profile: pause map drawing, preserve
+    // the live capture controls, freeze sprite animations and simplify UI.
+    // OFF restores the game's original rendering and scheduling.
     const DEFAULTS = {
         enabled: true
     };
@@ -102,7 +85,6 @@
     }
 
     let settings = loadSettings();
-    let lastActivity = Date.now();
     let interactionBoostUntil = 0;
     let currentMode = 'full';
     let currentUi = 'off';
@@ -138,20 +120,7 @@
     let campoRunsPerSecond = 0;
     let campoSkippedPerSecond = 0;
 
-    // Load monitor.
-    const longTasks = [];
-    const jankFrames = [];
-    let browserFps = 0;
-    let frameCount = 0;
-    let frameWindowStart = performance.now();
-    let previousMonitorFrame = 0;
-    let longTaskMsPerSecond = 0;
-    let jankPerSecond = 0;
-    let pressure = 'light';
-    let adaptiveDecision = '30';
-    let adaptiveCandidate = '30';
-    let adaptiveCandidateStreak = 0;
-
+    // Count actual Campo loop executions, never browser/compositor frames.
     let uiTimerRunsWindow = 0;
     let uiTimerSkippedWindow = 0;
     let uiTimerRunsPerSecond = 0;
@@ -164,10 +133,6 @@
 
     function saveSettings() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    }
-
-    function profile() {
-        return PROFILES.performance;
     }
 
     function isNativeEconomy() {
@@ -195,18 +160,6 @@
     // ------------------------------------------------------------------
     // Native optimized mode cooperation
     // ------------------------------------------------------------------
-
-    function nativeOptimizedEnabled() {
-        try {
-            return (
-                localStorage.getItem(
-                    'cfg-otimizado'
-                ) === '1'
-            );
-        } catch {
-            return false;
-        }
-    }
 
     function forceNativeOptimized() {
         try {
@@ -303,11 +256,7 @@
     }
 
     function syncNativeOptimized() {
-        const shouldForce =
-            settings.enabled &&
-            profile()
-                .nativeOptimized &&
-            !isNativeEconomy();
+        const shouldForce = settings.enabled && !isNativeEconomy();
 
         if (shouldForce) {
             forceNativeOptimized();
@@ -1108,263 +1057,6 @@
     installUiTimerHook();
 
     // ------------------------------------------------------------------
-    // Runtime pressure measurement
-    // ------------------------------------------------------------------
-
-    try {
-        const observer =
-            new PerformanceObserver(list => {
-                const now =
-                    performance.now();
-
-                for (
-                    const entry of
-                    list.getEntries()
-                ) {
-                    longTasks.push({
-                        time: now,
-                        duration:
-                            entry.duration
-                    });
-                }
-            });
-
-        observer.observe({
-            type: 'longtask',
-            buffered: false
-        });
-    } catch {}
-
-    function monitorFrame(now) {
-        frameCount++;
-
-        if (previousMonitorFrame) {
-            const gap =
-                now -
-                previousMonitorFrame;
-
-            if (gap > 34) {
-                jankFrames.push({
-                    time: now,
-                    gap
-                });
-            }
-        }
-
-        previousMonitorFrame = now;
-
-        const elapsed =
-            now -
-            frameWindowStart;
-
-        if (elapsed >= 1000) {
-            browserFps =
-                frameCount *
-                1000 /
-                elapsed;
-
-            frameCount = 0;
-            frameWindowStart = now;
-        }
-
-        nativeRAF?.(monitorFrame);
-    }
-
-    nativeRAF?.(monitorFrame);
-
-    function prunePerformanceSamples() {
-        const now =
-            performance.now();
-
-        const cutoff =
-            now - 5000;
-
-        while (
-            longTasks.length &&
-            longTasks[0].time < cutoff
-        ) {
-            longTasks.shift();
-        }
-
-        while (
-            jankFrames.length &&
-            jankFrames[0].time < cutoff
-        ) {
-            jankFrames.shift();
-        }
-
-        const longMs =
-            longTasks.reduce(
-                (sum, item) =>
-                    sum +
-                    item.duration,
-                0
-            );
-
-        longTaskMsPerSecond =
-            longMs / 5;
-
-        jankPerSecond =
-            jankFrames.length / 5;
-
-        if (
-            document.hidden
-        ) {
-            pressure = 'background';
-        } else if (
-            longTaskMsPerSecond >= 90 ||
-            jankPerSecond >= 5 ||
-            (
-                browserFps > 0 &&
-                browserFps < 42
-            )
-        ) {
-            pressure = 'heavy';
-        } else if (
-            longTaskMsPerSecond >= 35 ||
-            jankPerSecond >= 2.5 ||
-            (
-                browserFps > 0 &&
-                browserFps < 53
-            )
-        ) {
-            pressure = 'medium';
-        } else {
-            pressure = 'light';
-        }
-    }
-
-    function updateAdaptiveDecision() {
-        const p =
-            profile();
-
-        if (!p.adaptive) {
-            return;
-        }
-
-        const idleSeconds =
-            (
-                Date.now() -
-                lastActivity
-            ) /
-            1000;
-
-        if (
-            document.hidden
-        ) {
-            adaptiveDecision =
-                p.backgroundScene;
-
-            adaptiveCandidate =
-                adaptiveDecision;
-
-            adaptiveCandidateStreak =
-                0;
-
-            return;
-        }
-
-        if (
-            p.idleSeconds > 0 &&
-            idleSeconds >=
-                p.idleSeconds
-        ) {
-            adaptiveDecision =
-                p.idleScene;
-
-            adaptiveCandidate =
-                adaptiveDecision;
-
-            adaptiveCandidateStreak =
-                0;
-
-            return;
-        }
-
-        if (
-            Date.now() <
-            interactionBoostUntil
-        ) {
-            adaptiveDecision =
-                p.scene;
-
-            adaptiveCandidate =
-                adaptiveDecision;
-
-            adaptiveCandidateStreak =
-                0;
-
-            return;
-        }
-
-        const desired =
-            pressure ===
-                'heavy'
-                ? '12'
-                : pressure ===
-                    'medium'
-                    ? '20'
-                    : p.scene;
-
-        if (
-            desired ===
-            adaptiveDecision
-        ) {
-            adaptiveCandidate =
-                desired;
-
-            adaptiveCandidateStreak =
-                0;
-
-            return;
-        }
-
-        if (
-            adaptiveCandidate ===
-                desired
-        ) {
-            adaptiveCandidateStreak++;
-        } else {
-            adaptiveCandidate =
-                desired;
-
-            adaptiveCandidateStreak =
-                1;
-        }
-
-        const currentFps =
-            Number(
-                adaptiveDecision
-            ) ||
-            0;
-
-        const desiredFps =
-            Number(desired) ||
-            0;
-
-        /*
-         * Reduce quickly under sustained load, recover more slowly so the
-         * renderer does not oscillate around a threshold.
-         */
-        const required =
-            desiredFps <
-                currentFps
-                ? 2
-                : 4;
-
-        if (
-            adaptiveCandidateStreak >=
-            required
-        ) {
-            adaptiveDecision =
-                desired;
-
-            adaptiveCandidateStreak =
-                0;
-        }
-    }
-
-    // ------------------------------------------------------------------
     // UI performance levels
     // ------------------------------------------------------------------
 
@@ -1405,44 +1097,12 @@
         chatCollapsedByAddon = false;
     }
 
-    function isIdleForProfile(p) {
-        if (document.hidden) {
-            return true;
-        }
-
-        if (p.idleSeconds <= 0) {
-            return false;
-        }
-
-        return (
-            Date.now() -
-            lastActivity
-        ) >=
-            p.idleSeconds * 1000;
-    }
-
     function calculateMode() {
-        if (!settings.enabled) {
-            return 'full';
-        }
-
-        const p = profile();
-        if (document.hidden) {
-            return p.backgroundScene;
-        }
-        if (isIdleForProfile(p)) {
-            return p.idleScene;
-        }
-        return p.scene;
+        return settings.enabled ? 'paused' : 'full';
     }
 
     function calculateUiLevel() {
-        if (!settings.enabled) {
-            return 'off';
-        }
-
-        const p = profile();
-        return isIdleForProfile(p) ? p.idleUi : p.ui;
+        return settings.enabled ? 'performance' : 'off';
     }
 
     function syncChatPolicy() {
@@ -1485,21 +1145,10 @@
         currentUi =
             calculateUiLevel();
 
-        const p = profile();
         const html =
             document.documentElement;
 
-        html.classList.toggle(
-            'moth-perf-reduced',
-            settings.enabled &&
-                p.effects === 'reduced'
-        );
-
-        html.classList.toggle(
-            'moth-perf-minimal',
-            settings.enabled &&
-                p.effects === 'minimal'
-        );
+        html.classList.toggle('moth-perf-minimal', settings.enabled);
 
         for (
             const level of [
@@ -1515,97 +1164,28 @@
             );
         }
 
-        html.classList.toggle(
-            'moth-scene-sleep',
-            settings.enabled &&
-                currentMode === '2'
-        );
-
         syncSpriteTimerMode();
         syncNativeOptimized();
         syncChatPolicy();
         updateUI();
     }
 
+    // Keep essential controls responsive to input; changing this timestamp
+    // does not switch modes or repeatedly write DOM on every wheel event.
     function recordActivity() {
-        lastActivity = Date.now();
+        interactionBoostUntil = Date.now() + 2500;
+    }
 
-        /*
-         * Adaptive mode immediately returns to its responsive ceiling
-         * after interaction, then reevaluates load a few seconds later.
-         */
-        interactionBoostUntil =
-            Date.now() + 2500;
+    for (const eventName of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+        window.addEventListener(eventName, recordActivity, {
+            passive: true, capture: true
+        });
+    }
 
-        if (
-            profile().adaptive
-        ) {
-            adaptiveDecision =
-                profile().scene;
-
-            adaptiveCandidate =
-                adaptiveDecision;
-
-            adaptiveCandidateStreak =
-                0;
-        }
-
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) interactionBoostUntil = Date.now() + 1500;
         applyMode();
-    }
-
-    for (
-        const eventName of [
-            'pointerdown',
-            'keydown',
-            'wheel',
-            'touchstart'
-        ]
-    ) {
-        window.addEventListener(
-            eventName,
-            recordActivity,
-            {
-                passive: true,
-                capture: true
-            }
-        );
-    }
-
-    document.addEventListener(
-        'visibilitychange',
-        () => {
-            if (
-                !document.hidden
-            ) {
-                lastActivity =
-                    Date.now();
-
-                interactionBoostUntil =
-                    Date.now() +
-                    1500;
-
-                if (
-                    profile()
-                        .adaptive
-                ) {
-                    adaptiveDecision =
-                        profile().scene;
-
-                    adaptiveCandidate =
-                        adaptiveDecision;
-
-                    adaptiveCandidateStreak =
-                        0;
-                }
-            }
-
-            applyMode();
-        }
-    );
-
-    // ------------------------------------------------------------------
-    // CSS reductions
-    // ------------------------------------------------------------------
+    });
 
     function installStyles() {
         if (q('#' + STYLE_ID)) {
@@ -1685,19 +1265,6 @@
                 transition: none !important;
             }
 
-            html.moth-perf-reduced :is(
-                .ab-confete *,
-                .recompensa *,
-                .shiny-anuncio *,
-                .lendario-anuncio *,
-                .evento-faixa *,
-                .pvp-fila-pill *
-            ) {
-                animation-duration: .001ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: .001ms !important;
-            }
-
             /*
              * Do not put a wildcard rule on every #app descendant: PokéIdle
              * creates/reuses DOM constantly, and forcing every new node and
@@ -1744,10 +1311,6 @@
                 display: none !important;
             }
 
-            html.moth-scene-sleep #cena {
-                opacity: .55 !important;
-            }
-
             #${TRIGGER_ID} {
                 display: inline-flex !important;
                 align-items: center !important;
@@ -1789,34 +1352,6 @@
             document.head ||
             document.documentElement
         ).appendChild(style);
-    }
-
-    function labelForMode(mode) {
-        if (
-            mode ===
-                'full'
-        ) {
-            return 'Full';
-        }
-
-        const fps =
-            Number(mode);
-
-        return Number.isFinite(
-            fps
-        )
-            ? fps +
-              'fps'
-            : mode;
-    }
-
-    function labelForUi(level) {
-        return {
-            off: 'UI Full',
-            lite: 'UI Lite',
-            aggressive: 'UI Low',
-            performance: 'UI Max'
-        }[level] || level;
     }
 
     function setText(el, value) {
@@ -2005,8 +1540,6 @@
         npcRunsWindow = 0;
         npcSkippedWindow = 0;
 
-        prunePerformanceSamples();
-        updateAdaptiveDecision();
         pruneSuspendedCampoLoops();
         applyMode();
     }, 1000);
@@ -2015,9 +1548,6 @@
         installStyles();
         installCampoHook();
         ensureTrigger();
-
-        lastActivity =
-            Date.now();
 
         applyMode();
 
