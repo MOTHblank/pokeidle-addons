@@ -213,6 +213,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "This only opens installers, it does not confirm installation." => "Esta ação apenas abre instaladores, não confirma a instalação.",
         "Running" => "Em execução",
         "Not detected in game" => "Não detectado no jogo",
+        "Not installed or inactive" => "Não instalado ou inativo",
+        "detected" => "detectados",
         "Running, version not reported" => "Em execução, versão não informada",
         "Not checked yet" => "Ainda não verificado",
         "Up to date" => "Atualizado",
@@ -862,7 +864,7 @@ impl ControllerApp {
             if !setup_complete && vm_installed {
                 let health = self.games[index].health();
                 if health.telemetry_is_fresh() && health.logged_in
-                    && health.addon_total > 0 && health.addon_ok == health.addon_total
+                    && health.addon_ok > 0 && health.addon_missing.is_empty()
                 {
                     match accounts::complete_setup(profile) {
                         Ok(()) => setup_complete = true,
@@ -2959,8 +2961,11 @@ fn addon_condition(
             AddonCondition::Current
         }
     } else if health.addon_missing.iter().any(|name| name == addon_label(file)) {
+        // The script reported a marker but its runtime check failed.
         AddonCondition::NotDetected
     } else {
+        // Missing markers do not prove a missing mandatory installation:
+        // users can choose which published userscripts to enable.
         AddonCondition::Unverified
     }
 }
@@ -3144,8 +3149,8 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         let script_status = status_chip(
                                             ui,
                                             tr("Scripts"),
-                                            &format!("{}/{}", health.addon_ok, health.addon_total),
-                                            health.addon_total > 0 && health.addon_ok == health.addon_total,
+                                            &format!("{} {}", health.addon_ok, tr("detected")),
+                                            health.addon_ok > 0 && health.addon_missing.is_empty(),
                                         );
                                         if !health.addon_missing.is_empty() {
                                             script_status.on_hover_text(
@@ -3177,10 +3182,10 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 status_chip(ui, tr("Violentmonkey installed"), if setup.violentmonkey_installed { "✓" } else { "…" }, setup.violentmonkey_installed);
                                                 let verified = running && health.telemetry_is_fresh();
                                                 status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
-                                                let script_count = format!("{}/{}", health.addon_ok, health.addon_total);
+                                                let script_count = format!("{} {}", health.addon_ok, tr("detected"));
                                                 status_chip(ui, tr("Scripts detected"),
                                                     if verified { script_count.as_str() } else { "—" },
-                                                    verified && health.addon_total > 0 && health.addon_ok == health.addon_total);
+                                                    verified && health.addon_ok > 0 && health.addon_missing.is_empty());
                                             });
                                             ui.label(RichText::new(tr("You can finish with only the addons you want. Unverified steps are not automatically considered complete."))
                                                 .size(9.0).color(DIM));
@@ -3290,7 +3295,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                             AddonCondition::NotDetected => (tr("Not detected in game"), WARN),
                                                             AddonCondition::Unverified => {
                                                                 if running && health.telemetry_is_fresh() && remote_addons.checked {
-                                                                    (tr("Running, version not reported"), DIM)
+                                                                    (tr("Not installed or inactive"), DIM)
                                                                 } else {
                                                                     (tr("Not checked yet"), DIM)
                                                                 }
