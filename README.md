@@ -127,6 +127,10 @@ Abra a interface **Moth Watch** do userscript no PokéIdle para configurar:
 
 A compra automática começa desativada por padrão. Ative-a somente depois de conferir as regras de preço e as reservas da conta.
 
+**Regras fixas de compra e venda:** escolha o item e a moeda, depois defina o preço máximo para comprar e/ou o preço para vender. O preço é sempre **por unidade**. Valor zero desativa aquela ação. O Moth Watch compra automaticamente todas as unidades do anúncio que couberem no saldo e nos limites financeiros; ao vender, anuncia todas as unidades disponíveis, exceto a quantidade definida em **Manter quantidade**. Não há mais opções separadas de quantidade por compra/anúncio nem caixas de seleção “comprar/vender todas”.
+
+As chaves gerais das automações continuam **desligadas por padrão**. Regras previamente salvas mantêm preços, ativações e estoques reservados, mas passam a seguir a nova política de quantidade total. **Atenção:** reserva zero e gasto máximo por compra zero significam ausência de limite adicional; configure esses valores antes de ativar uma regra para evitar gastar todo o saldo disponível.
+
 ## Usando o Moth Controller
 
 ### Dashboard
