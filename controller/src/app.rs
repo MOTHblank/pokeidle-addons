@@ -898,7 +898,7 @@ impl ControllerApp {
                     self.addon_install_busy[index] = false;
                     match result {
                         Ok(opened) => self.set_status(
-                            format!("{} · {opened} {}", self.accounts[index].name, tr("addon installer tabs queued")),
+                            format!("{} · {opened} {}", self.accounts[index].name, tr("addon installers opened")),
                             false,
                         ),
                         Err(error) => {
@@ -1039,37 +1039,12 @@ impl ControllerApp {
         }
     }
 
-    /// All setup links go through the Firefox instance we own. In particular,
-    /// a second `firefox --new-tab` process cannot reach a --no-remote profile.
-    fn visible_tab_monitor(&mut self, profile: GameProfile) -> Result<MonitorHandle, String> {
-        let index = profile.index();
-        self.refresh_processes();
-        if !self.games[index].is_running() {
-            self.launch_one_mode(profile, false);
-        }
-        if self.games[index].headless {
-            return Err("Switch to visible Firefox before opening setup tabs.".to_string());
-        }
-        self.games[index].monitor.clone().ok_or_else(||
-            "This Firefox profile is not managed by BiDi. Finish sign-in, close that browser, then open the game visibly.".to_string()
-        )
-    }
-
-    fn queue_profile_tab(&mut self, profile: GameProfile, url: &str) -> Result<u64, String> {
-        self.visible_tab_monitor(profile)?
-            .send(json!({"t": "browser.openTab", "url": url}))
-    }
-
     fn start_addon_install(&mut self, profile: GameProfile, selected: Option<Vec<String>>) {
         let index = profile.index();
         if self.addon_install_busy[index] {
             self.set_status(format!("{} · {}", self.account_name(profile), tr("Installer already running")), true);
             return;
         }
-        let monitor = match self.visible_tab_monitor(profile) {
-            Ok(monitor) => monitor,
-            Err(error) => { self.set_status(error, true); return; }
-        };
         self.addon_install_busy[index] = true;
         self.addon_install_details[index].clear();
         self.set_status(format!("{} · {}", self.account_name(profile), tr("Checking addons on GitHub…")), false);
@@ -1081,7 +1056,6 @@ impl ControllerApp {
                 let progress_tx = tx.clone();
                 let result = accounts::open_addons(
                     profile, selected.as_deref(),
-                    |url| monitor.send(json!({"t": "browser.openTab", "url": url})).map(|_| ()),
                     |message| { let _ = progress_tx.send(AddonInstallEvent::Progress { index, message }); },
                 );
                 let _ = tx.send(AddonInstallEvent::Finished { index, result });
@@ -1419,10 +1393,8 @@ impl ControllerApp {
                 self.open_game_for_google_sign_in(profile);
                 return;
             }
-            ProfileAction::Twitch => self.queue_profile_tab(profile, accounts::TWITCH_LOGIN)
-                .map(|id| format!("Twitch tab queued in {} (command #{id}).", profile.label())),
-            ProfileAction::InstallViolentmonkey => self.queue_profile_tab(profile, accounts::VIOLENTMONKEY_INSTALL)
-                .map(|id| format!("Violentmonkey installer queued in {} (command #{id}).", profile.label())),
+            ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
+            ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
         };
 
@@ -3381,7 +3353,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         if app.addon_install_busy[index] {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(tr("Queuing addon installers…"));
+                                ui.label(tr("Opening addon installers…"));
                             });
                         }
                         if !app.addon_install_details[index].is_empty() {
