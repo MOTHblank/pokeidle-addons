@@ -66,7 +66,6 @@
         autoBuyDiamonds: false,
         buyCoins: false,
         buyGems: false,
-        buyWholeItemBatch: true,
         autoSellEnabled: false,
         autoSellRules: [],
         fixedRulesEnabled: false,
@@ -448,17 +447,13 @@
         return value.map((rule, index) => {
             const itemId = Math.floor(Number(rule?.itemId));
             if (!(itemId > 0)) return null;
-            const rawMaxSellQty = Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0));
-            const sellAll = typeof rule?.sellAll === 'boolean' ? rule.sellAll : rawMaxSellQty === 0;
             return {
                 id: String(rule?.id || ('autosell-' + index + '-' + itemId)),
                 itemId,
                 currency: rule?.currency === 'orb' ? 'orb' : 'gold',
                 mode: rule?.mode === 'patient' ? 'patient' : 'recommended',
                 enabled: rule?.enabled !== false,
-                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
-                maxSellQty: Math.max(1, rawMaxSellQty || 1),
-                sellAll
+                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0))
             };
         }).filter(Boolean);
     }
@@ -468,23 +463,15 @@
         return value.map((rule, index) => {
             const itemId = Math.floor(Number(rule?.itemId));
             if (!(itemId > 0)) return null;
-            const rawBuyQtyLimit = Math.max(0, Math.floor(Number(rule?.buyQtyLimit) || 0));
-            const rawMaxSellQty = Math.max(0, Math.floor(Number(rule?.maxSellQty) || 0));
-            const buyAll = typeof rule?.buyAll === 'boolean' ? rule.buyAll : rawBuyQtyLimit === 0;
-            const sellAll = typeof rule?.sellAll === 'boolean' ? rule.sellAll : rawMaxSellQty === 0;
             return {
                 id: String(rule?.id || ('fixed-' + index + '-' + itemId)),
                 itemId,
                 currency: rule?.currency === 'orb' ? 'orb' : 'gold',
                 buyEnabled: rule?.buyEnabled !== false && Number(rule?.buyMax) > 0,
                 buyMax: Math.max(0, Math.floor(Number(rule?.buyMax) || 0)),
-                buyQtyLimit: Math.max(1, rawBuyQtyLimit || 1),
-                buyAll,
                 sellEnabled: rule?.sellEnabled !== false && Number(rule?.sellPrice) > 0,
                 sellPrice: Math.max(0, Math.floor(Number(rule?.sellPrice) || 0)),
                 keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
-                maxSellQty: Math.max(1, rawMaxSellQty || 1),
-                sellAll
             };
         }).filter(Boolean);
     }
@@ -1941,7 +1928,7 @@
         return true;
     }
 
-    function purchaseQuantity(candidate, forceBatch = false) {
+    function purchaseQuantity(candidate) {
         const balance = balanceFor(candidate.currency);
         const available = Math.max(0, balance - reserveFor(candidate.currency));
         const cap = maxSpendFor(candidate.currency);
@@ -1954,7 +1941,6 @@
         if (!(unitPrice > 0) || budget < unitPrice) return 0;
 
         if (candidate.kind === 'pokemon') return 1;
-        if (!forceBatch && !config.buyWholeItemBatch) return 1;
 
         return Math.max(0, Math.min(
             Math.max(1, Number(candidate.qty || 1)),
@@ -1971,7 +1957,7 @@
         const blockedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
         if (blockedUntil > now) return false;
 
-        const affordableQuantity = purchaseQuantity(candidate, fixedRule);
+        const affordableQuantity = purchaseQuantity(candidate);
         const requestedLimit = requestedQuantity == null
             ? affordableQuantity
             : Math.floor(Number(requestedQuantity));
@@ -2109,7 +2095,7 @@
         const extraCap = maxSpendFor(currency);
         const budget = extraCap > 0 ? Math.min(available, extraCap) : available;
         const affordableQty = Math.floor(budget / price);
-        const requestedLimit = config.buyWholeItemBatch ? requestedQty : 1;
+        const requestedLimit = requestedQty;
         const qty = Math.min(requestedLimit, affordableQty);
         if (qty < 1) {
             return controllerResult({ ok: false, error: 'purchase exceeds spendable balance or configured cap', source: 'guard', listingId });
@@ -2488,9 +2474,10 @@
     }
 
     function automationSellQuantity(rule) {
-        const available = Math.max(0, ownedQuantity(rule.itemId) - Math.max(0, Number(rule.keepQty || 0)));
-        if (rule.sellAll) return Math.floor(available);
-        return Math.floor(Math.min(available, Math.max(1, Number(rule.maxSellQty || 1))));
+        // List every unreserved unit. The already-listed and pending-sale guards
+        // remain in sendItemSale(), so one rule never creates duplicate orders.
+        return Math.floor(Math.max(0, ownedQuantity(rule.itemId) -
+            Math.max(0, Number(rule.keepQty || 0))));
     }
 
     function runMarketAutomation() {
@@ -2530,8 +2517,9 @@
             if (!rule.buyEnabled || !(rule.buyMax > 0)) continue;
             const candidate = fixedRuleCandidate(rule);
             if (!candidate) continue;
-            const limit = rule.buyAll ? null : Math.max(1, Number(rule.buyQtyLimit || 1));
-            if (tryBuy(candidate, false, limit, true)) return;
+            // Buy all affordable units from this offer; currency reserve and
+            // per-transaction spending limits are enforced by tryBuy().
+            if (tryBuy(candidate, false, null, true)) return;
         }
 
         for (const rule of fixedRules) {
@@ -3097,7 +3085,6 @@
         autoBuyDiamonds: 'Allow automatic purchases of diamonds when a usable reference exists.',
         buyCoins: 'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.',
         buyGems: 'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.',
-        buyWholeItemBatch: 'When enabled, buy as many units from an item listing as the budget allows. Turn off to request one unit.',
         goldReserve: 'Money that must remain untouched. This is subtracted before calculating an affordable purchase.',
         gemReserve: 'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.',
         maxCoinsPerBuy: 'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.',
@@ -3798,7 +3785,7 @@
                     configField('Auto-buy items', 'autoBuyItems', 'checkbox') + configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
                     configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
                     configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
-                    configField('Buy whole item batch', 'buyWholeItemBatch', 'checkbox') + '</div></section></div>' +
+                    '</div></section></div>' +
                     '<details class="moth-mw-advanced"><summary>' + escapeHtml(tr('Advanced monitoring & references')) +
                     '</summary><div class="moth-mw-advanced-body"><p class="moth-mw-advanced-note">' +
                     escapeHtml(tr('Scanning and reference-quality controls. These do not authorize orders by themselves.')) +
