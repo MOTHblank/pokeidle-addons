@@ -1679,9 +1679,9 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let available = ui.available_width();
                 let columns = if available >= 880.0 { 2 } else { 1 };
                 let card_width = if columns == 2 {
-                    ((available - gap) / 2.0).max(390.0)
+                    (available - gap) / 2.0
                 } else {
-                    available.max(390.0)
+                    available
                 };
 
                 for chunk in profiles.chunks(columns) {
@@ -1740,7 +1740,7 @@ fn draw_game_card(
                 status_badge(ui, &health, running);
 
                 if running && app.games[index].orphaned_pid.is_none() {
-                    let mode_label = if app.games[index].headless { tr("Show Firefox") } else { tr("Hide Firefox") };
+                    let mode_label = if app.games[index].headless { tr("Restart visible") } else { tr("Restart headless") };
                     let mode_headless = !app.games[index].headless;
                     let clicked = ui
                         .add_sized(
@@ -1752,6 +1752,7 @@ fn draw_game_card(
                             .stroke(Stroke::new(1.0, BORDER))
                             .corner_radius(7.0),
                         )
+                        .on_hover_text(tr("Restarts Firefox in the selected mode; the game and streams will briefly disconnect."))
                         .clicked();
                     if clicked {
                         app.set_browser_mode(profile, mode_headless);
@@ -1788,6 +1789,21 @@ fn draw_game_card(
                     }
                 });
             });
+
+            if running && app.games[index].orphaned_pid.is_none() && !health.telemetry_is_fresh() {
+                let freshness = match health.telemetry_age() {
+                    Some(age) => format!("{} · {}s", tr("Telemetry stale"), age.as_secs()),
+                    None => tr("Waiting for first telemetry sample").to_string(),
+                };
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!("⚠ {freshness}"))
+                        .size(11.0)
+                        .color(WARN),
+                ).on_hover_text(
+                    health.last_error.as_deref().unwrap_or(tr("The displayed metrics may be out of date."))
+                );
+            }
 
             if idle_warning {
                 ui.add_space(6.0);
@@ -2682,8 +2698,8 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .resizable(true)
         .default_width(820.0)
         .default_height(620.0)
-        .min_width(720.0)
-        .min_height(500.0)
+        .min_width(480.0)
+        .min_height(380.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
@@ -2789,7 +2805,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             .color(DIM),
                                     );
                                     let response = ui.add_sized(
-                                        [360.0, 30.0],
+                                        [(ui.available_width() - 130.0).clamp(145.0, 360.0), 30.0],
                                         egui::TextEdit::singleline(&mut app.accounts[index].name)
                                             .hint_text(profile.label()),
                                     );
@@ -2826,13 +2842,18 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
                                     status_chip(ui, "Twitch", twitch_label, twitch_open);
 
-                                    if running {
-                                        status_chip(
+                                    if running && health.telemetry_is_fresh() {
+                                        let script_status = status_chip(
                                             ui,
                                             tr("Scripts"),
                                             &format!("{}/{}", health.addon_ok, health.addon_total),
-                                            health.addon_ok == health.addon_total,
+                                            health.addon_total > 0 && health.addon_ok == health.addon_total,
                                         );
+                                        if !health.addon_missing.is_empty() {
+                                            script_status.on_hover_text(
+                                                format!("{} {}", tr("Missing:"), health.addon_missing.join(", "))
+                                            );
+                                        }
                                     } else {
                                         status_chip(ui, tr("Scripts"), tr("Not checked"), false);
                                     }
@@ -2863,14 +2884,30 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     profile_button(ui, tr("Install Violentmonkey"), || {
                                         app.profile_action(profile, ProfileAction::InstallViolentmonkey)
                                     });
-                                    profile_button(ui, tr("Addons"), || {
-                                        app.profile_action(profile, ProfileAction::Addons)
+                                    ui.add_enabled_ui(!app.addon_install_busy[index], |ui| {
+                                        profile_button(ui, tr("Addons"), || {
+                                            app.profile_action(profile, ProfileAction::Addons)
+                                        });
                                     });
                                     profile_button(ui, tr("Profile folder"), || {
                                         app.profile_action(profile, ProfileAction::Folder)
                                     });
                                 });
                             });
+
+                        if app.addon_install_busy[index] {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(tr("Opening addon installers…"));
+                            });
+                        }
+                        if !app.addon_install_details[index].is_empty() {
+                            ui.collapsing(tr("Installer details"), |ui| {
+                                for message in &app.addon_install_details[index] {
+                                    ui.label(RichText::new(message).size(10.0).color(MUTED));
+                                }
+                            });
+                        }
 
                         if changed {
                             let trimmed = app.accounts[index].name.trim().to_string();
@@ -2897,13 +2934,13 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
     app.show_accounts = open;
 }
 
-fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) {
+fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
     let color = if good { GOOD } else { DIM };
     ui.label(
         RichText::new(format!("{}: {}", tr(name), tr(state)))
             .size(9.0)
             .color(color),
-    );
+    )
 }
 
 
@@ -2923,6 +2960,8 @@ fn profile_button(ui: &mut egui::Ui, label: &str, mut action: impl FnMut()) {
 fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     let (label, color) = if !running {
         ("STOPPED", DIM)
+    } else if health.state == "Running" && !health.telemetry_is_fresh() {
+        ("STALE", WARN)
     } else if health.state == "Running" && health.activity == "Hunting" {
         ("HUNTING", GOOD)
     } else if health.state == "Running" && health.logged_in {
