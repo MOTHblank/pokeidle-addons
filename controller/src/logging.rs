@@ -8,11 +8,8 @@ static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn init() {
-    let path = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Moth")
-        .join("PokeIdle")
+    let path = crate::config::data_root()
+        .unwrap_or_else(|_| PathBuf::from(".").join("Moth").join("PokeIdle"))
         .join("moth-controller.log");
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);

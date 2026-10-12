@@ -279,6 +279,14 @@ pub fn stop_child(child: &mut Child, monitor: Option<&MonitorHandle>) -> Result<
         return Ok(());
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        send_linux_signal(child.id(), "-TERM")?;
+        if wait_child(child, Duration::from_secs(4))? {
+            return Ok(());
+        }
+    }
+
     // This PID belongs to our Child handle, so force kill cannot hit a
     // different Firefox profile through a broad process-name lookup.
     logging::warn(&format!(
@@ -346,9 +354,62 @@ pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
         .transpose()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let desired = config.profile_dir.as_os_str().as_bytes();
+    let mut found = Vec::new();
+    let entries = fs::read_dir("/proc")
+        .map_err(|error| format!("cannot inspect /proc for Firefox profiles: {error}"))?;
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(raw) = fs::read(entry.path().join("cmdline")) else { continue; };
+        let args: Vec<&[u8]> = raw.split(|byte| *byte == 0).filter(|arg| !arg.is_empty()).collect();
+        if args.is_empty() {
+            continue;
+        }
+        if linux_command_has_profile(&args, desired) {
+            found.push(pid);
+        }
+    }
+    found.sort_unstable();
+    if found.len() > 1 {
+        logging::warn("Multiple Firefox processes advertise the same Linux profile");
+    }
+    Ok(found.into_iter().next())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_command_has_profile(args: &[&[u8]], desired: &[u8]) -> bool {
+    let Some(executable) = args.first().copied() else { return false; };
+    let executable = executable.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    if !executable.starts_with(b"firefox") {
+        return false;
+    }
+    args.windows(2).any(|pair| {
+        (pair[0] == b"--profile" || pair[0] == b"-profile") && pair[1] == desired
+    }) || args.iter().any(|arg| arg.starts_with(b"--profile=") && &arg[10..] == desired)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_process_tests {
+    use super::linux_command_has_profile;
+    #[test]
+    fn only_accept_exact_firefox_profile() {
+        let args: &[&[u8]] = &[b"/usr/lib/firefox/firefox", b"--profile", b"/tmp/Game1", b"--new-window"];
+        assert!(linux_command_has_profile(args, b"/tmp/Game1"));
+        assert!(!linux_command_has_profile(args, b"/tmp/Game2"));
+        assert!(!linux_command_has_profile(args, b"/tmp/Game"));
+        assert!(!linux_command_has_profile(&[b"/usr/bin/chrome", b"--profile", b"/tmp/Game1"], b"/tmp/Game1"));
+        assert!(linux_command_has_profile(&[b"firefox-bin", b"--profile=/tmp/Game1"], b"/tmp/Game1"));
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn find_profile_process(_config: &Config) -> Result<Option<u32>, String> {
-    Err("Firefox profile process detection is only available on Windows".to_string())
+    Err("Firefox profile detection is only available on Windows or Linux".to_string())
 }
 
 /// Close a recovered Firefox only after verifying that its command line still
@@ -370,19 +431,36 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
         return Err("Firefox profile process changed during shutdown".to_string());
     }
 
-    logging::warn(&format!(
-        "Recovered Firefox PID {pid} has not exited; Stop explicitly requested forced termination"
-    ));
-    let output = Command::new("taskkill.exe")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .output()
-        .map_err(|error| format!("could not terminate recovered Firefox: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "could not terminate recovered Firefox: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    #[cfg(target_os = "linux")]
+    {
+        send_linux_signal(pid, "-TERM")?;
+        if wait_pid(pid, Duration::from_secs(5)) {
+            return Ok(());
+        }
+        if find_profile_process(config)? != Some(pid) {
+            return Err("Firefox profile changed during shutdown".to_string());
+        }
+        logging::warn(&format!("Recovered Firefox PID {pid} ignored SIGTERM; forcing SIGKILL"));
+        send_linux_signal(pid, "-KILL")?;
     }
+
+    #[cfg(windows)]
+    {
+        logging::warn(&format!("Recovered Firefox PID {pid} ignored window close; terminating"));
+        let output = Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()
+            .map_err(|error| format!("could not terminate recovered Firefox: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "could not terminate recovered Firefox: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    return Err("recovered browser shutdown is unsupported on this platform".to_string());
     if !wait_pid(pid, Duration::from_secs(3)) {
         return Err("recovered Firefox did not exit after termination request".to_string());
     }
@@ -415,9 +493,29 @@ pub fn process_alive(pid: u32) -> bool {
     result == 0x102 // WAIT_TIMEOUT: the process is still running
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn process_alive(pid: u32) -> bool {
+    // /proc/<pid>/stat reports Z for an exited process waiting to be reaped.
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else { return false; };
+    stat.rsplit_once(") ").and_then(|(_, rest)| rest.chars().next()) != Some('Z')
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn process_alive(_pid: u32) -> bool {
     false
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_signal(pid: u32, signal: &str) -> Result<(), String> {
+    let output = Command::new("kill")
+        .args([signal, "--", &pid.to_string()])
+        .output()
+        .map_err(|error| format!("could not signal Firefox PID {pid}: {error}"))?;
+    if output.status.success() || !process_alive(pid) {
+        return Ok(());
+    }
+    Err(format!("could not signal Firefox PID {pid}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()))
 }
 
 #[cfg(windows)]
