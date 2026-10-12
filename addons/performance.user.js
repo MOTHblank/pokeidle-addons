@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.5.0
+// @version      5.5.1
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.0');
+        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.5.1');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -86,8 +86,9 @@
 
     let settings = loadSettings();
     let interactionBoostUntil = 0;
-    let currentMode = 'full';
-    let currentUi = 'off';
+    // Apply the saved choice before app.js creates its first Campo instance.
+    let currentMode = settings.enabled ? 'paused' : 'full';
+    let currentUi = settings.enabled ? 'performance' : 'off';
     let chatCollapsedByAddon = false;
 
     // Exact campo.mjs loop hook state.
@@ -354,10 +355,6 @@
                 true;
         }
 
-        /*
-         * Cap every page-world rAF callback, including loops not identified
-         * as campo/NPC. This limits JS-driven updates, not compositor refresh.
-         */
         // Do not throttle unknown rAF callers; some drive controls/modals.
         rafClassification.set(callback, kind);
 
@@ -380,91 +377,13 @@
         return kind;
     }
 
-    function intervalForMode(
-        mode
-    ) {
-        if (
-            mode ===
-                'full'
-        ) {
-            return 0;
-        }
-
-        const fps =
-            Number(mode);
-
-        if (
-            !Number.isFinite(
-                fps
-            ) ||
-            fps <= 0
-        ) {
-            return 0;
-        }
-
-        return (
-            1000 /
-            fps
-        );
-    }
-
-    function intervalForRafKind(
-        kind
-    ) {
-        if (
-            !settings.enabled
-        ) {
-            return 0;
-        }
-
-        if (
-            kind ===
-                'campo'
-        ) {
-            return intervalForMode(
-                currentMode
-            );
-        }
-
-        if (
-            kind ===
-                'npc'
-        ) {
-            if (
-                document.hidden
-            ) {
-                return 500;
-            }
-
-            if (currentMode === 'paused') {
-                return 1000;
-            }
-
-            if (
-                Date.now() <
-                interactionBoostUntil
-            ) {
-                return 1000 / 30;
-            }
-
-            if (
-                currentUi ===
-                    'off'
-            ) {
-                return 0;
-            }
-
-            if (
-                currentUi ===
-                    'lite'
-            ) {
-                return 1000 / 20;
-            }
-
-            return 100;
-        }
-
-        return 0;
+    function intervalForRafKind(kind) {
+        if (!settings.enabled) return 0;
+        if (kind !== 'npc') return 0; // Campo rendering is suspended entirely.
+        if (document.hidden) return 500;
+        // On user input, keep NPC action buttons attached to their targets.
+        if (Date.now() < interactionBoostUntil) return 1000 / 30;
+        return 1000;
     }
 
     function installCampoHook() {
@@ -842,114 +761,22 @@
         return kind;
     }
 
-    function uiTimerMinimum(
-        kind
-    ) {
-        if (
-            !settings.enabled ||
-            currentUi ===
-                'off'
-        ) {
-            return 0;
+    function uiTimerMinimum(kind) {
+        if (!settings.enabled) return 0;
+        // Any recent user interaction restores native cadence temporarily.
+        if (Date.now() < interactionBoostUntil) return 0;
+
+        switch (kind) {
+            case 'moveHud': return 2000;   // Hidden move panel
+            case 'exitHud': return 500;    // Keep the exit button actionable
+            case 'pvpTicker': return 1500;
+            case 'centerTicker': return 1500;
+            case 'fallen':
+                // Auto Catch+ reads the upstream fallen-body DOM, not the map.
+                // Never delay its producer while Auto Catch+ is enabled.
+                return autoCatchEnabled() ? 0 : 750;
+            default: return 0;
         }
-
-        /*
-         * Any fresh interaction temporarily restores native UI cadence.
-         * Performance+ should disappear when the player starts using the
-         * interface, then save work again after the short boost window.
-         */
-        if (
-            Date.now() <
-            interactionBoostUntil
-        ) {
-            return 0;
-        }
-
-        if (
-            kind ===
-                'moveHud'
-        ) {
-            if (
-                currentUi ===
-                    'lite'
-            ) {
-                return 250;
-            }
-
-            /*
-             * The panel is hidden by our aggressive/performance CSS. One
-             * slow sweep keeps its state fresh for instant restoration.
-             */
-            return currentUi ===
-                'performance'
-                ? 2000
-                : 1000;
-        }
-
-        if (
-            kind ===
-                'exitHud'
-        ) {
-            if (
-                currentUi ===
-                    'lite'
-            ) {
-                return 160;
-            }
-
-            return currentUi ===
-                'performance'
-                ? 500
-                : 250;
-        }
-
-        if (
-            kind ===
-                'fallen'
-        ) {
-            /*
-             * Auto Catch consumes the upstream fallen-body DOM, so never
-             * slow this producer while Auto Catch is active.
-             */
-            if (
-                autoCatchEnabled()
-            ) {
-                return 0;
-            }
-
-            return currentUi ===
-                'performance'
-                ? 750
-                : currentUi ===
-                    'aggressive'
-                    ? 500
-                    : 250;
-        }
-
-        if (
-            kind ===
-                'pvpTicker'
-        ) {
-            return currentUi ===
-                'performance'
-                ? 1500
-                : currentUi ===
-                    'aggressive'
-                    ? 1000
-                    : 500;
-        }
-
-        if (
-            kind ===
-                'centerTicker'
-        ) {
-            return currentUi ===
-                'performance'
-                ? 1500
-                : 1000;
-        }
-
-        return 0;
     }
 
     function installUiTimerHook() {
@@ -1030,9 +857,8 @@
             page.setInterval =
                 mothSetInterval;
 
-            /*
-             * IDs are native interval IDs; clearInterval needs no mapping.
-             */
+            // Native IDs pass through; managed sprite intervals use
+            // negative synthetic IDs and must be cancelled through our map.
             page.clearInterval =
                 mothClearInterval;
 
@@ -1150,19 +976,8 @@
 
         html.classList.toggle('moth-perf-minimal', settings.enabled);
 
-        for (
-            const level of [
-                'lite',
-                'aggressive',
-                'performance'
-            ]
-        ) {
-            html.classList.toggle(
-                'moth-ui-' + level,
-                settings.enabled &&
-                    currentUi === level
-            );
-        }
+        html.classList.toggle('moth-ui-performance', settings.enabled);
+        html.classList.remove('moth-ui-lite', 'moth-ui-aggressive');
 
         syncSpriteTimerMode();
         syncNativeOptimized();
@@ -1558,7 +1373,7 @@
         }, 1500);
 
         console.info(
-            '[PokéIdle Performance+] v5.5.0 loaded'
+            '[PokéIdle Performance+] v5.5.1 loaded'
         );
     }
 
