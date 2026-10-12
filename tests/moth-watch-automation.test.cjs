@@ -1,196 +1,166 @@
 'use strict';
 
-// Execute with: node --test tests/moth-watch-automation.test.cjs
-// These tests exercise the actual userscript functions without a live game.
-// They do not submit orders to the server.
+// Run with node --test tests/moth-watch-automation.test.cjs.
+// These tests exercise userscript code without a live game or real orders.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-
 const script = fs.readFileSync(path.join(__dirname, '..', 'addons', 'market-bot.user.js'), 'utf8');
 
 function section(start, end) {
-    const a = script.indexOf(start);
-    const b = script.indexOf(end, a + start.length);
-    assert.ok(a >= 0 && b > a, `missing section: ${start}`);
+    const a = script.indexOf(start), b = script.indexOf(end, a + start.length);
+    assert.ok(a >= 0 && b > a, 'missing section: ' + start);
     return script.slice(a, b);
 }
+const match = script.match(/const DEFAULTS = Object.freeze\((\{[\s\S]*?\})\);/);
+assert.ok(match);
+const defaults = new Function('return ' + match[1])();
 
-const sanitizers = section('    function sanitizeAutoSellRules(', '    function loadConfig(');
-const { sanitizeAutoSellRules, sanitizeFixedItemRules } =
-    new Function(sanitizers + '\nreturn { sanitizeAutoSellRules, sanitizeFixedItemRules };')();
+test('New profiles default to no automated purchases, and old mechanisms cannot submit sales', () => {
+    assert.equal(defaults.fixedRulesEnabled, false);
+    assert.deepEqual(defaults.fixedItemRules, []);
+    for (const old of ['autoBuy', 'autoBuyPercent', 'autoBuyItems', 'autoBuyPokemon', 'autoBuyDiamonds',
+        'buyCoins', 'buyGems', 'autoSellEnabled', 'autoSellRules']) {
+        assert.equal(Object.hasOwn(defaults, old), false, old);
+    }
+    assert.doesNotMatch(script, /market\.criar/);
+    assert.doesNotMatch(script, /candidateCanAutoBuy|sendItemSale|sanitizeAutoSellRules|maybeAutoBuy/);
+});
 
-test('Moth Watch purchase and sale automations are off for new profiles', () => {
-    const match = script.match(/const DEFAULTS = Object.freeze\((\{[\s\S]*?\})\);/);
-    assert.ok(match, 'DEFAULTS must be present');
-    const defaults = new Function('return ' + match[1])();
-    for (const key of [
-        'autoBuy', 'autoBuyItems', 'autoBuyPokemon', 'autoBuyDiamonds',
-        'autoSellEnabled', 'fixedRulesEnabled', 'buyCoins', 'buyGems'
-    ]) {
-        assert.equal(defaults[key], false, key);
+test('Existing fixed rules retain buying parameters but never restore selling or percentage options', () => {
+    const storage = {
+        value: JSON.stringify({
+            fixedRulesEnabled: true, autoBuy: true, autoBuyPercent: 90,
+            autoSellEnabled: true, autoSellRules: [{ itemId: 106, enabled: true }],
+            fixedItemRules: [{ id: 'old', itemId: 106, currency: 'gold', buyEnabled: true,
+                buyMax: 30000, sellEnabled: true, sellPrice: 45000, keepQty: 2 }]
+        }),
+        getItem() { return this.value; }, setItem(_, v) { this.value = v; }
+    };
+    const src = section('    function sanitizeFixedItemRules(', '    function emptyBaseline(');
+    const fn = new Function('localStorage', 'DEFAULTS', 'CONFIG_KEY', src +
+        '\nreturn { sanitizeFixedItemRules, loadConfig };')(storage, defaults, 'settings');
+    const loaded = fn.loadConfig();
+    assert.equal(loaded.fixedRulesEnabled, true);
+    assert.equal(loaded.fixedItemRules.length, 1);
+    assert.equal(loaded.fixedItemRules[0].buyMax, 30000);
+    assert.equal(loaded.fixedItemRules[0].buyEnabled, true);
+    for (const key of ['sellEnabled', 'sellPrice', 'keepQty']) {
+        assert.equal(Object.hasOwn(loaded.fixedItemRules[0], key), false, key);
+    }
+    for (const key of ['autoBuy', 'autoBuyPercent', 'autoSellEnabled', 'autoSellRules']) {
+        assert.equal(Object.hasOwn(loaded, key), false, key);
     }
 });
 
-test('Old saved rules retain their prices and stock reserve but lose quantity toggles', () => {
-    const fixed = sanitizeFixedItemRules([{
-        id: 'old-fixed', itemId: 106, currency: 'gold',
-        buyEnabled: true, buyMax: 30000, buyQtyLimit: 1, buyAll: false,
-        sellEnabled: true, sellPrice: 45000, maxSellQty: 1, sellAll: false,
-        keepQty: 2
-    }])[0];
-    assert.equal(fixed.buyMax, 30000);
-    assert.equal(fixed.sellPrice, 45000);
-    assert.equal(fixed.keepQty, 2);
-    assert.equal(fixed.buyEnabled, true);
-    assert.equal(fixed.sellEnabled, true);
-    for (const removed of ['buyAll', 'buyQtyLimit', 'sellAll', 'maxSellQty']) {
-        assert.equal(removed in fixed, false, removed);
-    }
-    const sell = sanitizeAutoSellRules([{
-        itemId: 106, currency: 'orb', mode: 'patient', enabled: true,
-        keepQty: 4, maxSellQty: 1, sellAll: false
-    }])[0];
-    assert.equal(sell.keepQty, 4);
-    assert.equal(sell.mode, 'patient');
-    assert.equal('sellAll' in sell, false);
-});
-
-test('Buy quantity uses full affordable listing, respecting balances, reserves and per-order cap', () => {
-    const fn = new Function('balanceFor', 'reserveFor', 'maxSpendFor',
-        section('    function purchaseQuantity(', '    function tryBuy(') +
-        '\nreturn purchaseQuantity;');
-    const purchase = fn(() => 100000, () => 10000, () => 30000);
-    assert.equal(purchase({ kind: 'item', currency: 'gold', qty: 20, price: 5000 }), 6);
-    assert.equal(purchase({ kind: 'item', currency: 'gold', qty: 3, price: 5000 }), 3);
-    assert.equal(purchase({ kind: 'item', currency: 'gold', qty: 5, price: 50000 }), 0);
-    const noExtraCap = fn(() => 100000, () => 10000, () => 0);
-    assert.equal(noExtraCap({ kind: 'item', currency: 'gold', qty: 100, price: 5000 }), 18);
-});
-
-test('Sell quantity uses all owned items except the amount kept in inventory', () => {
-    const fn = new Function('ownedQuantity',
-        section('    function automationSellQuantity(', '    function runMarketAutomation(') +
-        '\nreturn automationSellQuantity;');
-    const quantity = fn(() => 10);
-    assert.equal(quantity({ itemId: 106, keepQty: 0 }), 10);
-    assert.equal(quantity({ itemId: 106, keepQty: 2 }), 8);
-    assert.equal(quantity({ itemId: 106, keepQty: 20 }), 0);
-});
-
-test('Rules UI has prices and stock reserve but no obsolete quantity fields', () => {
-    const helperCode = sanitizers +
-        section('    function ruleNumber(', '    function renderWatch(');
-    const stubs = `
-        const tr = value => value;
-        const escapeHtml = value => String(value);
-        const config = {
-            fixedItemRules: [{
-                id: 'example', itemId: 106, currency: 'gold',
-                buyEnabled: true, buyMax: 30000,
-                sellEnabled: true, sellPrice: 45000, keepQty: 3
-            }],
-            autoSellRules: [], fixedRulesEnabled: false, autoSellEnabled: false
-        };
-        const catalogName = () => 'Cocoon Stone';
-        const automationRuleStatus = () => 'Inactive';
-        const autoSellTargetsHtml = () => '';
-        const automationItemOptions = () => '<option value="106">Cocoon Stone</option>';
-        const configField = () => '<label>OFF</label>';
-    `;
-    const render = new Function(stubs + helperCode +
-        '\nreturn { fixedRulesHtml, autoSellRulesHtml };')();
-    const html = render.fixedRulesHtml() + render.autoSellRulesHtml();
-    for (const id of [
-        'moth-fixed-buy', 'moth-fixed-sell', 'moth-fixed-keep',
-        'moth-fixed-item', 'moth-fixed-currency', 'moth-auto-sell-keep',
-        'moth-add-fixed-rule', 'moth-add-auto-sell'
-    ]) assert.ok(html.includes(id), id);
-    for (const id of [
-        'moth-fixed-buy-limit', 'moth-fixed-sell-limit',
-        'moth-fixed-buy-all', 'moth-fixed-sell-all',
-        'moth-auto-sell-max', 'moth-auto-sell-all'
-    ]) assert.ok(!html.includes(id), id);
-    assert.ok(html.includes('Cocoon Stone'));
-    assert.ok(html.includes('Buy every available unit'));
-});
-
-
-test('Shiny Pokémon only use Gems; ordinary Pokémon remain eligible for both currencies', () => {
-    const policyCode = section('    function pokemonCurrencyAllowed(', '    function median(');
-    const policy = new Function('speciesIdOf', 'levelBand', policyCode +
-        '\nreturn { pokemonCurrencyAllowed, pokemonBucketKeys };')(
-        ficha => ficha.speciesId, () => 10
-    );
-    const shiny = { speciesId: 25, shiny: true, potencia: 3, level: 20 };
-    const regular = { speciesId: 25, shiny: false, potencia: 3, level: 20 };
-
-    assert.equal(policy.pokemonCurrencyAllowed(shiny, 'gold'), false);
-    assert.equal(policy.pokemonCurrencyAllowed(shiny, 'orb'), true);
-    assert.equal(policy.pokemonCurrencyAllowed(regular, 'gold'), true);
-    assert.equal(policy.pokemonCurrencyAllowed(regular, 'orb'), true);
-    assert.deepEqual(policy.pokemonBucketKeys(shiny, 'gold'), []);
-    assert.ok(policy.pokemonBucketKeys(shiny, 'orb').every(k => k.startsWith('orb|')));
-    assert.ok(policy.pokemonBucketKeys(regular, 'gold').every(k => k.startsWith('gold|')));
-
-    const sampleHistory = new Function('pokemonCurrencyAllowed', 'pokemonBucketKeys',
-        section('    function addPokemonHistorySample(', '    function finalizePokemonHistory(') +
-        '\nreturn addPokemonHistorySample;')(
-        policy.pokemonCurrencyAllowed, policy.pokemonBucketKeys
-    );
-    const working = new Map();
-    sampleHistory({ tipo: 'pokemon', ficha: shiny, moeda: 'gold', preco: 2000 }, working);
-    assert.equal(working.size, 0, 'Old Shiny Coin sales must be ignored');
-    sampleHistory({ tipo: 'pokemon', ficha: shiny, moeda: 'orb', preco: 100 }, working);
-    assert.ok(working.size > 0, 'Shiny Gem sales remain valid');
-    sampleHistory({ tipo: 'pokemon', ficha: regular, moeda: 'gold', preco: 3000 }, working);
-    assert.ok([...working.keys()].some(k => k.startsWith('gold|')));
-});
-
-test('Shiny Coin purchases are blocked by both auto-buy and purchase quantity guards', () => {
-    const policyCode = section('    function pokemonCurrencyAllowed(', '    function pokemonBucketKeys(');
-    const policy = new Function(policyCode + '\nreturn pokemonCurrencyAllowed;')();
-    const config = {
-        autoBuy: true, autoBuyPercent: 40, autoBuyPokemon: true,
-        minPokemonSamples: 3
+test('Rule matching directly examines fresh item listings, skips attempted and retained offers', () => {
+    const now = Date.now();
+    const state = {
+        itemOfferDetails: new Map([['106:gold', { updatedAt: now, offers: [
+            { id: 11, preco: 18000, qtd: 2, vendedor: 'other' },
+            { id: 12, preco: 24000, qtd: 3, vendedor: 'other' },
+            { id: 13, preco: 5000, qtd: 4, vendedor: 'self' },
+            { id: 14, preco: 6000, qtd: 4, vendedor: 'other', compravelEm: now + 60000 },
+            { id: 15, preco: 65000, qtd: 4, vendedor: 'other' }
+        ] }]]),
+        attemptedListings: new Map([[11, now + 60000]])
     };
-    const logic = section('    function candidateCanAutoBuy(', '    function tryBuy(');
-    const buy = new Function('config', 'pokemonCurrencyAllowed',
-        'currencyAllowed', 'serverNow', 'autoThresholdFor', 'balanceFor', 'reserveFor', 'maxSpendFor',
-        logic + '\nreturn { candidateCanAutoBuy, purchaseQuantity };')(
-        config, policy, () => true, () => Date.now(), () => 0.4,
-        () => 10000, () => 0, () => 0
+    const fn = new Function('state', 'isOwnListing', 'retentionUntil', 'serverNow',
+        'itemReference', 'catalogName', section('    function fixedRuleCandidate(', '    function runMarketAutomation(') +
+        '\nreturn fixedRuleCandidate;')(state, offer => offer.vendedor === 'self',
+        offer => Number(offer.compravelEm || 0) > now ? offer.compravelEm : 0,
+        () => now, () => null, () => 'Cocoon Stone');
+    const rule = { itemId: 106, currency: 'gold', buyMax: 30000 };
+    assert.equal(fn(rule).listingId, 12, 'An already attempted cheap offer must not block the next one');
+    assert.equal(fn(rule).price, 24000);
+    assert.equal(fn(rule).average, 0, 'No reference data should be required');
+    state.attemptedListings.delete(11);
+    assert.equal(fn(rule).listingId, 11);
+    state.itemOfferDetails.get('106:gold').updatedAt = now - 50000;
+    assert.equal(fn(rule), null, 'Very old listings require a refresh');
+});
+
+test('Purchase quantity honors the whole available offer, balance, reserves and transaction caps', () => {
+    const src = section('    function purchaseQuantity(', '    function tryBuy(');
+    const create = new Function('balanceFor', 'reserveFor', 'maxSpendFor', 'pokemonCurrencyAllowed',
+        src + '\nreturn purchaseQuantity;');
+    const fn = create(() => 100000, () => 10000, () => 30000, () => true);
+    assert.equal(fn({ kind: 'item', currency: 'gold', price: 5000, qty: 20 }), 6);
+    assert.equal(fn({ kind: 'item', currency: 'gold', price: 5000, qty: 3 }), 3);
+    assert.equal(fn({ kind: 'item', currency: 'gold', price: 35000, qty: 3 }), 0);
+    assert.equal(create(() => 100000, () => 10000, () => 0, () => true)
+        ({ kind: 'item', currency: 'gold', price: 5000, qty: 100 }), 18);
+});
+
+test('Multiple fixed rules are checked fairly, including after an unaffordable rule', () => {
+    const state = { socket: { readyState: 1 }, pendingBuy: null, automationLastRunAt: 0, ruleItemKeys: new Set() };
+    const rules = [
+        { itemId: 106, currency: 'gold', buyMax: 30000, buyEnabled: true },
+        { itemId: 107, currency: 'orb', buyMax: 50, buyEnabled: true }
+    ];
+    const config = { enabled: true, fixedRulesEnabled: true, fixedItemRules: rules };
+    const requested = [], bought = [];
+    const fn = new Function('config', 'state', 'gameIsLoading', 'q', 'sanitizeFixedItemRules',
+        'automationDetail', 'fixedRuleCandidate', 'purchaseQuantity', 'tryBuy',
+        section('    function runMarketAutomation(', '    function runScan(force)') + '\nreturn runMarketAutomation;')(
+        config, state, () => false, () => null, v => v,
+        id => { requested.push(id); }, rule => ({ listingId: rule.itemId, name: String(rule.itemId) }),
+        candidate => candidate.listingId === 106 ? 0 : 1,
+        candidate => { bought.push(candidate.listingId); return true; }
     );
-    const candidate = {
-        kind: 'pokemon', currency: 'gold', ficha: { shiny: true },
-        price: 500, unitPrice: 500, qty: 1, ratio: 0.2, samples: 10
+    fn();
+    assert.deepEqual(requested, [106, 107]);
+    assert.deepEqual(bought, [107], 'Later eligible rules must still execute');
+    config.fixedRulesEnabled = false;
+    state.automationLastRunAt = 0;
+    fn();
+    assert.deepEqual(bought, [107], 'Master switch off must prevent orders');
+});
+
+test('Rule requests get ahead of background scans without displacing manual item inspections', () => {
+    const state = {
+        detailPending: null, detailQueue: [
+            { key: '105:gold' }, { key: '999:gold' }
+        ], detailQueued: new Set(), ruleItemKeys: new Set(['105:gold', '106:gold']),
+        selectedItemFocus: null, sellRecommendationKey: null,
+        lastDetailRequest: new Map()
     };
-    assert.equal(buy.candidateCanAutoBuy(candidate), false);
-    assert.equal(buy.purchaseQuantity(candidate), 0);
-    candidate.currency = 'orb';
-    assert.equal(buy.candidateCanAutoBuy(candidate), true);
-    assert.equal(buy.purchaseQuantity(candidate), 1);
-    candidate.currency = 'gold';
-    candidate.ficha = { shiny: false };
-    assert.equal(buy.candidateCanAutoBuy(candidate), true);
-    assert.equal(buy.purchaseQuantity(candidate), 1);
+    const fn = new Function('state', 'config', 'scheduleItemDetailPump',
+        section('    function queueItemDetail(', '    function scheduleItemDetailPump(') +
+        '\nreturn queueItemDetail;')(state, {scanSeconds:5}, () => {});
+    fn(106,'gold');
+    assert.deepEqual(state.detailQueue.map(x => x.key), ['105:gold','106:gold','999:gold']);
+    state.selectedItemFocus = { key:'107:orb' };
+    fn(107,'orb');
+    assert.equal(state.detailQueue[0].key, '107:orb');
 });
 
-test('Controller manual purchase validates supplied Shiny metadata', () => {
-    const buyCode = section('    function buyFromController(', '    function configureFromController(');
-    assert.match(buyCode, /const requestFicha = request\.ficha \|\| request\.pokemon \|\| null;/);
-    assert.match(buyCode, /currency === 'gold'/);
-    assert.match(buyCode, /shiny Pokémon listings require Gems/);
-    assert.match(buyCode, /ok: tryBuy\(candidate, true, requestedQty\)/);
-    // The native Controller may not provide Pokémon metadata. In that case
-    // only the game's own server-side rules can reliably reject an invalid order.
+test('Only buying controls are rendered, with a visible explanation of activation prerequisites', () => {
+    const helpers = section('    function ruleNumber(', '    function renderWatch(');
+    const fixedRulesHtml = new Function('config', 'sanitizeFixedItemRules', 'escapeHtml', 'tr',
+        'catalogName', 'fixedRuleStatus', 'ruleCurrencyUnused', 'automationItemOptions', 'configField',
+        helpers + '\nreturn fixedRulesHtml;')(
+        { fixedItemRules: [{id:'a',itemId:106,currency:'gold',buyEnabled:true,buyMax:30000}] },
+        v => v, String, v => v, () => 'Cocoon Stone', () => 'Monitoring',
+        null, () => '<option>106</option>', () => '<label>OFF</label>');
+    const html = fixedRulesHtml();
+    assert.match(html, /moth-fixed-buy/);
+    assert.match(html, /data-moth-fixed-field="buyMax"/);
+    for(const obsolete of ['moth-fixed-sell','moth-fixed-keep','moth-add-auto-sell','moth-auto-sell',
+        'moth-mw-cfg-autoBuyPercent']) assert.equal(html.includes(obsolete), false, obsolete);
+    assert.match(script, /No other buying switches are required/);
+    assert.match(script, /Rule-based buying is on, but no Buy rules are active/);
 });
 
-test('Userscript metadata and monitor version stay aligned', () => {
+test('Userscript version and monitor attribute match, with valid syntax and Portuguese guidance', () => {
     const version = script.match(/\/\/ @version\s+([\d.]+)/)?.[1];
     const marker = script.match(/data-moth-addon-version-market-bot', '([\d.]+)'/)?.[1];
     assert.ok(version);
-    assert.equal(marker, version);
+    assert.equal(version, marker);
     assert.doesNotThrow(() => new Function(script));
+    const pt = section('    const PT_BR = Object.freeze(', '    function tr(');
+    const dict = new Function(pt + '\nreturn PT_BR;')();
+    assert.ok(dict['Enable rule-based buying']);
+    assert.ok(dict['Rule-based buying is on, but no Buy rules are active. Create or enable a rule first.']);
 });
