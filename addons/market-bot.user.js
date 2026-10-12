@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.49
+// @version      0.1.50
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.49');
+        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.50');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -25,7 +25,6 @@
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
     const CONFIG_KEY = 'moth-pokeidle-market-bot-config-v1';
-    const AUTO_BUY_MIGRATION_KEY = 'moth-pokeidle-market-bot-auto-buy-defaults-v2';
     const BASELINE_KEY = 'moth-pokeidle-market-item-baseline-v1';
     const POKEMON_REFERENCE_KEY = 'moth-pokeidle-market-pokemon-reference-v1';
     const BACKGROUND_MIN_GAP_MS = 3000;
@@ -56,18 +55,9 @@
         enabled: true,
         scanSeconds: 5,
         watchPercent: 70,
-        autoBuy: false,
-        autoBuyPercent: 40,
         scanItems: true,
         scanPokemon: true,
         scanDiamonds: true,
-        autoBuyItems: false,
-        autoBuyPokemon: false,
-        autoBuyDiamonds: false,
-        buyCoins: false,
-        buyGems: false,
-        autoSellEnabled: false,
-        autoSellRules: [],
         fixedRulesEnabled: false,
         fixedItemRules: [],
         goldReserve: 0,
@@ -91,16 +81,13 @@
         nick: '',
         gold: 0,
         orbs: 0,
-        ownedItems: new Map(),
-        ownListings: [],
-        ownListingsAt: 0,
-        ownListingsPendingAt: 0,
         catalog: new Map(),
         itemNames: new Map(),
         creatureNames: new Map(),
         itemSummary: {},
         liveItemAverages: {},
         loadedItemKeys: new Set(),
+        ruleItemKeys: new Set(),
         liveDiamondAverages: null,
         diamondStatus: 'waiting',
         diamondPendingCurrency: null,
@@ -118,12 +105,10 @@
         itemOfferDetails: new Map(),
         sellRecommendationKey: null,
         pendingBuy: null,
-        pendingSell: null,
         automationLastRunAt: 0,
         itemSummaryAt: 0,
         automationNotice: null,
         attemptedListings: new Map(),
-        attemptedSales: new Map(),
         buyLog: [],
         lastScanAt: 0,
         scanTimer: null,
@@ -190,193 +175,227 @@
     }
 
     const PT_BR = Object.freeze({
-        'Underpriced listings and market sniper settings': 'Ofertas abaixo do preço e configurações de compra no mercado',
-        'Scan now': 'Escanear agora', 'Moth Watch views': 'Seções do Moth Watch',
-        'Opportunities': 'Oportunidades', 'Market inventory': 'Estoque do mercado',
-        'Automation & budget': 'Automação e orçamento', 'Activity & references': 'Atividade e referências',
-        'Search listings': 'Buscar ofertas', 'Search item, Pokémon, seller…': 'Buscar item, Pokémon ou vendedor…',
-        'Currency': 'Moeda', 'All': 'Todas', 'Coins': 'Moedas', 'Gems': 'Gemas',
-        'Shiny Pokémon can only be listed for Gems. Old Coin listings are ignored.': 'Pokémon Shiny só podem ser anunciados por Gemas. Anúncios antigos em Moedas são ignorados.',
-        'Type': 'Tipo', 'Items': 'Itens', 'Diamonds': 'Diamantes', 'Sort': 'Ordenar',
-        'Biggest discount': 'Maior desconto', 'Newest detected': 'Detectadas mais recentemente',
-        'Price: low → high': 'Preço: menor → maior', 'Price: high → low': 'Preço: maior → menor',
-        'Reference: high → low': 'Referência: maior → menor', 'Quantity: high → low': 'Quantidade: maior → menor',
-        'Name: A → Z': 'Nome: A → Z', '1 matching listing': '1 oferta correspondente',
-        '{count} matching listings': '{count} ofertas correspondentes',
-        '{count} matching listings · purchases are serialized while awaiting server confirmation': '{count} ofertas correspondentes · compras são serializadas até a confirmação do servidor',
-        'Watch threshold: {value}% of reference': 'Limite de alerta: {value}% da referência',
-        'Auto-buy: {status}': 'Compra automática: {status}', 'ON': 'LIGADA', 'OFF': 'DESLIGADA',
-        'Items: {items} · Pokémon: {pokemon} · Diamonds: {diamonds}': 'Itens: {items} · Pokémon: {pokemon} · Diamantes: {diamonds}',
-        'Load Coin offers': 'Carregar ofertas em moedas', 'No Coin offers': 'Sem ofertas em moedas',
-        'Load Gem offers': 'Carregar ofertas em gemas', 'No Gem offers': 'Sem ofertas em gemas',
-        'Items for sale': 'Itens à venda', 'item type with active listings': 'tipo de item com ofertas ativas',
-        'item types with active listings': 'tipos de item com ofertas ativas',
-        ' · showing first {count}': ' · mostrando os primeiros {count}',
-        'This summary shows the lowest active market price for every item. Use Load Coin/Gem offers to expand all current listings under the selected item. Loaded listings also remain available in Opportunities.': 'Este resumo mostra o menor preço ativo de cada item. Use Carregar ofertas em moedas/gemas para expandir todos os anúncios do item selecionado. Os anúncios carregados também ficam disponíveis em Oportunidades.',
-        'No market item inventory has arrived yet.': 'O inventário de itens do mercado ainda não chegou.',
-        'Current market median · {count} listings': 'Mediana atual do mercado · {count} ofertas',
-        ' · server 7d avg {value} ignored': ' · média do servidor em 7 dias ({value}) ignorada',
-        'live 7d avg / unit': 'média real de 7 dias por unidade',
-        'frozen fallback / unit': 'referência alternativa salva por unidade',
-        'no sale-price reference': 'sem referência de preço de venda',
-        'active market median': 'mediana atual do mercado', 'completed-sale reference': 'referência de vendas concluídas',
-        'no completed-sale reference': 'sem referência de vendas concluídas',
-        'sales median · {count} sales': 'mediana das vendas · {count} vendas',
-        '1 unit sold': '1 unidade vendida', '{count} units sold': '{count} unidades vendidas',
-        '1 sale': '1 venda', '{count} sales': '{count} vendas', '1 listing': '1 oferta', '{count} listings': '{count} ofertas',
-        'units': 'unidades', 'diamonds': 'diamantes', 'total': 'total', 'listed': 'anunciado',
-        ' / unit': ' / unidade', 'auto-buy range': 'faixa de compra automática', 'watch range': 'faixa de alerta',
-        'Seller: {seller}': 'Vendedor: {seller}', 'retained · {seconds}s': 'reservada · {seconds}s',
-        'available': 'disponível', 'Buying…': 'Comprando…', 'Wait': 'Aguardar', 'Tried recently': 'Tentativa recente', 'Buy': 'Comprar',
-        'No matching opportunities. Try a wider watch threshold or inspect Market inventory.': 'Nenhuma oportunidade corresponde aos filtros. Aumente o limite de alerta ou consulte o estoque do mercado.',
-        'Browse item types, then load the offers for a selected currency.': 'Navegue pelos tipos de item e carregue as ofertas na moeda desejada.',
-        'Watch rules': 'Regras de monitoramento', 'Watch price threshold': 'Limite de preço para alertas',
-        'Scan interval': 'Intervalo de varredura', 'seconds': 'segundos',
-        'Watch items': 'Monitorar itens', 'Watch Pokémon': 'Monitorar Pokémon', 'Watch diamonds': 'Monitorar diamantes',
-        'Automatic purchases': 'Compras automáticas',
-        'Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.': 'Mantenha esta chave principal desligada até revisar o limite de preço, as moedas permitidas e os limites de gastos.',
-        'Enable automatic buying': 'Ativar compras automáticas', 'Auto-buy price threshold': 'Limite de preço para compra automática',
-        'Auto-buy items': 'Comprar itens automaticamente', 'Auto-buy Pokémon': 'Comprar Pokémon automaticamente',
-        'Auto-buy diamonds': 'Comprar diamantes automaticamente', 'Allow Coin purchases': 'Permitir compras com moedas',
-        'Allow Gem purchases': 'Permitir compras com gemas',
-        'Spending limits': 'Limites de gastos', 'Keep Coins in reserve': 'Manter moedas reservadas',
-        'Keep Gems in reserve': 'Manter gemas reservadas', 'Maximum Coins per purchase': 'Máximo de moedas por compra',
-        'Maximum Gems per purchase': 'Máximo de gemas por compra', '0 = no extra cap': '0 = sem limite adicional',
-        'Reference confidence': 'Confiabilidade das referências', 'Minimum sold item units': 'Mínimo de unidades de item vendidas',
-        'Minimum Pokémon sale samples': 'Mínimo de vendas de Pokémon na amostra', 'Pokémon history pages': 'Páginas do histórico de Pokémon',
-        'Price references': 'Referências de preço', 'Inspect and refresh reference data used to judge offers.': 'Consulte e atualize as referências usadas para avaliar ofertas.',
-        'Item references:': 'Referências de itens:', 'live server 7-day averages with a saved fallback captured': 'médias do servidor em 7 dias, com referência alternativa salva em',
-        ' item types; ': ' tipos de item; ', ' Coin references; ': ' referências em moedas; ', ' Gem references.': ' referências em gemas.',
-        'Suspicious prices: ': 'Preços suspeitos: ', ' Coin · ': ' moedas · ', ' Gem.': ' gemas.',
-        'Refresh saved fallback': 'Atualizar referência alternativa salva', 'Copy reference data': 'Copiar dados de referência',
-        'Recent activity': 'Atividade recente', 'Purchase attempts, confirmations, and errors.': 'Tentativas de compra, confirmações e erros.',
-        'No purchase attempts recorded this session.': 'Nenhuma tentativa de compra registrada nesta sessão.',
-        'Moth Watch': 'Moth Watch', 'waiting': 'aguardando', 'live': 'ao vivo', 'disabled': 'desativado',
-        'queued': 'na fila', 'scanning': 'analisando', 'rate-limit backoff': 'pausa por limite de requisições',
-        'history ready': 'histórico pronto', 'waiting for game': 'aguardando o jogo', 'history cached': 'histórico em cache',
-        'loading history': 'carregando histórico', 'paused while browsing': 'pausado durante a navegação',
-        'watching': 'monitorando', 'disconnected': 'desconectado', 'retrying after timeout': 'nova tentativa após tempo limite',
-        'scanning · Gems': 'analisando · gemas', 'scanning · Coins': 'analisando · moedas',
-        'live · Gems': 'ao vivo · gemas', 'live · Coins': 'ao vivo · moedas',
-        'Purchase confirmed · listing #{id}': 'Compra confirmada · oferta #{id}',
-        'Reference data copied to clipboard': 'Dados de referência copiados para a área de transferência',
-        'Could not copy reference data': 'Não foi possível copiar os dados de referência',
-        'Purchase not sent; check balance, reserve, listing availability, and pending purchase status': 'Compra não enviada; confira saldo, reservas, disponibilidade da oferta e se há compra pendente',
-        'Server rate limit · background scans paused for 15s': 'Limite de requisições do servidor · varreduras em segundo plano pausadas por 15 s',
-        'Baseline frozen: {count} market items': 'Referência inicial salva: {count} itens do mercado',
-        'Baseline expanded with {count} missing Coin/Gem reference': 'Referência inicial ampliada com {count} referência ausente de moedas/gemas',
-        'Baseline expanded with {count} missing Coin/Gem references': 'Referência inicial ampliada com {count} referências ausentes de moedas/gemas',
-        'Pokémon reference refreshed: {count} buckets': 'Referências de Pokémon atualizadas: {count} grupos',
-        'Purchase refused: {message}': 'Compra recusada: {message}',
-        'Skipped: not enough spendable balance for {name}': 'Ignorado: saldo disponível insuficiente para {name}',
-        'no reference captured yet': 'nenhuma referência capturada ainda',
-        'loading {name} offers': 'carregando ofertas de {name}',
-        'Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.': 'Mostra uma oferta quando o preço estiver nesta proporção ou abaixo da referência. 70% significa pelo menos 30% abaixo da referência.',
-        'How often the market scanner checks again. Lower finds changes sooner but sends requests more often.': 'Define a frequência das consultas ao mercado. Intervalos menores encontram mudanças mais cedo, mas enviam mais requisições.',
-        'Scan ordinary market items and let you inspect their current offers.': 'Analisa itens comuns do mercado e permite consultar as ofertas atuais.',
-        'Scan Pokémon listings and compare them with completed-sale history.': 'Analisa anúncios de Pokémon e compara os preços com o histórico de vendas concluídas.',
-        'Scan diamond listings and compare prices when a reference is available.': 'Analisa anúncios de diamantes e compara os preços quando há uma referência disponível.',
-        'Master switch. Automatic buying still requires a category, currency, price, and budget to pass all checks.': 'Chave geral. Para comprar automaticamente, a categoria, a moeda, o preço e o orçamento ainda precisam passar por todas as verificações.',
-        'Maximum price for automatic buying, as a share of the reference. 40% means at least 60% below reference.': 'Preço máximo para compras automáticas em relação à referência. 40% significa pelo menos 60% abaixo da referência.',
-        'Allow automatic purchases of ordinary items.': 'Permite comprar itens comuns automaticamente.',
-        'Allow automatic purchases of Pokémon when enough sale samples exist.': 'Permite comprar Pokémon automaticamente quando há amostras de vendas suficientes.',
-        'Allow automatic purchases of diamonds when a usable reference exists.': 'Permite comprar diamantes automaticamente quando há uma referência utilizável.',
-        'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com moedas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
-        'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.': 'Permite compras automáticas com gemas. Compras manuais continuam respeitando o saldo disponível e os limites de gastos.',
-        'Money that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de moedas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
-        'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.': 'Quantidade de gemas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.',
-        'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em moedas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
-        'Maximum Gem spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.': 'Gasto máximo em gemas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.',
-        'Require at least this many sold units before using an item reference for automatic buying.': 'Exige pelo menos essa quantidade de unidades vendidas antes de usar a referência de um item em compras automáticas.',
-        'Require this many completed Pokémon sales before automatic buying can use that reference.': 'Exige essa quantidade de vendas concluídas de Pokémon antes de usar a referência em compras automáticas.',
-        'How many pages of completed-sale history to read. More pages take longer and use more requests.': 'Quantidade de páginas do histórico de vendas concluídas a consultar. Mais páginas demoram mais e fazem mais requisições.',
-        'Regular market': 'Mercado normal',
-        'Return to regular market': 'Voltar ao mercado normal',
-        'Open Moth Watch': 'Abrir Moth Watch',
-        'no offers found': 'nenhuma oferta encontrada',
-        'market request timed out': 'tempo limite da consulta ao mercado',
-        'Offers': 'Ofertas',
-        'Hide offers': 'Ocultar ofertas',
-        'Own listing': 'Seu anúncio',
-        'Offer count: {count}': '{count} ofertas',
-        'Waiting for the market to return offers…': 'Aguardando o mercado retornar as ofertas…',
-        'No offers found in this currency.': 'Nenhuma oferta encontrada nesta moeda.',
-        'Market did not respond. Load offers again.': 'O mercado não respondeu. Carregue as ofertas novamente.',
-        'Refreshing offers…': 'Atualizando ofertas…',
-        'Moth Watch recommended price': 'Preço recomendado pelo Moth Watch',
-        'Use recommended price': 'Usar preço recomendado',
-        '7d sold average': 'Média vendida em 7 dias',
-        'stable active median': 'Mediana dos anúncios estáveis',
-        'sold units': 'unidades vendidas',
-        'current asks': 'anúncios atuais',
-        'High confidence': 'Alta confiança',
-        'Medium confidence': 'Confiança média',
-        'Low confidence': 'Baixa confiança',
-        'Waiting for market data…': 'Aguardando dados do mercado…',
-        'No reliable recommendation yet.': 'Ainda não há dados suficientes para uma recomendação confiável.',
-        'Based on completed sales first; unusually cheap active listings are treated as possible dumps.': 'Prioriza vendas concluídas; anúncios ativos excepcionalmente baratos são tratados como possíveis liquidações.',
-        'Experimental auto-sell': 'Venda automática experimental',
-        'Enable experimental auto-sell': 'Ativar venda automática experimental',
-        'Automatically list selected owned items. Moth Watch waits if the same item/currency already has an open listing.': 'Anuncia automaticamente os itens selecionados que você possui. O Moth Watch espera se o mesmo item/moeda já tiver um anúncio aberto.',
-        'Recommended': 'Recomendado',
-        'Patient': 'Paciente',
-        'Keep quantity': 'Manter quantidade',
-        'Max units per listing': 'Máx. de unidades por anúncio',
-        'Add auto-sell item': 'Adicionar item à venda automática',
-        'No auto-sell items configured.': 'Nenhum item configurado para venda automática.',
-        'Fixed item rules': 'Regras fixas por item',
-        'Enable fixed item rules': 'Ativar regras fixas por item',
-        'Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.': 'Use limites exatos, por exemplo: comprar Cocoon Stone por até 30.000 e vender por 45.000. Estas regras são independentes da compra automática por porcentagem.',
-        'Buy at or below': 'Comprar por até',
-        'Sell at': 'Vender por',
-        'Max units per purchase': 'Máx. de unidades por compra',
-        'Add fixed rule': 'Adicionar regra fixa',
-        'No fixed item rules configured.': 'Nenhuma regra fixa configurada.',
-        'Enabled': 'Ativada',
-        'Sell': 'Vender',
-        'Remove': 'Remover',
-        'Item': 'Item',
-        'Price mode': 'Modo de preço',
-        'Market catalog is not loaded yet.': 'O catálogo do mercado ainda não foi carregado.',
-        'Owned: {owned} · listed: {listed}': 'Possui: {owned} · anunciado: {listed}',
-        'Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.': 'Experimental: as recomendações podem mudar com os dados do mercado. Mantenha desativado até revisar cada item selecionado.',
-        'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.',
-        'Automation status': 'Status da automação',
-        'Review the systems that can place market orders, then set spending safeguards and advanced monitoring.': 'Revise os sistemas que podem enviar ordens ao mercado e depois ajuste os limites de segurança e o monitoramento avançado.',
-        'Automation: {summary}': 'Automação: {summary}',
-        'Fixed {status}': 'Fixas {status}',
-        'Auto-sell {status}': 'Venda auto {status}',
-        'Auto-buy {status}': 'Compra auto {status}',
-        'Active': 'Ativa',
-        'Inactive': 'Inativa',
-        '{count} active rule': '{count} regra ativa',
-        '{count} active rules': '{count} regras ativas',
-        'No automated market orders are enabled.': 'Nenhuma ordem automática de mercado está ativada.',
-        'Fixed rules are deterministic: exact buy and sell prices win over recommendation-based selling for the same item.': 'Regras fixas são determinísticas: preços exatos de compra e venda têm prioridade sobre vendas por recomendação do mesmo item.',
-        'Percentage auto-buy': 'Compra automática por porcentagem',
-        'Spending safeguards': 'Limites de segurança',
-        'Advanced monitoring & references': 'Monitoramento e referências avançados',
-        'Scanning and reference-quality controls. These do not authorize orders by themselves.': 'Controles de varredura e qualidade das referências. Sozinhos, eles não autorizam ordens.',
-        'Find item': 'Buscar item',
-        'Search items…': 'Buscar itens…',
-        'No price yet': 'Sem preço ainda',
-        'Rule added: {name}.': 'Regra adicionada: {name}.',
-        'Rule removed: {name}.': 'Regra removida: {name}.',
-        'A rule for {name} in this currency already exists.': 'Já existe uma regra para {name} nesta moeda.',
-        'Choose an item before adding a rule.': 'Escolha um item antes de adicionar a regra.',
-        'Set a buy price, a sell price, or both before adding a fixed rule.': 'Defina um preço de compra, de venda ou ambos antes de adicionar uma regra fixa.',
-        'Create a fixed rule': 'Criar regra fixa',
-        'Create an auto-sell rule': 'Criar regra de venda automática',
-        'Configured rules': 'Regras cadastradas',
-        'Price per unit': 'Preços por unidade',
-        'Buy every available unit affordable within reserves and purchase limits.': 'Compra todas as unidades disponíveis no anúncio que couberem no saldo, nas reservas e no limite por compra.',
-        'List every owned unit except the quantity kept in inventory.': 'Anuncia todas as unidades disponíveis no inventário, descontando as que você decidiu manter.',
-        'Only set the prices for the actions you want. 0 disables that action.': 'Preencha apenas os preços das ações desejadas. Valor 0 desativa a compra ou a venda.',
-        'Adding a rule does not enable the master switch.': 'Adicionar uma regra não ativa a automação. Use a chave geral acima para ligá-la.',
-        'Automatic buying may use your entire available balance when reserves and spending limits are set to zero.': 'Com reservas e limites por compra em zero, as compras automáticas podem gastar todo o saldo disponível. Ajuste esses limites antes de ativar.',
-        'Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.': 'A venda automática experimental usa recomendações ao vivo. Revise os dois alvos antes de ativar a chave geral.',
-        'Recommended target': 'Alvo recomendado',
-        'Patient target': 'Alvo paciente'
+        "Underpriced listings and market sniper settings": "Ofertas abaixo do preço e configurações de compra no mercado",
+        "Scan now": "Escanear agora",
+        "Moth Watch views": "Seções do Moth Watch",
+        "Opportunities": "Oportunidades",
+        "Market inventory": "Estoque do mercado",
+        "Automation & budget": "Automação e orçamento",
+        "Activity & references": "Atividade e referências",
+        "Search listings": "Buscar ofertas",
+        "Search item, Pokémon, seller…": "Buscar item, Pokémon ou vendedor…",
+        "Currency": "Moeda",
+        "All": "Todas",
+        "Coins": "Moedas",
+        "Gems": "Gemas",
+        "Shiny Pokémon can only be listed for Gems. Old Coin listings are ignored.": "Pokémon Shiny só podem ser anunciados por Gemas. Anúncios antigos em Moedas são ignorados.",
+        "Type": "Tipo",
+        "Items": "Itens",
+        "Diamonds": "Diamantes",
+        "Sort": "Ordenar",
+        "Biggest discount": "Maior desconto",
+        "Newest detected": "Detectadas mais recentemente",
+        "Price: low → high": "Preço: menor → maior",
+        "Price: high → low": "Preço: maior → menor",
+        "Reference: high → low": "Referência: maior → menor",
+        "Quantity: high → low": "Quantidade: maior → menor",
+        "Name: A → Z": "Nome: A → Z",
+        "1 matching listing": "1 oferta correspondente",
+        "{count} matching listings": "{count} ofertas correspondentes",
+        "{count} matching listings · purchases are serialized while awaiting server confirmation": "{count} ofertas correspondentes · compras são serializadas até a confirmação do servidor",
+        "Watch threshold: {value}% of reference": "Limite de alerta: {value}% da referência",
+        "ON": "LIGADA",
+        "OFF": "DESLIGADA",
+        "Items: {items} · Pokémon: {pokemon} · Diamonds: {diamonds}": "Itens: {items} · Pokémon: {pokemon} · Diamantes: {diamonds}",
+        "Load Coin offers": "Carregar ofertas em moedas",
+        "No Coin offers": "Sem ofertas em moedas",
+        "Load Gem offers": "Carregar ofertas em gemas",
+        "No Gem offers": "Sem ofertas em gemas",
+        "Items for sale": "Itens à venda",
+        "item type with active listings": "tipo de item com ofertas ativas",
+        "item types with active listings": "tipos de item com ofertas ativas",
+        " · showing first {count}": " · mostrando os primeiros {count}",
+        "This summary shows the lowest active market price for every item. Use Load Coin/Gem offers to expand all current listings under the selected item. Loaded listings also remain available in Opportunities.": "Este resumo mostra o menor preço ativo de cada item. Use Carregar ofertas em moedas/gemas para expandir todos os anúncios do item selecionado. Os anúncios carregados também ficam disponíveis em Oportunidades.",
+        "No market item inventory has arrived yet.": "O inventário de itens do mercado ainda não chegou.",
+        "Current market median · {count} listings": "Mediana atual do mercado · {count} ofertas",
+        " · server 7d avg {value} ignored": " · média do servidor em 7 dias ({value}) ignorada",
+        "live 7d avg / unit": "média real de 7 dias por unidade",
+        "frozen fallback / unit": "referência alternativa salva por unidade",
+        "no sale-price reference": "sem referência de preço de venda",
+        "active market median": "mediana atual do mercado",
+        "completed-sale reference": "referência de vendas concluídas",
+        "no completed-sale reference": "sem referência de vendas concluídas",
+        "sales median · {count} sales": "mediana das vendas · {count} vendas",
+        "1 unit sold": "1 unidade vendida",
+        "{count} units sold": "{count} unidades vendidas",
+        "1 sale": "1 venda",
+        "{count} sales": "{count} vendas",
+        "1 listing": "1 oferta",
+        "{count} listings": "{count} ofertas",
+        "units": "unidades",
+        "diamonds": "diamantes",
+        "total": "total",
+        "listed": "anunciado",
+        " / unit": " / unidade",
+        "watch range": "faixa de alerta",
+        "Seller: {seller}": "Vendedor: {seller}",
+        "retained · {seconds}s": "reservada · {seconds}s",
+        "available": "disponível",
+        "Buying…": "Comprando…",
+        "Wait": "Aguardar",
+        "Tried recently": "Tentativa recente",
+        "Buy": "Comprar",
+        "No matching opportunities. Try a wider watch threshold or inspect Market inventory.": "Nenhuma oportunidade corresponde aos filtros. Aumente o limite de alerta ou consulte o estoque do mercado.",
+        "Browse item types, then load the offers for a selected currency.": "Navegue pelos tipos de item e carregue as ofertas na moeda desejada.",
+        "Watch rules": "Regras de monitoramento",
+        "Watch price threshold": "Limite de preço para alertas",
+        "Scan interval": "Intervalo de varredura",
+        "seconds": "segundos",
+        "Watch items": "Monitorar itens",
+        "Watch Pokémon": "Monitorar Pokémon",
+        "Watch diamonds": "Monitorar diamantes",
+        "Spending limits": "Limites de gastos",
+        "Keep Coins in reserve": "Manter moedas reservadas",
+        "Keep Gems in reserve": "Manter gemas reservadas",
+        "Maximum Coins per purchase": "Máximo de moedas por compra",
+        "Maximum Gems per purchase": "Máximo de gemas por compra",
+        "0 = no extra cap": "0 = sem limite adicional",
+        "Reference confidence": "Confiabilidade das referências",
+        "Minimum sold item units": "Mínimo de unidades de item vendidas",
+        "Minimum Pokémon sale samples": "Mínimo de vendas de Pokémon na amostra",
+        "Pokémon history pages": "Páginas do histórico de Pokémon",
+        "Price references": "Referências de preço",
+        "Inspect and refresh reference data used to judge offers.": "Consulte e atualize as referências usadas para avaliar ofertas.",
+        "Item references:": "Referências de itens:",
+        "live server 7-day averages with a saved fallback captured": "médias do servidor em 7 dias, com referência alternativa salva em",
+        " item types; ": " tipos de item; ",
+        " Coin references; ": " referências em moedas; ",
+        " Gem references.": " referências em gemas.",
+        "Suspicious prices: ": "Preços suspeitos: ",
+        " Coin · ": " moedas · ",
+        " Gem.": " gemas.",
+        "Refresh saved fallback": "Atualizar referência alternativa salva",
+        "Copy reference data": "Copiar dados de referência",
+        "Recent activity": "Atividade recente",
+        "Purchase attempts, confirmations, and errors.": "Tentativas de compra, confirmações e erros.",
+        "No purchase attempts recorded this session.": "Nenhuma tentativa de compra registrada nesta sessão.",
+        "Moth Watch": "Moth Watch",
+        "waiting": "aguardando",
+        "live": "ao vivo",
+        "disabled": "desativado",
+        "queued": "na fila",
+        "scanning": "analisando",
+        "rate-limit backoff": "pausa por limite de requisições",
+        "history ready": "histórico pronto",
+        "waiting for game": "aguardando o jogo",
+        "history cached": "histórico em cache",
+        "loading history": "carregando histórico",
+        "paused while browsing": "pausado durante a navegação",
+        "watching": "monitorando",
+        "disconnected": "desconectado",
+        "retrying after timeout": "nova tentativa após tempo limite",
+        "scanning · Gems": "analisando · gemas",
+        "scanning · Coins": "analisando · moedas",
+        "live · Gems": "ao vivo · gemas",
+        "live · Coins": "ao vivo · moedas",
+        "Purchase confirmed · listing #{id}": "Compra confirmada · oferta #{id}",
+        "Reference data copied to clipboard": "Dados de referência copiados para a área de transferência",
+        "Could not copy reference data": "Não foi possível copiar os dados de referência",
+        "Purchase not sent; check balance, reserve, listing availability, and pending purchase status": "Compra não enviada; confira saldo, reservas, disponibilidade da oferta e se há compra pendente",
+        "Server rate limit · background scans paused for 15s": "Limite de requisições do servidor · varreduras em segundo plano pausadas por 15 s",
+        "Baseline frozen: {count} market items": "Referência inicial salva: {count} itens do mercado",
+        "Baseline expanded with {count} missing Coin/Gem reference": "Referência inicial ampliada com {count} referência ausente de moedas/gemas",
+        "Baseline expanded with {count} missing Coin/Gem references": "Referência inicial ampliada com {count} referências ausentes de moedas/gemas",
+        "Pokémon reference refreshed: {count} buckets": "Referências de Pokémon atualizadas: {count} grupos",
+        "Purchase refused: {message}": "Compra recusada: {message}",
+        "Skipped: not enough spendable balance for {name}": "Ignorado: saldo disponível insuficiente para {name}",
+        "no reference captured yet": "nenhuma referência capturada ainda",
+        "loading {name} offers": "carregando ofertas de {name}",
+        "Show an offer when its price is at or below this share of the reference. 70% means at least 30% below reference.": "Mostra uma oferta quando o preço estiver nesta proporção ou abaixo da referência. 70% significa pelo menos 30% abaixo da referência.",
+        "How often the market scanner checks again. Lower finds changes sooner but sends requests more often.": "Define a frequência das consultas ao mercado. Intervalos menores encontram mudanças mais cedo, mas enviam mais requisições.",
+        "Scan ordinary market items and let you inspect their current offers.": "Analisa itens comuns do mercado e permite consultar as ofertas atuais.",
+        "Scan Pokémon listings and compare them with completed-sale history.": "Analisa anúncios de Pokémon e compara os preços com o histórico de vendas concluídas.",
+        "Scan diamond listings and compare prices when a reference is available.": "Analisa anúncios de diamantes e compara os preços quando há uma referência disponível.",
+        "Money that must remain untouched. This is subtracted before calculating an affordable purchase.": "Quantidade de moedas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.",
+        "Gems that must remain untouched. This is subtracted before calculating an affordable purchase.": "Quantidade de gemas que deve ficar reservada. Esse valor é descontado antes de calcular uma compra possível.",
+        "Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.": "Gasto máximo em moedas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.",
+        "Maximum Gem spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.": "Gasto máximo em gemas por compra. Use 0 para não adicionar um limite além da reserva e do saldo.",
+        "How many pages of completed-sale history to read. More pages take longer and use more requests.": "Quantidade de páginas do histórico de vendas concluídas a consultar. Mais páginas demoram mais e fazem mais requisições.",
+        "Regular market": "Mercado normal",
+        "Return to regular market": "Voltar ao mercado normal",
+        "Open Moth Watch": "Abrir Moth Watch",
+        "no offers found": "nenhuma oferta encontrada",
+        "market request timed out": "tempo limite da consulta ao mercado",
+        "Offers": "Ofertas",
+        "Hide offers": "Ocultar ofertas",
+        "Own listing": "Seu anúncio",
+        "Offer count: {count}": "{count} ofertas",
+        "Waiting for the market to return offers…": "Aguardando o mercado retornar as ofertas…",
+        "No offers found in this currency.": "Nenhuma oferta encontrada nesta moeda.",
+        "Market did not respond. Load offers again.": "O mercado não respondeu. Carregue as ofertas novamente.",
+        "Refreshing offers…": "Atualizando ofertas…",
+        "Moth Watch recommended price": "Preço recomendado pelo Moth Watch",
+        "Use recommended price": "Usar preço recomendado",
+        "7d sold average": "Média vendida em 7 dias",
+        "stable active median": "Mediana dos anúncios estáveis",
+        "sold units": "unidades vendidas",
+        "current asks": "anúncios atuais",
+        "High confidence": "Alta confiança",
+        "Medium confidence": "Confiança média",
+        "Low confidence": "Baixa confiança",
+        "Waiting for market data…": "Aguardando dados do mercado…",
+        "No reliable recommendation yet.": "Ainda não há dados suficientes para uma recomendação confiável.",
+        "Based on completed sales first; unusually cheap active listings are treated as possible dumps.": "Prioriza vendas concluídas; anúncios ativos excepcionalmente baratos são tratados como possíveis liquidações.",
+        "Fixed item rules": "Regras fixas por item",
+        "Buy at or below": "Comprar por até",
+        "Add fixed rule": "Adicionar regra fixa",
+        "No fixed item rules configured.": "Nenhuma regra fixa configurada.",
+        "Enabled": "Ativada",
+        "Remove": "Remover",
+        "Item": "Item",
+        "Market catalog is not loaded yet.": "O catálogo do mercado ainda não foi carregado.",
+        "Automation status": "Status da automação",
+        "Review the systems that can place market orders, then set spending safeguards and advanced monitoring.": "Revise os sistemas que podem enviar ordens ao mercado e depois ajuste os limites de segurança e o monitoramento avançado.",
+        "Automation: {summary}": "Automação: {summary}",
+        "Active": "Ativa",
+        "Inactive": "Inativa",
+        "{count} active rule": "{count} regra ativa",
+        "{count} active rules": "{count} regras ativas",
+        "No automated market orders are enabled.": "Nenhuma ordem automática de mercado está ativada.",
+        "Spending safeguards": "Limites de segurança",
+        "Advanced monitoring & references": "Monitoramento e referências avançados",
+        "Scanning and reference-quality controls. These do not authorize orders by themselves.": "Controles de varredura e qualidade das referências. Sozinhos, eles não autorizam ordens.",
+        "Find item": "Buscar item",
+        "Search items…": "Buscar itens…",
+        "Rule added: {name}.": "Regra adicionada: {name}.",
+        "Rule removed: {name}.": "Regra removida: {name}.",
+        "A rule for {name} in this currency already exists.": "Já existe uma regra para {name} nesta moeda.",
+        "Choose an item before adding a rule.": "Escolha um item antes de adicionar a regra.",
+        "Create a fixed rule": "Criar regra fixa",
+        "Configured rules": "Regras cadastradas",
+        "Price per unit": "Preços por unidade",
+        "Buy every available unit affordable within reserves and purchase limits.": "Compra todas as unidades disponíveis no anúncio que couberem no saldo, nas reservas e no limite por compra.",
+        "Automatic buying may use your entire available balance when reserves and spending limits are set to zero.": "Com reservas e limites por compra em zero, as compras automáticas podem gastar todo o saldo disponível. Ajuste esses limites antes de ativar.",
+        "Rule-based buying": "Compra automática por regras",
+        "Rule-based buying: {status}": "Compra por regras: {status}",
+        "No automatic purchases enabled.": "Nenhuma compra automática ativada.",
+        "Enable rule-based buying and at least one Buy rule with a maximum unit price. No other buying switches are required. Coin/Gem reserves and per-purchase caps still apply.": "Ative a compra por regras e pelo menos uma regra de compra com preço máximo por unidade. Nenhuma outra chave de compra é necessária. Reservas de Moedas/Gemas e limites por compra continuam valendo.",
+        "Rule paused": "Regra pausada",
+        "Moth Watch disabled": "Moth Watch desativado",
+        "Enable rule-based buying above": "Ative a compra por regras acima",
+        "Waiting for game connection": "Aguardando conexão com o jogo",
+        "Insufficient spendable balance": "Saldo disponível insuficiente",
+        "Checking listings…": "Consultando anúncios…",
+        "Eligible listing available": "Anúncio elegível disponível",
+        "Monitoring · no eligible listing": "Monitorando · nenhuma oferta elegível",
+        "Set an item and its maximum unit price, for example Cocoon Stone at 30,000 Coins. Only matching offers can be purchased.": "Escolha um item e seu preço máximo por unidade, por exemplo Cocoon Stone por 30.000 moedas. Apenas ofertas que atendam à regra poderão ser compradas.",
+        "Enable rule-based buying": "Ativar compra por regras",
+        "Only a positive buy price activates a rule.": "Somente um preço máximo maior que zero ativa uma regra.",
+        "Adding a rule does not turn on rule-based buying; enable the switch above.": "Criar a regra não ativa a automação; ligue a chave acima.",
+        "Set a positive maximum buy price.": "Defina um preço máximo de compra maior que zero.",
+        "Rule saved: {name}. Turn on rule-based buying to start.": "Regra salva: {name}. Ative a compra por regras para começar.",
+        "Rule-based buying is on, but no Buy rules are active. Create or enable a rule first.": "A compra por regras está ativada, mas não há regras de compra ativas. Crie ou ative uma regra primeiro.",
+        "Rule-based buying is on. No other purchase switches are required. Spending safeguards still apply.": "Compra por regras ativada. Nenhuma outra chave de compra é necessária. Os limites de segurança continuam valendo.",
     });
 
     function tr(key, params = null) {
@@ -446,22 +465,6 @@
     }
 
 
-    function sanitizeAutoSellRules(value) {
-        if (!Array.isArray(value)) return [];
-        return value.map((rule, index) => {
-            const itemId = Math.floor(Number(rule?.itemId));
-            if (!(itemId > 0)) return null;
-            return {
-                id: String(rule?.id || ('autosell-' + index + '-' + itemId)),
-                itemId,
-                currency: rule?.currency === 'orb' ? 'orb' : 'gold',
-                mode: rule?.mode === 'patient' ? 'patient' : 'recommended',
-                enabled: rule?.enabled !== false,
-                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0))
-            };
-        }).filter(Boolean);
-    }
-
     function sanitizeFixedItemRules(value) {
         if (!Array.isArray(value)) return [];
         return value.map((rule, index) => {
@@ -473,9 +476,6 @@
                 currency: rule?.currency === 'orb' ? 'orb' : 'gold',
                 buyEnabled: rule?.buyEnabled !== false && Number(rule?.buyMax) > 0,
                 buyMax: Math.max(0, Math.floor(Number(rule?.buyMax) || 0)),
-                sellEnabled: rule?.sellEnabled !== false && Number(rule?.sellPrice) > 0,
-                sellPrice: Math.max(0, Math.floor(Number(rule?.sellPrice) || 0)),
-                keepQty: Math.max(0, Math.floor(Number(rule?.keepQty) || 0)),
             };
         }).filter(Boolean);
     }
@@ -486,33 +486,12 @@
             saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}') || {};
         } catch {}
 
-        const loaded = Object.assign({}, DEFAULTS, saved);
-        // The old global one-unit switch no longer exists. All purchases now
-        // honor the explicit budget and the actual offer quantity.
-        delete loaded.buyWholeItemBatch;
-        loaded.autoSellRules = sanitizeAutoSellRules(saved.autoSellRules);
+        // Retired configurations never re-enable removed automation.
+        const loaded = { ...DEFAULTS };
+        for (const key of Object.keys(DEFAULTS)) {
+            if (Object.prototype.hasOwnProperty.call(saved, key)) loaded[key] = saved[key];
+        }
         loaded.fixedItemRules = sanitizeFixedItemRules(saved.fixedItemRules);
-        try {
-            /*
-             * Existing settings stored the child auto-buy toggles as ON even
-             * when the master switch was OFF. Migrate once to an explicitly
-             * safe state, then preserve future user choices.
-             */
-            if (localStorage.getItem(AUTO_BUY_MIGRATION_KEY) !== '1') {
-                for (const key of [
-                    'autoBuy',
-                    'autoBuyItems',
-                    'autoBuyPokemon',
-                    'autoBuyDiamonds',
-                    'buyCoins',
-                    'buyGems'
-                ]) {
-                    loaded[key] = false;
-                }
-                localStorage.setItem(AUTO_BUY_MIGRATION_KEY, '1');
-            }
-        } catch {}
-
         return loaded;
     }
 
@@ -627,7 +606,6 @@
 
         const previousGold = state.gold;
         const previousOrbs = state.orbs;
-        let itemsChanged = false;
 
         if (Number(snapshot.servidorAgora) > 0) {
             state.serverClockOffset = Date.now() - Number(snapshot.servidorAgora);
@@ -642,24 +620,11 @@
         if (full || Object.prototype.hasOwnProperty.call(snapshot, 'orbs')) {
             if (Number.isFinite(Number(snapshot.orbs))) state.orbs = Number(snapshot.orbs);
         }
-        if ((full || Object.prototype.hasOwnProperty.call(snapshot, 'items')) &&
-            snapshot.items && typeof snapshot.items === 'object' && !Array.isArray(snapshot.items)) {
-            if (full) state.ownedItems.clear();
-            for (const [rawId, rawQty] of Object.entries(snapshot.items)) {
-                const itemId = Number(rawId);
-                const qty = Math.max(0, Math.floor(Number(rawQty) || 0));
-                if (Number.isFinite(itemId) && itemId > 0) {
-                    state.ownedItems.set(itemId, qty);
-                    itemsChanged = true;
-                }
-            }
-        }
-
         if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 4500) {
             finishPendingBuy('timeout');
         }
 
-        if (state.watchOpen && (previousGold !== state.gold || previousOrbs !== state.orbs || itemsChanged)) {
+        if (state.watchOpen && (previousGold !== state.gold || previousOrbs !== state.orbs)) {
             queueRender();
         }
     }
@@ -1091,12 +1056,21 @@
         const key = String(itemId) + ':' + currency;
         const now = Date.now();
         if (state.detailPending?.key === key) return;
+        const urgent = state.selectedItemFocus?.key === key || state.sellRecommendationKey === key;
+        const rulePriority = state.ruleItemKeys.has(key);
+        const priorityIndex = () => {
+            if (urgent) return 0;
+            const index = state.detailQueue.findIndex(job =>
+                !state.ruleItemKeys.has(job.key) &&
+                state.selectedItemFocus?.key !== job.key &&
+                state.sellRecommendationKey !== job.key);
+            return index < 0 ? state.detailQueue.length : index;
+        };
         const queuedIndex = state.detailQueue.findIndex(job => job.key === key);
         if (queuedIndex >= 0) {
-            if ((state.selectedItemFocus?.key === key || state.sellRecommendationKey === key) && queuedIndex > 0) {
+            if ((urgent && queuedIndex > 0) || (rulePriority && queuedIndex > priorityIndex())) {
                 const [job] = state.detailQueue.splice(queuedIndex, 1);
-                job.enqueuedAt = now;
-                state.detailQueue.unshift(job);
+                state.detailQueue.splice(priorityIndex(), 0, job);
                 scheduleItemDetailPump(0);
             }
             return;
@@ -1104,7 +1078,7 @@
         if (now - Number(state.lastDetailRequest.get(key) || 0) < Math.max(1000, config.scanSeconds * 800)) return;
         state.detailQueued.add(key);
         const job = { itemId: Number(itemId), currency: currency, key: key, enqueuedAt: now };
-        if (state.selectedItemFocus?.key === key || state.sellRecommendationKey === key) state.detailQueue.unshift(job);
+        if (urgent || rulePriority) state.detailQueue.splice(priorityIndex(), 0, job);
         else state.detailQueue.push(job);
         scheduleItemDetailPump(0);
     }
@@ -1208,11 +1182,7 @@
     }
 
     function discoveryRatio() {
-        const watch = Math.max(0.01, Number(config.watchPercent) / 100);
-        const auto = config.autoBuy
-            ? Math.max(0.01, Number(config.autoBuyPercent) / 100)
-            : 0;
-        return Math.max(watch, auto);
+        return Math.max(0.01, Number(config.watchPercent) / 100);
     }
 
     function scanSuspiciousItemSummaries() {
@@ -1309,7 +1279,6 @@
             }
 
             current.retainedUntil = 0;
-            maybeAutoBuy(current);
             queueRender();
         }, delay);
 
@@ -1335,7 +1304,6 @@
         state.firstSeenCache.set(candidate.key, { firstSeenAt: candidate.firstSeenAt, lastSeenAt: now });
         state.candidates.set(candidate.key, candidate);
         scheduleCandidateRelease(candidate);
-        maybeAutoBuy(candidate);
         queueRender();
     }
 
@@ -1357,8 +1325,8 @@
         const offers = Array.isArray(lines) ? lines.slice() : [];
         const explicitlyLoaded = state.loadedItemKeys.has(detailKey);
         const selected = state.selectedItemFocus?.key === detailKey;
-        const neededForSell = state.sellRecommendationKey === detailKey;
-        if (explicitlyLoaded || selected || neededForSell) {
+        const neededForRecommendation = state.sellRecommendationKey === detailKey;
+        if (explicitlyLoaded || selected || neededForRecommendation || state.ruleItemKeys.has(detailKey)) {
             state.itemOfferDetails.set(detailKey, { itemId, currency, offers, updatedAt: Date.now() });
             state.itemDetailStatus = {
                 key: detailKey,
@@ -1916,37 +1884,6 @@
         return Math.max(0, Number(currency === 'orb' ? config.maxGemsPerBuy : config.maxCoinsPerBuy) || 0);
     }
 
-    function currencyAllowed(currency) {
-        return currency === 'orb' ? !!config.buyGems : !!config.buyCoins;
-    }
-
-    function autoThresholdFor(candidate) {
-        return Math.max(0.01, Number(config.autoBuyPercent) / 100);
-    }
-
-    function candidateCanAutoBuy(candidate) {
-        if (!config.autoBuy || !candidate) return false;
-        if (candidate.kind === 'pokemon' &&
-            !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) return false;
-        if (!currencyAllowed(candidate.currency)) return false;
-        if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
-        if (candidate.ratio > autoThresholdFor(candidate)) return false;
-        if (candidate.kind === 'item') {
-            if (!config.autoBuyItems) return false;
-            if (Number(candidate.samples || 0) < Math.max(1, Number(config.minItemUnits || 1))) return false;
-        }
-        if (candidate.kind === 'pokemon') {
-            if (!config.autoBuyPokemon) return false;
-            if (Number(candidate.samples || 0) < Math.max(1, Number(config.minPokemonSamples || 1))) return false;
-        }
-        if (candidate.kind === 'diamond') {
-            if (!config.autoBuyDiamonds) return false;
-            if (!(Number(candidate.average) > 0)) return false;
-            if (Number(candidate.samples || 0) < Math.max(1, Number(config.minItemUnits || 1))) return false;
-        }
-        return true;
-    }
-
     function purchaseQuantity(candidate) {
         if (candidate.kind === 'pokemon' &&
             !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) return 0;
@@ -1970,13 +1907,12 @@
     }
 
     function tryBuy(candidate, manual, requestedQuantity = null, fixedRule = false) {
-        if (!candidate || state.pendingBuy || state.pendingSell) return false;
+        if (!candidate || state.pendingBuy) return false;
         if (candidate.kind === 'pokemon' &&
             !pokemonCurrencyAllowed(candidate.ficha, candidate.currency)) {
             if (manual) addLog('Skipped: shiny Pokémon require Gems');
             return false;
         }
-        if (!manual && !fixedRule && !candidateCanAutoBuy(candidate)) return false;
         if (candidate.retainedUntil && candidate.retainedUntil > serverNow()) return false;
 
         const now = Date.now();
@@ -2022,14 +1958,15 @@
 
         if (!sent) {
             state.pendingBuy = null;
+            state.attemptedListings.delete(candidate.listingId);
             return false;
         }
 
         addLog(
-            (fixedRule ? 'RULE BUY' : manual ? 'BUY' : 'AUTO BUY') + ' · ' +
+            (fixedRule ? 'RULE BUY' : 'BUY') + ' · ' +
             candidate.name + ' · ' + qty + ' × ' + num(unitPrice) + ' ' +
             (candidate.currency === 'orb' ? 'Gems' : 'Coins') +
-            ' · ' + Math.round((1 - candidate.ratio) * 100) + '% under reference'
+            (Number(candidate.average) > 0 ? ' · ' + Math.round((1 - candidate.ratio) * 100) + '% under reference' : '')
         );
         queueRender();
 
@@ -2040,11 +1977,6 @@
         }, 5000);
 
         return true;
-    }
-
-    function maybeAutoBuy(candidate) {
-        if (!candidateCanAutoBuy(candidate)) return;
-        tryBuy(candidate, false);
     }
 
     function controllerResult(result) {
@@ -2170,20 +2102,14 @@
 
         const booleanKeys = [
             'enabled',
-            'autoBuy',
             'scanItems',
             'scanPokemon',
             'scanDiamonds',
-            'autoBuyItems',
-            'autoBuyPokemon',
-            'autoBuyDiamonds',
-            'buyCoins',
-            'buyGems'
+            'fixedRulesEnabled'
         ];
         const numberKeys = [
             'scanSeconds',
             'watchPercent',
-            'autoBuyPercent',
             'goldReserve',
             'gemReserve',
             'maxCoinsPerBuy',
@@ -2224,7 +2150,6 @@
 
         config.scanSeconds = Math.max(1, Number(config.scanSeconds) || 5);
         config.watchPercent = Math.max(1, Number(config.watchPercent) || 70);
-        config.autoBuyPercent = Math.max(1, Number(config.autoBuyPercent) || 40);
         config.minItemUnits = Math.max(1, Number(config.minItemUnits) || 1);
         config.minPokemonSamples = Math.max(1, Number(config.minPokemonSamples) || 1);
         config.pokemonHistoryPages = Math.max(1, Number(config.pokemonHistoryPages) || 12);
@@ -2391,197 +2316,55 @@
     }
 
 
-    function ownedQuantity(itemId) {
-        return Math.max(0, Number(state.ownedItems.get(Number(itemId)) || 0));
-    }
-
-    function ownListedQuantity(itemId, currency) {
-        return state.ownListings.reduce((total, listing) => {
-            if (!listing || Number(listing.itemId) !== Number(itemId)) return total;
-            if ((listing.moeda === 'orb' ? 'orb' : 'gold') !== currency) return total;
-            if (listing.estado && listing.estado !== 'aberto') return total;
-            return total + Math.max(1, Number(listing.qtd || 1));
-        }, 0);
-    }
-
-    function handleOwnListings(message) {
-        state.ownListings = Array.isArray(message.linhas) ? message.linhas.slice() : [];
-        state.ownListingsAt = Date.now();
-        state.ownListingsPendingAt = 0;
-        queueRender();
-    }
-
-    function requestOwnListings() {
-        const now = Date.now();
-        if (state.ownListingsPendingAt && now - state.ownListingsPendingAt < 6000) return false;
-        if (!sendBackground({ t: 'market.meus' })) return false;
-        state.ownListingsPendingAt = now;
-        return true;
-    }
-
-    function finishPendingSell(reason) {
-        const pending = state.pendingSell;
-        if (!pending) return;
-        state.pendingSell = null;
-        state.ownListingsAt = 0;
-        state.ownListingsPendingAt = 0;
-        const key = String(pending.itemId) + ':' + pending.currency;
-        state.attemptedSales.set(key, Date.now() + (
-            reason === 'refused' ? 10_000 : reason === 'server-confirmed' ? 30_000 : 60_000
-        ));
-        if (reason === 'server-confirmed') {
-            addLog('AUTO SELL · ' + pending.name + ' · ' + pending.qty + ' × ' +
-                num(pending.price) + ' ' + (pending.currency === 'orb' ? 'Gems' : 'Coins') +
-                ' · confirmed');
-        } else if (reason === 'refused') {
-            addLog('AUTO SELL · ' + pending.name + ' · refused');
-        } else {
-            addLog('AUTO SELL · ' + pending.name +
-                ' · outcome unverified; refreshing own listings before retry');
-        }
-        setTimeout(requestOwnListings, 500);
-        queueRender();
-    }
-
-    function sendItemSale(itemId, currency, qty, price, source) {
-        if (state.pendingSell || state.pendingBuy) return false;
-        itemId = Number(itemId);
-        qty = Math.floor(Number(qty));
-        price = Math.floor(Number(price));
-        if (!(itemId > 0) || !(qty > 0) || !(price > 0)) return false;
-        if (qty > ownedQuantity(itemId)) return false;
-        if (ownListedQuantity(itemId, currency) > 0) return false;
-        if (Number(state.attemptedSales.get(String(itemId) + ':' + currency) || 0) > Date.now()) return false;
-
-        const sent = send({
-            t: 'market.criar',
-            tipo: 'item',
-            itemId,
-            pokemonId: null,
-            caixaId: null,
-            casaId: null,
-            bicicletaId: null,
-            qtd: qty,
-            preco: price,
-            moeda: currency,
-            dias: null
-        });
-        if (!sent) return false;
-
-        state.pendingSell = {
-            itemId, currency, qty, price,
-            source: String(source || 'AUTO SELL'),
-            name: catalogName(itemId),
-            sentAt: Date.now()
-        };
-        addLog(String(source || 'AUTO SELL') + ' · ' + catalogName(itemId) + ' · ' +
-            qty + ' × ' + num(price) + ' ' + (currency === 'orb' ? 'Gems' : 'Coins'));
-        setTimeout(() => {
-            if (state.pendingSell && Date.now() - state.pendingSell.sentAt >= 6000) {
-                finishPendingSell('timeout');
-            }
-        }, 6100);
-        return true;
-    }
-
     function automationDetail(itemId, currency) {
         const key = String(itemId) + ':' + currency;
-        state.loadedItemKeys.add(key);
+        state.ruleItemKeys.add(key);
         const detail = state.itemOfferDetails.get(key);
-        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 12000) {
-            queueItemDetail(itemId, currency);
-        }
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 20000) queueItemDetail(itemId, currency);
         return detail;
     }
 
     function fixedRuleCandidate(rule) {
         const detail = state.itemOfferDetails.get(String(rule.itemId) + ':' + rule.currency);
-        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 20000) return null;
-        return Array.from(state.candidates.values())
-            .filter(candidate =>
-                candidate.kind === 'item' &&
-                Number(candidate.itemId) === Number(rule.itemId) &&
-                candidate.currency === rule.currency &&
-                Number(candidate.price) > 0 &&
-                Number(candidate.price) <= Number(rule.buyMax || 0) &&
-                (!candidate.retainedUntil || candidate.retainedUntil <= serverNow())
-            )
-            .sort((a, b) => Number(a.price) - Number(b.price) || Number(a.listingId) - Number(b.listingId))[0] || null;
-    }
-
-    function automationSellQuantity(rule) {
-        // List every unreserved unit. The already-listed and pending-sale guards
-        // remain in sendItemSale(), so one rule never creates duplicate orders.
-        return Math.floor(Math.max(0, ownedQuantity(rule.itemId) -
-            Math.max(0, Number(rule.keepQty || 0))));
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 45000) return null;
+        // Read listings directly, bypassing the opportunity/reference-% filters.
+        const available = detail.offers.filter(offer => {
+            const id = Number(offer?.id), price = Number(offer?.preco);
+            return Number.isSafeInteger(id) && id > 0 &&
+                Number.isFinite(price) && price > 0 && price <= rule.buyMax &&
+                Number(offer.qtd || 1) > 0 && !isOwnListing(offer) &&
+                !(retentionUntil(offer) > serverNow()) &&
+                Number(state.attemptedListings.get(id) || 0) <= Date.now();
+        }).sort((a, b) => Number(a.preco) - Number(b.preco) || Number(a.id) - Number(b.id));
+        const offer = available[0];
+        if (!offer) return null;
+        const ref = itemReference(rule.itemId, rule.currency);
+        const average = Number(ref?.average || 0);
+        return {
+            key: 'rule:' + rule.itemId + ':' + rule.currency + ':' + offer.id,
+            kind: 'item', listingId: Number(offer.id), itemId: rule.itemId,
+            name: catalogName(rule.itemId), currency: rule.currency,
+            price: Number(offer.preco), qty: Math.max(1, Math.floor(Number(offer.qtd || 1))),
+            average, ratio: average > 0 ? Number(offer.preco) / average : 1, retainedUntil: 0
+        };
     }
 
     function runMarketAutomation() {
-        if (!config.enabled || gameIsLoading()) return;
+        if (!config.enabled || !config.fixedRulesEnabled || gameIsLoading()) return;
         if (!state.socket || state.socket.readyState !== 1) return;
-        if (q('#modal .cm-folha')) return;
-        if (state.pendingBuy || state.pendingSell) return;
-
+        if (q('#modal .cm-folha') || state.pendingBuy) return;
         const now = Date.now();
         if (now - Number(state.automationLastRunAt || 0) < 1000) return;
         state.automationLastRunAt = now;
-
-        const fixedRules = config.fixedRulesEnabled ? sanitizeFixedItemRules(config.fixedItemRules) : [];
-        const autoSellRules = config.autoSellEnabled ? sanitizeAutoSellRules(config.autoSellRules) : [];
-        const hasSellRules =
-            fixedRules.some(rule => rule.sellEnabled && rule.sellPrice > 0) ||
-            autoSellRules.some(rule => rule.enabled);
-
-        if (hasSellRules && now - Number(state.ownListingsAt || 0) > 15000) {
-            requestOwnListings();
-            return;
-        }
-
-        if (autoSellRules.length && now - Number(state.itemSummaryAt || 0) > 30000) {
-            requestItemSummary(true);
-            return;
-        }
-
-        for (const rule of fixedRules) {
-            if (rule.buyEnabled && rule.buyMax > 0) automationDetail(rule.itemId, rule.currency);
-        }
-        for (const rule of autoSellRules) {
-            if (rule.enabled && automationSellQuantity(rule) > 0) automationDetail(rule.itemId, rule.currency);
-        }
-
-        for (const rule of fixedRules) {
-            if (!rule.buyEnabled || !(rule.buyMax > 0)) continue;
+        const rules = sanitizeFixedItemRules(config.fixedItemRules)
+            .filter(rule => rule.buyEnabled && rule.buyMax > 0);
+        state.ruleItemKeys = new Set(rules.map(rule => String(rule.itemId) + ':' + rule.currency));
+        for (const rule of rules) automationDetail(rule.itemId, rule.currency);
+        // A cooled-down listing must never block another offer for the same item.
+        for (const rule of rules) {
             const candidate = fixedRuleCandidate(rule);
-            if (!candidate) continue;
-            // Buy all affordable units from this offer; currency reserve and
-            // per-transaction spending limits are enforced by tryBuy().
-            if (tryBuy(candidate, false, null, true)) return;
-        }
-
-        for (const rule of fixedRules) {
-            if (!rule.sellEnabled || !(rule.sellPrice > 0)) continue;
-            const qty = automationSellQuantity(rule);
-            if (qty < 1 || ownListedQuantity(rule.itemId, rule.currency) > 0) continue;
-            if (sendItemSale(rule.itemId, rule.currency, qty, rule.sellPrice, 'RULE SELL')) return;
-        }
-
-        const fixedSellKeys = new Set(
-            fixedRules.filter(rule => rule.sellEnabled && rule.sellPrice > 0)
-                .map(rule => String(rule.itemId) + ':' + rule.currency)
-        );
-        for (const rule of autoSellRules) {
-            if (!rule.enabled) continue;
-            const key = String(rule.itemId) + ':' + rule.currency;
-            if (fixedSellKeys.has(key)) continue;
-            const qty = automationSellQuantity(rule);
-            if (qty < 1 || ownListedQuantity(rule.itemId, rule.currency) > 0) continue;
-            const recommendation = sellPriceRecommendation(rule.itemId, rule.currency);
-            const price = rule.mode === 'patient'
-                ? Number(recommendation.patientPrice || 0)
-                : Number(recommendation.price || 0);
-            if (!(price > 0)) continue;
-            if (sendItemSale(rule.itemId, rule.currency, qty, price,
-                rule.mode === 'patient' ? 'PATIENT SELL' : 'RECOMMENDED SELL')) return;
+            if (candidate && purchaseQuantity(candidate) > 0 &&
+                tryBuy(candidate, false, null, true)) return;
         }
     }
 
@@ -2686,13 +2469,10 @@
             }
             // Game errors unrelated to an order must not clear an in-flight order.
             const listingId = Number(message.listingId ?? message.anuncioId ?? message.vendaId);
-            const itemId = Number(message.itemId);
             if (state.pendingBuy && listingId > 0 && listingId === state.pendingBuy.listingId) {
                 addLog('Purchase refused: ' + String(message.chave || message.msg || 'server error'));
                 finishPendingBuy('refused');
-            } else if (state.pendingSell && itemId > 0 && itemId === state.pendingSell.itemId) {
-                addLog('AUTO SELL · refused · ' + String(message.chave || message.msg || 'server error'));
-                finishPendingSell('refused');
+
             }
             return;
         }
@@ -2710,16 +2490,6 @@
                         event.anuncio?.id, event.listing?.id];
                     if (ids.some(id => Number(id) > 0 && Number(id) === state.pendingBuy.listingId)) {
                         finishPendingBuy('server-confirmed');
-                    }
-                }
-                if (event?.k === 'marketCriado' && state.pendingSell) {
-                    const itemId = Number(event.itemId ?? event.idItem ?? event.item?.id ?? event.anuncio?.itemId);
-                    const price = Number(event.preco ?? event.price ?? event.anuncio?.preco);
-                    const currency = event.moeda ?? event.currency ?? event.anuncio?.moeda;
-                    if (itemId > 0 && itemId === state.pendingSell.itemId &&
-                        price > 0 && price === state.pendingSell.price &&
-                        (currency == null || currency === state.pendingSell.currency)) {
-                        finishPendingSell('server-confirmed');
                     }
                 }
             }
@@ -2755,10 +2525,6 @@
             }
         }
 
-        if (message.aba === 'meus') {
-            handleOwnListings(message);
-            return;
-        }
         if (message.aba === 'itens') {
             handleItemSummary(message);
             return;
@@ -3003,11 +2769,6 @@
             '.moth-mw-automation-block{margin-top:12px;padding:11px;border:1px solid var(--mad-linha,#3a2824);border-radius:9px;background:var(--vao,#21191d)}',
             '.moth-mw-automation-block.primary{border-color:color-mix(in srgb,var(--rx,#84325f) 52%,var(--mad-linha,#3a2824))}',
             '.moth-mw-automation-status{padding:11px;border-radius:9px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
-            '.moth-mw-auto-status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}',
-            '.moth-mw-auto-status-pill{display:flex;align-items:center;gap:8px;min-width:0;padding:8px;border-radius:7px;background:rgba(255,255,255,.035);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
-            '.moth-mw-auto-status-pill.on{box-shadow:inset 0 0 0 1px var(--rx,#84325f);background:color-mix(in srgb,var(--vao,#21191d) 82%,var(--rx,#84325f) 18%)}',
-            '.moth-mw-auto-dot{width:8px;height:8px;border-radius:50%;background:var(--sobre-mad-dim,#777);flex:none}.moth-mw-auto-status-pill.on .moth-mw-auto-dot{background:var(--seta,#efc66b)}',
-            '.moth-mw-auto-status-pill div{min-width:0;display:flex;flex-direction:column;gap:2px}.moth-mw-auto-status-pill b{font-size:10px}.moth-mw-auto-status-pill small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}',
             '.moth-mw-master-row{margin:8px 0}.moth-mw-master-row .moth-mw-setting{padding:0}.moth-mw-master-row .moth-mw-setting-help{display:none}',
             '.moth-mw-rule-add-card{display:grid;gap:8px;margin:9px 0 11px;padding:9px;border-radius:8px;background:rgba(255,255,255,.03);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}',
             '.moth-mw-rule-add-search{display:grid;grid-template-columns:minmax(150px,.8fr) minmax(190px,1.2fr);gap:7px}.moth-mw-rule-add-fields{display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));gap:7px}',
@@ -3020,7 +2781,6 @@
             '.moth-mw-rule-card-head>label{min-width:92px}.moth-mw-rule-fields{display:grid;grid-template-columns:repeat(4,minmax(82px,1fr));gap:7px}.moth-mw-rule-fields.compact{grid-template-columns:repeat(2,minmax(86px,1fr))}',
             '.moth-mw-rule-side{display:grid;gap:7px;padding:8px;border-radius:7px;background:rgba(0,0,0,.08);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-rule-side-head{display:flex;align-items:center;justify-content:space-between}',
             '.moth-mw-switch{display:flex!important;flex-direction:row!important;align-items:center!important;gap:6px!important;color:var(--sobre-mad,#eee)!important}.moth-mw-switch input{width:auto!important;flex:none}',
-            '.moth-mw-targets{display:grid;grid-template-columns:1fr 1fr;gap:6px}.moth-mw-target-chip{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:6px 7px;border-radius:6px;background:rgba(0,0,0,.1);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-target-chip.selected{box-shadow:inset 0 0 0 1px var(--rx,#84325f);background:color-mix(in srgb,var(--vao,#21191d) 84%,var(--rx,#84325f) 16%)}.moth-mw-target-chip small{font-size:8px;color:var(--sobre-mad-dim,#aaa)}.moth-mw-target-chip b{font-size:11px}',
             '.moth-mw-btn.danger{background:transparent;color:#e7a4a4;box-shadow:inset 0 0 0 1px rgba(210,90,90,.55)}.moth-mw-btn.danger:hover{background:rgba(180,60,60,.13)}',
             '.moth-mw-rule-notice{margin:8px 0;padding:7px 9px;border-radius:6px;font-size:10px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-rule-notice.warn{box-shadow:inset 0 0 0 1px var(--seta,#efc66b)}.moth-mw-rule-notice.ok{box-shadow:inset 0 0 0 1px var(--rx,#84325f)}',
             '.moth-mw-advanced{margin-top:12px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-advanced>summary{padding:10px 11px;cursor:pointer;font-size:11px;font-weight:800}.moth-mw-advanced-body{padding:0 10px 10px}.moth-mw-advanced-note{font-size:9px;color:var(--sobre-mad-dim,#aaa);margin:0 0 8px}',
@@ -3175,13 +2935,6 @@
         scanItems: 'Scan ordinary market items and let you inspect their current offers.',
         scanPokemon: 'Scan Pokémon listings and compare them with completed-sale history.',
         scanDiamonds: 'Scan diamond listings and compare prices when a reference is available.',
-        autoBuy: 'Master switch. Automatic buying still requires a category, currency, price, and budget to pass all checks.',
-        autoBuyPercent: 'Maximum price for automatic buying, as a share of the reference. 40% means at least 60% below reference.',
-        autoBuyItems: 'Allow automatic purchases of ordinary items.',
-        autoBuyPokemon: 'Allow automatic purchases of Pokémon when enough sale samples exist.',
-        autoBuyDiamonds: 'Allow automatic purchases of diamonds when a usable reference exists.',
-        buyCoins: 'Allow automatic purchases using Coins. Manual buys still obey the available balance and spending caps.',
-        buyGems: 'Allow automatic purchases using Gems. Manual buys still obey the available balance and spending caps.',
         goldReserve: 'Money that must remain untouched. This is subtracted before calculating an affordable purchase.',
         gemReserve: 'Gems that must remain untouched. This is subtracted before calculating an affordable purchase.',
         maxCoinsPerBuy: 'Maximum Coin spend on one purchase. Set to 0 for no extra cap beyond your reserve and balance.',
@@ -3192,7 +2945,6 @@
     });
     const CONFIG_LIMITS = Object.freeze({
         watchPercent: { min: 1, max: 100 },
-        autoBuyPercent: { min: 1, max: 100 },
         scanSeconds: { min: 1, max: 120 },
         minItemUnits: { min: 1, max: 1000000 },
         minPokemonSamples: { min: 1, max: 1000000 },
@@ -3329,7 +3081,6 @@
         const attemptedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
         const recentlyAttempted = attemptedUntil > Date.now();
         const canBuy = !state.pendingBuy && !recentlyAttempted && !retainedSeconds && purchaseQuantity(candidate) > 0;
-        const auto = candidateCanAutoBuy(candidate);
         const total = candidate.kind === 'item' || candidate.kind === 'diamond' ? candidate.price * candidate.qty : candidate.price;
         let referenceLabel;
         if (candidate.kind === 'item') {
@@ -3352,7 +3103,7 @@
         const availableLabel = retainedSeconds ? tr('retained · {seconds}s', { seconds: retainedSeconds }) : tr('available');
         const buyLabel = state.pendingBuy?.candidateKey === candidate.key ? tr('Buying…')
             : retainedSeconds ? tr('Wait') : recentlyAttempted ? tr('Tried recently') : tr('Buy');
-        return '<div class="moth-mw-row' + (candidate.ratio <= autoThresholdFor(candidate) ? ' deep' : '') + '">' +
+        return '<div class="moth-mw-row">' +
             '<div class="moth-mw-name"><b><span class="moth-mw-kind">' + escapeHtml(kind) + '</span>' + escapeHtml(candidate.name) + '</b><span>' +
             ((candidate.kind === 'item' || candidate.kind === 'diamond')
                 ? num(candidate.qty) + ' ' + escapeHtml(quantityLabel) + ' · ' + escapeHtml(tr('total')) + ' ' + num(total)
@@ -3360,7 +3111,7 @@
             '<div><div>' + money(candidate.price, candidate.currency) + '</div><div class="moth-mw-meta">' + escapeHtml(tr('listed')) +
             ((candidate.kind === 'item' || candidate.kind === 'diamond') && candidate.qty > 1 ? escapeHtml(tr(' / unit')) : '') + '</div></div>' +
             '<div class="moth-mw-ref"><div>' + money(Math.round(candidate.average), candidate.currency) + '</div><div class="moth-mw-meta">' + escapeHtml(referenceLabel) + '</div></div>' +
-            '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' + escapeHtml(tr(auto ? 'auto-buy range' : 'watch range')) + '</div></div>' +
+            '<div><div class="moth-mw-discount">−' + pct(discount) + '</div><div class="moth-mw-meta">' + escapeHtml(tr('watch range')) + '</div></div>' +
             '<div class="moth-mw-seller"><b>' + escapeHtml(tr('Seller: {seller}', { seller: candidate.seller })) + '</b><div class="moth-mw-meta">' + escapeHtml(availableLabel) + '</div></div>' +
             '<button type="button" class="moth-mw-btn primary" data-moth-buy="' + escapeHtml(candidate.key) + '"' + (canBuy ? '' : ' disabled') + '>' +
             escapeHtml(buyLabel) + '</button></div>';
@@ -3547,59 +3298,24 @@
     }
 
     function fixedAutomationActiveCount() {
-        if (!config.fixedRulesEnabled) return 0;
+        if (!config.enabled || !config.fixedRulesEnabled) return 0;
         return sanitizeFixedItemRules(config.fixedItemRules)
-            .filter(r => (r.buyEnabled && r.buyMax > 0) || (r.sellEnabled && r.sellPrice > 0)).length;
-    }
-
-    function autoSellActiveCount() {
-        if (!config.autoSellEnabled) return 0;
-        return sanitizeAutoSellRules(config.autoSellRules).filter(r => r.enabled).length;
-    }
-
-    function percentageAutoBuyActive() {
-        return Boolean(config.autoBuy &&
-            (config.autoBuyItems || config.autoBuyPokemon || config.autoBuyDiamonds) &&
-            (config.buyCoins || config.buyGems));
+            .filter(rule => rule.buyEnabled && rule.buyMax > 0).length;
     }
 
     function automationOverviewSummary() {
-        const fixed = fixedAutomationActiveCount(), sell = autoSellActiveCount(), autoBuy = percentageAutoBuyActive();
-        return tr('Fixed {status}', { status: tr(fixed ? 'ON' : 'OFF') }) + ' · ' +
-            tr('Auto-sell {status}', { status: tr(sell ? 'ON' : 'OFF') }) + ' · ' +
-            tr('Auto-buy {status}', { status: tr(autoBuy ? 'ON' : 'OFF') });
+        return tr('Rule-based buying: {status}', { status: tr(fixedAutomationActiveCount() ? 'ON' : 'OFF') });
     }
 
     function automationStatusPanelHtml() {
-        const fixed = fixedAutomationActiveCount(), sell = autoSellActiveCount(), autoBuy = percentageAutoBuyActive();
-        const total = fixed + sell + (autoBuy ? 1 : 0);
-        const pill = (label, active, detail) =>
-            '<div class="moth-mw-auto-status-pill ' + (active ? 'on' : 'off') + '">' +
-            '<span class="moth-mw-auto-dot" aria-hidden="true"></span><div><b>' + escapeHtml(label) +
-            '</b><small>' + escapeHtml(detail) + '</small></div></div>';
+        const active = fixedAutomationActiveCount();
         return '<section class="moth-mw-automation-status" id="moth-mw-automation-status">' +
-            '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Automation status')) + '</h4><span>' +
-            escapeHtml(total ? tr(total === 1 ? '{count} active rule' : '{count} active rules', { count: num(total) }) :
-                tr('No automated market orders are enabled.')) + '</span></div>' +
-            '<div class="moth-mw-auto-status-grid">' +
-            pill(tr('Fixed item rules'), fixed > 0, tr(fixed === 1 ? '{count} active rule' : '{count} active rules', { count: num(fixed) })) +
-            pill(tr('Experimental auto-sell'), sell > 0, tr(sell === 1 ? '{count} active rule' : '{count} active rules', { count: num(sell) })) +
-            pill(tr('Percentage auto-buy'), autoBuy, tr(autoBuy ? 'Active' : 'Inactive')) +
-            '</div></section>';
-    }
-
-    function autoSellTargets(rule) {
-        const r = sellPriceRecommendation(rule.itemId, rule.currency);
-        return { recommended: Number(r.price || 0), patient: Number(r.patientPrice || 0) };
-    }
-
-    function autoSellTargetsHtml(rule) {
-        const t = autoSellTargets(rule);
-        const chip = (label, price, selected) =>
-            '<span class="moth-mw-target-chip' + (selected ? ' selected' : '') + '"><small>' +
-            escapeHtml(label) + '</small><b>' + escapeHtml(price > 0 ? num(price) : tr('No price yet')) + '</b></span>';
-        return chip(tr('Recommended target'), t.recommended, rule.mode === 'recommended') +
-            chip(tr('Patient target'), t.patient, rule.mode === 'patient');
+            '<div class="moth-mw-section-title"><h4>' + escapeHtml(tr('Rule-based buying')) + '</h4><span>' +
+            escapeHtml(active ? tr(active === 1 ? '{count} active rule' : '{count} active rules', { count: num(active) }) :
+                tr('No automatic purchases enabled.')) + '</span></div>' +
+            '<p class="moth-mw-rule-hint">' +
+            escapeHtml(tr('Enable rule-based buying and at least one Buy rule with a maximum unit price. No other buying switches are required. Coin/Gem reserves and per-purchase caps still apply.')) +
+            '</p></section>';
     }
 
     function refreshAutomationLive(content) {
@@ -3611,19 +3327,12 @@
             const fresh = tpl.content.firstElementChild;
             if (fresh && statusHost.innerHTML !== fresh.innerHTML) statusHost.innerHTML = fresh.innerHTML;
         }
-        const autoRules = new Map(sanitizeAutoSellRules(config.autoSellRules).map(r => [r.id, r]));
-        const fixedRules = new Map(sanitizeFixedItemRules(config.fixedItemRules).map(r => [r.id, r]));
+        const rules = new Map(sanitizeFixedItemRules(config.fixedItemRules).map(r => [r.id, r]));
         for (const node of qa('[data-moth-rule-status]', content)) {
-            const r = node.dataset.ruleType === 'auto-sell' ? autoRules.get(node.dataset.ruleId) : fixedRules.get(node.dataset.ruleId);
-            if (!r) continue;
-            const next = automationRuleStatus(r.itemId, r.currency);
+            const rule = rules.get(node.dataset.ruleId);
+            if (!rule) continue;
+            const next = fixedRuleStatus(rule);
             if (node.textContent !== next) node.textContent = next;
-        }
-        for (const node of qa('[data-moth-auto-targets]', content)) {
-            const r = autoRules.get(node.dataset.ruleId);
-            if (!r) continue;
-            const next = autoSellTargetsHtml(r);
-            if (node.innerHTML !== next) node.innerHTML = next;
         }
         const host = q('#moth-mw-rule-notice', content), n = state.automationNotice;
         if (host) {
@@ -3667,11 +3376,19 @@
         ).join('');
     }
 
-    function automationRuleStatus(itemId, currency) {
-        return tr('Owned: {owned} · listed: {listed}', {
-            owned: num(ownedQuantity(itemId)),
-            listed: num(ownListedQuantity(itemId, currency))
-        });
+    function fixedRuleStatus(rule) {
+        if (!rule.buyEnabled || !(rule.buyMax > 0)) return tr('Rule paused');
+        if (!config.enabled) return tr('Moth Watch disabled');
+        if (!config.fixedRulesEnabled) return tr('Enable rule-based buying above');
+        if (!state.socket || state.socket.readyState !== 1 || gameIsLoading()) return tr('Waiting for game connection');
+        const spendable = Math.max(0, balanceFor(rule.currency) - reserveFor(rule.currency));
+        if (spendable < 1) return tr('Insufficient spendable balance');
+        const detail = state.itemOfferDetails.get(String(rule.itemId) + ':' + rule.currency);
+        if (!detail || Date.now() - Number(detail.updatedAt || 0) > 45000) return tr('Checking listings…');
+        const candidate = fixedRuleCandidate(rule);
+        if (candidate && purchaseQuantity(candidate) > 0) return tr('Eligible listing available');
+        if (candidate) return tr('Insufficient spendable balance');
+        return tr('Monitoring · no eligible listing');
     }
 
     function ruleNumber(label, attrs, value, min = 0) {
@@ -3689,65 +3406,6 @@
         return `<label class="moth-mw-switch moth-mw-rule-toggle"><input type="checkbox" ${attrs}${checked ? ' checked' : ''}><span>${escapeHtml(tr(label))}</span></label>`;
     }
 
-    function autoSellRulesHtml() {
-        const rules = sanitizeAutoSellRules(config.autoSellRules);
-        const cards = rules.map(rule => {
-            const id = escapeHtml(rule.id);
-            return `<article class="moth-mw-rule-card" data-moth-auto-sell-row="${id}">
-                <div class="moth-mw-rule-card-head">
-                    <div class="moth-mw-rule-title">
-                        <b>${escapeHtml(catalogName(rule.itemId))}</b>
-                        <small data-moth-rule-status data-rule-type="auto-sell" data-rule-id="${id}">${escapeHtml(automationRuleStatus(rule.itemId, rule.currency))}</small>
-                    </div>
-                    ${ruleSwitch('Enabled', `data-moth-auto-sell-field="enabled" data-rule-id="${id}"`, rule.enabled)}
-                </div>
-                <div class="moth-mw-rule-fields">
-                    ${ruleCurrency(`data-moth-auto-sell-field="currency" data-rule-id="${id}"`, rule.currency)}
-                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Price mode'))}</span>
-                        <select data-moth-auto-sell-field="mode" data-rule-id="${id}">
-                            <option value="recommended"${rule.mode === 'recommended' ? ' selected' : ''}>${escapeHtml(tr('Recommended'))}</option>
-                            <option value="patient"${rule.mode === 'patient' ? ' selected' : ''}>${escapeHtml(tr('Patient'))}</option>
-                        </select>
-                    </label>
-                    ${ruleNumber('Keep quantity', `data-moth-auto-sell-field="keepQty" data-rule-id="${id}"`, rule.keepQty)}
-                </div>
-                <div class="moth-mw-targets" data-moth-auto-targets data-rule-id="${id}">${autoSellTargetsHtml(rule)}</div>
-                <div class="moth-mw-rule-card-foot">
-                    <span class="moth-mw-rule-note">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</span>
-                    <button type="button" class="moth-mw-btn danger" data-moth-remove-auto-sell="${id}">${escapeHtml(tr('Remove'))}</button>
-                </div>
-            </article>`;
-        }).join('');
-        return `<section class="moth-mw-automation-block">
-            <div class="moth-mw-block-heading"><h4>${escapeHtml(tr('Experimental auto-sell'))}</h4>
-                <p>${escapeHtml(tr('Experimental auto-sell uses live recommendations. Review both targets before enabling the master switch.'))}</p>
-            </div>
-            <div class="moth-mw-master-row">${configField('Enable experimental auto-sell', 'autoSellEnabled', 'checkbox')}</div>
-            <div class="moth-mw-rule-add-card">
-                <h5>${escapeHtml(tr('Create an auto-sell rule'))}</h5>
-                <div class="moth-mw-rule-add-search">
-                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Find item'))}</span><input type="search" id="moth-auto-sell-search" placeholder="${escapeHtml(tr('Search items…'))}"></label>
-                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Item'))}</span><select id="moth-auto-sell-item">${automationItemOptions()}</select></label>
-                </div>
-                <div class="moth-mw-rule-add-fields">
-                    ${ruleCurrency('id="moth-auto-sell-currency"', 'gold')}
-                    <label class="moth-mw-rule-field"><span>${escapeHtml(tr('Price mode'))}</span><select id="moth-auto-sell-mode">
-                        <option value="recommended">${escapeHtml(tr('Recommended'))}</option>
-                        <option value="patient">${escapeHtml(tr('Patient'))}</option>
-                    </select></label>
-                    ${ruleNumber('Keep quantity', 'id="moth-auto-sell-keep"', 0)}
-                </div>
-                <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
-                <div class="moth-mw-rule-add-actions">
-                    <span>${escapeHtml(tr('Adding a rule does not enable the master switch.'))}</span>
-                    <button type="button" class="moth-mw-btn primary" id="moth-add-auto-sell">${escapeHtml(tr('Add auto-sell item'))}</button>
-                </div>
-            </div>
-            <h5 class="moth-mw-rule-list-title">${escapeHtml(tr('Configured rules'))} (${rules.length})</h5>
-            <div class="moth-mw-rule-list">${cards || `<div class="moth-mw-empty">${escapeHtml(tr('No auto-sell items configured.'))}</div>`}</div>
-        </section>`;
-    }
-
     function fixedRulesHtml() {
         const rules = sanitizeFixedItemRules(config.fixedItemRules);
         const cards = rules.map(rule => {
@@ -3755,7 +3413,7 @@
             return `<article class="moth-mw-rule-card fixed" data-moth-fixed-row="${id}">
                 <div class="moth-mw-rule-card-head">
                     <div class="moth-mw-rule-title"><b>${escapeHtml(catalogName(rule.itemId))}</b>
-                        <small data-moth-rule-status data-rule-type="fixed" data-rule-id="${id}">${escapeHtml(automationRuleStatus(rule.itemId, rule.currency))}</small>
+                        <small data-moth-rule-status data-rule-type="fixed" data-rule-id="${id}">${escapeHtml(fixedRuleStatus(rule))}</small>
                     </div>
                     ${ruleCurrency(`data-moth-fixed-field="currency" data-rule-id="${id}"`, rule.currency)}
                 </div>
@@ -3764,14 +3422,6 @@
                         <div class="moth-mw-rule-side-head">${ruleSwitch('Buy', `data-moth-fixed-field="buyEnabled" data-rule-id="${id}"`, rule.buyEnabled)}</div>
                         ${ruleNumber('Buy at or below', `data-moth-fixed-field="buyMax" data-rule-id="${id}"`, rule.buyMax)}
                         <p class="moth-mw-rule-hint">${escapeHtml(tr('Buy every available unit affordable within reserves and purchase limits.'))}</p>
-                    </section>
-                    <section class="moth-mw-rule-side sell">
-                        <div class="moth-mw-rule-side-head">${ruleSwitch('Sell', `data-moth-fixed-field="sellEnabled" data-rule-id="${id}"`, rule.sellEnabled)}</div>
-                        <div class="moth-mw-rule-fields compact">
-                            ${ruleNumber('Sell at', `data-moth-fixed-field="sellPrice" data-rule-id="${id}"`, rule.sellPrice)}
-                            ${ruleNumber('Keep quantity', `data-moth-fixed-field="keepQty" data-rule-id="${id}"`, rule.keepQty)}
-                        </div>
-                        <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
                     </section>
                 </div>
                 <div class="moth-mw-rule-card-foot">
@@ -3782,9 +3432,9 @@
         }).join('');
         return `<section class="moth-mw-automation-block primary">
             <div class="moth-mw-block-heading"><h4>${escapeHtml(tr('Fixed item rules'))}</h4>
-                <p>${escapeHtml(tr('Use exact thresholds such as: buy Cocoon Stone at or below 30,000 and sell it at 45,000. These rules are independent of percentage-based auto-buy.'))}</p>
+                <p>${escapeHtml(tr('Set an item and its maximum unit price, for example Cocoon Stone at 30,000 Coins. Only matching offers can be purchased.'))}</p>
             </div>
-            <div class="moth-mw-master-row">${configField('Enable fixed item rules', 'fixedRulesEnabled', 'checkbox')}</div>
+            <div class="moth-mw-master-row">${configField('Enable rule-based buying', 'fixedRulesEnabled', 'checkbox')}</div>
             <div class="moth-mw-rule-add-card">
                 <h5>${escapeHtml(tr('Create a fixed rule'))}</h5>
                 <div class="moth-mw-rule-add-search">
@@ -3799,18 +3449,10 @@
                         ${ruleNumber('Buy at or below', 'id="moth-fixed-buy"', 0)}
                         <p class="moth-mw-rule-hint">${escapeHtml(tr('Buy every available unit affordable within reserves and purchase limits.'))}</p>
                     </section>
-                    <section class="moth-mw-rule-side sell">
-                        <h6>${escapeHtml(tr('Sell'))}</h6>
-                        <div class="moth-mw-rule-fields compact">
-                            ${ruleNumber('Sell at', 'id="moth-fixed-sell"', 0)}
-                            ${ruleNumber('Keep quantity', 'id="moth-fixed-keep"', 0)}
-                        </div>
-                        <p class="moth-mw-rule-hint">${escapeHtml(tr('List every owned unit except the quantity kept in inventory.'))}</p>
-                    </section>
                 </div>
-                <p class="moth-mw-rule-hint">${escapeHtml(tr('Only set the prices for the actions you want. 0 disables that action.'))}</p>
+                <p class="moth-mw-rule-hint">${escapeHtml(tr('Only a positive buy price activates a rule.'))}</p>
                 <div class="moth-mw-rule-add-actions">
-                    <span>${escapeHtml(tr('Adding a rule does not enable the master switch.'))}</span>
+                    <span>${escapeHtml(tr('Adding a rule does not turn on rule-based buying; enable the switch above.'))}</span>
                     <button type="button" class="moth-mw-btn primary" id="moth-add-fixed-rule">${escapeHtml(tr('Add fixed rule'))}</button>
                 </div>
             </div>
@@ -3920,17 +3562,7 @@
                     configField('Keep Gems in reserve', 'gemReserve', 'number', '') +
                     configField('Maximum Coins per purchase', 'maxCoinsPerBuy', 'number', '0 = no extra cap') +
                     configField('Maximum Gems per purchase', 'maxGemsPerBuy', 'number', '0 = no extra cap') + '</div></section>' +
-                    fixedRulesHtml() + autoSellRulesHtml() +
-                    '<div class="moth-mw-settings-grid">' +
-                    '<section class="moth-mw-settings-card"><h4>' + escapeHtml(tr('Percentage auto-buy')) + '</h4><p class="moth-mw-setting-help">' +
-                    escapeHtml(tr('Leave this master switch off until you have reviewed the price threshold, currency permissions, and spending limits.')) +
-                    '</p><div class="moth-mw-config">' +
-                    configField('Enable automatic buying', 'autoBuy', 'checkbox') +
-                    configField('Auto-buy price threshold', 'autoBuyPercent', 'range', '%') +
-                    configField('Auto-buy items', 'autoBuyItems', 'checkbox') + configField('Auto-buy Pokémon', 'autoBuyPokemon', 'checkbox') +
-                    configField('Auto-buy diamonds', 'autoBuyDiamonds', 'checkbox') +
-                    configField('Allow Coin purchases', 'buyCoins', 'checkbox') + configField('Allow Gem purchases', 'buyGems', 'checkbox') +
-                    '</div></section></div>' +
+                    fixedRulesHtml() +
                     '<details class="moth-mw-advanced"><summary>' + escapeHtml(tr('Advanced monitoring & references')) +
                     '</summary><div class="moth-mw-advanced-body"><p class="moth-mw-advanced-note">' +
                     escapeHtml(tr('Scanning and reference-quality controls. These do not authorize orders by themselves.')) +
@@ -4033,43 +3665,23 @@
                 });
                 return;
             }
-            if (target.closest('#moth-add-auto-sell')) {
-                const itemId = Number(q('#moth-auto-sell-item', panel)?.value);
-                if (!(itemId > 0)) { setAutomationNotice(tr('Choose an item before adding a rule.'), 'warn'); return; }
-                const currency = q('#moth-auto-sell-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
-                const mode = q('#moth-auto-sell-mode', panel)?.value === 'patient' ? 'patient' : 'recommended';
-                const keepQty = Math.max(0, Math.floor(Number(q('#moth-auto-sell-keep', panel)?.value) || 0));
-                const rules = sanitizeAutoSellRules(config.autoSellRules), name = catalogName(itemId);
-                if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
-                    setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
-                }
-                rules.push({ id: newAutomationRuleId('autosell'), itemId, currency, mode, enabled: true, keepQty });
-                config.autoSellRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
-            }
-            const removeAutoSell = target.closest('[data-moth-remove-auto-sell]');
-            if (removeAutoSell) {
-                const rules = sanitizeAutoSellRules(config.autoSellRules);
-                const removed = rules.find(r => r.id === removeAutoSell.dataset.mothRemoveAutoSell);
-                config.autoSellRules = rules.filter(r => r.id !== removeAutoSell.dataset.mothRemoveAutoSell);
-                saveConfig(); setAutomationNotice(tr('Rule removed: {name}.', { name: removed ? catalogName(removed.itemId) : tr('Item') }), 'ok'); renderWatch(true); return;
-            }
             if (target.closest('#moth-add-fixed-rule')) {
                 const itemId = Number(q('#moth-fixed-item', panel)?.value);
                 if (!(itemId > 0)) { setAutomationNotice(tr('Choose an item before adding a rule.'), 'warn'); return; }
                 const currency = q('#moth-fixed-currency', panel)?.value === 'orb' ? 'orb' : 'gold';
                 const buyMax = Math.max(0, Math.floor(Number(q('#moth-fixed-buy', panel)?.value) || 0));
-                const sellPrice = Math.max(0, Math.floor(Number(q('#moth-fixed-sell', panel)?.value) || 0));
-                if (!(buyMax > 0) && !(sellPrice > 0)) {
-                    setAutomationNotice(tr('Set a buy price, a sell price, or both before adding a fixed rule.'), 'warn'); return;
+                if (!(buyMax > 0)) {
+                    setAutomationNotice(tr('Set a positive maximum buy price.'), 'warn'); return;
                 }
-                const keepQty = Math.max(0, Math.floor(Number(q('#moth-fixed-keep', panel)?.value) || 0));
                 const rules = sanitizeFixedItemRules(config.fixedItemRules), name = catalogName(itemId);
                 if (rules.some(r => r.itemId === itemId && r.currency === currency)) {
                     setAutomationNotice(tr('A rule for {name} in this currency already exists.', { name }), 'warn'); return;
                 }
-                rules.push({ id: newAutomationRuleId('fixed'), itemId, currency, buyEnabled: buyMax > 0, buyMax,
-                    sellEnabled: sellPrice > 0, sellPrice, keepQty });
-                config.fixedItemRules = rules; saveConfig(); setAutomationNotice(tr('Rule added: {name}.', { name }), 'ok'); renderWatch(true); return;
+                rules.push({ id: newAutomationRuleId('fixed'), itemId, currency, buyEnabled: true, buyMax });
+                config.fixedItemRules = rules; saveConfig();
+                setAutomationNotice(tr(config.fixedRulesEnabled
+                    ? 'Rule added: {name}.' : 'Rule saved: {name}. Turn on rule-based buying to start.', { name }), 'ok');
+                renderWatch(true); return;
             }
             const removeFixed = target.closest('[data-moth-remove-fixed]');
             if (removeFixed) {
@@ -4136,7 +3748,6 @@
                 renderWatch();
                 return;
             }
-            if (target.matches('#moth-auto-sell-search')) { filterAutomationItemSelect(target, q('#moth-auto-sell-item', panel)); return; }
             if (target.matches('#moth-fixed-search')) { filterAutomationItemSelect(target, q('#moth-fixed-item', panel)); return; }
             if (target.matches('input[type="range"][data-moth-cfg]')) {
                 const output = q('[data-moth-cfg-value="' + target.dataset.mothCfg + '"]', panel);
@@ -4147,22 +3758,6 @@
         panel.addEventListener('change', event => {
             const target = event.target instanceof Element ? event.target : null;
             if (!target) return;
-            if (target.matches('[data-moth-auto-sell-field]')) {
-                const id = target.dataset.ruleId;
-                const field = target.dataset.mothAutoSellField;
-                const rules = sanitizeAutoSellRules(config.autoSellRules);
-                const rule = rules.find(entry => entry.id === id);
-                if (!rule) return;
-                if (field === 'enabled') rule.enabled = target.checked;
-                else if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
-                else if (field === 'mode') rule.mode = target.value === 'patient' ? 'patient' : 'recommended';
-                else if (field === 'keepQty') rule.keepQty = Math.max(0, Math.floor(Number(target.value) || 0));
-                else return;
-                config.autoSellRules = rules;
-                saveConfig();
-                queueRender();
-                return;
-            }
             if (target.matches('[data-moth-fixed-field]')) {
                 const id = target.dataset.ruleId;
                 const field = target.dataset.mothFixedField;
@@ -4170,8 +3765,8 @@
                 const rule = rules.find(entry => entry.id === id);
                 if (!rule) return;
                 if (field === 'currency') rule.currency = target.value === 'orb' ? 'orb' : 'gold';
-                else if (field === 'buyEnabled' || field === 'sellEnabled') rule[field] = target.checked;
-                else if (['buyMax', 'sellPrice', 'keepQty'].includes(field)) rule[field] = Math.max(0, Math.floor(Number(target.value) || 0));
+                else if (field === 'buyEnabled') rule.buyEnabled = target.checked;
+                else if (field === 'buyMax') rule.buyMax = Math.max(0, Math.floor(Number(target.value) || 0));
                 else return;
                 config.fixedItemRules = rules;
                 saveConfig();
@@ -4187,6 +3782,14 @@
                     if (output) output.textContent = config[key] + '%';
                 }
                 saveConfig();
+                if (key === 'fixedRulesEnabled') {
+                    if (!config.fixedRulesEnabled) state.ruleItemKeys.clear();
+                    else if (!sanitizeFixedItemRules(config.fixedItemRules).some(rule => rule.buyEnabled && rule.buyMax > 0)) {
+                        setAutomationNotice(tr('Rule-based buying is on, but no Buy rules are active. Create or enable a rule first.'), 'warn');
+                    } else {
+                        setAutomationNotice(tr('Rule-based buying is on. No other purchase switches are required. Spending safeguards still apply.'), 'ok');
+                    }
+                }
                 if (key === 'pokemonHistoryPages' || key === 'minPokemonSamples') ensurePokemonHistory(true);
                 // Spending switches and numeric fields do not need a new market scan.
                 // Only changes to scanning conditions should request fresh data.
@@ -4477,20 +4080,15 @@
             enabled: !!config.enabled,
             scanSeconds: Math.max(1, Number(config.scanSeconds) || 5),
             watchPercent: Math.max(1, Number(config.watchPercent) || 70),
-            autoBuy: !!config.autoBuy,
-            autoBuyPercent: Math.max(1, Number(config.autoBuyPercent) || 40),
             scanItems: !!config.scanItems,
             scanPokemon: !!config.scanPokemon,
             scanDiamonds: !!config.scanDiamonds,
-            autoBuyItems: !!config.autoBuyItems,
-            autoBuyPokemon: !!config.autoBuyPokemon,
-            autoBuyDiamonds: !!config.autoBuyDiamonds,
-            buyCoins: !!config.buyCoins,
-            buyGems: !!config.buyGems,
             goldReserve: Math.max(0, Number(config.goldReserve) || 0),
             gemReserve: Math.max(0, Number(config.gemReserve) || 0),
             maxCoinsPerBuy: Math.max(0, Number(config.maxCoinsPerBuy) || 0),
             maxGemsPerBuy: Math.max(0, Number(config.maxGemsPerBuy) || 0),
+            fixedRulesEnabled: !!config.fixedRulesEnabled,
+            fixedItemRules: sanitizeFixedItemRules(config.fixedItemRules),
             minItemUnits: Math.max(1, Number(config.minItemUnits) || 1),
             minPokemonSamples: Math.max(1, Number(config.minPokemonSamples) || 1),
             pokemonHistoryPages: Math.max(1, Number(config.pokemonHistoryPages) || 12),
@@ -4522,7 +4120,6 @@
                 canBuy: !state.pendingBuy &&
                     !(candidate.retainedUntil && candidate.retainedUntil > serverNow()) &&
                     purchaseQuantity(candidate) > 0,
-                autoBuyEligible: candidateCanAutoBuy(candidate),
                 referenceSource: String(candidate.referenceSource || ''),
                 activeReferenceListings: Number(candidate.activeReferenceListings || 0),
                 serverAverage: Number(candidate.serverAverage || 0)
@@ -4616,9 +4213,6 @@
             if (state.pendingBuy && Date.now() - state.pendingBuy.sentAt > 5000) {
                 finishPendingBuy('watchdog');
             }
-            if (state.pendingSell && Date.now() - state.pendingSell.sentAt > 6500) {
-                finishPendingSell('watchdog');
-            }
             }, 1000);
 
         /*
@@ -4691,7 +4285,7 @@
         }
 
         ensureUi();
-        console.info('[Moth Watch] v0.1.45 loaded');
+        console.info('[Moth Watch] v0.1.50 loaded');
     }
 
     bootstrap();
