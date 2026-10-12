@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.7
+// @version      6.5.8
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -12,6 +12,15 @@
 
 (() => {
     'use strict';
+
+    // Report only this script's version to the native monitor (no account data).
+    const reportMothAddonVersion = () => {
+        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.5.8');
+    };
+    reportMothAddonVersion();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportMothAddonVersion, { once: true });
+    }
 
     const SETTINGS_KEY = 'moth-pokeidle-autocatch-v4';
     const MIN_INTERVAL_MS = 100;

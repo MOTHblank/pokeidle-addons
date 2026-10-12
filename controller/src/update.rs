@@ -1,8 +1,11 @@
+use crate::accounts;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 const RELEASE_API_URL: &str =
     "https://api.github.com/repos/MOTHblank/pokeidle-addons/releases/latest";
@@ -133,9 +136,97 @@ fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
     })
 }
 
+
+/// Versions from the same raw GitHub files used by Violentmonkey.
+/// This is a read-only status check; it never installs or replaces scripts.
+#[derive(Debug, Clone, Default)]
+pub struct AddonVersionStatus {
+    pub checked: bool,
+    pub versions: BTreeMap<String, String>,
+    pub error: Option<String>,
+}
+
+pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
+
+/// Refresh metadata on a worker every six hours without blocking the UI.
+pub fn start_addon_version_check() -> SharedAddonVersionStatus {
+    let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
+    let worker_status = Arc::clone(&status);
+    let spawn_result = thread::Builder::new()
+        .name("addon-version-check".to_string())
+        .spawn(move || loop {
+            let result = fetch_addon_versions();
+            if let Ok(mut state) = worker_status.lock() {
+                match result {
+                    Ok(versions) => {
+                        state.versions = versions;
+                        state.checked = true;
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        crate::logging::warn(&format!("addon version check failed: {error}"));
+                        state.checked = false;
+                        state.error = Some(error);
+                    }
+                }
+            }
+            thread::sleep(Duration::from_secs(6 * 60 * 60));
+        });
+    if let Err(error) = spawn_result {
+        crate::logging::warn(&format!("could not start addon version check: {error}"));
+    }
+    status
+}
+
+fn fetch_addon_versions() -> Result<BTreeMap<String, String>, String> {
+    let mut result = BTreeMap::new();
+    for file in accounts::discover_addon_files()? {
+        let url = format!("https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/{file}");
+        let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        // Only headers are needed; GitHub may serve the complete file anyway.
+        // All I/O and parsing occur on this worker, never on the egui thread.
+        let output = command.args([
+            "--fail", "--silent", "--show-error", "--location",
+            "--range", "0-4095", "--max-time", "8",
+            "--user-agent", "MothController-addon-versions", &url,
+        ]).output().map_err(|error| format!("{file}: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("{file}: curl exited with {}", output.status));
+        }
+        let version = parse_userscript_version(&output.stdout)
+            .ok_or_else(|| format!("{file}: missing valid @version metadata"))?;
+        result.insert(file, version);
+    }
+    Ok(result)
+}
+
+fn parse_userscript_version(contents: &[u8]) -> Option<String> {
+    let header = String::from_utf8_lossy(contents);
+    header.lines().take(50).find_map(|line| {
+        let value = line.trim().strip_prefix("//")?
+            .trim_start().strip_prefix("@version")?.trim();
+        if value.is_empty() || value.len() > 40 ||
+           !value.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-')) {
+            return None;
+        }
+        Some(value.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_newer_version;
+    use super::{is_newer_version, parse_userscript_version};
+
+    #[test]
+    fn reads_only_userscript_version_metadata() {
+        assert_eq!(parse_userscript_version(b"// ==UserScript==\n// @name Demo\n// @version 1.2.3\n// ==/UserScript==").as_deref(), Some("1.2.3"));
+        assert!(parse_userscript_version(b"// @version invalid version").is_none());
+    }
 
     #[test]
     fn abbreviated_release_tag_matches_package_version() {
