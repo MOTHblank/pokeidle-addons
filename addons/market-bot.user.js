@@ -2992,7 +2992,7 @@
             '.moth-mw-btn.danger{background:transparent;color:#e7a4a4;box-shadow:inset 0 0 0 1px rgba(210,90,90,.55)}.moth-mw-btn.danger:hover{background:rgba(180,60,60,.13)}',
             '.moth-mw-rule-notice{margin:8px 0;padding:7px 9px;border-radius:6px;font-size:10px;background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-rule-notice.warn{box-shadow:inset 0 0 0 1px var(--seta,#efc66b)}.moth-mw-rule-notice.ok{box-shadow:inset 0 0 0 1px var(--rx,#84325f)}',
             '.moth-mw-advanced{margin-top:12px;border-radius:8px;background:var(--vao,#21191d);box-shadow:inset 0 0 0 1px var(--mad-linha,#3a2824)}.moth-mw-advanced>summary{padding:10px 11px;cursor:pointer;font-size:11px;font-weight:800}.moth-mw-advanced-body{padding:0 10px 10px}.moth-mw-advanced-note{font-size:9px;color:var(--sobre-mad-dim,#aaa);margin:0 0 8px}',
-            '@media(max-width:900px){.moth-mw-auto-status-grid{grid-template-columns:1fr}.moth-mw-rule-add-search,.moth-mw-rule-add-fields,{grid-template-columns:1fr 1fr}.moth-mw-rule-list{grid-template-columns:1fr}}',
+            '@media(max-width:900px){.moth-mw-auto-status-grid{grid-template-columns:1fr}.moth-mw-rule-add-search,.moth-mw-rule-add-fields{grid-template-columns:1fr 1fr}.moth-mw-rule-list{grid-template-columns:1fr}}',
             '@media(max-width:620px){.moth-mw-rule-add-search,.moth-mw-rule-add-fields,.moth-mw-rule-fields,.moth-mw-rule-fields.compact,.moth-mw-targets{grid-template-columns:1fr}.moth-mw-rule-card-head{flex-direction:column}.moth-mw-rule-card-head>label{width:100%}}',
             '/* Automation workspace: readable at normal zoom, with no six-column forms. */',
             '#moth-mw-view-content[data-view=automation]{display:grid;gap:14px;min-width:0;font-size:13px;line-height:1.5;container-type:inline-size}',
@@ -3053,7 +3053,6 @@
             '#moth-mw-view-content[data-view=automation] .moth-mw-advanced-note{font-size:11px;line-height:1.5}',
             '@container (max-width:750px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search{grid-template-columns:repeat(2,minmax(0,1fr))}}',
             '@container (max-width:570px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search,#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-compose,#moth-mw-view-content[data-view=automation] .moth-mw-budget-card .moth-mw-config,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields.compact{grid-template-columns:1fr}}',
-            '@media(max-width:900px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search{grid-template-columns:repeat(2,minmax(0,1fr))}}',
             '@media(max-width:620px){#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-search,#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-compose,#moth-mw-view-content[data-view=automation] .moth-mw-budget-card .moth-mw-config,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields,#moth-mw-view-content[data-view=automation] .moth-mw-rule-fields.compact{grid-template-columns:1fr}#moth-mw-view-content[data-view=automation] .moth-mw-rule-add-actions .moth-mw-btn{width:100%}}',
             '.moth-mw-setting-control{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px}',
             '.moth-mw-setting-control>span{flex:1}',
@@ -3850,7 +3849,7 @@
         const settingsSignature = JSON.stringify(Object.keys(DEFAULTS).sort().map(key => [key, config[key]]));
         const settingsChanged = state.watchView === 'automation' && !viewChanged &&
             content.dataset.settingsSignature !== settingsSignature &&
-            !(panel.contains(document.activeElement) && document.activeElement.matches('input'));
+            !(content.contains(document.activeElement) && document.activeElement.matches('input, select, textarea'));
         if (forceViewBuild || viewChanged || settingsChanged) {
             content.dataset.view = state.watchView;
             if (state.watchView === 'opportunities') {
@@ -4150,7 +4149,11 @@
                 }
                 saveConfig();
                 if (key === 'pokemonHistoryPages' || key === 'minPokemonSamples') ensurePokemonHistory(true);
-                runScan(true);
+                // Spending switches and numeric fields do not need a new market scan.
+                // Only changes to scanning conditions should request fresh data.
+                if (['scanItems', 'scanPokemon', 'scanDiamonds', 'scanSeconds', 'watchPercent'].includes(key)) {
+                    runScan(true);
+                }
                 queueRender();
                 return;
             }
