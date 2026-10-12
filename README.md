@@ -2,7 +2,7 @@
 
 Addons para **PokéIdle** e um controlador nativo leve para manter até quatro contas em perfis separados do Firefox.
 
-O projeto foi feito para Windows. O controlador usa o Firefox instalado normalmente, com **um perfil isolado por conta**. Os userscripts continuam sendo executados pelo **Violentmonkey**; o controlador não possui um motor próprio de userscripts.
+O controlador funciona no Windows e no Linux e usa o Firefox instalado normalmente, com **um perfil isolado por conta**. Os userscripts continuam sendo executados pelo **Violentmonkey**; o controlador não possui um motor próprio de userscripts.
 
 ## Transparência e desenvolvimento
 
@@ -49,10 +49,11 @@ Para cada conta:
 
 1. Marque **Habilitar**.
 2. Dê um nome para a conta, por exemplo **Main**, **Alt**, **Shiny Hunter** ou o nome que preferir.
-3. Clique nos botões dentro do card da conta, começando por *instalar ViolentMonkey* (gerenciador de scripts).
-4. Feche a janela e clique no botão *Addons* para instalar meus scripts (só controller-bridge é de fato necessário para o funcionamento, mas os outros trazem automações)
-5. Use o **Twitch** na janela de Contas para abrir o login da Twitch naquele perfil.
-3. Abra o jogo nesse perfil e faça login no **PokéIdle**.
+3. Use **Abrir jogo** para configurar a conta em uma janela visível do Firefox.
+4. Clique em **Instalar Violentmonkey** e instale a extensão naquele perfil do Firefox.
+5. Em **Gerenciar addons**, clique em **Instalar todos (primeira configuração)**. Confirme os instaladores no Violentmonkey. Depois disso, as atualizações são feitas pelo Violentmonkey; não repita a instalação.
+6. Abra o PokéIdle e faça login. Use **Twitch** para entrar na conta correta em cada perfil.
+7. O guia de configuração é ocultado quando o jogo e todos os scripts são verificados. Se você optar por instalar apenas alguns addons, clique em **Concluir configuração** para ocultar o guia. Você pode reabri-lo depois.
 
 
 **Não misture logins entre perfis.** Game 1 deve permanecer com as sessões da conta 1; Game 2 com as da conta 2; e assim por diante.
@@ -60,9 +61,9 @@ Para cada conta:
 
 ## Userscripts
 
-### Scripts instalados pelo botão Addons
+### Scripts disponíveis em Gerenciar addons
 
-O botão **Addons** instala todos os userscripts recomendados para o perfil selecionado:
+**Gerenciar addons** mostra quais scripts estão em execução, versões antigas e scripts não detectados. **Reparar selecionados** abre instaladores somente dos itens marcados; **Instalar todos (primeira configuração)** abre todos os userscripts recomendados para o perfil selecionado. A abertura do instalador não significa que a instalação foi concluída: confirme-a no Violentmonkey.
 
 **Auto Catch+**  
 Captura automática configurável e estatísticas de captura. O Auto Catch também possui reposição automática independente para **bolas, poções e Revives**.
@@ -71,7 +72,7 @@ Captura automática configurável e estatísticas de captura. O Auto Catch tamb�
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
 **Live Stream Scanner**  
-Abre chat de streamers online a cada dez minutos. Para a KICK (que barra o acesso automatizado), um link multistream fica disponível na interface.
+Abre chat de streamers online a cada cinco minutos. Para a KICK (que barra o acesso automatizado), um link multistream fica disponível na interface.
 
 **Controller Bridge**  
 É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo.
@@ -218,7 +219,7 @@ Cada conta deve usar exclusivamente:
 
 Primeiro confirme que o **Violentmonkey foi instalado naquele perfil específico**. Instalar a extensão no seu Firefox pessoal não instala a extensão nos quatro perfis isolados do controlador.
 
-Depois use **Contas → Addons** somente na primeira instalação. **Não é necessário repetir esse passo a cada atualização.** O Violentmonkey pode baixar automaticamente as novas versões de cada script, desde que a verificação automática de atualizações esteja habilitada nesse perfil do Firefox. Recarregue a aba do jogo depois que uma atualização for instalada. Em **Gerenciador de contas → Versões dos addons**, confira as versões detectadas durante a execução e as versões publicadas no GitHub. Addons antigos que ainda não informam sua versão aparecem como **não verificados**, e não como atualizados.
+Depois use **Contas → Gerenciar addons → Instalar todos (primeira configuração)** somente na primeira instalação. **Não é necessário repetir esse passo a cada atualização.** O Violentmonkey pode baixar automaticamente as novas versões de cada script, desde que a verificação automática de atualizações esteja habilitada nesse perfil do Firefox. Recarregue a aba do jogo depois que uma atualização for instalada. Em **Gerenciador de contas → Gerenciar addons**, confira as versões detectadas durante a execução e as versões publicadas no GitHub. Addons antigos que ainda não informam sua versão aparecem como **não verificados**, e não como atualizados.
 
 ---
 
@@ -226,7 +227,7 @@ Depois use **Contas → Addons** somente na primeira instalação. **Não é nec
 
 A collection of **PokéIdle** addons plus a lightweight native controller for keeping up to four accounts in isolated Firefox profiles.
 
-The project targets Windows. The controller uses normal installed Firefox with **one isolated browser profile per account**. Userscripts continue to run through **Violentmonkey**; the controller does not contain its own userscript engine.
+The controller supports Windows and Linux. The controller uses normal installed Firefox with **one isolated browser profile per account**. Userscripts continue to run through **Violentmonkey**; the controller does not contain its own userscript engine.
 
 ### Transparency and development
 
@@ -256,11 +257,11 @@ Each slot gets its own Firefox profile:
 
 Use the account's **Twitch**, **KICK**, and game entry points from that same profile. Never mix account sessions between profiles.
 
-Install Violentmonkey inside each enabled profile, then use **Accounts → Addons** to open the complete addon set.
+Install Violentmonkey inside each enabled profile, then use **Accounts → Manage Addons → Install all (first setup)**. Confirm each installer inside Violentmonkey.
 
 ### Core userscripts
 
-The **Addons** button installs all recommended userscripts for the selected profile:
+The **Manage Addons** section offers these userscripts for the selected profile:
 
 - Auto Catch+ — including independent ball, potion and revive restocking
 - Performance+
@@ -270,7 +271,7 @@ The **Addons** button installs all recommended userscripts for the selected prof
 - PokéIdle Hunt Atlas
 - PokéIdle Moth Watch
 
-There is no separate installation flow. **Accounts → Addons** opens the complete addon set in the selected Firefox profile. Install them once; Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. Reload the game after an update. **Accounts → Addon versions** compares live reported versions with the versions published on GitHub. Older scripts without version markers appear as unverified, not current.
+**Install all (first setup)** opens every installer only when needed. **Repair selected** opens installers just for the checked userscripts; an opened installer is not confirmation of installation. Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. **Check now** refreshes GitHub version information without touching the game or opening tabs. **Manage Addons** compares the versions reported by running userscripts with those published on GitHub. A dashboard warning links to the affected account when scripts need attention. Reload the game manually after an update; the controller deliberately does not interrupt gameplay. First-time setup guidance disappears once the complete live setup is verified or the user explicitly finishes setup with their chosen scripts, and can be reopened later.
 
 ### Controller usage
 

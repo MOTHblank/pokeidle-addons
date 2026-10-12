@@ -39,18 +39,21 @@ automatically copy profiles between operating systems.
    for each account's login and setup.
 2. Use **Google sign-in** when browser automation prevents authentication; it
    launches visible Firefox without the remote-debugging endpoint.
-3. Use **Install Violentmonkey** and then **Addons** inside each Firefox
-   profile. The Addons action queries the current GitHub `addons/` directory and
-builds fresh URLs to each `.user.js` file on `master`.
-   Versions are read from each userscript's own `@version` metadata by
-   Violentmonkey, not pinned in the controller's installer list.
-   Enable automatic userscript updates in Violentmonkey once per Firefox profile.
-   Installed scripts then update themselves without reopening the Addons installers.
-   The controller checks current upstream versions in the background and displays
-   the running versions and pending updates in Account Manager → Addon versions.
-   Older scripts without runtime version markers are displayed as unverified;
-   this does not mean they are outdated or absent.
-   Reload the game tab after Violentmonkey downloads a script update.
+3. Use **Install Violentmonkey** and **Manage Addons → Install all (first setup)**
+   in each enabled Firefox profile. Confirm installation in Violentmonkey. The
+   installer queries the live GitHub `addons/` directory, not a baked-in list.
+   Use **Repair selected** to open only the selected installers later. An
+   opened installer tab is not proof of installation.
+   Enable automatic updates in Violentmonkey once per profile. Its updates
+   do not require another installer run or a new controller build. **Check now**
+   queries the published script versions without installing anything, and
+   **Manage Addons** displays detected, outdated, or unverified scripts.
+   Dashboard warnings link straight to the affected profile's management UI.
+   All version and installation checks are non-blocking, and the game is never
+   reloaded automatically. Reload the tab manually after an update.
+   Initial setup instructions disappear after the complete live setup is
+   verified, or when the user explicitly finishes setup with a subset of
+   the available addons. **Show setup guide** reopens those instructions.
 4. Return to the main dashboard to launch, monitor, switch visible/headless
    mode, or stop each account.
 
