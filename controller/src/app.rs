@@ -82,6 +82,8 @@ fn localize_status(message: String) -> String {
         ("Launch Both requested · monitoring will update as Firefox becomes ready", "Iniciar ambos solicitado · o monitor atualizará quando o Firefox estiver pronto"),
         ("All Firefox instances closed.", "Todas as instâncias do Firefox foram fechadas."),
         ("Some Firefox instances could not be stopped; check the log.", "Algumas instâncias do Firefox não puderam ser fechadas; consulte o log."),
+        ("could not determine XDG_DATA_HOME or HOME", "não foi possível determinar XDG_DATA_HOME ou HOME"),
+        ("Could not create log: ", "Não foi possível criar o log: "),
         ("Firefox already uses this profile", "O Firefox já está usando este perfil"),
         ("Close the existing Firefox profile before switching modes.", "Feche o perfil do Firefox existente antes de trocar de modo."),
         ("Use Stop before launching.", "Use Parar antes de iniciar."),
@@ -171,6 +173,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "VISIBLE" => "VISÍVEL",
         "MIXED" => "MISTO",
         "Rust rewrite · Windows" => "Reescrita em Rust · Windows",
+        "Rust rewrite · Linux" => "Reescrita em Rust · Linux",
         "Instances" => "Instâncias",
         "Live state for both isolated Firefox profiles" => "Estado atual dos dois perfis isolados do Firefox",
         "Show Firefox" => "Mostrar Firefox",
@@ -1050,34 +1053,27 @@ impl ControllerApp {
     }
 
     fn open_logs(&mut self) {
-        let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
-            self.set_status("Could not determine LOCALAPPDATA for logs.", true);
-            return;
+        let path = match crate::config::data_root() {
+            Ok(root) => root.join("moth-controller.log"),
+            Err(error) => {
+                self.set_status(error, true);
+                return;
+            }
         };
-
-        let path = std::path::PathBuf::from(local_app_data)
-            .join("Moth")
-            .join("PokeIdle")
-            .join("moth-controller.log");
-
         if let Some(parent) = path.parent() {
             if let Err(error) = std::fs::create_dir_all(parent) {
                 self.set_status(format!("Could not create log folder: {error}"), true);
                 return;
             }
         }
-
         if !path.exists() {
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path);
+            if let Err(error) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                self.set_status(format!("Could not create log: {error}"), true);
+                return;
+            }
         }
-
-        match std::process::Command::new("notepad.exe")
-            .arg(&path)
-            .spawn()
-        {
+        let opener = if cfg!(windows) { "notepad.exe" } else { "xdg-open" };
+        match std::process::Command::new(opener).arg(&path).spawn() {
             Ok(_) => self.set_status(format!("Opened controller log · {}", path.display()), false),
             Err(error) => self.set_status(format!("Could not open log: {error}"), true),
         }
@@ -1470,7 +1466,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 draw_credits(ui, &app.update_status);
                 ui.add_space(10.0);
                 ui.label(
-                    RichText::new(tr("Rust rewrite · Windows"))
+                    RichText::new(if cfg!(windows) { tr("Rust rewrite · Windows") } else { tr("Rust rewrite · Linux") })
                         .size(10.0)
                         .color(DIM),
                 );
@@ -1520,45 +1516,24 @@ fn open_kick_channels_in_regular_browser(channels: &[String]) -> Result<usize, S
     if channels.is_empty() {
         return Err("no live KICK channels to open".to_string());
     }
-
-    #[cfg(not(windows))]
-    {
-        let _ = channels;
-        return Err("opening live KICK channels is only supported on Windows".to_string());
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        let mut opened = 0usize;
-        for channel in channels {
-            if channel.is_empty()
-                || !channel
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
-            {
-                continue;
-            }
-
-            let url = format!("https://kick.com/{channel}");
-            Command::new("explorer.exe")
-                .arg(&url)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(0x08000000)
-                .spawn()
-                .map_err(|error| format!("could not open live KICK channel {channel}: {error}"))?;
-            opened += 1;
+    let mut opened = 0usize;
+    for channel in channels {
+        if channel.is_empty() || !channel.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+            continue;
         }
-
-        if opened == 0 {
-            Err("no valid live KICK channels to open".to_string())
-        } else {
-            Ok(opened)
+        let url = format!("https://kick.com/{channel}");
+        let mut command = Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" });
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
         }
+        command.arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("could not open live KICK channel {channel}: {error}"))?;
+        opened += 1;
     }
+    if opened == 0 { Err("no valid live KICK channels to open".to_string()) } else { Ok(opened) }
 }
 
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
