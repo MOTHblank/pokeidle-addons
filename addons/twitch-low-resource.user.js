@@ -50,7 +50,7 @@
         const values = [primary, ...queryChannels]
             .map(normalizeTwitchChannel)
             .filter(Boolean);
-        return [...new Set(values)].slice(0, 100);
+        return [...new Set(values)];
     })();
     const isMultiChannelChat = requestedMultiChatChannels.length > 1;
 
