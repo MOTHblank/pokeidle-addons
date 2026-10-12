@@ -14,11 +14,12 @@ use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
-// Full BiDi probes visit the game and each browser tab. Keep them infrequent
-// during long sessions, but retry an unavailable connection promptly.
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
+// Each full BiDi sample reads the game and every top-level browser tab.
+// Long-running logged-in sessions need only occasional status snapshots.
+const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(75);
+const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(7 * 60);
 
 #[derive(Clone, Debug)]
 pub struct TabInfo {
@@ -502,7 +503,13 @@ fn monitor_loop(
 
             match probe_page(browser_session, headless) {
                 Ok(probe) => {
-                    poll_interval = MONITOR_POLL_INTERVAL;
+                    // Poll more often only while the game is loading or awaiting login.
+                    // Once logged in, full browser scans are deliberately rare.
+                    poll_interval = if probe.game_ready && probe.logged_in {
+                        MONITOR_POLL_INTERVAL
+                    } else {
+                        MONITOR_STARTUP_POLL_INTERVAL
+                    };
                     issues.recovered(port);
                     if let Ok(mut current) = health.lock() {
                         current.state = "Running".to_string();
@@ -576,7 +583,7 @@ fn monitor_loop(
 
         // Interrupt the longer polling interval for browser commands and close
         // requests; they must not wait 30 seconds for a periodic telemetry scan.
-        for _ in 0..(poll_interval.as_millis() / 100) {
+        for _ in 0..(poll_interval.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
                 || (session.is_some()
@@ -584,7 +591,7 @@ fn monitor_loop(
             {
                 break;
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(500));
         }
     }
 }
@@ -1614,10 +1621,10 @@ mod command_tests {
         assert!(MONITOR_POLL_INTERVAL < TELEMETRY_FRESHNESS_LIMIT);
         let mut health = Health::default();
         health.state = "Running".to_string();
-        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(35));
+        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(5 * 60));
         assert!(health.telemetry_is_fresh());
 
-        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(90));
+        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(8 * 60));
         assert!(!health.telemetry_is_fresh());
     }
 
