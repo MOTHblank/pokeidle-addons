@@ -203,6 +203,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Idle detection unavailable without Controller Bridge telemetry" => "Detecção de inatividade indisponível sem telemetria do Controller Bridge",
         "Profile folder exists" => "Pasta do perfil existente",
         "Registered" => "Registrada",
+        "Check failed" => "Falha na verificação",
         "Stop" => "Parar",
         "Launch" => "Iniciar",
         "CURRENT ACTIVITY" => "ATIVIDADE ATUAL",
@@ -519,6 +520,7 @@ fn ball_stock_decreased(previous: &[String], current: &[String]) -> bool {
 struct AccountSetup {
     profile_ready: bool,
     violentmonkey_installed: bool,
+    check_error: Option<String>,
 }
 
 struct UiEvent {
@@ -775,16 +777,26 @@ impl ControllerApp {
     fn refresh_account_setup(&mut self) {
         for profile in GameProfile::ALL {
             let index = profile.index();
-            let Ok(config) = Config::for_profile(profile) else {
-                self.account_setup[index] = AccountSetup::default();
-                continue;
+            let config = match Config::for_profile(profile) {
+                Ok(config) => config,
+                Err(error) => {
+                    self.account_setup[index] = AccountSetup {
+                        check_error: Some(error),
+                        ..AccountSetup::default()
+                    };
+                    continue;
+                }
             };
 
-            let vm_installed = accounts::violentmonkey_installed(profile).unwrap_or(false);
+            let (vm_installed, check_error) = match accounts::violentmonkey_installed(profile) {
+                Ok(value) => (value, None),
+                Err(error) => (false, Some(error)),
+            };
 
             self.account_setup[index] = AccountSetup {
                 profile_ready: config.profile_dir.exists(),
                 violentmonkey_installed: vm_installed,
+                check_error,
             };
         }
 
@@ -2764,7 +2776,7 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
 fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
     if app
         .account_setup_checked_at
-        .map(|checked| checked.elapsed() >= Duration::from_secs(1))
+        .map(|checked| checked.elapsed() >= Duration::from_secs(5))
         .unwrap_or(true)
     {
         app.refresh_account_setup();
@@ -2906,7 +2918,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     let vm_label = if setup.violentmonkey_installed {
                                         tr("Registered")
                                     } else {
-                                        tr("Not installed")
+                                        if setup.check_error.is_some() { tr("Check failed") } else { tr("Not installed") }
                                     };
                                     let twitch_open = health.tabs.iter().any(|tab| tab.kind == "Twitch");
                                     // This check only observes tab existence. It does not
@@ -2918,7 +2930,10 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     };
 
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
-                                    status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
+                                    let vm_chip = status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
+                                    if let Some(error) = &setup.check_error {
+                                        vm_chip.on_hover_text(error);
+                                    }
                                     status_chip(ui, "Twitch", twitch_label, twitch_open);
 
                                     if running && health.telemetry_is_fresh() {
