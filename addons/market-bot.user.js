@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Moth Watch
 // @namespace    moth.pokeidle
-// @version      0.1.46
+// @version      0.1.47
 // @description  Community Market opportunities, inventory, and guarded purchase automation.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.46');
+        document.documentElement?.setAttribute('data-moth-addon-version-market-bot', '0.1.47');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -124,6 +124,7 @@
         itemSummaryAt: 0,
         automationNotice: null,
         attemptedListings: new Map(),
+        attemptedSales: new Map(),
         buyLog: [],
         lastScanAt: 0,
         scanTimer: null,
@@ -2244,10 +2245,12 @@
             state.candidates.delete(pending.candidateKey);
             addLog('Purchase confirmed · listing #' + pending.listingId);
         } else if (reason === 'refused') {
-            state.attemptedListings.set(
-                pending.listingId,
-                Date.now() + 5000
-            );
+            state.attemptedListings.set(pending.listingId, Date.now() + 5000);
+        } else {
+            // Never interpret silence or an unrelated event as a failed buy.
+            state.attemptedListings.set(pending.listingId, Date.now() + 60_000);
+            addLog('Purchase outcome unverified · listing #' + pending.listingId +
+                ' · temporarily held from another attempt');
         }
 
         requestItemSummary();
@@ -2400,12 +2403,19 @@
         state.pendingSell = null;
         state.ownListingsAt = 0;
         state.ownListingsPendingAt = 0;
+        const key = String(pending.itemId) + ':' + pending.currency;
+        state.attemptedSales.set(key, Date.now() + (
+            reason === 'refused' ? 10_000 : reason === 'server-confirmed' ? 30_000 : 60_000
+        ));
         if (reason === 'server-confirmed') {
             addLog('AUTO SELL · ' + pending.name + ' · ' + pending.qty + ' × ' +
                 num(pending.price) + ' ' + (pending.currency === 'orb' ? 'Gems' : 'Coins') +
                 ' · confirmed');
         } else if (reason === 'refused') {
             addLog('AUTO SELL · ' + pending.name + ' · refused');
+        } else {
+            addLog('AUTO SELL · ' + pending.name +
+                ' · outcome unverified; refreshing own listings before retry');
         }
         setTimeout(requestOwnListings, 500);
         queueRender();
@@ -2419,6 +2429,7 @@
         if (!(itemId > 0) || !(qty > 0) || !(price > 0)) return false;
         if (qty > ownedQuantity(itemId)) return false;
         if (ownListedQuantity(itemId, currency) > 0) return false;
+        if (Number(state.attemptedSales.get(String(itemId) + ':' + currency) || 0) > Date.now()) return false;
 
         const sent = send({
             t: 'market.criar',
@@ -2649,10 +2660,13 @@
                 enterRateLimitBackoff();
                 return;
             }
-            if (state.pendingBuy) {
+            // Game errors unrelated to an order must not clear an in-flight order.
+            const listingId = Number(message.listingId ?? message.anuncioId ?? message.vendaId);
+            const itemId = Number(message.itemId);
+            if (state.pendingBuy && listingId > 0 && listingId === state.pendingBuy.listingId) {
                 addLog('Purchase refused: ' + String(message.chave || message.msg || 'server error'));
                 finishPendingBuy('refused');
-            } else if (state.pendingSell) {
+            } else if (state.pendingSell && itemId > 0 && itemId === state.pendingSell.itemId) {
                 addLog('AUTO SELL · refused · ' + String(message.chave || message.msg || 'server error'));
                 finishPendingSell('refused');
             }
@@ -2667,11 +2681,22 @@
          */
         if (message.t === 'batalha') {
             for (const event of message.ev || []) {
-                if (event && event.k === 'marketComprado' && state.pendingBuy) {
-                    finishPendingBuy('server-confirmed');
+                if (event?.k === 'marketComprado' && state.pendingBuy) {
+                    const ids = [event.listingId, event.anuncioId, event.vendaId,
+                        event.anuncio?.id, event.listing?.id];
+                    if (ids.some(id => Number(id) > 0 && Number(id) === state.pendingBuy.listingId)) {
+                        finishPendingBuy('server-confirmed');
+                    }
                 }
-                if (event && event.k === 'marketCriado' && state.pendingSell) {
-                    finishPendingSell('server-confirmed');
+                if (event?.k === 'marketCriado' && state.pendingSell) {
+                    const itemId = Number(event.itemId ?? event.idItem ?? event.item?.id ?? event.anuncio?.itemId);
+                    const price = Number(event.preco ?? event.price ?? event.anuncio?.preco);
+                    const currency = event.moeda ?? event.currency ?? event.anuncio?.moeda;
+                    if (itemId > 0 && itemId === state.pendingSell.itemId &&
+                        price > 0 && price === state.pendingSell.price &&
+                        (currency == null || currency === state.pendingSell.currency)) {
+                        finishPendingSell('server-confirmed');
+                    }
                 }
             }
             return;
@@ -2813,31 +2838,51 @@
         return false;
     }
 
-    function installSocketHook() {
-        /*
-         * Controller Bridge is the single owner of game WebSocket discovery.
-         * Do not install another global constructor Proxy here: the current
-         * upstream client creates its socket during boot.
-         */
-        if (adoptBridgeSocket()) {
-            state.hookInstalled = true;
-            return true;
-        }
+    // Moth Watch observes game WebSockets independently. Controller Bridge is
+    // a useful late-attach fallback, not an installation requirement.
+    const MOTH_WATCH_HOOK = '__mothWatchSocketHookV1';
+    let lastHookTarget = null;
 
-        state.hookInstalled = false;
-        return false;
+    function installSocketHook() {
+        const NativeWebSocket = page.WebSocket;
+        if (typeof NativeWebSocket !== 'function') return false;
+        try {
+            if (NativeWebSocket[MOTH_WATCH_HOOK]) {
+                state.hookInstalled = true;
+                return true;
+            }
+        } catch (_) {}
+        if (NativeWebSocket === lastHookTarget) return state.hookInstalled;
+        lastHookTarget = NativeWebSocket;
+        try {
+            let WrappedWebSocket;
+            WrappedWebSocket = new Proxy(NativeWebSocket, {
+                get(target, prop, receiver) {
+                    if (prop === MOTH_WATCH_HOOK) return true;
+                    return Reflect.get(target, prop, receiver);
+                },
+                construct(target, args, newTarget) {
+                    const socket = Reflect.construct(target, args,
+                        newTarget === WrappedWebSocket ? target : newTarget);
+                    try { attachSocket(socket); }
+                    catch (error) { console.warn('[Moth Watch] socket observer:', error); }
+                    return socket;
+                }
+            });
+            page.WebSocket = WrappedWebSocket;
+            state.hookInstalled = page.WebSocket === WrappedWebSocket;
+        } catch (error) {
+            state.hookInstalled = false;
+            console.warn('[Moth Watch] independent socket hook unavailable:', error);
+        }
+        return state.hookInstalled;
     }
 
     installSocketHook();
-
-    // The bridge can load immediately before or after this addon, and it may
-    // replace the game socket after reconnect. Re-adopt without touching the
-    // global WebSocket constructor.
     setInterval(() => {
+        installSocketHook();
         const socket = state.gameSocket || state.socket;
-        if (!socket || socket.readyState !== 1) {
-            adoptBridgeSocket();
-        }
+        if (!socket || socket.readyState !== 1) adoptBridgeSocket();
     }, 1000);
 
     function injectStyle() {
