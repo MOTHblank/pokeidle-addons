@@ -1420,11 +1420,11 @@ impl eframe::App for ControllerApp {
                     let dot_color = if self.status_error { BAD } else { GOOD };
                     ui.colored_label(dot_color, "●");
                     ui.add_space(6.0);
-                    ui.label(
+                    ui.add(egui::Label::new(
                         RichText::new(&self.status)
                             .size(12.0)
                             .color(if self.status_error { TEXT } else { MUTED }),
-                    );
+                    ).truncate()).on_hover_text(&self.status);
                 });
             });
 
@@ -1559,8 +1559,23 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .color(DIM),
                     );
                     ui.add_space(7.0);
-                    runtime_row(ui, "Firefox", if app.games.iter().all(|game| game.headless) { tr("HEADLESS") } else if app.games.iter().all(|game| !game.headless) { tr("VISIBLE") } else { tr("MIXED") }, GOOD);
-                    runtime_row(ui, "Monitor", "BiDi", GOOD);
+                    let active: Vec<_> = app.games.iter()
+                        .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
+                        .collect();
+                    let mode = if active.is_empty() {
+                        tr("STOPPED")
+                    } else if active.iter().all(|game| game.headless) {
+                        tr("HEADLESS")
+                    } else if active.iter().all(|game| !game.headless) {
+                        tr("VISIBLE")
+                    } else {
+                        tr("MIXED")
+                    };
+                    let connected = active.iter()
+                        .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().telemetry_is_fresh()))
+                        .count();
+                    runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
+                    runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { WARN });
                     runtime_row(ui, "Poll", "5 sec", MUTED);
                 });
 
@@ -2584,8 +2599,19 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .inner_margin(14.0)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                runtime_chip(ui, tr("Firefox"), tr("Headless"), GOOD);
-                runtime_chip(ui, tr("BiDi"), tr("Active"), GOOD);
+                let running = app.games.iter()
+                    .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
+                    .count();
+                let headless = app.games.iter()
+                    .filter(|game| (game.child.is_some() || game.orphaned_pid.is_some()) && game.headless)
+                    .count();
+                let bidi_connected = app.games.iter()
+                    .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().telemetry_is_fresh()))
+                    .count();
+                let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Headless"));
+                let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
+                runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, tr("BiDi"), &bidi_state, if bidi_connected == running && running > 0 { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
                     ui,
@@ -2593,10 +2619,32 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     &format!("{} {}", enabled_profiles, tr("isolated")),
                     MUTED,
                 );
-                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 10 min"), MUTED);
+                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 5 min"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), tr("1 sec"), MUTED);
             });
         });
+
+    ui.add_space(12.0);
+    ui.collapsing(tr("Recent events"), |ui| {
+        if app.events.is_empty() {
+            ui.label(RichText::new(tr("No events yet")).color(DIM));
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("controller_event_history")
+            .max_height(190.0)
+            .show(ui, |ui| {
+                for event in &app.events {
+                    let age = event.at.elapsed().as_secs();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("{age}s {}", tr("ago")))
+                            .size(9.0).color(DIM));
+                        ui.label(RichText::new(&event.message)
+                            .size(10.0).color(if event.is_error { BAD } else { MUTED }));
+                    });
+                }
+            });
+    });
 }
 
 
