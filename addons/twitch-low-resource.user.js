@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.1.4
+// @version      3.1.5
 // @description  Uses one freshly opened Twitch popout for all live chats, minimizing chat and rendering work.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.4');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.5');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
