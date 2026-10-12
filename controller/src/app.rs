@@ -7,7 +7,9 @@ use crate::monitor::{Health, MonitorHandle};
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
+use std::collections::VecDeque;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -496,6 +498,17 @@ struct AccountSetup {
     violentmonkey_installed: bool,
 }
 
+struct UiEvent {
+    at: Instant,
+    message: String,
+    is_error: bool,
+}
+
+enum AddonInstallEvent {
+    Progress { index: usize, message: String },
+    Finished { index: usize, result: Result<usize, String> },
+}
+
 #[cfg(windows)]
 struct TrayRuntime {
     _icon: TrayIcon,
@@ -654,6 +667,11 @@ pub struct ControllerApp {
     accounts: [AccountConfig; 4],
     status: String,
     status_error: bool,
+    events: VecDeque<UiEvent>,
+    addon_install_tx: Sender<AddonInstallEvent>,
+    addon_install_rx: Receiver<AddonInstallEvent>,
+    addon_install_busy: [bool; 4],
+    addon_install_details: [Vec<String>; 4],
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
@@ -671,6 +689,7 @@ impl ControllerApp {
         logging::init();
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
+        let (addon_install_tx, addon_install_rx) = mpsc::channel();
 
         #[cfg(windows)]
         let tray = match TrayRuntime::new(cc.egui_ctx.clone()) {
@@ -688,6 +707,11 @@ impl ControllerApp {
             show_accounts: false,
             status: localize_status("Ready · launch only the profiles you need".to_string()),
             status_error: false,
+            events: VecDeque::new(),
+            addon_install_tx,
+            addon_install_rx,
+            addon_install_busy: [false; 4],
+            addon_install_details: std::array::from_fn(|_| Vec::new()),
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
@@ -745,6 +769,31 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        // Drain worker results on the UI thread. Never block egui on GitHub,
+        // curl, or Firefox installer tabs.
+        while let Ok(event) = self.addon_install_rx.try_recv() {
+            match event {
+                AddonInstallEvent::Progress { index, message } => {
+                    self.addon_install_details[index].push(message.clone());
+                    self.set_status(
+                        format!("{} · {}", self.accounts[index].name, message), false,
+                    );
+                }
+                AddonInstallEvent::Finished { index, result } => {
+                    self.addon_install_busy[index] = false;
+                    match result {
+                        Ok(opened) => self.set_status(
+                            format!("{} · {opened} {}", self.accounts[index].name, tr("addon installers opened")),
+                            false,
+                        ),
+                        Err(error) => {
+                            self.addon_install_details[index].push(error.clone());
+                            self.set_status(format!("{} · {error}", self.accounts[index].name), true);
+                        }
+                    }
+                }
+            }
+        }
         let mut command_feedback = Vec::new();
         for slot in &mut self.games {
             if let Some(monitor) = slot.monitor.as_ref() {
@@ -848,6 +897,41 @@ impl ControllerApp {
     fn set_status(&mut self, message: impl Into<String>, error: bool) {
         self.status = localize_status(message.into());
         self.status_error = error;
+        self.events.push_front(UiEvent {
+            at: Instant::now(),
+            message: self.status.clone(),
+            is_error: error,
+        });
+        self.events.truncate(80);
+        if error {
+            logging::warn(&self.status);
+        }
+    }
+
+    fn start_addon_install(&mut self, profile: GameProfile) {
+        let index = profile.index();
+        if self.addon_install_busy[index] {
+            self.set_status(format!("{} · {}", self.account_name(profile), tr("Installer already running")), true);
+            return;
+        }
+        self.addon_install_busy[index] = true;
+        self.addon_install_details[index].clear();
+        self.set_status(format!("{} · {}", self.account_name(profile), tr("Checking addons on GitHub…")), false);
+
+        let tx = self.addon_install_tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("moth-addons-{}", profile.label()))
+            .spawn(move || {
+                let progress_tx = tx.clone();
+                let result = accounts::open_addons(profile, |message| {
+                    let _ = progress_tx.send(AddonInstallEvent::Progress { index, message });
+                });
+                let _ = tx.send(AddonInstallEvent::Finished { index, result });
+            });
+        if let Err(error) = spawned {
+            self.addon_install_busy[index] = false;
+            self.set_status(format!("{}: {error}", self.account_name(profile)), true);
+        }
     }
 
     fn launch_one(&mut self, profile: GameProfile) {
@@ -1171,6 +1255,11 @@ impl ControllerApp {
             return;
         }
 
+        if let ProfileAction::Addons = action {
+            self.start_addon_install(profile);
+            return;
+        }
+
         let result = match action {
             ProfileAction::Game => unreachable!("game action handled above"),
             ProfileAction::GoogleSignIn => {
@@ -1179,8 +1268,7 @@ impl ControllerApp {
             }
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
             ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
-            ProfileAction::Addons => accounts::open_addons(profile)
-                .map(|count| format!("Opened {count} addon installers")),
+            ProfileAction::Addons => unreachable!("addon action handled above"),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
         };
 
