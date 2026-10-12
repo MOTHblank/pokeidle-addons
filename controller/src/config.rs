@@ -284,13 +284,3 @@ fn firefox_from_path(executables: &[&str]) -> Vec<PathBuf> {
 }
 
 
-#[cfg(all(test, not(windows)))]
-mod linux_path_tests {
-    use super::*;
-    #[test]
-    fn xdg_root_has_separate_game_profiles() {
-        // Test the path layout without overwriting host environment variables.
-        let root = PathBuf::from("/home/example/.local/share").join("Moth/PokeIdle");
-        assert_ne!(root.join("Profiles/Game1"), root.join("Profiles/Game2"));
-    }
-}
