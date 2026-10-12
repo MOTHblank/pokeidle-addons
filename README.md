@@ -291,3 +291,13 @@ The dashboard uses vertical scrolling rather than shrinking account cards. Wide 
 ---
 
 **MOTHblank** · [Google Play](https://play.google.com/store/apps/developer?id=MOTHblank) · [X](https://x.com/MOTHblank) · [WhatsApp / Pix](https://wa.me/+5537999933376)
+
+
+## Linux controller support
+
+The Rust controller supports Linux desktop sessions with X11 or Wayland. Install
+Firefox Developer Edition (or Firefox), Violentmonkey, and `xdg-utils`. Linux
+profile storage is under `$XDG_DATA_HOME/Moth/PokeIdle` or, by default,
+`~/.local/share/Moth/PokeIdle`; set `MOTH_FIREFOX` to an executable path
+if Firefox is not found. Windows and Linux profiles are separate. The Windows
+system tray is not available on Linux. See [controller/README.md](controller/README.md).
