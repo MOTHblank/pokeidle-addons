@@ -12,7 +12,7 @@ const ADDONS_API: &str =
 
 /// Discover the active addon scripts directly from GitHub. No versions or
 /// addon filenames are pinned in the native binary.
-fn discover_addon_files() -> Result<Vec<String>, String> {
+pub(crate) fn discover_addon_files() -> Result<Vec<String>, String> {
     let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     #[cfg(windows)]
     {

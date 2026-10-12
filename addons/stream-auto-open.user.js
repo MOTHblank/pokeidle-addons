@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.0.0
+// @version      7.0.1
 // @description  Opens all current Twitch chat channels in one low-resource popout per Firefox profile; KICK streams remain delegated to the Rust controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -14,6 +14,15 @@
 
 (() => {
     'use strict';
+
+    // Report only this script's version to the native monitor (no account data).
+    const reportMothAddonVersion = () => {
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.0.1');
+    };
+    reportMothAddonVersion();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportMothAddonVersion, { once: true });
+    }
 
     const BUTTON_ID = 'moth-scan-live-streams';
     const INVENTORY_ID = 'btn-bolsa';

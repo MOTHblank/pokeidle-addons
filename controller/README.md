@@ -44,6 +44,13 @@ automatically copy profiles between operating systems.
 builds fresh URLs to each `.user.js` file on `master`.
    Versions are read from each userscript's own `@version` metadata by
    Violentmonkey, not pinned in the controller's installer list.
+   Enable automatic userscript updates in Violentmonkey once per Firefox profile.
+   Installed scripts then update themselves without reopening the Addons installers.
+   The controller checks current upstream versions in the background and displays
+   the running versions and pending updates in Account Manager → Addon versions.
+   Older scripts without runtime version markers are displayed as unverified;
+   this does not mean they are outdated or absent.
+   Reload the game tab after Violentmonkey downloads a script update.
 4. Return to the main dashboard to launch, monitor, switch visible/headless
    mode, or stop each account.
 
@@ -65,3 +72,15 @@ completion/error status. A failed or uncertain tab creation is not retried
 blindly, to avoid accidentally opening duplicates.
 
 The controller does not store browser account passwords or tokens.
+
+## Publishing userscript changes
+
+A modified userscript must increase its `@version` and its matching
+DOM version marker. Violentmonkey compares versions: changing code on
+`master` without incrementing `@version` will not automatically
+reach existing installations.
+
+For local Git commits, run `git config core.hooksPath .githooks` once
+to enable the included version guard. It rejects staged userscript edits
+that do not increase the version or have a mismatching marker. No GitHub
+Actions, new controller release, or second userscript updater is needed.

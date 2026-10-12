@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.1.0
+// @version      3.1.1
 // @description  Joins multiple Twitch chats through one lightweight popout connection and discards unused chat events.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -18,6 +18,15 @@
 
 (() => {
     'use strict';
+
+    // Report only this script's version to the native monitor (no account data).
+    const reportMothAddonVersion = () => {
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.1');
+    };
+    reportMothAddonVersion();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportMothAddonVersion, { once: true });
+    }
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

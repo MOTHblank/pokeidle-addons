@@ -218,7 +218,7 @@ Cada conta deve usar exclusivamente:
 
 Primeiro confirme que o **Violentmonkey foi instalado naquele perfil específico**. Instalar a extensão no seu Firefox pessoal não instala a extensão nos quatro perfis isolados do controlador.
 
-Depois use **Contas → Addons**.
+Depois use **Contas → Addons** somente na primeira instalação. **Não é necessário repetir esse passo a cada atualização.** O Violentmonkey pode baixar automaticamente as novas versões de cada script, desde que a verificação automática de atualizações esteja habilitada nesse perfil do Firefox. Recarregue a aba do jogo depois que uma atualização for instalada. Em **Gerenciador de contas → Versões dos addons**, confira as versões detectadas durante a execução e as versões publicadas no GitHub. Addons antigos que ainda não informam sua versão aparecem como **não verificados**, e não como atualizados.
 
 ---
 
@@ -270,7 +270,7 @@ The **Addons** button installs all recommended userscripts for the selected prof
 - PokéIdle Hunt Atlas
 - PokéIdle Moth Watch
 
-There is no separate installation flow. **Accounts → Addons** opens the complete addon set in the selected Firefox profile.
+There is no separate installation flow. **Accounts → Addons** opens the complete addon set in the selected Firefox profile. Install them once; Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. Reload the game after an update. **Accounts → Addon versions** compares live reported versions with the versions published on GitHub. Older scripts without version markers appear as unverified, not current.
 
 ### Controller usage
 

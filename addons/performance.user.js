@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Performance+
 // @namespace    moth.pokeidle
-// @version      5.4.0
+// @version      5.4.1
 // @description  Performance+ pauses map rendering, hides visual noise and chat, and keeps capture controls visible.
 // @match        https://pokeidle.io/*
 // @match        https://www.pokeidle.io/*
@@ -13,6 +13,15 @@
 
 (() => {
     'use strict';
+
+    // Report only this script's version to the native monitor (no account data).
+    const reportMothAddonVersion = () => {
+        document.documentElement?.setAttribute('data-moth-addon-version-performance', '5.4.1');
+    };
+    reportMothAddonVersion();
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportMothAddonVersion, { once: true });
+    }
 
     const STORAGE_KEY = 'moth-pokeidle-performance-v7';
     const PREVIOUS_KEY = 'moth-pokeidle-performance-v6';
