@@ -6,39 +6,24 @@ pub const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
 pub const VIOLENTMONKEY_INSTALL: &str =
     "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
-pub const ADDONS: &[(&str, &str)] = &[
-    (
-        "Auto Catch+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/autocatch.user.js?v=6.5.2",
-    ),
-    (
-        "Performance+",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/performance.user.js?v=5.0.0",
-    ),
-    (
-        "Live Stream Scanner",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js?v=6.4.0",
-    ),
-    (
-        "Controller Bridge",
-        // The controller's Addons action deliberately cache-busts this script. The
-        // userscript metadata still points at the canonical URL for normal future updates.
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js?v=1.3.6",
-    ),
-    (
-        "Twitch Low Resource",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js?v=2.1.0",
-    ),
-    (
-        "Hunt Atlas",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js?v=1.7.20",
-    ),
-    (
-        "Moth Watch",
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/market-bot.user.js?v=0.1.43",
-    ),
-
+// Only the script filenames are maintained here, never embedded version numbers.
+// Installation URLs always address the live master script and use a fresh cache
+// key so browser/CDN caches cannot pin the previous installer version.
+const ADDON_FILES: &[(&str, &str)] = &[
+    ("Auto Catch+", "autocatch.user.js"),
+    ("Performance+", "performance.user.js"),
+    ("Live Stream Scanner", "stream-auto-open.user.js"),
+    ("Controller Bridge", "controller-bridge.user.js"),
+    ("Twitch Low Resource", "twitch-low-resource.user.js"),
+    ("Hunt Atlas", "hunt-atlas.user.js"),
+    ("Moth Watch", "market-bot.user.js"),
 ];
+
+fn installer_url(file: &str, nonce: u128) -> String {
+    format!(
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/{file}?moth_install={nonce}"
+    )
+}
 
 pub fn violentmonkey_installed(profile: GameProfile) -> Result<bool, String> {
     let config = Config::for_profile(profile)?;
@@ -99,8 +84,13 @@ pub fn open_addons(profile: GameProfile) -> Result<usize, String> {
     let mut opened = 0usize;
     let mut failures = Vec::new();
 
-    for &(name, url) in ADDONS {
-        match firefox::open_url(&config, url) {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("could not generate installer cache key: {error}"))?
+        .as_nanos();
+    for &(name, file) in ADDON_FILES {
+        let url = installer_url(file, nonce);
+        match firefox::open_url(&config, &url) {
             Ok(()) => opened += 1,
             Err(error) => failures.push(format!("{name}: {error}")),
         }
@@ -127,10 +117,23 @@ pub fn open_profile_folder(profile: GameProfile) -> Result<(), String> {
     std::fs::create_dir_all(&config.profile_dir)
         .map_err(|e| format!("could not create profile directory: {e}"))?;
 
-    std::process::Command::new("explorer.exe")
+    std::process::Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" })
         .arg(&config.profile_dir)
         .spawn()
         .map_err(|e| format!("could not open profile folder: {e}"))?;
 
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::{installer_url, ADDON_FILES};
+    #[test]
+    fn installer_urls_are_cache_busted_without_pinned_versions() {
+        for (_, file) in ADDON_FILES {
+            let url = installer_url(file, 123);
+            assert!(url.ends_with("?moth_install=123"));
+            assert!(url.contains("/master/addons/"));
+            assert!(!url.contains("?v="));
+        }
+    }
 }
