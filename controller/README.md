@@ -1,77 +1,65 @@
 # Moth Controller
 
-Native Rust Windows controller for dedicated PokéIdle Firefox profiles.
+Native Rust controller for PokéIdle using dedicated Firefox profiles on **Windows and Linux**.
 
-## Run
+The graphical app manages up to four isolated game accounts. Each account uses one
+Firefox profile for PokéIdle, Twitch login, and its userscripts. There is no
+embedded WebView or separate browser engine.
 
-The controller is intended to be a normal Windows application. A release build produces:
+## Running the app
 
-    moth-controller.exe
+Use a release executable built for your operating system:
+- Windows: `moth-controller.exe`
+- Linux: `moth-controller`
 
-Double-clicking it opens the controller window and automatically manages the enabled dedicated game profiles (up to four).
+On Linux, install Firefox (Developer Edition is preferred), the Violentmonkey
+extension, and your distribution's `xdg-utils` package (provides `xdg-open`).
+A desktop session with X11 or Wayland is required for the controller GUI and
+visible Firefox. Headless mode remains an optional per-account browser mode.
 
-## Profiles
+If Firefox is not found automatically, set `MOTH_FIREFOX` to the complete
+path to the Firefox executable before launching the controller.
 
-Each game account owns exactly one Firefox profile:
+## Profile and log locations
 
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game1
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game2
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game3
-    %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game4
+- Windows: `%LOCALAPPDATA%\Moth\PokeIdle\`
+- Linux: `$XDG_DATA_HOME/Moth/PokeIdle/` (default: `~/.local/share/Moth/PokeIdle/`)
 
-That same profile is used for:
+Within that directory, profiles are under `Profiles/Game1` through
+`Profiles/Game4`, account preferences are in `accounts.json`, and
+`moth-controller.log` records runtime errors.
 
-- PokéIdle;
-- the game account's one Twitch login;
-- the game account's one KICK login;
-- any Twitch/KICK stream tabs opened from PokéIdle.
+The Linux and Windows data directories are separate; the controller does not
+automatically copy profiles between operating systems.
 
-Do not create separate stream-login profiles. Keeping the sessions together is deliberate and avoids extra Firefox processes and duplicated browser state.
+## Accounts and userscripts
 
-## Current UI
+1. Open **Account Manager**, and use **Open Game** to launch a visible Firefox
+   for each account's login and setup.
+2. Use **Google sign-in** when browser automation prevents authentication; it
+   launches visible Firefox without the remote-debugging endpoint.
+3. Use **Install Violentmonkey** and then **Addons** inside each Firefox
+   profile. The Addons action builds fresh URLs to the current `master` scripts.
+   Versions are read from each userscript's own `@version` metadata by
+   Violentmonkey, not pinned in the controller's installer list.
+4. Return to the main dashboard to launch, monitor, switch visible/headless
+   mode, or stop each account.
 
-The **Accounts** window manages up to four independent Firefox profiles. Each row operates on exactly one game Firefox profile:
+Twitch chat sharing and stream scanning are handled by the userscripts.
+The initial scan runs about 30 seconds after the site loads; subsequent scans
+run every five minutes. KICK links can be opened in a normal browser. Linux
+does not currently have the Windows system tray integration.
 
-- **Open Game** — launch that profile.
-- **Twitch** — open Twitch login in that profile.
-- **KICK** — open KICK in that profile.
-- **Streams** — open the userscript stream manager in that profile.
-- **Scan Live** — open PokéIdle and trigger the userscript live-chat scanner.
-- **Addons** — open the complete repository `.user.js` installer/update set in that profile.
-- **Profile** — open the profile directory in Explorer.
+## Browser lifecycle and monitoring
 
-The controller never stores Twitch/KICK passwords or tokens. Their sessions remain in Firefox profile storage.
+The controller first tries WebDriver BiDi `browser.close`, then a native
+close request (Windows) or SIGTERM (Linux), and force-terminates only as a
+last resort. It prevents launching into profiles already owned by a Firefox
+process. Recovered processes are never automatically terminated on controller
+exit; use the account's **Stop** action to close them explicitly.
 
-## Stream/resource model
+Commands sent through the BiDi tab monitor have a bounded queue, expiry, and
+completion/error status. A failed or uncertain tab creation is not retried
+blindly, to avoid accidentally opening duplicates.
 
-The controller does not create hidden stream windows or background browser engines.
-
-The stream userscript provides 10 Twitch + 10 KICK chat slots for each game. Those slots open the official chat-only pop-out URLs in the already-running game profile, so the profile's existing Twitch/KICK login is reused. The manager can open or close slots individually or all at once.
-
-The actual video pages are separate and optional. The normal stream path is chat-only, so 20 configured channels do not mean 20 video decoders.
-
-The goal is approximately one Firefox instance per game account, with stream resource usage coming from chat connections only until video is explicitly requested.
-
-## Architecture
-
-The controller does not embed a browser, use WebView2, or implement a userscript engine.
-
-PokéIdle runs in normal Firefox processes. The **official Violentmonkey Firefox extension** owns the repository's ordinary `*.user.js` files.
-
-The controller opens the raw `.user.js` URLs for installation/update. The first install still goes through Violentmonkey's normal confirmation UI; the scripts carry `@updateURL` and `@downloadURL` so later updates are handled by Violentmonkey.
-
-The controller is responsible for desktop/process/profile orchestration and launching stream/addon commands in the correct profile.
-
-## Development
-
-From this directory:
-
-    cargo build
-
-For an optimized build:
-
-    cargo build --release
-
-The release executable is:
-
-    target\release\moth-controller.exe
+The controller does not store browser account passwords or tokens.
