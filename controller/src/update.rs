@@ -149,7 +149,7 @@ pub struct AddonVersionStatus {
 
 pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
 
-/// Refresh metadata on a worker every six hours without blocking the UI.
+/// Check versions at launch, daily thereafter, and immediately on manual request.\n/// All HTTP work stays off the UI thread.
 pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
     let worker_status = Arc::clone(&status);
@@ -177,7 +177,7 @@ pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
                     }
                 }
             }
-            match rx.recv_timeout(Duration::from_secs(6 * 60 * 60)) {
+            match rx.recv_timeout(Duration::from_secs(24 * 60 * 60)) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => {
                     // Coalesce multiple requests made during the same scan.
                     while rx.try_recv().is_ok() {}
