@@ -374,7 +374,7 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
         "Recovered Firefox PID {pid} has not exited; Stop explicitly requested forced termination"
     ));
     let output = Command::new("taskkill.exe")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .args(["/PID", &pid.to_string(), "/F"])
         .output()
         .map_err(|error| format!("could not terminate recovered Firefox: {error}"))?;
     if !output.status.success() {
