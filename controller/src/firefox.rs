@@ -4,6 +4,8 @@ use crate::monitor::MonitorHandle;
 use std::fs;
 use std::io;
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 
 const USER_PREFS: &str = r#"
@@ -242,4 +244,213 @@ pub fn open_url(config: &Config, url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(format_spawn_error)
+}
+
+
+/// Stop only the Firefox process started by this controller. Prefer a clean
+/// WebDriver BiDi browser.close (headless and visible); then try window close
+/// for visible or sign-in browsers. Force termination is the final fallback.
+pub fn stop_child(child: &mut Child, monitor: Option<&MonitorHandle>) -> Result<(), String> {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => return Err(format!("could not check Firefox process: {error}")),
+    }
+
+    if let Some(monitor) = monitor {
+        match monitor.close_browser(Duration::from_secs(3)) {
+            Ok(()) => logging::info("Firefox received BiDi browser.close"),
+            Err(error) => {
+                logging::warn(&format!("Firefox BiDi close unavailable: {error}"));
+                // A timed-out request must not close a newly launched browser
+                // later if this monitor reconnects to the same port.
+                monitor.stop();
+            }
+        }
+        if wait_child(child, Duration::from_secs(3))? {
+            return Ok(());
+        }
+    }
+
+    let windows = request_window_close(child.id());
+    if windows > 0 && wait_child(child, Duration::from_secs(4))? {
+        return Ok(());
+    }
+
+    // This PID belongs to our Child handle, so force kill cannot hit a
+    // different Firefox profile through a broad process-name lookup.
+    logging::warn(&format!(
+        "Firefox PID {} did not exit gracefully; forcing termination",
+        child.id()
+    ));
+    child.kill().map_err(|error| format!("could not terminate Firefox: {error}"))?;
+    child.wait().map_err(|error| format!("could not reap Firefox: {error}"))?;
+    Ok(())
+}
+
+fn wait_child(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+    let until = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(true),
+            Ok(None) => {}
+            Err(error) => return Err(format!("could not check Firefox process: {error}")),
+        }
+        if Instant::now() >= until {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Find a pre-existing Firefox parent launched with this *exact* profile.
+/// Used only when a process is lost or a new launch is requested: querying
+/// WMI from the egui repaint loop would be too expensive.
+#[cfg(windows)]
+pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
+    let quoted = format!("'{}'", config.profile_dir.to_string_lossy().replace('\'', "''"));
+    let script = format!(
+        r#"$ErrorActionPreference='Stop'; $p={quoted}; $pattern='(?i)(?:^|\s)-{{1,2}}profile\s+"?' + [regex]::Escape($p) + '"?(?=\s|$)'; @(Get-CimInstance Win32_Process -Filter "Name = 'firefox.exe'" | Where-Object {{ $_.CommandLine -match $pattern }} | Select-Object -ExpandProperty ProcessId) -join ','"#
+    );
+    let mut command = Command::new("powershell.exe");
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = command
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|error| format!("could not inspect running Firefox profiles: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Firefox profile inspection failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    let mut ids = value.trim().split(',').filter(|id| !id.trim().is_empty());
+    let first = ids.next();
+    if ids.next().is_some() {
+        logging::warn("Multiple Firefox parent processes advertise the same profile");
+    }
+    first
+        .map(|id| id.trim().parse::<u32>()
+            .map_err(|error| format!("invalid Firefox PID from process inspection: {error}")))
+        .transpose()
+}
+
+#[cfg(not(windows))]
+pub fn find_profile_process(_config: &Config) -> Result<Option<u32>, String> {
+    Err("Firefox profile process detection is only available on Windows".to_string())
+}
+
+/// Close a recovered Firefox only after verifying that its command line still
+/// identifies our own profile. This is called on an explicit Stop action,
+/// never on controller Drop: we must not kill somebody else's browser.
+pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
+    if find_profile_process(config)? != Some(pid) {
+        return Err("Firefox profile process changed; refresh and try again".to_string());
+    }
+    let windows = request_window_close(pid);
+    if windows > 0 && wait_pid(pid, Duration::from_secs(5)) {
+        return Ok(());
+    }
+
+    if !process_alive(pid) {
+        return Ok(());
+    }
+    if find_profile_process(config)? != Some(pid) {
+        return Err("Firefox profile process changed during shutdown".to_string());
+    }
+
+    logging::warn(&format!(
+        "Recovered Firefox PID {pid} has not exited; Stop explicitly requested forced termination"
+    ));
+    let output = Command::new("taskkill.exe")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .map_err(|error| format!("could not terminate recovered Firefox: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not terminate recovered Firefox: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if !wait_pid(pid, Duration::from_secs(3)) {
+        return Err("recovered Firefox did not exit after termination request".to_string());
+    }
+    Ok(())
+}
+
+fn wait_pid(pid: u32, timeout: Duration) -> bool {
+    let until = Instant::now() + timeout;
+    while process_alive(pid) {
+        if Instant::now() >= until {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+#[cfg(windows)]
+pub fn process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    // SYNCHRONIZE is enough to inspect whether a process handle is signaled.
+    let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let result = unsafe { WaitForSingleObject(handle, 0) };
+    unsafe { CloseHandle(handle); }
+    result == 0x102 // WAIT_TIMEOUT: the process is still running
+}
+
+#[cfg(not(windows))]
+pub fn process_alive(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct CloseWindows {
+    pid: u32,
+    sent: usize,
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn close_window_for_pid(hwnd: *mut std::ffi::c_void, parameter: isize) -> i32 {
+    let request = unsafe { &mut *(parameter as *mut CloseWindows) };
+    let mut owner = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, &mut owner) };
+    if owner == request.pid && unsafe { PostMessageW(hwnd, 0x0010, 0, 0) } != 0 {
+        request.sent += 1; // WM_CLOSE; Firefox controls its own cleanup
+    }
+    1 // continue enumerating all top-level windows for this PID
+}
+
+#[cfg(windows)]
+fn request_window_close(pid: u32) -> usize {
+    let mut request = CloseWindows { pid, sent: 0 };
+    unsafe { EnumWindows(Some(close_window_for_pid), &mut request as *mut CloseWindows as isize); }
+    request.sent
+}
+
+#[cfg(not(windows))]
+fn request_window_close(_pid: u32) -> usize { 0 }
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn EnumWindows(callback: Option<unsafe extern "system" fn(*mut std::ffi::c_void, isize) -> i32>, parameter: isize) -> i32;
+    fn GetWindowThreadProcessId(hwnd: *mut std::ffi::c_void, pid: *mut u32) -> u32;
+    fn PostMessageW(hwnd: *mut std::ffi::c_void, message: u32, wparam: usize, lparam: isize) -> i32;
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+    fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+    fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
 }
