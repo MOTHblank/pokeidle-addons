@@ -332,6 +332,7 @@
         'Price mode': 'Modo de preço',
         'Market catalog is not loaded yet.': 'O catálogo do mercado ainda não foi carregado.',
         'Owned: {owned} · listed: {listed}': 'Possui: {owned} · anunciado: {listed}',
+        'target: {price}': 'alvo: {price}',
         'Experimental: recommendations can change with market data. Keep this disabled until you have reviewed every selected item.': 'Experimental: as recomendações podem mudar com os dados do mercado. Mantenha desativado até revisar cada item selecionado.',
         'Fixed rules still obey Coin/Gem reserves and maximum spend per purchase. New automation is disabled by default.': 'As regras fixas continuam respeitando reservas de moedas/gemas e o gasto máximo por compra. A nova automação vem desativada por padrão.'
     });
@@ -1892,7 +1893,7 @@
         return true;
     }
 
-    function purchaseQuantity(candidate) {
+    function purchaseQuantity(candidate, forceBatch = false) {
         const balance = balanceFor(candidate.currency);
         const available = Math.max(0, balance - reserveFor(candidate.currency));
         const cap = maxSpendFor(candidate.currency);
@@ -1905,7 +1906,7 @@
         if (!(unitPrice > 0) || budget < unitPrice) return 0;
 
         if (candidate.kind === 'pokemon') return 1;
-        if (!config.buyWholeItemBatch) return 1;
+        if (!forceBatch && !config.buyWholeItemBatch) return 1;
 
         return Math.max(0, Math.min(
             Math.max(1, Number(candidate.qty || 1)),
@@ -1922,7 +1923,7 @@
         const blockedUntil = Number(state.attemptedListings.get(candidate.listingId) || 0);
         if (blockedUntil > now) return false;
 
-        const affordableQuantity = purchaseQuantity(candidate);
+        const affordableQuantity = purchaseQuantity(candidate, fixedRule);
         const requestedLimit = requestedQuantity == null
             ? affordableQuantity
             : Math.floor(Number(requestedQuantity));
@@ -3362,6 +3363,15 @@
         });
     }
 
+    function autoSellRuleStatus(rule) {
+        const base = automationRuleStatus(rule.itemId, rule.currency);
+        const recommendation = sellPriceRecommendation(rule.itemId, rule.currency);
+        const target = rule.mode === 'patient'
+            ? Number(recommendation.patientPrice || 0)
+            : Number(recommendation.price || 0);
+        return target > 0 ? base + ' · ' + tr('target: {price}', { price: num(target) }) : base;
+    }
+
     function autoSellRulesHtml() {
         const rules = sanitizeAutoSellRules(config.autoSellRules);
         const rows = rules.map(rule =>
@@ -3369,7 +3379,7 @@
             '<label class="moth-mw-rule-toggle"><input type="checkbox" data-moth-auto-sell-field="enabled" data-rule-id="' + escapeHtml(rule.id) + '"' +
             (rule.enabled ? ' checked' : '') + '> ' + escapeHtml(tr('Enabled')) + '</label>' +
             '<div class="moth-mw-rule-name"><b>' + escapeHtml(catalogName(rule.itemId)) + '</b><small>' +
-            escapeHtml(automationRuleStatus(rule.itemId, rule.currency)) + '</small></div>' +
+            escapeHtml(autoSellRuleStatus(rule)) + '</small></div>' +
             '<label><span>' + escapeHtml(tr('Currency')) + '</span><select data-moth-auto-sell-field="currency" data-rule-id="' + escapeHtml(rule.id) + '">' +
             '<option value="gold"' + (rule.currency === 'gold' ? ' selected' : '') + '>' + escapeHtml(tr('Coins')) + '</option>' +
             '<option value="orb"' + (rule.currency === 'orb' ? ' selected' : '') + '>' + escapeHtml(tr('Gems')) + '</option></select></label>' +
