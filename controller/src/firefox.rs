@@ -89,7 +89,7 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
         .spawn()
         .map_err(format_spawn_error)?;
 
-    let monitor = MonitorHandle::start(config.remote_debug_port);
+    let monitor = MonitorHandle::start(config.remote_debug_port, headless);
     Ok((child, monitor))
 }
 
