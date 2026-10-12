@@ -188,10 +188,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Restart visible" => "Reiniciar visível",
         "Restart headless" => "Reiniciar oculto",
         "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
-        "Telemetry stale" => "Telemetria desatualizada",
-        "Waiting for first telemetry sample" => "Aguardando primeira leitura da telemetria",
-        "The displayed metrics may be out of date." => "Os dados exibidos podem estar desatualizados.",
-        "STALE" => "DESATUALIZADO",
+        "NO READINGS" => "SEM LEITURAS",
+        "The controller has stopped receiving telemetry. Firefox and addons may still be running." => "O controlador deixou de receber telemetria. O Firefox e os addons podem continuar funcionando.",
+        "The displayed metrics are from the last successful reading." => "Os dados exibidos são da última leitura bem-sucedida.",
         "Installer already running" => "O instalador já está em execução",
         "Checking addons on GitHub…" => "Consultando addons no GitHub…",
         "Opening addon installers…" => "Abrindo instaladores de addons…",
@@ -1708,7 +1707,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().telemetry_is_fresh()))
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
-                    runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { WARN });
+                    runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
                     runtime_row(ui, "Poll", "5 sec", MUTED);
                 });
 
@@ -1960,21 +1959,6 @@ fn draw_game_card(
                 if response.on_hover_text(tr("Open Account Manager to resolve addon problems")).clicked() {
                     app.open_addon_manager(profile);
                 }
-            }
-
-            if running && app.games[index].orphaned_pid.is_none() && !health.telemetry_is_fresh() {
-                let freshness = match health.telemetry_age() {
-                    Some(age) => format!("{} · {}s", tr("Telemetry stale"), age.as_secs()),
-                    None => tr("Waiting for first telemetry sample").to_string(),
-                };
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!("⚠ {freshness}"))
-                        .size(11.0)
-                        .color(WARN),
-                ).on_hover_text(
-                    health.last_error.as_deref().unwrap_or(tr("The displayed metrics may be out of date."))
-                );
             }
 
             if running && health.game_ready && health.logged_in
@@ -2581,17 +2565,10 @@ fn draw_game_card(
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                if health.last_game_message_ms > 0 {
-                    let age = (chrono_like_now_ms().saturating_sub(health.last_game_message_ms)) / 1000;
-                    ui.label(
-                        RichText::new(format!("{} {}s {}", tr("DATA"), age, tr("ago")))
-                            .size(8.0)
-                            .color(if age <= 10 { GOOD } else { WARN }),
-                    );
-                    ui.add_space(8.0);
-                }
-
-                let addon_color = if health.addon_ok == health.addon_total {
+                // Unverified addon counts must not look like a live warning or success.
+                let addon_color = if !health.telemetry_is_fresh() {
+                    DIM
+                } else if health.addon_ok == health.addon_total {
                     GOOD
                 } else {
                     WARN
@@ -3427,10 +3404,15 @@ fn profile_button(ui: &mut egui::Ui, label: &str, mut action: impl FnMut()) {
 }
 
 fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
+    // Loss of BiDi telemetry does not imply that the game or its userscripts stopped.
+    // Keep the state accessible without a constantly growing, alarm-colored warning.
+    let no_readings = running
+        && health.last_successful_probe_at.is_some()
+        && !health.telemetry_is_fresh();
     let (label, color) = if !running {
         ("STOPPED", DIM)
-    } else if health.state == "Running" && !health.telemetry_is_fresh() {
-        ("STALE", WARN)
+    } else if no_readings {
+        ("NO READINGS", DIM)
     } else if health.state == "Running" && health.activity == "Hunting" {
         ("HUNTING", GOOD)
     } else if health.state == "Running" && health.logged_in {
@@ -3445,12 +3427,21 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
         ("ERROR", BAD)
     };
 
-    ui.label(
+    let response = ui.label(
         RichText::new(format!("● {}", tr(label)))
             .size(10.0)
             .strong()
             .color(color),
     );
+    if no_readings {
+        response.on_hover_ui(|ui| {
+            ui.label(tr("The controller has stopped receiving telemetry. Firefox and addons may still be running."));
+            ui.label(RichText::new(tr("The displayed metrics are from the last successful reading.")).color(DIM));
+            if let Some(error) = &health.last_error {
+                ui.label(RichText::new(error).color(DIM));
+            }
+        });
+    }
 }
 
 
@@ -3571,15 +3562,6 @@ pub fn run() -> Result<(), String> {
         Box::new(|cc| Ok(Box::new(ControllerApp::new(cc)))),
     )
     .map_err(|error| format!("could not start controller UI: {error}"))
-}
-
-pub(crate) fn chrono_like_now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn format_pct(value: f32) -> String {
