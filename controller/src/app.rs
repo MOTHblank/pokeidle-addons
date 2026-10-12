@@ -211,6 +211,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Switch to visible Firefox before opening installers." => "Mude para o Firefox visível antes de abrir os instaladores.",
         "Select only the affected scripts. Installers open in this Firefox profile; confirm installation in Violentmonkey." => "Selecione somente os scripts afetados. Os instaladores abrem neste perfil do Firefox; confirme a instalação no Violentmonkey.",
         "This only opens installers, it does not confirm installation." => "Esta ação apenas abre instaladores, não confirma a instalação.",
+        "Opens installer links through Firefox; confirm installation in Violentmonkey." => "Abre os links de instalação pelo Firefox; confirme a instalação no Violentmonkey.",
         "Running" => "Em execução",
         "Not detected in game" => "Não detectado no jogo",
         "Not installed or inactive" => "Não instalado ou inativo",
@@ -3307,7 +3308,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     app.start_addon_install(profile, None);
                                                 }
                                             });
-                                            ui.label(RichText::new(tr("This only queues installer tabs; Firefox reports whether they open. Confirm installation in Violentmonkey."))
+                                            ui.label(RichText::new(tr("Opens installer links through Firefox; confirm installation in Violentmonkey."))
                                                 .size(9.0).color(DIM));
                                             ui.label(RichText::new(tr("Reload the game only when you choose; an automatic reload could interrupt gameplay."))
                                                 .size(9.0).color(DIM));
