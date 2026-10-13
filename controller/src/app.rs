@@ -2493,7 +2493,13 @@ fn draw_game_details(
                             detail_stat_line(&mut cols[0], tr("Next level"), &eta);
                             detail_stat_line(&mut cols[0], tr("Coins/h"), &rate("coinsH"));
                             detail_stat_line(&mut cols[1], tr("Captures/h"), &rate("capturesH"));
-                            detail_stat_line(&mut cols[1], tr("Shiny catches/h"), &rate("shinyCaughtH"));
+                            let shiny_interval = atlas.get("shinyCaughtH").and_then(|v| v.as_f64())
+                                .filter(|rate| *rate > 0.0).map(|rate| {
+                                    let hours = 1.0 / rate;
+                                    if hours >= 48.0 { format!("{:.1} days", hours / 24.0) }
+                                    else { format!("{hours:.1} h") }
+                                }).unwrap_or_else(|| "—".to_string());
+                            detail_stat_line(&mut cols[1], tr("Shiny wait"), &shiny_interval);
                             detail_stat_line(&mut cols[1], tr("Balls/capture"), &rate("ballsPerCapture"));
                         });
                         ui.separator();
