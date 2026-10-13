@@ -10,6 +10,10 @@ Nenhuma parte do código deste projeto está escondida: todo o código-fonte est
 
 Este aplicativo ainda está em desenvolvimento, então nem tudo funciona perfeitamente. Caso encontre algum problema, abra uma [Issue](https://github.com/MOTHblank/pokeidle-addons/issues) descrevendo o que aconteceu. Sugestões de funcionalidades que estejam faltando também são bem-vindas. E, se você sabe programar, contribuições e pull requests são bem-vindos.
 
+## Documentação técnica
+
+Os estudos detalhados de captura, recompensas, mecânicas do PokéIdle e avaliação de Pokémon foram movidos para o repositório privado [pokeidle-addons-premium/docs](https://github.com/MOTHblank/pokeidle-addons-premium/tree/main/docs). Nenhum desses arquivos faz parte da distribuição do Controller; o repositório premium exige permissão de acesso.
+
 ## Requisitos
 
 Instale estes componentes antes de configurar o controlador:
