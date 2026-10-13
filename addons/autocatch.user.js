@@ -368,6 +368,7 @@
                 great: 0,
                 super: 0,
                 ultra: 0,
+                beast: 0,
                 master: 0,
                 other: 0
             },
@@ -479,7 +480,7 @@
             const previous = inventoryBaseline.get(id);
 
             if (previous !== undefined && count < previous) {
-                stats.used[key] += previous - count;
+                stats.used[key in stats.used ? key : 'other'] += previous - count;
             }
 
             inventoryBaseline.set(id, count);
@@ -517,11 +518,16 @@
             .map((button, index) => {
                 const meta = ballMetaForButton(button);
                 const key = meta?.key || classifyBall(button);
+                const domCount = ballCount(button);
                 return {
                     button,
                     key,
                     index,
-                    count: ballCount(button)
+                    count: domCount !== null
+                        ? domCount
+                        : meta && protocolBalls.has(meta.id)
+                            ? Number(protocolBalls.get(meta.id))
+                            : null
                 };
             })
             .filter(({ button, key, count }) => {
