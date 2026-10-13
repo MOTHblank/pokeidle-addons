@@ -1179,22 +1179,22 @@ fn build_tab_infos(
         };
 
         let result = if needs_tab_script_probe(kind) {
-        let id = *next_id;
-        *next_id += 1;
+            let id = *next_id;
+            *next_id += 1;
 
-        Some(send_and_wait(
-            socket,
-            id,
-            json!({
-                "id": id,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
-                    "target": { "context": context.id },
-                    "awaitPromise": false
-                }
-            }),
-        ))
+            Some(send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "script.evaluate",
+                    "params": {
+                        "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
+                        "target": { "context": context.id },
+                        "awaitPromise": false
+                    }
+                }),
+            ))
         } else {
             None
         };
@@ -1835,6 +1835,24 @@ mod command_tests {
 
         health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(6 * 60));
         assert!(!health.telemetry_is_fresh());
+    }
+
+    #[test]
+    fn stalled_websocket_handshake_has_a_timeout() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("local TCP listener");
+        let port = listener.local_addr().expect("local listener address").port();
+        let peer = thread::spawn(move || {
+            let (_socket, _) = listener.accept().expect("monitor must attempt handshake");
+            thread::sleep(super::BIDI_IO_TIMEOUT + Duration::from_millis(250));
+        });
+        let started = Instant::now();
+        assert!(super::open_session(port).is_err());
+        assert!(started.elapsed() < Duration::from_secs(12));
+        peer.join().expect("handshake server exited");
     }
 
     #[test]
