@@ -2,11 +2,11 @@
 // @name         PokéIdle Hunt Atlas
 // @namespace    moth.pokeidle
 // @author       MOTHblank
-// @homepageURL  https://github.com/MOTHblank/pokeidle-huntatlas
-// @supportURL   https://github.com/MOTHblank/pokeidle-huntatlas/issues
+// @homepageURL  https://github.com/MOTHblank/pokeidle-addons/tree/master/huntatlas
+// @supportURL   https://github.com/MOTHblank/pokeidle-addons/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.7.22
+// @version      1.9.17
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -20,7 +20,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.7.22');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.17');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -409,8 +409,6 @@
             'xp.sectionTitle': 'XP/hour recommendations',
             'xp.sectionSubtitle': 'Best hunt for {lead} within the current filters.',
             'xp.best': 'Best: {hunt}',
-            'xp.showTopFive': 'Show top 5',
-            'xp.hideTopFive': 'Hide top 5',
             'xp.topFiveTitle': 'Top 5 hunts by trainer XP/hour',
             'xp.measuredTrainer': 'measured {value} trainer XP/h',
             'xp.modeledTrainer': 'modeled {value} trainer XP/h',
@@ -420,7 +418,211 @@
             'xp.recommendationNote': '{lead} · recommendations respect the current Atlas filters.',
             'xp.currentMeasured': ' · current measured {value} trainer XP/h',
             'xp.currentModeled': ' · current modeled {value} trainer XP/h',
-            'xp.modelNote': ' · exact upstream XP/kill curve; movement, cadence, damage and kill speed come from this lead Pokémon’s real combat.',
+            'xp.warmingSession': 'warming up: sustained observations still insufficient',
+            'xp.sessionEvidence': '{samples} kills / {minutes} min, wall-clock',
+            'sort.capture': 'Captures (Ultra/Beast rate)',
+            'sort.shinyCatch': 'Shiny catches (conditional rate)',
+            'catch.title': 'Catch and shiny planner',
+            'catch.ball': 'Compare with',
+            'catch.ultra': 'Ultra Ball · ×4 (default)',
+            'catch.beast': 'Beast Ball · ×8 (Diamonds)',
+            'catch.lure': 'Simulate Shiny Secret Lure ×2 (hypothetical, not verified active)',
+            'catch.current': 'Compared hunt: {hunt}',
+            'catch.unknown': '— (species rarity or kill rate unavailable)',
+            'catch.percent': '{chance} per accepted throw',
+            'catch.expected': '{count} captures · {balls} accepted balls/capture on average',
+            'catch.seen': 'Shinies seen: {count} · shinies caught: {caught}',
+            'catch.oneDay': '≥1 shiny caught in 24h: {chance} (if steady conditions)',
+            'catch.cost': 'Replacement: {coins} Coins per expected capture',
+            'catch.diamondCost': 'Beast uses Diamonds',
+            'catch.diamondsPerCapture': '{count} Diamonds/capture',
+            'catch.diamondsPriceUnknown': 'Diamond cost unavailable',
+            'catch.stock': 'Stock: {count} · coverage at observed throw rate: {hours}h',
+            'catch.stockEmpty': 'Selected ball out of stock; future attempts require restocking',
+            'catch.observed': 'Observed: {throws} accepted throws, {caught} captures, {seen} shiny seen, {shiny} shiny caught; {fraction}% of killed corpses thrown at',
+            'catch.observedBall': 'Selected ball: {throws} accepted · {caught} confirmed captures (small samples are noisy)',
+            'catch.measuredChance': 'Observed success: {chance} ({throws} accepted throws)',
+            'catch.limit': 'Cross-hunt estimate is an upper bound IF every killed body gets one accepted throw. Current-hunt observed throws replace that assumption only after a usable sample. No free retries after failed throws.',
+            'catch.source': 'Estimated catch rate · coverage {coverage}% (active boosts unverified)',
+            'catch.shiny': 'Shiny is rolled per eligible accepted throw (1/24,000 base; 1/12,000 with applicable Lure), NOT per kill. Caught shiny needs both rolls to succeed. No guarantee or saleable specimen implied.',
+            'catch.outland': 'Outland shiny capture eligibility unresolved; shiny estimates withheld.',
+            'catch.clamp': 'Beast ×8 does not always double Ultra ×4 after the 10% cap.',
+            'catch.mystic': 'Mystic Arena uses a separate capture table',
+            'catch.mysticTitle': 'Mystic Arena',
+            'catch.mysticRates': 'Chance per ball',
+            'catch.mysticTicket': 'One MysticTicket per encounter; one accepted throw',
+            'catch.mysticStock': 'MysticTickets: {count}',
+            'catch.mysticNote': 'Unverified Capture Boost not applied',
+            'catch.card': 'Ultra {ultra} · Beast {beast} (wiki-conditional)',
+            'catch.levelCap': 'Caught level cap: {level} (wild rewards unchanged)',
+            'catch.cardUnknown': 'Capture chance unavailable (rarity unresolved)',
+            'catch.targetRate': 'Target {captures} captures · {shiny} shiny caught · mean {hours}/shiny ({source})',
+            'catch.targetObserved': 'observed throw coverage',
+            'catch.targetCeiling': 'upper bound if all bodies targeted',
+            'catch.shinyMean': 'Mean wait for shiny caught: {hours} · ≈{throws} accepted attempts/shiny caught',
+            'sort.npcLoot': 'NPC loot EV/hour (not cash)',
+            'sort.rare': 'Selected rare item rate',
+            'rank.topFive': 'Top 5 by {metric}',
+            'rank.noEvidence': 'No comparable estimate for this metric under the current filters.',
+            'rank.rareLabel': 'Rare item for comparison',
+            'rank.value': '{value}',
+            'rank.efficiency': '{value} Coins/expected capture · wiki-conditional',
+            'rank.invalid': 'Unavailable — insufficient model evidence or not eligible',
+            'rank.unboosted': 'Unboosted / not validated against active server buffs',
+            'rank.details': 'Hunt details (tap to expand)',
+            'rank.pokemonXp': 'Pokémon XP/h',
+            'rank.kills': 'Kills/h',
+            'rank.coverage': 'Coverage {percent}%',
+            'rank.rare': 'Selected rare item rate',
+            'rank.capture': 'Selected ball: {chance} per accepted throw',
+            'rank.confidence': 'Confidence: {confidence} (heuristic)',
+
+            'rank.keyInfo': 'Rates are conditional, and the best hunt depends on the selected metric.',
+            'rank.unknown': 'No data',
+            'rank.learning': 'Learning',
+            'rank.unverified': 'Unverified',
+            'reference.title': 'Simulate bonuses (optional)',
+            'reference.note': 'This separate calculator uses manual capture, shiny and drop assumptions from PokeIdle Tools. Those bonuses are NOT detected here. The game-reported XP bonuses appear above. Nothing changes in the game or measured rates.',
+            'reference.enable': 'Compare hypothetical bonuses',
+            'reference.shinyBoost': 'Shiny chance ×1.5',
+            'reference.catchBoost': 'Capture chance ×1.5',
+            'reference.kickShiny': 'Kick shiny ×1.15',
+            'reference.kickCatch': 'Kick capture ×1.15',
+            'reference.shinyEvent': 'Shiny event bonus (+%)',
+            'reference.catchEvent': 'Capture event bonus (+%)',
+            'reference.loot': 'Loot boost (×)',
+            'reference.guild': 'Guild drop boost (×)',
+            'reference.dropEvent': 'Event drop boost (×)',
+            'reference.dropKick': 'Kick drop boost (×)',
+            'reference.catchResult': 'Capture and shiny estimate',
+            'reference.rareResult': 'Rare-item estimate',
+            'reference.rareStats': '{units} expected · at least one in 24h: {day} (none: {none})',
+            'reference.captureStats': 'Captures {catches} · shiny seen {seen} · shiny caught {caught} · ≥1 shiny caught in 24h {day} (none {none})',
+            'reference.captureGroup': 'Capture and shiny bonuses',
+            'reference.captureHelp': 'Capture = chance the ball succeeds. Shiny = chance the encounter is shiny. These are different odds.',
+            'reference.rareGroup': 'Rare-drop bonuses',
+            'reference.rareHelp': 'Only changes the selected rare item\'s estimated drop odds. Does not affect XP or Coins.',
+            'reference.extra': 'Additional assumptions (Kick)',
+            'reference.extraHelp': 'Kick factors are just examples in the external calculator. They are not detected in-game and do not connect Kick.',
+            'reference.unitsHelp': 'Example: +50% = 1.5×. A drop multiplier of 1× makes no change; 2× doubles the modeled chance.',
+            'reference.catchCompare': 'Chance to capture per accepted ball: {before} → {after}',
+            'reference.rareCompare': 'Chance of this item per kill: {before} → {after}',
+            'reference.unchanged': 'No bonus selected for this estimate; it matches the ordinary scenario.',
+            'reference.provenance': 'These optional assumptions come from PokeIdle Tools; they are not verified against the live game.',
+            'reference.unknown': 'Unknown; cannot infer missing odds, eligibility or rate',
+            'diag.toggle': 'Local estimate diagnostics (off by default)',
+            'diag.title': 'Redacted evidence · local only',
+            'diag.source': 'source: {source} · sample window: {window} · model coverage: {coverage}%',
+            'diag.noWindow': 'no measured window',
+            'diag.caveat': 'No raw messages, token, name or account ID is exported or uploaded.',
+            'diag.counts': 'kills {kills}, accepted balls {throws}, captures {captures}, boosts keys {boosts}, render attempts {renders}',
+            'sort.coins': 'Kill Coins/hour',
+            'econ.title': 'Farming economy · {hunt}',
+            'econ.kill': 'Kill Coins/h',
+            'econ.loot': 'NPC loot EV/h',
+            'econ.realized': 'Realized Coins/h',
+            'econ.net': 'Net Coins/h',
+            'econ.cost': 'Replacement cost of used items',
+            'econ.diamonds': 'Diamonds/h (separate)',
+            'econ.model': 'shared model (unboosted, catalog fallback level)',
+            'econ.observed': 'observed server receipts',
+            'econ.estimatedLoot': 'reconstructed static loot · {coverage}% coverage (not verified server drops)',
+            'econ.netCaveat': 'Net = realized hunt Coins minus replacement cost of consumed balls/potions/revives, not a wallet-balance change. Unsold loot and potential market sales are excluded.',
+            'econ.noPrice': 'Costs unavailable: missing official shop price for {count} uses',
+            'econ.unlinked': 'Net unavailable: {count} throw event(s) could not be reconciled to a unique corpse',
+            'econ.stock': 'Stock {count} · runway {hours}h at observed use rate',
+            'econ.ball': 'Ball',
+            'econ.item': 'Item',
+            'econ.unknown': '— (insufficient evidence)',
+            'filter.panelTitle': 'Search and filters',
+            'filter.showPanel': 'Show filters',
+            'filter.hidePanel': 'Hide filters',
+            'filter.emptyReset': 'Clear filters and show Pokémon',
+            'outland.quickDisconnected': 'Game connection unavailable. Reconnect to change the tier.',
+            'outland.quickWaiting': 'Waiting for the game to report the active tier.',
+            'outland.quickTimedOut': 'The game did not confirm the change. Check the active tier and retry.',
+            'outland.quickLabel': 'Outland tier (quick change)',
+            'outland.quickActive': 'Active: {tier}',
+            'outland.quickUnknown': 'Current tier not reported by game',
+            'outland.quickAction': 'Switch to this tier',
+            'outland.quickAlready': 'Tier already active',
+            'rare.heading': 'Rare farming · tier preview',
+            'rare.outland': 'Outland rare drops',
+            'rare.egg': 'Shiny Egg Fragment',
+            'rare.preview': 'Compare Outland tier',
+            'rare.fallback': 'Reported tier {reported} reduced to allowed tier {effective} for current trainer level',
+            'rare.select': 'Use this tier in game',
+            'rare.pending': 'Change requested; waiting for the game to confirm',
+            'rare.locked': 'Locked: trainer level {level} required',
+            'rare.noCommand': 'In-game activation unavailable until the game reports its current tier',
+            'rare.source': 'Kills/h: {rate}',
+            'rare.kills': 'per kill',
+            'rare.units': 'Expected items: {value}',
+            'rare.mean': 'mean {hours} / item',
+            'rare.craft': 'mean {hours} / 10 fragments',
+            'rare.chances': '≥1 in 1h: {hour} · 24h: {day}',
+            'rare.incubation': 'Shiny Egg incubation: 168h after crafting (126h with verified heating)',
+            'rare.observed': 'Observed in this session: {count}',
+            'rare.marketUnknown': 'Completed-sale valuation: — (no verified sales samples)',
+            'rare.uncertainty': 'Unboosted independent-roll model; expected times are NOT guarantees. Loot Boost, guild/event stacking, item-roll exclusivity and bicycle server hook are unverified.',
+            'rare.notEligible': 'No supported rare drop for this location',
+            'rare.noRate': 'Kills/h unavailable; predictions are warming up',
+            'rare.huntContext': 'Base hunt: {hunt} (same Outland map across tiers)',
+            'xp.sourceLabel': 'source: {source}',
+            'xp.sourceMeasured': 'server kill rewards (observed)',
+            'xp.sourceModel': 'personalized combat projection',
+            'xp.sourceBaseline': 'unboosted static baseline',
+            'xp.sourceImmunity': 'known immunity',
+            'xp.ranged': 'heuristic range {low}–{high} trainer XP/h',
+            'xp.unboosted': 'modeled XP excludes unverified VIP, guild, stream, event and catch-up bonuses',
+            'xp.native.title': 'XP bonuses detected in the game',
+            'xp.native.wait': 'Waiting for game bonus data',
+            'xp.native.none': 'No active XP bonuses reported by Twitch, events or guild',
+            'xp.native.twitch': 'Twitch +{pct}% XP',
+            'xp.native.event': 'Event: trainer +{trainer}% · Pokémon +{pokemon}%',
+            'xp.native.guild': 'Guild +{pct}% XP',
+            'xp.native.shop': 'Shop boosts present (exact effect not yet verified)',
+            'xp.native.vip': 'VIP XP ×1.5',
+            'xp.native.guildBank': 'Guild timed XP boost ×1.1',
+            'xp.native.shopTrainer': 'Shop trainer XP ×{mult}',
+            'xp.native.shopPokemon': 'Shop Pokémon XP ×{mult}',
+            'xp.native.shopUnknown': 'Shop XP boost detected without a published multiplier',
+            'xp.native.catchup': 'Catch-up boost reported (threshold affects exact XP)',
+            'xp.native.unknownTwitch': 'Twitch percentage reported; credited channels not confirmed',
+            'xp.native.twitchAvailable': 'Twitch XP bonus is available but no credited chat is detected',
+            'xp.native.model': 'Model uses the detected percentages: trainer ×{trainer} · Pokémon ×{pokemon}. Other boosts may still be missing.',
+            'xp.native.measured': 'Measured XP/h already includes active bonuses; nothing is multiplied again.',
+            'xp.native.note': 'Reads game state like Moth Controller, with upstream XP multipliers. Unknown shop values and XP threshold crossings are not guessed. Capture/shiny/drop bonuses are separate.',
+            'xp.native.modeled': 'model includes recognized game-reported XP bonuses (remaining effects unverified)',
+            'xp.uncertainLeader': 'Leading candidate (uncertain): {hunt}',
+            'xp.fallback': '{reason}',
+            'xp.fallback.known-immunity': 'Known immunity',
+            'xp.fallback.no-lead-combat-samples': 'No combat samples yet',
+            'xp.fallback.incomplete-spawn-coverage': 'Some enemies are not measured yet',
+            'xp.fallback.insufficient-personalized-model': 'More combat samples needed',
+            'xp.calibration': 'validated against {count} hunt(s) in this context; median absolute error {error}%',
+            'xp.unknownPokemon': 'Pokémon XP event stream incomplete (not combined with trainer XP)',
+            'xp.modelNote': ' · exact upstream XP curve; real combat samples take priority over experimental move-index estimates.',
+            'xp.possibleMoves': '{count} level-eligible indexed moves (not confirmed equipped)',
+            'xp.knownMoves': '{count} named moves confirmed by battle events',
+            'xp.namesUnavailable': 'Battle events have no identified move names yet; using attack-type measurements',
+            'xp.protocol': 'Player hits: {total} · named {named} · unnamed {unnamed}',
+            'xp.protocolKeys': 'Unnamed attack fields: {keys}',
+            'xp.indexedMoveSummary': 'Possible attacks: {moves}',
+            'xp.observedMoveSummary': 'Observed attacks: {moves}',
+            'xp.moveConfidence': 'Move model: {confidence}',
+            'xp.confidence.high': 'observed',
+            'xp.confidence.medium': 'partly observed',
+            'xp.confidence.low': 'experimental',
+            'xp.incompleteShort': '⚠ model covers {percentage}%',
+            'xp.incompleteDetail': 'Incomplete personalized model: {covered}/{total} spawn points covered ({percentage}%); using baseline, not excluding enemies.',
+            'status.movesUnavailable': ' · move index unavailable',
+            'location.shared': 'Same mapped zone: {hunts}',
+            'location.coverage': 'Mapped hunt locations: {matched}/{total} · {conflicts} outdated level labels',
+            'xp.catalogMoves': '{count} candidates from creature catalog (index is advisory)',
+            'xp.moveDisagreements': '{count} indexed moves differ from the creature catalog',
+            'location.coordinates': 'World location: {region} · {x}, {y} (reference only)',
+            'status.locationsUnavailable': ' · world location index unavailable',
             'results.showMore': 'Show more · {count} Pokémon remaining',
             'results.noMatch': 'No Pokémon match these filters. Use Clear filters to reset the Atlas.',
             'results.waiting': 'Waiting for PokéIdle hunt data. Reload the page once after installing Hunt Atlas if this remains empty.',
@@ -563,8 +765,6 @@
             'xp.sectionTitle': 'Recomendações de XP/hora',
             'xp.sectionSubtitle': 'Melhor hunt para {lead} dentro dos filtros atuais.',
             'xp.best': 'Melhor: {hunt}',
-            'xp.showTopFive': 'Ver top 5',
-            'xp.hideTopFive': 'Ocultar top 5',
             'xp.topFiveTitle': 'Top 5 hunts por XP de treinador/hora',
             'xp.measuredTrainer': 'medido {value} XP de treinador/h',
             'xp.modeledTrainer': 'modelado {value} XP de treinador/h',
@@ -574,7 +774,211 @@
             'xp.recommendationNote': '{lead} · recomendações respeitam os filtros atuais do Atlas.',
             'xp.currentMeasured': ' · atual medido {value} XP de treinador/h',
             'xp.currentModeled': ' · atual modelado {value} XP de treinador/h',
-            'xp.modelNote': ' · curva oficial de XP/abate; deslocamento, cadência, dano e velocidade de abate vêm do combate real deste Pokémon líder.',
+            'xp.warmingSession': 'aquecendo: ainda faltam medições sustentadas',
+            'xp.sessionEvidence': '{samples} abates / {minutes} min, tempo corrido',
+            'sort.capture': 'Frequência de capturas (Ultra/Beast)',
+            'sort.shinyCatch': 'Frequência de shinies capturados (condicional)',
+            'catch.title': 'Planejador de capturas e shinies',
+            'catch.ball': 'Comparar usando',
+            'catch.ultra': 'Ultra Ball · ×4 (padrão)',
+            'catch.beast': 'Beast Ball · ×8 (Diamantes)',
+            'catch.lure': 'Simular Shiny Secret Lure ×2 (hipotético; não confirmado ativo)',
+            'catch.current': 'Hunt em análise: {hunt}',
+            'catch.unknown': '— (raridade da espécie ou abates/h indisponíveis)',
+            'catch.percent': '{chance} por bola aceita',
+            'catch.expected': '{count} capturas · {balls} bolas aceitas/captura em média',
+            'catch.seen': 'Shinies vistos: {count} · shinies capturados: {caught}',
+            'catch.oneDay': '≥1 shiny capturado em 24h: {chance} (com condições constantes)',
+            'catch.cost': 'Reposição: {coins} Moedas por captura esperada',
+            'catch.diamondCost': 'Beast usa Diamantes',
+            'catch.diamondsPerCapture': '{count} Diamantes/captura',
+            'catch.diamondsPriceUnknown': 'Custo em Diamantes indisponível',
+            'catch.stock': 'Estoque: {count} · duração no ritmo observado: {hours}h',
+            'catch.stockEmpty': 'Bola selecionada sem estoque; novas tentativas exigem reposição',
+            'catch.observed': 'Observado: {throws} bolas aceitas, {caught} capturas, {seen} shinies vistos, {shiny} shinies capturados; {fraction}% dos corpos derrotados receberam bola',
+            'catch.observedBall': 'Bola selecionada: {throws} aceitas · {caught} capturas confirmadas (amostras pequenas oscilam)',
+            'catch.measuredChance': 'Sucesso observado: {chance} ({throws} bolas aceitas)',
+            'catch.limit': 'Outras hunts: previsão é TETO condicional a arremessar uma bola aceita em todo corpo derrotado. Na hunt atual, o ritmo observado substitui essa hipótese apenas após amostra suficiente. Sem repetição grátis após falha.',
+            'catch.source': 'Previsão de captura · cobertura {coverage}% (bônus ativos não verificados)',
+            'catch.shiny': 'O shiny é sorteado por arremesso aceito elegível (1/24.000 normal; 1/12.000 com Lure aplicável), NÃO por abate. Capturar shiny exige sucesso em ambos os sorteios. Sem garantia de drop ou Pokémon vendável.',
+            'catch.outland': 'Elegibilidade de shiny na Outland não verificada; projeção de shiny omitida.',
+            'catch.clamp': 'Beast ×8 nem sempre dobra a chance da Ultra ×4 após o teto de 10%.',
+            'catch.mystic': 'A Arena Mística tem tabela própria de captura',
+            'catch.mysticTitle': 'Arena Mística',
+            'catch.mysticRates': 'Chance por bola',
+            'catch.mysticTicket': 'Um MysticTicket por encontro; uma bola aceita',
+            'catch.mysticStock': 'MysticTickets: {count}',
+            'catch.mysticNote': 'Bônus de captura não verificado, não aplicado',
+            'catch.card': 'Ultra {ultra} · Beast {beast} (condicional da wiki)',
+            'catch.levelCap': 'Teto do nível ao capturar: {level} (recompensas do selvagem não mudam)',
+            'catch.cardUnknown': 'Chance de captura indisponível (raridade não verificada)',
+            'catch.targetRate': 'Alvo {captures} capturas · {shiny} shinies capturados · média {hours}/shiny ({source})',
+            'catch.targetObserved': 'cobertura medida de arremessos',
+            'catch.targetCeiling': 'teto se todos os corpos receberem bola',
+            'catch.shinyMean': 'Espera média por shiny capturado: {hours} · ≈{throws} bolas aceitas/shiny capturado',
+            'sort.npcLoot': 'EV de loot NPC/h (não é dinheiro recebido)',
+            'sort.rare': 'Frequência do item raro escolhido',
+            'rank.topFive': 'Top 5 por {metric}',
+            'rank.noEvidence': 'Nenhuma previsão comparável nesta métrica com os filtros atuais.',
+            'rank.rareLabel': 'Item raro para comparar',
+            'rank.value': '{value}',
+            'rank.efficiency': '{value} Moedas/captura esperada · condicional da wiki',
+            'rank.invalid': 'Indisponível — dados insuficientes ou não elegível',
+            'rank.unboosted': 'Sem bônus / não validado com bônus ativos do servidor',
+            'rank.details': 'Detalhes da hunt (clique para abrir)',
+            'rank.pokemonXp': 'XP do Pokémon/h',
+            'rank.kills': 'Abates/h',
+            'rank.coverage': 'Cobertura {percent}%',
+            'rank.rare': 'Frequência do item raro escolhido',
+            'rank.capture': 'Bola selecionada: {chance} por arremesso aceito',
+            'rank.confidence': 'Confiança: {confidence} (heurística)',
+
+            'rank.keyInfo': 'As taxas são condicionais; a melhor hunt depende da métrica escolhida.',
+            'rank.unknown': 'Sem dados',
+            'rank.learning': 'Aprendendo',
+            'rank.unverified': 'Não verificado',
+            'reference.title': 'Simular bônus (opcional)',
+            'reference.note': 'Esta calculadora separada usa hipóteses manuais de captura, shiny e drops do PokeIdle Tools. Esses bônus NÃO são detectados aqui. Os bônus reais de XP informados pelo jogo aparecem acima. Nada muda no jogo nem nas taxas medidas.',
+            'reference.enable': 'Comparar bônus hipotéticos',
+            'reference.shinyBoost': 'Chance de shiny ×1,5',
+            'reference.catchBoost': 'Chance de captura ×1,5',
+            'reference.kickShiny': 'Shiny do Kick ×1,15',
+            'reference.kickCatch': 'Captura do Kick ×1,15',
+            'reference.shinyEvent': 'Bônus de evento shiny (+%)',
+            'reference.catchEvent': 'Bônus de evento de captura (+%)',
+            'reference.loot': 'Bônus de loot (×)',
+            'reference.guild': 'Bônus de drops da guilda (×)',
+            'reference.dropEvent': 'Bônus de drops de evento (×)',
+            'reference.dropKick': 'Bônus de drops do Kick (×)',
+            'reference.catchResult': 'Estimativa de capturas e shinies',
+            'reference.rareResult': 'Estimativa de item raro',
+            'reference.rareStats': '{units} esperados · pelo menos um em 24h: {day} (nenhum: {none})',
+            'reference.captureStats': 'Capturas {catches} · shiny visto {seen} · shiny capturado {caught} · ≥1 shiny capturado em 24h {day} (nenhum {none})',
+            'reference.captureGroup': 'Bônus de captura e shiny',
+            'reference.captureHelp': 'Captura = chance de a bola funcionar. Shiny = chance de o Pokémon aparecer shiny. São probabilidades diferentes.',
+            'reference.rareGroup': 'Bônus de drops raros',
+            'reference.rareHelp': 'Muda apenas a chance estimada do item raro escolhido. Não altera XP nem moedas.',
+            'reference.extra': 'Outras hipóteses (Kick)',
+            'reference.extraHelp': 'Os fatores do Kick são apenas exemplos da calculadora externa. Não são detectados no jogo e não conectam o Kick.',
+            'reference.unitsHelp': 'Exemplo: +50% = 1,5×. Um multiplicador de 1× não muda a chance; 2× dobra a chance simulada.',
+            'reference.catchCompare': 'Chance de capturar por bola aceita: {before} → {after}',
+            'reference.rareCompare': 'Chance deste item por abate: {before} → {after}',
+            'reference.unchanged': 'Nenhum bônus escolhido para esta estimativa; o resultado é igual ao cenário normal.',
+            'reference.provenance': 'Essas hipóteses opcionais vêm do PokeIdle Tools e não foram verificadas no servidor atual.',
+            'reference.unknown': 'Indisponível; sem inferir chance, elegibilidade ou taxa ausente',
+            'diag.toggle': 'Diagnóstico local da estimativa (desligado por padrão)',
+            'diag.title': 'Evidências resumidas · somente local',
+            'diag.source': 'origem: {source} · janela de amostras: {window} · cobertura do modelo: {coverage}%',
+            'diag.noWindow': 'sem janela medida',
+            'diag.caveat': 'Nenhuma mensagem bruta, token, nome ou ID de conta é exportado ou enviado.',
+            'diag.counts': 'abates {kills}, bolas aceitas {throws}, capturas {captures}, campos de bônus {boosts}, renderizações {renders}',
+            'sort.coins': 'Moedas/h por abate',
+            'econ.title': 'Economia da hunt · {hunt}',
+            'econ.kill': 'Moedas/h dos abates',
+            'econ.loot': 'EV/h de loot vendável ao NPC',
+            'econ.realized': 'Moedas/h realizadas',
+            'econ.net': 'Moedas líquidas/h',
+            'econ.cost': 'Reposição dos itens consumidos',
+            'econ.diamonds': 'Diamantes/h (separado)',
+            'econ.model': 'modelo-base (sem bônus, nível da hunt)',
+            'econ.observed': 'recibos observados do servidor',
+            'econ.estimatedLoot': 'loot reconstruído do catálogo · cobertura {coverage}% (drops do servidor não verificados)',
+            'econ.netCaveat': 'Líquido = moedas realizadas na hunt menos custo de reposição de bolas/poções/revives usados, não variação do saldo. Loot guardado e vendas futuras não entram.',
+            'econ.noPrice': 'Custo indisponível: falta preço oficial de {count} usos',
+            'econ.unlinked': 'Líquido indisponível: {count} evento(s) de bola sem associação confiável a um corpo',
+            'econ.stock': 'Estoque {count} · duração {hours}h no ritmo observado',
+            'econ.ball': 'Bola',
+            'econ.item': 'Item',
+            'econ.unknown': '— (evidência insuficiente)',
+            'filter.panelTitle': 'Busca e filtros',
+            'filter.showPanel': 'Mostrar filtros',
+            'filter.hidePanel': 'Ocultar filtros',
+            'filter.emptyReset': 'Limpar filtros e mostrar Pokémon',
+            'outland.quickDisconnected': 'Sem conexão com o jogo. Reconecte para mudar o tier.',
+            'outland.quickWaiting': 'Aguardando o jogo informar o tier ativo.',
+            'outland.quickTimedOut': 'O jogo não confirmou a troca. Confira o tier ativo e tente novamente.',
+            'outland.quickLabel': 'Tier Outland (troca rápida)',
+            'outland.quickActive': 'Ativo: {tier}',
+            'outland.quickUnknown': 'Jogo não informou o tier atual',
+            'outland.quickAction': 'Mudar para este tier',
+            'outland.quickAlready': 'Tier já está ativo',
+            'rare.heading': 'Farming raro · prévia do tier',
+            'rare.outland': 'Drops raros da Outland',
+            'rare.egg': 'Fragmento de Ovo Shiny',
+            'rare.preview': 'Comparar Outland',
+            'rare.fallback': 'Tier informado {reported} ajustado ao tier permitido {effective} para o nível atual',
+            'rare.select': 'Usar este tier no jogo',
+            'rare.pending': 'Troca solicitada; aguardando confirmação do jogo',
+            'rare.locked': 'Bloqueado: requer nível de treinador {level}',
+            'rare.noCommand': 'Troca no jogo indisponível até o estado informar o tier atual',
+            'rare.source': 'Abates/h: {rate}',
+            'rare.kills': 'por abate',
+            'rare.units': 'Itens esperados: {value}',
+            'rare.mean': 'média {hours} / item',
+            'rare.craft': 'média {hours} / 10 fragmentos',
+            'rare.chances': '≥1 em 1h: {hour} · 24h: {day}',
+            'rare.incubation': 'Incubação do Ovo Shiny: 168h após fabricar (126h com aquecimento confirmado)',
+            'rare.observed': 'Observado nesta sessão: {count}',
+            'rare.marketUnknown': 'Valoração por vendas concluídas: — (sem amostras verificadas)',
+            'rare.uncertainty': 'Modelo sem bônus e com sorteios independentes; tempos médios NÃO garantem drops. Loot Boost, guilda/eventos, exclusividade dos sorteios e servidor da Bicicleta não estão verificados.',
+            'rare.notEligible': 'Esta hunt não tem o drop raro modelado',
+            'rare.noRate': 'Abates/h indisponíveis; previsão aquecendo',
+            'rare.huntContext': 'Hunt de base: {hunt} (a Outland usa o mesmo mapa em todos os tiers)',
+            'xp.sourceLabel': 'fonte: {source}',
+            'xp.sourceMeasured': 'recompensas do servidor (medidas)',
+            'xp.sourceModel': 'projeção personalizada de combate',
+            'xp.sourceBaseline': 'estimativa-base sem bônus',
+            'xp.sourceImmunity': 'imunidade conhecida',
+            'xp.ranged': 'faixa heurística {low}–{high} XP de treinador/h',
+            'xp.unboosted': 'XP modelado não inclui bônus não verificados de VIP, guilda, lives, eventos ou catch-up',
+            'xp.native.title': 'Bônus de XP detectados no jogo',
+            'xp.native.wait': 'Aguardando dados de bônus do jogo',
+            'xp.native.none': 'Nenhum bônus de XP ativo informado para Twitch, eventos ou guilda',
+            'xp.native.twitch': 'Twitch +{pct}% XP',
+            'xp.native.event': 'Evento: treinador +{trainer}% · Pokémon +{pokemon}%',
+            'xp.native.guild': 'Guilda +{pct}% XP',
+            'xp.native.shop': 'Boosts da Loja presentes (efeito exato não verificado)',
+            'xp.native.vip': 'XP VIP ×1,5',
+            'xp.native.guildBank': 'Boost temporário da guilda ×1,1',
+            'xp.native.shopTrainer': 'XP do treinador da Loja ×{mult}',
+            'xp.native.shopPokemon': 'XP do Pokémon da Loja ×{mult}',
+            'xp.native.shopUnknown': 'Boost de XP da Loja detectado sem multiplicador informado',
+            'xp.native.catchup': 'Boost de recuperação informado (o nível-alvo afeta o XP real)',
+            'xp.native.unknownTwitch': 'Percentual Twitch informado; canais creditados não confirmados',
+            'xp.native.twitchAvailable': 'Bônus de XP da Twitch disponível, mas nenhum chat creditado foi detectado',
+            'xp.native.model': 'Modelo usa os percentuais detectados: treinador ×{trainer} · Pokémon ×{pokemon}. Outros bônus ainda podem faltar.',
+            'xp.native.measured': 'XP/h medido já inclui os bônus ativos; nenhum multiplicador é aplicado novamente.',
+            'xp.native.note': 'Lê o estado do jogo como o Moth Controller, com os multiplicadores de XP do upstream. Boosts sem valor informado e limites de nível não são inventados. Bônus de captura/shiny/drops são separados.',
+            'xp.native.modeled': 'modelo inclui bônus de XP identificados no jogo (outros efeitos não verificados)',
+            'xp.uncertainLeader': 'Candidato principal (incerto): {hunt}',
+            'xp.fallback': '{reason}',
+            'xp.fallback.known-immunity': 'Imunidade conhecida',
+            'xp.fallback.no-lead-combat-samples': 'Ainda sem dados de combate',
+            'xp.fallback.incomplete-spawn-coverage': 'Alguns inimigos ainda não foram medidos',
+            'xp.fallback.insufficient-personalized-model': 'São necessárias mais amostras de combate',
+            'xp.calibration': 'comparado com {count} hunt(s) neste contexto; erro absoluto mediano {error}%',
+            'xp.unknownPokemon': 'evento de XP do Pokémon incompleto (não somado ao XP do treinador)',
+            'xp.modelNote': ' · curva oficial de XP; amostras reais de combate têm prioridade sobre estimativas experimentais do índice de golpes.',
+            'xp.possibleMoves': '{count} golpes possíveis neste nível (não confirmados como equipados)',
+            'xp.knownMoves': '{count} golpes identificados nos eventos de combate',
+            'xp.namesUnavailable': 'Sem nomes de golpes identificados nos eventos; usando medidas por tipo de ataque',
+            'xp.protocol': 'Acertos do jogador: {total} · com nome {named} · sem nome {unnamed}',
+            'xp.protocolKeys': 'Campos de ataque sem nome: {keys}',
+            'xp.indexedMoveSummary': 'Ataques possíveis: {moves}',
+            'xp.observedMoveSummary': 'Ataques observados: {moves}',
+            'xp.moveConfidence': 'Modelo dos golpes: {confidence}',
+            'xp.confidence.high': 'medido',
+            'xp.confidence.medium': 'parcialmente medido',
+            'xp.confidence.low': 'experimental',
+            'xp.incompleteShort': '⚠ modelo cobre {percentage}%',
+            'xp.incompleteDetail': 'Modelo personalizado incompleto: {covered}/{total} pontos de aparição cobertos ({percentage}%); usando modelo-base, sem ignorar inimigos.',
+            'status.movesUnavailable': ' · índice de golpes indisponível',
+            'location.shared': 'Mesma zona mapeada: {hunts}',
+            'location.coverage': 'Hunts com localização: {matched}/{total} · {conflicts} níveis divergentes no índice',
+            'xp.catalogMoves': '{count} candidatos do catálogo de Pokémon (índice complementar)',
+            'xp.moveDisagreements': '{count} golpes diferentes entre índice e catálogo',
+            'location.coordinates': 'Local no mundo: {region} · {x}, {y} (apenas referência)',
+            'status.locationsUnavailable': ' · índice de locais indisponível',
             'results.showMore': 'Mostrar mais · restam {count} Pokémon',
             'results.noMatch': 'Nenhum Pokémon corresponde aos filtros. Use Limpar filtros para redefinir o Atlas.',
             'results.waiting': 'Aguardando os dados de hunts do PokéIdle. Recarregue a página uma vez após instalar o Hunt Atlas se isto continuar vazio.',
@@ -751,6 +1155,28 @@
         loadMarketCache();
 
     const state = {
+        rateGeneration: 1,
+        farmingSessionToken: Math.random().toString(36).slice(2),
+        farmingLedger: makeFarmingLedger(),
+        farmingSnapshot: {},
+        outlandTierSeen: false,
+        pendingOutlandTier: null,
+        outlandTierLastOutcome: null,
+        outlandCatalogTiers: null,
+        xpBonusState: {},
+        nativeXpContext: {},
+        itemCatalogStatus: 'idle',
+        itemsByName: new Map(),
+        itemsById: new Map(),
+        npcLootBySpecies: new Map(),
+        ballPrices: new Map(),
+        itemPrices: new Map(),
+        captureBallRates: new Map(),
+        captureRarities: new Map(),
+        captureBonusEvidence: {},
+        captureChanceEvidence: {seen:0,min:null,max:null},
+        inventoryForCosts: new Map(),
+        calibrationEvidence: new Map(),
         hunts: [],
         playerLevel: 0,
         currentHuntSlug: null,
@@ -787,7 +1213,25 @@
         speciesCombat: new Map(),
         combatCatalogStatus: 'idle',
         combatCatalogPromise: null,
+        locationsBySlug: new Map(),
+        locationsByRange: new Map(),
+        locationIndexDiagnostics: { loaded: 0 },
+        locationLastAttempt: 0,
+        locationIndexStatus: 'idle',
+        locationIndexPromise: null,
+        movesBySpecies: new Map(),
+        movesByName: new Map(),
+        moveLastAttempt: 0,
+        moveIndexStatus: 'idle',
+        moveIndexPromise: null,
+        moveIndexGeneratedAt: '',
         combatRevision: 0,
+        battleDiagnostics: {
+            playerEvents: 0, namedEvents: 0, unnamedEvents: 0,
+            lastUnnamedKeys: [], lastSeenAt: 0,
+            explicitCastEvents: 0, heuristicGroupedEvents: 0,
+            unnamedGroupedEvents: 0
+        },
         combatProfileCache: null,
         estimateCache: new Map(),
         estimateCacheKey: '',
@@ -806,7 +1250,13 @@
         nativeMapTitle: null,
         lastLocale: null,
         resultLimit: 120,
-        xpDetailsOpen: true,
+        filtersExpanded: null,
+        searchRenderTimer: null,
+        diagnosticsEnabled: false,
+        openHuntDetails:new Set(),
+        lastDrawerRenderAt: 0,
+        drawerRenderTimer: null,
+        renderStats: {attempts:0,skipped:0},
         mapObserver: null,
         mapSyncQueued: false,
         keyboardBound: false,
@@ -856,6 +1306,24 @@
             availability: 'unlocked',
             captured: 'all',
             sort: 'xp',
+            outlandPreviewTier: 1,
+            captureBall: 'ultra',
+            shinyLurePreview: false,
+            rareSortItem: 70000,
+            detailOpen: false,
+            referenceOpen: false,
+            referenceAdvancedOpen: false,
+            referenceEnabled: false,
+            referenceShinyBoost: false,
+            referenceCatchBoost: false,
+            referenceKickShiny: false,
+            referenceKickCatch: false,
+            referenceShinyEvent: 0,
+            referenceCatchEvent: 0,
+            referenceLoot: 1,
+            referenceGuild: 1,
+            referenceDropEvent: 1,
+            referenceDropKick: 1,
             sortDirection: 'desc'
         };
     }
@@ -876,6 +1344,30 @@
                 ...defaults,
                 ...saved
             };
+            const preview=Number(next.outlandPreviewTier);
+            next.outlandPreviewTier=Number.isInteger(preview)&&preview>=1&&
+                preview<=8?preview:1;
+            next.captureBall=['ultra','beast'].includes(next.captureBall)
+                ?next.captureBall:'ultra';
+            next.shinyLurePreview=next.shinyLurePreview===true;
+            next.rareSortItem=[70000,70011,70012,70013,70017].includes(
+                Number(next.rareSortItem))?Number(next.rareSortItem):70000;
+            next.detailOpen=next.detailOpen===true;
+            for(const key of ['referenceOpen','referenceAdvancedOpen','referenceEnabled',
+                'referenceShinyBoost','referenceCatchBoost',
+                'referenceKickShiny','referenceKickCatch'])
+                next[key]=next[key]===true;
+            for(const key of ['referenceShinyEvent','referenceCatchEvent']) {
+                const value=Number(next[key]);
+                next[key]=Number.isFinite(value)&&value>=0&&value<=1000
+                    ?value:0;
+            }
+            for(const key of ['referenceLoot','referenceGuild',
+                'referenceDropEvent','referenceDropKick']) {
+                const value=Number(next[key]);
+                next[key]=Number.isFinite(value)&&value>=1&&value<=1000
+                    ?value:1;
+            }
 
             if (typeof next.weakness === 'string') {
                 next.weakness =
@@ -968,6 +1460,12 @@
                         : 'desc';
             }
 
+            // Preserve a meaningful selection after removing this sorting
+            // objective, without resetting the user's unrelated preferences.
+            if(next.sort==='ballEfficiency'){
+                next.sort='capture';
+                next.sortDirection='desc';
+            }
             if (
                 next.sort ===
                     'spawn'
@@ -980,6 +1478,11 @@
 
             const validSorts = [
                 'xp',
+                'coins',
+                'npcLoot',
+                'rare',
+                'capture',
+                'shinyCatch',
                 'name',
                 'pokedex',
                 'level',
@@ -1013,31 +1516,30 @@
         }
     }
 
+    // Count only search restrictions, not optional models or open panels.
+    const SEARCH_FILTER_KEYS=Object.freeze([
+        'search','region','minLevel','maxLevel','type',
+        'weakness','weaknessMatchAll','availability','captured'
+    ]);
+    function resetSearchFilters() {
+        if(state.searchRenderTimer!==null){
+            clearTimeout(state.searchRenderTimer);
+            state.searchRenderTimer=null;
+        }
+        const defaults=defaultFilters();
+        for(const key of SEARCH_FILTER_KEYS)
+            state.filters[key]=key==='weakness'?[]:defaults[key];
+        state.resultLimit=120;
+        saveFilters();
+    }
     function activeFilterCount() {
-        const defaults =
-            defaultFilters();
-
-        return Object.keys(
-            defaults
-        ).filter(
-            key => {
-                if (key === 'sort' || key === 'sortDirection') {
-                    return false;
-                }
-
-                if (key === 'weakness') {
-                    return Array.isArray(state.filters.weakness) &&
-                        state.filters.weakness.length > 0;
-                }
-
-                if (key === 'weaknessMatchAll') {
-                    return Boolean(state.filters.weaknessMatchAll);
-                }
-
-                return String(state.filters[key] ?? '') !==
-                    String(defaults[key] ?? '');
-            }
-        ).length;
+        const defaults=defaultFilters();
+        return SEARCH_FILTER_KEYS.filter(key=>{
+            if(key==='weakness')return state.filters.weakness?.length>0;
+            if(key==='weaknessMatchAll')
+                return state.filters.weaknessMatchAll===true;
+            return String(state.filters[key]??'')!==String(defaults[key]??'');
+        }).length;
     }
 
     function saveFilters() {
@@ -1271,52 +1773,63 @@
         ].join(':');
     }
 
-    function formatRate(
-        value
-    ) {
-        const n =
-            Number(value);
-
-        if (
-            !Number.isFinite(n) ||
-            n <= 0
-        ) {
-            return '—';
-        }
-
-        if (n >= 1000000000) {
-            return (
-                n / 1000000000
-            ).toFixed(
-                n >= 10000000000
-                    ? 0
-                    : 1
-            ) + 'b';
-        }
-
-        if (n >= 1000000) {
-            return (
-                n / 1000000
-            ).toFixed(
-                n >= 10000000
-                    ? 0
-                    : 1
-            ) + 'm';
-        }
-
-        if (n >= 1000) {
-            return (
-                n / 1000
-            ).toFixed(
-                n >= 100000
-                    ? 0
-                    : 1
-            ) + 'k';
-        }
-
-        return Math.round(n)
-            .toLocaleString();
+    // HA RARE RATE UI PURE BEGIN. Presentation only; preserve raw sorting and evidence.
+    function formatRate(value) {
+        const n0=typeof value==='number'?value:value!==null&&value!==undefined&&value!==''?Number(value):NaN;
+        if(!Number.isFinite(n0))return '—';
+        value=n0;
+        if(value===0)return '0';
+        const sign=value<0?'-':'', n=Math.abs(value);
+        if(n>=1e9)return sign+(n/1e9).toFixed(n>=1e10?0:1)+'b';
+        if(n>=1e6)return sign+(n/1e6).toFixed(n>=1e7?0:1)+'m';
+        if(n>=1e3)return sign+(n/1e3).toFixed(n>=1e5?0:1)+'k';
+        if(n>=100)return sign+Math.round(n).toLocaleString();
+        if(n>=10)return sign+n.toFixed(1).replace(/0+$/,'').replace(/\.$/,'');
+        if(n>=1)return sign+n.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
+        if(n>=.01)return sign+n.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+        if(n>=.0001)return sign+n.toFixed(5).replace(/0+$/,'').replace(/\.$/,'');
+        if(n>=.000001)return sign+n.toFixed(7).replace(/0+$/,'').replace(/\.$/,'');
+        return sign+n.toExponential(2);
     }
+    // A complete value+unit: do not append "/h" to event rates.
+    // "~1 / N d" means an average interval, never a drop guarantee.
+    function formatEventRate(value) {
+        if(typeof value!=='number'||!Number.isFinite(value)||value<0)return '—';
+        if(value===0)return '0/h';
+        if(value>=.1)return formatRate(value)+'/h';
+        const daily=value*24;
+        if(daily>=1)return formatRate(daily)+'/d';
+        const days=1/daily;
+        if(!Number.isFinite(days))return formatRate(value)+'/h';
+        if(days>=365)return '~1 / '+formatRate(days/365)+' yr';
+        return '~1 / '+formatRate(days)+' d';
+    }
+    function formatDurationHours(value,portuguese=false) {
+        if(typeof value!=='number'||!Number.isFinite(value)||value<0)return '—';
+        if(value>=8760)return formatRate(value/8760)+' '+
+            (portuguese?(value<2*8760?'ano':'anos'):'yr');
+        if(value>=24)return formatRate(value/24)+' d';
+        return formatRate(value)+' h';
+    }
+    function formatProbability(value) {
+        if(typeof value!=='number'||!Number.isFinite(value)||value<0||
+            value>1)return '—';
+        if(value===0)return '0%';
+        const percent=value*100;
+        if(percent>=1)return formatRate(percent)+'%';
+        if(percent>=.01)return percent.toFixed(3).replace(/0+$/,'')
+            .replace(/\.$/,'')+'%';
+        if(percent>=.000001)return percent.toFixed(6).replace(/0+$/,'')
+            .replace(/\.$/,'')+'%';
+        return percent.toExponential(2)+'%';
+    }
+    function formatObjectiveValue(value,objective) {
+        if(typeof value!=='number'||!Number.isFinite(value))return '—';
+        if(['rare','shinyCatch','capture'].includes(objective))
+            return formatEventRate(value);
+        return formatRate(value)+'/h';
+    }
+    // HA RARE RATE UI PURE END.
 
     function leadPokemon() {
         const active =
@@ -1355,15 +1868,26 @@
             return null;
         }
 
+        const stats = pokemon.stats || {};
+        const iv = pokemon.ivs || pokemon.iv || {};
+        // Include battle-relevant values, NOT volatile current HP/XP or
+        // cooldown timers. A refreshed same-ID Pokémon can change combat stats.
+        const battleStats = ['atk', 'def', 'spAtk', 'spDef', 'speed']
+            .map(key => stats[key] ?? '?');
+        const speedIv = pokemon.speedIV ?? pokemon.speedIv ??
+            iv.speed ?? iv.spd ?? '?';
+        const moves = Array.isArray(pokemon.attacks)
+            ? pokemon.attacks.slice(0, 20).map(move => [
+                move?.name, move?.type, move?.category, move?.power
+            ].join(':')).sort().join(',') : '';
         return [
             pokemon.id,
             pokemon.speciesId,
             pokemon.tmElemental,
             pokemon.tmAoe,
             pokemon.heldItemId,
-            pokemon.megaId ||
-                pokemon.mega ||
-                ''
+            pokemon.megaId || pokemon.mega || '',
+            speedIv, ...battleStats, moves
         ]
             .map(
                 value =>
@@ -1437,6 +1961,14 @@
         );
     }
 
+    function farmingSnapshotScope() {
+        return [state.farmingSnapshot.outlandTier ?? '?',
+            state.farmingSnapshot.catalogRevision ?? '?',
+            state.farmingSnapshot.boostSignature ?? '?',
+            xpBonusScope(state.xpBonusState),
+            nativeXpBonusScope(state.nativeXpContext)].join('|');
+    }
+
     function performanceKey(
         huntSlug,
         pokemon =
@@ -1455,9 +1987,13 @@
         }
 
         return (
-            huntSlug +
-            '|' +
-            signature
+            huntSlug + '|' + signature + '|session:' +
+            state.farmingSessionToken + ':' + state.rateGeneration +
+            '|tier:' + (state.farmingSnapshot.outlandTier ?? '?') +
+            '|catalog:' + (state.farmingSnapshot.catalogRevision ?? '?') +
+            '|boost:' + (state.farmingSnapshot.boostSignature ?? '?') +
+            '|xpBonus:' + xpBonusScope(state.xpBonusState) +
+            '|nativeXp:' + nativeXpBonusScope(state.nativeXpContext)
         );
     }
 
@@ -1466,7 +2002,12 @@
         pokemon
     ) {
         return {
-            version: 2,
+            version: 5,
+            rateGeneration: state.rateGeneration,
+            sessionToken: state.farmingSessionToken,
+            snapshotScope: farmingSnapshotScope(),
+            rateWindow: null,
+            captureWindow: null,
             huntSlug,
             signature:
                 leadSignature(
@@ -1499,6 +2040,8 @@
             trainerXp: 0,
             pokemonXp: 0,
             gold: 0,
+            rateUseWindow: null,
+            speciesKills: {},
 
             killIntervals: [],
             sameTargetIntervals: [],
@@ -1508,9 +2051,14 @@
             attacks: 0,
             damage: 0,
             moveDamage: {},
+            attackObservations: [],
             hpSamples: [],
             trainerXpMultSamples: [],
             pokemonXpMultSamples: [],
+            xpBonusTransitions: [],
+            lastTrainerBonusRatio: null,
+            lastPokemonBonusRatio: null,
+            predictedBeforeMeasurement: null,
 
             firstEventAt: 0,
             lastEventAt: 0,
@@ -1747,36 +2295,8 @@
     /*
      * Exact upstream XP curve from shared/sell-value.mjs.
      */
-    function xpDoNivel(
-        level
-    ) {
-        const n =
-            Math.max(
-                1,
-                Number(level) ||
-                1
-            );
-
-        if (n <= 150) {
-            return (
-                Math.floor(
-                    6 *
-                        n *
-                        n /
-                        10
-                ) +
-                8
-            );
-        }
-
-        return Math.round(
-            13500 *
-                Math.pow(
-                    n /
-                        150,
-                    1.25
-                )
-        );
+    function xpDoNivel(level) {
+        return farmingXpForLevel(level);
     }
 
     function goldValueAtLevel(
@@ -2041,6 +2561,8 @@
                 event?.hp
             );
 
+        farmingSpawn(state.farmingLedger, slot);
+
         state.combatTargets.set(
             slot,
             {
@@ -2078,6 +2600,87 @@
         );
     }
 
+
+    // Move identity is optional in the battle protocol. Do not use event.nome:
+    // in spawn/death messages that field usually names the creature.
+    function namedMoveFromAttack(event) {
+        const fields = [
+            event?.golpe?.name, event?.golpe?.nome,
+            event?.movimento?.name, event?.movimento?.nome,
+            event?.golpe, event?.nomeGolpe, event?.golpeNome,
+            event?.moveName, event?.move, event?.ataqueNome,
+            event?.ataque?.name, event?.ataque?.nome,
+            typeof event?.ataque === 'string' ? event.ataque : null
+        ];
+        const found = fields.find(value => typeof value === 'string' &&
+            value.trim().length > 0 && value.length <= 80);
+        if (found) return found.trim();
+        // Some versions may put the move in a generic name/skill field.
+        // Accept such a value ONLY if it matches a species-specific known
+        // move with the attack's type. This prevents a Pokémon name from
+        // being confused with the name of its attack.
+        const ambiguous = [event?.nome, event?.skill, event?.habilidade];
+        const known = movesForLead();
+        const type = String(event?.tipo || '').toUpperCase();
+        const candidate = ambiguous.find(value => typeof value === 'string' &&
+            value.length <= 80 && known.some(move =>
+                moveNameKey(move.name) === moveNameKey(value) &&
+                move.type === type));
+        return candidate ? candidate.trim() : null;
+    }
+
+    // A transient, bounded cast ledger. Never persist raw cast IDs.
+    const recentAttackCasts = new WeakMap();
+
+    function explicitAttackCastId(event) {
+        // Generic golpeId/ataqueId identify abilities, not executions.
+        const candidates = [
+            event?.castId, event?.castID, event?.cast_id,
+            event?.attackCastId, event?.execucaoId,
+            event?.execucaoGolpeId, event?.idExecucao,
+            event?.ataque?.castId, event?.golpe?.castId,
+            event?.movimento?.castId
+        ];
+        const value = candidates.find(v =>
+            (typeof v === 'string' || typeof v === 'number') &&
+            String(v).trim().length > 0 && String(v).length <= 80);
+        return value === undefined ? null : String(value);
+    }
+
+    function identifyAttackCast(record, event, now, slot, nameKey, type) {
+        const explicitId = explicitAttackCastId(event);
+        let recent = recentAttackCasts.get(record) || [];
+        recent = recent.filter(group => now >= group.startedAt &&
+            now - group.startedAt <= 3000).slice(-16);
+        let group = null;
+        if (explicitId !== null) {
+            group = recent.find(row =>
+                row.explicitId === explicitId && row.type === type &&
+                (!row.nameKey || !nameKey || row.nameKey === nameKey)) || null;
+        } else if (slot !== null && nameKey) {
+            // The game's global attack floor is 900ms. One named move
+            // hitting distinct slots over 350ms may be an area cast;
+            // a repeated target starts a NEW cast without a protocol id.
+            group = [...recent].reverse().find(row =>
+                row.explicitId === null && row.nameKey === nameKey &&
+                row.type === type && now - row.startedAt <= 350 &&
+                !row.slots.has(slot)) || null;
+        }
+        if (!group) {
+            group = {
+                explicitId, nameKey, type, startedAt: now,
+                slots: new Set(), hits: 0,
+                observation: null, typeSample: null
+            };
+            recent.push(group);
+        }
+        if (!group.nameKey && nameKey) group.nameKey = nameKey;
+        if (slot !== null) group.slots.add(slot);
+        group.hits++;
+        recentAttackCasts.set(record, recent);
+        return group;
+    }
+
     function recordAttackEvent(
         event
     ) {
@@ -2110,9 +2713,18 @@
             combatSlot(
                 event
             );
+        const castName = namedMoveFromAttack(event);
+        const castKey = castName ? moveNameKey(castName) : null;
+        const castType = String(event?.tipo || 'UNKNOWN').toUpperCase();
+        const cast = identifyAttackCast(record, event, now, slot, castKey, castType);
+        const sameCast = cast.hits > 1;
+        const diagnostic = state.battleDiagnostics;
+        if (cast.explicitId !== null) diagnostic.explicitCastEvents++;
+        if (sameCast && cast.explicitId === null) diagnostic.heuristicGroupedEvents++;
+        if (sameCast && !castKey) diagnostic.unnamedGroupedEvents++;
 
         if (
-            record.lastAttackAt
+            record.lastAttackAt && !sameCast
         ) {
             const gap =
                 now -
@@ -2152,18 +2764,11 @@
             }
         }
 
-        record.lastAttackAt =
-            now;
-
-        record.lastAttackSlot =
-            slot;
-
-        record.attacks =
-            Number(
-                record.attacks ||
-                0
-            ) +
-            1;
+        if (!sameCast) {
+            record.lastAttackAt = now;
+            record.lastAttackSlot = slot;
+            record.attacks = Number(record.attacks || 0) + 1;
+        }
 
         const damage =
             Math.max(
@@ -2194,6 +2799,17 @@
             ) +
             damage;
 
+
+        diagnostic.playerEvents++;
+        const attackName = castName;
+        if (attackName) diagnostic.namedEvents++;
+        else {
+            diagnostic.unnamedEvents++;
+            // Field names only; no raw battle values or personal identifiers.
+            diagnostic.lastUnnamedKeys = Object.keys(event || {}).slice(0, 24);
+        }
+        diagnostic.lastSeenAt = now;
+
         if (
             damage > 0 &&
             Number.isFinite(
@@ -2219,43 +2835,64 @@
                     actualSamples: []
                 };
 
-            sample.count++;
-
-            sample.neutralSamples.push(
-                damage /
-                effectiveness
-            );
-
-            sample.actualSamples.push(
-                damage
-            );
-
-            if (
-                sample.neutralSamples.length >
-                80
-            ) {
-                sample.neutralSamples.splice(
-                    0,
-                    sample.neutralSamples.length -
-                        80
-                );
-            }
-
-            if (
-                sample.actualSamples.length >
-                80
-            ) {
-                sample.actualSamples.splice(
-                    0,
-                    sample.actualSamples.length -
-                        80
-                );
+            // Keep the type-based estimator cast-based as well.
+            const previous = cast.typeSample;
+            if (sameCast && previous?.sample === sample &&
+                Number.isInteger(previous.index) &&
+                previous.index < sample.neutralSamples.length) {
+                const hits = previous.hits;
+                sample.neutralSamples[previous.index] =
+                    (sample.neutralSamples[previous.index] * hits +
+                        damage / effectiveness) / (hits + 1);
+                sample.actualSamples[previous.index] =
+                    (sample.actualSamples[previous.index] * hits +
+                        damage) / (hits + 1);
+                previous.hits++;
+            } else {
+                sample.count++;
+                sample.neutralSamples.push(damage / effectiveness);
+                sample.actualSamples.push(damage);
+                if (sample.neutralSamples.length > 80)
+                    sample.neutralSamples.splice(0, sample.neutralSamples.length - 80);
+                if (sample.actualSamples.length > 80)
+                    sample.actualSamples.splice(0, sample.actualSamples.length - 80);
+                cast.typeSample = {
+                    sample, index: sample.neutralSamples.length - 1, hits: 1
+                };
             }
 
             record.moveDamage[
                 type
             ] =
                 sample;
+
+            if (!Array.isArray(record.attackObservations))
+                record.attackObservations = [];
+            const observations = record.attackObservations;
+            // An explicit cast id also groups unnamed attack hits.
+            // The heuristic only groups named moves across distinct slots.
+            if (sameCast && cast.observation) {
+                const observation = cast.observation;
+                const hits = Math.max(1, Number(observation.hits) || 1);
+                observation.neutralDamage =
+                    (observation.neutralDamage * hits +
+                        damage / effectiveness) / (hits + 1);
+                observation.hits = hits + 1;
+                if (!observation.name && attackName) {
+                    observation.name = attackName;
+                    observation.nameKey = castKey;
+                }
+            } else {
+                const observation = {
+                    name: attackName, nameKey: castKey, type,
+                    neutralDamage: damage / effectiveness,
+                    at: now, hits: 1
+                };
+                observations.push(observation);
+                cast.observation = observation;
+                if (observations.length > 160)
+                    observations.splice(0, observations.length - 160);
+            }
         }
 
         if (slot) {
@@ -2326,15 +2963,1388 @@
         }
     }
 
+
+    // HA MILESTONE A PURE BEGIN. Local, bounded and dependency-free farming math.
+    const FARM_OUTLAND_TIERS = Object.freeze([
+        [150, 1], [500, 1.25], [1000, 1.5], [2000, 2],
+        [4000, 3], [8000, 4], [16000, 6], [25000, 8]
+    ]);
+    const FARM_SHINY_LEVELS = Object.freeze([
+        5000, 5400, 5900, 6400, 6950, 8000, 8600,
+        10000, 11250, 12750, 14350, 16000, 20000, 21200,
+        25000, 27050, 29450, 32000, 34650, 43100,
+        50000, 58900, 64000, 69300, 86150, 100000,
+        114800, 123350, 132200, 160300
+    ]);
+    const FARM_RATE_WINDOW_MS = 15 * 60 * 1000;
+    const FARM_STALE_MS = 2 * 60 * 1000;
+    const FARM_MIN_WINDOW_MS = 60 * 1000;
+    const FARM_MIN_KILLS = 6;
+
+    function farmingXpForLevel(level) {
+        const n = Math.max(1, Number(level) || 1);
+        return n <= 150
+            ? Math.floor(0.6 * n * n) + 8
+            : Math.round(13500 * Math.pow(n / 150, 1.25));
+    }
+
+    function farmingGoldForLevel(level) {
+        const n = Math.min(25000, Math.max(1, Number(level) || 1));
+        const exponent = Math.log(6000 / 36) / Math.log(5000);
+        return Math.round(36 * Math.pow(n, exponent));
+    }
+
+    function farmingLootChance(encoded) {
+        const n = Number(encoded);
+        return Number.isFinite(n) && n >= 0 && n <= 100000
+            ? n / 100000 : null;
+    }
+
+    function outlandNormalizeSpeciesId(value) {
+        const n=Number(value);
+        return Number.isInteger(n) && n>=10501 && n<10548 ?
+            n-8500 : value;
+    }
+
+    function farmingTier(tier, playerLevel) {
+        const n = Number(tier), level = Number(playerLevel);
+        if (!Number.isInteger(n) || n < 1 || n > 8 ||
+            !Number.isFinite(level) || level < FARM_OUTLAND_TIERS[n - 1][0]) {
+            return null;
+        }
+        return {tier: n, requiredLevel: FARM_OUTLAND_TIERS[n - 1][0],
+            rareMultiplier: FARM_OUTLAND_TIERS[n - 1][1]};
+    }
+
+    function farmingShinyEggChance(level, outland = false) {
+        if (outland || !Number.isFinite(Number(level))) return 0;
+        const n = Number(level);
+        const steps = FARM_SHINY_LEVELS.filter(value => n >= value).length;
+        // Integer decimal steps prevent cumulative binary rounding drift.
+        return steps ? (375 + (steps - 1) * 15) / 10000000 : 0;
+    }
+
+    function farmingChanceAtLeastOne(probability, rolls) {
+        const p = Number(probability), n = Number(rolls);
+        if (!(p >= 0 && p <= 1) || !(n >= 0 && Number.isFinite(n))) return null;
+        if (n === 0 || p === 0) return 0;
+        if (p === 1) return 1;
+        return -Math.expm1(n * Math.log1p(-p));
+    }
+
+    // POKEIDLE-TOOLS REFERENCE SCENARIOS BEGIN.
+    // Optional what-if assumptions from the public third-party calculator;
+    // NEVER assume that these are active/stack on the deployed game server.
+    function referenceCapturePreview(chance,acceptedH,shinyBase,options={}) {
+        const valid=p=>typeof p==='number'&&Number.isFinite(p)&&p>=0&&p<=1;
+        const eventShiny=Number(options.shinyEvent??0);
+        const eventCatch=Number(options.catchEvent??0);
+        if(!valid(chance)||!Number.isFinite(acceptedH)||acceptedH<0||
+            (shinyBase!==null&&!valid(shinyBase))||
+            !Number.isFinite(eventShiny)||eventShiny<0||eventShiny>1000||
+            !Number.isFinite(eventCatch)||eventCatch<0||eventCatch>1000)
+            return null;
+        const catchMultiplier=(options.catchBoost?1.5:1)*
+            (1+eventCatch/100)*(options.kickCatch?1.15:1);
+        const shinyMultiplier=(options.shinyBoost?1.5:1)*
+            (1+eventShiny/100)*(options.kickShiny?1.15:1);
+        const catchChance=Math.min(1,chance*catchMultiplier);
+        // Null eligibility (e.g. Outland) must remain unknown, not zero.
+        const shinyChance=shinyBase===null?null:
+            Math.min(1,shinyBase*shinyMultiplier);
+        const success=shinyChance===null?null:catchChance*shinyChance;
+        const trials24=24*acceptedH; // forecast rate, not counted integer throws
+        const oneDay=success===null?null:
+            farmingChanceAtLeastOne(success,trials24);
+        return {catchChance,shinyChance,
+            catchesH:acceptedH*catchChance,
+            shinySeenH:shinyChance===null?null:acceptedH*shinyChance,
+            shinyCaughtH:success===null?null:acceptedH*success,
+            shinyCaught24hChance:oneDay,
+            shinyNotCaught24hChance:oneDay===null?null:1-oneDay,
+            assumption:'third-party-what-if-not-server-observed'};
+    }
+    function referenceRarePreview(probability,killsH,options={}) {
+        const multipliers=['loot','guild','event','kick'].map(key=>
+            Number(options[key]??1));
+        if(typeof probability!=='number'||!Number.isFinite(probability)||
+            probability<0||probability>1||
+            !Number.isFinite(killsH)||killsH<0||
+            multipliers.some(v=>!Number.isFinite(v)||v<1||v>1000))
+            return null;
+        const chance=Math.min(1,multipliers.reduce((a,b)=>a*b,probability));
+        const oneDay=farmingChanceAtLeastOne(chance,24*killsH);
+        return {chance,unitsH:killsH*chance,
+            expected24h:24*killsH*chance,
+            chance24h:oneDay,noDrop24h:oneDay===null?null:1-oneDay,
+            assumption:'third-party-what-if-not-server-observed'};
+    }
+    // POKEIDLE-TOOLS REFERENCE SCENARIOS END.
+
+    function farmingConfidence(sampleCount, elapsedMs, stale) {
+        if (stale) return 'stale';
+        if (sampleCount < FARM_MIN_KILLS || elapsedMs < FARM_MIN_WINDOW_MS)
+            return 'warming';
+        return sampleCount >= 30 && elapsedMs >= 5 * 60000 ? 'high' : 'medium';
+    }
+
+    const farmingFinite = value =>
+        (value !== null && value !== undefined && value !== '' &&
+        Number.isFinite(Number(value)) && Number(value) >= 0)
+            ? Number(value) : null;
+
+    // Some builds may provide an explicit event receipt ID. Never use a slot,
+    // item ID or wall-clock timestamp as an invented event identity.
+    function farmingReceiptIdentity(event) {
+        if (!event || typeof event !== 'object') return null;
+        for (const key of ['eventId', 'eventoId', 'receiptId', 'reciboId']) {
+            if (!Object.hasOwn(event, key)) continue;
+            const value = event[key];
+            if (typeof value === 'number' && Number.isSafeInteger(value) &&
+                value > 0) return key + ':' + value;
+            if (typeof value === 'string' && value.length > 0 &&
+                value.length <= 64 && /^[a-zA-Z0-9_-]+$/.test(value))
+                return key + ':' + value;
+        }
+        return null;
+    }
+
+    function normalizeFarmingEvent(event) {
+        if (!event || typeof event !== 'object' || Array.isArray(event) ||
+            typeof event.k !== 'string') return null;
+        const kind = event.k;
+        const supported = ['morte', 'bola', 'capturado', 'cura', 'revive',
+            'bossMorto', 'compra'];
+        if (!supported.includes(kind)) return null;
+        if (kind === 'morte' && event.quem !== 'selvagem') return null;
+        const rawSlot = event.slot ?? event.s;
+        const slot = (typeof rawSlot === 'string' || typeof rawSlot === 'number') &&
+            String(rawSlot).length <= 32 && String(rawSlot).length > 0
+                ? String(rawSlot) : null;
+        const itemId = farmingFinite(event.itemId ?? event.ballId);
+        const trainerXp = farmingFinite(event.xpTreinador);
+        const pokemonXp = farmingFinite(event.xpPokemon);
+        const killCoins = farmingFinite(event.ouro);
+        const autoSaleCoins = farmingFinite(event.ouroVendaAuto);
+        // Only supported receipt fields are retained. No names, tokens or raw packets.
+        const drops = [];
+        if (Array.isArray(event.drops)) {
+            for (const drop of event.drops.slice(0, 32)) {
+                const id = farmingFinite(drop?.itemId ?? drop?.id) ??
+                    RARE_OUTLAND_DROPS.concat([RARE_EGG_DROP])
+                        .find(row=>row.name===drop?.nome)?.id ?? null;
+                const quantity = farmingFinite(drop?.qtd ?? drop?.quantity ?? 1);
+                if (id !== null && quantity !== null && quantity > 0)
+                    drops.push({itemId: id, quantity});
+            }
+        }
+        return {
+            kind, slot, eventId: farmingReceiptIdentity(event),
+            itemId: itemId === null ? null : Math.trunc(itemId),
+            trainerXp: kind === 'morte' ? trainerXp : null,
+            pokemonXp: kind === 'morte' ? pokemonXp : null,
+            killCoins: kind === 'morte' ? killCoins : null,
+            autoSaleCoins: kind === 'morte' ? autoSaleCoins : null,
+            speciesId: kind === 'morte' ? farmingFinite(event.speciesId ?? event.pokeId) : null,
+            mobLevel: kind === 'morte' ? farmingFinite(event.level) : null,
+            drops: kind === 'morte' || kind === 'bossMorto' ? drops : [],
+            shinySeen: kind === 'bola' && typeof event.shiny === 'boolean'
+                ? event.shiny : null,
+            shinyCaught: kind === 'capturado' &&
+                typeof event.pokemon?.shiny === 'boolean'
+                ? event.pokemon.shiny : null,
+            chanceRaw: kind === 'bola' ? farmingFinite(event.chance) : null,
+            successFlag: kind === 'bola' && typeof event.sucesso === 'boolean'
+                ? event.sucesso : null,
+            // bola is a server-emitted accepted use, not a click/tick.
+            evidence: 'observed-server/event'
+        };
+    }
+
+    function normalizeFarmingSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') return null;
+        const tierRaw = snapshot.tierOutland ?? snapshot.outlandTier ?? snapshot.outland_tier;
+        const tierPresent = Object.hasOwn(snapshot, 'tierOutland') ||
+            Object.hasOwn(snapshot, 'outlandTier') || Object.hasOwn(snapshot, 'outland_tier');
+        const revision = snapshot.catalogRevision ?? snapshot.catalogoVersao;
+        const boosts = snapshot.bonuses;
+        const boostSignature = boosts && typeof boosts === 'object'
+            ? Object.entries(boosts).filter(([key, value]) =>
+                /^[a-zA-Z_]{1,30}$/.test(key) && farmingFinite(value) !== null
+            ).sort(([a], [b]) => a.localeCompare(b))
+                .slice(0, 24).map(([key, value]) => key + ':' + value).join('|')
+            : undefined;
+        return {
+            ...(tierPresent ? {
+                outlandTier: Number.isInteger(Number(tierRaw)) &&
+                    Number(tierRaw) >= 1 && Number(tierRaw) <= 8
+                        ? Number(tierRaw) : null
+            } : {}),
+            ...(revision !== undefined ? {
+                catalogRevision: String(revision).slice(0, 40)
+            } : {}),
+            ...(boostSignature !== undefined ? {boostSignature} : {}),
+            inventoryPresent: Object.hasOwn(snapshot, 'balls') ||
+                Object.hasOwn(snapshot, 'items'),
+            coinsPresent: Object.hasOwn(snapshot, 'gold')
+        };
+    }
+
+    function farmingEventEvidence(event) {
+        const normalized = normalizeFarmingEvent(event);
+        const kind = typeof event?.k === 'string' ? event.k : 'invalid';
+        const fields = ['slot', 's', 'quem', 'xpTreinador', 'xpPokemon',
+            'ouro', 'ouroVendaAuto', 'drops', 'ballId', 'chance',
+            'sucesso', 'shiny', 'pokemon', 'itemId',
+            'eventId', 'eventoId', 'receiptId', 'reciboId'].filter(key =>
+            Object.prototype.hasOwnProperty.call(event || {}, key));
+        return {kind, fields, recognized: Boolean(normalized),
+            missingSlot: Boolean(normalized && !normalized.slot),
+            source: 'observed-server/event', schema: 1};
+    }
+
+    function recordFarmingEvidence(ledger, event) {
+        if (!ledger) return;
+        const detail = farmingEventEvidence(event);
+        const kind = detail.kind;
+        if (!['morte', 'bola', 'capturado', 'cura', 'revive',
+            'bossMorto', 'compra'].includes(kind)) return;
+        let row = ledger.fieldPresence.get(kind);
+        if (!row) {
+            row = {seen: 0, malformed: 0, noSlot: 0, keys: {}};
+            ledger.fieldPresence.set(kind, row);
+        }
+        row.seen++;
+        if (!detail.recognized) row.malformed++;
+        if (detail.missingSlot) row.noSlot++;
+        for (const key of detail.fields) row.keys[key] = (row.keys[key] || 0) + 1;
+    }
+
+    function makeFarmingLedger() {
+        return {schema: 2, slots: new Map(), receipts: new Map(), totals: {
+            kills: 0, trainerXp: 0, pokemonXp: 0,
+            killCoins: 0, autoSaleCoins: 0, acceptedThrows: 0,
+            captures: 0, shinySeen: 0, shinyCaught: 0,
+            potions: 0, revives: 0, bossDeaths: 0
+        }, items: new Map(), diagnostics: {malformed: 0, duplicates: 0,
+            noSlot: 0, unlinked: 0, uncertainCosts: 0}, fieldPresence: new Map()};
+    }
+
+    function farmingSpawn(ledger, slot) {
+        if (!ledger || slot === null) return;
+        const old = ledger.slots.get(slot);
+        if (!old || old.dead) {
+            ledger.slots.delete(slot);
+            ledger.slots.set(slot, {dead: false, thrown: false, captured: false});
+        }
+        if (ledger.slots.size > 64)
+            ledger.slots.delete(ledger.slots.keys().next().value);
+    }
+
+    function farmingExpireCorpse(ledger, slot) {
+        if (!ledger || slot === null || slot === undefined) return false;
+        const corpse=ledger.slots.get(String(slot));
+        // Never infer that a body expired from a local wall-clock estimate.
+        if (!corpse?.dead || corpse.captured || corpse.expired) return false;
+        corpse.expired=true;
+        return true;
+    }
+
+    function acceptFarmingEvent(ledger, receipt) {
+        if (!ledger || !receipt) {
+            if (ledger) ledger.diagnostics.malformed++;
+            return false;
+        }
+        const kind = receipt.kind;
+        // Unique receipt evidence is optional; absent IDs keep the existing
+        // event-specific guards. Bound stored IDs for uninterrupted sessions.
+        const key = receipt.eventId === null || receipt.eventId === undefined
+            ? null : kind + ':' + receipt.eventId;
+        if (key && ledger.receipts.has(key)) {
+            ledger.diagnostics.duplicates++;
+            return false;
+        }
+        const slot = receipt.slot;
+        let corpse = slot !== null ? ledger.slots.get(slot) : null;
+        if (['morte', 'bola', 'capturado'].includes(kind) && !slot) {
+            ledger.diagnostics.noSlot++;
+            if (kind === 'bola') ledger.diagnostics.uncertainCosts++;
+            return false; // Cannot safely deduplicate or correlate a body.
+        }
+        if (kind === 'morte') {
+            if (!corpse) {
+                farmingSpawn(ledger, slot); // Late initial spawn is unknown.
+                corpse = ledger.slots.get(slot);
+            }
+            if (corpse.dead) {
+                ledger.diagnostics.duplicates++;
+                return false;
+            }
+            corpse.dead = true;
+            corpse.speciesId = receipt.speciesId !== null
+                ? Number(outlandNormalizeSpeciesId(receipt.speciesId)):null;
+            ledger.totals.kills++;
+            for (const [field, name] of [
+                ['trainerXp', 'trainerXp'], ['pokemonXp', 'pokemonXp'],
+                ['killCoins', 'killCoins'], ['autoSaleCoins', 'autoSaleCoins']
+            ]) ledger.totals[name] += receipt[field] ?? 0;
+        } else if (kind === 'bola') {
+            if (!corpse?.dead || corpse.thrown || corpse.expired) {
+                ledger.diagnostics.uncertainCosts++;
+                ledger.diagnostics.unlinked++;
+                return false;
+            }
+            corpse.thrown = true;
+            corpse.ballId=receipt.itemId;
+            // This still counts as an accepted throw, but an unidentified ball
+            // cannot be priced as free in net farming economics.
+            if (receipt.itemId === null) ledger.diagnostics.uncertainCosts++;
+            ledger.totals.acceptedThrows++;
+            if (receipt.shinySeen) ledger.totals.shinySeen++;
+        } else if (kind === 'capturado') {
+            if (!corpse?.thrown || corpse.captured || corpse.expired) {
+                ledger.diagnostics.unlinked++;
+                return false;
+            }
+            corpse.captured = true;
+            ledger.totals.captures++;
+            if (receipt.shinyCaught) ledger.totals.shinyCaught++;
+        } else if (kind === 'cura' || kind === 'revive') {
+            if (receipt.itemId === null) {
+                ledger.diagnostics.malformed++;
+                ledger.diagnostics.uncertainCosts++;
+                return false;
+            }
+            ledger.totals[kind === 'cura' ? 'potions' : 'revives']++;
+            // No per-event protocol ID: identical consecutive uses stay separate.
+        } else if (kind === 'bossMorto') {
+            ledger.totals.bossDeaths++;
+        } else if (kind === 'compra') {
+            // Purchases are not a second consumable expense, but their receipt
+            // ID can still be tracked for duplicate diagnostics.
+        } else return false;
+        if (key) {
+            ledger.receipts.set(key, true);
+            if (ledger.receipts.size > 256)
+                ledger.receipts.delete(ledger.receipts.keys().next().value);
+        }
+        for (const {itemId, quantity} of receipt.drops) {
+            if (!ledger.items.has(itemId) && ledger.items.size >= 64) continue;
+            ledger.items.set(itemId, (ledger.items.get(itemId) || 0) + quantity);
+        }
+        return true;
+    }
+
+    // Thirty-second buckets keep multi-hour sessions small, even at extreme K/h.
+    // The entire window is counted; dropping individual fast kills would
+    // underestimate the rate when the ring buffer fills.
+    function appendFarmingKill(window, sample) {
+        const at = Number(sample?.at);
+        if (!Number.isFinite(at)) return window;
+        const reset = !window || !Number.isFinite(window.lastAt) ||
+            at < window.lastAt || at - window.lastAt > FARM_STALE_MS;
+        const bucket = Math.floor(at / 30000);
+        const rows = reset ? [] : window.rows.filter(row =>
+            row.at >= at - FARM_RATE_WINDOW_MS - 30000);
+        let row = rows[rows.length - 1];
+        if (!row || row.bucket !== bucket) {
+            row = {bucket, at, kills: 0, productiveMs: 0,
+                trainerXp: 0, pokemonXp: 0, gold: 0,
+                trainerKnown: 0, pokemonKnown: 0,
+                killGold: 0, autoSale: 0, killGoldKnown: 0,
+                autoSaleKnown: 0};
+            rows.push(row);
+        }
+        row.kills++;
+        if (sample.trainerXp !== null && Number.isFinite(sample.trainerXp)) {
+            row.trainerXp += sample.trainerXp;
+            row.trainerKnown++;
+        }
+        if (sample.pokemonXp !== null && Number.isFinite(sample.pokemonXp)) {
+            row.pokemonXp += sample.pokemonXp;
+            row.pokemonKnown++;
+        }
+        row.gold += sample.gold ?? 0;
+        if (sample.killGold !== null && Number.isFinite(sample.killGold)) {
+            row.killGold += sample.killGold;
+            row.killGoldKnown++;
+        }
+        if (sample.autoSale !== null && Number.isFinite(sample.autoSale)) {
+            row.autoSale += sample.autoSale;
+            row.autoSaleKnown++;
+        }
+        if (!reset) {
+            const gap = at - window.lastAt;
+            if (gap >= 0 && gap <= 60000) row.productiveMs += gap;
+        }
+        if (rows.length > 33) rows.splice(0, rows.length - 33);
+        return {startedAt: reset ? at : Math.max(window.startedAt,
+            at - FARM_RATE_WINDOW_MS), lastAt: at, rows};
+    }
+
+    function farmingObservedRates(window, now) {
+        if (!window || !Array.isArray(window.rows) ||
+            !Number.isFinite(now) || now < window.lastAt) return null;
+        const stale = now - window.lastAt > FARM_STALE_MS;
+        const start = Math.max(window.startedAt, now - FARM_RATE_WINDOW_MS);
+        const rows = window.rows.filter(row =>
+            row.at >= start - 30000 && row.at <= now);
+        const samples = rows.reduce((total, row) => total + row.kills, 0);
+        const elapsedMs = now - start; // wall-clock: includes restock/idle.
+        if (farmingConfidence(samples, elapsedMs, stale) === 'warming' ||
+            stale || !samples) return null;
+        const killsH = samples * 3600000 / elapsedMs;
+        const sum = field => rows.reduce((total, row) => total + row[field], 0);
+        const productiveMs = sum('productiveMs');
+        return {killsH, killMs: 3600000 / killsH,
+            trainerXpH: sum('trainerKnown') === samples
+                ? sum('trainerXp') * 3600000 / elapsedMs : null,
+            pokemonXpH: sum('pokemonKnown') === samples
+                ? sum('pokemonXp') * 3600000 / elapsedMs : null,
+            trainerKnown: sum('trainerKnown'),
+            pokemonKnown: sum('pokemonKnown'),
+            goldH: sum('gold') * 3600000 / elapsedMs,
+            killGoldH: sum('killGoldKnown') === samples
+                ? sum('killGold') * 3600000 / elapsedMs : null,
+            autoSaleH: sum('autoSaleKnown') === samples
+                ? sum('autoSale') * 3600000 / elapsedMs : null,
+            productiveKillsH: productiveMs >= FARM_MIN_WINDOW_MS
+                ? samples * 3600000 / productiveMs : null,
+            productiveMs, windowMs: elapsedMs, samples,
+            denominator: 'wall', confidence:
+                farmingConfidence(samples, elapsedMs, false)};
+    }
+    // HA MILESTONE A PURE END.
+
+
+
+
+
+
+    // HA MILESTONE F PURE BEGIN. Ranking requires the requested metric,
+    // never XP as a fallback for missing Coins, rare or capture evidence.
+    const HA_RANK_METRICS=Object.freeze([
+        'xp','coins','npcLoot','rare',
+        'capture','shinyCatch'
+    ]);
+    const HA_RARE_SORT_IDS=Object.freeze([70000,70011,70012,70013,70017]);
+    function haMetricNumber(value) {
+        return typeof value==='number'&&Number.isFinite(value)?value:null;
+    }
+    function haMetricValue(metric,data) {
+        const xp=data?.xp,coins=data?.economy,rare=data?.rare,
+            capture=data?.capture;
+        switch(metric){
+            case 'xp': return haMetricNumber(xp?.value);
+            case 'coins': return haMetricNumber(coins?.killCoinsH);
+            case 'npcLoot': return haMetricNumber(coins?.npcLootEvH);
+            case 'rare': return haMetricNumber(rare?.unitsH);
+            case 'capture': return haMetricNumber(capture?.catchesH);
+            case 'shinyCatch': return haMetricNumber(capture?.shinyCaughtH);
+            default:return null;
+        }
+    }
+    function haRankMetricRows(rows,direction='desc',metric='xp') {
+        const asc=direction==='asc';
+        return [...rows].sort((a,b)=>{
+            const av=haMetricNumber(a?.score),bv=haMetricNumber(b?.score);
+            if(av===null||bv===null) {
+                if(av===null&&bv===null)return String(a?.hunt?.slug||'')
+                    .localeCompare(String(b?.hunt?.slug||''));
+                return av===null?1:-1;
+            }
+            if(av!==bv) {
+                return (bv-av)*(asc?-1:1);
+            }
+            const lv=Number(b?.hunt?.nivel||0)-Number(a?.hunt?.nivel||0);
+            return lv||String(a?.hunt?.slug||'').localeCompare(
+                String(b?.hunt?.slug||''));
+        });
+    }
+    function haMetricRare(hunt,tier,level,killsH,itemId) {
+        const drops=rareForHunt(hunt,tier,level,killsH);
+        if(drops.reason)return null;
+        return drops.drops.find(row=>row.id===itemId)??null;
+    }
+    // HA MILESTONE F PURE END.
+
+    // HA MILESTONE E PURE BEGIN — wiki-conditional, not deployed server parity.
+    const CAPTURE_BALLS=Object.freeze([
+        {id:1,name:'Poké',efficiency:1,defaultCoins:5},
+        {id:2,name:'Great',efficiency:2,defaultCoins:20},
+        {id:3,name:'Super',efficiency:3,defaultCoins:50},
+        {id:4,name:'Ultra',efficiency:4,defaultCoins:130},
+        {id:5,name:'Beast',efficiency:8,defaultCoins:null}
+    ]);
+    function captureRarityFromCatalog(meta) {
+        if (!meta) return null;
+        const level=Number(meta.huntLevel);
+        // The high-level economic normalization is upstream's
+        // aplicarEconomiaRegiaoAlta, BEFORE the independent NPC SALE cap.
+        if (Number.isFinite(level) && level>150)
+            return Math.round(12000*(level/150)**.6);
+        const sell=Number(meta.catalogSellValue);
+        const npc=Number(meta.priceNpc);
+        if (sell>0 && sell<=500000) return sell;
+        if (sell>500000 && level>0)
+            return Math.round(12000*(level/150)**.6);
+        if (npc>0 && npc<=500000) return npc;
+        return null; // Never borrow a specimen sale price or RMT listing.
+    }
+    function captureWikiChance(rarity,efficiency,hpFraction=0) {
+        const price=Number(rarity),eff=Number(efficiency),hp=Number(hpFraction);
+        if (!(price>0)||!Number.isFinite(price)||!(eff>0)||
+            !Number.isFinite(eff)||!Number.isFinite(hp)||hp<0||hp>1)
+            return null;
+        const r=Math.log10(Math.max(100,price))-1;
+        const factor=1+r**3/17;
+        return Math.min(.10,Math.max(.003,
+            .0075*eff/factor*(1.4-hp)));
+    }
+    function captureBallCatalog(source) {
+        const rows=Array.isArray(source)?source:
+            source&&typeof source==='object'?
+                Object.entries(source).map(([id,row])=>({
+                    id,...(row&&typeof row==='object'?row:{})
+                })): [];
+        const out=new Map();
+        for(const row of rows.slice(0,16)){
+            const id=Number(row?.id??row?.ballId);
+            const rate=Number(row?.catchRate);
+            const price=Number(row?.priceGold);
+            if(!Number.isInteger(id)||id<1||id>5)continue;
+            // The efficiency is meaningful only when a real catalog supplies
+            // a finite positive catchRate; absent values remain wiki conditional.
+            out.set(id,{efficiency:Number.isFinite(rate)&&rate>0?rate:null,
+                coins:row?.priceGold!==null&&row?.priceGold!==undefined&&
+                    Number.isFinite(price)&&price>=0?price:null,
+                currency:id===5?'diamonds':'coins',source:'observed-client-catalog'});
+        }
+        return out;
+    }
+    function captureMysticChance(ballId,captureBoost=1) {
+        const n=Number(ballId),boost=Number(captureBoost);
+        if(!Number.isInteger(n)||n<1||n>5 || !(boost>0))return null;
+        return Math.min(1,.001*n*boost);
+    }
+    function captureAppend(window,receipt,at,speciesId=null) {
+        if(!receipt||!Number.isFinite(at))return window;
+        const rows=!window||at<window.lastAt||
+            at-window.lastAt>900000?[]:
+                window.rows.filter(row=>row.at>=at-930000);
+        const bucket=Math.floor(at/30000);
+        let row=rows[rows.length-1];
+        if(!row||row.bucket!==bucket){
+            row={at,bucket,kills:0,throws:0,captures:0,shinySeen:0,
+                shinyCaught:0,shinySeenKnown:0,shinyCaughtKnown:0,
+                byBall:{},byBallCaught:{},bySpecies:{}};
+            rows.push(row);
+        }
+        const kind=receipt.kind;
+        if(kind==='morte')row.kills++;
+        if(kind==='bola'){
+            row.throws++;
+            if(receipt.shinySeen!==null)row.shinySeenKnown++;
+            if(receipt.shinySeen===true)row.shinySeen++;
+            const id=receipt.itemId;
+            if(id!==null && Number.isInteger(id)&&id>=1&&id<=5)
+                row.byBall[id]=(row.byBall[id]||0)+1;
+        }
+        if(kind==='capturado'){
+            row.captures++;
+            if(Number.isInteger(receipt.confirmedBallId) &&
+                receipt.confirmedBallId>=1&&receipt.confirmedBallId<=5)
+                row.byBallCaught[receipt.confirmedBallId]=
+                    (row.byBallCaught[receipt.confirmedBallId]||0)+1;
+            if(receipt.shinyCaught!==null)row.shinyCaughtKnown++;
+            if(receipt.shinyCaught===true)row.shinyCaught++;
+        }
+        const species=Number(speciesId);
+        if(Number.isInteger(species)&&species>0 && species<100000){
+            const key=String(species);
+            const target=row.bySpecies[key]??{kills:0,throws:0,captures:0};
+            if(kind==='morte')target.kills++;
+            if(kind==='bola')target.throws++;
+            if(kind==='capturado')target.captures++;
+            if(Object.keys(row.bySpecies).length<80||row.bySpecies[key])
+                row.bySpecies[key]=target;
+        }
+        if(rows.length>33)rows.splice(0,rows.length-33);
+        return {lastAt:at,rows};
+    }
+    // Observed outcomes are a session frequency, not the native capture
+    // formula. Report them only after a meaningful sample of accepted uses.
+    function captureMeasuredChance(throws,captures) {
+        const n=Number(throws),c=Number(captures);
+        if (!Number.isSafeInteger(n)||n<30||
+            !Number.isSafeInteger(c)||c<0||c>n) return null;
+        const p=c/n,z=1.96,z2=z*z;
+        const denom=1+z2/n;
+        const midpoint=(p+z2/(2*n))/denom;
+        const margin=z*Math.sqrt(p*(1-p)/n+z2/(4*n*n))/denom;
+        return {chance:p,low:Math.max(0,midpoint-margin),
+            high:Math.min(1,midpoint+margin),samples:n,
+            source:'observed-accepted-ball-outcomes'};
+    }
+
+    function captureObservedWindow(window,start,now) {
+        if(!window||!(now>start)||now-window.lastAt>120000)return null;
+        const rows=window.rows.filter(row=>row.at>=start-30000&&row.at<=now);
+        const sum=key=>rows.reduce((n,row)=>n+row[key],0);
+        const byBall={},byBallCaught={},bySpecies={};
+        for(const row of rows){
+            for(const [id,count] of Object.entries(row.byBall))
+                byBall[id]=(byBall[id]||0)+count;
+            for(const [id,count] of Object.entries(row.byBallCaught))
+                byBallCaught[id]=(byBallCaught[id]||0)+count;
+            for(const [id,counts] of Object.entries(row.bySpecies)){
+                const target=bySpecies[id]??{kills:0,throws:0,captures:0};
+                for(const key of ['kills','throws','captures'])
+                    target[key]+=counts[key];
+                bySpecies[id]=target;
+            }
+        }
+        const kills=sum('kills'),throws=sum('throws'),hours=(now-start)/3600000;
+        if(kills<6||hours<1/60)return null;
+        return {kills,throws,captures:sum('captures'),
+            shinySeen:sum('shinySeenKnown')===throws ?
+                sum('shinySeen'):null,
+            shinyCaught:sum('shinyCaughtKnown')===sum('captures') ?
+                sum('shinyCaught'):null,
+            shinySeenKnown:sum('shinySeenKnown'),
+            shinyCaughtKnown:sum('shinyCaughtKnown'),
+            throwsH:throws/hours,capturesH:sum('captures')/hours,
+            windowMs:now-start,
+            targetableFraction:throws/kills,
+            byBall,byBallCaught,bySpecies,
+            source:'observed-server/accepted-correlated'};
+    }
+    function captureHuntChance(hunt,rarities,efficiency,mix=null,mixMode='kills') {
+        if(!Array.isArray(hunt?.especies)||!hunt.especies.length)
+            return {chance:null,coverage:0,source:'no-spawns'};
+        const measured=mix&&Object.values(mix).reduce((n,x)=>n+(x[mixMode]||0),0)>=30;
+        let total=0,covered=0,weighted=0;
+        for(const row of hunt.especies){
+            const id=Number(outlandNormalizeSpeciesId(row.pokeId));
+            const weight=measured?(mix?.[id]?.[mixMode]??0):
+                Math.max(1,Number(row.pontos)||1);
+            total+=weight;
+            const rarity=rarities.get(id);
+            const chance=captureWikiChance(rarity,efficiency);
+            if(chance!==null){covered+=weight;weighted+=weight*chance;}
+        }
+        return {chance:total>0&&covered===total?weighted/total:null,
+            coverage:total?Math.round(100*covered/total):0,
+            source:measured?'measured-species-mix+wiki-conditional':
+                'spawn-weighted-wiki-conditional'};
+    }
+    function captureForecast(hunt,rarities,killsH,efficiency,options={}) {
+        const base=captureHuntChance(hunt,rarities,efficiency,
+            options.mix,options.mixMode??'kills');
+        const fraction=options.acceptedFraction;
+        const observed=typeof fraction==='number'&&
+            Number.isFinite(fraction)&&fraction>=0&&fraction<=1;
+        const acceptedH=Number.isFinite(killsH)&&killsH>=0 ?
+            killsH*(observed?fraction:1):null;
+        const catchesH=base.chance===null||acceptedH===null?
+            null:acceptedH*base.chance;
+        const shinyEligible=String(hunt?.area||'').toLowerCase()==='outland'
+            ? null : true; // Outland eligibility is not inferred from wiki.
+        const lure=options.hypotheticalLure===true;
+        const shinyP=lure?1/12000:1/24000;
+        return {...base,acceptedH,catchesH,
+            acceptedSource:observed?'observed-corpse-attempt-fraction':
+                'upper-bound-if-every-corpse-targeted',
+            ballsPerCapture:base.chance>0?1/base.chance:null,
+            coinsPerCapture:base.chance>0&&
+                Number.isFinite(options.coinPrice)?options.coinPrice/base.chance:null,
+            diamondsPerCapture:base.chance>0&&
+                Number.isFinite(options.diamondPrice)?
+                    options.diamondPrice/base.chance:null,
+            shinyEligible,shinyP,
+            shinySeenH:shinyEligible&&acceptedH!==null?
+                acceptedH*shinyP:null,
+            shinyCaughtH:shinyEligible&&catchesH!==null?
+                catchesH*shinyP:null,
+            shinyCaught24hChance:shinyEligible&&acceptedH!==null&&
+                base.chance!==null?farmingChanceAtLeastOne(
+                    shinyP*base.chance,24*acceptedH):null,
+            hypotheticalLure:lure};
+    }
+    function captureSpeciesForecast(hunt,speciesId,rarity,efficiency,
+        killsH,options={}) {
+        if(!Array.isArray(hunt?.especies)||!hunt.especies.length ||
+            !Number.isFinite(killsH)||killsH<0)
+            return null;
+        const target=Number(outlandNormalizeSpeciesId(speciesId));
+        let total=0,matches=0;
+        const mix=options.mix;
+        const measured=mix&&Object.values(mix).reduce((n,x)=>n+x.kills,0)>=30;
+        for(const row of hunt.especies){
+            const weight=measured?Number(mix?.[
+                outlandNormalizeSpeciesId(row.pokeId)]?.kills??0):
+                Math.max(1,Number(row.pontos)||1);
+            total+=weight;
+            if(Number(outlandNormalizeSpeciesId(row.pokeId))===target)
+                matches+=weight;
+        }
+        const chance=captureWikiChance(rarity,efficiency);
+        if(!total||!matches||chance===null)return null;
+        const hasMeasuredFraction=typeof options.acceptedFraction==='number' &&
+            Number.isFinite(options.acceptedFraction) &&
+            options.acceptedFraction>=0&&options.acceptedFraction<=1;
+        const fraction=typeof options.acceptedFraction==='number'&&
+            options.acceptedFraction>=0&&options.acceptedFraction<=1?
+                options.acceptedFraction:1;
+        const acceptedH=killsH*(matches/total)*fraction;
+        const catchesH=acceptedH*chance;
+        const eligible=String(hunt.area||'').toLowerCase()==='outland'
+            ?null:true;
+        const shinyP=options.hypotheticalLure?1/12000:1/24000;
+        return {chance,targetFraction:matches/total,acceptedH,catchesH,
+            acceptedSource:hasMeasuredFraction?'observed':'ceiling',
+            shinySeenH:eligible?acceptedH*shinyP:null,
+            shinyCaughtH:eligible?catchesH*shinyP:null,
+            meanHoursShiny:eligible&&catchesH>0?1/(catchesH*shinyP):null,
+            shiny24h:eligible?
+                farmingChanceAtLeastOne(chance*shinyP,24*acceptedH):null,
+            source:measured?'measured-species-mix+wiki':
+                'spawn-weighted-wiki-conditional'};
+    }
+    // HA MILESTONE E PURE END.
+
+    // HA MILESTONE D PURE BEGIN — base probabilities; no inferred boosts.
+    const RARE_OUTLAND_DROPS = Object.freeze([
+        {id:70000,key:'token',name:'Bronze Boss Token',base:.0005,craft:1,
+            source:'wiki+upstream-shared'},
+        {id:70011,key:'key',name:'Key Fragment',base:.000005,craft:10,
+            source:'wiki+upstream-shared'},
+        {id:70012,key:'stone',name:'Shiny Stone Fragment',base:.000005,
+            craft:10,source:'wiki+upstream-shared'},
+        {id:70013,key:'bicycle',name:'Bicycle Fragment',base:.000005,
+            craft:10,source:'wiki-reported;server-hook-unverified'}
+    ]);
+    const RARE_EGG_DROP = Object.freeze({
+        id:70017,key:'egg',name:'Shiny Egg Fragment',craft:10,
+        source:'upstream-shared-frozen-ladder'});
+    function outlandNativeTier(tier,level) {
+        const requested=Number(tier);
+        const choice=Number.isInteger(requested) && requested>=1 &&
+            requested<=8 ? requested : 1;
+        for(let i=choice;i>=1;i--)
+            if(farmingTier(i,level))return i;
+        for(let i=8;i>=1;i--)
+            if(farmingTier(i,level))return i;
+        // The upstream default is 1 even before trainer level 150, but the
+        // map remains LOCKED. Never advertise tier 1 as unlocked below 150.
+        return 1;
+    }
+    function outlandTierSnapshot(source) {
+        if(!source || typeof source!=='object') return null;
+        const keys=['tierOutland','outlandTier','outland_tier'];
+        for(const key of keys)if(Object.hasOwn(source,key)){
+            const n=Number(source[key]);
+            return Number.isInteger(n)&&n>=1&&n<=8?n:null;
+        }
+        return null;
+    }
+    function rareForHunt(hunt,tier,trainerLevel,killsH) {
+        if(!hunt || !Number.isFinite(killsH)||killsH<0)
+            return {drops:[],reason:'unknown-kill-rate'};
+        const area=String(hunt.area||'').toLowerCase();
+        const isOutland=area==='outland';
+        if(isOutland && !farmingTier(tier,trainerLevel))
+            return {drops:[],reason:'locked-tier'};
+        const available=isOutland?
+            RARE_OUTLAND_DROPS.map(row=>({...row,
+                probability:Math.min(1,row.base*farmingTier(tier,trainerLevel).rareMultiplier)})):
+            [RARE_EGG_DROP].map(row=>({...row,
+                probability:farmingShinyEggChance(hunt.nivel,false)}));
+        const drops=available.filter(row=>row.probability>0)
+            .map(row=>rareHorizon(row,killsH));
+        return {drops,reason:!drops.length?'ineligible-hunt':null,
+            source:'unboosted-wiki/upstream-shared',tier:isOutland?tier:null,
+            eggIncubationHours:isOutland?null:168};
+    }
+    function rareHorizon(item,killsH) {
+        const p=item.probability,unitsH=killsH*p;
+        return {...item,unitsH,
+            meanKills:p>0?1/p:null,
+            meanHours:unitsH>0?1/unitsH:null,
+            craftHours:unitsH>0?item.craft/unitsH:null,
+            chance1h:farmingChanceAtLeastOne(p,killsH),
+            chance24h:farmingChanceAtLeastOne(p,24*killsH),
+            assumption:'independent-stationary-rolls-unboosted'};
+    }
+    function rareMarketEvidence(item,sale,now=Date.now()) {
+        // Only verified, sufficiently sampled recent COMPLETED trades may
+        // supply a speculative reference. Listings are not proceeds.
+        const age=now-Number(sale?.sampledAt);
+        if(!item || !Number.isFinite(item.unitsH) ||
+            !sale || sale.source!=='completed-sale' ||
+            !['gold','orb'].includes(sale.currency) ||
+            !(Number.isFinite(sale.price)&&sale.price>0) ||
+            !(Number.isInteger(sale.samples)&&sale.samples>=3) ||
+            !Number.isFinite(age)||age<0||age>30*86400000)
+            return null;
+        return {units:item.unitsH,currency:sale.currency,
+            expectedMarketValueH:item.unitsH*sale.price,
+            referenceSamples:sale.samples,sampledAt:sale.sampledAt,
+            ageDays:age/86400000,
+            source:'historical-completed-sale-not-realized'};
+    }
+    // HA MILESTONE D PURE END.
+
+    // HA MILESTONE C PURE BEGIN: economy amounts in Coins, not XP or Gems.
+    const FARM_SEEDS={NORMAL:'Luck Medallion',FIRE:'Magma Foot',
+        WATER:'Air Tank',GRASS:'Massive Vines',ELECTRIC:'Electric Tail',
+        ICE:'Ski Poles',FIGHTING:'Belt of Champion',POISON:'Female Ear',
+        GROUND:'Horn Drill',FLYING:'Colored Feather',PSYCHIC:'Fox Tail',
+        BUG:'Pinsir Horn',ROCK:'Solid Rock Paw',GHOST:'Traces of Ghost',
+        DRAGON:'Dragon Tooth',DARK:'Dark Moon',STEEL:'Steelix Tail',
+        FAIRY:'Luck Medallion'};
+    const FARM_DEAD=new Set(['strange pheromone','10000 carat emerald','moon stone']);
+    const farmNum = n => n===null||n===undefined||n===''||
+        !Number.isFinite(Number(n))||Number(n)<0 ? null : Number(n);
+    function farmNpcPrice(item, shopIds=new Set(),specialIds=new Set()) {
+        if (!item || !Number.isInteger(Number(item.id))) return null;
+        // Explicit native NPC eligibility overrides static naming heuristics.
+        if (item.vendavelNpc === false || item.npcSellable === false)
+            return 0;
+        if (item.vendavelNpc === true || item.npcSellable === true)
+            return farmNum(item.npcPrice);
+        const name=String(item.name||'').toLowerCase().replace(/\./g,'');
+        if (item.category==='stone'&&name!=='rough gemstone') return 0;
+        if (['heal','revive'].includes(item.category)||shopIds.has(Number(item.id))||
+            specialIds.has(Number(item.id))||FARM_DEAD.has(name)) return 0;
+        const price=farmNum(item.npcPrice);
+        return item.category==='loot' ? price : null;
+    }
+    function farmLootValue(lines,priceOf) {
+        if (!Array.isArray(lines)) return {perKill:null,unknown:1,lines:0};
+        let value=0,unknown=0,seen=0;
+        for(const line of lines.slice(0,80)) {
+            const p=farmingLootChance(line?.chance);
+            const lo=farmNum(line?.minCount??1),hi=farmNum(line?.maxCount??1);
+            if(p===null||lo===null||hi===null||lo>hi){unknown++;continue;}
+            if(p===0)continue;
+            const price=priceOf(line?.name);
+            if(price===null||price===undefined){unknown++;continue;}
+            value+=p*(lo+hi)/2*price;seen++;
+        }
+        return {perKill:unknown?null:value,knownSubtotal:value,unknown,lines:seen};
+    }
+    // Reconstruct the shared economy-drop adjustments from the raw catalog.
+    // This is labeled "reconstructed", NOT the deployed server's final table.
+    function farmRebalanceLoot(species,priceOf) {
+        if(!species||!Array.isArray(species.loot)) return null;
+        const rows=species.loot.slice(0,80).map(x=>({...x}));
+        const n=farmNum(species.huntLevel);
+        if(!(n>=1))return null;
+        const gold=farmingGoldForLevel(n);
+        const base=n<=25000?gold:farmingGoldForLevel(25000)*(n/25000)**.30;
+        const target=Math.max(0,Math.round(base*1.15)-gold);
+        const paying=()=>rows.filter(x=>farmNum(x.chance)>0&&(priceOf(x.name)??0)>0);
+        if(!paying().length) {
+            const name=FARM_SEEDS[String(species.type1||'').toUpperCase()]||FARM_SEEDS.NORMAL;
+            const price=priceOf(name);
+            if(price>0)rows.push({name,chance:Math.max(1,
+                Math.round(Math.min(60,target/price*100)*1000)),
+                minCount:1,maxCount:1});
+        }
+        const lines=paying().filter(x=>x.name!=='Rare Pokémon Picture');
+        const ev=farmLootValue(lines,priceOf).perKill;
+        if(ev>0)for(const row of lines){
+            const scale=target/ev;
+            const min=Math.max(1,Math.min(20,Math.round((row.minCount??1)*scale)));
+            row.maxCount=Math.max(min,Math.min(20,Math.round((row.maxCount??1)*scale)));
+            row.minCount=min;
+        }
+        const after=farmLootValue(lines,priceOf).perKill;
+        const missing=after===null?0:target-after;
+        const rarePrice=priceOf('Rare Pokémon Picture');
+        const quantity=rarePrice>0?Math.round(missing/(.05*rarePrice)):0;
+        const rare=rows.find(x=>x.name==='Rare Pokémon Picture');
+        if(missing>0&&quantity>=1){
+            if(rare)Object.assign(rare,{chance:5000,minCount:quantity,maxCount:quantity});
+            else rows.push({name:'Rare Pokémon Picture',chance:5000,
+                minCount:quantity,maxCount:quantity});
+        }else if(rare)rows.splice(rows.indexOf(rare),1);
+        return rows;
+    }
+    function farmGoldPrediction(hunt,killsH){
+        if(!Number.isFinite(killsH)||killsH<0||
+            !Array.isArray(hunt?.especies)||!hunt.especies.length)return null;
+        const rows=hunt.especies.map(x=>({weight:Math.max(1,Number(x.pontos)||1),
+            level:farmNum(x.level??x.nivel??hunt.nivel)}));
+        if(rows.some(x=>!x.level))return null;
+        const total=rows.reduce((sum,x)=>sum+x.weight,0);
+        return killsH*rows.reduce((sum,x)=>sum+
+            x.weight*farmingGoldForLevel(x.level),0)/total;
+    }
+    // Hunt catalogs are stable between actual revisions; reuse baseline
+    // weighted loot once per hunt/catalog pair instead of per species card.
+    // Measured kill mixes are deliberately not cached.
+    const FARM_LOOT_BASELINE_CACHE = new WeakMap();
+    function farmLootPrediction(hunt,known,killsH,mix=null) {
+        if(!Number.isFinite(killsH)||killsH<0||
+            !Array.isArray(hunt?.especies)||!hunt.especies.length)
+            return {perHour:null,coverage:0,source:'unknown'};
+        const reported=mix && typeof mix==='object'
+            ? Object.values(mix).reduce((n,x)=>n+Number(x?.kills||0),0) : 0;
+        const huntIds=new Set(hunt.especies.map(row=>
+            Number(outlandNormalizeSpeciesId(row.pokeId))));
+        // A fully attributed event can still refer to a species absent from
+        // this catalog. Never silently discard that weight when averaging.
+        const matching=mix && typeof mix==='object' &&
+            Object.entries(mix).every(([id,row])=>
+                !(Number(row?.kills)>0) || huntIds.has(Number(id)));
+        const measured=reported>=30 && matching;
+        const cached=!measured ? FARM_LOOT_BASELINE_CACHE.get(hunt) : null;
+        if (cached?.catalog === known && cached.species === hunt.especies)
+            return {perHour:cached.perKill===null?null:killsH*cached.perKill,
+                coverage:cached.coverage,source:'reconstructed-upstream-catalog'};
+        let total=0,covered=0,weighted=0;
+        for(const x of hunt.especies){
+            const id=Number(outlandNormalizeSpeciesId(x.pokeId));
+            const w=measured ? Number(mix?.[id]?.kills||0) :
+                Math.max(1,Number(x.pontos)||1);
+            if(!(w>0))continue;
+            total+=w;
+            const row=known.get(id);
+            if(row&&Number.isFinite(row.perKill)){covered+=w;weighted+=row.perKill*w;}
+        }
+        const perKill=total>0&&covered===total?weighted/total:null;
+        const coverage=total?Math.round(100*covered/total):0;
+        if (!measured) FARM_LOOT_BASELINE_CACHE.set(hunt,{
+            catalog:known,species:hunt.especies,perKill,coverage
+        });
+        return {perHour:perKill===null?null:killsH*perKill,
+            coverage,source:measured?'observed-species-mix+reconstructed-loot':
+                'reconstructed-upstream-catalog'};
+    }
+    function farmNormalizePrices(data,kind){
+        const rows=Array.isArray(data)?data:
+            data&&typeof data==='object'?Object.entries(data).map(([id,row])=>
+                row&&typeof row==='object'?{id,...row}:{id}):[];
+        const out=new Map();
+        for(const row of rows.slice(0,200)){
+            const id=Number(row?.id??row?.itemId??row?.ballId);
+            if(!Number.isInteger(id)||id<0)continue;
+            const coins=kind==='ball'?
+                farmNum(row.priceGold??row.precoGold??row.goldPrice):
+                farmNum(row.npcPrice??row.precoGold??row.priceGold);
+            const diamonds=farmNum(row.priceDiamond??row.precoDiamantes??row.diamondPrice);
+            out.set(id,{coins,diamonds,kind,source:'observed-client-catalog'});
+        }
+        return out;
+    }
+    function farmAppendUse(win,receipt,at){
+        if(!Number.isFinite(at)||!receipt)return win;
+        const rows=!win||at<win.lastAt||at-win.lastAt>900000?[]:
+            win.rows.filter(x=>x.at>=at-930000);
+        const bucket=Math.floor(at/30000);
+        let row=rows[rows.length-1];
+        if(!row||row.bucket!==bucket){row={bucket,at,uses:{}};rows.push(row);}
+        const type=receipt.kind==='bola'?'ball':
+            ['cura','revive'].includes(receipt.kind)?'item':null;
+        if(type&&receipt.itemId!==null){
+            const key=type+':'+receipt.itemId;
+            row.uses[key]=(row.uses[key]||0)+1;
+        }
+        if(rows.length>33)rows.splice(0,rows.length-33);
+        return {rows,lastAt:at};
+    }
+    function farmCostRates(win,from,to,catalogs,inventory){
+        if(!(to>from))return null;
+        const counts=new Map();
+        for(const row of win?.rows||[]){
+            if(row.at<from-30000||row.at>to)continue;
+            for(const [key,count] of Object.entries(row.uses))
+                counts.set(key,(counts.get(key)||0)+count);
+        }
+        let coins=0,diamonds=0,unknown=0;
+        const items=[];
+        for(const [key,count] of counts){
+            const [type,idText]=key.split(':');const id=Number(idText);
+            const price=(type==='ball'?catalogs.balls:catalogs.items)?.get(id);
+            const c=price?.coins,d=price?.diamonds;
+            // A catalog with two positive currency quotes offers alternatives,
+            // not an instruction to pay BOTH for a single consumed item.
+            if (c!==null && c!==undefined && d!==null &&
+                d!==undefined && c>0 && d>0) unknown+=count;
+            else if(c!==null && c!==undefined && !(d>0)) coins+=c*count;
+            else if(d!==null && d!==undefined && !(c>0)) diamonds+=d*count;
+            else unknown+=count;
+            items.push({type,id,count,remaining:inventory?.get(key)??null,
+                priceSource:price?.source??'unknown'});
+        }
+        const hours=(to-from)/3600000;
+        return {coinsH:unknown?null:coins/hours,
+            diamondsH:unknown?null:diamonds/hours,
+            unknown,items,source:'replacement-cost-not-spend'};
+    }
+    function farmFinancialSummary(killsH,modeledKillH,observedKillH,
+        observedAutoSaleH,npcLootEvH,cost){
+        const ok=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0;
+        const killH=ok(observedKillH)?observedKillH:ok(modeledKillH)?
+            modeledKillH:null;
+        const realizedH=ok(observedKillH)&&ok(observedAutoSaleH)?
+            observedKillH+observedAutoSaleH:null;
+        // No unsold loot EV and no second copy of already-realized auto sales.
+        const netH=ok(realizedH)&&ok(cost?.coinsH)?
+            realizedH-cost.coinsH:null;
+        return {killsH,killCoinsH:killH,
+            killSource:ok(observedKillH)?'observed-server/event':'upstream-shared-model',
+            npcLootEvH:ok(npcLootEvH)?npcLootEvH:null,realizedH,netH,
+            replacementCostH:cost?.coinsH??null,diamondsH:cost?.diamondsH??null,
+            source:netH===null?'incomplete':'replacement-cost-adjusted'};
+    }
+    // HA MILESTONE C PURE END.
+
+    // HA MILESTONE B PURE BEGIN: no live bonus is inferred from a prior kill.
+    const XP_BONUS_FIELDS = Object.freeze([
+        'xpBoost', 'pokemonXpBoost', 'vip', 'guildBoost',
+        'guildRank', 'streamBonusPct', 'twitchBonusPct', 'kickBonusPct',
+        'eventXp', 'xpEvent', 'catchupBoost', 'catchupTarget',
+        'xpTreinadorBoost', 'xpPokemonBoost'
+    ]);
+    // The native game-state keys used by Controller Bridge and Moth Controller.
+    // Keep only aggregate bonus evidence, never channel names or account data.
+    // Partial estado packets replace only supplied top-level fields.
+    function nativeXpBonusDelta(previous, delta, full=false) {
+        const next=full ? {} : {...(previous||{})};
+        if (!delta || typeof delta!=='object') return next;
+        const pct=value=>typeof value==='number'&&Number.isFinite(value)&&
+            value>=0&&value<=1000?value:null;
+        const until=value=>typeof value==='number'&&Number.isFinite(value)&&
+            value>=1400000000000&&value<=4100000000000?value:null;
+        if (Object.hasOwn(delta,'twitch')) {
+            const t=delta.twitch;
+            next.twitch=t&&typeof t==='object'?{
+                pct:pct(t.pctAtual??t.pct),
+                watching:Array.isArray(t.assistindoEm)
+                    ?Math.min(100,t.assistindoEm.filter(Boolean).length):null
+            }:null;
+        }
+        if (Object.hasOwn(delta,'evento')) {
+            const e=delta.evento;
+            next.evento=e&&typeof e==='object'?{
+                trainer:pct(e.xpTreinadorPct),
+                pokemon:pct(e.xpPokemonPct)
+            }:null;
+        }
+        if (Object.hasOwn(delta,'guildBonusPct'))
+            next.guildBonusPct=pct(delta.guildBonusPct);
+        if (Object.hasOwn(delta,'guild'))
+            next.guild=delta.guild&&typeof delta.guild==='object'?{
+                boostUntil:until(delta.guild.boostAte)
+            }:null;
+        if (Object.hasOwn(delta,'tiposBoost')) {
+            const rows=Array.isArray(delta.tiposBoost)?delta.tiposBoost:[];
+            const catalog={};
+            for(const b of rows.slice(0,60)) {
+                if(!['xp','pokexp'].includes(b?.chave))continue;
+                const mult=b.mult;
+                if(typeof mult==='number'&&Number.isFinite(mult)&&
+                    mult>=1&&mult<=100)catalog[b.chave]=mult;
+            }
+            next.tiposBoost=catalog;
+        }
+        if (Object.hasOwn(delta,'loja')) {
+            const shop=delta.loja;
+            const boosts=shop?.boosts;
+            const catchup=shop?.atrasados;
+            next.loja=shop&&typeof shop==='object'?{
+                vipUntil:until(shop.vipAte),
+                boosts:boosts&&typeof boosts==='object'&&!Array.isArray(boosts)
+                    ?Object.fromEntries(Object.entries(boosts).slice(0,60)
+                        .filter(([key])=>/^[a-zA-Z]{1,20}$/.test(key))
+                        .map(([key,value])=>[key,until(value)])):{},
+                boostKeys:boosts&&typeof boosts==='object'&&!Array.isArray(boosts)
+                    ?Math.min(50,Object.keys(boosts).length):0,
+                catchup:catchup&&typeof catchup==='object'?{
+                    target:Number.isSafeInteger(Number(catchup.alvo))&&
+                        Number(catchup.alvo)>0?Number(catchup.alvo):null,
+                    multiplier:typeof catchup.mult==='number'&&
+                        Number.isFinite(catchup.mult)&&catchup.mult>=1&&
+                        catchup.mult<=10?catchup.mult:null
+                }:null
+            }:null;
+        }
+        return next;
+    }
+
+    function nativeXpBonusReading(state,level,now=Date.now()) {
+        const values=state||{};
+        let trainer=1,pokemon=1;
+        const sources=[],unknown=[];
+        const pct=(v)=>typeof v==='number'&&Number.isFinite(v)&&v>0&&v<=1000?v:0;
+        if(pct(values.twitch?.pct)) {
+            if(values.twitch.watching>0) {
+                const p=values.twitch.pct;
+                trainer*=1+p/100;pokemon*=1+p/100;
+                sources.push({kind:'twitch',pct:p});
+            } else if(values.twitch.watching===null) {
+                unknown.push('twitch');
+            } else {
+                unknown.push('twitchAvailable');
+            }
+        }
+        if(pct(values.evento?.trainer)||pct(values.evento?.pokemon)) {
+            const t=pct(values.evento?.trainer),p=pct(values.evento?.pokemon);
+            trainer*=1+t/100;pokemon*=1+p/100;
+            sources.push({kind:'event',trainer:t,pokemon:p});
+        }
+        if(pct(values.guildBonusPct)) {
+            const p=values.guildBonusPct;
+            trainer*=1+p/100;pokemon*=1+p/100;
+            sources.push({kind:'guild',pct:p});
+        }
+        // These are upstream-defined, timestamp-gated multiplicative XP
+        // sources, not arbitrary interpretations of a generic 'boost' flag.
+        if(Number(values.loja?.vipUntil)>now) {
+            trainer*=1.5;pokemon*=1.5;
+            sources.push({kind:'vip'});
+        }
+        if(Number(values.guild?.boostUntil)>now) {
+            trainer*=1.1;pokemon*=1.1;
+            sources.push({kind:'guildBank'});
+        }
+        const shopBoosts=values.loja?.boosts||{};
+        for(const [kind,key] of [['shopTrainer','xp'],['shopPokemon','pokexp']]) {
+            if(!(Number(shopBoosts[key])>now))continue;
+            const mult=values.tiposBoost?.[key];
+            if(typeof mult==='number'&&Number.isFinite(mult)&&mult>=1) {
+                if(key==='xp')trainer*=mult;
+                else pokemon*=mult;
+                sources.push({kind,mult});
+            } else unknown.push(kind);
+        }
+        const catchup=values.loja?.catchup;
+        if(catchup) {
+            // The upstream x10 catch-up ends at a trainer-XP threshold and
+            // splits the crossing reward. Presence alone cannot model it.
+            const target=catchup.target;
+            if(target!==null&&Number.isFinite(Number(level))&&level<target)
+                unknown.push('catchup');
+            else if(target===null) unknown.push('catchup');
+        }
+        const reported=['twitch','evento','guildBonusPct','guild','loja']
+            .some(key=>Object.hasOwn(values,key));
+        return {trainer, pokemon,sources,unknown,
+            reported,knownFactors:sources.length>0,
+            complete:reported&&unknown.length===0 &&
+                ['twitch','evento','guildBonusPct','guild','loja']
+                    .every(key=>Object.hasOwn(values,key))};
+    }
+
+    function nativeXpBonusScope(values,now=Date.now()) {
+        // Invalidate a cached forecast when an upstream timed boost expires,
+        // even without another websocket packet.
+        const active=end=>typeof end==='number'&&end>now;
+        return JSON.stringify([
+            values?.twitch?.pct??null,values?.twitch?.watching??null,
+            values?.evento?.trainer??null,values?.evento?.pokemon??null,
+            values?.guildBonusPct??null,
+            active(values?.guild?.boostUntil),
+            active(values?.loja?.vipUntil),
+            active(values?.loja?.boosts?.xp),
+            active(values?.loja?.boosts?.pokexp),
+            values?.tiposBoost?.xp??null,values?.tiposBoost?.pokexp??null,
+            values?.loja?.catchup?.target??null,
+            values?.loja?.catchup?.multiplier??null
+        ]);
+    }
+
+    function xpBonusSnapshot(delta) {
+        if (!delta || typeof delta !== 'object') return null;
+        const result = {};
+        for (const section of [delta, delta.bonuses, delta.boosts]) {
+            if (!section || typeof section !== 'object' ||
+                Array.isArray(section)) continue;
+            for (const key of XP_BONUS_FIELDS) {
+                if (!Object.hasOwn(section, key)) continue;
+                const value = section[key];
+                // Only finite scalar numbers and booleans are safely scoped.
+                if (typeof value === 'boolean' ||
+                    (typeof value === 'number' && Number.isFinite(value)))
+                    result[key] = value;
+                else if (value === null) result[key] = null;
+                else if (typeof value === 'object' && value !== null) {
+                    const safe = {};
+                    for (const field of ['active','ativo','expiresAt','expiraEm',
+                        'until','multiplier','multiplicador','targetLevel']) {
+                        const v = value[field];
+                        if (typeof v === 'boolean' ||
+                            (typeof v === 'number' && Number.isFinite(v)))
+                            safe[field] = v;
+                    }
+                    result[key] = Object.keys(safe).length ? safe : 'unverified';
+                } else result[key] = 'unverified';
+            }
+        }
+        return Object.keys(result).length ? result : null;
+    }
+
+    function xpBonusTimeScope(snapshot, now) {
+        const defined = [];
+        if (!snapshot || typeof snapshot !== 'object') return 'unknown';
+        for (const [name,value] of Object.entries(snapshot)) {
+            if (!value || typeof value !== 'object') continue;
+            const at = value.expiresAt ?? value.until;
+            // Only plausible Unix millisecond timestamps have interpretable
+            // expiration semantics. Unknown protocol units stay unverified.
+            if (typeof at === 'number' && at > 1400000000000 &&
+                at < 4100000000000) defined.push([
+                    name, now >= at ? 'expired' : 'active'
+                ]);
+        }
+        return JSON.stringify(defined.sort((a,b)=>a[0].localeCompare(b[0])));
+    }
+
+    function xpBonusScope(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') return 'unknown';
+        // Fixed ordering means a delta with identical semantics won't reset data.
+        return JSON.stringify(Object.keys(snapshot).sort()
+            .map(key => [key, snapshot[key]])) +
+            '|' + xpBonusTimeScope(snapshot, Date.now());
+    }
+
+    function observeXpTransition(record, channel, xp, base, at) {
+        if (!record || !(base > 0) || !(xp >= 0) || !Number.isFinite(xp))
+            return;
+        const ratio = xp / base;
+        const key = channel === 'trainer' ? 'lastTrainerBonusRatio'
+            : 'lastPokemonBonusRatio';
+        const previous = record[key];
+        if (previous !== null && Number.isFinite(previous) &&
+            Math.abs(ratio - previous) > Math.max(.1, previous * .12)) {
+            record.xpBonusTransitions ||= [];
+            record.xpBonusTransitions.push({
+                channel, at, previous: Math.round(previous * 100) / 100,
+                next: Math.round(ratio * 100) / 100,
+                reason: 'bonus-or-catchup-transition-unverified'
+            });
+            if (record.xpBonusTransitions.length > 12)
+                record.xpBonusTransitions.shift();
+        }
+        record[key] = ratio;
+    }
+
+    function xpRewardReceipt(receipt) {
+        return {
+            trainerXp: Number.isFinite(receipt?.trainerXp)
+                ? receipt.trainerXp : null,
+            pokemonXp: Number.isFinite(receipt?.pokemonXp)
+                ? receipt.pokemonXp : null,
+            source: 'observed-server/event'
+        };
+    }
+
+    function xpGlobalAttackFloor(speedIv) {
+        // The Speed-IV rule is wiki-derived because server scheduling is absent.
+        const iv = Number(speedIv);
+        return Number.isInteger(iv) && iv >= 1 && iv <= 32
+            ? Math.max(400, 900 - 10 * iv) : 900;
+    }
+
+    function xpMoveCooldown(baseCooldownMs, baseSpeed, speedIv, alreadyAdjusted = false) {
+        const cooldown = Number(baseCooldownMs), speed = Number(baseSpeed);
+        const iv = Number(speedIv);
+        if (!(cooldown > 0) || !Number.isFinite(cooldown))
+            return null;
+        if (alreadyAdjusted) return Math.round(cooldown);
+        if (!(speed >= 0) || !Number.isInteger(iv) || iv < 1 || iv > 32)
+            return null; // Do not fake known runtime cooldown from unknown IVs.
+        const potential = Math.min(7, speed <= 120 ?
+            speed / 20 : 6 + (speed - 120) / 40);
+        return Math.round(cooldown * (1 - (potential * iv / 32) / 100));
+    }
+
+    function xpCooldownFromPower(power) {
+        const p = Math.max(15, Number(power) || 15);
+        const seconds = p <= 100 ? 10 + (p - 15) * (20 / 85)
+            : 30 + (p - 100) * (30 / 500);
+        return Math.round(seconds * 10) * 100;
+    }
+
+    // Without directly observed attack intervals, fast kill throughput is
+    // not a reliable proxy for live move readiness. Keep a conservative
+    // baseline until enough timed combat evidence is available.
+    function xpForecastCastCadence(profile, globalMs, fallbackMs) {
+        const global = Number(globalMs);
+        const fallback = Number(fallbackMs);
+        if (!(global > 0) || !Number.isFinite(global) ||
+            !(fallback > 0) || !Number.isFinite(fallback)) return null;
+        const measured = Number(profile?.cadenceMs);
+        return profile?.cadenceMeasured === true &&
+            Number.isFinite(measured) && measured > 0
+            ? Math.max(global, measured)
+            : Math.max(global, fallback);
+    }
+
+    function xpPredictionBand(estimate) {
+        const value = Number(estimate?.value);
+        if (!Number.isFinite(value) || value <= 0) return null;
+        const observed = estimate.observed === true;
+        const samples = Number(estimate.samples) || 0;
+        const coverage = Number(estimate.coverage);
+        const high = observed && samples >= 30 &&
+            Number(estimate.windowMs) >= 300000;
+        // These are explicitly heuristic uncertainty ranges, NOT statistical CIs.
+        const baseline = observed ? (high ? .12 : .28)
+            : estimate.source === 'baseline model' ? .65
+            : coverage < 100 || samples < 16 ? .5 : .3;
+        // Observed out-of-sample errors may widen, never shrink, the
+        // heuristic band. These are NOT statistical confidence intervals.
+        const verifiedError = Number(estimate.validationErrorPct);
+        const fraction = !observed && Number.isFinite(verifiedError) &&
+            verifiedError >= 0 && Number(estimate.validationCount) >= 3
+            ? Math.max(baseline, Math.min(1.5, verifiedError / 100))
+            : baseline;
+        return {
+            low: Math.max(0, value * (1 - fraction)),
+            high: value * (1 + fraction),
+            kind: 'heuristic',
+            width: fraction
+        };
+    }
+
+    function xpCompareForecasts(a, b) {
+        const av = Number(a?.value) || 0, bv = Number(b?.value) || 0;
+        const ar = xpPredictionBand(a), br = xpPredictionBand(b);
+        if (ar && br && Math.abs(av - bv) <= Math.max(
+            ar.width * av, br.width * bv
+        )) {
+            // A ranking must not privilege an uncertain cold-start estimate
+            // merely because its point estimate is slightly larger.
+            const quality = x => x?.observed ? 3
+                : x?.source === 'named-move model' && x?.coverage === 100 ? 2
+                : x?.source === 'combat model' && x?.coverage === 100 ? 1 : 0;
+            if (quality(a) !== quality(b)) return quality(b) - quality(a);
+        }
+        return bv - av;
+    }
+
+    function xpForecastResidual(predictedKillMs, observedKillMs) {
+        if (!(Number(predictedKillMs) > 0) || !(Number(observedKillMs) > 0) ||
+            !Number.isFinite(predictedKillMs) || !Number.isFinite(observedKillMs))
+            return null;
+        const ratio = observedKillMs / predictedKillMs;
+        return {
+            ratio: Math.max(.5, Math.min(2, ratio)),
+            errorPct: Math.round(100 * (predictedKillMs - observedKillMs) /
+                observedKillMs)
+        };
+    }
+    // HA MILESTONE B PURE END.
+
     function recordDeathEvent(
         event
     ) {
-        if (
-            event?.quem !==
-                'selvagem'
-        ) {
-            return;
-        }
+        const receipt = normalizeFarmingEvent(event);
+        if (!receipt || !acceptFarmingEvent(state.farmingLedger, receipt)) return;
 
         const record =
             performanceRecord(
@@ -2384,72 +4394,44 @@
             ) +
             1;
 
-        const trainerXp =
-            Math.max(
-                0,
-                Number(
-                    event?.xpTreinador ??
-                    event?.xp
-                ) ||
-                0
-            );
-
-        const pokemonXp =
-            Math.max(
-                0,
-                Number(
-                    event?.xpPokemon ??
-                    event?.xp
-                ) ||
-                0
-            );
-
-        record.trainerXp =
-            Number(
-                record.trainerXp ||
-                0
-            ) +
-            trainerXp;
-
-        record.pokemonXp =
-            Number(
-                record.pokemonXp ||
-                0
-            ) +
-            pokemonXp;
-
-        record.gold =
-            Number(
-                record.gold ||
-                0
-            ) +
-            Math.max(
-                0,
-                Number(
-                    event?.ouro
-                ) ||
-                0
-            ) +
-            Math.max(
-                0,
-                Number(
-                    event?.ouroVendaAuto
-                ) ||
-                0
-            );
+        // Distinct server receipts. Generic event.xp is not both streams.
+        const {trainerXp, pokemonXp} = xpRewardReceipt(receipt);
+        const gold = (receipt.killCoins ?? 0) +
+            (receipt.autoSaleCoins ?? 0);
+        if (trainerXp !== null)
+            record.trainerXp = Number(record.trainerXp || 0) + trainerXp;
+        if (pokemonXp !== null)
+            record.pokemonXp = Number(record.pokemonXp || 0) + pokemonXp;
+        record.gold = Number(record.gold || 0) + gold;
+        record.goldKill = Number(record.goldKill || 0) +
+            (receipt.killCoins ?? 0);
+        record.goldAutoSale = Number(record.goldAutoSale || 0) +
+            (receipt.autoSaleCoins ?? 0);
+        if (record.rateGeneration !== state.rateGeneration ||
+            record.sessionToken !== state.farmingSessionToken) {
+            record.rateWindow = null;
+            record.rateGeneration = state.rateGeneration;
+            record.sessionToken = state.farmingSessionToken;
+        }
+        record.rateWindow = appendFarmingKill(record.rateWindow,
+            {at: now, trainerXp, pokemonXp, gold,
+                killGold:receipt.killCoins, autoSale:receipt.autoSaleCoins});
 
         const hunt =
             currentHunt();
 
-        const baseXp =
-            xpDoNivel(
-                hunt?.nivel ||
-                event?.level ||
-                1
-            );
-
+        // A hunt's nominal level is not evidence of the defeated mob's
+        // actual level. Only compare bonus/catch-up transitions when the
+        // server supplied a trustworthy per-kill level.
+        const exactLevel = receipt.mobLevel;
+        const baseXp = Number.isInteger(exactLevel) && exactLevel >= 1
+            ? xpDoNivel(exactLevel) : null;
+        if (baseXp !== null) {
+            observeXpTransition(record, 'trainer', trainerXp, baseXp, now);
+            observeXpTransition(record, 'pokemon', pokemonXp, baseXp, now);
+        }
         if (
-            trainerXp > 0 &&
+            trainerXp !== null && trainerXp > 0 &&
             baseXp > 0
         ) {
             pushSample(
@@ -2462,7 +4444,7 @@
         }
 
         if (
-            pokemonXp > 0 &&
+            pokemonXp !== null && pokemonXp > 0 &&
             baseXp > 0
         ) {
             pushSample(
@@ -2480,21 +4462,20 @@
             );
 
         if (slot) {
-            const target =
-                state.combatTargets.get(
-                    slot
-                );
-
-            recordTargetHp(
-                record,
-                target
-            );
-
-            state.combatTargets.delete(
-                slot
-            );
+            const target = state.combatTargets.get(slot);
+            const speciesId = outlandNormalizeSpeciesId(receipt.speciesId ?? target?.speciesId);
+            if (speciesId && Object.keys(record.speciesKills).length < 80) {
+                const key = String(speciesId);
+                record.speciesKills[key] = (record.speciesKills[key] || 0) + 1;
+            }
+            if (state.farmingLedger.slots.has(slot) && speciesId)
+                state.farmingLedger.slots.get(slot).speciesId=Number(speciesId);
+            recordTargetHp(record, target);
+            state.combatTargets.delete(slot);
         }
-
+        record.captureWindow = captureAppend(record.captureWindow,
+            receipt,now,state.farmingLedger.slots.get(slot)?.speciesId??
+                receipt.speciesId);
         savePerformance();
 
         if (
@@ -2510,16 +4491,26 @@
         if (
             !Array.isArray(
                 events
-            ) ||
-            !isHuntHere()
+            )
         ) {
             return;
         }
 
+        const hunting = isHuntHere();
         for (
             const event of
             events
         ) {
+            recordFarmingEvidence(state.farmingLedger, event);
+            if (!hunting) {
+                // Boss and supplies are session events, never normal hunt
+                // kills/captures (Mystic and other scenes have different rules).
+                if (['bossMorto', 'cura', 'revive', 'compra'].includes(event?.k)) {
+                    const receipt = normalizeFarmingEvent(event);
+                    if (receipt) acceptFarmingEvent(state.farmingLedger, receipt);
+                }
+                continue;
+            }
             if (
                 event?.k ===
                     'spawn'
@@ -2541,6 +4532,17 @@
                 recordDeathEvent(
                     event
                 );
+            } else if (event?.k === 'despawn' ||
+                event?.k === 'corpoExpirado') {
+                // Only an explicit native disappearance event closes a corpse.
+                if (event.quem === undefined || event.quem === 'selvagem')
+                    farmingExpireCorpse(state.farmingLedger,event.slot??event.s);
+            } else {
+                const receipt = normalizeFarmingEvent(event);
+                if (receipt && acceptFarmingEvent(state.farmingLedger, receipt)) {
+                    farmTrackUse(receipt);
+                    captureTrackReceipt(receipt);
+                }
             }
         }
     }
@@ -2794,12 +4796,43 @@
          * In the delta protocol, a missing key means "unchanged" while an
          * explicit null means "clear it".
          */
+        farmUpdateInventory(gameState,fullSnapshot);
+        const beforeFarmingScope = farmingSnapshotScope();
+        const farmSnapshot = normalizeFarmingSnapshot(gameState);
+        if (farmSnapshot) Object.assign(state.farmingSnapshot, farmSnapshot);
+        if (Object.hasOwn(gameState,'tierOutland') ||
+            Object.hasOwn(gameState,'outlandTier') ||
+            Object.hasOwn(gameState,'outland_tier')) {
+            state.outlandTierSeen=true;
+            if(state.pendingOutlandTier &&
+                state.farmingSnapshot.outlandTier === state.pendingOutlandTier.tier){
+                state.outlandTierLastOutcome={
+                    tier:state.pendingOutlandTier.tier,status:'confirmed'
+                };
+                state.pendingOutlandTier=null;
+            }
+        }
+        const incomingXpBonuses = xpBonusSnapshot(gameState);
+        if (fullSnapshot) state.xpBonusState = {};
+        if (incomingXpBonuses) Object.assign(state.xpBonusState, incomingXpBonuses);
+        state.nativeXpContext = nativeXpBonusDelta(
+            state.nativeXpContext,gameState,fullSnapshot);
+        if (beforeFarmingScope !== farmingSnapshotScope()) {
+            state.farmingLedger = makeFarmingLedger();
+            state.combatRevision++;
+            state.combatProfileCache = null;
+            state.estimateCache.clear();
+        }
         if (
             Object.prototype.hasOwnProperty.call(
                 gameState,
                 'huntSlug'
             )
         ) {
+            if (state.currentHuntSlug !== gameState.huntSlug) {
+                state.rateGeneration++;
+                state.farmingLedger = makeFarmingLedger();
+            }
             state.currentHuntSlug =
                 typeof gameState.huntSlug ===
                     'string'
@@ -3063,6 +5096,10 @@
             return false;
         }
 
+        if (state.currentHuntSlug !== huntEvent.slug) {
+            state.rateGeneration++;
+            state.farmingLedger = makeFarmingLedger();
+        }
         state.currentHuntSlug =
             huntEvent.slug;
 
@@ -3180,6 +5217,21 @@
             message?.t ===
                 'welcome'
         ) {
+            // Treat reconnect/account replacement as a new evidence session.
+            state.rateGeneration++;
+            state.farmingLedger = makeFarmingLedger();
+            state.farmingSnapshot = {};
+            state.outlandTierSeen = false;
+            state.pendingOutlandTier = null;
+            state.outlandTierLastOutcome = null;
+            state.outlandCatalogTiers = null;
+            state.xpBonusState = {};
+            state.nativeXpContext = {};
+            state.captureChanceEvidence = {seen:0,min:null,max:null};
+            state.calibrationEvidence.clear();
+            state.combatTargets.clear();
+            state.lastLeadPokemon = null;
+            state.activePokemonId = null;
             if (
                 message.tabelaTipos &&
                 typeof message.tabelaTipos ===
@@ -3219,10 +5271,25 @@
                 );
             }
 
+            const publishedTiers=message.catalogoOutlandTiers ??
+                message.outlandTiers;
+            if(Array.isArray(publishedTiers) && publishedTiers.length===8 &&
+                publishedTiers.every((t,i)=>Number(t?.tier)===i+1 &&
+                    Number(t?.nivel)===FARM_OUTLAND_TIERS[i][0] &&
+                    Number(t?.mult)===FARM_OUTLAND_TIERS[i][1]))
+                state.outlandCatalogTiers=publishedTiers.map(t=>({
+                    tier:Number(t.tier),nivel:Number(t.nivel),mult:Number(t.mult)
+                }));
+            farmApplyRuntimeCatalog(message);
             mergeState(
                 message.estado,
                 true
             );
+            // The upstream Hunt Analyser obtains multipliers from tiposBoost.
+            // Read only catalog entries the live game explicitly supplies.
+            if(Array.isArray(message.tiposBoost))
+                state.nativeXpContext=nativeXpBonusDelta(
+                    state.nativeXpContext,{tiposBoost:message.tiposBoost});
 
             saveCache();
 
@@ -3809,6 +5876,14 @@
                 ) {
                     state.activeSocket =
                         null;
+                    state.rateGeneration++;
+                    state.farmingLedger = makeFarmingLedger();
+                    state.farmingSnapshot = {};
+                    state.xpBonusState = {};
+                    state.nativeXpContext = {};
+                    state.calibrationEvidence.clear();
+                    state.combatTargets.clear();
+                    state.lastLeadPokemon = null;
 
                     if (
                         state.marketFetch ||
@@ -3830,6 +5905,7 @@
         socket.addEventListener(
             'message',
             event => {
+                if (state.activeSocket !== socket) return;
                 if (
                     typeof Blob !==
                         'undefined' &&
@@ -4251,13 +6327,214 @@
     // Upstream combat catalog
     // ------------------------------------------------------------------
 
+
+    // The game's welcome.hunts catalog is authoritative; map markers only
+    // provide optional reference locations. Never derive unlocks or XP from it.
+    function locationForHunt(hunt) {
+        return state.locationsBySlug.get(String(hunt?.slug || '')) || null;
+    }
+
+    function locationCoverage() {
+        const hunts = state.hunts || [];
+        const matched = hunts.filter(hunt => locationForHunt(hunt)).length;
+        const levelConflicts = hunts.filter(hunt => {
+            const marker = locationForHunt(hunt);
+            const liveLevel = Number(hunt?.nivel);
+            return marker && Number.isFinite(liveLevel) &&
+                Number.isFinite(marker.level) &&
+                marker.level > 0 && liveLevel !== marker.level;
+        }).length;
+        return { matched, total: hunts.length, levelConflicts };
+    }
+
+    function sharedWorldLocation(hunt) {
+        const marker = locationForHunt(hunt);
+        if (!marker) return [];
+        const liveHunts = new Set(state.hunts.map(row => row.slug));
+        return (state.locationsByRange.get(marker.key) || [])
+            .filter(row => row.slug !== hunt.slug && liveHunts.has(row.slug))
+            .map(row => row.name).slice(0, 4);
+    }
+
+    function ensureLocationIndex() {
+        if (state.locationIndexStatus === 'ready') return Promise.resolve();
+        if (state.locationIndexPromise) return state.locationIndexPromise;
+        if (state.locationIndexStatus === 'error' &&
+            Date.now() - state.locationLastAttempt < 60000) return Promise.resolve();
+        state.locationLastAttempt = Date.now();
+        state.locationIndexStatus = 'loading';
+        state.locationIndexPromise = fetch('/assets/world/map-markers.json', {
+            credentials: 'same-origin', cache: 'force-cache'
+        }).then(r => {
+            if (!r.ok) throw new Error('map-markers HTTP ' + r.status);
+            return r.json();
+        }).then(data => {
+            if (!Array.isArray(data?.hunts) || !(data?.map?.w > 0) ||
+                !(data?.map?.h > 0)) throw new Error('invalid map marker index');
+            const bySlug = new Map(), byRange = new Map();
+            for (const row of data.hunts) {
+                const slug = String(row?.slug || '');
+                if (!slug || bySlug.has(slug) ||
+                    !Array.isArray(row.pixel) || row.pixel.length !== 2 ||
+                    !row.pixel.every(Number.isFinite) ||
+                    row.pixel[0] < 0 || row.pixel[0] > data.map.w ||
+                    row.pixel[1] < 0 || row.pixel[1] > data.map.h ||
+                    !Array.isArray(row.range) || row.range.length !== 5 ||
+                    !row.range.every(Number.isFinite)) continue;
+                const key = row.range.join(':');
+                const entry = {
+                    slug, name: String(row.name || slug), area: String(row.area || ''),
+                    level: Number(row.level) || 0,
+                    pixel: row.pixel, range: row.range, key
+                };
+                bySlug.set(slug, entry);
+                if (!byRange.has(key)) byRange.set(key, []);
+                byRange.get(key).push(entry);
+            }
+            if (!bySlug.size) throw new Error('no usable map markers');
+            state.locationsBySlug = bySlug;
+            state.locationsByRange = byRange;
+            state.locationIndexDiagnostics.loaded = bySlug.size;
+            state.locationIndexStatus = 'ready';
+            queueRender();
+        }).catch(error => {
+            state.locationIndexStatus = 'error';
+            console.warn('[Hunt Atlas experimental] map-marker lookup failed', error);
+            queueRender();
+        }).finally(() => { state.locationIndexPromise = null; });
+        return state.locationIndexPromise;
+    }
+
+
+    // Index published by the game, but potentially older than the current
+    // battle engine. Entries describe moves LEARNABLE by species/level, not
+    // necessarily the actual loadout. Combat events remain authoritative.
+    function moveNameKey(name) {
+        return normalize(name);
+    }
+
+    function indexedMove(name) {
+        return state.movesByName.get(moveNameKey(name)) || null;
+    }
+
+
+    function catalogMovesForSpecies(id) {
+        const pokemonId = Number(id);
+        const own = state.speciesCombat.get(pokemonId)?.attacks;
+        if (own?.length) return own;
+        // Clones inherit the national list, except when their own curated
+        // catalog entry exists. Never normalize other 14xxx/10xxx forms.
+        if (pokemonId >= 13000 && pokemonId < 14000) {
+            return state.speciesCombat.get(pokemonId - 13000)?.attacks || [];
+        }
+        return [];
+    }
+
+    function moveSourceForLead(pokemon = leadPokemon()) {
+        if (!pokemon) return 'none';
+        return catalogMovesForSpecies(pokemon.speciesId).length
+            ? 'catalog' : state.moveIndexStatus === 'ready'
+                ? 'index' : 'none';
+    }
+
+    function movesForLead(pokemon = leadPokemon()) {
+        if (!pokemon) return [];
+        const id = Number(pokemon.speciesId);
+        const level = Number(pokemon.level) || 0;
+        const catalog = catalogMovesForSpecies(id);
+        if (catalog.length) {
+            // Current October creature overrides outrank the August index.
+            // Some moves are added in server boot after these files are read;
+            // only observed battle moves can prove the actual loadout.
+            return catalog.filter(move => move.learnLevel <= level);
+        }
+        const possible = state.movesBySpecies.get(id) ||
+            (id >= 13000 && id < 14000
+                ? state.movesBySpecies.get(id - 13000) : null) || [];
+        return possible.filter(move => move.learnLevel <= level);
+    }
+
+    function indexConflictsForLead(pokemon = leadPokemon()) {
+        if (!pokemon || state.moveIndexStatus !== 'ready') return [];
+        const id = Number(pokemon.speciesId);
+        const catalog = catalogMovesForSpecies(id);
+        if (!catalog.length) return [];
+        const index = state.movesBySpecies.get(id) ||
+            (id >= 13000 && id < 14000
+                ? state.movesBySpecies.get(id - 13000) : null) || [];
+        const known = new Map(index.map(move => [moveNameKey(move.name), move]));
+        return catalog.filter(move => {
+            const old = known.get(moveNameKey(move.name));
+            return !old || old.type !== move.type ||
+                old.category !== move.category || old.power !== move.power ||
+                old.cooldownMs !== move.cooldownMs ||
+                old.learnLevel !== move.learnLevel;
+        });
+    }
+
+    function ensureMoveIndex() {
+        if (state.moveIndexStatus === 'ready') return Promise.resolve();
+        if (state.moveIndexPromise) return state.moveIndexPromise;
+        if (state.moveIndexStatus === 'error' &&
+            Date.now() - state.moveLastAttempt < 60000) return Promise.resolve();
+        state.moveLastAttempt = Date.now();
+        state.moveIndexStatus = 'loading';
+        state.moveIndexPromise = fetch('/assets/index/moves-index.json', {
+            credentials: 'same-origin', cache: 'force-cache'
+        }).then(r => {
+            if (!r.ok) throw new Error('moves-index HTTP ' + r.status);
+            return r.json();
+        }).then(data => {
+            if (!data?.porAtaque || typeof data.porAtaque !== 'object') {
+                throw new Error('invalid moves-index schema');
+            }
+            const bySpecies = new Map(), byName = new Map();
+            for (const [name, raw] of Object.entries(data.porAtaque)) {
+                const type = String(raw?.tipo || '').toUpperCase();
+                if (!name || !type || !Array.isArray(raw?.aprendidoPor)) continue;
+                const common = {
+                    name: String(raw.nome || name),
+                    type, category: String(raw.categoria || ''),
+                    cooldownMs: Number(raw.cooldownMs) || 0,
+                    power: Number(raw.power) || 0
+                };
+                byName.set(moveNameKey(name), common);
+                for (const entry of raw.aprendidoPor) {
+                    const id = Number(entry.pokeId);
+                    const level = Number(entry.learnLevel);
+                    if (!Number.isInteger(id) || id <= 0 ||
+                        !Number.isFinite(level) || level <= 0) continue;
+                    const ownPower = Number(entry.power);
+                    const move = {
+                        ...common, learnLevel: level,
+                        speciesId: id,
+                        power: Number.isFinite(ownPower) && ownPower > 0
+                            ? ownPower : common.power
+                    };
+                    if (!bySpecies.has(id)) bySpecies.set(id, []);
+                    bySpecies.get(id).push(move);
+                }
+            }
+            if (!bySpecies.size) throw new Error('no usable indexed moves');
+            state.movesByName = byName;
+            state.movesBySpecies = bySpecies;
+            state.moveIndexGeneratedAt = String(data.gerado || '');
+            state.moveIndexStatus = 'ready';
+            state.combatRevision++;
+            state.combatProfileCache = null;
+            queueRender();
+        }).catch(error => {
+            state.moveIndexStatus = 'error';
+            console.warn('[Hunt Atlas experimental] move index unavailable', error);
+            queueRender();
+        }).finally(() => { state.moveIndexPromise = null; });
+        return state.moveIndexPromise;
+    }
+
     function mergeCombatCreature(
         creature
     ) {
-        const id =
-            Number(
-                creature?.pokeId
-            );
+        const id = Number(outlandNormalizeSpeciesId(creature?.pokeId));
 
         if (
             !Number.isFinite(id)
@@ -4273,6 +6550,21 @@
         const meta = {
             ...previous,
             id,
+            // Later override arrays replace earlier raw-catalog arrays.
+            // Never mutate the source arrays (other game components reuse them).
+            attacks: Array.isArray(creature?.attacks)
+                ? creature.attacks.filter(row =>
+                    typeof row?.name === 'string' && row?.type &&
+                    Number(row.power) > 0)
+                    .map(row => ({
+                        name: row.name,
+                        type: String(row.type).toUpperCase(),
+                        category: String(row.category || ''),
+                        power: Number(row.power) || 0,
+                        cooldownMs: Number(row.cooldownMs) || 0,
+                        learnLevel: Math.max(1, Number(row.learnLevel) || 1)
+                    }))
+                : previous.attacks || [],
             name:
                 creature?.name ||
                 previous.name ||
@@ -4305,6 +6597,13 @@
                         creature.huntLevel
                     )
                     : previous.huntLevel,
+            captureLevelCeiling:Number.isInteger(Number(
+                creature?.tetoCaptura)) && Number(creature.tetoCaptura)>0
+                ? Number(creature.tetoCaptura)
+                :previous.captureLevelCeiling??null,
+            rawLoot: Array.isArray(creature?.loot)
+                ? creature.loot.map(line => ({...line}))
+                : previous.rawLoot ?? null,
             catalogSellValue:
                 Number.isFinite(
                     Number(
@@ -4360,10 +6659,7 @@
     function speciesCombatMeta(
         speciesId
     ) {
-        const id =
-            Number(
-                speciesId
-            );
+        const id = Number(outlandNormalizeSpeciesId(speciesId));
 
         if (
             !Number.isFinite(id)
@@ -4395,6 +6691,287 @@
         }
 
         return null;
+    }
+
+
+    function rebuildNpcLootCatalog() {
+        // Uses already-loaded raw item/creature assets once per catalog
+        // revision. It reconstructs upstream normalization, not server truth.
+        const shopIds = new Set(state.itemPrices.keys());
+        const special = new Set([70000]); // upstream Bronze Boss Token
+        const priceOf = name => {
+            const item = state.itemsByName.get(String(name || '').toLowerCase());
+            return farmNpcPrice(item, shopIds, special);
+        };
+        state.npcLootBySpecies = new Map();
+        state.captureRarities.clear();
+        for(const [id,meta] of state.speciesCombat) {
+            const rarity=captureRarityFromCatalog(meta);
+            if(rarity!==null)state.captureRarities.set(id,rarity);
+        }
+        if (!state.itemsByName.size) return;
+        for (const [id, meta] of state.speciesCombat) {
+            if (!Array.isArray(meta.rawLoot)) continue;
+            const rebuilt = farmRebalanceLoot({
+                loot:meta.rawLoot, huntLevel:meta.huntLevel,
+                type1:meta.type1
+            }, priceOf);
+            const value = farmLootValue(rebuilt, priceOf);
+            state.npcLootBySpecies.set(id,value);
+        }
+    }
+
+    function farmApplyRuntimeCatalog(message) {
+        const balls = message?.catalogoBolas;
+        const items = message?.itensCompraveis;
+        if (balls !== undefined) {
+            state.ballPrices = farmNormalizePrices(balls, 'ball');
+            state.captureBallRates = captureBallCatalog(balls);
+        }
+        if (items !== undefined) {
+            state.itemPrices = farmNormalizePrices(items, 'item');
+            if (state.itemsByName.size) rebuildNpcLootCatalog();
+        }
+    }
+
+    function farmUpdateInventory(snapshot,full=false) {
+        if (!snapshot || typeof snapshot !== 'object') return;
+        for (const [name,kind] of [['balls','ball'],['items','item']]) {
+            if (!Object.hasOwn(snapshot,name)) continue;
+            const source = snapshot[name];
+            // State deltas update only the listed items. Erase other entries
+            // only for explicitly complete or cleared inventory snapshots.
+            if (full || source === null)
+                for (const key of [...state.inventoryForCosts.keys()])
+                    if (key.startsWith(kind+':')) state.inventoryForCosts.delete(key);
+            const entries = Array.isArray(source) ? source.map(x=>
+                [x?.id??x?.itemId??x?.ballId, x?.qtd??x?.quantity??x?.count])
+                : source && typeof source === 'object' ?
+                    Object.entries(source) : [];
+            for (const [id,quantity] of entries.slice(0,200)) {
+                const n = Number(id), count = farmNum(quantity);
+                if (!Number.isSafeInteger(n) || n < 0) continue;
+                const key=kind+':'+n;
+                if (quantity === null) state.inventoryForCosts.delete(key);
+                else if (Number.isSafeInteger(count))
+                    state.inventoryForCosts.set(key,count);
+            }
+        }
+    }
+
+    function captureTrackReceipt(receipt, at=Date.now()) {
+        if(!receipt || !['bola','capturado'].includes(receipt.kind) ||
+            !isHuntHere())return;
+        const record=performanceRecord(state.currentHuntSlug,true);
+        if(!record)return;
+        const species=state.farmingLedger.slots.get(receipt.slot)?.speciesId;
+        const tracked=receipt.kind==='capturado'?
+            {...receipt,confirmedBallId:state.farmingLedger.slots.get(
+                receipt.slot)?.ballId??null}:receipt;
+        record.captureWindow=captureAppend(record.captureWindow,tracked,at,species);
+        if(receipt.kind==='bola' && receipt.chanceRaw!==null){
+            const evidence=state.captureChanceEvidence;
+            evidence.seen++;
+            evidence.min=evidence.min===null?receipt.chanceRaw:
+                Math.min(evidence.min,receipt.chanceRaw);
+            evidence.max=evidence.max===null?receipt.chanceRaw:
+                Math.max(evidence.max,receipt.chanceRaw);
+            // No unit inference: fraction vs percentage and boosted vs
+            // unboosted remain unverified until native capture UI comparison.
+        }
+    }
+
+    function captureObservedForHunt(hunt, now=Date.now()) {
+        if(!hunt||!isHuntHere(hunt.slug))return null;
+        const record=performanceRecord(hunt.slug,false);
+        const rates=observedRates(record,now);
+        if(!rates)return null;
+        return captureObservedWindow(record?.captureWindow,
+            now-rates.windowMs,now);
+    }
+
+    function captureInfoForBall(id) {
+        const standard=CAPTURE_BALLS.find(row=>row.id===id);
+        if(!standard)return null;
+        const runtime=state.captureBallRates.get(id);
+        const catalogPrice=state.ballPrices.get(id);
+        const efficiency=runtime?.efficiency??standard.efficiency;
+        const priceCoins=id===5?null:
+            (runtime?.coins??standard.defaultCoins);
+        return {
+            ...standard,efficiency,
+            coins:priceCoins,diamondPrice:catalogPrice?.diamonds??null,
+            source:runtime?.efficiency?
+                'observed-client-efficiency+wiki-conditional-formula':
+                'wiki-conditional-efficiency',
+            priceSource:runtime?.coins!==null&&runtime?.coins!==undefined?
+                'observed-client':'wiki-reference',
+            stock:state.inventoryForCosts.get('ball:'+id)??null
+        };
+    }
+
+    function capturePlanForHunt(hunt,ballId=4,xp=huntXpEstimate(hunt)) {
+        if(!hunt)return null;
+        const ball=captureInfoForBall(ballId);
+        if(!ball)return null;
+        const observed=captureObservedForHunt(hunt);
+        const mixKills=observed?Object.values(observed.bySpecies)
+            .reduce((sum,row)=>sum+row.kills,0):0;
+        const mixThrows=observed?Object.values(observed.bySpecies)
+            .reduce((sum,row)=>sum+row.throws,0):0;
+        const measuredMix=observed&&mixThrows===observed.throws &&
+            mixThrows>=30 ? observed.bySpecies:null;
+        const fraction=observed&&observed.kills>=6 ?
+            Math.min(1,Math.max(0,observed.throws/observed.kills)):null;
+        const predicted=captureForecast(hunt,state.captureRarities,
+            xp?.killsH??null,ball.efficiency,{
+                mix:measuredMix,mixMode:'throws',
+                acceptedFraction:fraction,
+                coinPrice:ball.coins,
+                diamondPrice:ball.diamondPrice,
+                hypotheticalLure:state.filters.shinyLurePreview
+            });
+        const selectedBallUses=observed?.byBall?.[ball.id]??0;
+        const observedBallH=selectedBallUses>0&&observed?.windowMs>0
+            ?selectedBallUses*3600000/observed.windowMs:null;
+        const stockHours=observedBallH>0&&ball.stock!==null?
+            ball.stock/observedBallH:null;
+        return {...predicted,ball,observed,
+            stockHours,rateSource:xp?.observed?'observed-kills':
+                xp?.source??'unknown'};
+    }
+
+    function capturePlanForSpecies(species,ballId=4,xp=null) {
+        if(!species?.hunt)return null;
+        const hunt=species.hunt;
+        const estimate=xp??huntXpEstimate(hunt);
+        const ball=captureInfoForBall(ballId);
+        if(!ball)return null;
+        const observed=captureObservedForHunt(hunt);
+        const mixKills=observed?Object.values(observed.bySpecies)
+            .reduce((sum,row)=>sum+row.kills,0):0;
+        const mix=observed&&mixKills===observed.kills &&
+            mixKills>=30?observed.bySpecies:null;
+        const target=observed?.bySpecies?.[
+            outlandNormalizeSpeciesId(species.id)];
+        const acceptance=target?.kills>=6?
+            Math.min(1,target.throws/target.kills):
+            observed?Math.min(1,observed.throws/Math.max(1,observed.kills)):null;
+        return captureSpeciesForecast(hunt,species.id,
+            state.captureRarities.get(Number(outlandNormalizeSpeciesId(species.id))),
+            ball.efficiency,estimate?.killsH??null,{
+                mix,acceptedFraction:acceptance,
+                hypotheticalLure:state.filters.shinyLurePreview
+            });
+    }
+
+    function farmTrackUse(receipt, at=Date.now()) {
+        if (!receipt || !['bola','cura','revive'].includes(receipt.kind) ||
+            !isHuntHere()) return;
+        const record = performanceRecord(state.currentHuntSlug,true);
+        if (!record) return;
+        record.rateUseWindow = farmAppendUse(record.rateUseWindow,receipt,at);
+    }
+
+    function rareObservedFor(id, eligible=true) {
+        return eligible ? (state.farmingLedger.items.get(id) ?? 0) : null;
+    }
+    function rareOutlandHunt() {
+        return state.hunts.find(hunt=>String(hunt?.area).toLowerCase()==='outland'
+            && isUnlocked(hunt)) || null;
+    }
+    function rareModelForHunt(hunt, tier) {
+        const xp=hunt ? huntXpEstimate(hunt):null;
+        const rate=Number.isFinite(xp?.killsH)?xp.killsH:null;
+        const model=rareForHunt(hunt,tier,state.playerLevel,rate);
+        const actualHere=isHuntHere(hunt?.slug);
+        const tierActive=state.outlandTierSeen &&
+            state.farmingSnapshot.outlandTier!==null &&
+            outlandNativeTier(state.farmingSnapshot.outlandTier,
+                state.playerLevel)===tier;
+        return {...model,killsH:rate,
+            rateSource:xp?.observed?'observed-wall-clock':
+                xp?.source??'unknown',
+            observedAvailable:actualHere && (String(hunt?.area).toLowerCase()!=='outland'
+                || tierActive),
+            observedDrops:actualHere && (String(hunt?.area).toLowerCase()!=='outland'
+                || tierActive) ? Object.fromEntries(model.drops.map(row=>[
+                    row.id,rareObservedFor(row.id)
+                ])):null};
+    }
+
+    function requestOutlandTier(tier) {
+        // shared/outland-tiers.mjs confirms "outland.tier" exists. This
+        // message is not evidence of SUCCESS; only an authoritative estate
+        // snapshot with the selected tier may confirm it.
+        const requested=Number(tier);
+        if(!state.outlandTierSeen ||
+            !farmingTier(requested,state.playerLevel) ||
+            state.pendingOutlandTier || !socketReady() ||
+            state.farmingSnapshot.outlandTier===requested)
+            return false;
+        try{
+            state.activeSocket.send(JSON.stringify({t:'outland.tier',tier:requested}));
+            const sentAt=Date.now();
+            state.outlandTierLastOutcome=null;
+            state.pendingOutlandTier={tier:requested,sentAt};
+            setTimeout(()=>{
+                if(state.pendingOutlandTier?.sentAt===sentAt){
+                    state.pendingOutlandTier=null;
+                    state.outlandTierLastOutcome={
+                        tier:requested,status:'timeout'
+                    };
+                    queueRender();
+                }
+            },6000);
+            queueRender();
+            return true;
+        }catch{
+            state.pendingOutlandTier=null;
+            return false;
+        }
+    }
+
+    function huntEconomyEstimate(hunt, xp = huntXpEstimate(hunt)) {
+        const killsH = Number.isFinite(xp?.killsH) ? xp.killsH : null;
+        const modelKillGoldH = farmGoldPrediction(hunt,killsH);
+        const current = isHuntHere(hunt?.slug);
+        const record = current ? performanceRecord(hunt?.slug,false) : null;
+        const rates = current ? observedRates(record) : null;
+        const observedMix = current ? captureObservedForHunt(hunt) : null;
+        const attributed = observedMix ? Object.values(observedMix.bySpecies)
+            .reduce((n,row)=>n+(Number(row?.kills)||0),0) : 0;
+        // Use measured mix only if all 30+ kills have species attribution.
+        const mix = observedMix?.kills >= 30 &&
+            attributed === observedMix.kills ? observedMix.bySpecies : null;
+        const loot = farmLootPrediction(hunt,state.npcLootBySpecies,killsH,mix);
+        const now = Date.now();
+        const measuredStart = rates ? now-rates.windowMs : null;
+        const costs = measuredStart !== null
+            ? farmCostRates(record?.rateUseWindow, measuredStart, now,
+                {balls:state.ballPrices,items:state.itemPrices},
+                state.inventoryForCosts) : null;
+        // Missing/unlinked accepted throw events mean the consumed-ball
+        // cost ledger may be incomplete; do not publish an inflated net.
+        const uncertainCosts=state.farmingLedger.diagnostics.uncertainCosts || 0;
+        if (costs && uncertainCosts) costs.coinsH=null;
+        const summary = farmFinancialSummary(killsH,modelKillGoldH,
+            rates?.killGoldH ?? null,rates?.autoSaleH ?? null,
+            loot.perHour,costs);
+        return {...summary, lootCoverage:loot.coverage,
+            lootSource:loot.source,
+            sampleCount:rates?.samples??0,
+            windowMs:rates?.windowMs??null,
+            useEvidence:(costs?.items??[]).map(entry=>{
+                const hours=rates?.windowMs / 3600000;
+                const perHour=hours>0 ? entry.count/hours : null;
+                return {...entry,perHour,
+                    hoursRemaining:perHour>0 &&
+                        entry.remaining!==null ? entry.remaining/perHour : null};
+            }),
+            unknownCosts:costs?.unknown??null,
+            unlinkedCosts:uncertainCosts,
+            unboosted:!xp?.observed};
     }
 
     function ensureCombatCatalog() {
@@ -4459,14 +7036,16 @@
                     '/assets/creatures-audit-overrides.json'
                 ).catch(
                     () => null
-                )
+                ),
+                load('/assets/items.json').catch(() => null)
             ])
                 .then(
                     ([
                         base,
                         novos,
                         outland,
-                        audit
+                        audit,
+                        items
                     ]) => {
                         for (
                             const data of [
@@ -4495,6 +7074,19 @@
                                 override
                             );
                         }
+
+                        state.itemsByName.clear();
+                        state.itemsById.clear();
+                        if (Array.isArray(items?.items)) {
+                            for (const item of items.items) {
+                                const id = Number(item?.id);
+                                if (!Number.isInteger(id) || !item.name) continue;
+                                state.itemsById.set(id, item);
+                                state.itemsByName.set(String(item.name).toLowerCase(), item);
+                            }
+                            state.itemCatalogStatus = 'raw-upstream-catalog';
+                        } else state.itemCatalogStatus = 'unknown';
+                        rebuildNpcLootCatalog();
 
                         state.combatCatalogStatus =
                             'ready';
@@ -4686,15 +7278,16 @@
     }
 
     function leadAttackTypesForMatchup() {
-        const observed =
-            normalizedTypes(
-                attackerTypes()
-            );
+        const observed = normalizedTypes(combatProfile()?.moveTypes || []);
+        if (observed.length) return observed;
 
-        if (observed.length) {
-            return observed;
+        const indexed = movesForLead();
+        if (indexed.length) {
+            const candidates = normalizedTypes(indexed
+                .filter(move => move.power > 0 && move.category !== 'STATUS')
+                .map(move => move.type));
+            if (candidates.length) return candidates;
         }
-
         return leadDefenderTypes();
     }
 
@@ -5015,6 +7608,11 @@
             return profile.moveTypes;
         }
 
+        const candidates = movesForLead()
+            .filter(move => move.power > 0 && move.category !== 'STATUS')
+            .map(move => move.type);
+        if (candidates.length) return normalizedTypes(candidates);
+
         return (
             leadPokemon()
                 ?.tipos ||
@@ -5109,7 +7707,10 @@
         ].filter(
             record =>
                 record?.version ===
-                    2 &&
+                    5 &&
+                record.rateGeneration === state.rateGeneration &&
+                record.sessionToken === state.farmingSessionToken &&
+                record.snapshotScope === farmingSnapshotScope() &&
                 record.signature ===
                     signature
         );
@@ -5184,7 +7785,10 @@
                 .filter(
                     record =>
                         record?.version ===
-                            2 &&
+                            5 &&
+                        record.rateGeneration === state.rateGeneration &&
+                        record.sessionToken === state.farmingSessionToken &&
+                        record.snapshotScope === farmingSnapshotScope() &&
                         record.loadoutSignature ===
                             loadout &&
                         record.signature !==
@@ -5243,70 +7847,11 @@
             warmStart: true
         };
     }
-    function observedRates(
-        record
-    ) {
-        if (
-            !record ||
-            Number(
-                record.kills ||
-                0
-            ) <
-                2
-        ) {
-            return null;
-        }
-
-        const killMs =
-            average(
-                record.killIntervals
-            );
-
-        if (
-            !killMs ||
-            killMs <= 0
-        ) {
-            return null;
-        }
-
-        const kills =
-            Math.max(
-                1,
-                Number(
-                    record.kills
-                ) ||
-                1
-            );
-
-        const killsH =
-            3600000 /
-            killMs;
-
-        return {
-            killMs,
-            killsH,
-            trainerXpH:
-                Number(
-                    record.trainerXp ||
-                    0
-                ) /
-                kills *
-                killsH,
-            pokemonXpH:
-                Number(
-                    record.pokemonXp ||
-                    0
-                ) /
-                kills *
-                killsH,
-            goldH:
-                Number(
-                    record.gold ||
-                    0
-                ) /
-                kills *
-                killsH
-        };
+    function observedRates(record, now = Date.now()) {
+        if (!record || record.rateGeneration !== state.rateGeneration ||
+            record.sessionToken !== state.farmingSessionToken ||
+            record.snapshotScope !== farmingSnapshotScope()) return null;
+        return farmingObservedRates(record.rateWindow, now);
     }
 
     function combatProfile() {
@@ -5315,7 +7860,8 @@
                 leadSignature() ||
                     '',
                 state.combatRevision,
-                state.combatCatalogStatus
+                state.combatCatalogStatus,
+                farmingSnapshotScope()
             ].join('|');
 
         if (
@@ -5356,6 +7902,7 @@
         const pokemonMult = [];
 
         const moves = {};
+        const attackObservations = [];
 
         let attacks = 0;
         let kills = 0;
@@ -5417,6 +7964,20 @@
                     record.kills ||
                     0
                 );
+
+            const scale = warmStart
+                ? currentPower / Math.max(1, Number(record.pokemonPower || currentPower))
+                : 1;
+            for (const row of (record.attackObservations || []).slice(-160)) {
+                const damage = Number(row?.neutralDamage) * scale;
+                if (!(damage > 0) || !Number.isFinite(damage) ||
+                    typeof row.type !== 'string') continue;
+                attackObservations.push({
+                    name: typeof row.name === 'string' ? row.name : null,
+                    type: row.type, neutralDamage: damage,
+                    at: Number(row.at) || 0
+                });
+            }
 
             for (
                 const [
@@ -5641,9 +8202,34 @@
                 bucket.samples.length;
         }
 
+        const byName = new Map();
+        for (const row of attackObservations) {
+            if (!row.name) continue;
+            const key = moveNameKey(row.name);
+            const aggregate = byName.get(key) || {
+                name: row.name, type: row.type, samples: []
+            };
+            if (aggregate.type !== row.type) continue;
+            aggregate.samples.push(row.neutralDamage);
+            byName.set(key, aggregate);
+        }
+        const observedNamedMoves = Object.create(null);
+        for (const [key, row] of byName) {
+            observedNamedMoves[key] = {
+                name: row.name, type: row.type,
+                neutralDamage: robustMean(row.samples) || 0,
+                samples: row.samples.length
+            };
+        }
+        const namedMoveSamples = [...byName.values()]
+            .reduce((sum, row) => sum + row.samples.length, 0);
+
         const value = {
             records,
             warmStart,
+            observedNamedMoves,
+            namedMoveSamples,
+            attackObservations: attackObservations.slice(-1100),
             attacks,
             kills,
             cadenceMs,
@@ -5745,299 +8331,228 @@
         return null;
     }
 
-    function damagePerAttackAgainst(
-        speciesId,
-        profile
-    ) {
-        const entries =
-            Object.entries(
-                profile?.moveDamage ||
-                {}
-            );
 
-        if (!entries.length) {
-            return null;
-        }
+    // Forecasts individual observed attacks with index-assisted smoothing.
+    // Never assume a LEARNABLE index move was equipped or fired. Missing
+    // events use the old per-type estimator unchanged.
 
-        const meta =
-            speciesCombatMeta(
-                speciesId
-            );
-
-        const defenderTypes =
-            (
-                state.typesBySpecies.get(
-                    Number(
-                        speciesId
-                    )
-                ) ||
-                [
-                    meta?.type1,
-                    meta?.type2
-                ].filter(Boolean)
-            )
-                .map(
-                    type =>
-                        String(type)
-                            .toUpperCase()
-                );
-
-        let totalWeight = 0;
-        let totalDamage = 0;
-
-        for (
-            const [
-                type,
-                move
-            ] of
-            entries
-        ) {
-            const samples =
-                Math.max(
-                    1,
-                    Number(
-                        move?.samples ||
-                        1
-                    )
-                );
-
-            const multiplier =
-                defenderTypes.length
-                    ? huntEffectiveness(
-                        type,
-                        defenderTypes
-                    )
-                    : 1;
-
-            totalWeight +=
-                samples;
-
-            totalDamage +=
-                samples *
-                Number(
-                    move.damage ||
-                    0
-                ) *
-                multiplier;
-        }
-
-        return totalWeight
-            ? totalDamage /
-                totalWeight
-            : null;
+    // Confidence describes how much of ACTUAL battle traffic identifies its
+    // move. It does not pretend the public index proves the active loadout.
+    // One confirmed move is enough; Pokémon are not forced to use two.
+    function moveModelConfidence(profile) {
+        const observations = (profile?.attackObservations || [])
+            .filter(row => Number(row.neutralDamage) > 0);
+        const named = observations.filter(row => typeof row.name === 'string' &&
+            row.name.length > 0);
+        if (named.length >= 16 && named.length / observations.length >= 0.6)
+            return 'high';
+        if (named.length >= 5 && named.length / observations.length >= 0.3)
+            return 'medium';
+        return 'low';
     }
 
-    function rawPredictedKillMs(
-        hunt,
-        profile
-    ) {
-        if (
-            !hunt ||
-            !profile ||
-            !profile.moveSamples ||
-            (
-                !profile.hpScale &&
-                !profile.hpPerLevel
-            )
-        ) {
-            return null;
+    function damagePerAttackAgainst(speciesId, profile) {
+        const defender = speciesCombatMeta(speciesId);
+        const types = (state.typesBySpecies.get(Number(speciesId)) ||
+            [defender?.type1, defender?.type2].filter(Boolean))
+            .map(type => String(type).toUpperCase());
+        const effectiveness = type => types.length
+            ? huntEffectiveness(type, types) : 1;
+
+        // Historical records before v1.9 do not contain per-cast samples.
+        const legacyTypeDamage = () => {
+            let weighted = 0, count = 0;
+            for (const [type, row] of Object.entries(profile?.moveDamage || {})) {
+                const samples = Math.max(1, Number(row.samples) || 1);
+                weighted += samples * (Number(row.damage) || 0) *
+                    effectiveness(type);
+                count += samples;
+            }
+            return count ? weighted / count : null;
+        };
+
+        const samples = (profile?.attackObservations || [])
+            .filter(row => Number(row.neutralDamage) > 0 &&
+                Number.isFinite(Number(row.neutralDamage)) &&
+                typeof row.type === 'string')
+            .slice(-1100);
+        if (!samples.length) return legacyTypeDamage();
+
+        // Unlike the earlier implementation, named and unnamed observations
+        // are from ONE stream, so an attack is never counted twice.
+        const recognized = movesForLead();
+        const byName = new Map(recognized.map(move =>
+            [moveNameKey(move.name), move]));
+        const groups = new Map();
+        for (const row of samples) {
+            if (!row.name) continue;
+            const move = byName.get(moveNameKey(row.name));
+            if (!move || move.type !== row.type || !(move.power > 0)) continue;
+            const key = move.type + ':' + move.category;
+            const g = groups.get(key) || { sum: 0, n: 0 };
+            g.sum += row.neutralDamage / move.power;
+            g.n++;
+            groups.set(key, g);
         }
 
-        const species =
-            Array.isArray(
-                hunt.especies
-            )
-                ? hunt.especies
-                : [];
-
-        if (!species.length) {
-            return null;
+        const namedSamples = samples.filter(row => row.name).length;
+        // A weak 5% prior can improve a sparse named sample using the
+        // species-specific power, but cannot override observed damage.
+        const canSmooth = moveModelConfidence(profile) !== 'low' &&
+            namedSamples >= 5;
+        let total = 0;
+        for (const row of samples) {
+            let neutral = Number(row.neutralDamage);
+            const move = row.name ? byName.get(moveNameKey(row.name)) : null;
+            const group = move && groups.get(move.type + ':' + move.category);
+            if (canSmooth && move?.type === row.type &&
+                move.power > 0 && group?.n >= 6) {
+                const observedForMove = Number(
+                    profile?.observedNamedMoves?.[moveNameKey(row.name)]?.samples
+                ) || 0;
+                if (observedForMove < 4) {
+                    const prior = group.sum / group.n * move.power;
+                    // Bound to ±5% even when the index is badly outdated.
+                    const bounded = Math.max(neutral * 0.95,
+                        Math.min(neutral * 1.05, prior));
+                    neutral = neutral * 0.92 + bounded * 0.08;
+                }
+            }
+            total += neutral * effectiveness(row.type);
         }
+        return total / samples.length;
+    }
 
-        const totalPoints =
-            species.reduce(
-                (sum, row) =>
-                    sum +
-                    Math.max(
-                        1,
-                        Number(
-                            row?.pontos ||
-                            1
-                        )
-                    ),
-                0
-            ) ||
-            1;
+    // Coverage is spawn-weighted. An unknown high-frequency enemy cannot
+    // vanish from the denominator of an XP/h prediction.
+    function huntCombatCoverage(hunt, profile) {
+        const species = Array.isArray(hunt?.especies) ? hunt.especies : [];
+        const entries = species.map(row => {
+            const weight = Math.max(1, Number(row?.pontos || 1));
+            const hp = profile
+                ? targetHpEstimate(row?.pokeId, hunt.nivel, profile) : null;
+            const damage = profile
+                ? damagePerAttackAgainst(row?.pokeId, profile) : null;
+            const hpKnown = Number.isFinite(hp) && hp > 0;
+            const damageKnown = Number.isFinite(damage) && damage >= 0;
+            return { row, weight, hp, damage, hpKnown, damageKnown };
+        });
+        const total = entries.reduce((sum, row) => sum + row.weight, 0);
+        const covered = entries.reduce((sum, row) =>
+            sum + (row.hpKnown && row.damageKnown ? row.weight : 0), 0);
+        return {
+            entries, total, covered,
+            percentage: total ? Math.round(100 * covered / total) : 0,
+            complete: total > 0 && covered === total,
+            missingHp: entries.filter(row => !row.hpKnown).reduce(
+                (sum, row) => sum + row.weight, 0),
+            missingDamage: entries.filter(row => !row.damageKnown).reduce(
+                (sum, row) => sum + row.weight, 0),
+            blocked: entries.some(row =>
+                row.hpKnown && row.damageKnown && row.damage === 0)
+        };
+    }
 
-        const mobsPerWave =
-            Math.max(
-                1,
-                Math.min(
-                    16,
-                    totalPoints
-                )
-            );
+    function rawPredictedKillMs(hunt, profile) {
+        if (!hunt || !profile || !profile.moveSamples ||
+            (!profile.hpScale && !profile.hpPerLevel)) return null;
+        const coverage = huntCombatCoverage(hunt, profile);
+        // Preserve the existing known-immunity protection.
+        if (coverage.blocked) return Infinity;
+        // Missing enemies may be slower than covered ones; do not
+        // renormalize their weights into an optimistic personalized model.
+        if (!coverage.complete) return null;
 
-        /*
-         * Measured ordinary movement + exact upstream fixed wave pause,
-         * amortized over mobs in the wave.
-         */
+        const mobsPerWave = Math.max(1, Math.min(16, coverage.total));
+        const lead = typeof leadPokemon === 'function' ? leadPokemon() : null;
+        const iv = lead?.speedIV ?? lead?.speedIv ??
+            lead?.ivs?.speed ?? lead?.iv?.speed;
+        const firstAttackMs = typeof xpGlobalAttackFloor === 'function'
+            ? xpGlobalAttackFloor(iv) : UPSTREAM_GLOBAL_ATTACK_MS;
         const transitionMs =
-            profile.movementMs +
-            UPSTREAM_WAVE_MS /
-                mobsPerWave;
-
+            (Number(profile.movementMs) || 600) + UPSTREAM_WAVE_MS / mobsPerWave;
+        const castCadenceMs = xpForecastCastCadence(
+            profile, firstAttackMs, UPSTREAM_FALLBACK_MOVE_MS
+        );
         let weightedMs = 0;
-        let weightSum = 0;
-
-        for (
-            const row of
-            species
-        ) {
-            const weight =
-                Math.max(
-                    1,
-                    Number(
-                        row?.pontos ||
-                        1
-                    )
-                );
-
-            const hp =
-                targetHpEstimate(
-                    row?.pokeId,
-                    hunt.nivel,
-                    profile
-                );
-
-            const damage =
-                damagePerAttackAgainst(
-                    row?.pokeId,
-                    profile
-                );
-
-            if (
-                !hp ||
-                !damage ||
-                damage <= 0
-            ) {
-                continue;
-            }
-
-            const attacksNeeded =
-                Math.max(
-                    1,
-                    Math.ceil(
-                        hp /
-                        damage
-                    )
-                );
-
-            /*
-             * The first attack comes after transition. Further attacks use
-             * this Pokémon's measured same-target cadence.
-             */
-            const killMs =
-                transitionMs +
-                Math.max(
-                    0,
-                    attacksNeeded -
-                        1
-                ) *
-                    profile.cadenceMs;
-
-            weightedMs +=
-                killMs *
-                weight;
-
-            weightSum +=
-                weight;
+        for (const row of coverage.entries) {
+            const attacksNeeded = Math.max(1, Math.ceil(row.hp / row.damage));
+            const killMs = transitionMs + firstAttackMs +
+                Math.max(0, attacksNeeded - 1) * castCadenceMs;
+            weightedMs += killMs * row.weight;
         }
-
-        return weightSum
-            ? weightedMs /
-                weightSum
-            : null;
+        return weightedMs / coverage.total;
     }
 
-    function predictionCalibration(
-        profile
-    ) {
-        if (
-            profile &&
-            Number.isFinite(
-                profile._calibration
-            )
-        ) {
-            return profile._calibration;
+    // Validation is out-of-sample: freeze an early model estimate BEFORE
+    // sustained kills are available, then compare with later actual results.
+    function calibrationContextKey() {
+        const lead = leadSignature();
+        return lead ? lead + '|' + farmingSnapshotScope() : null;
+    }
+
+    function recordForecastResidual(hunt, record, observed, now = Date.now()) {
+        const prediction = record?.predictedBeforeMeasurement;
+        if (!hunt || !prediction || !observed || !(observed.samples >= 6) ||
+            observed.windowMs < 60000 ||
+            prediction.hunt !== hunt.slug || prediction.scope !== farmingSnapshotScope())
+            return null;
+        const residual = xpForecastResidual(prediction.killMs, observed.killMs);
+        if (!residual) return null;
+        const key = calibrationContextKey();
+        if (!key) return null;
+        let cases = state.calibrationEvidence.get(key);
+        if (!cases) {
+            cases = new Map();
+            state.calibrationEvidence.set(key, cases);
         }
-
-        const ratios = [];
-
-        for (
-            const record of
-            profile?.records ||
-            []
-        ) {
-            const observed =
-                observedRates(
-                    record
-                );
-
-            if (!observed) {
-                continue;
-            }
-
-            const hunt =
-                state.hunts.find(
-                    item =>
-                        item.slug ===
-                        record.huntSlug
-                );
-
-            if (!hunt) {
-                continue;
-            }
-
-            const predicted =
-                rawPredictedKillMs(
-                    hunt,
-                    profile
-                );
-
-            if (
-                predicted &&
-                predicted > 0
-            ) {
-                ratios.push(
-                    observed.killMs /
-                    predicted
-                );
-            }
+        const previous = cases.get(hunt.slug);
+        if (!previous || now - previous.at >= 60000) {
+            cases.set(hunt.slug, {ratio: residual.ratio, errorPct: residual.errorPct,
+                at: now, samples: observed.samples, source: prediction.source});
+            while (cases.size > 12) cases.delete(cases.keys().next().value);
+            while (state.calibrationEvidence.size > 4)
+                state.calibrationEvidence.delete(state.calibrationEvidence.keys().next().value);
+            state.estimateCache.clear();
+            // This mutation is deliberately outside the per-kill handler to
+            // avoid costly recomputation on every high-frequency battle event.
         }
+        return residual;
+    }
 
-        const ratio =
-            robustMean(
-                ratios
-            );
+    function predictionCalibration(profile) {
+        const key = calibrationContextKey();
+        const cases = key ? state.calibrationEvidence.get(key) : null;
+        const ratios = cases ? [...cases.values()].filter(row =>
+            Date.now() - row.at < 90 * 60000 && row.samples >= 6)
+                .map(row => row.ratio) : [];
+        const ratio = robustMean(ratios);
+        return ratio && ratios.length
+            ? Math.max(.65, Math.min(1.65, ratio)) : 1;
+    }
 
-        const calibrated =
-            !ratio
-                ? 1
-                : Math.max(
-                    0.4,
-                    Math.min(
-                        3,
-                        ratio
-                    )
-                );
-
-        if (profile) {
-            profile._calibration =
-                calibrated;
-        }
-
-        return calibrated;
+    function calibrationDiagnostics() {
+        const key = calibrationContextKey();
+        const cases = key ? state.calibrationEvidence.get(key) : null;
+        const values = cases ? [...cases.values()].filter(row =>
+            Date.now() - row.at < 90 * 60000) : [];
+        // Quantile of genuinely later-measured, per-hunt forecast errors.
+        // At least three distinct hunts are required before using the error
+        // to widen extrapolated ranges; one repeated session is not evidence.
+        const sortedErrors = values.map(row => Math.abs(row.errorPct))
+            .filter(Number.isFinite).sort((a,b)=>a-b);
+        const p80 = sortedErrors.length >= 3
+            ? sortedErrors[Math.ceil(.8 * sortedErrors.length)-1] : null;
+        return {
+            hunts: values.length,
+            p80ErrorPct: p80,
+            medianErrorPct: sortedErrors.length
+                ? Math.round(median(sortedErrors))
+                : null,
+            source: 'personalized-model-validation',
+            // Transferring between hunts is an experimental heuristic.
+            confidence: values.length >= 3 ? 'medium' : 'low'
+        };
     }
 
     function huntXpEstimate(
@@ -6048,7 +8563,8 @@
                 leadSignature() ||
                     '',
                 state.combatRevision,
-                state.combatCatalogStatus
+                state.combatCatalogStatus,
+                farmingSnapshotScope()
             ].join('|');
 
         if (
@@ -6080,14 +8596,19 @@
          * Always check the live measurement before using a cached model.
          * Measurements evolve during a hunt and must take precedence.
          */
-        if (observed) {
-            return {
+        if (observed && observed.trainerXpH !== null) {
+            const residual = recordForecastResidual(hunt, record, observed);
+            const result = {
                 value:
                     observed.trainerXpH,
-                pokemonValue:
-                    observed.pokemonXpH,
+                pokemonValue: observed.pokemonXpH,
+                killGoldH: observed.killGoldH,
+                autoSaleH: observed.autoSaleH,
+                trainerKnown: observed.trainerKnown,
+                pokemonKnown: observed.pokemonKnown,
                 goldValue:
                     observed.goldH,
+                goldSource: 'observed-server/combined-receipt',
                 killsH:
                     observed.killsH,
                 killMs:
@@ -6096,15 +8617,18 @@
                     true,
                 source:
                     'measured',
-                samples:
-                    Math.max(
-                        0,
-                        Number(
-                            record.kills ||
-                            0
-                        )
-                    )
+                confidence: observed.confidence,
+                samples: observed.samples,
+                windowMs: observed.windowMs,
+                denominator: observed.denominator,
+                bonusSource: 'observed-server/event',
+                residualErrorPct: residual?.errorPct ?? null,
+                fallbackReason: null,
+                range: xpPredictionBand({value: observed.trainerXpH,
+                    observed: true, samples: observed.samples,
+                    windowMs: observed.windowMs})
             };
+            return result;
         }
 
         if (
@@ -6140,11 +8664,25 @@
         const profile =
             combatProfile();
 
-        const rawKillMs =
-            rawPredictedKillMs(
-                hunt,
-                profile
-            );
+        const coverage = huntCombatCoverage(hunt, profile);
+        const rawKillMs = rawPredictedKillMs(hunt, profile);
+        const coverageFields = {
+            coverage: coverage.percentage,
+            coveredPoints: coverage.covered,
+            totalPoints: coverage.total,
+            missingHpPoints: coverage.missingHp,
+            missingDamagePoints: coverage.missingDamage,
+            incomplete: !coverage.complete
+        };
+        // A proven immunity is unfinishable. Measured XP/h above still wins.
+        if (rawKillMs === Infinity) return {
+            value: 0, pokemonValue: 0, goldValue: null,
+            killsH: 0, killMs: Infinity, observed: false,
+            source: 'immune combat model', confidence: 'low',
+            fallbackReason: 'known-immunity',
+            samples: Number(profile?.moveSamples) || 0,
+            ...coverageFields
+        };
 
         /*
          * Never hide recommendations while combat data is warming up. The
@@ -6156,8 +8694,9 @@
         const hasPersonalizedModel =
             Boolean(
                 profile &&
-                rawKillMs > 0
+                Number.isFinite(rawKillMs) && rawKillMs > 0
             );
+        const moveConfidence = moveModelConfidence(profile);
 
         const species =
             Array.isArray(hunt?.especies)
@@ -6190,6 +8729,15 @@
             2000 +
             UPSTREAM_WAVE_MS / mobsPerWave;
 
+        if (record && hasPersonalizedModel && !record.predictedBeforeMeasurement &&
+            profile.moveSamples >= 6 && !(record.rateWindow?.rows?.reduce(
+                (count, row) => count + row.kills, 0) >= 6)) {
+            record.predictedBeforeMeasurement = {
+                hunt: hunt.slug, scope: farmingSnapshotScope(),
+                killMs: rawKillMs, source: 'personalized-model'
+            };
+        }
+
         const killMs =
             hasPersonalizedModel
                 ? rawKillMs *
@@ -6206,119 +8754,116 @@
                 1
             );
 
-        const trainerXpPerKill =
-            Math.round(
-                baseXp *
-                (
-                    Number(profile?.trainerXpMult) ||
-                    1
-                )
-            );
+        // Game-reported Twitch, event and guild percentages have known
+        // multiplicative semantics in upstream. Unknown shop/catch-up effects
+        // are not silently included; measured receipts always win above.
+        const nativeBonus=nativeXpBonusReading(
+            state.nativeXpContext,state.playerLevel);
+        const trainerXpPerKill = baseXp * nativeBonus.trainer;
+        const pokemonXpPerKill = baseXp * nativeBonus.pokemon;
 
-        const pokemonXpPerKill =
-            Math.round(
-                baseXp *
-                (
-                    Number(profile?.pokemonXpMult) ||
-                    1
-                )
-            );
-
-        return remember({
+        const forecast = {
             value:
                 trainerXpPerKill *
                 killsH,
             pokemonValue:
                 pokemonXpPerKill *
                 killsH,
-            goldValue: null,
+            goldValue: farmGoldPrediction(hunt,killsH),
+            goldSource: 'upstream-shared-model',
+            killGoldH: null,
+            autoSaleH: null,
+            warmingUp: Boolean(record && record.rateWindow?.rows?.length &&
+                record.rateGeneration === state.rateGeneration),
             killsH,
             killMs,
             observed:
                 false,
+            bonusSource: nativeBonus.knownFactors
+                ? 'native-game-reported-partial-xp-bonuses'
+                : 'unboosted-upstream-shared',
+            bonusKnownFactors: {trainer:nativeBonus.trainer,
+                pokemon:nativeBonus.pokemon},
+            bonusCaveat: 'uses game-reported XP bonus fields and upstream timed rules; '+
+                'catch-up threshold transitions and missing boost catalog remain unverified',
             source:
-                hasPersonalizedModel
-                    ? 'combat model'
-                    : 'baseline model',
+                !hasPersonalizedModel
+                    ? 'baseline model'
+                    : moveConfidence === 'low'
+                        ? 'combat model'
+                        : 'named-move model',
+            confidence: hasPersonalizedModel ? moveConfidence : 'low',
             samples:
-                Number(profile?.moveSamples) || 0
-        });
+                Number(profile?.moveSamples) || 0,
+            fallbackReason: !profile ? 'no-lead-combat-samples'
+                : !coverage.complete ? 'incomplete-spawn-coverage'
+                : !hasPersonalizedModel ? 'insufficient-personalized-model'
+                : 'observed-attacks-with-unknown-live-scheduler',
+            calibration: calibrationDiagnostics(),
+            ...coverageFields
+        };
+        forecast.validationCount = forecast.calibration.hunts;
+        forecast.validationErrorPct = forecast.calibration.p80ErrorPct;
+        forecast.range = xpPredictionBand(forecast);
+        return remember(forecast);
     }
 
-    function rankedUnlockedHunts(
-        speciesResults = null
-    ) {
-        const sourceHunts =
-            speciesResults
-                ? [
-                    ...new Map(
-                        speciesResults
-                            .map(
-                                species => [
-                                    species.hunt.slug,
-                                    species.hunt
-                                ]
-                            )
-                    ).values()
-                ]
-                : state.hunts;
-
-        return sourceHunts
-            .filter(
-                isUnlocked
-            )
-            .map(
-                hunt => ({
-                    hunt,
-                    xp:
-                        huntXpEstimate(
-                            hunt
-                        )
-                })
-            )
-            .sort(
-                (a, b) => {
-                    const av =
-                        Number(
-                            a.xp?.value ||
-                            0
-                        );
-
-                    const bv =
-                        Number(
-                            b.xp?.value ||
-                            0
-                        );
-
-                    if (
-                        av !== bv
-                    ) {
-                        return bv - av;
+    function rankedUnlockedHunts(speciesResults=null) {
+        const metric=HA_RANK_METRICS.includes(state.filters.sort)?
+            state.filters.sort:'xp';
+        const grouped=new Map();
+        if(speciesResults){
+            for(const species of speciesResults){
+                const slug=species.hunt?.slug;
+                if(!slug)continue;
+                if(!grouped.has(slug))grouped.set(slug,[]);
+                grouped.get(slug).push(species);
+            }
+        }
+        const hunts=speciesResults?
+            [...grouped.values()].map(species=>species[0].hunt):state.hunts;
+        const ballId=state.filters.captureBall==='beast'?5:4;
+        const isCapture=metric==='capture'||metric==='shinyCatch';
+        const objectiveSource='wiki-conditional';
+        const rows=hunts.filter(isUnlocked).map(hunt=>{
+            const xp=huntXpEstimate(hunt);
+            const relevant=grouped.get(hunt.slug)??[];
+            let economy=null,rare=null,capture=null;
+            let target=null;
+            if(['coins','npcLoot'].includes(metric))
+                economy=huntEconomyEstimate(hunt,xp);
+            if(metric==='rare')
+                rare=haMetricRare(hunt,state.filters.outlandPreviewTier,
+                    state.playerLevel,xp?.killsH??null,
+                    state.filters.rareSortItem);
+            if(isCapture) {
+                // For search/type/caught filters, rank each eligible hunt by
+                // its best *matching* species. Do not recommend a Pokémon
+                // filtered out of the species results.
+                let best=null;
+                const key=metric==='capture'?'catchesH':'shinyCaughtH';
+                for(const species of relevant){
+                    const model=capturePlanForSpecies(species,ballId,xp);
+                    const value=model?.[key];
+                    if(!Number.isFinite(value))continue;
+                    if(!best||value>best[key]){
+                        best=model;target=species.name;
                     }
-
-                    const levelDifference =
-                        Number(
-                            b.hunt.nivel ||
-                            0
-                        ) -
-                        Number(
-                            a.hunt.nivel ||
-                            0
-                        );
-
-                    if (levelDifference) {
-                        return levelDifference;
-                    }
-
-                    return String(
-                        a.hunt.slug || ''
-                    ).localeCompare(
-                        String(
-                            b.hunt.slug || ''
-                        )
-                    );
                 }
-            );
+                capture=best;
+            }
+            const score=haMetricValue(metric,{xp,economy,rare,capture});
+            const source=metric==='xp'?
+                (xp?.observed?'measured':xp?.source??'unknown'):
+                metric==='coins'||metric==='npcLoot'?
+                    (metric==='coins'?economy?.killSource:
+                        economy?.lootSource)??'unknown':
+                metric==='rare'?rare?.source??'not-eligible':
+                    capture?.source??objectiveSource;
+            return {hunt,xp,score,source,target,rare,capture,
+                economy,metric};
+        });
+        return haRankMetricRows(rows,state.filters.sortDirection,metric);
     }
 
     // ------------------------------------------------------------------
@@ -6940,7 +9485,9 @@
                     species.name,
                     hunt.nome,
                     hunt.slug,
-                    hunt.area
+                    hunt.area,
+                    locationForHunt(hunt)?.name,
+                    locationForHunt(hunt)?.area
                 ]
                     .map(
                         normalize
@@ -6970,6 +9517,33 @@
             });
         }
 
+        // Compute at most one economy estimate per hunt during this sort.
+        const economySortCache = new Map();
+        const captureSortCache = new Map();
+        const objectiveSortCache = new Map();
+        const objectiveFor=species=>{
+            const metric=state.filters.sort;
+            const key=metric+'|'+species.id+'|'+species.hunt?.slug;
+            if(objectiveSortCache.has(key))return objectiveSortCache.get(key);
+            const xp=huntXpEstimate(species.hunt);
+            let value=null;
+            if(metric==='npcLoot')value=economyFor(species.hunt)?.npcLootEvH??null;
+            if(metric==='rare'){
+                const rare=haMetricRare(species.hunt,
+                    state.filters.outlandPreviewTier,state.playerLevel,
+                    xp?.killsH??null,state.filters.rareSortItem);
+                value=rare?.unitsH??null;
+            }
+            const result=haMetricNumber(value);
+            objectiveSortCache.set(key,result);
+            return result;
+        };
+        const economyFor = hunt => {
+            if (!hunt?.slug) return null;
+            if (!economySortCache.has(hunt.slug))
+                economySortCache.set(hunt.slug, huntEconomyEstimate(hunt));
+            return economySortCache.get(hunt.slug);
+        };
         result.sort(
             (a, b) => {
                 const sort =
@@ -7077,6 +9651,33 @@
                             value(b),
                             true
                         );
+                } else if (['npcLoot','rare'].includes(sort)) {
+                    const av=objectiveFor(a),bv=objectiveFor(b);
+                    const ak=av!==null,bk=bv!==null;
+                    comparison=ak&&bk?(av-bv)*direction:
+                        ak?-1:bk?1:0;
+                } else if (sort === 'coins') {
+                    // Null means unsupported, NOT free or equal to zero.
+                    const av = economyFor(a.hunt)?.killCoinsH;
+                    const bv = economyFor(b.hunt)?.killCoinsH;
+                    const aKnown = typeof av === 'number' && Number.isFinite(av);
+                    const bKnown = typeof bv === 'number' && Number.isFinite(bv);
+                    comparison = aKnown && bKnown ? (av - bv) * direction
+                        : aKnown ? -1 : bKnown ? 1 : 0;
+                } else if (sort === 'capture' || sort === 'shinyCatch') {
+                    const id=state.filters.captureBall==='beast'?5:4;
+                    const key=sort==='capture'?'catchesH':'shinyCaughtH';
+                    const val=species=>{
+                        const cacheKey=String(species.id)+'|'+species.hunt?.slug;
+                        if(!captureSortCache.has(cacheKey))
+                            captureSortCache.set(cacheKey,
+                                capturePlanForSpecies(species,id)?.[key]??null);
+                        return captureSortCache.get(cacheKey);
+                    };
+                    const av=val(a),bv=val(b);
+                    const ak=typeof av==='number'&&Number.isFinite(av);
+                    const bk=typeof bv==='number'&&Number.isFinite(bv);
+                    comparison=ak&&bk?(av-bv)*direction:ak?-1:bk?1:0;
                 } else if (
                     sort === 'npc'
                 ) {
@@ -7352,6 +9953,7 @@
             );
         }
     }
+
 
     // ------------------------------------------------------------------
     // UI
@@ -7654,49 +10256,15 @@
                 white-space: nowrap;
             }
 
-            .mha-xp-primary {
-                display: grid;
-                grid-template-columns: minmax(0,1fr) auto auto;
-                gap: 6px;
-                align-items: center;
-            }
-
-            .mha-xp-primary-main {
-                min-width: 0;
-            }
-
-            .mha-xp-primary-main strong {
-                display: block;
-                overflow: hidden;
-                color: #e8e1e4;
-                font-size: 10px;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .mha-xp-primary-main span,
             .mha-xp-note {
                 color: #9e9398;
                 font-size: 8px;
-            }
-
-            .mha-xp-toggle {
-                border: 0;
-                background: transparent;
-                color: #a9d2ff;
-                cursor: pointer;
-                font: inherit;
-                font-size: 9px;
             }
 
             .mha-xp-details {
                 margin-top: 6px;
                 padding-top: 6px;
                 border-top: 1px solid rgba(255,255,255,.07);
-            }
-
-            .mha-xp-details[hidden] {
-                display: none;
             }
 
             .mha-xp-list-title {
@@ -7715,7 +10283,7 @@
 
             .mha-best-row {
                 display: grid;
-                grid-template-columns: 18px minmax(0,1fr) auto auto;
+                grid-template-columns: 18px minmax(0,1fr) minmax(110px,36%) auto;
                 gap: 5px;
                 align-items: center;
                 min-height: 26px;
@@ -7963,6 +10531,29 @@
                 color: #93898e;
                 font-size: 8px;
             }
+            .mha-hunt-detail { margin-top: 3px; }
+            .mha-hunt-detail summary,
+            .mha-xp-summary [data-mha-more] > summary {
+                cursor: pointer;
+                color: #a9d2ff;
+                font-size: 9px;
+            }
+            .mha-hunt-detail[open] {
+                max-width: min(100%, 720px);
+                padding-bottom: 3px;
+            }
+            .mha-xp-summary [data-mha-more] {
+                margin-top: 6px;
+                border-top: 1px solid rgba(255,255,255,.07);
+                padding-top: 6px;
+            }
+            .mha-xp-summary select {
+                max-width: 100%;
+                color: inherit;
+                background-color: #201e29;
+                border: 1px solid rgba(255,255,255,.15);
+                border-radius: 4px;
+            }
 
             .mha-go {
                 min-width: 58px;
@@ -8007,6 +10598,264 @@
                 background: rgba(255,255,255,.09);
             }
 
+
+            /* UX audit: contrast, focus and controls sized for real use. */
+            #${DRAWER_ID} {
+                font-size: 12px !important;
+                line-height: 1.4 !important;
+            }
+            .mha-filter-toolbar {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px;
+                padding: 6px 12px;
+                border-bottom: 1px solid rgba(255,255,255,.09);
+                background: rgba(255,255,255,.025);
+            }
+            .mha-filter-toolbar button {
+                min-height: 34px;
+                min-width: 112px;
+                border: 1px solid rgba(255,255,255,.18);
+                border-radius: 6px;
+                padding: 5px 12px;
+                color: #d7e7ff;
+                background: #25212b;
+                cursor: pointer;
+                font: 600 11px/1.25 system-ui,sans-serif;
+            }
+            .mha-filter-glance {
+                min-width: 0;
+                color: #bab0b7;
+                font-size: 11px;
+            }
+            .mha-filters[hidden] { display: none !important; }
+            .mha-field { font-size: 10px; }
+            .mha-filters input, .mha-filters select,
+            .mha-sort-control button, .mha-filter-actions button {
+                height: 34px;
+                font-size: 11px;
+            }
+            .mha-weakness-option {
+                min-height: 30px;
+                font-size: 10px;
+            }
+            .mha-weakness-mode,
+            .mha-weakness-mode button { font-size: 10px; }
+            .mha-xp-note, .mha-xp-heading span,
+            .mha-hunt-sub, .mha-meta .mha-status {
+                font-size: 10px;
+                line-height: 1.45;
+            }
+            .mha-xp-heading strong, .mha-hunt-title {
+                font-size: 12px;
+            }
+            .mha-xp-heading span {
+                white-space: normal;
+                text-overflow: clip;
+            }
+            .mha-xp-summary {
+                min-height: 0;
+                max-height: min(55dvh, 550px);
+                overflow-y: auto;
+                overflow-x: hidden;
+                scrollbar-gutter: stable;
+            }
+            .mha-best-name, .mha-xp-value { font-size: 10px; }
+            /* Keep the Top 5 action visible even with long source strings. */
+            .mha-best-row { min-width: 0; }
+            .mha-best-row .mha-xp-value {
+                min-width: 0;
+                white-space: normal;
+                overflow-wrap: anywhere;
+                line-height: 1.3;
+            }
+            .mha-best-row .mha-best-name {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .mha-xp-summary [data-mha-more] .mha-xp-note {
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }
+            .mha-native-bonuses {
+                margin: 8px 0;
+                padding: 9px;
+                border: 1px solid rgba(121,180,240,.2);
+                border-radius: 7px;
+                background: rgba(121,180,240,.045);
+            }
+            .mha-native-bonuses > strong {
+                display: block;
+                font-size: 11px;
+                color: #dcecff;
+                margin-bottom: 5px;
+            }
+            .mha-native-bonuses .mha-xp-note {
+                margin: 3px 0;
+                overflow-wrap: anywhere;
+            }
+            .mha-xp-summary [data-mha-reference] label {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px;
+                flex-wrap: wrap;
+                min-width: 0;
+                font-size: 11px;
+            }
+            .mha-xp-summary [data-mha-reference] {
+                margin-top: 8px;
+                border-top: 1px solid rgba(255,255,255,.09);
+                padding-top: 7px;
+            }
+            .mha-xp-summary .mha-reference-enable {
+                font-weight: 600;
+                padding: 8px 4px;
+            }
+            .mha-reference-group {
+                margin: 8px 0;
+                padding: 9px;
+                border: 1px solid rgba(121,180,240,.17);
+                border-radius: 7px;
+            }
+            .mha-reference-group > strong {
+                display: block;
+                font-size: 11px;
+                color: #e4eeff;
+            }
+            .mha-reference-group .mha-xp-note {
+                margin: 4px 0 6px;
+            }
+            .mha-reference-controls {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px),1fr));
+                gap: 5px 9px;
+                margin: 6px 0;
+            }
+            .mha-reference-controls label {
+                justify-content: space-between;
+                border-radius: 5px;
+                background: rgba(255,255,255,.035);
+                overflow-wrap: anywhere;
+            }
+            .mha-reference-result {
+                margin-top: 8px;
+                padding-top: 7px;
+                border-top: 1px solid rgba(255,255,255,.07);
+                font-size: 10px;
+                line-height: 1.6;
+                overflow-wrap: anywhere;
+            }
+            .mha-reference-result strong {font-size: 11px;}
+            .mha-xp-summary [data-mha-reference-extra] {
+                margin: 8px 0;
+                padding: 7px;
+                border: 1px solid rgba(255,255,255,.09);
+                border-radius: 6px;
+            }
+            .mha-xp-summary [data-mha-reference-extra] > summary {
+                cursor: pointer;
+                font-size: 10px;
+            }
+            .mha-xp-summary [data-mha-reference] input[type="number"] {
+                width: 76px;
+                max-width: 100%;
+                min-height: 32px;
+                padding: 3px 5px;
+                color: #eee7ea;
+                background: #211a1e;
+                border: 1px solid rgba(255,255,255,.25);
+                border-radius: 5px;
+            }
+            @media (max-width: 720px) {
+                .mha-best-row {
+                    grid-template-columns: 18px minmax(0,1fr) auto;
+                }
+                .mha-best-row .mha-xp-value {
+                    grid-column: 2 / 3;
+                    grid-row: 2;
+                }
+                .mha-best-row .mha-go { grid-column: 3; grid-row: 1 / 3; }
+            }
+            .mha-xp-summary [data-mha-more][open] {
+                max-height: min(44dvh, 480px);
+                overflow-y: auto;
+                overflow-x: hidden;
+            }
+            .mha-xp-summary button,
+            .mha-xp-summary select { min-height: 30px; }
+            .mha-outland-quick {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 7px;
+                padding: 8px;
+                margin: 6px 0;
+                border: 1px solid rgba(121,180,240,.26);
+                border-radius: 7px;
+                background: rgba(121,180,240,.07);
+            }
+            .mha-outland-quick .mha-outland-title {
+                color: #e4eeff;
+                font-size: 11px;
+            }
+            .mha-outland-selector {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                color: #c4bdc6;
+                font-size: 10px;
+            }
+            .mha-outland-selector select { max-width: 170px; }
+            .mha-outland-active { color: #b0e0bc; font-size: 10px; }
+            .mha-outland-reason {
+                color: #c4b6c0;
+                font-size: 10px;
+                flex-basis: 100%;
+            }
+            .mha-outland-quick button {
+                padding: 5px 10px;
+                border: 1px solid rgba(121,180,240,.5);
+                border-radius: 6px;
+                color: #e1eeff;
+                background: #25364e;
+                cursor: pointer;
+                font: 600 11px/1.3 system-ui,sans-serif;
+            }
+            .mha-outland-quick button:disabled {
+                opacity: .48;
+                cursor: not-allowed;
+            }
+            .mha-empty p { margin: 0 0 8px; }
+            .mha-empty button {
+                padding: 8px 14px;
+                border: 1px solid rgba(121,180,240,.38);
+                border-radius: 6px;
+                color: #e3ecff;
+                background: #25364e;
+                cursor: pointer;
+                font: inherit;
+            }
+            #${DRAWER_ID} :is(button,select,input,summary):focus-visible {
+                outline: 2px solid #91c3ff;
+                outline-offset: 2px;
+            }
+            @media (max-width: 620px) {
+                .mha-filter-toolbar { padding: 6px 8px; }
+                .mha-filters {
+                    max-height: min(50dvh, 440px);
+                    overflow-y: auto;
+                    scrollbar-gutter: stable;
+                }
+                .mha-xp-summary {
+                    max-height: min(50dvh, 460px);
+                }
+                .mha-outland-quick { align-items: stretch; }
+                .mha-outland-quick button { flex: 1 1 140px; }
+                .mha-outland-selector { flex: 1 1 170px; }
+            }
+
             @media (max-width: 900px) {
                 .mha-body {
                     grid-template-columns: 1fr;
@@ -8033,16 +10882,6 @@
 
                 .mha-body {
                     padding: 7px;
-                }
-
-                .mha-xp-primary {
-                    grid-template-columns: minmax(0,1fr) auto;
-                }
-
-                .mha-xp-toggle {
-                    grid-column: 1 / -1;
-                    justify-self: start;
-                    padding: 0;
                 }
 
                 #mha-native-credit {
@@ -8127,7 +10966,7 @@
                 <span class="mha-credit-sep">·</span>
 
                 <a
-                    href="https://github.com/MOTHblank/pokeidle-huntatlas"
+                    href="https://github.com/MOTHblank/pokeidle-addons-premium/tree/main/huntatlas"
                     target="_blank"
                     rel="noopener noreferrer"
                 >${tr('footer.source')}</a>
@@ -8373,12 +11212,16 @@
                     true;
 
                 if (!wasOpen) {
+                    syncFromControllerBridge();
                     ensureTypeData();
                     ensureCombatCatalog();
+                    ensureLocationIndex();
+                    ensureMoveIndex();
                     ensureMarketValues();
                 }
 
-                renderDrawer();
+                if(!wasOpen) renderDrawer();
+                else queueRender();
 
                 if (!wasOpen) {
                     queueMicrotask(
@@ -8521,8 +11364,17 @@
         drawer.hidden =
             true;
 
+        if(state.filtersExpanded===null)
+            state.filtersExpanded=window.innerWidth>620;
         drawer.innerHTML = `
-            <div class="mha-filters">
+            <div class="mha-filter-toolbar">
+                <button type="button" data-mha-filter-toggle
+                    aria-controls="mha-filter-grid"
+                    aria-expanded="${state.filtersExpanded?'true':'false'}"></button>
+                <span class="mha-filter-glance" data-mha-filter-glance></span>
+            </div>
+            <div class="mha-filters" id="mha-filter-grid"
+                ${state.filtersExpanded?'':'hidden'}>
                 <label class="mha-field mha-search">
                     <span>${tr('filter.search')}</span>
                     <input data-mha-filter="search" type="search" placeholder="${escapeHtml(tr('filter.searchPlaceholder'))}">
@@ -8585,6 +11437,11 @@
                     <div class="mha-sort-control">
                         <select data-mha-filter="sort">
                             <option value="xp">${tr('sort.xp')}</option>
+                            <option value="coins">${tr('sort.coins')}</option>
+                            <option value="npcLoot">${tr('sort.npcLoot')}</option>
+                            <option value="rare">${tr('sort.rare')}</option>
+                            <option value="capture">${tr('sort.capture')}</option>
+                            <option value="shinyCatch">${tr('sort.shinyCatch')}</option>
                             <option value="name">${tr('sort.name')}</option>
                             <option value="pokedex">${tr('sort.pokedex')}</option>
                             <option value="level">${tr('sort.level')}</option>
@@ -8622,28 +11479,18 @@
         modalBody.appendChild(
             drawer
         );
-
+        q('[data-mha-filter-toggle]',drawer)?.addEventListener('click',()=>{
+            state.filtersExpanded=!state.filtersExpanded;
+            renderFilterControls(drawer);
+        });
         q(
             '[data-mha-clear]',
             drawer
         ).addEventListener(
             'click',
             () => {
-                const sort =
-                    state.filters.sort;
-
-                const sortDirection =
-                    state.filters
-                        .sortDirection;
-
-                state.filters = {
-                    ...defaultFilters(),
-                    sort,
-                    sortDirection
-                };
-                state.resultLimit =
-                    120;
-                saveFilters();
+                // Keep the sort, Outland preview, ball and scenarios.
+                resetSearchFilters();
                 renderDrawer();
 
                 q(
@@ -8665,6 +11512,8 @@
                     if (
                         !isMapModalOpen() ||
                         event.key !== '/' ||
+                        event.altKey || event.ctrlKey || event.metaKey ||
+                        document.activeElement?.isContentEditable ||
                         [
                             'INPUT',
                             'SELECT',
@@ -8815,6 +11664,21 @@
                     }
 
                     state.resultLimit = 120;
+                    if(['search','minLevel','maxLevel'].includes(key)){
+                        // Type without a full 120-card rebuild per keystroke.
+                        if(state.searchRenderTimer!==null)
+                            clearTimeout(state.searchRenderTimer);
+                        state.searchRenderTimer=setTimeout(()=>{
+                            state.searchRenderTimer=null;
+                            saveFilters();
+                            renderDrawer();
+                        },160);
+                        return;
+                    }
+                    if(state.searchRenderTimer!==null){
+                        clearTimeout(state.searchRenderTimer);
+                        state.searchRenderTimer=null;
+                    }
                     saveFilters();
                     renderDrawer();
                 }
@@ -8972,11 +11836,19 @@
                 })
                 .join('');
 
-        if (weaknessOptions && weaknessOptions.innerHTML !== weaknessHtml) {
-            weaknessOptions.innerHTML = weaknessHtml;
-        }
-
         if (weaknessOptions) {
+            // Retain button nodes across selection changes so keyboard focus
+            // is not destroyed by the next refresh.
+            if(weaknessOptions.children.length!==STANDARD_TYPES.length)
+                weaknessOptions.innerHTML=weaknessHtml;
+            for(const button of qa('[data-mha-weakness-option]',weaknessOptions)){
+                const type=button.dataset.mhaWeaknessOption;
+                const selected=selectedWeaknessSet.has(type);
+                button.classList.toggle('active',selected);
+                button.setAttribute('aria-pressed',String(selected));
+                const label=typeLabel(type);
+                if(button.textContent!==label)button.textContent=label;
+            }
             weaknessOptions.title =
                 weaknessSelected.length
                     ? tr('filter.weaknessSelected').replace('{count}', String(weaknessSelected.length))
@@ -9075,10 +11947,17 @@
                 drawer
             );
 
-        if (clearButton) {
-            clearButton.disabled =
-                activeCount === 0;
+        if (clearButton) clearButton.disabled = activeCount === 0;
+        const toggle=q('[data-mha-filter-toggle]',drawer);
+        if(toggle){
+            toggle.textContent=tr('filter.panelTitle')+' · '+
+                tr(state.filtersExpanded?'filter.hidePanel':'filter.showPanel');
+            toggle.setAttribute('aria-expanded',String(state.filtersExpanded));
         }
+        const grid=q('#mha-filter-grid',drawer);
+        if(grid)grid.hidden=!state.filtersExpanded;
+        const glance=q('[data-mha-filter-glance]',drawer);
+        if(glance)glance.textContent=filterState?.textContent??'';
     }
 
 
@@ -9304,6 +12183,7 @@
                 hunt
             );
 
+        const economicInfo = huntEconomyEstimate(hunt,xpInfo);
         const xpLabel =
             xpInfo?.value
                 ? tr(
@@ -9321,32 +12201,29 @@
                     'xp.baseline'
                 );
 
-        const sub =
-            [
-                String(
-                    hunt.area ||
-                    ''
-                ).toUpperCase(),
-                tr(
-                    'hunt.level',
-                    {
-                        level:
-                            Number(
-                                hunt.nivel ||
-                                0
-                            )
-                    }
-                ),
-                tr(
-                    unlocked
-                        ? 'hunt.unlocked'
-                        : 'hunt.locked'
-                ),
-                xpLabel
-            ]
-                .filter(Boolean)
-                .join(' · ');
+        const meta=speciesCombatMeta(species.id);
+        const rarity=captureRarityFromCatalog(meta);
+        const ultraPct=captureWikiChance(rarity,
+            captureInfoForBall(4)?.efficiency??4);
+        const beastPct=captureWikiChance(rarity,
+            captureInfoForBall(5)?.efficiency??8);
+        const catchCard=ultraPct!==null&&beastPct!==null ?
+            tr('catch.card',{ultra:formatProbability(ultraPct),
+                beast:formatProbability(beastPct)}):
+            tr('catch.cardUnknown');
 
+        const chosenSpeciesPlan=capturePlanForSpecies(species,
+            state.filters.captureBall==='beast'?5:4,xpInfo);
+        const shinyCard=chosenSpeciesPlan?
+            tr('catch.targetRate',{
+                captures:formatEventRate(chosenSpeciesPlan.catchesH),
+                shiny:formatEventRate(chosenSpeciesPlan.shinyCaughtH),
+                hours:formatDurationHours(chosenSpeciesPlan.meanHoursShiny,currentLocale()==='pt-BR'),
+                source:tr(chosenSpeciesPlan.acceptedSource==='observed'
+                    ?'catch.targetObserved':'catch.targetCeiling')}) :
+            null;
+
+        const worldLocation = locationForHunt(hunt);
         const label =
             tr(
                 current
@@ -9356,12 +12233,54 @@
                         : 'hunt.locked'
             );
 
+
+        const selectedBall=state.filters.captureBall==='beast'?5:4;
+        const selectedRare=haMetricRare(hunt,
+            state.filters.outlandPreviewTier,state.playerLevel,
+            xpInfo?.killsH??null,state.filters.rareSortItem);
+        const activeChance=selectedBall===5?beastPct:ultraPct;
+        const detailId=String(species.id)+'|'+String(hunt.slug);
+        const expanded=state.openHuntDetails.has(detailId);
+        const sharedHunts=expanded?sharedWorldLocation(hunt):[];
+        const metricRate=value=>typeof value==='number'&&Number.isFinite(value)
+            ?formatRate(value):tr('rank.unknown');
+        const compactSub=[
+            String(hunt.area||'').toUpperCase(),
+            tr('hunt.level',{level:Number(hunt.nivel)||0}),
+            tr(unlocked?'hunt.unlocked':'hunt.locked'),
+            xpLabel,
+            catchCard
+        ].join(' · ');
+        const moreSub=[
+            tr('rank.kills')+': '+metricRate(xpInfo?.killsH),
+            tr('rank.pokemonXp')+': '+metricRate(xpInfo?.pokemonValue),
+            tr('econ.kill')+': '+metricRate(economicInfo.killCoinsH),
+            tr('econ.loot')+': '+metricRate(economicInfo.npcLootEvH),
+            tr('econ.net')+': '+metricRate(economicInfo.netH),
+            tr('rank.rare')+': '+formatEventRate(selectedRare?.unitsH),
+            tr('rank.capture',{chance:formatProbability(activeChance)}),
+            shinyCard??tr('rank.invalid'),
+            meta?.captureLevelCeiling?tr('catch.levelCap',{
+                level:Math.min(Number(hunt.nivel)||1,meta.captureLevelCeiling)
+            }):null,
+            sharedHunts.length?tr('location.shared',{
+                hunts:sharedHunts.join(', ')}):null,
+            tr('rank.confidence',{confidence:tr('xp.confidence.'+(xpInfo?.confidence??'low'))}),
+            tr('rank.coverage',{percent:xpInfo?.coverage??0}),
+            xpInfo?.observed?tr('econ.observed'):tr('rank.unboosted')
+        ].filter(Boolean).join(' · ');
+
         const huntMarkup =
             `
                 <div class="mha-hunt ${current ? 'current' : ''} ${!unlocked ? 'locked' : ''}">
                     <div class="mha-hunt-main">
-                        <div class="mha-hunt-title">${escapeHtml(hunt.nome || hunt.slug)}</div>
-                        <div class="mha-hunt-sub">${escapeHtml(sub)}</div>
+                        <div class="mha-hunt-title" ${worldLocation ? 'title="' + escapeHtml(tr('location.coordinates', { region: worldLocation.area, x: worldLocation.pixel[0], y: worldLocation.pixel[1] })) + '"' : ''}>${escapeHtml(hunt.nome || hunt.slug)}</div>
+                        <div class="mha-hunt-sub">${escapeHtml(compactSub)}</div>
+                        <details class="mha-hunt-detail" data-mha-hunt-detail=
+                            "${escapeHtml(detailId)}" ${expanded?'open':''}>
+                            <summary>${escapeHtml(tr('rank.details'))}</summary>
+                            <div class="mha-hunt-sub">${escapeHtml(moreSub)}</div>
+                        </details>
                     </div>
 
                     <button
@@ -9434,17 +12353,32 @@
                 results
             );
 
-        const usable =
-            ranked.filter(
-                row =>
-                    Number(
-                        row.xp?.value ||
-                        0
-                    ) > 0
-            );
-
-        const best =
-            usable[0] || null;
+        const objective=HA_RANK_METRICS.includes(state.filters.sort)?
+            state.filters.sort:'xp';
+        const objectiveLabel=tr('sort.'+objective);
+        // Zero is a measured fact for capture or net, while null means
+        // unknown/unavailable. Never mistake a missing observation for zero.
+        const usable=ranked.filter(row=>haMetricNumber(row.score)!==null);
+        const best=usable[0]||null;
+        const xpSourceLabel = estimate => estimate?.observed
+            ? tr('xp.sourceMeasured')
+            : estimate?.source === 'immune combat model'
+                ? tr('xp.sourceImmunity')
+                : estimate?.source === 'baseline model'
+                    ? tr('xp.sourceBaseline')
+                    : tr('xp.sourceModel');
+        const rangeLabel = estimate => estimate?.range
+            ? tr('xp.ranged', {low: formatRate(estimate.range.low),
+                high: formatRate(estimate.range.high)}) : '';
+        const displayEvidence = estimate => [
+            tr('xp.sourceLabel', {source: xpSourceLabel(estimate)}),
+            rangeLabel(estimate),
+            estimate?.observed ? null :
+                estimate?.bonusSource==='native-game-reported-partial-xp-bonuses'
+                    ? tr('xp.native.modeled') : tr('xp.unboosted'),
+            estimate?.fallbackReason
+                ? tr('xp.fallback', {reason: tr('xp.fallback.'+estimate.fallbackReason)}) : null
+        ].filter(Boolean).join(' · ');
 
         const current =
             currentHunt();
@@ -9455,6 +12389,54 @@
                     current
                 )
                 : null;
+
+        const nativeBonus=nativeXpBonusReading(
+            state.nativeXpContext,state.playerLevel);
+        const nativePct=n=>currentLocale()==='pt-BR'
+            ?String(n).replace('.',','):String(n);
+        const nativeFactor=n=>nativePct(Math.round(n*1000)/1000);
+        const bonusDescriptions=nativeBonus.sources.map(row=>{
+            if(row.kind==='twitch')return tr('xp.native.twitch',{
+                pct:nativePct(row.pct)});
+            if(row.kind==='guild')return tr('xp.native.guild',{
+                pct:nativePct(row.pct)});
+            if(row.kind==='event')return tr('xp.native.event',{
+                trainer:nativePct(row.trainer),
+                pokemon:nativePct(row.pokemon)});
+            if(row.kind==='vip')return tr('xp.native.vip');
+            if(row.kind==='guildBank')return tr('xp.native.guildBank');
+            if(row.kind==='shopTrainer'||row.kind==='shopPokemon')
+                return tr('xp.native.'+row.kind,{
+                    mult:nativePct(row.mult)});
+            return '';
+        }).filter(Boolean);
+        for(const kind of nativeBonus.unknown) {
+            const key=kind==='shop'?'xp.native.shop':
+                kind==='shopTrainer'||kind==='shopPokemon'
+                    ?'xp.native.shopUnknown':
+                kind==='catchup'?'xp.native.catchup':
+                kind==='twitchAvailable'?'xp.native.twitchAvailable':
+                'xp.native.unknownTwitch';
+            bonusDescriptions.push(tr(key));
+        }
+        const nativeBonusHtml='<section class="mha-native-bonuses">'+
+            '<strong>'+escapeHtml(tr('xp.native.title'))+'</strong>'+
+            '<div class="mha-xp-note">'+escapeHtml(
+                !nativeBonus.reported?tr('xp.native.wait'):
+                bonusDescriptions.length?bonusDescriptions.join(' · '):
+                tr('xp.native.none'))+'</div>'+
+            (nativeBonus.knownFactors?
+                '<div class="mha-xp-note">'+escapeHtml(
+                    tr('xp.native.model',{
+                        trainer:nativeFactor(nativeBonus.trainer),
+                        pokemon:nativeFactor(nativeBonus.pokemon)
+                    }))+'</div>':'')+
+            (currentXp?.observed?
+                '<div class="mha-xp-note">'+escapeHtml(
+                    tr('xp.native.measured'))+'</div>':'')+
+            '<div class="mha-xp-note">'+escapeHtml(
+                tr('xp.native.note'))+'</div>'+
+        '</section>';
 
         const profile =
             combatProfile();
@@ -9561,7 +12543,36 @@
                                     profile.hpSamples
                             }
                         )
-                        : null
+                        : null,
+                    movesForLead().length
+                        ? tr('xp.possibleMoves', { count: movesForLead().length })
+                        : null,
+                    moveSourceForLead() === 'catalog'
+                        ? tr('xp.catalogMoves', { count: movesForLead().length }) : null,
+                    indexConflictsForLead().length
+                        ? tr('xp.moveDisagreements', {
+                            count: indexConflictsForLead().length
+                        }) : null,
+                    profile.namedMoveSamples
+                        ? tr('xp.knownMoves', {
+                            count: Object.keys(profile.observedNamedMoves || {}).length
+                        })
+                        : profile.attacks && movesForLead().length
+                            ? tr('xp.namesUnavailable') : null,
+                    profile.namedMoveSamples
+                        ? tr('xp.moveConfidence', {
+                            confidence: tr('xp.confidence.' + moveModelConfidence(profile))
+                        })
+                        : null,
+                    tr('xp.protocol', {
+                        total: state.battleDiagnostics.playerEvents,
+                        named: state.battleDiagnostics.namedEvents,
+                        unnamed: state.battleDiagnostics.unnamedEvents
+                    }),
+                    state.battleDiagnostics.lastUnnamedKeys.length
+                        ? tr('xp.protocolKeys', {
+                            keys: state.battleDiagnostics.lastUnnamedKeys.join(', ')
+                        }) : null
                 ]
                     .filter(Boolean)
                     .join(' · ')
@@ -9589,6 +12600,21 @@
                           : ''
                   )
                 : tr('xp.baseline');
+        const movesSummary = (profile?.namedMoveSamples
+            ? Object.values(profile.observedNamedMoves || {})
+                .sort((a, b) => b.samples - a.samples)
+                .slice(0, 4)
+                .map(row => row.name + ' (' + row.type + ', ' + row.samples + ')')
+            : movesForLead().filter(move => move.category !== 'STATUS')
+                .sort((a, b) => b.power - a.power)
+                .slice(0, 3)
+                .map(move => move.name + ' (' + move.type + ')'));
+        const moveSummaryText = movesSummary.length
+            ? tr(profile?.namedMoveSamples
+                ? 'xp.observedMoveSummary' : 'xp.indexedMoveSummary',
+                { moves: movesSummary.join(', ') })
+            : '';
+
         const bestRows =
             usable
                 .slice(0, 5)
@@ -9600,7 +12626,7 @@
                             );
 
                         return `
-                            <div class="mha-best-row">
+                            <div class="mha-best-row" role="listitem">
                                 <span class="mha-best-rank">${index + 1}</span>
                                 <span class="mha-best-name">${escapeHtml(row.hunt.nome || row.hunt.slug)} · ${escapeHtml(
                                     tr(
@@ -9639,17 +12665,11 @@
                                         : null
                                 ].filter(Boolean).join(' · '))}">${escapeHtml(
                                     tr(
-                                        row.xp.observed
-                                            ? 'xp.measuredShort'
-                                            : 'xp.modelShort',
-                                        {
-                                            value:
-                                                formatRate(
-                                                    row.xp.value
-                                                )
+                                        'rank.value',{
+                                            value:formatObjectiveValue(row.score,objective)
                                         }
                                     )
-                                )}</span>
+                                )}${row.target?' · '+escapeHtml(row.target):''}${objective==='xp'&&row.xp.incomplete?' · '+escapeHtml(tr('xp.incompleteShort',{percentage:row.xp.coverage})):''}</span>
                                 <button
                                     type="button"
                                     class="mha-go ${here ? 'current' : ''}"
@@ -9666,119 +12686,485 @@
                 )
                 .join('');
 
-        const bestHere =
-            best?.hunt?.slug
-                ? isHuntHere(
-                    best.hunt.slug
-                )
-                : false;
+        const economicHunt = current || best?.hunt || null;
+        const economic = economicHunt ? huntEconomyEstimate(economicHunt,
+            economicHunt.slug === best?.hunt?.slug
+                ? best.xp : huntXpEstimate(economicHunt)) : null;
+        const econValue = value => typeof value === 'number' &&
+            Number.isFinite(value) ? formatRate(value) : tr('econ.unknown');
+        const econLine = (label,value,source) => '<div class="mha-xp-note"><strong>' +
+            escapeHtml(label) + ': ' + escapeHtml(econValue(value)) +
+            '</strong>' + (source ? ' · ' + escapeHtml(source) : '') + '</div>';
+        const economyHtml = economic ? [
+            '<div class="mha-xp-list-title">' +
+                escapeHtml(tr('econ.title',{hunt:economicHunt.nome ||
+                    economicHunt.slug})) + '</div>',
+            econLine(tr('econ.kill'),economic.killCoinsH,
+                tr(economic.killSource === 'observed-server/event' ?
+                    'econ.observed':'econ.model')),
+            econLine(tr('econ.loot'),economic.npcLootEvH,
+                tr('econ.estimatedLoot',{coverage:economic.lootCoverage})),
+            econLine(tr('econ.realized'),economic.realizedH,
+                tr('econ.observed')),
+            econLine(tr('econ.net'),economic.netH,
+                tr('econ.cost')),
+            econLine(tr('econ.cost'),economic.replacementCostH,
+                tr('econ.observed')),
+            economic.diamondsH ? econLine(tr('econ.diamonds'),
+                economic.diamondsH,tr('econ.observed')) : '',
+            ...economic.useEvidence.filter(row=>
+                row.remaining !== null && row.hoursRemaining !== null
+            ).slice(0,3).map(row=>'<div class="mha-xp-note">' +
+                escapeHtml((row.type==='ball'?tr('econ.ball'):tr('econ.item'))+' '+row.id) +
+                ': ' + escapeHtml(tr('econ.stock', {
+                    count:row.remaining,
+                    hours:row.hoursRemaining.toFixed(1)
+                })) + '</div>'),
+            '<div class="mha-xp-note">' +
+                escapeHtml(tr('econ.netCaveat')) + '</div>',
+            economic.unknownCosts ? '<div class="mha-xp-note">' +
+                escapeHtml(tr('econ.noPrice',
+                    {count:economic.unknownCosts})) + '</div>' : '',
+            economic.unlinkedCosts ? '<div class="mha-xp-note">' +
+                escapeHtml(tr('econ.unlinked',
+                    {count:economic.unlinkedCosts})) + '</div>' : ''
+        ].join('') : '';
 
+
+        const selectedTier=state.filters.outlandPreviewTier;
+        const reportedTier=state.outlandTierSeen
+            ? state.farmingSnapshot.outlandTier : null;
+        const nativeTier=reportedTier===null ? null :
+            outlandNativeTier(reportedTier,state.playerLevel);
+        const tierInfo=farmingTier(selectedTier,state.playerLevel);
+        const tierGate=FARM_OUTLAND_TIERS[selectedTier-1][0];
+        const previewHunt=rareOutlandHunt();
+        const outlandModel=previewHunt
+            ? rareModelForHunt(previewHunt,selectedTier) : null;
+        const eggHunt=(current && current.area!=='outland' &&
+            Number(current.nivel)>=5000) ? current
+            : ranked.map(row=>row.hunt).find(hunt=>
+                hunt.area!=='outland' && Number(hunt.nivel)>=5000) || null;
+        const eggModel=eggHunt?rareModelForHunt(eggHunt,1):null;
+        const fmtChance=value=>(value*100).toFixed(6)+'%';
+        const fmtHours=value=>formatDurationHours(value,currentLocale()==='pt-BR');
+        const fmtUnits=value=>formatEventRate(value);
+        const modelRows=model=>model?.drops?.length
+            ? model.drops.map(row=>{
+                const observed=model.observedDrops?.[row.id];
+                const descriptions=[
+                    fmtChance(row.probability)+' '+tr('rare.kills'),
+                    tr('rare.units',{value:fmtUnits(row.unitsH)}),
+                    tr('rare.mean',{hours:fmtHours(row.meanHours)}),
+                    row.craft>1 ? tr('rare.craft',{hours:fmtHours(row.craftHours)}) : null,
+                    tr('rare.chances',{hour:formatProbability(row.chance1h),
+                        day:formatProbability(row.chance24h)}),
+                    observed===undefined ? null:
+                        tr('rare.observed',{count:observed})
+                ].filter(Boolean).join(' · ');
+                return '<div class="mha-xp-note"><strong>'+
+                    escapeHtml(row.name)+'</strong> · '+escapeHtml(descriptions)+'</div>';
+            }).join('') :
+                '<div class="mha-xp-note">'+escapeHtml(tr(
+                    model?.reason==='unknown-kill-rate'?'rare.noRate':'rare.notEligible'
+                ))+'</div>';
+        const previewOptions=FARM_OUTLAND_TIERS.map(([level],i)=>
+            '<option value="'+(i+1)+'" '+
+                (selectedTier===i+1?'selected':'')+
+                '>Outland '+(i+1)+' · Lv '+level+'</option>').join('');
+        const rareChoiceHtml=objective==='rare'?'<div class="mha-xp-note"><label>'+
+            escapeHtml(tr('rank.rareLabel'))+' <select data-mha-rare-item>'+
+            [...RARE_OUTLAND_DROPS,RARE_EGG_DROP].map(item=>
+                '<option value="'+item.id+'" '+
+                (state.filters.rareSortItem===item.id?'selected':'')+
+                '>'+escapeHtml(item.name)+'</option>').join('')+
+            '</select></label> · <label>'+
+            escapeHtml(tr('rare.preview'))+' <select data-mha-sort-outland-tier>'+
+            FARM_OUTLAND_TIERS.map(([level],i)=>
+                '<option value="'+(i+1)+'" '+
+                (state.filters.outlandPreviewTier===i+1?'selected':'')+
+                '>Outland '+(i+1)+' · Lv '+level+'</option>').join('')+
+            '</select></label></div>':'';
+        const ballSortHtml=['capture','shinyCatch'].includes(objective)?
+            '<div class="mha-xp-note"><label>'+
+            escapeHtml(tr('catch.ball'))+' <select data-mha-sort-capture-ball>'+
+            '<option value="ultra" '+
+                (state.filters.captureBall==='ultra'?'selected':'')+'>'+
+                escapeHtml(tr('catch.ultra'))+'</option>'+
+            '<option value="beast" '+
+                (state.filters.captureBall==='beast'?'selected':'')+'>'+
+                escapeHtml(tr('catch.beast'))+'</option></select></label></div>':'';
+        const activateTier=Boolean(tierInfo && state.outlandTierSeen &&
+            nativeTier!==null && nativeTier!==selectedTier &&
+            !state.pendingOutlandTier && socketReady());
+        // Quick access uses the same server-confirmed native command as
+        // the advanced panel; a preview alone never changes the game tier.
+        const quickTierReason=!tierInfo?
+            tr('rare.locked',{level:tierGate}):
+            state.pendingOutlandTier?tr('rare.pending'):
+            !socketReady()?tr('outland.quickDisconnected'):
+            !state.outlandTierSeen||nativeTier===null?
+                tr('outland.quickWaiting'):
+            nativeTier===selectedTier?tr('outland.quickAlready'):
+            state.outlandTierLastOutcome?.status==='timeout'&&
+                state.outlandTierLastOutcome.tier===selectedTier?
+                    tr('outland.quickTimedOut'):
+                '';
+        const quickOutlandHtml=previewHunt?'<div class="mha-outland-quick">'+
+            '<strong class="mha-outland-title">'+
+                escapeHtml(tr('outland.quickLabel'))+'</strong>'+
+            '<label class="mha-outland-selector">'+
+                escapeHtml(tr('rare.preview'))+
+                ' <select data-mha-quick-outland aria-label="'+
+                    escapeHtml(tr('outland.quickLabel'))+'">'+previewOptions+
+                '</select></label>'+
+            '<span class="mha-outland-active">'+escapeHtml(nativeTier!==null?
+                tr('outland.quickActive',{tier:nativeTier}):
+                tr('outland.quickUnknown'))+'</span>'+
+            '<button type="button" data-mha-quick-tier-apply '+
+                (activateTier?'':'disabled ')+
+                'title="'+escapeHtml(quickTierReason)+'">'+
+                escapeHtml(tr('outland.quickAction'))+'</button>'+
+            '<span class="mha-outland-reason" role="status">'+
+                escapeHtml(quickTierReason)+'</span>'+
+            '</div>':'';
+        const rareHtml=[
+            '<div class="mha-xp-list-title">'+escapeHtml(tr('rare.heading'))+'</div>',
+            '<div class="mha-xp-note"><label>'+escapeHtml(tr('rare.preview'))+
+                ' <select data-mha-outland-preview aria-label="'+
+                escapeHtml(tr('rare.preview'))+'">'+previewOptions+
+                '</select></label></div>',
+            !tierInfo ? '<div class="mha-xp-note">'+escapeHtml(
+                tr('rare.locked',{level:tierGate}))+'</div>' : '',
+            reportedTier!==null && nativeTier!==reportedTier ?
+                '<div class="mha-xp-note">'+escapeHtml(tr('rare.fallback',{
+                    reported:reportedTier,effective:nativeTier
+                }))+'</div>' : '',
+            activateTier ? '<div class="mha-xp-note">'+
+                '<button type="button" data-mha-activate-tier>'+
+                escapeHtml(tr('rare.select'))+'</button></div>' :
+                state.pendingOutlandTier || !state.outlandTierSeen ?
+                    '<div class="mha-xp-note">'+escapeHtml(tr(
+                        state.pendingOutlandTier?'rare.pending':'rare.noCommand'
+                    ))+'</div>' : '',
+            '<div class="mha-xp-note"><strong>'+
+                escapeHtml(tr('rare.outland'))+'</strong> · '+
+                escapeHtml(previewHunt?
+                    tr('rare.huntContext',{hunt:previewHunt.nome||previewHunt.slug}):
+                    tr('rare.notEligible'))+'</div>',
+            previewHunt && tierInfo && outlandModel?
+                '<div class="mha-xp-note">'+escapeHtml(tr('rare.source',{
+                    rate:Math.round(outlandModel.killsH??0)
+                }))+'</div>' + modelRows(outlandModel):'',
+            '<div class="mha-xp-note"><strong>'+escapeHtml(tr('rare.egg'))+
+                '</strong> · '+escapeHtml(eggHunt?.nome||tr('rare.notEligible'))+'</div>',
+            eggHunt?modelRows(eggModel):'',
+            eggModel?.drops?.length?
+                '<div class="mha-xp-note">'+escapeHtml(tr('rare.incubation'))+'</div>':'',
+            '<div class="mha-xp-note">'+escapeHtml(tr('rare.marketUnknown'))+'</div>',
+            '<div class="mha-xp-note">'+escapeHtml(tr('rare.uncertainty'))+'</div>'
+        ].join('');
+
+
+        const captureHunt=String(state.filters.search||'').trim()&&results.length?
+            results[0].hunt : current && isUnlocked(current) ?
+            current : best?.hunt??null;
+        const activeCaptureId=state.filters.captureBall==='beast'?5:4;
+        const capXp=captureHunt?huntXpEstimate(captureHunt):null;
+        const ultra=captureHunt?capturePlanForHunt(captureHunt,4,capXp):null;
+        const beast=captureHunt?capturePlanForHunt(captureHunt,5,capXp):null;
+        const chosen=activeCaptureId===5?beast:ultra;
+        const pct=value=>typeof value==='number'&&Number.isFinite(value)
+            ?formatProbability(value):tr('catch.unknown');
+        const rate=value=>typeof value==='number'&&Number.isFinite(value)
+            ?formatRate(value):tr('catch.unknown');
+        const captureLine=(label,value)=>'<div class="mha-xp-note">'+
+            '<strong>'+escapeHtml(label)+'</strong>'+
+            (value?' · '+escapeHtml(value):'')+'</div>';
+        const observedCapture=chosen?.observed;
+        const selectedThrows=observedCapture?.byBall?.[activeCaptureId]??0;
+        const attributedThrows=Object.values(observedCapture?.byBall??{})
+            .reduce((n,v)=>n+v,0);
+        const attributedCaptures=Object.values(observedCapture?.byBallCaught??{})
+            .reduce((n,v)=>n+v,0);
+        // A measured success fraction is meaningful only if EVERY accepted
+        // use and confirmed capture has a recognized ball association.
+        const observedBallChance=observedCapture &&
+            attributedThrows===observedCapture.throws &&
+            attributedCaptures===observedCapture.captures
+            ? captureMeasuredChance(selectedThrows,
+                observedCapture.byBallCaught?.[activeCaptureId]??0) : null;
+        const capEvidence=chosen?
+            tr('catch.source',{coverage:chosen.coverage}):tr('catch.unknown');
+        const mysticArena = state.currentHuntSlug === 'arena_mistica';
+        const mysticTickets = state.inventoryForCosts.get('item:70090');
+        const mysticHtml = [
+            '<div class="mha-xp-list-title">'+escapeHtml(tr('catch.mysticTitle'))+'</div>',
+            captureLine(tr('catch.mysticRates'),CAPTURE_BALLS.map(ball=>
+                ball.name+' '+formatProbability(captureMysticChance(ball.id)))
+                .join(' · ')),
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.mysticTicket'))+'</div>',
+            Number.isSafeInteger(mysticTickets) ? '<div class="mha-xp-note">'+
+                escapeHtml(tr('catch.mysticStock',{count:mysticTickets}))+'</div>':'',
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.mysticNote'))+'</div>'
+        ].join('');
+        const captureHtml= mysticArena ? mysticHtml : [
+            '<div class="mha-xp-list-title">'+escapeHtml(tr('catch.title'))+'</div>',
+            '<div class="mha-xp-note"><label>'+escapeHtml(tr('catch.ball'))+
+                ' <select data-mha-capture-ball>'+
+                '<option value="ultra" '+(activeCaptureId===4?'selected':'')+'>'+
+                escapeHtml(tr('catch.ultra'))+'</option>'+
+                '<option value="beast" '+(activeCaptureId===5?'selected':'')+'>'+
+                escapeHtml(tr('catch.beast'))+'</option></select></label></div>',
+            '<div class="mha-xp-note"><label><input type="checkbox" '+
+                'data-mha-shiny-lure-preview '+
+                (state.filters.shinyLurePreview?'checked':'')+
+                ' /> '+escapeHtml(tr('catch.lure'))+'</label></div>',
+            captureLine(tr('catch.current',{hunt:captureHunt?.nome||
+                captureHunt?.slug||'?'}),[
+                    'Ultra '+pct(ultra?.chance),
+                    'Beast '+pct(beast?.chance)
+                ].filter(Boolean).join(' · ')),
+            chosen ? captureLine(tr('catch.percent',{
+                chance:formatProbability(chosen.chance)
+            }),tr('catch.expected',{
+                count:formatEventRate(chosen.catchesH),
+                balls:rate(chosen.ballsPerCapture)
+            })):'',
+            chosen && chosen.shinyCaughtH>0 ? captureLine(tr('catch.shinyMean',{
+                hours:formatDurationHours(1/chosen.shinyCaughtH,currentLocale()==='pt-BR'),
+                throws:formatRate(1/(chosen.chance*chosen.shinyP))
+            }),tr('catch.limit')):'',
+            chosen ? captureLine(tr('catch.seen',{
+                count:formatEventRate(chosen.shinySeenH),
+                caught:formatEventRate(chosen.shinyCaughtH)
+            }),tr('catch.oneDay',{
+                chance:formatProbability(chosen.shinyCaught24hChance)
+            })):'',
+            chosen && chosen.ball.id===4 && chosen.coinsPerCapture!==null ?
+                captureLine(tr('catch.cost',{
+                    coins:formatRate(chosen.coinsPerCapture)})):'',
+            chosen && chosen.ball.id===5 ?
+                captureLine(tr('catch.diamondCost'),
+                    chosen.diamondsPerCapture!==null?
+                        tr('catch.diamondsPerCapture',{count:rate(chosen.diamondsPerCapture)}):
+                        tr('catch.diamondsPriceUnknown')):'',
+            chosen && chosen.ball.stock!==null ?
+                captureLine(tr('catch.stock',{count:chosen.ball.stock,
+                    hours:chosen.stockHours===null?'—':
+                        rate(chosen.stockHours)})):'',
+            chosen?.ball.stock===0 ?
+                '<div class="mha-xp-note">'+escapeHtml(tr('catch.stockEmpty'))+'</div>':'',
+            observedCapture?.byBall?.[activeCaptureId] ?
+                captureLine(tr('catch.observedBall',{
+                    throws:observedCapture.byBall[activeCaptureId],
+                    caught:observedCapture.byBallCaught[activeCaptureId]??0
+                }),tr('econ.observed')):'',
+            observedBallChance ? captureLine(tr('catch.measuredChance',{
+                chance:formatProbability(observedBallChance.chance),
+                throws:observedBallChance.samples})):'',
+            observedCapture ?
+                captureLine(tr('catch.observed',{
+                    throws:observedCapture.throws,
+                    caught:observedCapture.captures,
+                    seen:observedCapture.shinySeen??'—',
+                    shiny:observedCapture.shinyCaught??'—',
+                    fraction:(100*Math.min(1,
+                        observedCapture.targetableFraction)).toFixed(1)
+                }),tr('econ.observed')):'',
+            '<div class="mha-xp-note">'+escapeHtml(capEvidence)+'</div>',
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.limit'))+'</div>',
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.shiny'))+'</div>',
+            chosen?.shinyEligible===null ?
+                '<div class="mha-xp-note">'+escapeHtml(tr('catch.outland'))+
+                '</div>':'',
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.clamp'))+'</div>',
+            '<div class="mha-xp-note">'+escapeHtml(tr('catch.mystic'))+'</div>'
+        ].join('');
+
+        // Reference inputs are explicit manual scenarios, not detected buffs.
+        // They never modify the actual model, measured rates, or rankings.
+        const referenceBooleanFields=[
+            ['referenceShinyBoost','reference.shinyBoost'],
+            ['referenceCatchBoost','reference.catchBoost'],
+            ['referenceKickShiny','reference.kickShiny'],
+            ['referenceKickCatch','reference.kickCatch']
+        ];
+        const referenceNumericFields=[
+            ['referenceShinyEvent','reference.shinyEvent',0],
+            ['referenceCatchEvent','reference.catchEvent',0],
+            ['referenceLoot','reference.loot',1],
+            ['referenceGuild','reference.guild',1],
+            ['referenceDropEvent','reference.dropEvent',1],
+            ['referenceDropKick','reference.dropKick',1]
+        ];
+        const referenceControl=(key,label,kind='checkbox',minimum=0)=>
+            '<label>'+escapeHtml(tr(label))+' <input type="'+
+            (kind==='checkbox'?'checkbox':'number')+'" '+
+            'data-mha-reference-setting="'+key+'" '+
+            (kind==='checkbox' ? (state.filters[key]?'checked':'') :
+                'min="'+minimum+'" max="1000" step="0.1" value="'+
+                state.filters[key]+'"')+
+            ((!state.filters.referenceEnabled&&key!=='referenceEnabled')?
+                ' disabled':'')+' /></label>';
+        const refActive=state.filters.referenceEnabled;
+        const refCatch=refActive && chosen ? referenceCapturePreview(
+            chosen.chance,chosen.acceptedH,
+            chosen.shinyEligible===null?null:chosen.shinyP,{
+                shinyBoost:state.filters.referenceShinyBoost,
+                catchBoost:state.filters.referenceCatchBoost,
+                kickShiny:state.filters.referenceKickShiny,
+                kickCatch:state.filters.referenceKickCatch,
+                shinyEvent:state.filters.referenceShinyEvent,
+                catchEvent:state.filters.referenceCatchEvent
+            }):null;
+        const refRareModel=state.filters.rareSortItem===RARE_EGG_DROP.id
+            ?eggModel:outlandModel;
+        const refRareItem=refRareModel?.drops?.find(item=>
+            item.id===state.filters.rareSortItem);
+        const refRare=refActive && refRareItem ? referenceRarePreview(
+            refRareItem.probability,refRareModel.killsH,{
+                loot:state.filters.referenceLoot,
+                guild:state.filters.referenceGuild,
+                event:state.filters.referenceDropEvent,
+                kick:state.filters.referenceDropKick
+            }):null;
+        // Small percentages (e.g. 1 in 200,000) must not print as 0.00%.
+        const refPct=p=>p===null||!Number.isFinite(p)?'—':
+            p>0&&p*100<0.000001?'<0.000001%':
+            (p*100).toFixed(p*100<0.01?6:p*100<1?4:2)+'%';
+        const refCaptureText=refCatch ? tr('reference.captureStats',{
+            catchChance:refPct(refCatch.catchChance),
+            catches:formatEventRate(refCatch.catchesH),
+            seen:formatEventRate(refCatch.shinySeenH),
+            caught:formatEventRate(refCatch.shinyCaughtH),
+            day:refPct(refCatch.shinyCaught24hChance),
+            none:refPct(refCatch.shinyNotCaught24hChance)
+        }):tr('reference.unknown');
+        const refRareText=refRare ? tr('reference.rareStats',{
+            chance:refPct(refRare.chance),
+            units:formatEventRate(refRare.unitsH),
+            day:refPct(refRare.chance24h),
+            none:refPct(refRare.noDrop24h)
+        }):tr('reference.unknown');
+        const refCaptureComparison = refCatch ? tr('reference.catchCompare',{
+            before:refPct(chosen.chance),after:refPct(refCatch.catchChance)
+        }) : tr('reference.unknown');
+        const refRareComparison = refRare ? tr('reference.rareCompare',{
+            before:refPct(refRareItem.probability),after:refPct(refRare.chance)
+        }) : tr('reference.unknown');
+        const catchUnchanged=refCatch&&
+            refCatch.catchChance===chosen.chance &&
+            refCatch.shinyChance===(chosen.shinyEligible===null?
+                null:chosen.shinyP);
+        const rareUnchanged=refRare&&
+            refRare.chance===refRareItem.probability;
+        const refCheckGroup=rows=>rows.map(([key,label])=>
+            referenceControl(key,label)).join('');
+        const refNumberGroup=rows=>rows.map(([key,label,min])=>
+            referenceControl(key,label,'number',min)).join('');
+        const referenceHtml='<details data-mha-reference '+
+            (state.filters.referenceOpen?'open':'')+'><summary>'+
+            escapeHtml(tr('reference.title'))+'</summary>'+
+            '<p class="mha-xp-note">'+escapeHtml(tr('reference.note'))+'</p>'+
+            '<label class="mha-reference-enable"><input type="checkbox" '+
+            'data-mha-reference-setting="referenceEnabled" '+
+            (refActive?'checked':'')+' />'+
+            escapeHtml(tr('reference.enable'))+'</label>'+
+            (refActive ?
+                '<div class="mha-reference-group">'+
+                    '<strong>'+escapeHtml(tr('reference.captureGroup'))+'</strong>'+
+                    '<p class="mha-xp-note">'+
+                        escapeHtml(tr('reference.captureHelp'))+'</p>'+
+                    '<div class="mha-reference-controls">'+
+                        refCheckGroup(referenceBooleanFields.slice(0,2))+
+                        refNumberGroup(referenceNumericFields.slice(0,2))+
+                    '</div>'+
+                    '<div class="mha-reference-result"><strong>'+
+                        escapeHtml(tr('reference.catchResult'))+'</strong>'+
+                        '<div>'+escapeHtml(refCaptureComparison)+'</div>'+
+                        '<div>'+escapeHtml(refCaptureText)+'</div>'+
+                        (catchUnchanged?'<div class="mha-xp-note">'+
+                            escapeHtml(tr('reference.unchanged'))+'</div>':'')+
+                    '</div>'+
+                '</div>'+
+                '<div class="mha-reference-group">'+
+                    '<strong>'+escapeHtml(tr('reference.rareGroup'))+'</strong>'+
+                    '<p class="mha-xp-note">'+
+                        escapeHtml(tr('reference.rareHelp'))+'</p>'+
+                    '<div class="mha-reference-controls">'+
+                        refNumberGroup(referenceNumericFields.slice(2,5))+
+                    '</div>'+
+                    '<div class="mha-reference-result"><strong>'+
+                        escapeHtml(tr('reference.rareResult'))+
+                        (refRareItem?' ('+escapeHtml(refRareItem.name)+')':'')+
+                    '</strong><div>'+escapeHtml(refRareComparison)+'</div>'+
+                    '<div>'+escapeHtml(refRareText)+'</div>'+
+                    (rareUnchanged?'<div class="mha-xp-note">'+
+                        escapeHtml(tr('reference.unchanged'))+'</div>':'')+
+                    '</div>'+
+                '</div>'+
+                '<details data-mha-reference-extra '+
+                    (state.filters.referenceAdvancedOpen?'open':'')+'>'+
+                    '<summary>'+escapeHtml(tr('reference.extra'))+'</summary>'+
+                    '<p class="mha-xp-note">'+
+                        escapeHtml(tr('reference.extraHelp'))+'</p>'+
+                    '<div class="mha-reference-controls">'+
+                        refCheckGroup(referenceBooleanFields.slice(2))+
+                        refNumberGroup(referenceNumericFields.slice(5))+
+                    '</div>'+
+                '</details>'+
+                '<p class="mha-xp-note">'+
+                    escapeHtml(tr('reference.unitsHelp'))+' '+
+                    escapeHtml(tr('reference.provenance'))+'</p>'
+                : '')+
+            '</details>';
         const html = `
             <div class="mha-xp-heading">
                 <strong>${escapeHtml(
                     tr(
-                        'xp.sectionTitle'
+                        'rank.topFive',{metric:objectiveLabel}
                     )
                 )}</strong>
                 <span>${escapeHtml(
                     tr(
-                        'xp.sectionSubtitle',
-                        {
-                            lead:
-                                lead?.nome ||
-                                lead?.name ||
-                                'Pokémon'
-                        }
+                        'rank.keyInfo'
                     )
                 )}</span>
             </div>
 
-            <div class="mha-xp-primary">
-                <div class="mha-xp-primary-main">
-                    <strong>${best
-                        ? escapeHtml(
-                            tr(
-                                'xp.best',
-                                {
-                                    hunt:
-                                        best.hunt.nome ||
-                                        best.hunt.slug
-                                }
-                            )
-                        ) +
-                          ' · ' +
-                          escapeHtml(
-                              tr(
-                                  'hunt.level',
-                                  {
-                                      level:
-                                          Number(
-                                              best.hunt.nivel ||
-                                              0
-                                          )
-                                  }
-                              )
-                          )
-                        : escapeHtml(
-                            tr(
-                                'xp.noEstimate'
-                            )
-                        )}</strong>
-                    <span>${best
-                        ? escapeHtml(
-                            tr(
-                                best.xp.observed
-                                    ? 'xp.measuredTrainer'
-                                    : 'xp.modeledTrainer',
-                                {
-                                    value:
-                                        formatRate(
-                                            best.xp.value
-                                        )
-                                }
-                            )
-                        )
-                        : ''}</span>
-                </div>
+            ${rareChoiceHtml}
+            ${quickOutlandHtml}
+            ${ballSortHtml}
+            <section class="mha-xp-details" id="mha-best-results"
+                aria-label="${escapeHtml(tr('rank.topFive',{metric:objectiveLabel}))}">
 
-                ${best ? `
-                    <button
-                        type="button"
-                        class="mha-go ${bestHere ? 'current' : ''}"
-                        data-mha-best-go="${escapeHtml(best.hunt.slug)}"
-                        ${bestHere ? 'disabled' : ''}
-                    >${tr(
-                        bestHere
-                            ? 'hunt.here'
-                            : 'hunt.go'
-                    )}</button>
-                ` : ''}
-
-                <button type="button" class="mha-xp-toggle" data-mha-xp-toggle>
-                    ${tr(
-                        state.xpDetailsOpen
-                            ? 'xp.hideTopFive'
-                            : 'xp.showTopFive'
-                    )}
-                </button>
-            </div>
-
-            <div class="mha-xp-details" ${state.xpDetailsOpen ? '' : 'hidden'}>
-                <div class="mha-xp-list-title">
-                    ${escapeHtml(
-                        tr(
-                            'xp.topFiveTitle'
-                        )
-                    )}
-                </div>
-
-                <div class="mha-best-list">
+                <div class="mha-best-list" role="list">
                     ${bestRows}
                 </div>
+                ${bestRows ? '' :
+                    '<div class="mha-xp-note" role="status">'+
+                    escapeHtml(tr('rank.noEvidence'))+'</div>'}
 
+            </section>
+            <details data-mha-more ${state.filters.detailOpen?'open':''}>
+                <summary>${escapeHtml(tr('rank.details'))}</summary>
                 <div class="mha-xp-note">
                     ${escapeHtml(leadText)}
                     · ${escapeHtml(calibrationText)}
+                    ${moveSummaryText ? ' · ' + escapeHtml(moveSummaryText) : ''}
+                    ${currentXp?.incomplete ? ' · ' + escapeHtml(tr('xp.incompleteDetail', {
+                        covered: currentXp.coveredPoints,
+                        total: currentXp.totalPoints,
+                        percentage: currentXp.coverage
+                    })) : ''}
+                    ${best ? ' · ' + escapeHtml(displayEvidence(best.xp)) : ''}
+                    ${currentXp?.pokemonValue === null ? ' · ' + escapeHtml(tr('xp.unknownPokemon')) : ''}
+                    ${currentXp?.warmingUp ? ' · ' + escapeHtml(tr('xp.warmingSession')) : ''}
+                    ${currentXp?.observed ? ' · ' + escapeHtml(tr('xp.sessionEvidence', {
+                        samples: currentXp.samples,
+                        minutes: Math.max(1, Math.round(currentXp.windowMs / 60000))
+                    })) : ''}
                     ${currentXp?.value
                         ? escapeHtml(
                             tr(
@@ -9794,39 +13180,143 @@
                             )
                         )
                         : ''}
+                    ${currentXp?.residualErrorPct !== null && currentXp?.residualErrorPct !== undefined ? ' · forecast error ' + escapeHtml(String(currentXp.residualErrorPct)) + '%' : ''}
+                    ${currentXp?.calibration?.hunts ? ' · ' + escapeHtml(tr('xp.calibration', {count: currentXp.calibration.hunts, error: currentXp.calibration.medianErrorPct})) : ''}
                     ${escapeHtml(
                         tr(
                             'xp.modelNote'
                         )
                     )}
                 </div>
-            </div>
+                ${nativeBonusHtml}
+                ${captureHtml}
+                ${economyHtml}
+                ${rareHtml}
+                ${referenceHtml}
+                <div class="mha-xp-note"><label><input type="checkbox"
+                    data-mha-local-diagnostics
+                    ${state.diagnosticsEnabled?'checked':''}/>
+                    ${escapeHtml(tr('diag.toggle'))}</label></div>
+                ${state.diagnosticsEnabled?'<div class="mha-xp-note">'+
+                    escapeHtml(tr('diag.title'))+' · '+
+                    escapeHtml(tr('diag.source',{
+                        source:currentXp?xpSourceLabel(currentXp):tr('rank.unknown'),
+                        window:currentXp?.observed?
+                            Math.round(currentXp.windowMs/1000)+' s':
+                            tr('diag.noWindow'),
+                        coverage:currentXp?.coverage??0
+                    }))+' · '+escapeHtml(tr('diag.counts',{
+                        kills:Math.max(0,state.farmingLedger.totals.kills),
+                        throws:Math.max(0,state.farmingLedger.totals.acceptedThrows),
+                        captures:Math.max(0,state.farmingLedger.totals.captures),
+                        boosts:Object.keys(state.xpBonusState).length,
+                        renders:state.renderStats.attempts
+                    }))+' · '+escapeHtml(tr('diag.caveat'))+
+                    '</div>':''}
+            </details>
         `;
 
         // This summary is polled with the drawer, but should only replace its
         // DOM when the rendered content changed. Preserving existing nodes
         // prevents needless repaint/focus churn and avoids re-binding handlers.
         if (host.innerHTML === html) return;
+        const active=document.activeElement;
+        const focusAttr=host.contains(active)?
+            active.getAttributeNames().find(name=>name.startsWith('data-mha-')):null;
+        const focusValue=focusAttr?active.getAttribute(focusAttr):null;
         host.innerHTML = html;
 
-        const detailsToggle =
-            q(
-                '[data-mha-xp-toggle]',
-                host
-            );
-
-        detailsToggle?.addEventListener(
-            'click',
-            () => {
-                state.xpDetailsOpen =
-                    !state.xpDetailsOpen;
-
-                renderXpSummary(
-                    drawer,
-                    results
-                );
+        q('[data-mha-reference]',host)?.addEventListener('toggle',event=>{
+            state.filters.referenceOpen=event.target.open;
+            saveFilters();
+        });
+        q('[data-mha-reference-extra]',host)?.addEventListener('toggle',event=>{
+            state.filters.referenceAdvancedOpen=event.target.open;
+            saveFilters();
+        });
+        for(const control of qa('[data-mha-reference-setting]',host)){
+            control.addEventListener('change',()=>{
+                const key=control.dataset.mhaReferenceSetting;
+                const bools=['referenceEnabled',...referenceBooleanFields.map(row=>row[0])];
+                const numeric=referenceNumericFields.find(row=>row[0]===key);
+                if(bools.includes(key)) state.filters[key]=control.checked;
+                else if(numeric){
+                    // Empty, invalid, or out-of-range input is rejected; keep last good value.
+                    const value=Number(control.value);
+                    if(!control.value.trim()||!Number.isFinite(value)||
+                        value<numeric[2]||value>1000){
+                        control.value=state.filters[key];
+                        return;
+                    }
+                    state.filters[key]=value;
+                }else return;
+                state.filters.referenceOpen=true;
+                saveFilters();
+                renderXpSummary(drawer,results);
+            });
+        }
+        q('[data-mha-quick-outland]',host)?.addEventListener('change',event=>{
+            const tier=Number(event.target.value);
+            if(!Number.isInteger(tier)||tier<1||tier>8)return;
+            state.filters.outlandPreviewTier=tier;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-quick-tier-apply]',host)?.addEventListener('click',()=>{
+            requestOutlandTier(state.filters.outlandPreviewTier);
+            renderXpSummary(drawer,results);
+        });
+        q('[data-mha-sort-outland-tier]',host)?.addEventListener('change',event=>{
+            const tier=Number(event.target.value);
+            if(!Number.isInteger(tier)||tier<1||tier>8)return;
+            state.filters.outlandPreviewTier=tier;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-sort-capture-ball]',host)?.addEventListener('change',event=>{
+            if(!['ultra','beast'].includes(event.target.value))return;
+            state.filters.captureBall=event.target.value;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-rare-item]',host)?.addEventListener('change',event=>{
+            const item=Number(event.target.value);
+            if(!HA_RARE_SORT_IDS.includes(item))return;
+            state.filters.rareSortItem=item;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-more]',host)?.addEventListener('toggle',event=>{
+            state.filters.detailOpen=event.target.open;
+            saveFilters();
+        });
+        q('[data-mha-local-diagnostics]',host)?.addEventListener('change',event=>{
+            state.diagnosticsEnabled=event.target.checked;
+            renderXpSummary(drawer,results);
+        });
+        q('[data-mha-capture-ball]',host)?.addEventListener('change',event=>{
+            if(!['ultra','beast'].includes(event.target.value))return;
+            state.filters.captureBall=event.target.value;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-shiny-lure-preview]',host)?.addEventListener('change',event=>{
+            state.filters.shinyLurePreview=event.target.checked;
+            saveFilters();
+            renderDrawer();
+        });
+        q('[data-mha-outland-preview]',host)?.addEventListener('change',event=>{
+            const tier=Number(event.target.value);
+            if(Number.isInteger(tier)&&tier>=1&&tier<=8){
+                state.filters.outlandPreviewTier=tier;
+                saveFilters();
+                renderXpSummary(drawer,results);
             }
-        );
+        });
+        q('[data-mha-activate-tier]',host)?.addEventListener('click',()=>{
+            requestOutlandTier(state.filters.outlandPreviewTier);
+            renderXpSummary(drawer,results);
+        });
 
         for (
             const button of
@@ -9853,6 +13343,12 @@
                     }
                 }
             );
+        }
+        if(focusAttr){
+            const match=qa('['+focusAttr+']',host).find(node=>
+                node.getAttribute(focusAttr)===focusValue);
+            // Server updates should not steal keyboard focus.
+            match?.focus({preventScroll:true});
         }
     }
 
@@ -9883,6 +13379,9 @@
 
         drawer.hidden =
             false;
+        state.lastDrawerRenderAt=Date.now();
+        state.renderStats.attempts=Math.min(1000000000,
+            state.renderStats.attempts+1);
 
         renderFilterControls(
             drawer
@@ -9947,14 +13446,18 @@
                           : ''
                   )
                 : `
-                    <div class="mha-empty">
-                        ${escapeHtml(
+                    <div class="mha-empty" role="status">
+                        <p>${escapeHtml(
                             tr(
                                 state.hunts.length
                                     ? 'results.noMatch'
                                     : 'results.waiting'
                             )
-                        )}
+                        )}</p>
+                        ${state.hunts.length && activeFilterCount() ?
+                            '<button type="button" data-mha-empty-reset>'+
+                                escapeHtml(tr('filter.emptyReset'))+
+                            '</button>':''}
                     </div>
                 `;
 
@@ -9965,6 +13468,21 @@
             body.innerHTML =
                 html;
 
+            q('[data-mha-empty-reset]',body)?.addEventListener('click',()=>{
+                resetSearchFilters();
+                renderDrawer();
+            });
+            for(const detail of qa('[data-mha-hunt-detail]',body)){
+                detail.addEventListener('toggle',()=>{
+                    const id=detail.dataset.mhaHuntDetail;
+                    if(detail.open){
+                        state.openHuntDetails.add(id);
+                        if(state.openHuntDetails.size>40)
+                            state.openHuntDetails.delete(
+                                state.openHuntDetails.values().next().value);
+                    }else state.openHuntDetails.delete(id);
+                });
+            }
             for (
                 const button of
                 qa(
@@ -10028,6 +13546,18 @@
                     )
                     : '';
 
+        const locationSuffix = state.locationIndexStatus === 'error'
+            ? tr('status.locationsUnavailable')
+            : state.locationIndexStatus === 'ready' && state.hunts.length
+                ? (() => {
+                    const coverage = locationCoverage();
+                    return ' · ' + tr('location.coverage', {
+                        matched: coverage.matched,
+                        total: coverage.total,
+                        conflicts: coverage.levelConflicts
+                    });
+                })() : '';
+        const moveSuffix = state.moveIndexStatus === 'error' ? tr('status.movesUnavailable') : '';
         const marketSuffix =
             state.marketStatus ===
                 'loading'
@@ -10039,7 +13569,9 @@
         const statusText =
             localizedStatus() +
             typeSuffix +
-            marketSuffix;
+            marketSuffix +
+            locationSuffix +
+            moveSuffix;
 
         if (
             status.textContent !==
@@ -10047,6 +13579,7 @@
         ) {
             status.textContent =
                 statusText;
+            status.title = statusText;
         }
 
         const count =
@@ -10084,45 +13617,26 @@
     }
 
     function queueRender() {
-        if (
-            state.renderQueued
-        ) {
+        // No expensive list/rate work in headless/background mode or when
+        // the user has switched back to the native map.
+        if(!state.drawerOpen || !state.atlasEnabled ||
+            !isMapModalOpen()) {
+            state.renderStats.skipped=Math.min(1000000000,
+                state.renderStats.skipped+1);
             return;
         }
-
-        state.renderQueued =
-            true;
-
-        queueMicrotask(
-            () => {
-                state.renderQueued =
-                    false;
-
-                ensureButton();
-
-                if (
-                    isMapModalOpen()
-                ) {
-                    ensureMapToggle();
-
-                    if (
-                        state.atlasEnabled
-                    ) {
-                        state.drawerOpen =
-                            true;
-                        renderDrawer();
-                    } else {
-                        state.drawerOpen =
-                            false;
-                        restoreNativeMapView();
-                    }
-                } else {
-                    cleanupMapIntegration();
-                }
+        if(state.renderQueued)return;
+        state.renderQueued=true;
+        const delay=Math.max(0,1500-(Date.now()-state.lastDrawerRenderAt));
+        state.drawerRenderTimer=setTimeout(()=>{
+            state.renderQueued=false;
+            state.drawerRenderTimer=null;
+            if(state.drawerOpen&&state.atlasEnabled&&
+                isMapModalOpen()){
+                renderDrawer();
             }
-        );
+        },delay);
     }
-
 
     function controllerSnapshot() {
         syncFromControllerBridge();
@@ -10275,9 +13789,23 @@
                         xp?.source ||
                         'learning'
                     ),
+                    economy: (() => {
+                        const econ=huntEconomyEstimate(hunt,xp);
+                        return {
+                            killCoinsH:econ.killCoinsH,killSource:econ.killSource,
+                            npcLootEvH:econ.npcLootEvH,
+                            lootCoverage:econ.lootCoverage,
+                            realizedCoinsH:econ.realizedH,netCoinsH:econ.netH,
+                            replacementCoinsH:econ.replacementCostH,
+                            diamondCostH:econ.diamondsH
+                        };
+                    })(),
+                    confidence: String(xp?.confidence || 'low'),
                     samples: Number(
                         xp?.samples || 0
-                    )
+                    ),
+                    coverage: xp?.coverage ?? null,
+                    incomplete: Boolean(xp?.incomplete)
                 },
                 species
             };
@@ -10324,42 +13852,167 @@
         snapshot: controllerSnapshot
     };
 
+    // Experimental, read-only instrumentation for later player tests.
+    // No automatic export, background logging or collection of private data.
+    page.__mothHuntAtlasExperimentV1 = {
+        snapshot() {
+            const lead = leadPokemon();
+            const profile = combatProfile();
+            const here = currentHunt();
+            const xp = here ? huntXpEstimate(here) : null;
+            return {
+                version: '1.9.9',
+                indexes: {
+                    locations: state.locationIndexStatus,
+                    markerCount: state.locationsBySlug.size,
+                    huntCoverage: locationCoverage(),
+                    moves: state.moveIndexStatus,
+                    moveGeneratedAt: state.moveIndexGeneratedAt,
+                    speciesWithIndexedMoves: state.movesBySpecies.size,
+                    candidateSource: moveSourceForLead(),
+                    candidateCount: movesForLead().length,
+                    disagreements: indexConflictsForLead().slice(0, 15)
+                        .map(row => ({
+                            name: row.name, type: row.type,
+                            power: row.power, cooldownMs: row.cooldownMs
+                        }))
+                },
+                attacks: {
+                    ...state.battleDiagnostics,
+                    castsInProfile: profile?.attackObservations?.length || 0,
+                    namedCastsInProfile: profile?.namedMoveSamples || 0,
+                    confirmedMoves: Object.values(profile?.observedNamedMoves || {})
+                        .map(row => ({
+                            name: row.name, type: row.type,
+                            samples: row.samples,
+                            neutralDamage: Math.round(row.neutralDamage || 0)
+                        }))
+                },
+                rareDropEvidence: (() => {
+                    const outland=rareOutlandHunt();
+                    const tier=state.filters.outlandPreviewTier;
+                    const plan=outland?rareModelForHunt(outland,tier):null;
+                    return {
+                        previewTier:tier,
+                        activeTier:state.outlandTierSeen
+                            ? state.farmingSnapshot.outlandTier : null,
+                        tierSource:state.outlandTierSeen
+                            ? 'observed-client':'unknown',
+                        publishedTierCatalog:state.outlandCatalogTiers?.length===8,
+                        pending:state.pendingOutlandTier?.tier??null,
+                        rates:plan?.drops.map(row=>({
+                            itemId:row.id,unitsH:row.unitsH,
+                            probability:row.probability,
+                            source:row.source
+                        }))??[],
+                        observedItemCounts:Object.fromEntries(
+                            [...state.farmingLedger.items].filter(([id])=>
+                                RARE_OUTLAND_DROPS.some(row=>row.id===id)
+                                || id===RARE_EGG_DROP.id)
+                        )
+                    };
+                })(),
+                captureEvidence: (() => {
+                    const here=currentHunt();
+                    const ultra=here?capturePlanForHunt(here,4):null;
+                    const beast=here?capturePlanForHunt(here,5):null;
+                    return {
+                        model:'wiki-conditional',
+                        serverFormulaVerified:false,
+                        rawChanceEvidence:{...state.captureChanceEvidence,
+                            unit:'unknown-not-applied'},
+                        observed:ultra?.observed??null,
+                        ultra:ultra?{
+                            chance:ultra.chance,
+                            catchesH:ultra.catchesH,shinySeenH:ultra.shinySeenH,
+                            shinyCaughtH:ultra.shinyCaughtH,
+                            source:ultra.source,
+                            acceptedSource:ultra.acceptedSource
+                        }:null,
+                        beast:beast?{
+                            chance:beast.chance,
+                            catchesH:beast.catchesH,
+                            shinyCaughtH:beast.shinyCaughtH,
+                            source:beast.source
+                        }:null
+                    };
+                })(),
+                farmingEvidence: {
+                    schema: state.farmingLedger.schema,
+                    // Only allowlisted field names and counters; no event bodies.
+                    events: Object.fromEntries(state.farmingLedger.fieldPresence),
+                    counts: {...state.farmingLedger.totals},
+                    diagnostics: {...state.farmingLedger.diagnostics},
+                    tier: state.farmingSnapshot.outlandTier ?? null,
+                    tierSource: state.farmingSnapshot.outlandTier === undefined
+                        ? 'unknown' : 'observed-client',
+                    catalogRevision: state.farmingSnapshot.catalogRevision ?? null,
+                    bonusSemantics: 'unverified'
+                },
+                xpEvidence: {
+                    source: 'observed-server/event',
+                    activeBonusFields: Object.keys(state.xpBonusState).sort(),
+                    bonusScopeKnown: Object.keys(state.xpBonusState).length > 0,
+                    serverStackingVerified: false,
+                    transitions: performanceRecord(here?.slug, false)
+                        ?.xpBonusTransitions?.slice(-6) || []
+                },
+                prediction: {
+                    hunt: here?.slug || null,
+                    calibration: calibrationDiagnostics(),
+                    bonusSource: xp?.bonusSource ?? 'unknown',
+                    fallbackReason: xp?.fallbackReason ?? null,
+                    forecastRange: xp?.range
+                        ? {low: Math.round(xp.range.low),
+                            high: Math.round(xp.range.high),
+                            label: 'heuristic-not-confidence-interval'} : null,
+                    residualErrorPct: xp?.residualErrorPct ?? null,
+                    speedIvRule: 'wiki-derived; runtime scheduling not confirmed',
+                    source: xp?.source || 'none',
+                    moveConfidence: moveModelConfidence(profile),
+                    trainerXpH: Math.round(xp?.value || 0),
+                    killsH: Math.round(xp?.killsH || 0),
+                    measured: Boolean(xp?.observed),
+                    warmingUp: Boolean(xp?.warmingUp),
+                    samples: xp?.samples ?? 0,
+                    windowMs: xp?.windowMs ?? null,
+                    denominator: xp?.observed ? 'wall' : null,
+                    coverage: xp?.coverage ?? null,
+                    incomplete: Boolean(xp?.incomplete),
+                    coveredPoints: xp?.coveredPoints ?? null,
+                    totalPoints: xp?.totalPoints ?? null,
+                    missingHpPoints: xp?.missingHpPoints ?? null,
+                    missingDamagePoints: xp?.missingDamagePoints ?? null
+                }
+            };
+        }
+    };
+
     function bootstrap() {
         injectStyles();
         ensureButton();
         installMapObserver();
         scheduleMapSync();
 
-        setInterval(
-            () => {
+        setInterval(()=>{
+            // Keep a cheap button check; only read the bridge and redraw
+            // after a long idle gap AND while the Atlas list is visible.
+            ensureButton();
+            if(!isMapModalOpen()){
+                if(state.drawerOpen)cleanupMapIntegration();
+                return;
+            }
+            ensureMapToggle();
+            if(!state.atlasEnabled)return;
+            if(Date.now()-state.lastDrawerRenderAt>=12000){
                 syncFromControllerBridge();
-                ensureButton();
-
-                if (
-                    isMapModalOpen()
-                ) {
-                    ensureMapToggle();
-
-                    if (
-                        state.atlasEnabled
-                    ) {
-                        state.drawerOpen =
-                            true;
-                        renderDrawer();
-                    } else {
-                        state.drawerOpen =
-                            false;
-                        restoreNativeMapView();
-                    }
-                } else {
-                    cleanupMapIntegration();
-                }
-            },
-            3000
-        );
+                state.drawerOpen=true;
+                queueRender();
+            }
+        },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.7.21 loaded'
+            '[PokéIdle Hunt Atlas] v1.9.17 experimental loaded'
         );
     }
 
