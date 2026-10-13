@@ -4,16 +4,11 @@ Addons para **PokéIdle** e um controlador nativo leve para manter até quatro c
 
 O controlador funciona no Windows e no Linux e usa o Firefox instalado normalmente, com **um perfil isolado por conta**. Os userscripts continuam sendo executados pelo **Violentmonkey**; o controlador não possui um motor próprio de userscripts.
 
-## ⬇️ Baixar Moth Controller
-
 [![Baixar para Windows](https://img.shields.io/badge/BAIXAR%20PARA%20WINDOWS-v0.1.4-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MOTHblank/pokeidle-addons/releases/download/v0.1.4/moth-controller-v0.1.4-windows-x86_64.exe)
 [![Baixar para Linux](https://img.shields.io/badge/BAIXAR%20PARA%20LINUX-v0.1.4-0078d4?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/MOTHblank/pokeidle-addons/releases/download/v0.1.4/moth-controller-v0.1.4-linux-x86_64.tar.gz)
 
-**Windows:** clique no botão verde para baixar o executável `.exe`. **Linux:** o botão azul baixa o arquivo `.tar.gz` com o programa e instruções.
-
 **[Ver a versão mais recente e todos os downloads](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
 
-> **Atenção:** o botão **Code → Download ZIP** do GitHub baixa o código-fonte, não o aplicativo. Para instalar os requisitos e configurar as contas, siga as instruções abaixo.
 
 ---
 
