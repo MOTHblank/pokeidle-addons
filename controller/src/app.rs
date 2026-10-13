@@ -2105,7 +2105,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 ui.add(egui::Label::new(
                     RichText::new(compact_text(&account_name, 21))
                         .size(14.0).strong().color(TEXT),
-                ).truncate()).on_hover_text(&account_name);
+                ).truncate()).on_hover_text(account_name.as_str());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let expanded = app.selected_details == Some(index);
                     let label = tr(if expanded { "Hide details" } else { "Show details" });
