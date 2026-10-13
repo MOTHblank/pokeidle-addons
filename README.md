@@ -24,7 +24,7 @@ Os estudos detalhados de captura, recompensas, mecânicas do PokéIdle e avalia�
 
 ## Requisitos
 
-Instale estes componentes antes de configurar o controlador:
+O Firefox é necessário para configurar o controlador; o Firemin é opcional:
 
 1. **Firefox Developer Edition**  
    [Baixar Firefox Developer Edition](https://www.mozilla.org/pt-BR/firefox/developer/)
@@ -65,7 +65,7 @@ Para cada conta:
 4. Clique em **Instalar Violentmonkey** e instale a extensão naquele perfil do Firefox.
 5. Em **Gerenciar addons**, clique em **Instalar todos (primeira configuração)**. Confirme os instaladores no Violentmonkey. Depois disso, as atualizações são feitas pelo Violentmonkey; não repita a instalação.
 6. Abra o PokéIdle e faça login. Use **Twitch** para entrar na conta correta em cada perfil.
-7. O guia de configuração é ocultado quando o jogo e todos os scripts são verificados. Se você optar por instalar apenas alguns addons, clique em **Concluir configuração** para ocultar o guia. Você pode reabri-lo depois.
+7. O guia de configuração é ocultado quando o jogo está autenticado e os scripts em execução são detectados sem erros. Se você optar por instalar apenas alguns addons, clique em **Concluir configuração** para ocultar o guia. Você pode reabri-lo depois.
 
 
 **Não misture logins entre perfis.** Game 1 deve permanecer com as sessões da conta 1; Game 2 com as da conta 2; e assim por diante.
@@ -75,7 +75,7 @@ Para cada conta:
 
 ### Scripts disponíveis em Gerenciar addons
 
-**Gerenciar addons** mostra quais scripts estão em execução, versões antigas e scripts não detectados. **Reparar selecionados** abre instaladores somente dos itens marcados; **Instalar todos (primeira configuração)** abre todos os userscripts recomendados para o perfil selecionado. A abertura do instalador não significa que a instalação foi concluída: confirme-a no Violentmonkey.
+**Gerenciar addons** mostra as versões publicadas e o estado detectado dos scripts em execução, quando há telemetria disponível. **Reparar selecionados** abre instaladores somente dos itens marcados; **Instalar todos (primeira configuração)** abre os instaladores de todos os userscripts publicados na pasta `addons/`, mesmo que já estejam instalados. A abertura do instalador não significa que a instalação foi concluída: confirme-a no Violentmonkey.
 
 **Auto Catch+**  
 Captura automática configurável e estatísticas de captura. O Auto Catch também possui reposição automática independente para **bolas, poções e Revives**.
@@ -84,19 +84,16 @@ Captura automática configurável e estatísticas de captura. O Auto Catch tamb�
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
 **Live Stream Scanner**  
-Abre chat de streamers online a cada cinco minutos. Para a KICK (que barra o acesso automatizado), um link multistream fica disponível na interface.
+Verifica os streamers online cerca de 30 segundos após o carregamento do jogo e depois a cada cinco minutos, atualizando uma aba consolidada de chats da Twitch por perfil. Para a KICK, a interface oferece um link MultiKick para abrir fora do Firefox gerenciado.
 
 **Controller Bridge**  
 É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo.
 
 **Twitch Low Resource Mode**  
-Mantém as páginas da Twitch no menor consumo prático. Pop-outs de chat da Twitch permanecem intocados; a redução de recursos é aplicada somente à Twitch.
+Reduz o trabalho de vídeo e interface nas páginas da Twitch. Nos pop-outs de chat, oculta a interface e filtra mensagens para reduzir o consumo, preservando a conexão e os eventos necessários. Não otimiza páginas da KICK.
 
 **PokéIdle Hunt Atlas**  
 Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. 
-
-**Moth Watch (separado)**  
-Não é mais distribuído por este repositório nem instalado pelo Controller. Para uso opcional, consulte [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). A configuração e as atualizações devem ser feitas separadamente no Violentmonkey.
 
 ## Como configurar os userscripts
 
@@ -117,14 +114,8 @@ Comece com as reservas conservadoras e ajuste depois de confirmar que a captura 
 
 ### Performance+
 
-Abra o painel **Performance+** no PokéIdle.
+No cabeçalho da área de captura automática do PokéIdle, use o botão **Performance+** para ativar ou desativar a otimização. Ela vem habilitada por padrão e utiliza um único modo de desempenho, sem perfis adicionais para selecionar. Quando o Firefox está em modo oculto (headless), o controlador solicita que o Performance+ permaneça ativo.
 
-Ele vem habilitado por padrão. O perfil de desempenho pode ser ajustado ali. Para contas usadas apenas para ficar AFK, mantenha-o ativo.
-
-
-### Moth Watch (instalação separada)
-
-A partir da próxima versão, o **Moth Watch não é instalado, atualizado nem distribuído** pelo Controller ou por este repositório. A versão premium possui [código e instruções próprias](https://github.com/MOTHblank/pokeidle-addons-premium). No Firefox, remova ou substitua a cópia anterior do userscript para evitar duas instâncias executando juntas. A automação de compra por regras permanece desligada por padrão em perfis novos, e não há compra automática de Pokémon.
 
 ## Usando o Moth Controller
 
@@ -164,9 +155,11 @@ Use **Contas** para:
 - habilitar/desabilitar uma conta;
 - abrir o jogo;
 - abrir Twitch;
-- abrir KICK;
+- abrir o login do Google em uma janela sem depuração remota, quando necessário;
 - instalar os userscripts principais;
 - abrir a pasta do perfil.
+
+Os canais da KICK aparecem na área **KICK MULTISTREAM** quando detectados. Use o link MultiKick ou abra os canais no navegador normal, fora do Firefox gerenciado pelo controlador.
 
 Desabilitar uma conta a remove do Dashboard e de **Iniciar habilitadas**, mas não apaga o perfil nem seus logins.
 
@@ -236,8 +229,8 @@ This application is still under development, so not everything will work perfect
 
 ### Requirements
 
-1. [Download Firefox Developer Edition](https://www.mozilla.org/firefox/developer/)
-2. [Download Firemin](https://rizonesoft.com/downloads/firemin/)
+1. **Firefox Developer Edition (recommended)** — [Download Firefox Developer Edition](https://www.mozilla.org/firefox/developer/). Standard Firefox is also supported.
+2. **Firemin (optional, Windows only)** — [Download Firemin](https://rizonesoft.com/downloads/firemin/). It may help reduce Firefox memory usage during long sessions; it is not required on Linux.
 
 Violentmonkey must be installed separately in every isolated controller profile you enable.
 
@@ -254,7 +247,7 @@ Each slot gets its own Firefox profile:
     %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game3
     %LOCALAPPDATA%\Moth\PokeIdle\Profiles\Game4
 
-Use the account's **Twitch**, **KICK**, and game entry points from that same profile. Never mix account sessions between profiles.
+Use the account's **game** and **Twitch** entry points from that same Firefox profile. Never mix account sessions between profiles. KICK channels can be opened through the MultiKick link or in a regular browser outside the Controller-managed Firefox.
 
 Install Violentmonkey inside each enabled profile, then use **Accounts → Manage Addons → Install all (first setup)**. Confirm each installer inside Violentmonkey.
 
@@ -266,10 +259,10 @@ The **Manage Addons** section offers these userscripts for the selected profile:
 - Performance+
 - Live Stream Scanner
 - Controller Bridge
-- Twitch Low Resource Mode
+- Twitch Low Resource Mode — minimizes Twitch rendering and chat-processing overhead, including popouts
 - PokéIdle Hunt Atlas
 
-**Install all (first setup)** opens every installer only when needed. **Repair selected** opens installers just for the checked userscripts; an opened installer is not confirmation of installation. Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. **Check now** refreshes GitHub version information without touching the game or opening tabs. **Manage Addons** compares the versions reported by running userscripts with those published on GitHub. A dashboard warning links to the affected account when scripts need attention. Reload the game manually after an update; the controller deliberately does not interrupt gameplay. First-time setup guidance disappears once the complete live setup is verified or the user explicitly finishes setup with their chosen scripts, and can be reopened later.
+**Install all (first setup)** opens the installers for every userscript currently published in `addons/`, even if already installed. **Repair selected** opens installers just for the checked userscripts; an opened installer is not confirmation of installation. Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. **Check now** refreshes GitHub version information without touching the game or opening tabs. **Manage Addons** compares the versions reported by running userscripts with those published on GitHub. A dashboard warning links to the affected account when scripts need attention. Reload the game manually after an update; the controller deliberately does not interrupt gameplay. First-time setup guidance disappears once the game login and running scripts are detected without errors, or when the user explicitly finishes setup with their chosen scripts. It can be reopened later.
 
 ### Controller usage
 
@@ -281,9 +274,7 @@ The **Manage Addons** section offers these userscripts for the selected profile:
 
 **Stop all** closes every controlled Firefox instance.
 
-**Hunt Atlas** remains an in-game userscript installed through **Accounts → Addons**. The Rust controller no longer provides a separate Hunt Atlas window.
-
-**Moth Watch** moved to [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). The standard controller will not discover, install, or update it; use Violentmonkey separately if you choose to install the optional script.
+**Hunt Atlas** remains an in-game userscript installed through **Accounts → Manage Addons**. The Rust controller no longer provides a separate Hunt Atlas window.
 
 The dashboard uses vertical scrolling rather than shrinking account cards. Wide windows use two columns; narrow windows use one.
 
