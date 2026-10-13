@@ -714,38 +714,9 @@ impl XpRateTracker {
     }
 }
 
-/// Time to next level at the recently observed earning rate; deliberately
-/// approximate. No ETA is shown for zero XP/h or an unknown level threshold.
-fn level_eta(remaining: Option<u64>, xp_per_hour: Option<f64>) -> Option<String> {
-    let (Some(remaining), Some(rate)) = (remaining, xp_per_hour) else {
-        return None;
-    };
-    if remaining == 0 || !rate.is_finite() || rate <= 0.0 {
-        return None;
-    }
-    let minutes = ((remaining as f64 * 60.0) / rate).ceil().max(1.0);
-    if !minutes.is_finite() {
-        return None;
-    }
-    if minutes > 30.0 * 24.0 * 60.0 {
-        return Some(">30d".to_string());
-    }
-    let minutes = minutes as u64;
-    let days = minutes / (60 * 24);
-    let hours = (minutes / 60) % 24;
-    let mins = minutes % 60;
-    if days > 0 {
-        Some(format!("~{days}d {hours}h"))
-    } else if hours > 0 {
-        Some(format!("~{hours}h {mins}m"))
-    } else {
-        Some(format!("~{mins}m"))
-    }
-}
-
 #[cfg(test)]
 mod xp_rate_tests {
-    use super::{level_eta, Health, XpRateTracker};
+    use super::{Health, XpRateTracker};
     use std::time::{Duration, Instant};
 
     fn sample(at: Instant, total: Option<u64>) -> Health {
@@ -807,15 +778,7 @@ mod xp_rate_tests {
         assert_eq!(tracker.samples.len(), 1);
     }
 
-    #[test]
-    fn estimated_level_time_has_human_readable_limits() {
-        assert_eq!(level_eta(Some(600), Some(1200.0)).as_deref(), Some("~30m"));
-        assert_eq!(level_eta(Some(3600), Some(1200.0)).as_deref(), Some("~3h 0m"));
-        assert_eq!(level_eta(Some(2000), Some(0.0)), None);
-        assert_eq!(level_eta(None, Some(1200.0)), None);
-        assert_eq!(level_eta(Some(1000), None), None);
-        assert_eq!(level_eta(Some(1_000_000_000), Some(1.0)).as_deref(), Some(">30d"));
-    }
+
 }
 
 #[cfg(test)]
@@ -2267,50 +2230,31 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             ui.separator();
             ui.add_space(5.0);
 
-            ui.columns(2, |columns| {
-                let trainer_xp = if fresh && !health.player_xp.is_empty() {
-                    if health.player_level > 0 {
-                        format!("Lv {} · {}", health.player_level, health.player_xp)
-                    } else {
-                        health.player_xp.clone()
-                    }
-                } else if !running {
-                    "—".to_string()
-                } else if !health.player_xp.is_empty() {
-                    health.player_xp.clone()
-                } else {
-                    "—".to_string()
-                };
-                overview_value(&mut columns[0], "Trainer XP", &trainer_xp);
+            // Keep the compact card focused on spendable resources and income
+            // rate. Currencies come from the same verified bridge snapshot as
+            // the detailed resource panel; never present an unverified zero.
+            ui.columns(3, |columns| {
+                let balances_ready = fresh && health.bridge_snapshot_ok;
+                let gold = if balances_ready { format_number(health.gold) } else { "—".to_string() };
+                let gems = if balances_ready { format_number(health.orbs) } else { "—".to_string() };
+                overview_value(&mut columns[0], "Gold", &gold);
+                overview_value(&mut columns[1], "Gems", &gems);
 
-                columns[1].label(RichText::new(tr("EXP/hour")).size(9.0).color(DIM));
+                columns[2].label(RichText::new(tr("EXP/hour")).size(9.0).color(DIM));
                 let rate_text = xp_per_hour
                     .map(|rate| format_number(rate.round() as u64))
                     .unwrap_or_else(|| "—".to_string());
-                columns[1].label(
-                    RichText::new(rate_text)
-                        .size(14.0).strong()
-                        .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
+                columns[2].add(
+                    egui::Label::new(
+                        RichText::new(rate_text)
+                            .size(14.0).strong()
+                            .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
+                    ).truncate(),
                 ).on_hover_text(tr(match xp_per_hour {
                     Some(rate) if rate > 0.0 => "Based on recent EXP gains",
                     Some(_) => "No EXP gained recently",
                     None => "Calculating EXP rate",
                 }));
-            });
-
-            ui.add_space(5.0);
-            let eta = if fresh && health.activity == "Hunting" {
-                level_eta(health.player_xp_to_next, xp_per_hour)
-            } else {
-                None
-            };
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{}:", tr("Next level")))
-                    .size(10.0).color(DIM));
-                ui.label(RichText::new(eta.as_deref().unwrap_or("—"))
-                    .size(11.0).strong()
-                    .color(if eta.is_some() { TEXT } else { MUTED }))
-                    .on_hover_text(tr("Estimated from recent gains; actual progress may vary"));
             });
 
             ui.add_space(9.0);

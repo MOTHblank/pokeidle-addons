@@ -56,20 +56,21 @@ automatically copy profiles between operating systems.
    the available addons. **Show setup guide** reopens those instructions.
 4. Return to the main dashboard. The default **compact overview** shows all
    enabled accounts in a two-column layout when space allows: current hunt,
-   active Pokémon, trainer XP, **EXP/hour**, estimated time to the next trainer
-   level, Auto Catch, confirmed Twitch XP bonuses, and warnings. Use **Show details**
-   on an account to open its full-width inventory, capture statistics, tabs,
-   streams and addon diagnostics below the overview. Only one detailed account
-   is expanded at a time; **Hide details** returns to the compact view.
-   Launch, stop and browser-mode controls remain available in the overview.
+   active Pokémon, **Gold**, **Gems**, **EXP/hour**, Auto Catch, confirmed Twitch
+   XP bonuses, and warnings. Gold, Gems and EXP/hour share one compact
+   three-column row. Use **Show details** on an account to open its full-width
+   trainer/Pokémon XP, inventory, capture statistics, tabs, streams and addon
+   diagnostics below the overview. Only one detailed account is expanded at
+   a time; **Hide details** returns to the compact view. Launch, stop and
+   browser-mode controls remain available in the overview.
 
 The Controller estimates EXP/hour from recent cumulative trainer XP gains
 over elapsed time, using a rolling history to smooth out short combat bursts.
-The time to the next level uses the game's next-level cumulative XP threshold.
-These figures are estimates, not promises: the EXP rate displays 0 when no
-recent XP was earned, while the time to level up stays unavailable until the
-character is earning XP. Missing data and counter resets never produce guessed
-figures. Both remain lightweight and require no additional game polling.
+This is an estimate, not a promise: the EXP rate displays 0 when no recent XP
+was earned. Missing data and counter resets never produce guessed rates.
+Gold and Gems are displayed only with a fresh verified bridge snapshot, rather
+than showing an unverified zero. This uses existing game telemetry without
+additional polling.
 Detailed monitoring diagnostics are collapsed below the dashboard by default.
 
 Twitch chat sharing and stream scanning are handled by the userscripts.
