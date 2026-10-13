@@ -45,6 +45,7 @@ pub struct Health {
     pub activity: String,
     pub hunt: String,
     pub hunt_slug: String,
+    pub hunt_atlas: Value,
     pub active_pokemon: String,
     pub fallen_count: u32,
     pub economy_mode: bool,
@@ -112,6 +113,7 @@ impl Default for Health {
             activity: "Starting".to_string(),
             hunt: String::new(),
             hunt_slug: String::new(),
+            hunt_atlas: Value::Null,
             active_pokemon: String::new(),
             fallen_count: 0,
             economy_mode: false,
@@ -352,6 +354,7 @@ struct RuntimeProbe {
     bridge_connected: bool,
     bridge_snapshot_ok: bool,
     hunt_slug: String,
+    hunt_atlas: Value,
     player_level: u32,
     player_xp: String,
     player_total_xp: Option<u64>,
@@ -571,6 +574,7 @@ fn monitor_loop(
                         current.activity = probe.activity;
                         current.hunt = probe.hunt;
                         current.hunt_slug = probe.hunt_slug;
+            current.hunt_atlas = probe.hunt_atlas;
                         current.active_pokemon = probe.active_pokemon;
                         current.fallen_count = probe.fallen_count;
                         current.economy_mode = probe.economy_mode;
@@ -1033,6 +1037,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         activity: page.get("activity").and_then(Value::as_str).unwrap_or("Unknown").to_string(),
         hunt: page.get("hunt").and_then(Value::as_str).unwrap_or_default().to_string(),
         hunt_slug: runtime.hunt_slug.clone(),
+        hunt_atlas: runtime.hunt_atlas.clone(),
         active_pokemon: if runtime.active_pokemon.is_empty() {
             page.get("activePokemon")
                 .and_then(Value::as_str)
@@ -1496,6 +1501,7 @@ fn probe_runtime_details(
         bridge_connected,
         bridge_snapshot_ok: true,
         hunt_slug,
+        hunt_atlas: snapshot.get("huntAtlas").cloned().unwrap_or(Value::Null),
         player_level,
         player_xp,
         player_total_xp: state.get("xp").and_then(Value::as_u64),
