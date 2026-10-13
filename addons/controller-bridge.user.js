@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.11
+// @version      1.3.12
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.11');
+        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.12');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -27,7 +27,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 11 &&
+        Number(existingBridge.version) >= 12 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function'
         && typeof existingBridge.streamStateSnapshot === 'function' &&
@@ -505,7 +505,7 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 11,
+        version: 12,
         marketCatalogSnapshot() {
             return {
                 ready: marketCatalogReady,
