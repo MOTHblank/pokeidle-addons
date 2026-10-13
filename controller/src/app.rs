@@ -196,6 +196,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
         "NO READINGS" => "SEM LEITURAS",
         "CONNECTION UNCONFIRMED" => "CONEXÃO NÃO CONFIRMADA",
+        "BIDI SESSION BLOCKED" => "SESSÃO BIDI BLOQUEADA",
+        "Repair monitor (restart Firefox)" => "Reparar monitor (reiniciar Firefox)",
+        "Restarts this account's Firefox to release a stuck BiDi session. The game briefly disconnects." => "Reinicia o Firefox desta conta para liberar uma sessão BiDi travada. O jogo ficará desconectado brevemente.",
+        "Firefox is refusing a new BiDi session; use Repair monitor to restart only this account." => "O Firefox está recusando outra sessão BiDi. Use Reparar monitor para reiniciar apenas esta conta.",
         "The controller has stopped receiving telemetry. Firefox and addons may still be running." => "O controlador deixou de receber telemetria. O Firefox e os addons podem continuar funcionando.",
         "The displayed metrics are from the last successful reading." => "Os dados exibidos são da última leitura bem-sucedida.",
         "Installer already running" => "O instalador já está em execução",
@@ -1481,6 +1485,21 @@ impl ControllerApp {
         }
     }
 
+    fn repair_monitor(&mut self, profile: GameProfile) {
+        // An orphaned Firefox BiDi session cannot be reclaimed by a new
+        // session.new. Only an explicit user action restarts this profile;
+        // never interrupt a running game automatically on telemetry failure.
+        let index = Self::game_index(profile);
+        let headless = self.games[index].headless;
+        logging::warn(&format!(
+            "{} repairing an exhausted BiDi session by user-requested Firefox restart",
+            self.account_name(profile)
+        ));
+        if self.stop_one(profile) {
+            self.launch_one_mode(profile, headless);
+        }
+    }
+
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
@@ -2193,6 +2212,12 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let addon_problems = addon_needs_attention(&health, running, &addon_versions);
     let needs_setup = !app.account_setup[index].setup_complete;
     let fresh = running && health.telemetry_is_fresh();
+    let blocked_session = health.last_error.as_deref()
+        .is_some_and(|error| error.contains("Maximum number of active sessions"));
+    let repair_available = running && (blocked_session
+        || (health.last_heartbeat_at.is_some()
+            && !health.heartbeat_is_fresh()
+            && health.last_error.is_some()));
 
     egui::Frame::new()
         .fill(PANEL)
@@ -2337,6 +2362,16 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     RichText::new(tr("Game progress unavailable"))
                         .size(9.0).color(DIM),
                 );
+            }
+            if repair_available {
+                ui.add_space(6.0);
+                if ui.small_button(
+                    RichText::new(tr("Repair monitor (restart Firefox)")).color(WARN)
+                )
+                .on_hover_text(tr("Restarts this account's Firefox to release a stuck BiDi session. The game briefly disconnects."))
+                .clicked() {
+                    app.repair_monitor(profile);
+                }
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -3913,8 +3948,12 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     let no_readings = running
         && health.last_heartbeat_at.is_some()
         && !health.heartbeat_is_fresh();
+    let session_blocked = running && health.last_error.as_deref()
+        .is_some_and(|error| error.contains("Maximum number of active sessions"));
     let (label, color) = if !running {
         ("STOPPED", DIM)
+    } else if session_blocked {
+        ("BIDI SESSION BLOCKED", WARN)
     } else if no_readings {
         ("CONNECTION UNCONFIRMED", DIM)
     } else if health.telemetry_is_fresh()
@@ -3940,9 +3979,13 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
             .strong()
             .color(color),
     );
-    if no_readings {
+    if no_readings || session_blocked {
         response.on_hover_ui(|ui| {
-            ui.label(tr("The controller has stopped receiving telemetry. Firefox and addons may still be running."));
+            if session_blocked {
+                ui.label(tr("Firefox is refusing a new BiDi session; use Repair monitor to restart only this account."));
+            } else {
+                ui.label(tr("The controller has stopped receiving telemetry. Firefox and addons may still be running."));
+            }
             ui.label(RichText::new(tr("The displayed metrics are from the last successful reading.")).color(DIM));
             if let Some(error) = &health.last_error {
                 ui.label(RichText::new(error).color(DIM));
