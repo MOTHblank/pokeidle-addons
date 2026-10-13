@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.12
+// @version      1.3.13
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.12');
+        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.13');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -27,7 +27,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 12 &&
+        Number(existingBridge.version) >= 13 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function'
         && typeof existingBridge.streamStateSnapshot === 'function' &&
@@ -499,13 +499,17 @@
                 pokedex: copy(state?.pokedex) || {}
             },
             hunts: copy(hunts) || [],
+            // Give late-attaching HuntAtlas the native ball efficiencies
+            // without requiring a second WebSocket welcome event.
+            marketCatalogReady,
+            catalogoBolas: copy(catalogoBolas) || [],
             serverTypeChart: copy(serverTypeChart),
             huntAmplification
         };
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 12,
+        version: 13,
         marketCatalogSnapshot() {
             return {
                 ready: marketCatalogReady,
