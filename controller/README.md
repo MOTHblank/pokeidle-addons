@@ -86,10 +86,17 @@ uses separate layers:
   changes, or a Controller-requested tab opens. Game scans still use
   `browsingContext.getTree` to find the game, but do not run JavaScript in
   unchanged tabs.
-- **Recovery:** reconnects try again every **5 seconds**, and an invalidated
-  heartbeat context triggers a full game discovery without blindly reopening
-  tabs. Initial expensive scans start at 12-second offsets across Game1–Game4;
-  recovered sessions do not wait for the stagger.
+- **Recovery:** a failed game probe or timed-out heartbeat first retries
+  over the **existing BiDi session** rather than discarding Firefox's single
+  active session. Closed connections retry every **5 seconds**; the Firefox
+  error `Maximum number of active sessions` backs off to **60 seconds**,
+  since opening more sockets cannot clear an orphaned session. Initial
+  expensive scans start at 12-second offsets across Game1–Game4; recovered
+  sessions do not wait for the stagger. If Firefox retains an unusable BiDi
+  session, the affected account shows **BIDI SESSION BLOCKED** and
+  **Repair monitor (restart Firefox)**. This explicit action restarts only
+  that Firefox profile in the same visible/headless mode. It briefly
+  interrupts gameplay; monitoring failures never auto-restart an account.
 - **Addon version checks:** unchanged at **4 hours**; **stream scanning** stays
   separate, every **5 minutes**.
 
