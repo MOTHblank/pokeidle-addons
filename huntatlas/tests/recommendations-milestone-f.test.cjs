@@ -101,6 +101,6 @@ test('background budget: bounded event data and no 3s full Atlas scans in closed
     assert.match(src,/if\(state\.openHuntDetails\.size>40\)/);
     assert.match(src,/data-mha-local-diagnostics/);
     assert.match(src,/state\.diagnosticsEnabled\?'checked'/);
-    assert.match(src,/source:currentXp\?\.source/);
+    assert.match(src,/const displayEvidence = estimate =>/);
     assert.doesNotMatch(src,/fetch\(\s*['"]\/market\/rare/);
 });
