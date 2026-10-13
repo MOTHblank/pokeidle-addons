@@ -24,9 +24,12 @@ function model(hp, damage) {
         targetHpEstimate: id => hp.get(id),
         damagePerAttackAgainst: id => damage.get(id),
         UPSTREAM_GLOBAL_ATTACK_MS: 900,
-        UPSTREAM_WAVE_MS: 2600
+        UPSTREAM_WAVE_MS: 2600,
+        UPSTREAM_FALLBACK_MOVE_MS: 600
     };
     return vm.runInNewContext(
+        portion('    function xpForecastCastCadence(',
+                '    function xpPredictionBand(') +
         portion('    function huntCombatCoverage(',
                 '    function predictionCalibration(') +
         '\n({huntCombatCoverage, rawPredictedKillMs})',
