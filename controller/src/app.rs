@@ -3,7 +3,10 @@ use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
-use crate::monitor::{Health, MonitorHandle, MONITOR_POLL_INTERVAL};
+use crate::monitor::{
+    Health, MonitorHandle, MONITOR_HEARTBEAT_INTERVAL,
+    MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
+};
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
@@ -255,6 +258,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "running" => "em execução",
         "First scan 30s · 5 min" => "Primeiro scan em 30 s · a cada 5 min",
         "Game data" => "Dados do jogo",
+        "Game heartbeat" => "Sinal do jogo",
+        "Tab inventory" => "Inventário de abas",
+        "Data cached" => "Dados em cache",
+        "Tabs checked" => "Abas verificadas",
+        "recent" => "recente",
+        "never" => "nunca",
+        "min ago" => "min atrás",
+        "Connected heartbeat" => "Sinal conectado",
+        "Recent game snapshot" => "Leitura do jogo recente",
         "Idle detection unavailable without Controller Bridge telemetry" => "Detecção de inatividade indisponível sem telemetria do Controller Bridge",
         "Profile folder exists" => "Pasta do perfil existente",
         "Registered" => "Registrada",
@@ -1902,11 +1914,12 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         tr("MIXED")
                     };
                     let connected = active.iter()
-                        .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().telemetry_is_fresh()))
+                        .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-                    runtime_row(ui, "Poll", &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
+                    runtime_row(ui, "Game data", &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
+                    runtime_row(ui, "Game heartbeat", &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 });
 
             ui.add_space(12.0);
@@ -2116,6 +2129,26 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             });
             ui.add_space(2.0);
             status_badge(ui, &health, running);
+            if running {
+                let live = health.heartbeat_is_fresh();
+                let data = health.telemetry_is_fresh();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(if live { tr("Connected heartbeat") } else { tr("No recent game data") })
+                            .size(9.0).color(if live { GOOD } else { DIM }),
+                    );
+                    if let Some(age) = health.telemetry_age() {
+                        ui.label(
+                            RichText::new(format!(
+                                " · {} {} {}",
+                                tr(if data { "Recent game snapshot" } else { "Data cached" }),
+                                age.as_secs() / 60,
+                                tr("min ago")
+                            )).size(9.0).color(DIM)
+                        );
+                    }
+                });
+            }
             ui.add_space(9.0);
 
             ui.columns(2, |columns| {
@@ -2225,13 +2258,6 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         .size(9.0).color(DIM),
                 );
             }
-            if running && !fresh && health.last_successful_probe_at.is_some() {
-                ui.label(
-                    RichText::new(tr("The displayed metrics are from the last successful reading."))
-                        .size(9.0).color(DIM),
-                );
-            }
-
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let action = tr(if running { "Stop" } else { "Launch" });
@@ -2570,6 +2596,13 @@ fn draw_game_details(
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(age) = health.tab_inventory_age() {
+                        ui.label(
+                            RichText::new(format!("{} · {} {}",
+                                tr("Tabs checked"), age.as_secs() / 60, tr("min ago")))
+                                .size(9.0).color(DIM),
+                        );
+                    }
                     if ui
                         .add(
                             egui::Button::new(
@@ -3055,7 +3088,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .filter(|game| (game.child.is_some() || game.orphaned_pid.is_some()) && game.headless)
                     .count();
                 let bidi_connected = app.games.iter()
-                    .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().telemetry_is_fresh()))
+                    .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                     .count();
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Headless"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
@@ -3068,7 +3101,9 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     &format!("{} {}", enabled_profiles, tr("isolated")),
                     MUTED,
                 );
+                runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
+                runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 5 min"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
@@ -3710,13 +3745,13 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     // Loss of BiDi telemetry does not imply that the game or its userscripts stopped.
     // Keep the state accessible without a constantly growing, alarm-colored warning.
     let no_readings = running
-        && health.last_successful_probe_at.is_some()
-        && !health.telemetry_is_fresh();
+        && health.last_heartbeat_at.is_some()
+        && !health.heartbeat_is_fresh();
     let (label, color) = if !running {
         ("STOPPED", DIM)
     } else if no_readings {
         ("NO READINGS", DIM)
-    } else if health.state == "Running" && health.activity == "Hunting" {
+    } else if health.telemetry_is_fresh() && health.activity == "Hunting" {
         ("HUNTING", GOOD)
     } else if health.state == "Running" && health.logged_in {
         ("ONLINE", GOOD)
