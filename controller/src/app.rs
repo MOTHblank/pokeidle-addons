@@ -195,6 +195,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Restart headless" => "Reiniciar oculto",
         "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
         "NO READINGS" => "SEM LEITURAS",
+        "CONNECTION UNCONFIRMED" => "CONEXÃO NÃO CONFIRMADA",
         "The controller has stopped receiving telemetry. Firefox and addons may still be running." => "O controlador deixou de receber telemetria. O Firefox e os addons podem continuar funcionando.",
         "The displayed metrics are from the last successful reading." => "Os dados exibidos são da última leitura bem-sucedida.",
         "Installer already running" => "O instalador já está em execução",
@@ -285,6 +286,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Next level" => "Próximo nível",
         "Estimated from recent gains; actual progress may vary" => "Estimativa com base no ganho recente de EXP; o tempo real pode variar",
         "Calculating EXP rate" => "Calculando ritmo de EXP",
+        "Based on recent EXP gains" => "Baseado nos ganhos recentes de EXP",
         "No EXP gained recently" => "Sem ganho recente de EXP",
         "Game progress unavailable" => "Progresso do jogo indisponível",
         "Technical details" => "Detalhes técnicos",
@@ -682,7 +684,11 @@ impl XpRateTracker {
             }
             // A reset, character switch, or unexpected counter decrease
             // must never produce an absurd negative rate.
-            if total < previous_total {
+            if total < previous_total
+                || at.duration_since(previous_at) > Self::MAX_WINDOW
+            {
+                // A long gap would blend inactive time into the rate. Begin
+                // again instead of displaying an unreliable average.
                 self.samples.clear();
                 self.rate_per_hour = None;
             }
@@ -768,12 +774,12 @@ mod xp_rate_tests {
     fn gains_are_smoothed_across_readings_and_level_ups() {
         let now = Instant::now();
         let mut tracker = XpRateTracker::default();
-        tracker.observe(&sample(now - Duration::from_secs(360), Some(9800)));
-        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(180), Some(10100))), Some(6000.0));
+        tracker.observe(&sample(now - Duration::from_secs(240), Some(9800)));
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(120), Some(10100))), Some(9000.0));
         // No progress in the latest interval lowers the rolling rate.
-        assert_eq!(tracker.observe(&sample(now, Some(10100))), Some(3000.0));
+        assert_eq!(tracker.observe(&sample(now, Some(10100))), Some(4500.0));
         // A genuine counter reset creates a new baseline.
-        assert_eq!(tracker.observe(&sample(now + Duration::from_secs(180), Some(50))), None);
+        assert_eq!(tracker.observe(&sample(now + Duration::from_secs(1), Some(50))), None);
     }
 
     #[test]
@@ -788,6 +794,16 @@ mod xp_rate_tests {
         disconnected.state = "Reconnecting".into();
         assert_eq!(tracker.observe(&disconnected), None);
         assert_eq!(tracker.observe(&sample(now, Some(70))), None);
+    }
+
+    #[test]
+    fn long_gap_does_not_produce_misleading_exp_rate() {
+        let now = Instant::now();
+        let mut tracker = XpRateTracker::default();
+        tracker.samples.push_back((now - Duration::from_secs(25 * 60), 1000));
+        tracker.rate_per_hour = Some(5000.0);
+        assert_eq!(tracker.observe(&sample(now, Some(4000))), None);
+        assert_eq!(tracker.samples.len(), 1);
     }
 
     #[test]
@@ -1978,7 +1994,6 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-
                 });
 
             ui.add_space(12.0);
@@ -2239,10 +2254,10 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     RichText::new(rate_text)
                         .size(14.0).strong()
                         .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
-                ).on_hover_text(tr(if xp_per_hour == Some(0.0) {
-                    "No EXP gained recently"
-                } else {
-                    "Calculating EXP rate"
+                ).on_hover_text(tr(match xp_per_hour {
+                    Some(rate) if rate > 0.0 => "Based on recent EXP gains",
+                    Some(_) => "No EXP gained recently",
+                    None => "Calculating EXP rate",
                 }));
             });
 
@@ -3805,7 +3820,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     let (label, color) = if !running {
         ("STOPPED", DIM)
     } else if no_readings {
-        ("NO READINGS", DIM)
+        ("CONNECTION UNCONFIRMED", DIM)
     } else if health.telemetry_is_fresh()
         && health.heartbeat_is_fresh()
         && health.logged_in
