@@ -70,6 +70,8 @@ pub struct Health {
     pub xp_bonuses: Vec<String>,
     pub player_level: u32,
     pub player_xp: String,
+    /// Cumulative trainer XP from Controller Bridge; absent when unverified.
+    pub player_total_xp: Option<u64>,
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
@@ -128,6 +130,7 @@ impl Default for Health {
             xp_bonuses: Vec::new(),
             player_level: 0,
             player_xp: String::new(),
+            player_total_xp: None,
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
@@ -327,6 +330,7 @@ struct RuntimeProbe {
     hunt_slug: String,
     player_level: u32,
     player_xp: String,
+    player_total_xp: Option<u64>,
     gold: u64,
     orbs: u64,
     fallen_count: u32,
@@ -391,6 +395,7 @@ struct Probe {
     xp_bonuses: Vec<String>,
     player_level: u32,
     player_xp: String,
+    player_total_xp: Option<u64>,
     gold: u64,
     orbs: u64,
     stream_bonus: String,
@@ -560,6 +565,7 @@ fn monitor_loop(
                         current.xp_bonuses = probe.xp_bonuses;
                         current.player_level = probe.player_level;
                         current.player_xp = probe.player_xp;
+                        current.player_total_xp = probe.player_total_xp;
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
                         current.stream_bonus = probe.stream_bonus.clone();
@@ -946,6 +952,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, Str
         } else {
             page.get("playerXp").and_then(Value::as_str).unwrap_or_default().to_string()
         },
+        player_total_xp: runtime.player_total_xp,
         gold: runtime.gold,
         orbs: runtime.orbs,
         stream_bonus: if runtime.stream_bonus.is_empty() {
@@ -1355,6 +1362,7 @@ fn probe_runtime_details(
         hunt_slug,
         player_level,
         player_xp,
+        player_total_xp: state.get("xp").and_then(Value::as_u64),
         gold,
         orbs,
         fallen_count,

@@ -54,8 +54,20 @@ automatically copy profiles between operating systems.
    Initial setup instructions disappear after the complete live setup is
    verified, or when the user explicitly finishes setup with a subset of
    the available addons. **Show setup guide** reopens those instructions.
-4. Return to the main dashboard to launch, monitor, switch visible/headless
-   mode, or stop each account.
+4. Return to the main dashboard. The default **compact overview** shows all
+   enabled accounts in a two-column layout when space allows: current hunt,
+   active Pokémon, trainer XP, XP gained since the preceding successful reading,
+   Auto Catch, confirmed Twitch XP bonuses, and warnings. Use **Show details**
+   on an account to open its full-width inventory, capture statistics, tabs,
+   streams and addon diagnostics below the overview. Only one detailed account
+   is expanded at a time; **Hide details** returns to the compact view.
+   Launch, stop and browser-mode controls remain available in the overview.
+
+Trainer XP gained comes from the cumulative XP value reported by Controller
+Bridge, not the level-relative progress bar. The first valid reading displays
+a dash until a second reading arrives; a reset, missing data or disconnected
+telemetry never produces a guessed XP gain. Redrawing the interface does not
+create extra samples.
 
 Twitch chat sharing and stream scanning are handled by the userscripts.
 The initial stream scan runs about 30 seconds after the site loads; subsequent
