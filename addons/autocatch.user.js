@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.6.1
+// @version      6.6.2
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.2');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -1352,6 +1352,59 @@
         };
     }
 
+    // Native game artwork; mirrored items.json paths omit the /assets/site
+    // prefix, and Golden Potion isn't represented in the static mirror.
+    const RESTOCK_ITEM_ASSET_BY_NAME = Object.freeze({
+        'small potion': '/assets/site/assets/markitems/small_potion.png',
+        'great potion': '/assets/site/assets/markitems/great_potion.png',
+        'ultra potion': '/assets/site/assets/markitems/ultra_potion.png',
+        'hyper potion': '/assets/site/assets/markitems/hyper_potion.png',
+        'ultimate potion': '/assets/site/assets/markitems/ultimate_potion.png',
+        'golden potion': '/img/itens/golden-potion.png',
+        'pocao dourada': '/img/itens/golden-potion.png',
+        'revive': '/assets/site/assets/markitems/revive.png',
+        'max revive': '/assets/site/assets/markitems/max_revive.png'
+    });
+
+    function normalizeRestockIconPath(value) {
+        const path = String(value || '').trim();
+        if (!path) return null;
+        if (path.startsWith('/assets/site/') ||
+            path.startsWith('/img/')) return path;
+        if (path.startsWith('site/assets/')) return '/assets/' + path;
+        if (path.startsWith('/assets/markitems/')) return '/assets/site' + path;
+        if (path.startsWith('assets/markitems/')) return '/assets/site/' + path;
+        if (path.startsWith('img/')) return '/' + path;
+        if (path.startsWith('/')) return path;
+        return null;
+    }
+
+    // Match the native potion/revive picker by its exact visible name,
+    // disregarding the game's optional "— acabou" stock suffix.
+    function nativeRestockItemIcons() {
+        const icons = new Map();
+        for (const button of qa(
+            '#auto-potion-opts button.auto-chip, #auto-revive-opts button.auto-chip'
+        )) {
+            const title = normalize(
+                String(button.title || '').split(/\s+[—–]\s+/)[0]
+            );
+            const src = normalizeRestockIconPath(
+                button.querySelector('img')?.getAttribute('src')
+            );
+            if (title && src) icons.set(title, src);
+        }
+        return icons;
+    }
+
+    function restockItemImageSrc(item, nativeIcons) {
+        const name = normalize(item?.name || item?.nome);
+        return nativeIcons.get(name) ||
+            RESTOCK_ITEM_ASSET_BY_NAME[name] ||
+            normalizeRestockIconPath(item?.icon) ||
+            null;
+    }
+
     function catalogPickerIcon(src, fallbackLabel) {
         const fallback = () => {
             const span = document.createElement('span');
@@ -1372,6 +1425,7 @@
     }
 
     function syncRestockSelections() {
+        const nativeIcons = nativeRestockItemIcons();
         const categories = [
             { hostId: 'moth-ac-restock-ball', field: 'selectedBallId',
               kind: 'ball', entries: restockBallEntries(), label: 'ball' },
@@ -1408,7 +1462,11 @@
             const signature = JSON.stringify([
                 selected,
                 entries.map(entry => [
-                    entry.id, entry.nome || entry.name, entry.icon, entry.priceGold
+                    entry.id, entry.nome || entry.name,
+                    category.kind === 'ball'
+                        ? ballImageSrc(entry)
+                        : restockItemImageSrc(entry, nativeIcons),
+                    entry.priceGold
                 ])
             ]);
             if (host.dataset.signature === signature) continue;
@@ -1445,7 +1503,9 @@
                 button.title = name + ' · ' + Number(entry.priceGold || 0) + ' gold';
                 button.setAttribute('aria-label', name);
                 button.appendChild(catalogPickerIcon(
-                    category.kind === 'ball' ? ballImageSrc(entry) : entry.icon,
+                    category.kind === 'ball'
+                        ? ballImageSrc(entry)
+                        : restockItemImageSrc(entry, nativeIcons),
                     name
                 ));
                 button.addEventListener('click', () => {
