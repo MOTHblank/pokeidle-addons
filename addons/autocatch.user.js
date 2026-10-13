@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.6.2
+// @version      6.6.3
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.2');
+        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.3');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -989,7 +989,11 @@
         return true;
     }
 
+    const GOLDEN_POTION_ID = 70070;
+    const GOLDEN_POTION_PRICE_GOLD = 2500;
+
     function isRestockPotion(item) {
+        if (Number(item?.id ?? item?.itemId) === GOLDEN_POTION_ID) return true;
         return Boolean(
             item &&
             /potion|pocao/.test(normalize(item.name || item.nome || ''))
@@ -1023,7 +1027,8 @@
             // welcome payload. Never overwrite a shop item with stale data.
             if (source !== 'shop' && previous?.source === 'shop') continue;
 
-            const name = item?.name || item?.nome || previous?.name;
+            const name = item?.name || item?.nome || previous?.name ||
+                (id === GOLDEN_POTION_ID ? 'Golden Potion' : null);
             if (!name || (!isRestockPotion({ name }) &&
                 !isRestockRevive({ name }))) {
                 continue;
@@ -1032,7 +1037,8 @@
             const suppliedPrice =
                 item?.preco ??
                 item?.npcPrice ??
-                item?.priceGold;
+                item?.priceGold ??
+                (id === GOLDEN_POTION_ID ? GOLDEN_POTION_PRICE_GOLD : null);
             const parsedPrice = Number(suppliedPrice);
             const priceGold =
                 suppliedPrice != null &&
@@ -1288,6 +1294,19 @@
     }
 
     function restockPotionEntries() {
+        // Market data-chave="i70070" identifies Golden Potion. The
+        // static items.json mirror omits it, so keep a known fallback.
+        if (!itemCatalog.has(GOLDEN_POTION_ID)) {
+            itemCatalog.set(GOLDEN_POTION_ID, {
+                id: GOLDEN_POTION_ID,
+                name: 'Golden Potion',
+                nome: 'Golden Potion',
+                icon: '/img/itens/golden-potion.png',
+                priceGold: GOLDEN_POTION_PRICE_GOLD,
+                source: 'observed-market',
+                compravel: true
+            });
+        }
         return [...itemCatalog.values()]
             .filter(item => {
                 if (!isRestockPotion(item) ||
