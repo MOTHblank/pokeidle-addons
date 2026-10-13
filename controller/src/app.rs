@@ -2321,8 +2321,25 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
+                // Match the global STOP ALL / LAUNCH ENABLED visual language,
+                // but retain exactly one action for this account.
                 let action = tr(if running { "Stop" } else { "Launch" });
-                if ui.small_button(action).clicked() {
+                let (fill, stroke) = if running {
+                    (BAD.linear_multiply(0.18), Stroke::new(1.0, BAD.linear_multiply(0.55)))
+                } else {
+                    (ACCENT.linear_multiply(0.8), Stroke::new(1.0, ACCENT))
+                };
+                if ui.add(
+                    egui::Button::new(
+                        RichText::new(action.to_uppercase())
+                            .size(12.0)
+                            .strong()
+                            .color(TEXT),
+                    )
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(8.0),
+                ).clicked() {
                     if running {
                         app.stop_one(profile);
                     } else {
@@ -3921,7 +3938,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
 
     let response = ui.label(
         RichText::new(format!("● {}", tr(label)))
-            .size(10.0)
+            .size(12.0)
             .strong()
             .color(color),
     );
