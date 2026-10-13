@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.1.1
+// @version      7.1.2
 // @description  Replaces one consolidated Twitch chat tab every five minutes; KICK channels remain delegated to Rust.
 // @match        https://pokeidle.io/app*
 // @match        https://www.twitch.tv/popout/*/chat*
@@ -77,7 +77,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.1.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.1.2');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -567,6 +567,8 @@
         button.dataset.mothScanStatus = data.status || '';
         button.dataset.mothScanReason = data.reason || '';
         button.dataset.mothScanLive = String(data.live ?? 0);
+        // Counts selected Twitch channels, not newly opened browser tabs.
+        button.dataset.mothScanTwitchChannels = data.twitchChannels == null ? '' : String(data.twitchChannels);
         button.dataset.mothScanOpened = String(data.opened ?? 0);
         button.dataset.mothScanTracked = String(data.tracked ?? 0);
         button.dataset.mothScanKickLive = String(lastKickLive.length);
@@ -690,6 +692,7 @@
                 status: 'ok',
                 reason,
                 live: live.size,
+                twitchChannels: twitchChannels.length,
                 opened,
                 tracked: openStreams.size
             });
@@ -700,7 +703,7 @@
                 live.size,
                 'live channel(s),',
                 opened,
-                'opened/kept,',
+                'shared tab requested,',
                 openStreams.size,
                 'tracked'
             );
@@ -713,6 +716,7 @@
 
             return {
                 channels: [...live.values()],
+                twitchChannels: twitchChannels.length,
                 opened,
                 tracked: openStreams.size
             };
@@ -751,10 +755,10 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.id = BUTTON_ID;
-        button.title = 'Open one Twitch chat tab for all current live channels; KICK streams are handled by the controller.';
+        button.title = 'Refresh the shared Twitch chat tab for all current live channels; KICK is managed separately.';
         button.setAttribute(
             'aria-label',
-            'Open all current live Twitch chats in one tab'
+            'Refresh all Twitch live channels in one shared chat tab'
         );
 
         const style = window.getComputedStyle(inventory);
@@ -777,7 +781,7 @@
         ].join(';');
 
         const label = document.createElement('span');
-        label.textContent = 'Open Live Streams';
+        label.textContent = 'Refresh Twitch chats';
         button.appendChild(label);
 
         button.addEventListener('click', async () => {
@@ -790,9 +794,11 @@
                 ? 'Scan failed'
                 : result.notReady
                     ? 'Game not ready'
-                    : result.channels.length
-                        ? 'Opened/kept ' + result.opened
-                        : 'No live streams found';
+                    : result.twitchChannels > 0
+                        ? result.opened
+                            ? result.twitchChannels + ' Twitch channels · shared tab requested'
+                            : result.twitchChannels + ' Twitch channels · tab not confirmed'
+                        : 'No live Twitch channels found';
 
             window.setTimeout(() => {
                 if (!button.isConnected) {
@@ -800,7 +806,7 @@
                 }
 
                 button.disabled = false;
-                label.textContent = 'Open Live Streams';
+                label.textContent = 'Refresh Twitch chats';
             }, 1600);
         });
 
@@ -853,7 +859,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v7.1.1 ready · fresh all-channel Twitch popout every 5 minutes · KICK stays in Rust');
+    console.info('[Moth] live stream scanner v7.1.2 ready · fresh all-channel Twitch popout every 5 minutes · KICK stays in Rust');
     }
 
     start();
