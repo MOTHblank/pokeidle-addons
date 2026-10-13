@@ -4,7 +4,7 @@
 // @author       MOTHblank
 // @homepageURL  https://github.com/MOTHblank/pokeidle-addons-premium/tree/main/huntatlas
 // @supportURL   https://github.com/MOTHblank/pokeidle-addons-premium/issues
-// @version      1.9.18
+// @version      1.9.19
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -18,7 +18,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.18');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.19');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -13859,15 +13859,40 @@
         const rare = isOutland && tier != null ? rareModelForHunt(hunt,
             outlandNativeTier(tier, state.playerLevel)) : null;
         const finite = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
+        // Incomplete rarity catalogs must not suppress directly observed
+        // capture statistics. The server-correlated receipt window is scoped
+        // to the current hunt, and only accepted throws count as attempts.
+        const observed = ultra?.observed || null;
+        const empiricalChance = ballId => {
+            const throws = finite(observed?.byBall?.[ballId]);
+            const caught = finite(observed?.byBallCaught?.[ballId]);
+            return throws > 0 && caught !== null ? caught / throws : null;
+        };
+        const ultraObserved = empiricalChance(4);
+        const beastObserved = empiricalChance(5);
+        const ultraChance = finite(ultra?.chance) ?? ultraObserved;
+        const beastChance = finite(beast?.chance) ?? beastObserved;
+        const capturesH = finite(ultra?.catchesH) ?? finite(observed?.capturesH);
+        const ballsPerCapture = finite(ultra?.ballsPerCapture) ??
+            (finite(observed?.captures) > 0 && finite(observed?.throws) !== null
+                ? observed.throws / observed.captures : null);
         return {
             version: 1, huntSlug: String(hunt.slug || ''),
             xpH: finite(xp?.value), xpMeasured: Boolean(xp?.observed),
             coinsH: finite(economy?.realizedH ?? economy?.killCoinsH),
             coinsMeasured: finite(economy?.realizedH) !== null,
-            capturesH: finite(ultra?.catchesH),
-            ultraChance: finite(ultra?.chance), beastChance: finite(beast?.chance),
+            capturesH,
+            ultraChance, beastChance,
+            captureSource: finite(ultra?.catchesH) !== null ? 'wiki-model' :
+                capturesH !== null ? 'observed' : 'unavailable',
+            ultraSource: finite(ultra?.chance) !== null ? 'wiki-model' :
+                ultraObserved !== null ? 'observed' : 'unavailable',
+            beastSource: finite(beast?.chance) !== null ? 'wiki-model' :
+                beastObserved !== null ? 'observed' : 'unavailable',
             shinyCaughtH: finite(ultra?.shinyCaughtH),
-            ballsPerCapture: finite(ultra?.ballsPerCapture),
+            shinyUnavailableReason: isOutland ? 'outland-eligibility-unverified' :
+                ultra?.chance == null ? 'capture-rarity-incomplete' : null,
+            ballsPerCapture,
             activeOutlandTier: isOutland && tier != null ? tier : null,
             rareDrops: Array.isArray(rare?.drops) ? rare.drops.slice(0, 6)
                 .map(row => ({name: String(row.name || row.id || ''),
@@ -14041,7 +14066,7 @@
         },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.9.18 experimental loaded'
+            '[PokéIdle Hunt Atlas] v1.9.19 experimental loaded'
         );
     }
 
