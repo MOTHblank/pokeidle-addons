@@ -4,7 +4,7 @@
 // @author       MOTHblank
 // @homepageURL  https://github.com/MOTHblank/pokeidle-addons-premium/tree/main/huntatlas
 // @supportURL   https://github.com/MOTHblank/pokeidle-addons-premium/issues
-// @version      1.9.20
+// @version      1.9.21
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -18,7 +18,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.20');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.21');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -1212,6 +1212,7 @@
         combatCatalogStatus: 'idle',
         combatCatalogPromise: null,
         combatCatalogError: null,
+        combatCatalogLastAttempt: 0,
         locationsBySlug: new Map(),
         locationsByRange: new Map(),
         locationIndexDiagnostics: { loaded: 0 },
@@ -6827,11 +6828,11 @@
         };
     }
 
-    function capturePlanForHunt(hunt,ballId=4,xp=huntXpEstimate(hunt)) {
+    function capturePlanForHunt(hunt,ballId=4,xp=huntXpEstimate(hunt),observedOverride=undefined) {
         if(!hunt)return null;
         const ball=captureInfoForBall(ballId);
         if(!ball)return null;
-        const observed=captureObservedForHunt(hunt);
+        const observed=observedOverride === undefined ? captureObservedForHunt(hunt) : observedOverride;
         const mixKills=observed?Object.values(observed.bySpecies)
             .reduce((sum,row)=>sum+row.kills,0):0;
         const mixThrows=observed?Object.values(observed.bySpecies)
@@ -6949,13 +6950,14 @@
         }
     }
 
-    function huntEconomyEstimate(hunt, xp = huntXpEstimate(hunt)) {
+    function huntEconomyEstimate(hunt, xp = huntXpEstimate(hunt), observedOverride=undefined) {
         const killsH = Number.isFinite(xp?.killsH) ? xp.killsH : null;
         const modelKillGoldH = farmGoldPrediction(hunt,killsH);
         const current = isHuntHere(hunt?.slug);
         const record = current ? performanceRecord(hunt?.slug,false) : null;
         const rates = current ? observedRates(record) : null;
-        const observedMix = current ? captureObservedForHunt(hunt) : null;
+        const observedMix = current ?
+            (observedOverride === undefined ? captureObservedForHunt(hunt) : observedOverride) : null;
         const attributed = observedMix ? Object.values(observedMix.bySpecies)
             .reduce((n,row)=>n+(Number(row?.kills)||0),0) : 0;
         // Use measured mix only if all 30+ kills have species attribution.
@@ -7005,6 +7007,11 @@
             return state.combatCatalogPromise;
         }
 
+        // Avoid refetching unavailable assets every time the controller reads.
+        if (state.combatCatalogStatus === 'error' &&
+            Date.now() - state.combatCatalogLastAttempt < 5 * 60000)
+            return Promise.resolve();
+        state.combatCatalogLastAttempt = Date.now();
         state.combatCatalogStatus =
             'loading';
         state.combatCatalogError = null;
@@ -7035,106 +7042,58 @@
                         }
                     );
 
-        state.combatCatalogPromise =
-            Promise.all([
-                load(
-                    '/assets/creatures.json'
-                ),
-                load(
-                    '/assets/creatures-novos.json'
-                ).catch(
-                    () => null
-                ),
-                load(
-                    '/assets/creatures-outland-novos.json'
-                ).catch(
-                    () => null
-                ),
-                load(
-                    '/assets/creatures-audit-overrides.json'
-                ).catch(
-                    () => null
-                ),
-                load('/assets/items.json').catch(() => null)
-            ])
-                .then(
-                    ([
-                        base,
-                        novos,
-                        outland,
-                        audit,
-                        items
-                    ]) => {
-                        for (
-                            const data of [
-                                base,
-                                novos,
-                                outland
-                            ]
-                        ) {
-                            for (
-                                const creature of
-                                data?.creatures ||
-                                []
-                            ) {
-                                mergeCombatCreature(
-                                    creature
-                                );
-                            }
+        // Serial fetching/merging avoids retaining all five parsed
+        // catalogs in memory simultaneously in each Firefox profile.
+        state.combatCatalogPromise = (async () => {
+            const inputs = [
+                ['/assets/creatures.json', 'creatures', true],
+                ['/assets/creatures-novos.json', 'creatures', false],
+                ['/assets/creatures-outland-novos.json', 'creatures', false],
+                ['/assets/creatures-audit-overrides.json', 'audit', false],
+                ['/assets/items.json', 'items', false]
+            ];
+            for (const [url, kind, required] of inputs) {
+                let data;
+                try {
+                    data = await load(url);
+                } catch (error) {
+                    if (required) throw error;
+                    if (kind === 'items') state.itemCatalogStatus = 'unknown';
+                    continue;
+                }
+                if (kind === 'creatures') {
+                    for (const creature of data?.creatures || [])
+                        mergeCombatCreature(creature);
+                } else if (kind === 'audit') {
+                    for (const override of data?.overrides || [])
+                        mergeCombatCreature(override);
+                } else {
+                    state.itemsByName.clear();
+                    state.itemsById.clear();
+                    if (Array.isArray(data?.items)) {
+                        for (const item of data.items) {
+                            const id = Number(item?.id);
+                            if (!Number.isInteger(id) || !item.name) continue;
+                            state.itemsById.set(id, item);
+                            state.itemsByName.set(String(item.name).toLowerCase(), item);
                         }
-
-                        for (
-                            const override of
-                            audit?.overrides ||
-                            []
-                        ) {
-                            mergeCombatCreature(
-                                override
-                            );
-                        }
-
-                        state.itemsByName.clear();
-                        state.itemsById.clear();
-                        if (Array.isArray(items?.items)) {
-                            for (const item of items.items) {
-                                const id = Number(item?.id);
-                                if (!Number.isInteger(id) || !item.name) continue;
-                                state.itemsById.set(id, item);
-                                state.itemsByName.set(String(item.name).toLowerCase(), item);
-                            }
-                            state.itemCatalogStatus = 'raw-upstream-catalog';
-                        } else state.itemCatalogStatus = 'unknown';
-                        rebuildNpcLootCatalog();
-
-                        state.combatCatalogStatus =
-                            'ready';
-                        state.combatCatalogError = null;
-
-                        state.combatRevision++;
-                        state.combatProfileCache =
-                            null;
-
-                        queueRender();
-                    }
-                )
-                .catch(
-                    error => {
-                        state.combatCatalogStatus =
-                            'error';
-                        state.combatCatalogError = String(error?.message || error);
-
-                        console.warn(
-                            '[PokéIdle Hunt Atlas] combat catalog failed',
-                            error
-                        );
-                    }
-                )
-                .finally(
-                    () => {
-                        state.combatCatalogPromise =
-                            null;
-                    }
-                );
+                        state.itemCatalogStatus = 'raw-upstream-catalog';
+                    } else state.itemCatalogStatus = 'unknown';
+                }
+            }
+            rebuildNpcLootCatalog();
+            state.combatCatalogStatus = 'ready';
+            state.combatCatalogError = null;
+            state.combatRevision++;
+            state.combatProfileCache = null;
+            queueRender();
+        })().catch(error => {
+            state.combatCatalogStatus = 'error';
+            state.combatCatalogError = String(error?.message || error);
+            console.warn('[PokéIdle Hunt Atlas] combat catalog failed', error);
+        }).finally(() => {
+            state.combatCatalogPromise = null;
+        });
 
         return state.combatCatalogPromise;
     }
@@ -13882,18 +13841,20 @@
         const hunt = currentHunt();
         if (!hunt) return null;
         const xp = huntXpEstimate(hunt);
-        const economy = huntEconomyEstimate(hunt, xp);
-        const ultra = capturePlanForHunt(hunt, 4, xp);
-        const beast = capturePlanForHunt(hunt, 5, xp);
+        // Reuse one bounded receipt window and XP result for all metrics.
+        const observed = captureObservedForHunt(hunt);
+        const economy = huntEconomyEstimate(hunt, xp, observed);
+        const ultra = capturePlanForHunt(hunt, 4, xp, observed);
+        const beast = capturePlanForHunt(hunt, 5, xp, observed);
         const tier = state.outlandTierSeen ? state.farmingSnapshot.outlandTier : null;
         const isOutland = String(hunt.area || '').toLowerCase() === 'outland';
-        const rare = isOutland && tier != null ? rareModelForHunt(hunt,
-            outlandNativeTier(tier, state.playerLevel)) : null;
+        const rare = isOutland && tier != null ? rareForHunt(hunt,
+            outlandNativeTier(tier, state.playerLevel), state.playerLevel,
+            Number.isFinite(xp?.killsH) ? xp.killsH : null) : null;
         const finite = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
         // Incomplete rarity catalogs must not suppress directly observed
         // capture statistics. The server-correlated receipt window is scoped
         // to the current hunt, and only accepted throws count as attempts.
-        const observed = ultra?.observed || null;
         const empiricalChance = ballId => {
             const throws = finite(observed?.byBall?.[ballId]);
             const caught = finite(observed?.byBallCaught?.[ballId]);
@@ -13964,7 +13925,7 @@
             const here = currentHunt();
             const xp = here ? huntXpEstimate(here) : null;
             return {
-                version: '1.9.20',
+                version: '1.9.21',
                 indexes: {
                     locations: state.locationIndexStatus,
                     markerCount: state.locationsBySlug.size,
@@ -14095,7 +14056,12 @@
         injectStyles();
         // Capture rarity/ball modeling must work even with the Atlas closed.
         // Reuses the existing cached catalog loader; no timer or game scan.
-        ensureCombatCatalog();
+        // Defer one catalog load until initial game rendering has settled.
+        // Never schedule recurring work to keep the catalog updated.
+        if (typeof page.requestIdleCallback === 'function')
+            page.requestIdleCallback(() => ensureCombatCatalog(), {timeout: 10000});
+        else
+            setTimeout(() => ensureCombatCatalog(), 4000);
         ensureButton();
         installMapObserver();
         scheduleMapSync();
@@ -14118,7 +14084,7 @@
         },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.9.20 experimental loaded'
+            '[PokéIdle Hunt Atlas] v1.9.21 experimental loaded'
         );
     }
 
