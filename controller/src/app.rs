@@ -2215,7 +2215,8 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let blocked_session = health.last_error.as_deref()
         .is_some_and(|error| error.contains("Maximum number of active sessions"));
     let repair_available = running && (blocked_session
-        || app.games[index].orphaned_pid.is_some()
+        || (app.games[index].orphaned_pid.is_some()
+            && app.games[index].monitor.is_none())
         || (health.last_heartbeat_at.is_some()
             && !health.heartbeat_is_fresh()
             && health.last_error.is_some()));
