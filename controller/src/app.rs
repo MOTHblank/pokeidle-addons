@@ -2244,10 +2244,12 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 let rate_text = xp_per_hour
                     .map(|rate| format_number(rate.round() as u64))
                     .unwrap_or_else(|| "—".to_string());
-                columns[2].label(
-                    RichText::new(rate_text)
-                        .size(14.0).strong()
-                        .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
+                columns[2].add(
+                    egui::Label::new(
+                        RichText::new(rate_text)
+                            .size(14.0).strong()
+                            .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
+                    ).truncate(),
                 ).on_hover_text(tr(match xp_per_hour {
                     Some(rate) if rate > 0.0 => "Based on recent EXP gains",
                     Some(_) => "No EXP gained recently",
