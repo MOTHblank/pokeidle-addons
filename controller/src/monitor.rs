@@ -724,6 +724,15 @@ fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
     })
 }
 
+fn should_inspect_tabs(
+    page_loading: bool,
+    force: bool,
+    current: &[(String, String)],
+    previous: &[(String, String)],
+) -> bool {
+    !page_loading && (force || current != previous)
+}
+
 fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
     // Initial acquisition is staggered across Game1..Game4 to avoid
     // simultaneous expensive snapshots. Reconnects are never delayed.
@@ -991,9 +1000,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         .filter(|context| context.depth == 0)
         .map(|context| (context.id.clone(), context.url.clone()))
         .collect();
-    let tabs = if page_loading {
-        None
-    } else if force_tabs || signature != session.tab_signature {
+    let tabs = if should_inspect_tabs(page_loading, force_tabs, &signature, &session.tab_signature) {
         let inspected = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
         session.tab_signature = signature;
         Some(inspected)
@@ -1790,6 +1797,36 @@ mod command_tests {
 
         health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(6 * 60));
         assert!(!health.telemetry_is_fresh());
+    }
+
+    #[test]
+    fn tab_inventory_only_runs_on_change_or_slow_refresh() {
+        use super::should_inspect_tabs;
+        let a = vec![("tab1".to_string(), "https://pokeidle.io/app".to_string())];
+        let b = vec![("tab2".to_string(), "https://www.twitch.tv".to_string())];
+        assert!(!should_inspect_tabs(false, false, &a, &a));
+        assert!(should_inspect_tabs(false, true, &a, &a));
+        assert!(should_inspect_tabs(false, false, &b, &a));
+        assert!(!should_inspect_tabs(true, true, &b, &a));
+    }
+
+    #[test]
+    fn heartbeat_and_profile_stagger_are_independent_of_full_scans() {
+        use super::{
+            stagger_delay, Health, MONITOR_HEARTBEAT_INTERVAL, MONITOR_TAB_INTERVAL,
+        };
+        use std::time::{Duration, Instant};
+        assert_eq!(MONITOR_HEARTBEAT_INTERVAL, Duration::from_secs(45));
+        assert_eq!(MONITOR_TAB_INTERVAL, Duration::from_secs(10 * 60));
+        assert_eq!(stagger_delay(27701, false), Duration::ZERO);
+        assert_eq!(stagger_delay(27702, false), Duration::from_secs(12));
+        assert_eq!(stagger_delay(27704, false), Duration::from_secs(36));
+        assert_eq!(stagger_delay(27704, true), Duration::ZERO);
+        let mut health = Health::default();
+        health.state = "Running".to_string();
+        health.last_heartbeat_at = Some(Instant::now());
+        assert!(health.heartbeat_is_fresh());
+        assert!(!health.telemetry_is_fresh()); // heartbeat is not a game snapshot
     }
 
     #[test]

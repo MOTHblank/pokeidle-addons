@@ -72,11 +72,28 @@ create extra samples.
 Twitch chat sharing and stream scanning are handled by the userscripts.
 The initial stream scan runs about 30 seconds after the site loads; subsequent
 stream scans run every five minutes. The controller's game/Firefox telemetry
-uses a separate, lightweight cadence: every **3 minutes** while signed in,
-or every **45 seconds** during login and loading (with faster reconnect attempts
-after failures). The Rust interface repaints cached data every **3 seconds**;
-these repaints do **not** trigger additional game reads. Addon version checks
-are a separate four-hour process. KICK links can be opened in a normal browser.
+uses separate layers:
+- **Heartbeat:** a minimal read of the known game tab every **45 seconds**.
+  It confirms whether the game page is reachable and whether login is present,
+  without traversing the tab tree or reading game inventory.
+- **Game statistics:** full game and Controller Bridge data every **3 minutes**
+  when signed in, or **45 seconds** while loading or awaiting login.
+- **Firefox tabs:** a full per-tab inventory roughly every **10–12 minutes**,
+  or earlier when the tab context list changes during a game scan, login
+  changes, or a Controller-requested tab opens. Game scans still use
+  `browsingContext.getTree` to find the game, but do not run JavaScript in
+  unchanged tabs.
+- **Recovery:** reconnects try again every **5 seconds**, and an invalidated
+  heartbeat context triggers a full game discovery without blindly reopening
+  tabs. Initial expensive scans start at 12-second offsets across Game1–Game4;
+  recovered sessions do not wait for the stagger.
+- **Addon version checks:** unchanged at **4 hours**; **stream scanning** stays
+  separate, every **5 minutes**.
+
+The Rust UI repaints cached data every **3 seconds**, without extra BiDi
+requests. Overview cards distinguish a recent heartbeat from older game data,
+and the expanded tabs panel shows when its inventory was last inspected.
+KICK links can be opened in a normal browser.
 Linux does not currently have the Windows system tray integration.
 
 ## Browser lifecycle and monitoring
