@@ -14,13 +14,16 @@ use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
 
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
-// Each full BiDi sample reads the game and every top-level browser tab.
-// Long-running logged-in sessions need only occasional status snapshots.
+// The inexpensive page heartbeat does not enumerate tabs or serialize game state.
+// Detailed game data and the cross-tab inventory have separate cadences.
+pub(crate) const MONITOR_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
 pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
 const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(45);
+pub(crate) const MONITOR_TAB_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-// Allow probe scheduling jitter without reporting an active game as stale.
 const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(5 * 60);
+const HEARTBEAT_FRESHNESS_LIMIT: Duration = Duration::from_secs(2 * 60);
+const PROFILE_STAGGER: Duration = Duration::from_secs(12);
 
 #[derive(Clone, Debug)]
 pub struct TabInfo {
@@ -90,6 +93,10 @@ pub struct Health {
     pub last_error: Option<String>,
     /// Time of last successful telemetry sample (kept on transient disconnects).
     pub last_successful_probe_at: Option<Instant>,
+    /// A lightweight live-page check, independent from expensive game samples.
+    pub last_heartbeat_at: Option<Instant>,
+    /// Last full inventory of Firefox tabs (may be older than game stats).
+    pub last_tabs_at: Option<Instant>,
 }
 
 impl Default for Health {
@@ -147,6 +154,8 @@ impl Default for Health {
             kick_state_available: false,
             last_error: None,
             last_successful_probe_at: None,
+            last_heartbeat_at: None,
+            last_tabs_at: None,
         }
     }
 }
@@ -159,6 +168,16 @@ impl Health {
     pub fn telemetry_is_fresh(&self) -> bool {
         self.state == "Running"
             && self.telemetry_age().is_some_and(|age| age < TELEMETRY_FRESHNESS_LIMIT)
+    }
+
+    pub fn heartbeat_is_fresh(&self) -> bool {
+        self.state == "Running"
+            && self.last_heartbeat_at
+                .is_some_and(|at| at.elapsed() < HEARTBEAT_FRESHNESS_LIMIT)
+    }
+
+    pub fn tab_inventory_age(&self) -> Option<Duration> {
+        self.last_tabs_at.map(|at| at.elapsed())
     }
 
     pub fn summary(&self) -> String {
@@ -321,6 +340,8 @@ struct BrowserSession {
     socket: BrowserSocket,
     next_id: u64,
     game_context: Option<String>,
+    /// Top-level context id+URL fingerprint from the last full tab inspection.
+    tab_signature: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -407,7 +428,7 @@ struct Probe {
     bridge_connected: bool,
     bridge_snapshot_ok: bool,
     last_game_message_ms: u64,
-    tabs: Vec<TabInfo>,
+    tabs: Option<Vec<TabInfo>>,
     kick_streams: Vec<KickStream>,
     kick_state_available: bool,
 }
@@ -452,9 +473,11 @@ fn monitor_loop(
 ) {
     let mut session: Option<BrowserSession> = None;
     let mut issues = MonitorIssueReporter::default();
+    let mut next_full = Instant::now();
+    let mut next_heartbeat = Instant::now();
+    let mut next_tabs = Instant::now();
 
     loop {
-        let mut poll_interval = MONITOR_RETRY_INTERVAL;
         expire_pending_commands(&commands);
         if stop.load(Ordering::Relaxed) {
             logging::info(&format!("BiDi monitor on port {} stopping", port));
@@ -467,19 +490,20 @@ fn monitor_loop(
                 Ok(browser_session) => {
                     logging::info(&format!("BiDi session established on port {}", port));
                     session = Some(browser_session);
-
+                    let already_sampled = health.lock().map(|current|
+                        current.last_successful_probe_at.is_some()).unwrap_or(false);
+                    next_full = Instant::now() + stagger_delay(port, already_sampled);
+                    next_heartbeat = next_full;
+                    next_tabs = next_full;
                     if let Ok(mut current) = health.lock() {
-                        // A live socket is not yet a successful telemetry sample.
                         current.state = "Connecting".to_string();
                         current.last_error = None;
                     }
                 }
                 Err(error) => {
                     issues.report(format!(
-                        "BiDi session setup on port {} failed: {}",
-                        port, error
+                        "BiDi session setup on port {} failed: {}", port, error
                     ));
-
                     if let Ok(mut current) = health.lock() {
                         current.state = "Connecting".to_string();
                         current.last_error = Some(error);
@@ -490,7 +514,6 @@ fn monitor_loop(
             }
         }
 
-        // Handle shutdown before probing; browser.close invalidates this socket.
         if stop.load(Ordering::Relaxed) {
             break;
         }
@@ -516,19 +539,26 @@ fn monitor_loop(
             }
         }
 
+        let mut wait = MONITOR_RETRY_INTERVAL;
         if let Some(browser_session) = session.as_mut() {
-            flush_commands(browser_session, &commands);
+            if flush_commands(browser_session, &commands) {
+                // An explicit controller tab change deserves an immediate update.
+                next_full = Instant::now();
+                next_tabs = next_full;
+            }
 
-            match probe_page(browser_session, headless) {
-                Ok(probe) => {
-                    // Poll more often only while the game is loading or awaiting login.
-                    // Keep the logged-in snapshots lightweight, but moderately responsive.
-                    poll_interval = if probe.game_ready && probe.logged_in {
-                        MONITOR_POLL_INTERVAL
-                    } else {
-                        MONITOR_STARTUP_POLL_INTERVAL
-                    };
-                    issues.recovered(port);
+            let now = Instant::now();
+            if now >= next_full {
+                match probe_page(browser_session, headless, now >= next_tabs) {
+                    Ok(probe) => {
+                        let sample_at = Instant::now();
+                        let interval = if probe.game_ready && probe.logged_in {
+                            MONITOR_POLL_INTERVAL
+                        } else {
+                            MONITOR_STARTUP_POLL_INTERVAL
+                        };
+                        let inspected_tabs = probe.tabs.is_some();
+                        issues.recovered(port);
                     if let Ok(mut current) = health.lock() {
                         current.state = "Running".to_string();
                         current.url = probe.url;
@@ -545,8 +575,7 @@ fn monitor_loop(
                         current.addon_total = probe.addon_total;
                         current.addon_missing = probe.addon_missing;
                         current.addon_versions = probe.addon_versions;
-                        current.twitch_tabs = probe.twitch_tabs;
-                        current.twitch_low_resource_ok = probe.twitch_low_resource_ok;
+                        // Keep the prior tab inventory until an actual inventory refresh.
                         current.performance_enabled = probe.performance_enabled;
                         current.performance_fps = probe.performance_fps;
                         current.performance_scene_runs = probe.performance_scene_runs;
@@ -577,43 +606,131 @@ fn monitor_loop(
                         current.bridge_connected = probe.bridge_connected;
                         current.bridge_snapshot_ok = probe.bridge_snapshot_ok;
                         current.last_game_message_ms = probe.last_game_message_ms;
-                        current.tabs = probe.tabs;
+                        if let Some(tabs) = probe.tabs {
+                            current.twitch_tabs = tabs.iter().filter(|t| t.kind == "Twitch").count() as u8;
+                            current.twitch_low_resource_ok = tabs.iter()
+                                .filter(|t| t.kind == "Twitch" && t.low_resource).count() as u8;
+                            current.tabs = tabs;
+                            current.last_tabs_at = Some(sample_at);
+                        }
                         current.kick_streams = probe.kick_streams;
                         current.kick_state_available = probe.kick_state_available;
                         current.last_error = None;
-                        current.last_successful_probe_at = Some(Instant::now());
+                        current.last_successful_probe_at = Some(sample_at);
+                        current.last_heartbeat_at = Some(sample_at);
+                    }
+                        next_full = sample_at + interval;
+                        next_heartbeat = sample_at + MONITOR_HEARTBEAT_INTERVAL;
+                        if inspected_tabs {
+                            next_tabs = sample_at + MONITOR_TAB_INTERVAL;
+                        }
+                    }
+                    Err(error) => {
+                        issues.report(format!(
+                            "BiDi page probe on port {} failed: {}", port, error
+                        ));
+                        if let Ok(mut current) = health.lock() {
+                            current.state = "Reconnecting".to_string();
+                            current.last_error = Some(error);
+                            current.game_ready = false;
+                            current.logged_in = false;
+                        }
+                        end_session(&mut session);
                     }
                 }
-                Err(error) => {
-                    issues.report(format!(
-                        "BiDi page probe on port {} failed: {}",
-                        port, error
-                    ));
-
-                    if let Ok(mut current) = health.lock() {
-                        current.state = "Reconnecting".to_string();
-                        current.last_error = Some(error);
-                        current.game_ready = false;
-                        current.logged_in = false;
+            } else if now >= next_heartbeat {
+                match probe_heartbeat(browser_session) {
+                    Ok(heartbeat) => {
+                        let checked_at = Instant::now();
+                        if let Ok(mut current) = health.lock() {
+                            let changed_login = current.logged_in != heartbeat.logged_in;
+                            current.last_heartbeat_at = Some(checked_at);
+                            current.logged_in = heartbeat.logged_in;
+                            current.game_ready = heartbeat.logged_in;
+                            current.state = "Running".to_string();
+                            if changed_login {
+                                // New login/logout should refresh full metrics promptly.
+                                next_full = checked_at;
+                            }
+                        }
+                        issues.recovered(port);
                     }
-
-                    end_session(&mut session);
+                    Err(_error) => {
+                        // Navigation can invalidate an old game context. Resolve
+                        // it via a full context lookup before reporting failure.
+                        next_full = Instant::now();
+                    }
                 }
+                next_heartbeat = Instant::now() + MONITOR_HEARTBEAT_INTERVAL;
+            }
+
+            if session.is_some() {
+                wait = next_full.min(next_heartbeat)
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_millis(500));
             }
         }
 
-        // Interrupt the longer polling interval for browser commands and close
-        // requests; they must not wait for the next scheduled telemetry scan.
-        for _ in 0..(poll_interval.as_millis() / 500) {
+        // Keep browser.close and manual tab commands responsive without
+        // using BiDi polling to drive the GUI repaint cadence.
+        for _ in 0..(wait.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
-                || (session.is_some()
-                    && commands.lock().map(|queue| !queue.pending.is_empty()).unwrap_or(false))
+                || (session.is_some() && commands.lock()
+                    .map(|queue| !queue.pending.is_empty()).unwrap_or(false))
             {
                 break;
             }
             thread::sleep(Duration::from_millis(500));
         }
+    }
+}
+
+/// One tiny read of the already-known game context. No context enumeration,
+/// userscript snapshot, page-wide scanning or Firefox tab evaluations.
+#[derive(Clone, Copy)]
+struct Heartbeat {
+    logged_in: bool,
+}
+
+fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
+    let context = session.game_context.as_deref()
+        .ok_or_else(|| "game context not discovered yet".to_string())?;
+    let id = session.next_id;
+    session.next_id += 1;
+    let result = send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": "JSON.stringify({ loggedIn: (() => { const app = document.querySelector('#app'); return !!app && !app.classList.contains('hidden'); })() })",
+                "target": { "context": context },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+    let raw = result.get("result")
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "no game heartbeat result".to_string())?;
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|error| format!("invalid game heartbeat: {error}"))?;
+    Ok(Heartbeat {
+        logged_in: value.get("loggedIn").and_then(Value::as_bool)
+            .ok_or_else(|| "game heartbeat missing login state".to_string())?,
+    })
+}
+
+fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
+    // Initial acquisition is staggered across Game1..Game4 to avoid
+    // simultaneous expensive snapshots. Reconnects are never delayed.
+    if previous_sample {
+        Duration::ZERO
+    } else {
+        PROFILE_STAGGER * u32::from(port.saturating_sub(27701) % 4)
     }
 }
 
@@ -642,10 +759,11 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         socket,
         next_id: 2,
         game_context: None,
+        tab_signature: Vec::new(),
     })
 }
 
-fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, String> {
+fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) -> Result<Probe, String> {
     let tree_id = session.next_id;
     session.next_id += 1;
 
@@ -867,21 +985,26 @@ fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, Str
         .and_then(Value::as_str)
         == Some("Loading");
 
+    // getTree is needed to locate the game context, but per-tab script.evaluate
+    // is only needed when top-level tabs change or the slow refresh expires.
+    let signature: Vec<(String, String)> = contexts.iter()
+        .filter(|context| context.depth == 0)
+        .map(|context| (context.id.clone(), context.url.clone()))
+        .collect();
     let tabs = if page_loading {
-        Vec::new()
+        None
+    } else if force_tabs || signature != session.tab_signature {
+        let inspected = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
+        session.tab_signature = signature;
+        Some(inspected)
     } else {
-        build_tab_infos(&contexts, &mut session.socket, &mut session.next_id)
+        None
     };
 
-    let twitch_tabs = tabs
-        .iter()
-        .filter(|tab| tab.kind == "Twitch")
-        .count() as u8;
-
-    let twitch_low_resource_ok = tabs
-        .iter()
-        .filter(|tab| tab.kind == "Twitch" && tab.low_resource)
-        .count() as u8;
+    let twitch_tabs = tabs.as_ref().map_or(0, |tabs| tabs
+        .iter().filter(|tab| tab.kind == "Twitch").count() as u8);
+    let twitch_low_resource_ok = tabs.as_ref().map_or(0, |tabs| tabs
+        .iter().filter(|tab| tab.kind == "Twitch" && tab.low_resource).count() as u8);
 
     let runtime = if page_loading {
         RuntimeProbe::default()
@@ -1474,13 +1597,14 @@ fn expire_pending_commands(mailbox: &Arc<Mutex<CommandMailbox>>) {
 fn flush_commands(
     session: &mut BrowserSession,
     mailbox: &Arc<Mutex<CommandMailbox>>,
-) {
+) -> bool {
+    let mut tabs_changed = false;
     loop {
         let command = match mailbox.lock() {
             Ok(mut queue) => queue.pending.pop_front(),
             Err(_) => {
                 logging::error("browser command mailbox lock poisoned");
-                return;
+                return tabs_changed;
             }
         };
         let Some(command) = command else { break; };
@@ -1493,7 +1617,10 @@ fn flush_commands(
             }
         };
         let (ok, message) = match outcome {
-            Ok(()) => (true, "tab opened".to_string()),
+            Ok(()) => {
+                tabs_changed = true;
+                (true, "tab opened".to_string())
+            },
             Err(error) => {
                 // No blind retry: Firefox might have created the tab before
                 // losing the acknowledgement.
@@ -1508,6 +1635,7 @@ fn flush_commands(
             queue.feedback.push_back(CommandFeedback { id: command.id, ok, message });
         }
     }
+    tabs_changed
 }
 
 
