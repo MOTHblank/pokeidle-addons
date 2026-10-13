@@ -2153,6 +2153,8 @@ fn draw_game_card(
                     ui.horizontal_wrapped(|ui| {
                         let gold = format_number(health.gold);
                         let orbs = format_number(health.orbs);
+                        let balls_used = health.autocatch_balls_used.to_string();
+                        let captures = health.autocatch_captures.to_string();
                         resource_value(ui, tr("GOLD"), if health.bridge_snapshot_ok { &gold } else { "—" }, WARN);
                         resource_value(ui, tr("GEMS"), if health.bridge_snapshot_ok { &orbs } else { "—" }, ACCENT);
                         resource_value(
@@ -2165,13 +2167,13 @@ fn draw_game_card(
                         resource_value(
                             ui,
                             tr("USED"),
-                            if health.bridge_snapshot_ok { &health.autocatch_balls_used.to_string() } else { "—" },
+                            if health.bridge_snapshot_ok { &balls_used } else { "—" },
                             TEXT,
                         );
                         resource_value(
                             ui,
                             tr("CAPTURES"),
-                            if health.bridge_snapshot_ok { &health.autocatch_captures.to_string() } else { "—" },
+                            if health.bridge_snapshot_ok { &captures } else { "—" },
                             TEXT,
                         );
                         resource_value(
