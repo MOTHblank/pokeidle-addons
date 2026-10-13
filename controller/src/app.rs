@@ -3,7 +3,7 @@ use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
-use crate::monitor::{Health, MonitorHandle};
+use crate::monitor::{Health, MonitorHandle, MONITOR_POLL_INTERVAL};
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
@@ -23,6 +23,9 @@ use tray_icon::{
 };
 
 static PT_BR: AtomicBool = AtomicBool::new(true);
+
+// Redraw cached information more often without triggering additional BiDi reads.
+const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
 
 fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
@@ -251,6 +254,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No events yet" => "Nenhum evento ainda",
         "running" => "em execução",
         "First scan 30s · 5 min" => "Primeiro scan em 30 s · a cada 5 min",
+        "Game data" => "Dados do jogo",
         "Idle detection unavailable without Controller Bridge telemetry" => "Detecção de inatividade indisponível sem telemetria do Controller Bridge",
         "Profile folder exists" => "Pasta do perfil existente",
         "Registered" => "Registrada",
@@ -258,7 +262,14 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Stop" => "Parar",
         "Launch" => "Iniciar",
         "CURRENT ACTIVITY" => "ATIVIDADE ATUAL",
+        "LAST OBSERVED STATE" => "ÚLTIMO ESTADO REGISTRADO",
         "STATE" => "ESTADO",
+        "TRAINER" => "TREINADOR",
+        "POKÉMON" => "POKÉMON",
+        "CURRENCY" => "SALDOS",
+        "CAPTURE RESULTS" => "RESULTADOS DE CAPTURA",
+        "BALL STOCK" => "ESTOQUE DE POKÉBOLAS",
+        "BALLS USED" => "BOLAS USADAS",
         "Hunting" => "Caçando",
         "Online · Center" => "Online · Centro",
         "Waiting for login" => "Aguardando login",
@@ -1517,7 +1528,7 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs(5));
+        ui.ctx().request_repaint_after(UI_REPAINT_INTERVAL);
 
         draw_sidebar(self, ui);
 
@@ -1782,7 +1793,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-                    runtime_row(ui, "Poll", "5 min", MUTED);
+                    runtime_row(ui, "Poll", &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 });
 
             ui.add_space(12.0);
@@ -2061,7 +2072,9 @@ fn draw_game_card(
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(
-                            if health.activity == "Hunting" {
+                            if running && health.last_successful_probe_at.is_some() && !health.telemetry_is_fresh() {
+                                tr("LAST OBSERVED STATE")
+                            } else if health.activity == "Hunting" {
                                 tr("CURRENT ACTIVITY")
                             } else {
                                 tr("STATE")
@@ -2114,12 +2127,19 @@ fn draw_game_card(
                     };
                     let fallen = health.fallen_count.to_string();
 
-                    ui.horizontal_wrapped(|ui| {
-                        mini_metric(ui, "TRAINER LV", &trainer_level);
-                        mini_metric(ui, "TRAINER XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
-                        mini_metric(ui, "POKÉMON LV", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
-                        mini_metric(ui, "POKÉMON XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
-                        mini_metric(ui, "FALLEN", &fallen);
+                    // Stable two-column progress summary: trainer and Pokémon
+                    // stats no longer wrap into an ambiguous sequence of labels.
+                    ui.columns(2, |columns| {
+                        columns[0].label(RichText::new(tr("TRAINER")).size(9.0).strong().color(DIM));
+                        columns[0].add_space(3.0);
+                        stat_line(&mut columns[0], "Level", &trainer_level);
+                        stat_line(&mut columns[0], "XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
+
+                        columns[1].label(RichText::new(tr("POKÉMON")).size(9.0).strong().color(DIM));
+                        columns[1].add_space(3.0);
+                        stat_line(&mut columns[1], "Level", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
+                        stat_line(&mut columns[1], "XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
+                        stat_line(&mut columns[1], "FALLEN", &fallen);
                     });
                 });
 
@@ -2138,8 +2158,34 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
+                    let gold = format_number(health.gold);
+                    let orbs = format_number(health.orbs);
+                    let balls_used = health.autocatch_balls_used.to_string();
+                    let captures = health.autocatch_captures.to_string();
+                    let bridge_ok = health.bridge_snapshot_ok;
+
+                    // Group balances and capture statistics independently.
+                    // Auto Catch ON/OFF is already shown under Automation.
+                    ui.columns(2, |columns| {
+                        columns[0].label(RichText::new(tr("CURRENCY")).size(9.0).strong().color(DIM));
+                        columns[0].add_space(3.0);
+                        stat_line(&mut columns[0], "GOLD", if bridge_ok { &gold } else { "—" });
+                        stat_line(&mut columns[0], "GEMS", if bridge_ok { &orbs } else { "—" });
+
+                        columns[1].label(RichText::new(tr("CAPTURE RESULTS")).size(9.0).strong().color(DIM));
+                        columns[1].add_space(3.0);
+                        stat_line(&mut columns[1], "BALLS USED", if bridge_ok { &balls_used } else { "—" });
+                        stat_line(&mut columns[1], "CAPTURES", if bridge_ok { &captures } else { "—" });
+                        stat_line(&mut columns[1], "SUCCESS", if bridge_ok && !health.autocatch_rate.is_empty() { &health.autocatch_rate } else { "—" });
+                    });
+
+                    ui.add_space(9.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+                    ui.label(RichText::new(tr("BALL STOCK")).size(9.0).strong().color(DIM));
+                    ui.add_space(5.0);
                     if health.ball_stock.is_empty() {
-                        ui.label(RichText::new(tr("Pokéballs: unavailable")).size(11.0).color(MUTED));
+                        ui.label(RichText::new(tr("Pokéballs: unavailable")).size(10.0).color(MUTED));
                     } else {
                         ui.horizontal_wrapped(|ui| {
                             for item in &health.ball_stock {
@@ -2147,42 +2193,6 @@ fn draw_game_card(
                             }
                         });
                     }
-
-                    ui.add_space(8.0);
-
-                    ui.horizontal_wrapped(|ui| {
-                        let gold = format_number(health.gold);
-                        let orbs = format_number(health.orbs);
-                        let balls_used = health.autocatch_balls_used.to_string();
-                        let captures = health.autocatch_captures.to_string();
-                        resource_value(ui, tr("GOLD"), if health.bridge_snapshot_ok { &gold } else { "—" }, WARN);
-                        resource_value(ui, tr("GEMS"), if health.bridge_snapshot_ok { &orbs } else { "—" }, ACCENT);
-                        resource_value(
-                            ui,
-                            tr("AUTO CATCH"),
-
-                            if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { "—" } else if health.autocatch_on { tr("ON") } else { tr("OFF") },
-                            if health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on { GOOD } else { MUTED },
-                        );
-                        resource_value(
-                            ui,
-                            tr("USED"),
-                            if health.bridge_snapshot_ok { &balls_used } else { "—" },
-                            TEXT,
-                        );
-                        resource_value(
-                            ui,
-                            tr("CAPTURES"),
-                            if health.bridge_snapshot_ok { &captures } else { "—" },
-                            TEXT,
-                        );
-                        resource_value(
-                            ui,
-                            tr("SUCCESS"),
-                            if !health.bridge_snapshot_ok || health.autocatch_rate.is_empty() { "—" } else { &health.autocatch_rate },
-                            TEXT,
-                        );
-                    });
                 });
 
             ui.add_space(12.0);
@@ -2691,20 +2701,19 @@ fn draw_game_card(
         });
 }
 
-fn mini_metric(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(tr(label)).size(8.0).strong().color(DIM));
-        ui.add(
-            egui::Label::new(
-                RichText::new(compact_text(value, 18))
-                    .size(11.0)
-                    .strong()
-                    .color(TEXT),
-            )
-            .truncate(),
-        );
+// Compact key/value rows keep stats aligned in narrow two-column game cards.
+// Full untruncated values remain available on hover.
+fn stat_line(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(compact_text(value, 25)).size(11.0).strong().color(TEXT)
+                ).truncate()
+            ).on_hover_text(value);
+        });
     });
-    ui.add_space(16.0);
 }
 
 fn resource_chip(ui: &mut egui::Ui, text: &str) {
@@ -2716,22 +2725,6 @@ fn resource_chip(ui: &mut egui::Ui, text: &str) {
         .show(ui, |ui| {
             ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT));
         });
-}
-
-fn resource_value(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(tr(label)).size(8.0).strong().color(DIM));
-        ui.add(
-            egui::Label::new(
-                RichText::new(compact_text(value, 18))
-                    .size(10.0)
-                    .strong()
-                    .color(color),
-            )
-            .truncate(),
-        );
-    });
-    ui.add_space(14.0);
 }
 
 fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) -> egui::Response {
@@ -2848,8 +2841,9 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     &format!("{} {}", enabled_profiles, tr("isolated")),
                     MUTED,
                 );
+                runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 5 min"), MUTED);
-                runtime_chip(ui, tr("UI repaint"), tr("1 sec"), MUTED);
+                runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
 
