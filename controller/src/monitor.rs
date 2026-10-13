@@ -396,6 +396,7 @@ struct Probe {
     activity: String,
     hunt: String,
     hunt_slug: String,
+    hunt_atlas: Value,
     active_pokemon: String,
     fallen_count: u32,
     economy_mode: bool,
