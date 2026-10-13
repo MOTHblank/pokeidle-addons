@@ -218,7 +218,8 @@ test('current hunt chance can use fully attributed accepted species throws, not 
 
 test('late catalogue preparation does not require opening the HuntAtlas panel',()=>{
     const script=source.slice(source.indexOf('    function bootstrap()'));
-    assert.match(script,/ensureCombatCatalog\(\);/);
+    assert.match(script,/requestIdleCallback\(\(\) => ensureCombatCatalog\(\)/);
+    assert.match(script,/setTimeout\(\(\) => ensureCombatCatalog\(\)/);
     const metrics=source.slice(source.indexOf('    function controllerMetrics()'),
         source.indexOf('    page.__mothHuntAtlasControllerV1 ='));
     assert.match(metrics,/ensureCombatCatalog\(\)/);
@@ -241,4 +242,26 @@ test('bridge can restore missed native ball catalog',()=>{
     const bridge=fs.readFileSync(path.join(__dirname,'../../addons/controller-bridge.user.js'),'utf8');
     assert.match(bridge,/marketCatalogReady,\s*catalogoBolas: copy\(catalogoBolas\)/);
     assert.match(source,/farmApplyRuntimeCatalog\(\{catalogoBolas:snapshot\.catalogoBolas\}\)/);
+});
+
+test('background dashboard reuses one XP sample and capture observation',()=>{
+    const start=source.indexOf('    function controllerMetrics()');
+    const end=source.indexOf('    page.__mothHuntAtlasControllerV1 =',start);
+    const metrics=source.slice(start,end);
+    assert.match(metrics,/const observed = captureObservedForHunt\(hunt\)/);
+    assert.match(metrics,/huntEconomyEstimate\(hunt, xp, observed\)/);
+    assert.match(metrics,/capturePlanForHunt\(hunt, 4, xp, observed\)/);
+    assert.match(metrics,/capturePlanForHunt\(hunt, 5, xp, observed\)/);
+    assert.match(metrics,/rareForHunt\(hunt,/);
+    assert.doesNotMatch(metrics,/rareModelForHunt\(hunt,/);
+});
+test('catalog loading is serial, deferred, cached and has retry backoff',()=>{
+    const begin=source.indexOf('    function ensureCombatCatalog()');
+    const end=source.indexOf('    function typeMultiplierExact(',begin);
+    const loader=source.slice(begin,end);
+    assert.match(loader,/for \(const \[url, kind, required\] of inputs\)/);
+    assert.match(loader,/await load\(url\)/);
+    assert.doesNotMatch(loader,/Promise\.all\(/);
+    assert.match(loader,/combatCatalogLastAttempt < 5 \* 60000/);
+    assert.match(loader,/cache:\s*'force-cache'/);
 });
