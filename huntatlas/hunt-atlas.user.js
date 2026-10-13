@@ -13845,9 +13845,40 @@
         };
     }
 
+    // Cheap, read-only snapshot; evaluated only during the controller's normal
+    // detailed telemetry. Never triggers an independent refresh or network call.
+    function controllerMetrics() {
+        const hunt = currentHunt();
+        if (!hunt || !state.atlasEnabled) return null;
+        const xp = huntXpEstimate(hunt);
+        const economy = huntEconomyEstimate(hunt, xp);
+        const ultra = capturePlanForHunt(hunt, 4, xp);
+        const beast = capturePlanForHunt(hunt, 5, xp);
+        const tier = state.outlandTierSeen ? state.farmingSnapshot.outlandTier : null;
+        const isOutland = String(hunt.area || '').toLowerCase() === 'outland';
+        const rare = isOutland && tier != null ? rareModelForHunt(hunt,
+            outlandNativeTier(tier, state.playerLevel)) : null;
+        const finite = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
+        return {
+            version: 1, huntSlug: String(hunt.slug || ''),
+            xpH: finite(xp?.value), xpMeasured: Boolean(xp?.observed),
+            coinsH: finite(economy?.realizedH ?? economy?.killCoinsH),
+            coinsMeasured: finite(economy?.realizedH) !== null,
+            capturesH: finite(ultra?.catchesH),
+            ultraChance: finite(ultra?.chance), beastChance: finite(beast?.chance),
+            shinyCaughtH: finite(ultra?.shinyCaughtH),
+            ballsPerCapture: finite(ultra?.ballsPerCapture),
+            activeOutlandTier: isOutland && tier != null ? tier : null,
+            rareDrops: Array.isArray(rare?.drops) ? rare.drops.slice(0, 6)
+                .map(row => ({name: String(row.name || row.id || ''),
+                    unitsH: finite(row.unitsH)})) : []
+        };
+    }
+
     page.__mothHuntAtlasControllerV1 = {
         version: 1,
-        snapshot: controllerSnapshot
+        snapshot: controllerSnapshot,
+        metrics: controllerMetrics
     };
 
     // Experimental, read-only instrumentation for later player tests.
