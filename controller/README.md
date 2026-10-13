@@ -66,11 +66,11 @@ automatically copy profiles between operating systems.
 The Controller estimates EXP/hour from recent cumulative trainer XP gains
 over elapsed time, using a rolling history to smooth out short combat bursts.
 The time to the next level uses the game's next-level cumulative XP threshold.
-These figures are estimates, not promises: during startup, missing game data,
-progress resets, or periods without earned XP, unavailable estimates are shown
-as a dash rather than fabricated values. Both remain lightweight and require
-no additional game polling. Detailed monitoring diagnostics are collapsed
-below the dashboard by default.
+These figures are estimates, not promises: the EXP rate displays 0 when no
+recent XP was earned, while the time to level up stays unavailable until the
+character is earning XP. Missing data and counter resets never produce guessed
+figures. Both remain lightweight and require no additional game polling.
+Detailed monitoring diagnostics are collapsed below the dashboard by default.
 
 Twitch chat sharing and stream scanning are handled by the userscripts.
 The initial stream scan runs about 30 seconds after the site loads; subsequent
