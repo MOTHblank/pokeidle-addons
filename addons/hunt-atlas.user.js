@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-addons/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.9.19
+// @version      1.9.20
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -20,7 +20,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.19');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.20');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -1213,6 +1213,7 @@
         speciesCombat: new Map(),
         combatCatalogStatus: 'idle',
         combatCatalogPromise: null,
+        combatCatalogError: null,
         locationsBySlug: new Map(),
         locationsByRange: new Map(),
         locationIndexDiagnostics: { loaded: 0 },
@@ -3619,6 +3620,19 @@
             byBall,byBallCaught,bySpecies,
             source:'observed-server/accepted-correlated'};
     }
+    // Raw catalogs may omit special-form entries: Orre clones (13xxx) inherit
+    // the source species' economic rarity just as their combat stats do.
+    function captureRarityForSpecies(rarities, speciesId) {
+        const id = Number(outlandNormalizeSpeciesId(speciesId));
+        if (!Number.isInteger(id) || id <= 0) return null;
+        const direct = rarities.get(id);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        if (id >= 13000) {
+            const base = rarities.get(id % 1000);
+            if (Number.isFinite(base) && base > 0) return base;
+        }
+        return null;
+    }
     function captureHuntChance(hunt,rarities,efficiency,mix=null,mixMode='kills') {
         if(!Array.isArray(hunt?.especies)||!hunt.especies.length)
             return {chance:null,coverage:0,source:'no-spawns'};
@@ -3629,7 +3643,7 @@
             const weight=measured?(mix?.[id]?.[mixMode]??0):
                 Math.max(1,Number(row.pontos)||1);
             total+=weight;
-            const rarity=rarities.get(id);
+            const rarity=captureRarityForSpecies(rarities,id);
             const chance=captureWikiChance(rarity,efficiency);
             if(chance!==null){covered+=weight;weighted+=weight*chance;}
         }
@@ -5045,6 +5059,11 @@
                             }))
                             : []
                 }));
+            }
+
+            if (snapshot?.marketCatalogReady &&
+                !state.captureBallRates.size && Array.isArray(snapshot.catalogoBolas)) {
+                farmApplyRuntimeCatalog({catalogoBolas:snapshot.catalogoBolas});
             }
 
             if (gameState && typeof gameState === 'object') {
@@ -6858,7 +6877,7 @@
             Math.min(1,target.throws/target.kills):
             observed?Math.min(1,observed.throws/Math.max(1,observed.kills)):null;
         return captureSpeciesForecast(hunt,species.id,
-            state.captureRarities.get(Number(outlandNormalizeSpeciesId(species.id))),
+            captureRarityForSpecies(state.captureRarities,species.id),
             ball.efficiency,estimate?.killsH??null,{
                 mix,acceptedFraction:acceptance,
                 hypotheticalLure:state.filters.shinyLurePreview
@@ -6990,6 +7009,7 @@
 
         state.combatCatalogStatus =
             'loading';
+        state.combatCatalogError = null;
 
         const load =
             url =>
@@ -7090,6 +7110,7 @@
 
                         state.combatCatalogStatus =
                             'ready';
+                        state.combatCatalogError = null;
 
                         state.combatRevision++;
                         state.combatProfileCache =
@@ -7102,6 +7123,7 @@
                     error => {
                         state.combatCatalogStatus =
                             'error';
+                        state.combatCatalogError = String(error?.message || error);
 
                         console.warn(
                             '[PokéIdle Hunt Atlas] combat catalog failed',
@@ -13850,6 +13872,15 @@
     // Cheap, read-only snapshot; evaluated only during the controller's normal
     // detailed telemetry. Never triggers an independent refresh or network call.
     function controllerMetrics() {
+        // The controller can read metrics without anyone opening HuntAtlas.
+        // Start a one-time catalog load if the initial startup load has not
+        // finished. Never block the synchronous Bridge snapshot.
+        if (state.combatCatalogStatus !== 'ready' &&
+            state.combatCatalogStatus !== 'loading') ensureCombatCatalog();
+        // Restore game state from the Bridge when our WebSocket hook missed
+        // the initial welcome frame; no additional socket is opened.
+        if (!state.hunts.length || !state.huntSceneKnown || !state.activeSocket)
+            syncFromControllerBridge();
         const hunt = currentHunt();
         if (!hunt) return null;
         const xp = huntXpEstimate(hunt);
@@ -13878,8 +13909,26 @@
         const ballsPerCapture = finite(ultra?.ballsPerCapture) ??
             (finite(observed?.captures) > 0 && finite(observed?.throws) !== null
                 ? observed.throws / observed.captures : null);
+        const entries = Array.isArray(hunt.especies) ? hunt.especies : [];
+        const missing = entries.map(row => Number(outlandNormalizeSpeciesId(row.pokeId)))
+            .filter(id => !Number.isInteger(id) ||
+                captureRarityForSpecies(state.captureRarities, id) === null);
+        const captureInputs = {
+            catalog: state.combatCatalogStatus,
+            catalogError: state.combatCatalogError || null,
+            rarityEntries: state.captureRarities.size,
+            huntSpecies: entries.length,
+            coveredSpecies: entries.length - missing.length,
+            missingSpeciesIds: missing.filter(Number.isInteger).slice(0, 20),
+            ballCatalog: state.captureBallRates.size > 0 ? 'game' : 'wiki-default',
+            observations: observed ? {
+                kills: observed.kills, throws: observed.throws,
+                captures: observed.captures
+            } : null
+        };
         return {
-            version: 1, huntSlug: String(hunt.slug || ''),
+            version: 2, huntSlug: String(hunt.slug || ''),
+            captureInputs,
             xpH: finite(xp?.value), xpMeasured: Boolean(xp?.observed),
             coinsH: finite(economy?.realizedH ?? economy?.killCoinsH),
             coinsMeasured: finite(economy?.realizedH) !== null,
@@ -13917,7 +13966,7 @@
             const here = currentHunt();
             const xp = here ? huntXpEstimate(here) : null;
             return {
-                version: '1.9.9',
+                version: '1.9.20',
                 indexes: {
                     locations: state.locationIndexStatus,
                     markerCount: state.locationsBySlug.size,
@@ -14046,6 +14095,9 @@
 
     function bootstrap() {
         injectStyles();
+        // Capture rarity/ball modeling must work even with the Atlas closed.
+        // Reuses the existing cached catalog loader; no timer or game scan.
+        ensureCombatCatalog();
         ensureButton();
         installMapObserver();
         scheduleMapSync();
@@ -14068,7 +14120,7 @@
         },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.9.19 experimental loaded'
+            '[PokéIdle Hunt Atlas] v1.9.20 experimental loaded'
         );
     }
 
