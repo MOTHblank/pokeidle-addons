@@ -56,18 +56,21 @@ automatically copy profiles between operating systems.
    the available addons. **Show setup guide** reopens those instructions.
 4. Return to the main dashboard. The default **compact overview** shows all
    enabled accounts in a two-column layout when space allows: current hunt,
-   active Pokémon, trainer XP, XP gained since the preceding successful reading,
-   Auto Catch, confirmed Twitch XP bonuses, and warnings. Use **Show details**
+   active Pokémon, trainer XP, **EXP/hour**, estimated time to the next trainer
+   level, Auto Catch, confirmed Twitch XP bonuses, and warnings. Use **Show details**
    on an account to open its full-width inventory, capture statistics, tabs,
    streams and addon diagnostics below the overview. Only one detailed account
    is expanded at a time; **Hide details** returns to the compact view.
    Launch, stop and browser-mode controls remain available in the overview.
 
-Trainer XP gained comes from the cumulative XP value reported by Controller
-Bridge, not the level-relative progress bar. The first valid reading displays
-a dash until a second reading arrives; a reset, missing data or disconnected
-telemetry never produces a guessed XP gain. Redrawing the interface does not
-create extra samples.
+The Controller estimates EXP/hour from recent cumulative trainer XP gains
+over elapsed time, using a rolling history to smooth out short combat bursts.
+The time to the next level uses the game's next-level cumulative XP threshold.
+These figures are estimates, not promises: during startup, missing game data,
+progress resets, or periods without earned XP, unavailable estimates are shown
+as a dash rather than fabricated values. Both remain lightweight and require
+no additional game polling. Detailed monitoring diagnostics are collapsed
+below the dashboard by default.
 
 Twitch chat sharing and stream scanning are handled by the userscripts.
 The initial stream scan runs about 30 seconds after the site loads; subsequent
