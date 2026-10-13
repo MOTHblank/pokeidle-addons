@@ -31,6 +31,40 @@ static PT_BR: AtomicBool = AtomicBool::new(true);
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
 const UI_TRAY_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
 
+fn monitor_pace_for_slot(
+    expanded: Option<usize>,
+    index: usize,
+    enabled: bool,
+    hidden_in_tray: bool,
+) -> MonitorPace {
+    if hidden_in_tray {
+        MonitorPace::Background
+    } else if enabled && expanded == Some(index) {
+        MonitorPace::Detailed
+    } else {
+        MonitorPace::Compact
+    }
+}
+
+#[cfg(test)]
+mod adaptive_monitor_ui_tests {
+    use super::{monitor_pace_for_slot, MonitorPace};
+
+    #[test]
+    fn only_the_visible_expanded_account_gets_fast_polling() {
+        assert_eq!(monitor_pace_for_slot(Some(2), 2, true, false), MonitorPace::Detailed);
+        assert_eq!(monitor_pace_for_slot(Some(2), 1, true, false), MonitorPace::Compact);
+        assert_eq!(monitor_pace_for_slot(Some(2), 2, false, false), MonitorPace::Compact);
+        assert_eq!(monitor_pace_for_slot(None, 2, true, false), MonitorPace::Compact);
+        for index in 0..4 {
+            assert_eq!(
+                monitor_pace_for_slot(Some(2), index, true, true),
+                MonitorPace::Background
+            );
+        }
+    }
+}
+
 fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
 }
@@ -1112,13 +1146,9 @@ impl ControllerApp {
         // overrides that selection without forgetting which panel was open.
         let hidden = self.hidden_in_tray();
         for (index, slot) in self.games.iter().enumerate() {
-            let pace = if hidden {
-                MonitorPace::Background
-            } else if self.selected_details == Some(index) && self.accounts[index].enabled {
-                MonitorPace::Detailed
-            } else {
-                MonitorPace::Compact
-            };
+            let pace = monitor_pace_for_slot(
+                self.selected_details, index, self.accounts[index].enabled, hidden
+            );
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.set_pace(pace);
             }
