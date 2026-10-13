@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     mpsc, Arc, Mutex,
 };
 use std::thread;
@@ -14,11 +14,63 @@ use tungstenite::{client, stream::MaybeTlsStream, Message, WebSocket};
 
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
-// The inexpensive page heartbeat does not enumerate tabs or serialize game state.
-// Detailed game data and the cross-tab inventory have separate cadences.
+// The lightweight heartbeat, game telemetry and tab inventory have separate
+// cadences. Only the one expanded, visible account receives 5-second samples.
 pub(crate) const MONITOR_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(45);
-pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
-const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(45);
+pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const MONITOR_DETAIL_POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const MONITOR_BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
+const MONITOR_BACKGROUND_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(90);
+const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+// UI controls the telemetry pace via an atomic; no additional BiDi sessions
+// or cross-thread game-state copies are created by opening the details view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum MonitorPace {
+    Compact = 0,
+    Detailed = 1,
+    Background = 2,
+}
+
+impl MonitorPace {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Detailed,
+            2 => Self::Background,
+            _ => Self::Compact,
+        }
+    }
+
+    fn poll_interval(self) -> Duration {
+        match self {
+            Self::Compact => MONITOR_POLL_INTERVAL,
+            Self::Detailed => MONITOR_DETAIL_POLL_INTERVAL,
+            Self::Background => MONITOR_BACKGROUND_POLL_INTERVAL,
+        }
+    }
+
+    fn heartbeat_interval(self) -> Duration {
+        match self {
+            Self::Background => MONITOR_BACKGROUND_HEARTBEAT_INTERVAL,
+            _ => MONITOR_HEARTBEAT_INTERVAL,
+        }
+    }
+}
+
+fn should_reuse_game_context(
+    pace: MonitorPace,
+    known_context: bool,
+    now: Instant,
+    next_discovery: Instant,
+    next_tabs: Instant,
+) -> bool {
+    pace == MonitorPace::Detailed
+        && known_context
+        && now < next_discovery
+        && now < next_tabs
+}
+
 pub(crate) const MONITOR_TAB_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const MONITOR_SESSION_LIMIT_RETRY_INTERVAL: Duration = Duration::from_secs(60);
@@ -234,6 +286,7 @@ pub struct MonitorHandle {
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    pace: Arc<AtomicU8>,
 }
 
 impl MonitorHandle {
@@ -243,15 +296,17 @@ impl MonitorHandle {
         let commands = Arc::new(Mutex::new(CommandMailbox::default()));
         let close_request = Arc::new(Mutex::new(None));
         let close_worker = Arc::clone(&close_request);
+        let pace = Arc::new(AtomicU8::new(MonitorPace::Compact as u8));
+        let pace_worker = Arc::clone(&pace);
         let shared = Arc::clone(&health);
         let stop_worker = Arc::clone(&stop);
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, pace_worker);
         });
 
-        Self { health, stop, commands, close_request }
+        Self { health, stop, commands, close_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -277,6 +332,10 @@ impl MonitorHandle {
 
     pub fn health(&self) -> Health {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
+    }
+
+    pub(crate) fn set_pace(&self, pace: MonitorPace) {
+        self.pace.store(pace as u8, Ordering::Relaxed);
     }
 
     /// Ask Firefox to shut down through the existing BiDi session. Creating
@@ -499,16 +558,41 @@ fn monitor_loop(
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    pace: Arc<AtomicU8>,
 ) {
     let mut session: Option<BrowserSession> = None;
     let mut issues = MonitorIssueReporter::default();
     let mut next_full = Instant::now();
     let mut next_heartbeat = Instant::now();
     let mut next_tabs = Instant::now();
+    let mut next_discovery = Instant::now();
+    let mut active_pace = MonitorPace::from_u8(pace.load(Ordering::Relaxed));
     let mut setup_retry_interval = MONITOR_RETRY_INTERVAL;
 
     loop {
         expire_pending_commands(&commands);
+        let requested_pace = MonitorPace::from_u8(pace.load(Ordering::Relaxed));
+        if requested_pace != active_pace {
+            active_pace = requested_pace;
+            let now = Instant::now();
+            // An expanded view needs its first fresh reading immediately.
+            // When collapsing or hiding, don't immediately repeat a sample
+            // that already ran during the prior 5-second detail interval.
+            next_full = if active_pace == MonitorPace::Detailed {
+                now
+            } else {
+                health.lock().ok()
+                    .and_then(|current| current.last_successful_probe_at)
+                    .map(|at| at + active_pace.poll_interval())
+                    .unwrap_or(now)
+                    .max(now)
+            };
+            next_heartbeat = if active_pace == MonitorPace::Background {
+                now + active_pace.heartbeat_interval()
+            } else {
+                next_heartbeat.min(now + active_pace.heartbeat_interval())
+            };
+        }
         if stop.load(Ordering::Relaxed) {
             logging::info(&format!("BiDi monitor on port {} stopping", port));
             end_session(&mut session);
@@ -526,6 +610,7 @@ fn monitor_loop(
                     next_full = Instant::now() + stagger_delay(port, already_sampled);
                     next_heartbeat = next_full;
                     next_tabs = next_full;
+                    next_discovery = next_full;
                     if let Ok(mut current) = health.lock() {
                         current.state = "Connecting".to_string();
                         current.last_error = None;
@@ -587,11 +672,22 @@ fn monitor_loop(
 
             let now = Instant::now();
             if now >= next_full {
-                match probe_page(browser_session, headless, now >= next_tabs) {
+                let reuse_context = should_reuse_game_context(
+                    active_pace,
+                    browser_session.game_context.is_some(),
+                    now,
+                    next_discovery,
+                    next_tabs,
+                );
+                match probe_page(browser_session, headless, now >= next_tabs, reuse_context) {
                     Ok(probe) => {
                         let sample_at = Instant::now();
                         let interval = if probe.game_ready && probe.logged_in {
-                            MONITOR_POLL_INTERVAL
+                            active_pace.poll_interval()
+                        } else if active_pace == MonitorPace::Detailed {
+                            MONITOR_DETAIL_POLL_INTERVAL
+                        } else if active_pace == MonitorPace::Background {
+                            MONITOR_BACKGROUND_POLL_INTERVAL
                         } else {
                             MONITOR_STARTUP_POLL_INTERVAL
                         };
@@ -660,7 +756,13 @@ fn monitor_loop(
                         current.last_heartbeat_at = Some(sample_at);
                         }
                         next_full = sample_at + interval;
-                        next_heartbeat = sample_at + MONITOR_HEARTBEAT_INTERVAL;
+                        next_heartbeat = sample_at + active_pace.heartbeat_interval();
+                        if !reuse_context {
+                            // Even with a 5-second detail interval, refresh
+                            // browsingContext.getTree no more than once/minute
+                            // unless the cached context fails.
+                            next_discovery = sample_at + MONITOR_POLL_INTERVAL;
+                        }
                         if inspected_tabs {
                             next_tabs = sample_at + MONITOR_TAB_INTERVAL;
                         }
@@ -682,6 +784,11 @@ fn monitor_loop(
                         if closed {
                             end_session(&mut session);
                         } else {
+                            // Navigation can invalidate a cached tab ID.
+                            // Rediscover within this same Firefox BiDi session
+                            // before trying another fast targeted detail probe.
+                            browser_session.game_context = None;
+                            next_discovery = Instant::now();
                             next_full = Instant::now() + MONITOR_RETRY_INTERVAL;
                             next_heartbeat = next_full;
                         }
@@ -707,10 +814,12 @@ fn monitor_loop(
                     Err(_error) => {
                         // Navigation can invalidate an old game context. Resolve
                         // it via a full context lookup before reporting failure.
+                        browser_session.game_context = None;
+                        next_discovery = Instant::now();
                         next_full = Instant::now();
                     }
                 }
-                next_heartbeat = Instant::now() + MONITOR_HEARTBEAT_INTERVAL;
+                next_heartbeat = Instant::now() + active_pace.heartbeat_interval();
             }
 
             if session.is_some() {
@@ -725,6 +834,7 @@ fn monitor_loop(
         for _ in 0..(wait.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || pace.load(Ordering::Relaxed) != active_pace as u8
                 || (session.is_some() && commands.lock()
                     .map(|queue| !queue.pending.is_empty()).unwrap_or(false))
             {
@@ -839,7 +949,22 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
     })
 }
 
-fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) -> Result<Probe, String> {
+fn probe_page(
+    session: &mut BrowserSession,
+    headless: bool,
+    force_tabs: bool,
+    reuse_context: bool,
+) -> Result<Probe, String> {
+    let (contexts, game) = if reuse_context {
+        // Only the expanded account uses this fast path. Avoid enumerating
+        // Firefox contexts/tabs twelve times per minute.
+        (Vec::new(), ContextInfo {
+            id: session.game_context.clone()
+                .ok_or_else(|| "game context not discovered yet".to_string())?,
+            url: String::new(),
+            depth: 0,
+        })
+    } else {
     let tree_id = session.next_id;
     session.next_id += 1;
 
@@ -870,6 +995,8 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         .clone();
 
     session.game_context = Some(game.id.clone());
+    (contexts, game)
+    };
 
     let game_id = session.next_id;
     session.next_id += 1;
@@ -1067,7 +1194,9 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         .filter(|context| context.depth == 0)
         .map(|context| (context.id.clone(), context.url.clone()))
         .collect();
-    let tabs = if should_inspect_tabs(page_loading, force_tabs, &signature, &session.tab_signature) {
+    let tabs = if reuse_context {
+        None
+    } else if should_inspect_tabs(page_loading, force_tabs, &signature, &session.tab_signature) {
         let inspected = build_tab_infos(&contexts, &mut session.socket, &mut session.next_id);
         session.tab_signature = signature;
         Some(inspected)
@@ -1871,6 +2000,45 @@ mod command_tests {
     }
 
     #[test]
+    fn adaptive_polling_is_scoped_to_visible_details() {
+        use super::{
+            MonitorPace, MONITOR_DETAIL_POLL_INTERVAL, MONITOR_POLL_INTERVAL,
+            MONITOR_BACKGROUND_POLL_INTERVAL, should_reuse_game_context,
+        };
+        use std::time::{Duration, Instant};
+        assert_eq!(MonitorPace::Compact.poll_interval(), Duration::from_secs(60));
+        assert_eq!(MonitorPace::Detailed.poll_interval(), Duration::from_secs(5));
+        assert_eq!(MonitorPace::Background.poll_interval(), Duration::from_secs(180));
+        assert_eq!(MonitorPace::from_u8(1), MonitorPace::Detailed);
+        assert_eq!(MonitorPace::from_u8(2), MonitorPace::Background);
+        assert_eq!(MonitorPace::from_u8(99), MonitorPace::Compact);
+        assert_eq!(MONITOR_DETAIL_POLL_INTERVAL, Duration::from_secs(5));
+        assert_eq!(MONITOR_POLL_INTERVAL, Duration::from_secs(60));
+        assert_eq!(MONITOR_BACKGROUND_POLL_INTERVAL, Duration::from_secs(180));
+        let now = Instant::now();
+        assert!(should_reuse_game_context(
+            MonitorPace::Detailed, true, now,
+            now + Duration::from_secs(15), now + Duration::from_secs(15)
+        ));
+        assert!(!should_reuse_game_context(
+            MonitorPace::Compact, true, now,
+            now + Duration::from_secs(15), now + Duration::from_secs(15)
+        ));
+        assert!(!should_reuse_game_context(
+            MonitorPace::Detailed, false, now,
+            now + Duration::from_secs(15), now + Duration::from_secs(15)
+        ));
+        assert!(!should_reuse_game_context(
+            MonitorPace::Detailed, true, now,
+            now - Duration::from_secs(1), now + Duration::from_secs(15)
+        ));
+        assert!(!should_reuse_game_context(
+            MonitorPace::Detailed, true, now,
+            now + Duration::from_secs(15), now - Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
     fn freshness_window_covers_normal_poll_interval() {
         use super::{
             Health, MONITOR_POLL_INTERVAL, MONITOR_STARTUP_POLL_INTERVAL,
@@ -1878,7 +2046,7 @@ mod command_tests {
         };
         use std::time::{Duration, Instant};
 
-        assert_eq!(MONITOR_POLL_INTERVAL, Duration::from_secs(3 * 60));
+        assert_eq!(MONITOR_POLL_INTERVAL, Duration::from_secs(60));
         assert_eq!(MONITOR_STARTUP_POLL_INTERVAL, Duration::from_secs(45));
         assert!(MONITOR_POLL_INTERVAL < TELEMETRY_FRESHNESS_LIMIT);
         let mut health = Health::default();

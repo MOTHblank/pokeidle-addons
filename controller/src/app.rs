@@ -4,7 +4,7 @@ use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
 use crate::monitor::{
-    Health, MonitorHandle, MONITOR_HEARTBEAT_INTERVAL,
+    Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
 };
 use crate::update::{self, SharedUpdateStatus};
@@ -29,6 +29,41 @@ static PT_BR: AtomicBool = AtomicBool::new(true);
 
 // Redraw cached information more often without triggering additional BiDi reads.
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
+const UI_TRAY_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
+
+fn monitor_pace_for_slot(
+    expanded: Option<usize>,
+    index: usize,
+    enabled: bool,
+    hidden_in_tray: bool,
+) -> MonitorPace {
+    if hidden_in_tray {
+        MonitorPace::Background
+    } else if enabled && expanded == Some(index) {
+        MonitorPace::Detailed
+    } else {
+        MonitorPace::Compact
+    }
+}
+
+#[cfg(test)]
+mod adaptive_monitor_ui_tests {
+    use super::{monitor_pace_for_slot, MonitorPace};
+
+    #[test]
+    fn only_the_visible_expanded_account_gets_fast_polling() {
+        assert_eq!(monitor_pace_for_slot(Some(2), 2, true, false), MonitorPace::Detailed);
+        assert_eq!(monitor_pace_for_slot(Some(2), 1, true, false), MonitorPace::Compact);
+        assert_eq!(monitor_pace_for_slot(Some(2), 2, false, false), MonitorPace::Compact);
+        assert_eq!(monitor_pace_for_slot(None, 2, true, false), MonitorPace::Compact);
+        for index in 0..4 {
+            assert_eq!(
+                monitor_pace_for_slot(Some(2), index, true, true),
+                MonitorPace::Background
+            );
+        }
+    }
+}
 
 fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
@@ -860,7 +895,7 @@ struct TrayRuntime {
 
 #[cfg(windows)]
 impl TrayRuntime {
-    fn new(ctx: egui::Context) -> Result<Self, String> {
+    fn new(ctx: egui::Context, hidden: Arc<AtomicBool>) -> Result<Self, String> {
         let menu = Menu::new();
         let show_item = MenuItem::new("Mostrar / Show Moth", true, None);
         let separator = PredefinedMenuItem::separator();
@@ -900,14 +935,14 @@ impl TrayRuntime {
                                 button_state: MouseButtonState::Up,
                                 ..
                             } if id == tray_id => {
-                                restore_from_tray(&ctx);
+                                restore_from_tray(&ctx, &hidden);
                             }
                             TrayIconEvent::DoubleClick {
                                 id,
                                 button: MouseButton::Left,
                                 ..
                             } if id == tray_id => {
-                                restore_from_tray(&ctx);
+                                restore_from_tray(&ctx, &hidden);
                             }
                             _ => {}
                         }
@@ -915,7 +950,7 @@ impl TrayRuntime {
 
                     while let Ok(event) = MenuEvent::receiver().try_recv() {
                         if event.id == show_id {
-                            restore_from_tray(&ctx);
+                            restore_from_tray(&ctx, &hidden);
                         } else if event.id == quit_id {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ctx.request_repaint();
@@ -950,7 +985,8 @@ impl Drop for TrayRuntime {
 }
 
 #[cfg(windows)]
-fn restore_from_tray(ctx: &egui::Context) {
+fn restore_from_tray(ctx: &egui::Context, hidden: &AtomicBool) {
+    hidden.store(false, Ordering::Relaxed);
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -1031,6 +1067,8 @@ pub struct ControllerApp {
     addon_refresh_tx: Sender<()>,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
+    #[cfg(windows)]
+    tray_hidden: Arc<AtomicBool>,
 }
 
 impl ControllerApp {
@@ -1044,7 +1082,9 @@ impl ControllerApp {
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
 
         #[cfg(windows)]
-        let tray = match TrayRuntime::new(cc.egui_ctx.clone()) {
+        let tray_hidden = Arc::new(AtomicBool::new(false));
+        #[cfg(windows)]
+        let tray = match TrayRuntime::new(cc.egui_ctx.clone(), Arc::clone(&tray_hidden)) {
             Ok(tray) => Some(tray),
             Err(error) => {
                 logging::warn(&format!("system tray initialization failed: {error}"));
@@ -1081,6 +1121,8 @@ impl ControllerApp {
             addon_refresh_tx,
             #[cfg(windows)]
             tray,
+            #[cfg(windows)]
+            tray_hidden,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -1090,6 +1132,27 @@ impl ControllerApp {
 
     fn game_index(profile: GameProfile) -> usize {
         profile.index()
+    }
+
+    fn hidden_in_tray(&self) -> bool {
+        #[cfg(windows)]
+        { self.tray_hidden.load(Ordering::Relaxed) }
+        #[cfg(not(windows))]
+        { false }
+    }
+
+    fn sync_monitor_paces(&self) {
+        // Exactly one account may be expanded. Hiding the whole controller
+        // overrides that selection without forgetting which panel was open.
+        let hidden = self.hidden_in_tray();
+        for (index, slot) in self.games.iter().enumerate() {
+            let pace = monitor_pace_for_slot(
+                self.selected_details, index, self.accounts[index].enabled, hidden
+            );
+            if let Some(monitor) = slot.monitor.as_ref() {
+                monitor.set_pace(pace);
+            }
+        }
     }
 
     fn account_name(&self, profile: GameProfile) -> String {
@@ -1716,7 +1779,9 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
-        ui.ctx().request_repaint_after(UI_REPAINT_INTERVAL);
+        ui.ctx().request_repaint_after(
+            if self.hidden_in_tray() { UI_TRAY_REPAINT_INTERVAL } else { UI_REPAINT_INTERVAL }
+        );
 
         draw_sidebar(self, ui);
 
@@ -1796,6 +1861,7 @@ impl eframe::App for ControllerApp {
                             #[cfg(windows)]
                             {
                                 if self.tray.is_some() {
+                                    self.tray_hidden.store(true, Ordering::Relaxed);
                                     ui.ctx().send_viewport_cmd(
                                         egui::ViewportCommand::Visible(false),
                                     );
@@ -1843,6 +1909,10 @@ impl eframe::App for ControllerApp {
         if self.show_accounts {
             draw_accounts_window(self, ui.ctx());
         }
+        // Apply after widgets so a Show/Hide Details click changes the
+        // polling schedule in the same frame (and tray hiding immediately
+        // switches all four monitors to the inexpensive background pace).
+        self.sync_monitor_paces();
     }
 }
 
