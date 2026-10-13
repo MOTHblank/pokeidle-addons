@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.6.0
+// @version      6.6.1
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.0');
+        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.1');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -326,6 +326,7 @@
 
     const ballCatalog = new Map();
     const itemCatalog = new Map();
+    let serverItemCatalogReady = false;
     const protocolBalls = new Map();
     const protocolItems = new Map();
     const restockPending = new Map();
@@ -1002,7 +1003,7 @@
         );
     }
 
-    function mergeItemCatalog(catalog) {
+    function mergeItemCatalog(catalog, source = 'fallback') {
         const list = Array.isArray(catalog)
             ? catalog
             : Array.isArray(catalog?.items)
@@ -1012,33 +1013,26 @@
         if (!list.length) return;
 
         for (const item of list) {
+            // The live shop is authoritative. The bundled items.json can
+            // lag behind new shop inventory (for example Golden Potion).
             const id = Number(item?.itemId ?? item?.id);
-            if (!Number.isFinite(id)) continue;
+            if (!Number.isSafeInteger(id) || id <= 0) continue;
 
-            const name = item?.name || item?.nome;
-            if (
-                !name ||
-                (!isRestockPotion({ name }) && !isRestockRevive({ name }))
-            ) {
+            const previous = itemCatalog.get(id);
+            // Fetch of the older assets/items.json can finish *after* the
+            // welcome payload. Never overwrite a shop item with stale data.
+            if (source !== 'shop' && previous?.source === 'shop') continue;
+
+            const name = item?.name || item?.nome || previous?.name;
+            if (!name || (!isRestockPotion({ name }) &&
+                !isRestockRevive({ name }))) {
                 continue;
             }
 
-            /*
-             * Keep potions and revives in the same source catalog, but let
-             * their selectors classify them independently. The previous
-             * potion-only gate silently discarded every Revive before
-             * restockReviveEntries() could ever see it.
-             *
-             * items.json is the complete item catalog; the server's
-             * itensCompraveis payload may supply a more specific price.
-             * Do not replace a known price with zero when a partial payload
-             * omits price fields.
-             */
             const suppliedPrice =
                 item?.preco ??
                 item?.npcPrice ??
                 item?.priceGold;
-            const previous = itemCatalog.get(id);
             const parsedPrice = Number(suppliedPrice);
             const priceGold =
                 suppliedPrice != null &&
@@ -1053,6 +1047,9 @@
                 nome: name,
                 icon: item?.icon || previous?.icon || '',
                 priceGold,
+                source,
+                // No synthetic shop items, ids or prices. A potion only
+                // becomes auto-buyable after a verified catalog entry.
                 compravel: Number.isFinite(priceGold) && priceGold > 0
             });
         }
@@ -1069,7 +1066,10 @@
             if (!snapshot?.ready) return false;
 
             mergeBallCatalog(snapshot.balls);
-            mergeItemCatalog(snapshot.items);
+            if (Array.isArray(snapshot.items)) {
+                serverItemCatalogReady = true;
+                mergeItemCatalog(snapshot.items, 'shop');
+            }
             if (snapshot.state) {
                 mergeProtocolState(snapshot.state);
             }
@@ -1118,7 +1118,7 @@
                 return response.json();
             })
             .then(payload => {
-                mergeItemCatalog(payload);
+                mergeItemCatalog(payload, 'fallback');
                 if (
                     !restockPotionEntries().length &&
                     !restockReviveEntries().length
@@ -1391,14 +1391,16 @@
             const hasSelected = entries.some(entry =>
                 Number(entry.id) === selectedId
             );
-            const selected = hasSelected
-                ? selectedId
-                : entries.length
-                    ? Number(entries[0].id)
-                    : null;
+            // Preserve a saved Golden Potion (or any other live-shop item)
+            // while the older local items.json is the only available catalog.
+            // Missing inventory/catalog data must never silently switch
+            // an existing restock rule to buying Small Potion.
+            const selected = hasSelected ? selectedId : (
+                selectedId > 0 ? selectedId :
+                    entries.length ? Number(entries[0].id) : null
+            );
 
-            // Do not discard a saved choice while the catalog is loading.
-            if (entries.length && selected !== selectedId) {
+            if (selectedId <= 0 && entries.length && selected !== selectedId) {
                 settings.restock[category.field] = selected;
                 changed = true;
             }
@@ -1413,12 +1415,23 @@
             host.dataset.signature = signature;
             host.replaceChildren();
 
-            if (!entries.length) {
+            if (!hasSelected && selectedId > 0) {
+                const waiting = document.createElement('span');
+                waiting.className = 'moth-ac-restock-waiting';
+                waiting.textContent =
+                    category.field === 'selectedPotionId' &&
+                    settings.restock.selectedPotionName
+                        ? settings.restock.selectedPotionName + ' · …'
+                        : 'Selected item · …';
+                waiting.title = serverItemCatalogReady
+                    ? 'Saved item is not available from the live shop catalog; choose another'
+                    : 'Waiting for live shop catalog; saved choice is preserved';
+                host.appendChild(waiting);
+            } else if (!entries.length) {
                 const waiting = document.createElement('span');
                 waiting.textContent = '…';
                 waiting.title = 'Waiting for ' + category.label + ' catalog';
                 host.appendChild(waiting);
-                continue;
             }
 
             for (const entry of entries) {
@@ -1437,6 +1450,9 @@
                 ));
                 button.addEventListener('click', () => {
                     settings.restock[category.field] = Number(entry.id);
+                    if (category.field === 'selectedPotionId') {
+                        settings.restock.selectedPotionName = name;
+                    }
                     saveSettings();
                     maybeRestock();
                     updateUI();
@@ -1882,7 +1898,10 @@
             protocolHookInstalled = true;
 
             mergeBallCatalog(decoded.catalogoBolas);
-            mergeItemCatalog(decoded.itensCompraveis);
+            if (Array.isArray(decoded.itensCompraveis)) {
+                serverItemCatalogReady = true;
+                mergeItemCatalog(decoded.itensCompraveis, 'shop');
+            }
             mergeProtocolState(decoded.estado);
 
             maybeRestock();
@@ -2636,6 +2655,15 @@
                 height: 23px;
                 object-fit: contain;
                 image-rendering: pixelated;
+            }
+
+            .moth-ac-restock-waiting {
+                flex-basis: 100%;
+                color: #c7aeb7;
+                font-size: 9px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
 
             .moth-ac-restock-status {
