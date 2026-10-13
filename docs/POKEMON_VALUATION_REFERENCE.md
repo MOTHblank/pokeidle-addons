@@ -2,7 +2,7 @@
 
 **Status:** research / implementation reference, not a deployed pricing algorithm  
 **Reviewed:** 2026-10-12  
-**Sources:** the complete PokéIdle wiki supplied by the project owner (especially *Stats, Qualidade e IV*, *Nota, Poder e Calculadora*, *Potência*, *Shiny*, *Combate*, *Evolução*, *Mercado da Comunidade*, and *Todas as taxas*); [pokeidle-upstream](https://github.com/MOTHblank/pokeidle-upstream) `master`; and this repository's [Moth Watch](../addons/market-bot.user.js).  
+**Sources:** the complete PokéIdle wiki supplied by the project owner (especially *Stats, Qualidade e IV*, *Nota, Poder e Calculadora*, *Potência*, *Shiny*, *Combate*, *Evolução*, *Mercado da Comunidade*, and *Todas as taxas*); [pokeidle-upstream](https://github.com/MOTHblank/pokeidle-upstream) `master`; and [Moth Watch v0.1.51 (historical source)](https://github.com/MOTHblank/pokeidle-addons/blob/03a09abf7bf8cb0d89db518729a18b8aa66d4ec7/addons/market-bot.user.js).  
 **Source authority:** wiki = stated live game rules; upstream mirror = inspected client/shared implementation; Moth Watch = existing behavior. Where a server-only calculation, message shape, live transaction sample, or buyer preference is missing, this document says so rather than guessing.
 
 ## Executive findings
@@ -11,7 +11,7 @@
 2. **Listing eligibility is not strictly “score > 3.5.”** The shared rule is **level >= 50 and N >= 3.5**, inclusive, with **shiny and P5 bypassing both minimums**. Shiny listings can use **Gems only**.
 3. **N=3.5 versus N=4.0 is a meaningful market boundary**, not an instruction to raise the price by 4/3.5. Supply is censored by the 3.5 minimum; there can be a large price difference even for a small grade difference. No reliable numeric price premium has been established.
 4. **N is not combat fitness or interchangeable across species.** For a physical attacker an exceptional ATK IV can matter more than a higher total N driven by other stats; special attackers prioritize Sp.Atk. Speed IV affects attack cooldowns despite Speed not appearing in direct damage.
-5. **Moth Watch currently pools unlike Pokémon.** Its completed-sale lookup groups by `currency | speciesId | shiny | potency | level band`, with a fallback that drops level band. **It does not group by N, IV distribution, quality, refinement, moves/TMs, or buyer-desired build.** Its current median is a *coarse historical comparator*, **not an ideal price**.
+5. **Moth Watch v0.1.51 pooled unlike Pokémon.** Its completed-sale lookup groups by `currency | speciesId | shiny | potency | level band`, with a fallback that drops level band. **It does not group by N, IV distribution, quality, refinement, moves/TMs, or buyer-desired build.** Its current median is a *coarse historical comparator*, **not an ideal price**.
 
 ## 1. The exact grade calculation: upstream
 
@@ -114,9 +114,9 @@ Sources: wiki *Mercado da Comunidade*, *Todas as taxas*; upstream [`shared/nota-
 
 The **3.5 floor creates selection bias**: ordinary below-floor specimens are absent from normal listings; high-N or unusual P5/shiny populations will have very different sample distributions. “Average of listed creatures” is especially misleading near 3.5.
 
-## 5. What Moth Watch does today (verified, not proposed)
+## 5. What Moth Watch v0.1.51 did before migration (historical)
 
-Source: [`addons/market-bot.user.js`](../addons/market-bot.user.js).
+Historical source: [Moth Watch v0.1.51](https://github.com/MOTHblank/pokeidle-addons/blob/03a09abf7bf8cb0d89db518729a18b8aa66d4ec7/addons/market-bot.user.js). For the current script and v2 reference model see [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium).
 
 1. It requests `market.historicoGlobal` pages for Pokémon separately in `gold` and `orb`; it takes `line.ficha` and a positive `line.bruto ?? line.preco`. Default: **12 history pages**, **60-minute** refresh, **minimum 3 completed-sale samples**. It retains up to 200 prices per bucket and stores a local reference (version 1).
 2. `pokemonBucketKeys()` uses `currency | speciesId | shiny | potency | level band`, falling back to `currency | speciesId | shiny | potency`. Level bands: <100, 100–499, 500–999, 1000–4999, 5000–9999, 10000–24999, 25000+.
@@ -127,7 +127,7 @@ Source: [`addons/market-bot.user.js`](../addons/market-bot.user.js).
 
 `ficha` is passed through from game messages and might contain useful fields (e.g., `nota`, `ivs`, `quality`, `refino`), but **the exact fields present in both listing and completed-sale payloads have not been established from the available shared/client upstream mirror**. Verify an actual authorized, redacted response before designing a required field or storing real user IDs.
 
-## 6. Proposed fair-price/reference model (future work, not implemented)
+## 6. Proposed fair-price/reference model (research; partial premium implementation)
 
 **Principle:** first establish valid *comparable sales*; do not assign arbitrary multipliers such as “+25% price for P4” because **+25% stats is not +25% demand**.
 
@@ -190,4 +190,4 @@ These are wiki statements, not claims that all related server modules are presen
 - That an upstream *client/shared* mirror proves server-side market query, executed price or full transaction history semantics.
 - That a high-confidence or automated Pokémon buying model exists today.
 
-**Code cross-reference:** `notaPokemon`, `notaDePokemon`, `notaMercadoDoPokemon`, `motivoNaoAnunciavel` (upstream `shared/nota-pokemon.mjs`); `anotarLinhagemDaNota` (`shared/linhagem-nota.mjs`); `basesComRefino` (`shared/refino-stats.mjs`); `pokemonBucketKeys`, `pokemonReferenceFor`, `addPokemonHistorySample`, `handlePokemonListings` (Moth Watch).
+**Code cross-reference:** `notaPokemon`, `notaDePokemon`, `notaMercadoDoPokemon`, `motivoNaoAnunciavel` (upstream `shared/nota-pokemon.mjs`); `anotarLinhagemDaNota` (`shared/linhagem-nota.mjs`); `basesComRefino` (`shared/refino-stats.mjs`); `pokemonBucketKeys` (legacy), `pokemonReferenceFor`, `addPokemonHistorySample`, `handlePokemonListings` (Moth Watch).

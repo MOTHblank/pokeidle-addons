@@ -83,8 +83,8 @@ Mantém as páginas da Twitch no menor consumo prático. Pop-outs de chat da Twi
 **PokéIdle Hunt Atlas**  
 Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. 
 
-**PokéIdle Moth Watch**  
-Monitoramento e compra configurável do mercado.
+**Moth Watch (separado)**  
+Não é mais distribuído por este repositório nem instalado pelo Controller. Para uso opcional, consulte [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). A configuração e as atualizações devem ser feitas separadamente no Violentmonkey.
 
 ## Como configurar os userscripts
 
@@ -110,26 +110,9 @@ Abra o painel **Performance+** no PokéIdle.
 Ele vem habilitado por padrão. O perfil de desempenho pode ser ajustado ali. Para contas usadas apenas para ficar AFK, mantenha-o ativo.
 
 
-### Moth Watch
+### Moth Watch (instalação separada)
 
-Abra a interface **Moth Watch** do userscript no PokéIdle para configurar:
-
-- porcentagem máxima do preço observado;
-- porcentagem para compra automática;
-- intervalo de varredura;
-- mercado de itens;
-- mercado de Pokémon;
-- compra automática de itens;
-- compra automática de Pokémon;
-- reservas de ouro;
-- reservas de gemas;
-- limites por compra.
-
-A compra automática começa desativada por padrão. Ative-a somente depois de conferir as regras de preço e as reservas da conta.
-
-**Regras fixas de compra e venda:** escolha o item e a moeda, depois defina o preço máximo para comprar e/ou o preço para vender. O preço é sempre **por unidade**. Valor zero desativa aquela ação. O Moth Watch compra automaticamente todas as unidades do anúncio que couberem no saldo e nos limites financeiros; ao vender, anuncia todas as unidades disponíveis, exceto a quantidade definida em **Manter quantidade**. Não há mais opções separadas de quantidade por compra/anúncio nem caixas de seleção “comprar/vender todas”.
-
-As chaves gerais das automações continuam **desligadas por padrão**. Regras previamente salvas mantêm preços, ativações e estoques reservados, mas passam a seguir a nova política de quantidade total. **Atenção:** reserva zero e gasto máximo por compra zero significam ausência de limite adicional; configure esses valores antes de ativar uma regra para evitar gastar todo o saldo disponível.
+A partir da próxima versão, o **Moth Watch não é instalado, atualizado nem distribuído** pelo Controller ou por este repositório. A versão premium possui [código e instruções próprias](https://github.com/MOTHblank/pokeidle-addons-premium). No Firefox, remova ou substitua a cópia anterior do userscript para evitar duas instâncias executando juntas. A automação de compra por regras permanece desligada por padrão em perfis novos, e não há compra automática de Pokémon.
 
 ## Usando o Moth Controller
 
@@ -273,7 +256,6 @@ The **Manage Addons** section offers these userscripts for the selected profile:
 - Controller Bridge
 - Twitch Low Resource Mode
 - PokéIdle Hunt Atlas
-- PokéIdle Moth Watch
 
 **Install all (first setup)** opens every installer only when needed. **Repair selected** opens installers just for the checked userscripts; an opened installer is not confirmation of installation. Violentmonkey's automatic update setting (enabled separately in each Firefox profile) handles newer `@version` releases. **Check now** refreshes GitHub version information without touching the game or opening tabs. **Manage Addons** compares the versions reported by running userscripts with those published on GitHub. A dashboard warning links to the affected account when scripts need attention. Reload the game manually after an update; the controller deliberately does not interrupt gameplay. First-time setup guidance disappears once the complete live setup is verified or the user explicitly finishes setup with their chosen scripts, and can be reopened later.
 
@@ -289,7 +271,7 @@ The **Manage Addons** section offers these userscripts for the selected profile:
 
 **Hunt Atlas** remains an in-game userscript installed through **Accounts → Addons**. The Rust controller no longer provides a separate Hunt Atlas window.
 
-**Moth Watch** remains an in-game userscript. The Rust controller no longer provides a separate market panel; configure scanning and purchases in the userscript.
+**Moth Watch** moved to [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). The standard controller will not discover, install, or update it; use Violentmonkey separately if you choose to install the optional script.
 
 The dashboard uses vertical scrolling rather than shrinking account cards. Wide windows use two columns; narrow windows use one.
 
