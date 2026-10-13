@@ -4,7 +4,7 @@
 // @author       MOTHblank
 // @homepageURL  https://github.com/MOTHblank/pokeidle-addons-premium/tree/main/huntatlas
 // @supportURL   https://github.com/MOTHblank/pokeidle-addons-premium/issues
-// @version      1.9.17
+// @version      1.9.18
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -18,7 +18,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.17');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.18');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -13849,7 +13849,7 @@
     // detailed telemetry. Never triggers an independent refresh or network call.
     function controllerMetrics() {
         const hunt = currentHunt();
-        if (!hunt || !state.atlasEnabled) return null;
+        if (!hunt) return null;
         const xp = huntXpEstimate(hunt);
         const economy = huntEconomyEstimate(hunt, xp);
         const ultra = capturePlanForHunt(hunt, 4, xp);
@@ -14041,7 +14041,7 @@
         },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.9.17 experimental loaded'
+            '[PokéIdle Hunt Atlas] v1.9.18 experimental loaded'
         );
     }
 
