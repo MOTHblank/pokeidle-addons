@@ -75,6 +75,8 @@ pub struct Health {
     pub player_xp: String,
     /// Cumulative trainer XP from Controller Bridge; absent when unverified.
     pub player_total_xp: Option<u64>,
+    /// Cumulative XP remaining to reach the next trainer level.
+    pub player_xp_to_next: Option<u64>,
     pub gold: u64,
     pub orbs: u64,
     pub stream_bonus: String,
@@ -138,6 +140,7 @@ impl Default for Health {
             player_level: 0,
             player_xp: String::new(),
             player_total_xp: None,
+            player_xp_to_next: None,
             gold: 0,
             orbs: 0,
             stream_bonus: String::new(),
@@ -352,6 +355,7 @@ struct RuntimeProbe {
     player_level: u32,
     player_xp: String,
     player_total_xp: Option<u64>,
+    player_xp_to_next: Option<u64>,
     gold: u64,
     orbs: u64,
     fallen_count: u32,
@@ -415,6 +419,7 @@ struct Probe {
     player_level: u32,
     player_xp: String,
     player_total_xp: Option<u64>,
+    player_xp_to_next: Option<u64>,
     gold: u64,
     orbs: u64,
     stream_bonus: String,
@@ -593,6 +598,7 @@ fn monitor_loop(
                         current.player_level = probe.player_level;
                         current.player_xp = probe.player_xp;
                         current.player_total_xp = probe.player_total_xp;
+                        current.player_xp_to_next = probe.player_xp_to_next;
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
                         current.stream_bonus = probe.stream_bonus.clone();
@@ -1074,6 +1080,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
             page.get("playerXp").and_then(Value::as_str).unwrap_or_default().to_string()
         },
         player_total_xp: runtime.player_total_xp,
+        player_xp_to_next: runtime.player_xp_to_next,
         gold: runtime.gold,
         orbs: runtime.orbs,
         stream_bonus: if runtime.stream_bonus.is_empty() {
@@ -1094,6 +1101,14 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         kick_state_available: runtime.kick_state_available,
     })
 }
+/// The bridge exposes cumulative XP and next-level threshold. Never infer a
+/// level threshold from a text progress bar or assume it exists when missing.
+fn remaining_trainer_xp(state: &Value) -> Option<u64> {
+    let current = state.get("xp").and_then(Value::as_u64)?;
+    let next = state.get("xpProximo").and_then(Value::as_u64)?;
+    (next > current).then_some(next - current)
+}
+
 fn xp_progress(value: &Value, fallback: &str) -> String {
     let current = value.get("xp").and_then(Value::as_u64).unwrap_or(0);
     let floor = value.get("xpNivel").and_then(Value::as_u64).unwrap_or(0);
@@ -1484,6 +1499,7 @@ fn probe_runtime_details(
         player_level,
         player_xp,
         player_total_xp: state.get("xp").and_then(Value::as_u64),
+        player_xp_to_next: remaining_trainer_xp(&state),
         gold,
         orbs,
         fallen_count,
@@ -1818,6 +1834,17 @@ mod command_tests {
         health.last_heartbeat_at = Some(Instant::now());
         assert!(health.heartbeat_is_fresh());
         assert!(!health.telemetry_is_fresh()); // heartbeat is not a game snapshot
+    }
+
+    #[test]
+    fn level_progress_uses_absolute_trainer_thresholds() {
+        use super::remaining_trainer_xp;
+        use serde_json::json;
+        assert_eq!(remaining_trainer_xp(&json!({"xp": 1400, "xpProximo": 2000})), Some(600));
+        assert_eq!(remaining_trainer_xp(&json!({"xp": 2000, "xpProximo": 2000})), None);
+        assert_eq!(remaining_trainer_xp(&json!({"xp": 150, "xpProximo": 0})), None);
+        assert_eq!(remaining_trainer_xp(&json!({"xp": 150})), None);
+        assert_eq!(remaining_trainer_xp(&json!({"xp": "150", "xpProximo": 250})), None);
     }
 
     #[test]

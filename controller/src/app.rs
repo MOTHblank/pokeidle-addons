@@ -281,9 +281,13 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Current hunt" => "Caça atual",
         "Active Pokémon" => "Pokémon ativo",
         "Trainer XP" => "XP do treinador",
-        "XP gained" => "XP ganho",
-        "Since last reading" => "Desde a última leitura",
-        "Awaiting second reading" => "Aguardando segunda leitura",
+        "EXP/hour" => "EXP/h",
+        "Next level" => "Próximo nível",
+        "Estimated from recent gains; actual progress may vary" => "Estimativa com base no ganho recente de EXP; o tempo real pode variar",
+        "Calculating EXP rate" => "Calculando ritmo de EXP",
+        "No EXP gained recently" => "Sem ganho recente de EXP",
+        "Game progress unavailable" => "Progresso do jogo indisponível",
+        "Technical details" => "Detalhes técnicos",
         "No recent game data" => "Sem leitura recente do jogo",
         "Not confirmed" => "Não confirmado",
         "XP bonus" => "Bônus XP",
@@ -646,47 +650,95 @@ impl IdleProgressTracker {
     }
 }
 
-/// Trainer XP gained since the previous *successful* BiDi game reading.
-/// A cached UI repaint never creates another XP observation.
+/// Estimate earned trainer XP per hour from a short rolling history.
+/// Samples are cumulative XP and monotonic timestamps, never UI redraws.
+/// A four-to-six-sample window smooths combat bursts without endless averaging.
 #[derive(Debug, Default, Clone)]
-struct XpDeltaTracker {
-    sample_at: Option<Instant>,
-    total_xp: Option<u64>,
-    delta: Option<u64>,
+struct XpRateTracker {
+    samples: VecDeque<(Instant, u64)>,
+    rate_per_hour: Option<f64>,
 }
 
-impl XpDeltaTracker {
-    fn observe(&mut self, health: &Health) -> Option<u64> {
+impl XpRateTracker {
+    const MAX_SAMPLES: usize = 6;
+    const MAX_WINDOW: Duration = Duration::from_secs(20 * 60);
+
+    fn observe(&mut self, health: &Health) -> Option<f64> {
         if !health.telemetry_is_fresh() || !health.logged_in || !health.bridge_snapshot_ok {
             *self = Self::default();
             return None;
         }
-
-        let Some(current) = health.player_total_xp else {
-            *self = Self::default();
-            return None;
-        };
-        let Some(sample_at) = health.last_successful_probe_at else {
+        let (Some(at), Some(total)) =
+            (health.last_successful_probe_at, health.player_total_xp)
+        else {
             *self = Self::default();
             return None;
         };
 
-        if self.sample_at.is_some_and(|previous| sample_at <= previous) {
-            return self.delta;
+        if let Some(&(previous_at, previous_total)) = self.samples.back() {
+            // Ignore cached UI redraws and older readings.
+            if at <= previous_at {
+                return self.rate_per_hour;
+            }
+            // A reset, character switch, or unexpected counter decrease
+            // must never produce an absurd negative rate.
+            if total < previous_total {
+                self.samples.clear();
+                self.rate_per_hour = None;
+            }
+        }
+        self.samples.push_back((at, total));
+        while self.samples.len() > Self::MAX_SAMPLES
+            || self.samples.front().is_some_and(|(old_at, _)|
+                at.duration_since(*old_at) > Self::MAX_WINDOW
+                && self.samples.len() > 2)
+        {
+            self.samples.pop_front();
         }
 
-        // First sample (or a decreasing/reset counter) establishes a baseline.
-        // The cumulative counter works across trainer level-ups.
-        self.delta = self.total_xp.and_then(|previous| current.checked_sub(previous));
-        self.total_xp = Some(current);
-        self.sample_at = Some(sample_at);
-        self.delta
+        self.rate_per_hour = self.samples.front().zip(self.samples.back())
+            .and_then(|(&(start_at, start_total), &(end_at, end_total))| {
+                let seconds = end_at.duration_since(start_at).as_secs_f64();
+                if seconds < 60.0 { return None; }
+                let earned = end_total.checked_sub(start_total)?;
+                Some((earned as f64 * 3600.0) / seconds)
+            });
+        self.rate_per_hour
+    }
+}
+
+/// Time to next level at the recently observed earning rate; deliberately
+/// approximate. No ETA is shown for zero XP/h or an unknown level threshold.
+fn level_eta(remaining: Option<u64>, xp_per_hour: Option<f64>) -> Option<String> {
+    let (Some(remaining), Some(rate)) = (remaining, xp_per_hour) else {
+        return None;
+    };
+    if remaining == 0 || !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+    let minutes = ((remaining as f64 * 60.0) / rate).ceil().max(1.0);
+    if !minutes.is_finite() {
+        return None;
+    }
+    if minutes > 30.0 * 24.0 * 60.0 {
+        return Some(">30d".to_string());
+    }
+    let minutes = minutes as u64;
+    let days = minutes / (60 * 24);
+    let hours = (minutes / 60) % 24;
+    let mins = minutes % 60;
+    if days > 0 {
+        Some(format!("~{days}d {hours}h"))
+    } else if hours > 0 {
+        Some(format!("~{hours}h {mins}m"))
+    } else {
+        Some(format!("~{mins}m"))
     }
 }
 
 #[cfg(test)]
-mod xp_delta_tests {
-    use super::{Health, XpDeltaTracker};
+mod xp_rate_tests {
+    use super::{level_eta, Health, XpRateTracker};
     use std::time::{Duration, Instant};
 
     fn sample(at: Instant, total: Option<u64>) -> Health {
@@ -700,44 +752,52 @@ mod xp_delta_tests {
     }
 
     #[test]
-    fn gains_are_sample_based_not_repaint_based() {
+    fn rate_normalizes_elapsed_time_and_ignores_ui_redraws() {
         let now = Instant::now();
-        let first = now - Duration::from_secs(10);
-        let mut tracker = XpDeltaTracker::default();
-        let baseline = sample(first, Some(1_500));
+        let mut tracker = XpRateTracker::default();
+        let baseline = sample(now - Duration::from_secs(180), Some(1500));
         assert_eq!(tracker.observe(&baseline), None);
         assert_eq!(tracker.observe(&baseline), None);
-        let second = sample(now, Some(1_720));
-        assert_eq!(tracker.observe(&second), Some(220));
-        assert_eq!(tracker.observe(&second), Some(220));
-        assert_eq!(tracker.observe(&baseline), Some(220)); // ignore older snapshots
+        let next = sample(now, Some(1620));
+        assert_eq!(tracker.observe(&next), Some(2400.0));
+        assert_eq!(tracker.observe(&next), Some(2400.0));
+        assert_eq!(tracker.observe(&baseline), Some(2400.0));
     }
 
     #[test]
-    fn cumulative_xp_survives_level_ups_and_resets_safely() {
+    fn gains_are_smoothed_across_readings_and_level_ups() {
         let now = Instant::now();
-        let mut tracker = XpDeltaTracker::default();
-        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(12), Some(9_900))), None);
-        // The total continues increasing even when XP toward next level resets.
-        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(8), Some(10_100))), Some(200));
-        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(4), Some(5))), None);
-        assert_eq!(tracker.observe(&sample(now, Some(35))), Some(30));
+        let mut tracker = XpRateTracker::default();
+        tracker.observe(&sample(now - Duration::from_secs(360), Some(9800)));
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(180), Some(10100))), Some(6000.0));
+        // No progress in the latest interval lowers the rolling rate.
+        assert_eq!(tracker.observe(&sample(now, Some(10100))), Some(3000.0));
+        // A genuine counter reset creates a new baseline.
+        assert_eq!(tracker.observe(&sample(now + Duration::from_secs(180), Some(50))), None);
     }
 
     #[test]
-    fn unavailable_and_stale_readings_never_report_new_gains() {
+    fn stale_or_missing_game_data_clears_rate() {
         let now = Instant::now();
-        let mut tracker = XpDeltaTracker::default();
-        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(4), Some(10))), None);
-        assert_eq!(tracker.observe(&sample(now, Some(20))), Some(10));
-        let missing = sample(now, None);
-        assert_eq!(tracker.observe(&missing), None);
-        assert_eq!(tracker.observe(&sample(now, Some(30))), None);
-
-        let mut disconnected = sample(now, Some(40));
+        let mut tracker = XpRateTracker::default();
+        tracker.observe(&sample(now - Duration::from_secs(180), Some(20)));
+        tracker.observe(&sample(now, Some(40)));
+        assert_eq!(tracker.observe(&sample(now, None)), None);
+        assert_eq!(tracker.observe(&sample(now, Some(50))), None);
+        let mut disconnected = sample(now, Some(70));
         disconnected.state = "Reconnecting".into();
         assert_eq!(tracker.observe(&disconnected), None);
-        assert_eq!(tracker.observe(&sample(now, Some(40))), None);
+        assert_eq!(tracker.observe(&sample(now, Some(70))), None);
+    }
+
+    #[test]
+    fn estimated_level_time_has_human_readable_limits() {
+        assert_eq!(level_eta(Some(600), Some(1200.0)).as_deref(), Some("~30m"));
+        assert_eq!(level_eta(Some(3600), Some(1200.0)).as_deref(), Some("~3h 0m"));
+        assert_eq!(level_eta(Some(2000), Some(0.0)), None);
+        assert_eq!(level_eta(None, Some(1200.0)), None);
+        assert_eq!(level_eta(Some(1000), None), None);
+        assert_eq!(level_eta(Some(1_000_000_000), Some(1.0)).as_deref(), Some(">30d"));
     }
 }
 
@@ -984,7 +1044,7 @@ pub struct ControllerApp {
     tab_url_input: [String; 4],
     tab_url_open: [bool; 4],
     idle_progress: [IdleProgressTracker; 4],
-    xp_progress: [XpDeltaTracker; 4],
+    xp_rates: [XpRateTracker; 4],
     selected_details: Option<usize>,
     update_status: SharedUpdateStatus,
     addon_version_status: update::SharedAddonVersionStatus,
@@ -1034,7 +1094,7 @@ impl ControllerApp {
             tab_url_input: std::array::from_fn(|_| String::new()),
             tab_url_open: [false; 4],
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
-            xp_progress: std::array::from_fn(|_| XpDeltaTracker::default()),
+            xp_rates: std::array::from_fn(|_| XpRateTracker::default()),
             selected_details: None,
             update_status,
             addon_version_status,
@@ -1918,8 +1978,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .count();
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
-                    runtime_row(ui, "Game data", &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
-                    runtime_row(ui, "Game heartbeat", &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
+
                 });
 
             ui.add_space(12.0);
@@ -2082,8 +2141,10 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             }
 
-            ui.add_space(16.0);
-            draw_runtime_section(app, ui);
+            ui.add_space(12.0);
+            ui.collapsing(tr("Technical details"), |ui| {
+                draw_runtime_section(app, ui);
+            });
         });
 }
 
@@ -2095,10 +2156,10 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
-    let xp_gain = if running {
-        app.xp_progress[index].observe(&health)
+    let xp_per_hour = if running {
+        app.xp_rates[index].observe(&health)
     } else {
-        app.xp_progress[index] = XpDeltaTracker::default();
+        app.xp_rates[index] = XpRateTracker::default();
         None
     };
     let idle_warning = app.idle_warning_for(index, &health);
@@ -2129,26 +2190,6 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             });
             ui.add_space(2.0);
             status_badge(ui, &health, running);
-            if running {
-                let live = health.heartbeat_is_fresh();
-                let data = health.telemetry_is_fresh();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(if live { tr("Connected heartbeat") } else { tr("No recent game data") })
-                            .size(9.0).color(if live { GOOD } else { DIM }),
-                    );
-                    if let Some(age) = health.telemetry_age() {
-                        ui.label(
-                            RichText::new(format!(
-                                " · {} {} {}",
-                                tr(if data { "Recent game snapshot" } else { "Data cached" }),
-                                age.as_secs() / 60,
-                                tr("min ago")
-                            )).size(9.0).color(DIM)
-                        );
-                    }
-                });
-            }
             ui.add_space(9.0);
 
             ui.columns(2, |columns| {
@@ -2190,20 +2231,34 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 };
                 overview_value(&mut columns[0], "Trainer XP", &trainer_xp);
 
-                columns[1].label(RichText::new(tr("XP gained")).size(9.0).color(DIM));
-                let delta = xp_gain.map(|gain| format!("+{}", format_number(gain)));
-                let delta_text = delta.as_deref().unwrap_or("—");
+                columns[1].label(RichText::new(tr("EXP/hour")).size(9.0).color(DIM));
+                let rate_text = xp_per_hour
+                    .map(|rate| format_number(rate.round() as u64))
+                    .unwrap_or_else(|| "—".to_string());
                 columns[1].label(
-                    RichText::new(delta_text)
+                    RichText::new(rate_text)
                         .size(14.0).strong()
-                        .color(if delta.is_some() && fresh { GOOD } else { MUTED }),
-                ).on_hover_text(tr(if delta.is_some() {
-                    "Since last reading"
-                } else if fresh && health.bridge_snapshot_ok {
-                    "Awaiting second reading"
+                        .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
+                ).on_hover_text(tr(if xp_per_hour == Some(0.0) {
+                    "No EXP gained recently"
                 } else {
-                    "No recent game data"
+                    "Calculating EXP rate"
                 }));
+            });
+
+            ui.add_space(5.0);
+            let eta = if fresh && health.activity == "Hunting" {
+                level_eta(health.player_xp_to_next, xp_per_hour)
+            } else {
+                None
+            };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("{}:", tr("Next level")))
+                    .size(10.0).color(DIM));
+                ui.label(RichText::new(eta.as_deref().unwrap_or("—"))
+                    .size(11.0).strong()
+                    .color(if eta.is_some() { TEXT } else { MUTED }))
+                    .on_hover_text(tr("Estimated from recent gains; actual progress may vary"));
             });
 
             ui.add_space(9.0);
@@ -2254,7 +2309,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             if running && health.game_ready && health.logged_in
                 && health.activity == "Hunting" && !health.bridge_connected {
                 ui.label(
-                    RichText::new(tr("Idle detection unavailable without Controller Bridge telemetry"))
+                    RichText::new(tr("Game progress unavailable"))
                         .size(9.0).color(DIM),
                 );
             }
