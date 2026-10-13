@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéIdle Auto Catch+
 // @namespace    moth.pokeidle
-// @version      6.5.8
+// @version      6.6.0
 // @description  Configurable auto-catch with protocol-backed capture stats and per-target state.
 // @match        https://pokeidle.io/*
 // @grant        unsafeWindow
@@ -15,7 +15,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.5.8');
+        document.documentElement?.setAttribute('data-moth-addon-version-autocatch', '6.6.0');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -52,11 +52,13 @@
     const DEFAULTS = {
         enabled: false,
         intervalMs: 100,
+        ballPriority: ['beast', 'ultra'],
         use: {
             poke: true,
             great: true,
             super: true,
             ultra: true,
+            beast: true,
             master: false,
             other: false
         },
@@ -65,6 +67,7 @@
             great: 0,
             super: 0,
             ultra: 0,
+            beast: 0,
             master: 1,
             other: 0
         },
@@ -83,6 +86,46 @@
         }
     };
 
+    const BALL_PRIORITY_KEYS = ['beast', 'ultra', 'super', 'great', 'poke', 'master', 'other'];
+
+    function sanitizeBallPriority(priority) {
+        if (!Array.isArray(priority)) return [];
+        return [...new Set(priority.filter(key =>
+            BALL_PRIORITY_KEYS.includes(key)
+        ))].slice(0, 2);
+    }
+
+    function migrateBallPriority(saved) {
+        if (Array.isArray(saved.ballPriority)) {
+            return sanitizeBallPriority(saved.ballPriority);
+        }
+
+        // The previous default enabled every regular ball. That configuration
+        // was not an intentional ordering, so upgrade it to Beast -> Ultra.
+        const oldUse = saved.use;
+        if (!oldUse || (
+            oldUse.poke !== false &&
+            oldUse.great !== false &&
+            oldUse.super !== false &&
+            oldUse.ultra !== false &&
+            !oldUse.master &&
+            !oldUse.other
+        )) {
+            return [...DEFAULTS.ballPriority];
+        }
+
+        // Preserve customized legacy choices, strongest-first, up to two.
+        // The old "other" category was also how Beast Balls were classified.
+        const legacy = { ...oldUse };
+        if (legacy.other && legacy.beast === undefined) {
+            legacy.beast = true;
+            legacy.other = false;
+        }
+        return sanitizeBallPriority(
+            BALL_PRIORITY_KEYS.filter(key => Boolean(legacy[key]))
+        );
+    }
+
     function loadSettings() {
         try {
             const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -99,6 +142,7 @@
 
             // v6.3 removes the redundant floating capture HUD.
             delete saved.showHud;
+            saved.ballPriority = migrateBallPriority(saved);
 
             /*
              * v6.5 keeps balls and potions independent and adds Revives as a
@@ -260,6 +304,7 @@
                     ...DEFAULTS.use,
                     ...(saved.use || {})
                 },
+                ballPriority: saved.ballPriority,
                 reserve: {
                     ...DEFAULTS.reserve,
                     ...(saved.reserve || {})
@@ -389,6 +434,7 @@
             button?.querySelector('img')?.src
         ].filter(Boolean).join(' '));
 
+        if (text.includes('beast')) return 'beast';
         if (text.includes('master')) return 'master';
         if (text.includes('ultra')) return 'ultra';
         if (text.includes('super')) return 'super';
@@ -450,8 +496,9 @@
             great: 1,
             super: 2,
             ultra: 3,
-            other: 4,
-            master: 5
+            beast: 4,
+            other: 5,
+            master: 6
         }[key] ?? 99;
     }
 
@@ -465,45 +512,34 @@
     }
 
     function getEligibleBalls() {
+        const priority = sanitizeBallPriority(settings.ballPriority);
         return getBallButtons()
             .map((button, index) => {
                 const meta = ballMetaForButton(button);
                 const key = meta?.key || classifyBall(button);
-                const catchRate = Number(meta?.catchRate);
-
                 return {
                     button,
                     key,
                     index,
-                    count: ballCount(button),
-                    rank: rankFor(key),
-                    catchRate:
-                        Number.isFinite(catchRate) && catchRate > 0
-                            ? catchRate
-                            : null
+                    count: ballCount(button)
                 };
             })
             .filter(({ button, key, count }) => {
-                if (button.disabled || !visible(button) || !settings.use[key]) return false;
-
+                if (button.disabled || !visible(button) || !priority.includes(key)) {
+                    return false;
+                }
                 const reserve = Number(settings.reserve[key] || 0);
                 return count === null || count > reserve;
             })
-            .sort((a, b) => {
-                if (a.catchRate !== null && b.catchRate !== null) {
-                    return a.catchRate - b.catchRate || a.index - b.index;
-                }
-
-                if (a.catchRate !== null) return -1;
-                if (b.catchRate !== null) return 1;
-
-                return a.rank - b.rank || a.index - b.index;
-            });
+            // Selection order is intentional: use the primary ball until
+            // exhausted, then fall back to the second. No rate-based escalation.
+            .sort((a, b) =>
+                priority.indexOf(a.key) - priority.indexOf(b.key) ||
+                a.index - b.index
+            );
     }
 
     function chooseBall() {
-        // v5 intentionally has no escalation. Always use the weakest
-        // enabled ball that is above its configured reserve.
         return getEligibleBalls()[0] || null;
     }
 
@@ -750,6 +786,7 @@
                 value
             );
 
+        if (text.includes('beast')) return 'beast';
         if (
             text.includes(
                 'master'
@@ -948,7 +985,7 @@
     function isRestockPotion(item) {
         return Boolean(
             item &&
-            normalize(item.name || item.nome || '').includes('potion')
+            /potion|pocao/.test(normalize(item.name || item.nome || ''))
         );
     }
 
@@ -1246,11 +1283,18 @@
 
     function restockPotionEntries() {
         return [...itemCatalog.values()]
-            .filter(item =>
-                isRestockPotion(item) &&
-                item.compravel &&
-                Number(item.priceGold || 0) > 0
-            )
+            .filter(item => {
+                if (!isRestockPotion(item) ||
+                    !item.compravel ||
+                    Number(item.priceGold || 0) <= 0) return false;
+
+                // Keep a previously selected type available until changed.
+                // The current upstream catalog calls ID 204 "Ultimate Potion".
+                // Also accept Golden Potion if a live catalog supplies it.
+                const name = normalize(item.name || item.nome);
+                return Number(item.id) === Number(settings.restock.selectedPotionId) ||
+                    /small|ultimate|golden|dourad/.test(name);
+            })
             .sort((a, b) =>
                 Number(a.id) - Number(b.id)
             );
