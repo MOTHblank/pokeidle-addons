@@ -1,0 +1,31 @@
+name: Validate HuntAtlas and Bridge
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/huntatlas-tests.yml'
+      - 'huntatlas/**'
+      - 'addons/hunt-atlas.user.js'
+      - 'addons/controller-bridge.user.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate userscript syntax
+        run: |
+          node --check addons/controller-bridge.user.js
+          node --check addons/hunt-atlas.user.js
+          node --check huntatlas/hunt-atlas.user.js
+      - name: Run HuntAtlas regression suite
+        run: node --test huntatlas/tests/*.test.cjs
