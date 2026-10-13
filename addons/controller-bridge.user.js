@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.10
+// @version      1.3.11
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.10');
+        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.11');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -458,6 +458,9 @@
                 autoCatchRestock: text('#moth-ac-restock-status'),
                 streamScanStatus: scanner?.dataset?.mothScanStatus || '',
                 streamScanLive: Number(scanner?.dataset?.mothScanLive || 0) || 0,
+                streamScanTwitchChannels: scanner?.dataset?.mothScanTwitchChannels !== undefined &&
+                    scanner.dataset.mothScanTwitchChannels !== ''
+                    ? Number(scanner.dataset.mothScanTwitchChannels) : null,
                 streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0
             },
             hunts: copy(hunts) || [],

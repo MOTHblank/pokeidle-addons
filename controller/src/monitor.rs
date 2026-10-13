@@ -27,6 +27,8 @@ pub struct TabInfo {
     pub title: String,
     pub url: String,
     pub low_resource: bool,
+    /// Count requested by the managed Twitch popout URL, not a count of tabs.
+    pub twitch_channels: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +64,8 @@ pub struct Health {
     pub stream_scan_status: String,
     pub stream_scan_live: u32,
     pub stream_scan_opened: u32,
+    /// Scanner Twitch channel count; None if the installed scanner is too old.
+    pub stream_scan_twitch_channels: Option<u32>,
     pub xp_bonuses: Vec<String>,
     pub player_level: u32,
     pub player_xp: String,
@@ -117,6 +121,7 @@ impl Default for Health {
             stream_scan_status: String::new(),
             stream_scan_live: 0,
             stream_scan_opened: 0,
+            stream_scan_twitch_channels: None,
             xp_bonuses: Vec::new(),
             player_level: 0,
             player_xp: String::new(),
@@ -333,6 +338,7 @@ struct RuntimeProbe {
     stream_scan_status: String,
     stream_scan_live: u32,
     stream_scan_opened: u32,
+    stream_scan_twitch_channels: Option<u32>,
     stream_bonus: String,
     stream_bonus_pct: f32,
     stream_watching: Vec<String>,
@@ -376,6 +382,7 @@ struct Probe {
     stream_scan_status: String,
     stream_scan_live: u32,
     stream_scan_opened: u32,
+    stream_scan_twitch_channels: Option<u32>,
     xp_bonuses: Vec<String>,
     player_level: u32,
     player_xp: String,
@@ -543,6 +550,7 @@ fn monitor_loop(
                         current.stream_scan_status = probe.stream_scan_status;
                         current.stream_scan_live = probe.stream_scan_live;
                         current.stream_scan_opened = probe.stream_scan_opened;
+                        current.stream_scan_twitch_channels = probe.stream_scan_twitch_channels;
                         current.xp_bonuses = probe.xp_bonuses;
                         current.player_level = probe.player_level;
                         current.player_xp = probe.player_xp;
@@ -921,6 +929,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, Str
         stream_scan_status: runtime.stream_scan_status,
         stream_scan_live: runtime.stream_scan_live,
         stream_scan_opened: runtime.stream_scan_opened,
+        stream_scan_twitch_channels: runtime.stream_scan_twitch_channels,
         xp_bonuses: runtime.xp_bonuses,
         player_level: page.get("playerLevel").and_then(Value::as_str)
             .and_then(|v| v.trim().parse::<u32>().ok())
@@ -1006,14 +1015,14 @@ fn build_tab_infos(
                 "id": id,
                 "method": "script.evaluate",
                 "params": {
-                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css') })",
+                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
                     "target": { "context": context.id },
                     "awaitPromise": false
                 }
             }),
         );
 
-        let (title, low_resource) = result
+        let (title, low_resource, twitch_channels) = result
             .ok()
             .and_then(|value| {
                 value.get("result")
@@ -1025,6 +1034,9 @@ fn build_tab_infos(
             .map(|value| (
                 value.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
                 value.get("lowResource").and_then(Value::as_bool).unwrap_or(false),
+                if kind == "Twitch" {
+                    value.get("twitchChannels").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32)
+                } else { None },
             ))
             .unwrap_or_default();
 
@@ -1033,6 +1045,7 @@ fn build_tab_infos(
             title: if title.is_empty() { context.url.clone() } else { title },
             url: context.url.clone(),
             low_resource: kind == "Twitch" && low_resource,
+            twitch_channels,
         });
     }
 
@@ -1273,7 +1286,7 @@ fn probe_runtime_details(
         };
 
         xp_sources.push(format!(
-            "{} · chat not open: {}",
+            "{} · bonus not registered for: {}",
             bonus_label,
             stream_missing.join(", ")
         ));
@@ -1348,6 +1361,7 @@ fn probe_runtime_details(
         stream_scan_status: state.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
         stream_scan_live: state.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
+        stream_scan_twitch_channels: state.get("streamScanTwitchChannels").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32),
         stream_bonus,
         stream_bonus_pct,
         stream_watching,
