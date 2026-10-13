@@ -396,8 +396,6 @@ struct Probe {
     addon_total: u8,
     addon_missing: Vec<String>,
     addon_versions: BTreeMap<String, String>,
-    twitch_tabs: u8,
-    twitch_low_resource_ok: u8,
     performance_enabled: Option<bool>,
     performance_fps: String,
     performance_scene_runs: String,
@@ -559,7 +557,7 @@ fn monitor_loop(
                         };
                         let inspected_tabs = probe.tabs.is_some();
                         issues.recovered(port);
-                    if let Ok(mut current) = health.lock() {
+                        if let Ok(mut current) = health.lock() {
                         current.state = "Running".to_string();
                         current.url = probe.url;
                         current.title = probe.title;
@@ -618,7 +616,7 @@ fn monitor_loop(
                         current.last_error = None;
                         current.last_successful_probe_at = Some(sample_at);
                         current.last_heartbeat_at = Some(sample_at);
-                    }
+                        }
                         next_full = sample_at + interval;
                         next_heartbeat = sample_at + MONITOR_HEARTBEAT_INTERVAL;
                         if inspected_tabs {
@@ -1008,11 +1006,6 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         None
     };
 
-    let twitch_tabs = tabs.as_ref().map_or(0, |tabs| tabs
-        .iter().filter(|tab| tab.kind == "Twitch").count() as u8);
-    let twitch_low_resource_ok = tabs.as_ref().map_or(0, |tabs| tabs
-        .iter().filter(|tab| tab.kind == "Twitch" && tab.low_resource).count() as u8);
-
     let runtime = if page_loading {
         RuntimeProbe::default()
     } else {
@@ -1056,8 +1049,6 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
         addon_total,
         addon_missing,
         addon_versions,
-        twitch_tabs,
-        twitch_low_resource_ok,
         performance_enabled: page.get("performanceEnabled").and_then(Value::as_bool),
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
         performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),

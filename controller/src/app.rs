@@ -3751,7 +3751,10 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
         ("STOPPED", DIM)
     } else if no_readings {
         ("NO READINGS", DIM)
-    } else if health.telemetry_is_fresh() && health.activity == "Hunting" {
+    } else if health.telemetry_is_fresh()
+        && health.heartbeat_is_fresh()
+        && health.logged_in
+        && health.activity == "Hunting" {
         ("HUNTING", GOOD)
     } else if health.state == "Running" && health.logged_in {
         ("ONLINE", GOOD)
