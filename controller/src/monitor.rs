@@ -16,10 +16,11 @@ type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
 // Each full BiDi sample reads the game and every top-level browser tab.
 // Long-running logged-in sessions need only occasional status snapshots.
-const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
+const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(45);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(7 * 60);
+// Allow probe scheduling jitter without reporting an active game as stale.
+const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug)]
 pub struct TabInfo {
@@ -516,7 +517,7 @@ fn monitor_loop(
             match probe_page(browser_session, headless) {
                 Ok(probe) => {
                     // Poll more often only while the game is loading or awaiting login.
-                    // Once logged in, full browser scans are deliberately rare.
+                    // Keep the logged-in snapshots lightweight, but moderately responsive.
                     poll_interval = if probe.game_ready && probe.logged_in {
                         MONITOR_POLL_INTERVAL
                     } else {
@@ -596,7 +597,7 @@ fn monitor_loop(
         }
 
         // Interrupt the longer polling interval for browser commands and close
-        // requests; they must not wait for the next five-minute telemetry scan.
+        // requests; they must not wait for the next scheduled telemetry scan.
         for _ in 0..(poll_interval.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
@@ -1637,16 +1638,21 @@ mod command_tests {
 
     #[test]
     fn freshness_window_covers_normal_poll_interval() {
-        use super::{Health, MONITOR_POLL_INTERVAL, TELEMETRY_FRESHNESS_LIMIT};
+        use super::{
+            Health, MONITOR_POLL_INTERVAL, MONITOR_STARTUP_POLL_INTERVAL,
+            TELEMETRY_FRESHNESS_LIMIT,
+        };
         use std::time::{Duration, Instant};
 
+        assert_eq!(MONITOR_POLL_INTERVAL, Duration::from_secs(3 * 60));
+        assert_eq!(MONITOR_STARTUP_POLL_INTERVAL, Duration::from_secs(45));
         assert!(MONITOR_POLL_INTERVAL < TELEMETRY_FRESHNESS_LIMIT);
         let mut health = Health::default();
         health.state = "Running".to_string();
-        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(5 * 60));
+        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(4 * 60));
         assert!(health.telemetry_is_fresh());
 
-        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(8 * 60));
+        health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(6 * 60));
         assert!(!health.telemetry_is_fresh());
     }
 
