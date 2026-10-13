@@ -3,14 +3,14 @@ use crate::logging;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
-use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
+use tungstenite::{client, stream::MaybeTlsStream, Message, WebSocket};
 
 type BrowserSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -21,6 +21,10 @@ pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
 const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(45);
 pub(crate) const MONITOR_TAB_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+// Bound the TCP connect and WebSocket handshake, not just post-handshake reads.
+const BIDI_IO_TIMEOUT: Duration = Duration::from_secs(4);
+// A stream of unrelated responses must not keep one command alive indefinitely.
+const BIDI_RESPONSE_DEADLINE: Duration = Duration::from_secs(15);
 const TELEMETRY_FRESHNESS_LIMIT: Duration = Duration::from_secs(5 * 60);
 const HEARTBEAT_FRESHNESS_LIMIT: Duration = Duration::from_secs(2 * 60);
 const PROFILE_STAGGER: Duration = Duration::from_secs(12);
@@ -753,15 +757,20 @@ fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
 }
 
 fn open_session(port: u16) -> Result<BrowserSession, String> {
-    let (mut socket, _) = connect(format!("ws://127.0.0.1:{port}/session"))
-        .map_err(|error| error.to_string())?;
-    // Bounded I/O prevents an unanswered read from freezing monitoring forever.
-    if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
-        stream.set_read_timeout(Some(Duration::from_secs(4)))
-            .map_err(|error| format!("BiDi read timeout setup failed: {error}"))?;
-        stream.set_write_timeout(Some(Duration::from_secs(4)))
-            .map_err(|error| format!("BiDi write timeout setup failed: {error}"))?;
-    }
+    // tungstenite::connect performs the WebSocket handshake *before* callers
+    // can set I/O timeouts. A stalled Firefox listener could otherwise park
+    // the monitor thread indefinitely, even though the game keeps running.
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect_timeout(&address, BIDI_IO_TIMEOUT)
+        .map_err(|error| format!("BiDi TCP connection failed: {error}"))?;
+    stream.set_read_timeout(Some(BIDI_IO_TIMEOUT))
+        .map_err(|error| format!("BiDi read timeout setup failed: {error}"))?;
+    stream.set_write_timeout(Some(BIDI_IO_TIMEOUT))
+        .map_err(|error| format!("BiDi write timeout setup failed: {error}"))?;
+    let (mut socket, _) = client(
+        format!("ws://127.0.0.1:{port}/session"),
+        MaybeTlsStream::Plain(stream),
+    ).map_err(|error| format!("BiDi WebSocket handshake failed: {error}"))?;
 
     send_and_wait(
         &mut socket,
@@ -1137,6 +1146,13 @@ fn trim_pct(value: f32) -> String {
 }
 
 
+fn needs_tab_script_probe(kind: &str) -> bool {
+    // Only Twitch needs the injected low-resource marker and channel count.
+    // Reading titles from unrelated tabs (including busy game/web tabs)
+    // blocks all heartbeat checks on the single BiDi monitor thread.
+    kind == "Twitch"
+}
+
 fn build_tab_infos(
     contexts: &[ContextInfo],
     socket: &mut BrowserSocket,
@@ -1162,25 +1178,29 @@ fn build_tab_infos(
             "Web"
         };
 
-        let id = *next_id;
-        *next_id += 1;
+        let result = if needs_tab_script_probe(kind) {
+            let id = *next_id;
+            *next_id += 1;
 
-        let result = send_and_wait(
-            socket,
-            id,
-            json!({
-                "id": id,
-                "method": "script.evaluate",
-                "params": {
-                    "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
-                    "target": { "context": context.id },
-                    "awaitPromise": false
-                }
-            }),
-        );
+            Some(send_and_wait(
+                socket,
+                id,
+                json!({
+                    "id": id,
+                    "method": "script.evaluate",
+                    "params": {
+                        "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
+                        "target": { "context": context.id },
+                        "awaitPromise": false
+                    }
+                }),
+            ))
+        } else {
+            None
+        };
 
         let (title, low_resource, twitch_channels) = result
-            .ok()
+            .and_then(Result::ok)
             .and_then(|value| {
                 value.get("result")
                     .and_then(|v| v.get("result"))
@@ -1712,11 +1732,15 @@ fn send_and_wait<S>(
 where
     S: Read + Write,
 {
+    let started = Instant::now();
     socket
         .send(Message::Text(command.to_string().into()))
         .map_err(|error| error.to_string())?;
 
     loop {
+        if started.elapsed() >= BIDI_RESPONSE_DEADLINE {
+            return Err(format!("BiDi command {expected_id} timed out while waiting for its response"));
+        }
         let message = socket.read().map_err(|error| error.to_string())?;
 
         let Message::Text(text) = message else {
@@ -1811,6 +1835,34 @@ mod command_tests {
 
         health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(6 * 60));
         assert!(!health.telemetry_is_fresh());
+    }
+
+    #[test]
+    fn stalled_websocket_handshake_has_a_timeout() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("local TCP listener");
+        let port = listener.local_addr().expect("local listener address").port();
+        let peer = thread::spawn(move || {
+            let (_socket, _) = listener.accept().expect("monitor must attempt handshake");
+            thread::sleep(super::BIDI_IO_TIMEOUT + Duration::from_millis(250));
+        });
+        let started = Instant::now();
+        assert!(super::open_session(port).is_err());
+        assert!(started.elapsed() < Duration::from_secs(12));
+        peer.join().expect("handshake server exited");
+    }
+
+    #[test]
+    fn only_twitch_tabs_need_evaluation() {
+        assert!(super::needs_tab_script_probe("Twitch"));
+        for kind in ["PokéIdle", "KICK", "Browser", "Web"] {
+            assert!(!super::needs_tab_script_probe(kind));
+        }
+        assert!(super::BIDI_IO_TIMEOUT < super::BIDI_RESPONSE_DEADLINE);
+        assert!(super::BIDI_RESPONSE_DEADLINE < super::HEARTBEAT_FRESHNESS_LIMIT);
     }
 
     #[test]

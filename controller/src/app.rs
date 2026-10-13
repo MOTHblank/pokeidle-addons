@@ -587,15 +587,17 @@ impl GameSlot {
     }
 
     fn health(&self) -> Health {
+        // The launcher process can exit while the exact-profile Firefox process
+        // and its BiDi session remain alive. Preserve live monitoring in that case.
+        if let Some(monitor) = self.monitor.as_ref() {
+            return monitor.health();
+        }
         if self.orphaned_pid.is_some() {
             let mut health = Health::default();
             health.state = "Existing Firefox".to_string();
             return health;
         }
-        self.monitor
-            .as_ref()
-            .map(MonitorHandle::health)
-            .unwrap_or_default()
+        Health::default()
     }
 }
 
@@ -1237,31 +1239,39 @@ impl ControllerApp {
             if exited {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
                 logging::info(&format!("{} Firefox child process exited", account_name));
-                if let Some(monitor) = slot.monitor.take() {
-                    monitor.stop();
-                }
                 slot.child = None;
 
-                // Firefox can outlive the original launcher handle. Recover the
-                // exact-profile PID rather than silently starting a duplicate.
+                // Firefox can outlive the original launcher handle. Keep the
+                // existing BiDi monitor for that same profile rather than
+                // permanently discarding telemetry from a still-open game.
                 match Config::for_profile(slot.profile)
                     .and_then(|config| firefox::find_profile_process(&config))
                 {
                     Ok(Some(pid)) => {
                         slot.orphaned_pid = Some(pid);
                         logging::warn(&format!(
-                            "{} still has a Firefox profile process (PID {})", account_name, pid
+                            "{} Firefox launcher exited; profile PID {} is still running, preserving monitor",
+                            account_name, pid
                         ));
                     }
-                    Ok(None) => slot.orphaned_pid = None,
+                    Ok(None) => {
+                        slot.orphaned_pid = None;
+                        if let Some(monitor) = slot.monitor.take() {
+                            monitor.stop();
+                        }
+                    }
                     Err(error) => logging::warn(&format!(
-                        "{} profile recovery failed: {}", account_name, error
+                        "{} profile recovery failed (keeping monitor until ownership is known): {}",
+                        account_name, error
                     )),
                 }
             }
             if let Some(pid) = slot.orphaned_pid {
                 if !firefox::process_alive(pid) {
                     slot.orphaned_pid = None;
+                    if let Some(monitor) = slot.monitor.take() {
+                        monitor.stop();
+                    }
                 }
             }
         }
