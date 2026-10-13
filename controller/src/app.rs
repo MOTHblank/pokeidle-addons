@@ -2144,8 +2144,13 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(8.0);
                     if app.selected_details == Some(index) {
-                        let width = ui.available_width();
-                        draw_game_details(app, ui, index, width);
+                        // Keep the expanded dashboard at a readable measure on wide windows.
+                        let width = ui.available_width().min(820.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(width, 0.0),
+                            Layout::top_down(Align::Min),
+                            |ui| draw_game_details(app, ui, index, width),
+                        );
                         ui.add_space(12.0);
                     }
                 }
@@ -2450,14 +2455,14 @@ fn draw_game_details(
                     ui.columns(2, |columns| {
                         columns[0].label(RichText::new(tr("TRAINER")).size(9.0).strong().color(DIM));
                         columns[0].add_space(3.0);
-                        stat_line(&mut columns[0], "Level", &trainer_level);
-                        stat_line(&mut columns[0], "XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
+                        detail_stat_line(&mut columns[0], "Level", &trainer_level);
+                        detail_stat_line(&mut columns[0], "XP", if health.player_xp.is_empty() { "—" } else { &health.player_xp });
 
                         columns[1].label(RichText::new(tr("POKÉMON")).size(9.0).strong().color(DIM));
                         columns[1].add_space(3.0);
-                        stat_line(&mut columns[1], "Level", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
-                        stat_line(&mut columns[1], "XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
-                        stat_line(&mut columns[1], "FALLEN", &fallen);
+                        detail_stat_line(&mut columns[1], "Level", if health.pokemon_level.is_empty() { "—" } else { &health.pokemon_level });
+                        detail_stat_line(&mut columns[1], "XP", if health.pokemon_xp.is_empty() { "—" } else { &health.pokemon_xp });
+                        detail_stat_line(&mut columns[1], "FALLEN", &fallen);
                     });
                 });
 
@@ -2487,14 +2492,14 @@ fn draw_game_details(
                     ui.columns(2, |columns| {
                         columns[0].label(RichText::new(tr("CURRENCY")).size(9.0).strong().color(DIM));
                         columns[0].add_space(3.0);
-                        stat_line(&mut columns[0], "GOLD", if bridge_ok { &gold } else { "—" });
-                        stat_line(&mut columns[0], "GEMS", if bridge_ok { &orbs } else { "—" });
+                        detail_stat_line(&mut columns[0], "GOLD", if bridge_ok { &gold } else { "—" });
+                        detail_stat_line(&mut columns[0], "GEMS", if bridge_ok { &orbs } else { "—" });
 
                         columns[1].label(RichText::new(tr("CAPTURE RESULTS")).size(9.0).strong().color(DIM));
                         columns[1].add_space(3.0);
-                        stat_line(&mut columns[1], "BALLS USED", if bridge_ok { &balls_used } else { "—" });
-                        stat_line(&mut columns[1], "CAPTURES", if bridge_ok { &captures } else { "—" });
-                        stat_line(&mut columns[1], "SUCCESS", if bridge_ok && !health.autocatch_rate.is_empty() { &health.autocatch_rate } else { "—" });
+                        detail_stat_line(&mut columns[1], "BALLS USED", if bridge_ok { &balls_used } else { "—" });
+                        detail_stat_line(&mut columns[1], "CAPTURES", if bridge_ok { &captures } else { "—" });
+                        detail_stat_line(&mut columns[1], "SUCCESS", if bridge_ok && !health.autocatch_rate.is_empty() { &health.autocatch_rate } else { "—" });
                     });
 
                     ui.add_space(9.0);
@@ -3024,6 +3029,23 @@ fn draw_game_details(
                 });
             });
         });
+}
+
+// Detailed view uses close label/value pairs instead of pushing numbers to the
+// far edge of large columns. Preserve full values in the hover tooltip.
+fn detail_stat_line(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.add_sized(
+            [108.0, 18.0],
+            egui::Label::new(RichText::new(tr(label)).size(10.0).color(DIM)),
+        );
+        ui.add(
+            egui::Label::new(
+                RichText::new(compact_text(value, 32)).size(11.0).strong().color(TEXT),
+            ).truncate(),
+        ).on_hover_text(value);
+    });
 }
 
 // Compact key/value rows keep stats aligned in narrow two-column game cards.
