@@ -7,7 +7,7 @@ function section(a,b){const i=source.indexOf(a),j=source.indexOf(b,i+a.length);
 const blocks=section('// HA MILESTONE A PURE BEGIN.','// HA MILESTONE A PURE END.')+
     section('// HA MILESTONE D PURE BEGIN','// HA MILESTONE D PURE END.')+
     section('// HA MILESTONE E PURE BEGIN','// HA MILESTONE E PURE END.');
-const names=['captureRarityFromCatalog','captureWikiChance','captureBallCatalog',
+const names=['captureRarityFromCatalog','captureRarityForSpecies','captureWikiChance','captureBallCatalog',
     'captureMysticChance','captureAppend','captureObservedWindow',
     'captureHuntChance','captureForecast','captureSpeciesForecast','CAPTURE_BALLS',
     'normalizeFarmingEvent','acceptFarmingEvent','makeFarmingLedger','farmingSpawn'];
@@ -214,4 +214,31 @@ test('current hunt chance can use fully attributed accepted species throws, not 
     near(byThrows.chance,.1*h.captureWikiChance(100,4)+
         .9*h.captureWikiChance(10000,4));
     assert.match(source,/mixThrows===observed.throws/);
+});
+
+test('late catalogue preparation does not require opening the HuntAtlas panel',()=>{
+    const script=source.slice(source.indexOf('    function bootstrap()'));
+    assert.match(script,/ensureCombatCatalog\(\);/);
+    const metrics=source.slice(source.indexOf('    function controllerMetrics()'),
+        source.indexOf('    page.__mothHuntAtlasControllerV1 ='));
+    assert.match(metrics,/ensureCombatCatalog\(\)/);
+    assert.match(metrics,/captureInputs/);
+    assert.match(metrics,/missingSpeciesIds/);
+    assert.match(metrics,/coveredSpecies/);
+    assert.match(metrics,/syncFromControllerBridge\(\)/);
+});
+test('capture rarity lookup supports inherited Orre clone species',()=>{
+    const rarities=new Map([[1,100],[2,10000]]);
+    assert.equal(h.captureRarityForSpecies(rarities,13001),100);
+    assert.equal(h.captureRarityForSpecies(rarities,13002),10000);
+    assert.equal(h.captureRarityForSpecies(rarities,13003),null);
+    const hunt={especies:[{pokeId:13001,pontos:1},{pokeId:13002,pontos:1}]};
+    near(h.captureHuntChance(hunt,rarities,4).chance,
+        (h.captureWikiChance(100,4)+h.captureWikiChance(10000,4))/2);
+});
+test('bridge can restore missed native ball catalog',()=>{
+    const fs=require('node:fs'), path=require('node:path');
+    const bridge=fs.readFileSync(path.join(__dirname,'../../addons/controller-bridge.user.js'),'utf8');
+    assert.match(bridge,/marketCatalogReady,\s*catalogoBolas: copy\(catalogoBolas\)/);
+    assert.match(source,/farmApplyRuntimeCatalog\(\{catalogoBolas:snapshot\.catalogoBolas\}\)/);
 });
