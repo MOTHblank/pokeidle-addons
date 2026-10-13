@@ -261,6 +261,20 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Check failed" => "Falha na verificação",
         "Stop" => "Parar",
         "Launch" => "Iniciar",
+        "COMPACT OVERVIEW" => "VISÃO COMPACTA",
+        "Select an account to inspect its full statistics" => "Selecione uma conta para ver todas as estatísticas",
+        "Show details" => "Ver detalhes",
+        "Hide details" => "Ocultar detalhes",
+        "Details for" => "Detalhes de",
+        "Current hunt" => "Caça atual",
+        "Active Pokémon" => "Pokémon ativo",
+        "Trainer XP" => "XP do treinador",
+        "XP gained" => "XP ganho",
+        "Since last reading" => "Desde a última leitura",
+        "Awaiting second reading" => "Aguardando segunda leitura",
+        "No recent game data" => "Sem leitura recente do jogo",
+        "Not confirmed" => "Não confirmado",
+        "XP bonus" => "Bônus XP",
         "CURRENT ACTIVITY" => "ATIVIDADE ATUAL",
         "LAST OBSERVED STATE" => "ÚLTIMO ESTADO REGISTRADO",
         "STATE" => "ESTADO",
@@ -620,6 +634,101 @@ impl IdleProgressTracker {
     }
 }
 
+/// Trainer XP gained since the previous *successful* BiDi game reading.
+/// A cached UI repaint never creates another XP observation.
+#[derive(Debug, Default, Clone)]
+struct XpDeltaTracker {
+    sample_at: Option<Instant>,
+    total_xp: Option<u64>,
+    delta: Option<u64>,
+}
+
+impl XpDeltaTracker {
+    fn observe(&mut self, health: &Health) -> Option<u64> {
+        if !health.telemetry_is_fresh() || !health.logged_in || !health.bridge_snapshot_ok {
+            *self = Self::default();
+            return None;
+        }
+
+        let Some(current) = health.player_total_xp else {
+            *self = Self::default();
+            return None;
+        };
+        let Some(sample_at) = health.last_successful_probe_at else {
+            *self = Self::default();
+            return None;
+        };
+
+        if self.sample_at.is_some_and(|previous| sample_at <= previous) {
+            return self.delta;
+        }
+
+        // First sample (or a decreasing/reset counter) establishes a baseline.
+        // The cumulative counter works across trainer level-ups.
+        self.delta = self.total_xp.and_then(|previous| current.checked_sub(previous));
+        self.total_xp = Some(current);
+        self.sample_at = Some(sample_at);
+        self.delta
+    }
+}
+
+#[cfg(test)]
+mod xp_delta_tests {
+    use super::{Health, XpDeltaTracker};
+    use std::time::{Duration, Instant};
+
+    fn sample(at: Instant, total: Option<u64>) -> Health {
+        let mut health = Health::default();
+        health.state = "Running".into();
+        health.logged_in = true;
+        health.bridge_snapshot_ok = true;
+        health.player_total_xp = total;
+        health.last_successful_probe_at = Some(at);
+        health
+    }
+
+    #[test]
+    fn gains_are_sample_based_not_repaint_based() {
+        let now = Instant::now();
+        let first = now - Duration::from_secs(10);
+        let mut tracker = XpDeltaTracker::default();
+        let baseline = sample(first, Some(1_500));
+        assert_eq!(tracker.observe(&baseline), None);
+        assert_eq!(tracker.observe(&baseline), None);
+        let second = sample(now, Some(1_720));
+        assert_eq!(tracker.observe(&second), Some(220));
+        assert_eq!(tracker.observe(&second), Some(220));
+        assert_eq!(tracker.observe(&baseline), Some(220)); // ignore older snapshots
+    }
+
+    #[test]
+    fn cumulative_xp_survives_level_ups_and_resets_safely() {
+        let now = Instant::now();
+        let mut tracker = XpDeltaTracker::default();
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(12), Some(9_900))), None);
+        // The total continues increasing even when XP toward next level resets.
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(8), Some(10_100))), Some(200));
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(4), Some(5))), None);
+        assert_eq!(tracker.observe(&sample(now, Some(35))), Some(30));
+    }
+
+    #[test]
+    fn unavailable_and_stale_readings_never_report_new_gains() {
+        let now = Instant::now();
+        let mut tracker = XpDeltaTracker::default();
+        assert_eq!(tracker.observe(&sample(now - Duration::from_secs(4), Some(10))), None);
+        assert_eq!(tracker.observe(&sample(now, Some(20))), Some(10));
+        let missing = sample(now, None);
+        assert_eq!(tracker.observe(&missing), None);
+        assert_eq!(tracker.observe(&sample(now, Some(30))), None);
+
+        let mut disconnected = sample(now, Some(40));
+        disconnected.state = "Reconnecting".into();
+        assert_eq!(tracker.observe(&disconnected), None);
+        assert_eq!(tracker.observe(&sample(now, Some(40))), None);
+    }
+}
+
 #[cfg(test)]
 mod idle_progress_tests {
     use super::{Health, IdleProgressTracker};
@@ -863,6 +972,8 @@ pub struct ControllerApp {
     tab_url_input: [String; 4],
     tab_url_open: [bool; 4],
     idle_progress: [IdleProgressTracker; 4],
+    xp_progress: [XpDeltaTracker; 4],
+    selected_details: Option<usize>,
     update_status: SharedUpdateStatus,
     addon_version_status: update::SharedAddonVersionStatus,
     addon_refresh_tx: Sender<()>,
@@ -911,6 +1022,8 @@ impl ControllerApp {
             tab_url_input: std::array::from_fn(|_| String::new()),
             tab_url_open: [false; 4],
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
+            xp_progress: std::array::from_fn(|_| XpDeltaTracker::default()),
+            selected_details: None,
             update_status,
             addon_version_status,
             addon_refresh_tx,
@@ -1875,19 +1988,18 @@ fn open_kick_channels_in_regular_browser(channels: &[String]) -> Result<usize, S
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(tr("Instances"))
+            RichText::new(tr("COMPACT OVERVIEW"))
                 .font(FontId::proportional(17.0))
                 .strong()
                 .color(TEXT),
         );
         ui.add_space(8.0);
         ui.label(
-            RichText::new(tr("Live state for enabled isolated Firefox profiles"))
+            RichText::new(tr("Select an account to inspect its full statistics"))
                 .size(11.0)
                 .color(DIM),
         );
     });
-
     ui.add_space(12.0);
 
     egui::ScrollArea::vertical()
@@ -1907,9 +2019,11 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .color(DIM),
                 );
             } else {
-                let gap = ui.spacing().item_spacing.x;
+                // Two compact cards fit at the app's default 1120px window
+                // without squeezing the old multi-section details side by side.
+                let gap = 12.0;
                 let available = ui.available_width();
-                let columns = if available >= 880.0 { 2 } else { 1 };
+                let columns = if available >= 650.0 { 2 } else { 1 };
                 let card_width = if columns == 2 {
                     (available - gap) / 2.0
                 } else {
@@ -1919,19 +2033,39 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 for chunk in profiles.chunks(columns) {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = gap;
-
                         for index in chunk {
                             ui.allocate_ui_with_layout(
                                 egui::vec2(card_width, 0.0),
                                 Layout::top_down(Align::Min),
-                                |ui| {
-                                    draw_game_card(app, ui, *index, card_width);
-                                },
+                                |ui| draw_overview_card(app, ui, *index, card_width),
                             );
                         }
                     });
+                    ui.add_space(10.0);
+                }
 
-                    ui.add_space(12.0);
+                // Only one account opens at a time, at full available width.
+                // Other overview cards never grow or move into a giant row.
+                if let Some(index) = app.selected_details.filter(|index| profiles.contains(index)) {
+                    ui.add_space(9.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!(
+                            "{} {}",
+                            tr("Details for"),
+                            app.account_name(app.games[index].profile)
+                        )).size(16.0).strong().color(TEXT));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button(tr("Hide details")).clicked() {
+                                app.selected_details = None;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    if app.selected_details == Some(index) {
+                        let width = ui.available_width();
+                        draw_game_details(app, ui, index, width);
+                        ui.add_space(12.0);
+                    }
                 }
             }
 
@@ -1940,7 +2074,200 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
 }
 
-fn draw_game_card(
+/// At-a-glance card: keep the operational summary visible for every enabled
+/// account, independently of the much longer optional diagnostics panel.
+fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
+    ui.set_width(width);
+    let profile = app.games[index].profile;
+    let account_name = app.account_name(profile);
+    let health = app.games[index].health();
+    let running = app.games[index].is_running();
+    let xp_gain = if running {
+        app.xp_progress[index].observe(&health)
+    } else {
+        app.xp_progress[index] = XpDeltaTracker::default();
+        None
+    };
+    let idle_warning = app.idle_warning_for(index, &health);
+    let addon_versions = app.addon_version_status.lock()
+        .map(|status| status.clone()).unwrap_or_default();
+    let addon_problems = addon_needs_attention(&health, running, &addon_versions);
+    let needs_setup = !app.account_setup[index].setup_complete;
+    let fresh = running && health.telemetry_is_fresh();
+
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, if app.selected_details == Some(index) { ACCENT } else { BORDER }))
+        .corner_radius(12.0)
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(
+                    RichText::new(compact_text(&account_name, 21))
+                        .size(14.0).strong().color(TEXT),
+                ).truncate()).on_hover_text(&account_name);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let expanded = app.selected_details == Some(index);
+                    let label = tr(if expanded { "Hide details" } else { "Show details" });
+                    if ui.small_button(label).clicked() {
+                        app.selected_details = if expanded { None } else { Some(index) };
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            status_badge(ui, &health, running);
+            ui.add_space(9.0);
+
+            ui.columns(2, |columns| {
+                let hunt = if !running { "—" } else if health.hunt.is_empty() {
+                    match health.activity.as_str() {
+                        "Center" => tr("Online · Center"),
+                        "Login" => tr("Waiting for login"),
+                        "Hunting" => tr("Hunting"),
+                        _ => "—",
+                    }
+                } else { &health.hunt };
+                overview_value(&mut columns[0], "Current hunt", hunt);
+
+                let pokemon = if !running || health.active_pokemon.is_empty() {
+                    "—"
+                } else {
+                    health.active_pokemon.as_str()
+                };
+                overview_value(&mut columns[1], "Active Pokémon", pokemon);
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(5.0);
+
+            ui.columns(2, |columns| {
+                let trainer_xp = if fresh && !health.player_xp.is_empty() {
+                    if health.player_level > 0 {
+                        format!("Lv {} · {}", health.player_level, health.player_xp)
+                    } else {
+                        health.player_xp.clone()
+                    }
+                } else if !running {
+                    "—".to_string()
+                } else if !health.player_xp.is_empty() {
+                    health.player_xp.clone()
+                } else {
+                    "—".to_string()
+                };
+                overview_value(&mut columns[0], "Trainer XP", &trainer_xp);
+
+                columns[1].label(RichText::new(tr("XP gained")).size(9.0).color(DIM));
+                let delta = xp_gain.map(|gain| format!("+{}", format_number(gain)));
+                let delta_text = delta.as_deref().unwrap_or("—");
+                columns[1].label(
+                    RichText::new(delta_text)
+                        .size(14.0).strong()
+                        .color(if delta.is_some() && fresh { GOOD } else { MUTED }),
+                ).on_hover_text(tr(if delta.is_some() {
+                    "Since last reading"
+                } else if fresh && health.bridge_snapshot_ok {
+                    "Awaiting second reading"
+                } else {
+                    "No recent game data"
+                }));
+            });
+
+            ui.add_space(9.0);
+            ui.horizontal_wrapped(|ui| {
+                let catch_status = if !fresh || !health.bridge_snapshot_ok {
+                    tr("Not checked")
+                } else if health.autocatch_on {
+                    tr("Active")
+                } else {
+                    tr("Off")
+                };
+                automation_badge(
+                    ui, "Auto Catch", catch_status,
+                    fresh && health.bridge_snapshot_ok && health.autocatch_on,
+                );
+                let bonus_confirmed = fresh && health.bridge_snapshot_ok
+                    && health.stream_bonus_pct > 0.0 && !health.stream_watching.is_empty();
+                let bonus_text = if bonus_confirmed {
+                    format!("+{}% XP", format_pct(health.stream_bonus_pct))
+                } else {
+                    tr("Not confirmed").to_string()
+                };
+                automation_badge(ui, "XP bonus", &bonus_text, bonus_confirmed);
+            });
+
+            if needs_setup || addon_problems > 0 {
+                ui.add_space(7.0);
+                let warning = if needs_setup {
+                    tr("Setup needed").to_string()
+                } else {
+                    format!("{} {}", addon_problems, tr(if addon_problems == 1 {
+                        "addon needs attention"
+                    } else {
+                        "addons need attention"
+                    }))
+                };
+                if ui.small_button(RichText::new(format!("⚠ {warning}")).color(WARN)).clicked() {
+                    app.open_addon_manager(profile);
+                }
+            }
+            if idle_warning {
+                ui.add_space(5.0);
+                ui.label(
+                    RichText::new(tr("Idle warning: no EXP or Pokéballs used in 5 minutes"))
+                        .size(10.0).color(WARN),
+                );
+            }
+            if running && health.game_ready && health.logged_in
+                && health.activity == "Hunting" && !health.bridge_connected {
+                ui.label(
+                    RichText::new(tr("Idle detection unavailable without Controller Bridge telemetry"))
+                        .size(9.0).color(DIM),
+                );
+            }
+            if running && !fresh && health.last_successful_probe_at.is_some() {
+                ui.label(
+                    RichText::new(tr("The displayed metrics are from the last successful reading."))
+                        .size(9.0).color(DIM),
+                );
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let action = tr(if running { "Stop" } else { "Launch" });
+                if ui.small_button(action).clicked() {
+                    if running {
+                        app.stop_one(profile);
+                    } else {
+                        app.launch_one(profile);
+                    }
+                }
+                if running && app.games[index].orphaned_pid.is_none() {
+                    ui.add_space(6.0);
+                    let mode = tr(if app.games[index].headless {
+                        "Restart visible"
+                    } else {
+                        "Restart headless"
+                    });
+                    if ui.small_button(mode).clicked() {
+                        let headless = !app.games[index].headless;
+                        app.set_browser_mode(profile, headless);
+                    }
+                }
+            });
+        });
+}
+
+fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
+    ui.add(
+        egui::Label::new(
+            RichText::new(compact_text(value, 35)).size(11.0).strong().color(TEXT)
+        ).truncate(),
+    ).on_hover_text(value);
+}
+
+fn draw_game_details(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
     index: usize,
@@ -1952,11 +2279,6 @@ fn draw_game_card(
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
-    let idle_warning = app.idle_warning_for(index, &health);
-    let addon_versions = app.addon_version_status.lock()
-        .map(|status| status.clone()).unwrap_or_default();
-    let addon_problems = addon_needs_attention(&health, running, &addon_versions);
-    let needs_setup = !app.account_setup[index].setup_complete;
 
     egui::Frame::new()
         .fill(PANEL)
@@ -1964,104 +2286,9 @@ fn draw_game_card(
         .corner_radius(12.0)
         .inner_margin(16.0)
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(egui::Label::new(
-                    RichText::new(compact_text(&account_name, 28))
-                        .size(14.0)
-                        .strong()
-                        .color(TEXT),
-                ).truncate()).on_hover_text(account_name.as_str());
-
-                ui.add_space(8.0);
-                status_badge(ui, &health, running);
-
-                if running && app.games[index].orphaned_pid.is_none() {
-                    let mode_label = if app.games[index].headless { tr("Restart visible") } else { tr("Restart headless") };
-                    let mode_headless = !app.games[index].headless;
-                    let clicked = ui
-                        .add_sized(
-                            [108.0, 30.0],
-                            egui::Button::new(
-                                RichText::new(mode_label).size(10.0).strong(),
-                            )
-                            .fill(PANEL_ALT)
-                            .stroke(Stroke::new(1.0, BORDER))
-                            .corner_radius(7.0),
-                        )
-                        .on_hover_text(tr("Restarts Firefox in the selected mode; the game and streams will briefly disconnect."))
-                        .clicked();
-                    if clicked {
-                        app.set_browser_mode(profile, mode_headless);
-                    }
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let button_text = if running { tr("Stop") } else { tr("Launch") };
-                    let clicked = ui
-                        .add_sized(
-                            [84.0, 30.0],
-                            egui::Button::new(
-                                RichText::new(button_text).size(11.0).strong(),
-                            )
-                            .fill(if running {
-                                BAD.linear_multiply(0.18)
-                            } else {
-                                ACCENT.linear_multiply(0.82)
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if running { BAD.linear_multiply(0.55) } else { ACCENT },
-                            ))
-                            .corner_radius(7.0),
-                        )
-                        .clicked();
-
-                    if clicked {
-                        if running {
-                            app.stop_one(profile);
-                        } else {
-                            app.launch_one(profile);
-                        }
-                    }
-                });
-            });
-
-            if needs_setup || addon_problems > 0 {
-                ui.add_space(7.0);
-                let title = if needs_setup {
-                    tr("Setup needed").to_string()
-                } else {
-                    format!("{addon_problems} {}", tr(if addon_problems == 1 {
-                        "addon needs attention"
-                    } else {
-                        "addons need attention"
-                    }))
-                };
-                let response = ui.add(egui::Button::new(
-                    RichText::new(format!("⚠ {title}  ›"))
-                        .size(11.0).strong().color(WARN),
-                ).fill(PANEL_ALT).stroke(Stroke::new(1.0, WARN.linear_multiply(0.35))));
-                if response.on_hover_text(tr("Open Account Manager to resolve addon problems")).clicked() {
-                    app.open_addon_manager(profile);
-                }
-            }
-
-            if running && health.game_ready && health.logged_in
-                && health.activity == "Hunting" && !health.bridge_connected {
-                ui.add_space(4.0);
-                ui.label(RichText::new(tr("Idle detection unavailable without Controller Bridge telemetry"))
-                    .size(10.0).color(DIM));
-            }
-
-            if idle_warning {
-                ui.add_space(6.0);
-                ui.colored_label(
-                    WARN,
-                    RichText::new(tr("Idle warning: no EXP or Pokéballs used in 5 minutes"))
-                        .size(11.0)
-                        .strong(),
-                );
-            }
+            // Browser controls and warnings live in the compact overview.
+            // Keep the full-width detail panel dedicated to game data.
+            ui.add_space(2.0);
 
             ui.add_space(14.0);
 
