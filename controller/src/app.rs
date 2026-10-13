@@ -29,15 +29,22 @@ static PT_BR: AtomicBool = AtomicBool::new(true);
 
 // Redraw cached information more often without triggering additional BiDi reads.
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
-const UI_TRAY_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
+const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
+
+// eframe/egui reports native window focus via ViewportInfo. Treat missing
+// focus information as foreground instead of disabling live monitoring on
+// platforms where the OS cannot report it.
+fn controller_is_background(hidden_in_tray: bool, focused: Option<bool>) -> bool {
+    hidden_in_tray || focused == Some(false)
+}
 
 fn monitor_pace_for_slot(
     expanded: Option<usize>,
     index: usize,
     enabled: bool,
-    hidden_in_tray: bool,
+    background: bool,
 ) -> MonitorPace {
-    if hidden_in_tray {
+    if background {
         MonitorPace::Background
     } else if enabled && expanded == Some(index) {
         MonitorPace::Detailed
@@ -48,7 +55,17 @@ fn monitor_pace_for_slot(
 
 #[cfg(test)]
 mod adaptive_monitor_ui_tests {
-    use super::{monitor_pace_for_slot, MonitorPace};
+    use super::{controller_is_background, monitor_pace_for_slot, MonitorPace};
+
+    #[test]
+    fn inactive_window_and_system_tray_share_background_mode() {
+        assert!(!controller_is_background(false, Some(true)));
+        assert!(!controller_is_background(false, None)); // unknown: don't throttle
+        assert!(controller_is_background(false, Some(false))); // alt-tab
+        assert!(controller_is_background(true, Some(true))); // tray override
+        assert!(controller_is_background(true, Some(false)));
+        assert!(controller_is_background(true, None));
+    }
 
     #[test]
     fn only_the_visible_expanded_account_gets_fast_polling() {
@@ -62,6 +79,19 @@ mod adaptive_monitor_ui_tests {
                 MonitorPace::Background
             );
         }
+        // The expanded selection remains set while focus is lost, but no
+        // account may keep five-second polling.
+        let background = controller_is_background(false, Some(false));
+        for index in 0..4 {
+            assert_eq!(
+                monitor_pace_for_slot(Some(2), index, true, background),
+                MonitorPace::Background
+            );
+        }
+        assert_eq!(
+            monitor_pace_for_slot(Some(2), 2, true, controller_is_background(false, Some(true))),
+            MonitorPace::Detailed
+        );
     }
 }
 
@@ -1141,13 +1171,19 @@ impl ControllerApp {
         { false }
     }
 
-    fn sync_monitor_paces(&self) {
-        // Exactly one account may be expanded. Hiding the whole controller
-        // overrides that selection without forgetting which panel was open.
-        let hidden = self.hidden_in_tray();
+    fn controller_in_background(&self, ctx: &egui::Context) -> bool {
+        // A visible but unfocused window should be just as inexpensive as
+        // one hidden in the tray. Focus changes arrive as native UI events.
+        let focused = ctx.input(|input| input.viewport().focused);
+        controller_is_background(self.hidden_in_tray(), focused)
+    }
+
+    fn sync_monitor_paces(&self, background: bool) {
+        // Exactly one account may be expanded when focused. Background mode
+        // overrides that selection without clearing the open details panel.
         for (index, slot) in self.games.iter().enumerate() {
             let pace = monitor_pace_for_slot(
-                self.selected_details, index, self.accounts[index].enabled, hidden
+                self.selected_details, index, self.accounts[index].enabled, background
             );
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.set_pace(pace);
@@ -1780,7 +1816,11 @@ impl eframe::App for ControllerApp {
         }
 
         ui.ctx().request_repaint_after(
-            if self.hidden_in_tray() { UI_TRAY_REPAINT_INTERVAL } else { UI_REPAINT_INTERVAL }
+            if self.controller_in_background(ui.ctx()) {
+                UI_BACKGROUND_REPAINT_INTERVAL
+            } else {
+                UI_REPAINT_INTERVAL
+            }
         );
 
         draw_sidebar(self, ui);
@@ -1909,10 +1949,10 @@ impl eframe::App for ControllerApp {
         if self.show_accounts {
             draw_accounts_window(self, ui.ctx());
         }
-        // Apply after widgets so a Show/Hide Details click changes the
-        // polling schedule in the same frame (and tray hiding immediately
-        // switches all four monitors to the inexpensive background pace).
-        self.sync_monitor_paces();
+        // Apply after widgets so Show/Hide Details and tray hiding change
+        // polling in the same frame. Alt-tab also switches every account to
+        // the cheaper background pace; refocusing restores the open panel.
+        self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
     }
 }
 

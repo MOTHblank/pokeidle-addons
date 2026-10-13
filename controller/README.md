@@ -78,22 +78,24 @@ The initial stream scan runs about 30 seconds after the site loads; subsequent
 stream scans run every five minutes. The controller's game/Firefox telemetry
 uses separate layers:
 - **Heartbeat:** a minimal read of the known game tab every **45 seconds**
-  while visible, or **90 seconds** when hidden to the Windows system tray.
-  It confirms whether the page is reachable without reading game inventory.
-- **Compact statistics:** each visible account is sampled every **60 seconds**,
-  including its Controller Bridge balances and XP data.
-- **Expanded statistics:** **only the one account with its details open** is
-  sampled every **5 seconds**. Opening details requests an immediate sample;
-  closing them returns that account to the 60-second cadence. The fast path
-  reuses its already-discovered game tab and refreshes the tab tree at most
+  when the controller is focused, or **90 seconds** when unfocused or hidden
+  in the Windows system tray. It confirms page reachability without game inventory.
+- **Compact statistics:** each account is sampled every **60 seconds** while
+  the controller has focus, including Controller Bridge balances and XP data.
+- **Expanded statistics:** **only the one account with details open while
+  the controller is focused** is sampled every **5 seconds**. Opening details
+  requests an immediate sample; closing them returns to the 60-second cadence.
+  The fast path reuses the discovered game tab and refreshes the tab tree at most
   once per minute, unless navigation invalidates that context. Hunt Atlas and
-  capture statistics are included in the detail samples without spawning a
-  new BiDi session.
-- **Hidden to tray:** all accounts return to background samples every
-  **3 minutes**, even if a details panel was open when the window was hidden.
-  Restoring the window re-enables compact/detail polling as appropriate.
-  UI repaint requests also drop from every **3 seconds** to every **30 seconds**
-  while tray-hidden. Gameplay and userscripts keep running unchanged.
+  capture statistics are included without spawning a new BiDi session.
+- **Unfocused or hidden to tray:** switching to another application (even
+  without minimizing Moth) or hiding Moth in the Windows system tray puts
+  **all accounts on the 3-minute background cadence**. UI repaint requests
+  drop from every **3 seconds** to every **30 seconds**. Refocusing or
+  restoring the window resumes the 60-second compact or 5-second expanded
+  cadence automatically; the selected detail panel remains open. Unknown
+  OS focus state does not force background mode. Gameplay and userscripts
+  keep running unchanged.
 - **Firefox tabs:** a full per-tab inventory remains roughly every
   **10–12 minutes**, or sooner when a full context scan detects changed tabs
   or a Controller-requested tab opens. Fast detail samples don't inspect
@@ -112,11 +114,11 @@ uses separate layers:
 - **Addon version checks:** unchanged at **4 hours**; **stream scanning** stays
   separate, every **5 minutes**.
 
-The Rust UI repaints cached data every **3 seconds** while visible,
-independently of the BiDi sampling schedule; the first display after a sample
-can therefore lag by up to one repaint. Overview cards distinguish a recent
-heartbeat from older game data, and the expanded tabs panel shows when its
-inventory was last inspected.
+The Rust UI repaints cached data every **3 seconds** while focused, or every
+**30 seconds** while unfocused or hidden in the tray, independently of BiDi
+sampling. OS focus events wake the UI when returning to Moth. Overview cards
+distinguish a recent heartbeat from older game data, and the expanded tabs
+panel shows when its inventory was last inspected.
 KICK links can be opened in a normal browser.
 Linux does not currently have the Windows system tray integration.
 
