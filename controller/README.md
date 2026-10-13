@@ -58,9 +58,14 @@ automatically copy profiles between operating systems.
    mode, or stop each account.
 
 Twitch chat sharing and stream scanning are handled by the userscripts.
-The initial scan runs about 30 seconds after the site loads; subsequent scans
-run every five minutes. KICK links can be opened in a normal browser. Linux
-does not currently have the Windows system tray integration.
+The initial stream scan runs about 30 seconds after the site loads; subsequent
+stream scans run every five minutes. The controller's game/Firefox telemetry
+uses a separate, lightweight cadence: every **3 minutes** while signed in,
+or every **45 seconds** during login and loading (with faster reconnect attempts
+after failures). The Rust interface repaints cached data every **3 seconds**;
+these repaints do **not** trigger additional game reads. Addon version checks
+are a separate four-hour process. KICK links can be opened in a normal browser.
+Linux does not currently have the Windows system tray integration.
 
 ## Browser lifecycle and monitoring
 
