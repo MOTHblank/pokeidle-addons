@@ -1112,7 +1112,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool, force_tabs: bool) ->
 fn remaining_trainer_xp(state: &Value) -> Option<u64> {
     let current = state.get("xp").and_then(Value::as_u64)?;
     let next = state.get("xpProximo").and_then(Value::as_u64)?;
-    (next > current).then_some(next - current)
+    next.checked_sub(current).filter(|remaining| *remaining > 0)
 }
 
 fn xp_progress(value: &Value, fallback: &str) -> String {
