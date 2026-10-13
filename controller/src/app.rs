@@ -2471,6 +2471,10 @@ fn draw_game_details(
             let atlas = &health.hunt_atlas;
             let matches_hunt = atlas.get("huntSlug").and_then(|v| v.as_str())
                 .is_some_and(|slug| !slug.is_empty() && slug == health.hunt_slug);
+            if !matches_hunt && health.addon_versions.contains_key("hunt-atlas.user.js") {
+                ui.label(RichText::new(tr("HuntAtlas metrics unavailable — update HuntAtlas and Controller Bridge, then refresh the game."))
+                    .size(10.0).color(MUTED));
+            }
             if matches_hunt {
                 let rate = |key: &str| -> String {
                     atlas.get(key).and_then(|v| v.as_f64())
