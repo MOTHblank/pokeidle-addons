@@ -283,6 +283,30 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Stream scanner" => "Scanner de streams",
         "Waiting" => "Aguardando",
         "Streams" => "Streams",
+        "Twitch chats" => "Chats da Twitch",
+        "Twitch channels" => "canais Twitch",
+        "shared chat tab" => "aba compartilhada",
+        "shared chat tabs (refreshing)" => "abas compartilhadas (atualizando)",
+        "shared chat tab not observed yet" => "aba compartilhada ainda não detectada",
+        "No live Twitch channels in last scan" => "Nenhum canal Twitch ao vivo no último scan",
+        "One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh." => "Uma aba pode conter vários canais Twitch; uma segunda aba pode aparecer brevemente na atualização a cada cinco minutos.",
+        "Shared Twitch chat" => "Chat Twitch compartilhado",
+        "channels in this tab" => "canais nesta aba",
+        "Last reported tabs" => "Últimas abas detectadas",
+        "Tab list unavailable while game loads" => "Lista de abas indisponível durante o carregamento do jogo",
+        "Optimized Twitch tabs" => "Abas Twitch otimizadas",
+        "This ratio counts Twitch browser tabs, not livestream channels." => "Esta proporção conta abas Twitch do navegador, não canais ao vivo.",
+        "Not optimized" => "Não otimizado",
+        "not optimized" => "não otimizado",
+        "No Twitch XP bonus confirmed by the game" => "Nenhum bônus de XP da Twitch confirmado pelo jogo",
+        "Twitch channels and game-reported XP bonuses are different signals." => "Canais Twitch e bônus de XP informados pelo jogo são informações diferentes.",
+        "Bonus not registered for:" => "Bônus ainda não registrado para:",
+        "Chat activity reported; XP bonus not confirmed" => "Jogo registra canais assistidos; bônus de XP não confirmado",
+        "Not reported" => "Não informado",
+        "scanning" => "verificando",
+        "not-ready" => "jogo não pronto",
+        "failed" => "falhou",
+        "ok" => "OK",
         "OPEN TABS" => "ABAS ABERTAS",
         "No top-level tabs reported" => "Nenhuma aba principal detectada",
         "custom tab requested" => "nova aba personalizada solicitada",
@@ -2129,8 +2153,8 @@ fn draw_game_card(
                             ui,
                             tr("AUTO CATCH"),
 
-                            if health.autocatch_on { tr("ON") } else { tr("OFF") },
-                            if health.autocatch_on { GOOD } else { MUTED },
+                            if !health.telemetry_is_fresh() { "—" } else if health.autocatch_on { tr("ON") } else { tr("OFF") },
+                            if health.telemetry_is_fresh() && health.autocatch_on { GOOD } else { MUTED },
                         );
                         resource_value(
                             ui,
@@ -2181,40 +2205,44 @@ fn draw_game_card(
                 automation_badge(
                     ui,
                     tr("Auto Catch"),
-                    if health.autocatch_on { tr("Active") } else { tr("Off") },
-                    health.autocatch_on,
+                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
+                    health.telemetry_is_fresh() && health.autocatch_on,
                 );
                 automation_badge(
                     ui,
                     tr("Restock"),
-                    if health.autocatch_restock.is_empty() { tr("Off") } else { tr(&health.autocatch_restock) },
-                    health.autocatch_on && !health.autocatch_restock.eq_ignore_ascii_case("off"),
+                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
+                    health.telemetry_is_fresh() && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
                 );
                 automation_badge(
                     ui,
                     tr("Stream scanner"),
-                    if health.stream_scan_status.is_empty() {
+                    if !health.telemetry_is_fresh() {
+                        tr("Not checked")
+                    } else if health.stream_scan_status.is_empty() {
                         tr("Waiting")
                     } else {
                         tr(&health.stream_scan_status)
                     },
-                    health.stream_scan_status.eq_ignore_ascii_case("ok"),
+                    health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
                 );
-                if health.stream_scan_live > 0 || health.stream_scan_opened > 0 {
-                    let streams_value = format!(
-                        "{} {} · {} {}",
-                        health.stream_scan_live,
-                        tr("live"),
-                        health.stream_scan_opened,
-                        tr("opened")
-                    );
-
-                    automation_badge(
-                        ui,
-                        "Streams",
-                        &streams_value,
-                        true,
-                    );
+                if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
+                    if let Some(channels) = health.stream_scan_twitch_channels {
+                        let shared_tabs = health.tabs.iter()
+                            .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
+                            .count();
+                        let (value, ready) = if channels == 0 {
+                            (tr("No live Twitch channels in last scan").to_string(), false)
+                        } else if shared_tabs == 0 {
+                            (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
+                        } else if shared_tabs == 1 {
+                            (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
+                        } else {
+                            (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
+                        };
+                        automation_badge(ui, tr("Twitch chats"), &value, ready)
+                            .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
+                    }
                 }
                 automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
             });
@@ -2290,7 +2318,7 @@ fn draw_game_card(
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(tr("OPEN TABS"))
+                    RichText::new(tr(if health.telemetry_is_fresh() { "OPEN TABS" } else { "Last reported tabs" }))
                         .size(9.0)
                         .strong()
                         .color(DIM),
@@ -2416,7 +2444,7 @@ fn draw_game_card(
 
                     if health.tabs.is_empty() {
                         ui.label(
-                            RichText::new(tr("No top-level tabs reported"))
+                            RichText::new(tr(if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -2436,7 +2464,7 @@ fn draw_game_card(
                                 );
 
                                 ui.label(
-                                    RichText::new(&tab.kind)
+                                    RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
                                         .size(9.0)
                                         .strong()
                                         .color(TEXT),
@@ -2444,11 +2472,8 @@ fn draw_game_card(
 
                                 ui.add_space(5.0);
 
-                                let title = if tab.title.is_empty() {
-                                    &tab.url
-                                } else {
-                                    &tab.title
-                                };
+                                let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
+                                let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
 
                                 ui.add(
                                     egui::Label::new(
@@ -2462,7 +2487,7 @@ fn draw_game_card(
                                 if tab.kind == "Twitch" {
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         ui.label(
-                                            RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("FULL") })
+                                            RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
                                                 .size(8.0)
                                                 .strong()
                                                 .color(if tab.low_resource { GOOD } else { WARN }),
@@ -2488,7 +2513,7 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
-                    if !health.stream_watching.is_empty() {
+                    if !health.stream_watching.is_empty() && health.stream_bonus_pct > 0.0 {
                         ui.label(
                             RichText::new(format!(
                                 "{} · +{}% XP",
@@ -2518,7 +2543,7 @@ fn draw_game_card(
                         ui.label(
                             RichText::new(format!(
                                 "{} {}{}",
-                                tr("Open chat:"),
+                                tr("Bonus not registered for:"),
                                 health.stream_missing.join(", "),
                                 if health.stream_bonus_pct > 0.0 {
                                     format!(" · +{}% XP", format_pct(health.stream_bonus_pct))
@@ -2531,11 +2556,12 @@ fn draw_game_card(
                         );
                     } else {
                         ui.label(
-                            RichText::new(tr("No Twitch bonus detected"))
+                            RichText::new(tr(if health.stream_watching.is_empty() { "No Twitch XP bonus confirmed by the game" } else { "Chat activity reported; XP bonus not confirmed" }))
                                 .size(10.0)
                                 .color(DIM),
                         );
                     }
+                    ui.label(RichText::new(tr("Twitch channels and game-reported XP bonuses are different signals.")).size(9.0).color(DIM));
 
                     ui.add_space(6.0);
 
@@ -2544,7 +2570,7 @@ fn draw_game_card(
                             tab.kind == "Twitch" || tab.kind == "KICK"
                         }) {
                             let state = if tab.kind == "Twitch" {
-                                if tab.low_resource { tr("LOW") } else { tr("FULL") }
+                                if tab.low_resource { tr("LOW") } else { tr("not optimized") }
                             } else {
                                 tr("OPEN")
                             };
@@ -2619,13 +2645,13 @@ fn draw_game_card(
                 };
 
                 ui.label(
-                    RichText::new(format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total))
+                    RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
                         .size(10.0)
                         .strong()
                         .color(addon_color),
                 );
 
-                if !health.addon_missing.is_empty() {
+                if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
                     ui.add_space(8.0);
                     ui.add(
                         egui::Label::new(
@@ -2638,17 +2664,17 @@ fn draw_game_card(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if health.twitch_tabs > 0 {
+                    if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
                         ui.label(
                             RichText::new(format!(
                                 "{} {}/{}",
-                                tr("Twitch low resource"),
+                                tr("Optimized Twitch tabs"),
                                 health.twitch_low_resource_ok,
                                 health.twitch_tabs
                             ))
                             .size(10.0)
                             .color(MUTED),
-                        );
+                        ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
                     }
                 });
             });
@@ -2698,7 +2724,7 @@ fn resource_value(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     ui.add_space(14.0);
 }
 
-fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
+fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) -> egui::Response {
     egui::Frame::new()
         .fill(if good { GOOD.linear_multiply(0.08) } else { PANEL_ALT })
         .stroke(Stroke::new(1.0, if good { GOOD.linear_multiply(0.28) } else { BORDER }))
@@ -2713,9 +2739,9 @@ fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) {
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(tr(value), 24)).size(9.0).color(TEXT));
+                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT));
             });
-        });
+        }).response
 }
 
 fn bonus_chip(ui: &mut egui::Ui, text: &str) {
@@ -3136,7 +3162,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     } else {
                                         if setup.check_error.is_some() { tr("Check failed") } else { tr("Not installed") }
                                     };
-                                    let twitch_open = health.tabs.iter().any(|tab| tab.kind == "Twitch");
+                                    let twitch_open = health.telemetry_is_fresh() && health.tabs.iter().any(|tab| tab.kind == "Twitch");
                                     // This check only observes tab existence. It does not
                                     // authenticate Twitch, so never label a profile as logged in.
                                     let twitch_label = if twitch_open {
