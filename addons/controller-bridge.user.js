@@ -463,6 +463,12 @@
                     ? Number(scanner.dataset.mothScanTwitchChannels) : null,
                 streamScanOpened: Number(scanner?.dataset?.mothScanOpened || 0) || 0
             },
+            huntAtlas: (() => {
+                try {
+                    const api = page.__mothHuntAtlasControllerV1;
+                    return typeof api?.metrics === 'function' ? copy(api.metrics()) : null;
+                } catch { return null; }
+            })(),
             hunts: copy(hunts) || [],
             stream: {
                 twitch: copy(state?.twitch),
