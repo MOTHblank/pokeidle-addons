@@ -4,6 +4,19 @@ Addons para **PokéIdle** e um controlador nativo leve para manter até quatro c
 
 O controlador funciona no Windows e no Linux e usa o Firefox instalado normalmente, com **um perfil isolado por conta**. Os userscripts continuam sendo executados pelo **Violentmonkey**; o controlador não possui um motor próprio de userscripts.
 
+## ⬇️ Baixar Moth Controller
+
+[![Baixar para Windows](https://img.shields.io/badge/BAIXAR%20PARA%20WINDOWS-v0.1.4-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MOTHblank/pokeidle-addons/releases/download/v0.1.4/moth-controller-v0.1.4-windows-x86_64.exe)
+[![Baixar para Linux](https://img.shields.io/badge/BAIXAR%20PARA%20LINUX-v0.1.4-0078d4?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/MOTHblank/pokeidle-addons/releases/download/v0.1.4/moth-controller-v0.1.4-linux-x86_64.tar.gz)
+
+**Windows:** clique no botão verde para baixar o executável `.exe`. **Linux:** o botão azul baixa o arquivo `.tar.gz` com o programa e instruções.
+
+**[Ver a versão mais recente e todos os downloads](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
+
+> **Atenção:** o botão **Code → Download ZIP** do GitHub baixa o código-fonte, não o aplicativo. Para instalar os requisitos e configurar as contas, siga as instruções abaixo.
+
+---
+
 ## Transparência e desenvolvimento
 
 Nenhuma parte do código deste projeto está escondida: todo o código-fonte está disponível neste repositório para que você possa revisá-lo. Você também pode pedir a uma IA de sua confiança para analisar o código e ajudar a identificar possíveis problemas de segurança ou comportamento.
@@ -286,7 +299,7 @@ The dashboard uses vertical scrolling rather than shrinking account cards. Wide 
 
 ## Versão para Linux (experimental)
 
-A partir da **v0.1.3**, a página de [Releases](https://github.com/MOTHblank/pokeidle-addons/releases) também oferece um arquivo `moth-controller-v0.1.3-linux-x86_64.tar.gz`. Ele contém o executável nativo e instruções em português.
+A versão para Linux está disponível no botão **Baixar para Linux** no início deste README e na página de [Releases](https://github.com/MOTHblank/pokeidle-addons/releases). O arquivo contém o executável nativo e instruções em português.
 
 Extraia o arquivo e execute `chmod +x moth-controller && ./moth-controller` em um terminal dentro da pasta extraída.
 
