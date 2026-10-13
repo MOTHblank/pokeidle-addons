@@ -294,6 +294,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "channels in this tab" => "canais nesta aba",
         "Last reported tabs" => "Últimas abas detectadas",
         "Tab list unavailable while game loads" => "Lista de abas indisponível durante o carregamento do jogo",
+        "No active browser tabs" => "Nenhuma aba ativa do navegador",
+        "Tab list not currently verified" => "Lista de abas ainda não verificada",
+        "No Twitch tab open" => "Nenhuma aba da Twitch aberta",
         "Optimized Twitch tabs" => "Abas Twitch otimizadas",
         "This ratio counts Twitch browser tabs, not livestream channels." => "Esta proporção conta abas Twitch do navegador, não canais ao vivo.",
         "Not optimized" => "Não otimizado",
@@ -2318,7 +2321,7 @@ fn draw_game_card(
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(tr(if health.telemetry_is_fresh() { "OPEN TABS" } else { "Last reported tabs" }))
+                    RichText::new(tr(if health.telemetry_is_fresh() || health.last_successful_probe_at.is_none() { "OPEN TABS" } else { "Last reported tabs" }))
                         .size(9.0)
                         .strong()
                         .color(DIM),
@@ -2444,7 +2447,7 @@ fn draw_game_card(
 
                     if health.tabs.is_empty() {
                         ui.label(
-                            RichText::new(tr(if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
+                            RichText::new(tr(if !running { "No active browser tabs" } else if !health.telemetry_is_fresh() { "Tab list not currently verified" } else if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -2830,7 +2833,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Headless"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
                 runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { GOOD } else { MUTED });
-                runtime_chip(ui, tr("BiDi"), &bidi_state, if bidi_connected == running && running > 0 { GOOD } else { WARN });
+                runtime_chip(ui, tr("BiDi"), &bidi_state, if running == 0 { MUTED } else if bidi_connected == running { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
                     ui,
@@ -3167,6 +3170,8 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     // authenticate Twitch, so never label a profile as logged in.
                                     let twitch_label = if twitch_open {
                                         tr("Tab open")
+                                    } else if running && health.telemetry_is_fresh() {
+                                        tr("No Twitch tab open")
                                     } else {
                                         tr("Not checked")
                                     };
