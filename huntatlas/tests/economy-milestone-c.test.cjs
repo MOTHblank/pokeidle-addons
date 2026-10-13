@@ -61,7 +61,8 @@ test('loot mixture requires complete species coverage, not renormalized optimist
     const m=new Map([[1,{perKill:10}],[2,{perKill:100}]]);
     assert.equal(h.farmLootPrediction(hunt,m,100).perHour,1900);
     m.delete(2);
-    const missing=h.farmLootPrediction(hunt,m,100);
+    // Real catalog revisions replace the Map, invalidating the reference-scoped cache.
+    const missing=h.farmLootPrediction(hunt,new Map(m),100);
     assert.equal(missing.perHour,null);
     assert.equal(missing.coverage,90);
 });
