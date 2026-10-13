@@ -2047,7 +2047,9 @@ mod command_tests {
         use std::time::{Duration, Instant};
 
         assert_eq!(MONITOR_POLL_INTERVAL, Duration::from_secs(60));
-        assert_eq!(MONITOR_STARTUP_POLL_INTERVAL, Duration::from_secs(45));
+        // Startup/login samples now follow the compact 60-second cadence.
+        assert_eq!(MONITOR_STARTUP_POLL_INTERVAL, MONITOR_POLL_INTERVAL);
+        assert!(MONITOR_STARTUP_POLL_INTERVAL < TELEMETRY_FRESHNESS_LIMIT);
         assert!(MONITOR_POLL_INTERVAL < TELEMETRY_FRESHNESS_LIMIT);
         let mut health = Health::default();
         health.state = "Running".to_string();
