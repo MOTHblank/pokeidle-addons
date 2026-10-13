@@ -78,6 +78,8 @@ pub struct Health {
     pub stream_missing: Vec<String>,
     pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
+    /// The bridge snapshot was actually readable, regardless of game socket state.
+    pub bridge_snapshot_ok: bool,
     pub last_game_message_ms: u64,
     pub tabs: Vec<TabInfo>,
     pub kick_streams: Vec<KickStream>,
@@ -134,6 +136,7 @@ impl Default for Health {
             stream_missing: Vec::new(),
             xp_sources: Vec::new(),
             bridge_connected: false,
+            bridge_snapshot_ok: false,
             last_game_message_ms: 0,
             tabs: Vec::new(),
             kick_streams: Vec::new(),
@@ -319,6 +322,7 @@ struct BrowserSession {
 #[derive(Default)]
 struct RuntimeProbe {
     bridge_connected: bool,
+    bridge_snapshot_ok: bool,
     hunt_slug: String,
     player_level: u32,
     player_xp: String,
@@ -395,6 +399,7 @@ struct Probe {
     stream_missing: Vec<String>,
     xp_sources: Vec<String>,
     bridge_connected: bool,
+    bridge_snapshot_ok: bool,
     last_game_message_ms: u64,
     tabs: Vec<TabInfo>,
     kick_streams: Vec<KickStream>,
@@ -563,6 +568,7 @@ fn monitor_loop(
                         current.stream_missing = probe.stream_missing;
                         current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
+                        current.bridge_snapshot_ok = probe.bridge_snapshot_ok;
                         current.last_game_message_ms = probe.last_game_message_ms;
                         current.tabs = probe.tabs;
                         current.kick_streams = probe.kick_streams;
@@ -952,6 +958,7 @@ fn probe_page(session: &mut BrowserSession, headless: bool) -> Result<Probe, Str
         stream_missing: runtime.stream_missing,
         xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
+        bridge_snapshot_ok: runtime.bridge_snapshot_ok,
         last_game_message_ms: runtime.last_game_message_ms,
         tabs,
         kick_streams: runtime.kick_streams,
@@ -1343,6 +1350,7 @@ fn probe_runtime_details(
 
     Ok(RuntimeProbe {
         bridge_connected,
+        bridge_snapshot_ok: true,
         hunt_slug,
         player_level,
         player_xp,

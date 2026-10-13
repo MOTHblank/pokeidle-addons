@@ -306,6 +306,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Bonus not registered for:" => "Bônus ainda não registrado para:",
         "Chat activity reported; XP bonus not confirmed" => "Jogo registra canais assistidos; bônus de XP não confirmado",
         "Not reported" => "Não informado",
+        "Bridge data unavailable" => "Dados da ponte indisponíveis",
+        "Twitch XP bonus not checked (Controller Bridge data unavailable)" => "Bônus de XP da Twitch não verificado (dados do Controller Bridge indisponíveis)",
+        "XP bonus data unavailable" => "Dados de bônus de XP indisponíveis",
         "scanning" => "verificando",
         "not-ready" => "jogo não pronto",
         "failed" => "falhou",
@@ -2150,31 +2153,31 @@ fn draw_game_card(
                     ui.horizontal_wrapped(|ui| {
                         let gold = format_number(health.gold);
                         let orbs = format_number(health.orbs);
-                        resource_value(ui, tr("GOLD"), &gold, WARN);
-                        resource_value(ui, tr("GEMS"), &orbs, ACCENT);
+                        resource_value(ui, tr("GOLD"), if health.bridge_snapshot_ok { &gold } else { "—" }, WARN);
+                        resource_value(ui, tr("GEMS"), if health.bridge_snapshot_ok { &orbs } else { "—" }, ACCENT);
                         resource_value(
                             ui,
                             tr("AUTO CATCH"),
 
-                            if !health.telemetry_is_fresh() { "—" } else if health.autocatch_on { tr("ON") } else { tr("OFF") },
-                            if health.telemetry_is_fresh() && health.autocatch_on { GOOD } else { MUTED },
+                            if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { "—" } else if health.autocatch_on { tr("ON") } else { tr("OFF") },
+                            if health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on { GOOD } else { MUTED },
                         );
                         resource_value(
                             ui,
                             tr("USED"),
-                            &health.autocatch_balls_used.to_string(),
+                            if health.bridge_snapshot_ok { &health.autocatch_balls_used.to_string() } else { "—" },
                             TEXT,
                         );
                         resource_value(
                             ui,
                             tr("CAPTURES"),
-                            &health.autocatch_captures.to_string(),
+                            if health.bridge_snapshot_ok { &health.autocatch_captures.to_string() } else { "—" },
                             TEXT,
                         );
                         resource_value(
                             ui,
                             tr("SUCCESS"),
-                            if health.autocatch_rate.is_empty() { "—" } else { &health.autocatch_rate },
+                            if !health.bridge_snapshot_ok || health.autocatch_rate.is_empty() { "—" } else { &health.autocatch_rate },
                             TEXT,
                         );
                     });
@@ -2208,19 +2211,19 @@ fn draw_game_card(
                 automation_badge(
                     ui,
                     tr("Auto Catch"),
-                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
-                    health.telemetry_is_fresh() && health.autocatch_on,
+                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Bridge data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
+                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
                 );
                 automation_badge(
                     ui,
                     tr("Restock"),
-                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
-                    health.telemetry_is_fresh() && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
+                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
+                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
                 );
                 automation_badge(
                     ui,
                     tr("Stream scanner"),
-                    if !health.telemetry_is_fresh() {
+                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
                         tr("Not checked")
                     } else if health.stream_scan_status.is_empty() {
                         tr("Waiting")
@@ -2516,7 +2519,9 @@ fn draw_game_card(
                 .corner_radius(10.0)
                 .inner_margin(10.0)
                 .show(ui, |ui| {
-                    if !health.stream_watching.is_empty() && health.stream_bonus_pct > 0.0 {
+                    if !health.bridge_snapshot_ok {
+                        ui.label(RichText::new(tr("Twitch XP bonus not checked (Controller Bridge data unavailable)")).size(10.0).color(DIM));
+                    } else if !health.stream_watching.is_empty() && health.stream_bonus_pct > 0.0 {
                         ui.label(
                             RichText::new(format!(
                                 "{} · +{}% XP",
@@ -2622,7 +2627,7 @@ fn draw_game_card(
 
                     if sources.is_empty() {
                         ui.label(
-                            RichText::new(tr("No active XP bonus detected"))
+                            RichText::new(tr(if health.bridge_snapshot_ok { "No active XP bonus detected" } else { "XP bonus data unavailable" }))
                                 .size(10.0)
                                 .color(DIM),
                         );
