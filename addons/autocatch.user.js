@@ -2352,7 +2352,7 @@
         style.textContent = `
             #moth-ac-panel {
                 margin: 8px 0 10px;
-                padding: 9px;
+                padding: 7px;
                 border: 1px solid rgba(255,255,255,.14);
                 border-radius: 8px;
                 background: rgba(18,15,18,.72);
@@ -2412,27 +2412,22 @@
 
             .moth-ac-stats {
                 display: grid;
-                grid-template-columns: repeat(auto-fit,minmax(150px,1fr));
-                gap: 5px;
-                margin-bottom: 7px;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 4px;
+                margin-bottom: 6px;
             }
 
             .moth-ac-stat {
-                padding: 5px 6px;
-                border-radius: 6px;
-                background: rgba(255,255,255,.06);
+                min-width: 0;
+                padding: 4px 2px;
+                border-radius: 5px;
+                background: rgba(255,255,255,.05);
                 text-align: center;
+                white-space: nowrap;
             }
 
-            .moth-ac-stat b {
-                display: block;
-                font-size: 14px;
-            }
-
-            .moth-ac-stat span {
-                color: #aaa0a4;
-                font-size: 9px;
-            }
+            .moth-ac-stat b { font-size: 12px; }
+            .moth-ac-stat span { margin-left: 4px; color: #aaa0a4; font-size: 9px; }
 
             .moth-ac-grid {
                 display: grid;
@@ -2442,7 +2437,7 @@
             }
 
             .moth-ac-grid input[type="number"],
-            .moth-ac-ball input[type="number"] {
+            .moth-ac-ball-active input[type="number"] {
                 padding: 3px 5px;
                 border-radius: 5px;
                 border: 1px solid rgba(255,255,255,.14);
@@ -2451,161 +2446,159 @@
             }
 
             .moth-ac-grid input[type="number"] { width: 72px; }
+            .moth-ac-speed { margin-bottom: 5px; }
 
             .moth-ac-ball-intro {
                 display: flex;
-                align-items: baseline;
-                justify-content: space-between;
-                gap: 8px;
-                margin: 8px 0 5px;
+                align-items: center;
+                gap: 7px;
+                margin: 6px 0 5px;
             }
 
-            .moth-ac-ball-intro b {
-                color: var(--sobre-mad, #f4edf0);
-                font-size: 11px;
-            }
-
-            .moth-ac-ball-intro span {
-                color: var(--sobre-mad-dim, #aaa0a4);
-                font-size: 9px;
-                text-align: right;
+            .moth-ac-ball-intro b { font-size: 11px; }
+            .moth-ac-ball-intro span { color: #aaa0a4; font-size: 9px; }
+            .moth-ac-ball-intro button {
+                margin-left: auto;
+                border: 1px solid rgba(255,255,255,.16);
+                border-radius: 5px;
+                padding: 2px 7px;
+                color: #eee;
+                background: rgba(255,255,255,.06);
+                cursor: pointer;
+                font: inherit;
             }
 
             .moth-ac-balls {
                 display: grid;
-                grid-template-columns: repeat(auto-fit,minmax(132px,1fr));
-                gap: 6px;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 5px;
             }
 
-            .moth-ac-ball {
+            .moth-ac-ball-active {
                 min-width: 0;
-                overflow: hidden;
+                padding: 4px 5px;
                 border-radius: 6px;
-                background: var(--vao, rgba(255,255,255,.045));
-                box-shadow: inset 0 0 0 2px var(--mad-linha, rgba(255,255,255,.12));
-                opacity: .78;
-                transition: filter .1s, opacity .1s, box-shadow .1s;
+                border: 1px solid var(--rx-rosa, #b04a86);
+                background: rgba(139,53,104,.22);
             }
 
-            .moth-ac-ball.on {
-                opacity: 1;
-                background: linear-gradient(180deg,
-                    var(--rx-esc, #5f2748) 0 5px,
-                    var(--rx, #8b3568) 5px calc(100% - 5px),
-                    var(--rx-rosa, #b04a86) calc(100% - 5px) 100%);
-                box-shadow:
-                    inset 0 0 0 2px var(--mad-linha, rgba(255,255,255,.16)),
-                    inset 0 0 0 4px var(--mad-luz2, rgba(255,255,255,.08));
-            }
-
-            .moth-ac-ball:hover { filter: brightness(1.08); }
-
-            .moth-ac-ball.vazio .moth-ac-ball-stock {
-                color: var(--vermelho, #ff776e);
-            }
-
-            .moth-ac-ball.reserved .moth-ac-ball-stock {
-                color: var(--seta, #efc66b);
-            }
-
-            .moth-ac-ball-select {
-                display: grid;
-                grid-template-columns: 28px minmax(0,1fr) auto;
+            .moth-ac-ball-top {
+                display: flex;
                 align-items: center;
-                gap: 7px;
-                width: 100%;
-                min-height: 42px;
-                padding: 5px 7px;
-                border: 0;
-                color: inherit;
-                background: transparent;
-                text-align: left;
-                cursor: pointer;
+                gap: 5px;
+                min-width: 0;
             }
 
-            .moth-ac-ball-select img {
-                width: 26px;
-                height: 26px;
+            .moth-ac-ball-top b {
+                min-width: 0;
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 10px;
+            }
+
+            .moth-ac-ball-rank { color: #efc2d8; font-size: 10px; font-weight: 750; }
+            .moth-ac-ball-top img,
+            .moth-ac-ball-options img {
+                width: 23px;
+                height: 23px;
                 object-fit: contain;
                 image-rendering: pixelated;
             }
 
             .moth-ac-ball-fallback {
-                display: grid;
+                display: inline-grid;
                 place-items: center;
-                width: 26px;
-                height: 26px;
+                width: 23px;
+                height: 23px;
                 border-radius: 50%;
-                background: var(--mad, #6c493f);
-                box-shadow: inset 0 0 0 2px var(--mad-linha, #3f2925);
+                background: #6c493f;
                 font-weight: 800;
+                flex-shrink: 0;
             }
 
-            .moth-ac-ball-copy {
-                min-width: 0;
+            .moth-ac-ball-action {
+                padding: 0 3px;
+                border: 0;
+                color: #e0c8d0;
+                background: transparent;
+                cursor: pointer;
+                font: inherit;
             }
 
-            .moth-ac-ball-copy b,
-            .moth-ac-ball-copy small {
-                display: block;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .moth-ac-ball-copy b {
-                font-size: 10.5px;
-            }
-
-            .moth-ac-ball-copy small {
-                margin-top: 1px;
-                color: var(--sobre-mad-dim, #aaa0a4);
-                font-size: 8.5px;
-            }
-
-            .moth-ac-ball.on .moth-ac-ball-copy small {
-                color: rgba(255,255,255,.72);
-            }
-
-            .moth-ac-ball-check {
-                min-width: 18px;
-                color: rgba(255,255,255,.35);
-                font-size: 15px;
-                text-align: center;
-            }
-
-            .moth-ac-ball.on .moth-ac-ball-check {
-                color: #fff;
-            }
-
-            .moth-ac-ball-reserve {
+            .moth-ac-ball-bottom {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
-                gap: 6px;
-                padding: 4px 7px 6px;
-                border-top: 1px solid rgba(255,255,255,.08);
-                color: var(--sobre-mad-dim, #aaa0a4);
-                font-size: 8.5px;
+                gap: 5px;
+                margin-top: 3px;
+                color: #c1b7bd;
+                font-size: 9px;
             }
 
-            .moth-ac-ball-reserve input[type="number"] {
-                width: 50px;
-                padding: 2px 4px;
-                border-radius: 4px;
-                border: 1px solid rgba(255,255,255,.14);
-                color: white;
-                background: rgba(0,0,0,.22);
+            .moth-ac-ball-bottom label {
+                display: flex;
+                align-items: center;
+                gap: 3px;
+                margin-left: auto;
+            }
+
+            .moth-ac-ball-active input[type="number"] {
+                width: 42px;
+                padding: 2px 3px;
                 text-align: right;
+                font-size: 9px;
+            }
+
+            .moth-ac-ball-options {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                margin-top: 5px;
+                padding: 6px;
+                border-radius: 6px;
+                background: rgba(255,255,255,.035);
+            }
+
+            .moth-ac-ball-options[hidden],
+            .moth-ac-restock-settings[hidden] { display: none !important; }
+
+            .moth-ac-ball-option {
+                position: relative;
+                display: inline-grid;
+                place-items: center;
+                width: 39px;
+                height: 39px;
+                padding: 3px;
+                border: 1px solid rgba(255,255,255,.18);
+                border-radius: 6px;
+                color: white;
+                background: rgba(255,255,255,.04);
+                opacity: .75;
+                cursor: pointer;
+            }
+
+            .moth-ac-ball-option.on {
+                opacity: 1;
+                border-color: #ef95bf;
+                background: rgba(139,53,104,.35);
+                box-shadow: inset 0 0 0 1px rgba(239,149,191,.4);
+            }
+
+            .moth-ac-ball-option small {
+                position: absolute;
+                right: 2px;
+                bottom: 1px;
+                font-size: 8px;
             }
 
             .moth-ac-ball-empty {
                 grid-column: 1 / -1;
-                padding: 7px;
+                padding: 6px;
                 border-radius: 5px;
-                color: var(--sobre-mad-dim, #aaa0a4);
-                background: var(--vao, rgba(255,255,255,.045));
-                font-size: 9.5px;
+                color: #aaa0a4;
+                background: rgba(255,255,255,.045);
+                font-size: 10px;
             }
 
             .moth-ac-restock {
@@ -2630,33 +2623,65 @@
                 font-weight: 700;
             }
 
+            .moth-ac-restock-head { margin-bottom: 0; }
+            .moth-ac-restock-expand {
+                order: 3;
+                border: 1px solid rgba(255,255,255,.15);
+                border-radius: 5px;
+                padding: 2px 5px;
+                color: #eee;
+                background: rgba(255,255,255,.05);
+                cursor: pointer;
+                font: inherit;
+            }
+
+            .moth-ac-restock-settings { margin-top: 6px; }
+
             .moth-ac-restock-picker {
                 display: grid;
-                grid-template-columns: repeat(3,minmax(0,1fr));
-                gap: 6px;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 5px;
                 margin-bottom: 6px;
             }
 
-            .moth-ac-restock-picker label {
-                display: grid;
-                gap: 3px;
+            .moth-ac-restock-picker > div {
                 min-width: 0;
                 color: #aaa0a4;
-                font-size: 8.5px;
+                font-size: 9px;
             }
 
-            .moth-ac-restock-picker select {
-                width: 100%;
-                min-width: 0;
-                padding: 4px 5px;
+            .moth-ac-restock-choices {
+                display: flex;
+                gap: 3px;
+                flex-wrap: wrap;
+                margin-top: 3px;
+            }
+
+            .moth-ac-restock-choice {
+                display: inline-grid;
+                place-items: center;
+                width: 31px;
+                height: 31px;
+                padding: 3px;
+                border: 1px solid rgba(255,255,255,.16);
                 border-radius: 5px;
-                border: 1px solid rgba(255,255,255,.14);
                 color: white;
-                background: rgba(0,0,0,.22);
+                background: rgba(255,255,255,.04);
+                opacity: .65;
+                cursor: pointer;
             }
 
-            .moth-ac-restock-picker select:disabled {
-                opacity: .55;
+            .moth-ac-restock-choice.on {
+                opacity: 1;
+                border-color: #ef95bf;
+                background: rgba(139,53,104,.35);
+            }
+
+            .moth-ac-restock-choice img {
+                width: 23px;
+                height: 23px;
+                object-fit: contain;
+                image-rendering: pixelated;
             }
 
             .moth-ac-restock-status {
@@ -2958,21 +2983,23 @@
             <div class="moth-ac-current" id="moth-ac-current">No target</div>
 
             <div class="moth-ac-stats">
-                <div class="moth-ac-stat"><b id="moth-ac-captures">0</b><span>captures</span></div>
-                <div class="moth-ac-stat"><b id="moth-ac-balls-used">0</b><span>balls used</span></div>
+                <div class="moth-ac-stat"><b id="moth-ac-captures">0</b><span>caught</span></div>
+                <div class="moth-ac-stat"><b id="moth-ac-balls-used">0</b><span>balls</span></div>
                 <div class="moth-ac-stat"><b id="moth-ac-rate">0%</b><span>success</span></div>
             </div>
 
-            <div class="moth-ac-grid">
-                <label for="moth-ac-interval">Throw interval</label>
+            <div class="moth-ac-grid moth-ac-speed">
+                <label for="moth-ac-interval">Throw interval (ms)</label>
                 <input id="moth-ac-interval" type="number" min="100" max="5000" step="25">
             </div>
 
             <div class="moth-ac-ball-intro">
                 <b>Capture balls</b>
-                <span>weakest enabled first · reserve is never spent</span>
+                <span>Primary → fallback · max 2</span>
+                <button type="button" id="moth-ac-change-balls" aria-expanded="false" aria-controls="moth-ac-ball-options">Change ▾</button>
             </div>
             <div class="moth-ac-balls" id="moth-ac-balls"></div>
+            <div class="moth-ac-ball-options" id="moth-ac-ball-options" hidden></div>
 
             <div class="moth-ac-restock">
                 <div class="moth-ac-restock-head">
@@ -2981,33 +3008,27 @@
                         Auto-restock
                     </label>
                     <span class="moth-ac-restock-status" id="moth-ac-restock-status">off</span>
+                    <button type="button" class="moth-ac-restock-expand" id="moth-ac-restock-expand" aria-expanded="false" aria-controls="moth-ac-restock-settings">Options ▾</button>
                 </div>
 
-                <div class="moth-ac-restock-picker">
-                    <label>
-                        <span>Ball to restock</span>
-                        <select id="moth-ac-restock-ball"></select>
-                    </label>
-                    <label>
-                        <span>Potion to restock</span>
-                        <select id="moth-ac-restock-potion"></select>
-                    </label>
-                    <label>
-                        <span>Revive to restock</span>
-                        <select id="moth-ac-restock-revive"></select>
-                    </label>
-                </div>
+                <div class="moth-ac-restock-settings" id="moth-ac-restock-settings" hidden>
+                    <div class="moth-ac-restock-picker">
+                        <div><span>Ball</span><div class="moth-ac-restock-choices" id="moth-ac-restock-ball" role="group" aria-label="Ball to restock"></div></div>
+                        <div><span>Potion</span><div class="moth-ac-restock-choices" id="moth-ac-restock-potion" role="group" aria-label="Potion to restock"></div></div>
+                        <div><span>Revive</span><div class="moth-ac-restock-choices" id="moth-ac-restock-revive" role="group" aria-label="Revive to restock"></div></div>
+                    </div>
 
-                <div class="moth-ac-restock-grid">
-                    <small></small><small>at</small><small>to</small>
-                    ${restockControl('ball', 'Selected Ball')}
-                    ${restockControl('potion', 'Selected Potion')}
-                    ${restockControl('revive', 'Selected Revive')}
-                </div>
+                    <div class="moth-ac-restock-grid">
+                        <small></small><small>at ≤</small><small>to</small>
+                        ${restockControl('ball', 'Ball')}
+                        ${restockControl('potion', 'Potion')}
+                        ${restockControl('revive', 'Revive')}
+                    </div>
 
-                <div class="moth-ac-grid moth-ac-restock-gold">
-                    <label for="moth-ac-restock-gold">Keep gold</label>
-                    <input id="moth-ac-restock-gold" type="number" min="0" step="100">
+                    <div class="moth-ac-grid moth-ac-restock-gold">
+                        <label for="moth-ac-restock-gold">Keep gold</label>
+                        <input id="moth-ac-restock-gold" type="number" min="0" step="100">
+                    </div>
                 </div>
             </div>
 
