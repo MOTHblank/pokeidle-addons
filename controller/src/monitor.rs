@@ -21,6 +21,7 @@ pub(crate) const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(3 * 60);
 const MONITOR_STARTUP_POLL_INTERVAL: Duration = Duration::from_secs(45);
 pub(crate) const MONITOR_TAB_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MONITOR_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const MONITOR_SESSION_LIMIT_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 // Bound the TCP connect and WebSocket handshake, not just post-handshake reads.
 const BIDI_IO_TIMEOUT: Duration = Duration::from_secs(4);
 // A stream of unrelated responses must not keep one command alive indefinitely.
@@ -474,6 +475,23 @@ impl MonitorIssueReporter {
     }
 }
 
+// Firefox allows only one BiDi session. A read timeout or a missing tab
+// does NOT mean that the current session has ended: abandoning its socket
+// can permanently exhaust Firefox's only session slot (Mozilla bug 1739363).
+// Only a confirmed transport close warrants creating a new session.
+fn session_connection_is_closed(error: &str) -> bool {
+    let message = error.to_ascii_lowercase();
+    [
+        "connection closed", "connection reset", "connection aborted",
+        "broken pipe", "already closed", "unexpected eof",
+        "websocket protocol error",
+    ].iter().any(|marker| message.contains(marker))
+}
+
+fn session_limit_exhausted(error: &str) -> bool {
+    error.contains("Maximum number of active sessions")
+}
+
 fn monitor_loop(
     port: u16,
     headless: bool,
@@ -487,6 +505,7 @@ fn monitor_loop(
     let mut next_full = Instant::now();
     let mut next_heartbeat = Instant::now();
     let mut next_tabs = Instant::now();
+    let mut setup_retry_interval = MONITOR_RETRY_INTERVAL;
 
     loop {
         expire_pending_commands(&commands);
@@ -501,6 +520,7 @@ fn monitor_loop(
                 Ok(browser_session) => {
                     logging::info(&format!("BiDi session established on port {}", port));
                     session = Some(browser_session);
+                    setup_retry_interval = MONITOR_RETRY_INTERVAL;
                     let already_sampled = health.lock().map(|current|
                         current.last_successful_probe_at.is_some()).unwrap_or(false);
                     next_full = Instant::now() + stagger_delay(port, already_sampled);
@@ -512,6 +532,13 @@ fn monitor_loop(
                     }
                 }
                 Err(error) => {
+                    // A prior socket may still own Firefox's single BiDi slot.
+                    // Rapidly repeating session.new cannot reclaim it.
+                    setup_retry_interval = if session_limit_exhausted(&error) {
+                        MONITOR_SESSION_LIMIT_RETRY_INTERVAL
+                    } else {
+                        MONITOR_RETRY_INTERVAL
+                    };
                     issues.report(format!(
                         "BiDi session setup on port {} failed: {}", port, error
                     ));
@@ -550,7 +577,7 @@ fn monitor_loop(
             }
         }
 
-        let mut wait = MONITOR_RETRY_INTERVAL;
+        let mut wait = setup_retry_interval;
         if let Some(browser_session) = session.as_mut() {
             if flush_commands(browser_session, &commands) {
                 // An explicit controller tab change deserves an immediate update.
@@ -642,13 +669,22 @@ fn monitor_loop(
                         issues.report(format!(
                             "BiDi page probe on port {} failed: {}", port, error
                         ));
+                        let closed = session_connection_is_closed(&error);
                         if let Ok(mut current) = health.lock() {
                             current.state = "Reconnecting".to_string();
                             current.last_error = Some(error);
                             current.game_ready = false;
                             current.logged_in = false;
                         }
-                        end_session(&mut session);
+                        // Retry the already-registered session first. Dropping
+                        // it after a transient read timeout, a navigation, or
+                        // an absent game tab strands that session in Firefox.
+                        if closed {
+                            end_session(&mut session);
+                        } else {
+                            next_full = Instant::now() + MONITOR_RETRY_INTERVAL;
+                            next_heartbeat = next_full;
+                        }
                     }
                 }
             } else if now >= next_heartbeat {
@@ -772,7 +808,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         MaybeTlsStream::Plain(stream),
     ).map_err(|error| format!("BiDi WebSocket handshake failed: {error}"))?;
 
-    send_and_wait(
+    if let Err(error) = send_and_wait(
         &mut socket,
         1,
         json!({
@@ -780,7 +816,20 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
             "method": "session.new",
             "params": { "capabilities": {} }
         }),
-    )?;
+    ) {
+        // Firefox might have created the session before our acknowledgement
+        // timed out. Attempt to free it over this SAME connection before
+        // dropping it; a fresh session.new cannot replace a stranded session.
+        if !session_limit_exhausted(&error) {
+            let _ = send_and_wait(
+                &mut socket,
+                2,
+                json!({ "id": 2, "method": "session.end", "params": {} }),
+            );
+        }
+        let _ = socket.close(None);
+        return Err(error);
+    }
 
     Ok(BrowserSession {
         socket,
@@ -1711,7 +1760,7 @@ fn end_session(session: &mut Option<BrowserSession>) {
     };
 
     let command_id = session.next_id;
-    let _ = send_and_wait(
+    if let Err(error) = send_and_wait(
         &mut session.socket,
         command_id,
         json!({
@@ -1719,7 +1768,11 @@ fn end_session(session: &mut Option<BrowserSession>) {
             "method": "session.end",
             "params": {}
         }),
-    );
+    ) {
+        logging::warn(&format!(
+            "BiDi session.end was not acknowledged: {error}; Firefox may retain the active session"
+        ));
+    }
 
     let _ = session.socket.close(None);
 }
@@ -1835,6 +1888,32 @@ mod command_tests {
 
         health.last_successful_probe_at = Some(Instant::now() - Duration::from_secs(6 * 60));
         assert!(!health.telemetry_is_fresh());
+    }
+
+    #[test]
+    fn transient_probe_failures_keep_the_registered_bidi_session() {
+        for error in [
+            "IO error: timed out (os error 10060)",
+            "Firefox has no PokéIdle app context",
+            "BiDi command 5 timed out while waiting for its response",
+            "script.evaluate exception: invalid context",
+        ] {
+            assert!(!super::session_connection_is_closed(error), "{error}");
+        }
+        for error in [
+            "Connection closed normally",
+            "IO error: Connection reset by peer",
+            "IO error: Broken pipe",
+        ] {
+            assert!(super::session_connection_is_closed(error), "{error}");
+        }
+    }
+
+    #[test]
+    fn exhausted_session_slot_uses_backoff() {
+        assert!(super::session_limit_exhausted("Maximum number of active sessions"));
+        assert!(!super::session_limit_exhausted("Firefox has no PokéIdle app context"));
+        assert!(super::MONITOR_SESSION_LIMIT_RETRY_INTERVAL > super::MONITOR_RETRY_INTERVAL);
     }
 
     #[test]
