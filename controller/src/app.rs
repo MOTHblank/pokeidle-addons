@@ -2466,6 +2466,65 @@ fn draw_game_details(
                     });
                 });
 
+            // HuntAtlas shares already-calculated results through the Bridge.
+            // An absent or mismatched snapshot is not a rate of zero.
+            let atlas = &health.hunt_atlas;
+            let matches_hunt = atlas.get("huntSlug").and_then(|v| v.as_str())
+                .is_some_and(|slug| !slug.is_empty() && slug == health.hunt_slug);
+            if matches_hunt {
+                let rate = |key: &str| -> String {
+                    atlas.get(key).and_then(|v| v.as_f64())
+                        .filter(|n| n.is_finite() && *n >= 0.0)
+                        .map(|n| if n < 1.0 { format!("{n:.3}") } else { format!("{n:.1}") })
+                        .unwrap_or_else(|| "—".to_string())
+                };
+                ui.add_space(10.0);
+                ui.label(RichText::new(tr("HUNT ATLAS")).size(10.0).strong().color(DIM));
+                egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+                    .inner_margin(10.0).show(ui, |ui| {
+                        ui.columns(2, |cols| {
+                            detail_stat_line(&mut cols[0], tr("Trainer XP/h"), &rate("xpH"));
+                            let eta = match (health.player_xp_to_next,
+                                atlas.get("xpH").and_then(|v| v.as_f64())) {
+                                (Some(remaining), Some(xp)) if xp > 0.0 =>
+                                    format!("{:.1} h", remaining as f64 / xp),
+                                _ => "—".to_string(),
+                            };
+                            detail_stat_line(&mut cols[0], tr("Next level"), &eta);
+                            detail_stat_line(&mut cols[0], tr("Coins/h"), &rate("coinsH"));
+                            detail_stat_line(&mut cols[1], tr("Captures/h"), &rate("capturesH"));
+                            detail_stat_line(&mut cols[1], tr("Shiny catches/h"), &rate("shinyCaughtH"));
+                            detail_stat_line(&mut cols[1], tr("Balls/capture"), &rate("ballsPerCapture"));
+                        });
+                        ui.separator();
+                        let chance = |key: &str| -> String {
+                            atlas.get(key).and_then(|v| v.as_f64())
+                                .filter(|n| n.is_finite() && *n >= 0.0)
+                                .map(|n| format!("{:.2}%", n * 100.0))
+                                .unwrap_or_else(|| "—".to_string())
+                        };
+                        detail_stat_line(ui, tr("Ultra Ball"), &chance("ultraChance"));
+                        detail_stat_line(ui, tr("Beast Ball"), &chance("beastChance"));
+                        if let Some(tier) = atlas.get("activeOutlandTier").and_then(|v| v.as_u64()) {
+                            detail_stat_line(ui, tr("Outland tier"), &tier.to_string());
+                        }
+                        if let Some(drops) = atlas.get("rareDrops").and_then(|v| v.as_array()) {
+                            for drop in drops {
+                                if let (Some(name), Some(rate)) = (drop.get("name").and_then(|v| v.as_str()),
+                                    drop.get("unitsH").and_then(|v| v.as_f64())) {
+                                    let label = if rate > 0.0 && rate < 0.01 {
+                                        format!("{:.1} days/drop", 1.0 / (rate * 24.0))
+                                    } else { format!("{rate:.3}/h") };
+                                    detail_stat_line(ui, name, &label);
+                                }
+                            }
+                        }
+                        ui.label(RichText::new(if atlas.get("xpMeasured").and_then(|v| v.as_bool()) == Some(true) {
+                            tr("Measured XP/h · other rates may be estimated")
+                        } else { tr("Estimated rates · not measured") }).size(9.0).color(DIM));
+                    });
+            }
+
             ui.add_space(12.0);
 
             ui.label(
