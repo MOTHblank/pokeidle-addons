@@ -53,9 +53,26 @@ fn monitor_pace_for_slot(
     }
 }
 
+// Normal throttling, an old heartbeat, and transient BiDi probe failures
+// must not encourage a Firefox restart. Only a confirmed session-slot
+// failure or an existing Firefox profile with no monitor offers repair.
+fn monitor_repair_available(
+    running: bool,
+    last_error: Option<&str>,
+    orphaned_without_monitor: bool,
+) -> bool {
+    running
+        && (orphaned_without_monitor
+            || last_error.is_some_and(|error| {
+                error.contains("Maximum number of active sessions")
+            }))
+}
+
 #[cfg(test)]
 mod adaptive_monitor_ui_tests {
-    use super::{controller_is_background, monitor_pace_for_slot, MonitorPace};
+    use super::{
+        controller_is_background, monitor_pace_for_slot, monitor_repair_available, MonitorPace,
+    };
 
     #[test]
     fn inactive_window_and_system_tray_share_background_mode() {
@@ -92,6 +109,31 @@ mod adaptive_monitor_ui_tests {
             monitor_pace_for_slot(Some(2), 2, true, controller_is_background(false, Some(true))),
             MonitorPace::Detailed
         );
+    }
+
+    #[test]
+    fn transient_monitor_failures_do_not_prompt_firefox_restart() {
+        // Normal compact, expanded, and background monitoring never requires
+        // a restart merely because its most recent reading is stale.
+        assert!(!monitor_repair_available(true, None, false));
+        for error in [
+            "IO error: A connection attempt failed (os error 10060)",
+            "Firefox has no PokéIdle app context",
+            "BiDi command 7 timed out while waiting for its response",
+            "IO error: An established connection was aborted (os error 10053)",
+        ] {
+            assert!(!monitor_repair_available(true, Some(error), false), "{error}");
+        }
+
+        // The repair button remains for actual session exhaustion or an
+        // existing Firefox process whose monitor no longer exists.
+        assert!(monitor_repair_available(
+            true, Some("Maximum number of active sessions"), false
+        ));
+        assert!(monitor_repair_available(true, None, true));
+        assert!(!monitor_repair_available(
+            false, Some("Maximum number of active sessions"), true
+        ));
     }
 }
 
@@ -2285,14 +2327,11 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let addon_problems = addon_needs_attention(&health, running, &addon_versions);
     let needs_setup = !app.account_setup[index].setup_complete;
     let fresh = running && health.telemetry_is_fresh();
-    let blocked_session = health.last_error.as_deref()
-        .is_some_and(|error| error.contains("Maximum number of active sessions"));
-    let repair_available = running && (blocked_session
-        || (app.games[index].orphaned_pid.is_some()
-            && app.games[index].monitor.is_none())
-        || (health.last_heartbeat_at.is_some()
-            && !health.heartbeat_is_fresh()
-            && health.last_error.is_some()));
+    let repair_available = monitor_repair_available(
+        running,
+        health.last_error.as_deref(),
+        app.games[index].orphaned_pid.is_some() && app.games[index].monitor.is_none(),
+    );
 
     egui::Frame::new()
         .fill(PANEL)
