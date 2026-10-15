@@ -205,9 +205,12 @@ test('ready skill cooldown changes the predicted fight difficulty', () => {
     name:'Cyclonic Tide', type:'WATER', category:'SPECIAL',
     power:600, cooldownMs:60000
   }];
-  const longCooldown = ctx.rawPredictedKillMs(charizard);
+  // This is a same-level hunt: the shared Charizard fixture is level 1800
+  // and would swamp a level-150 lead regardless of ability cooldown.
+  const target = {...charizard, nivel:150};
+  const longCooldown = ctx.rawPredictedKillMs(target);
   ctx.leadPokemon().attacks[0].cooldownMs = 2000;
-  const shortCooldown = ctx.rawPredictedKillMs(charizard);
+  const shortCooldown = ctx.rawPredictedKillMs(target);
   assert.ok(longCooldown > shortCooldown,
     'more frequent effective skill use must improve sustained throughput');
 });
