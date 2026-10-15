@@ -334,3 +334,22 @@ test('upstream action pacing reduces unrealistic one-hit farming speed', () => {
   const easy = ctx.xpPacedKillMs(5_000,16,32);
   assert.ok(hard > easy,'different combat difficulty must stay differentiated');
 });
+
+test('a 46m predicted vs 13m measured miss is decomposed without clipping', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(functionBody('xpForecastAudit'), context);
+  const before = {
+    killMs: 1_800, trainerXpPerKill: 23_000, modelVersion:'1.9.23'
+  };
+  const actual = {killMs: 6_000, trainerXpH:13_000_000};
+  const audit = context.xpForecastAudit(before,actual);
+  assert.ok(audit);
+  assert.ok(Math.abs(audit.modeledTrainerXpH - 46e6) < 1);
+  assert.equal(audit.measuredTrainerXpH,13e6);
+  assert.ok(audit.xpRateOverestimate > 3.5 && audit.xpRateOverestimate < 3.6);
+  assert.ok(Math.abs(audit.killRateOverestimate - 6_000 / 1_800) < 1e-8);
+  assert.equal(audit.modeledXpPerKill,23_000);
+  assert.equal(audit.measuredXpPerKill,13e6 / 600);
+  assert.equal(context.xpForecastAudit({killMs:0},actual),null);
+});
