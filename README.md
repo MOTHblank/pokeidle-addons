@@ -93,7 +93,7 @@ Verifica os streamers online cerca de 30 segundos após o carregamento do jogo e
 Reduz o trabalho de vídeo e interface nas páginas da Twitch. No pop-out compartilhado, oculta a interface e filtra apenas mensagens de chat de alto volume, mantendo eventos de controle/keepalive e sincronizando os canais sem reconstruir o socket. É necessário atualizar **Live Stream Scanner** e **Twitch Low Resource Mode** no mesmo perfil para usar a sincronização contínua. Não otimiza páginas da KICK.
 
 **PokéIdle Hunt Atlas**  
-Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. 
+Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. Na versão **1.9.22**, combina o modelo por stats, golpes, tipos e cooldowns da edição experimental com as métricas de captura/economia do Controller da edição pública. Mostra **medido/modelo**, golpes estimados por abate, reconhece HP medido na própria hunt e conserva medições ao trocar de área. Valores simulados continuam aproximados; o Controller mantém acesso às métricas mesmo com o Atlas fechado. 
 
 ## Como configurar os userscripts
 
@@ -274,7 +274,7 @@ The **Manage Addons** section offers these userscripts for the selected profile:
 
 **Stop all** closes every controlled Firefox instance.
 
-**Hunt Atlas** remains an in-game userscript installed through **Accounts → Manage Addons**. The Rust controller no longer provides a separate Hunt Atlas window.
+**Hunt Atlas** remains an in-game userscript installed through **Accounts → Manage Addons**. The Rust controller no longer provides a separate Hunt Atlas window. Version **1.9.22** combines target-specific combat, cooldown-aware XP predictions and saved per-hunt measurements with the existing public controller capture/economy metrics and one-time background catalog loading. The public userscript retains its normal automatic-update metadata.
 
 The dashboard uses vertical scrolling rather than shrinking account cards. Wide windows use two columns; narrow windows use one.
 
