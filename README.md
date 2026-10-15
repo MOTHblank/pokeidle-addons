@@ -84,13 +84,13 @@ Captura automática configurável e estatísticas de captura. O Auto Catch tamb�
 Reduz trabalho de renderização e loops da interface do PokéIdle. É recomendado para todos os perfis.
 
 **Live Stream Scanner**  
-Verifica os streamers online cerca de 30 segundos após o carregamento do jogo e depois a cada cinco minutos, atualizando uma aba consolidada de chats da Twitch por perfil. Para a KICK, a interface oferece um link MultiKick para abrir fora do Firefox gerenciado.
+Verifica os streamers online cerca de 30 segundos após o carregamento do jogo e depois a cada minuto. Mantém **uma única aba de chat da Twitch por perfil**, sem recarregá-la nas atualizações: adiciona canais por IRC `JOIN`, remove canais por `PART` e preserva as conexões dos canais que continuam ao vivo. Controla a frequência de entradas conforme os limites da Twitch e só reinicia a aba quando a conexão não se recupera. Leituras momentaneamente vazias não encerram os chats. Para a KICK, a interface oferece um link MultiKick para abrir fora do Firefox gerenciado.
 
 **Controller Bridge**  
 É o principal userscript de integração com o aplicativo Rust. Ele fornece ao controlador dados do jogo.
 
 **Twitch Low Resource Mode**  
-Reduz o trabalho de vídeo e interface nas páginas da Twitch. Nos pop-outs de chat, oculta a interface e filtra mensagens para reduzir o consumo, preservando a conexão e os eventos necessários. Não otimiza páginas da KICK.
+Reduz o trabalho de vídeo e interface nas páginas da Twitch. No pop-out compartilhado, oculta a interface e filtra apenas mensagens de chat de alto volume, mantendo eventos de controle/keepalive e sincronizando os canais sem reconstruir o socket. É necessário atualizar **Live Stream Scanner** e **Twitch Low Resource Mode** no mesmo perfil para usar a sincronização contínua. Não otimiza páginas da KICK.
 
 **PokéIdle Hunt Atlas**  
 Substitui a tela **Mapa** por uma interface de busca e comparação de hunts. 
