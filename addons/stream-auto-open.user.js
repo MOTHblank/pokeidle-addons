@@ -76,7 +76,7 @@
             const confirmedSuccessor = active && active !== generation &&
                 readStoredJson(CHAT_HEARTBEAT_KEY)?.generation === active &&
                 chatHostIsAlive();
-            if (active?.startsWith('stop-') || lostLaunch ||
+            if ((active?.startsWith('stop-') && target !== generation) || lostLaunch ||
                 (confirmedSuccessor && target !== generation)) {
                 try { window.close(); }
                 catch (error) { console.warn('[Moth] Twitch tab close failed:', error); }
