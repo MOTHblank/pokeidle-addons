@@ -10,7 +10,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'addons', 'hunt-atlas.
 const names = ['formatRate', 'formatXpRate', 'xpRatingOriginKey', 'xpGlobalAttackFloor', 'xpMoveCooldown', 'xpCooldownFromPower',
   'median', 'estimatedWildStat', 'sampledHuntHp', 'targetHpEstimate', 'battleLeadTypes', 'battleMovesForLead', 'battleStat',
   'estimatedWildDefense', 'battleDamage', 'deterministicSpeciesCombat',
-  'huntCombatCoverage', 'rawPredictedKillMs', 'savedObservedRates'];
+  'huntCombatCoverage', 'xpPacedKillMs', 'rawPredictedKillMs', 'savedObservedRates'];
 function functionBody(name) {
   const start = source.indexOf('    function ' + name + '(');
   assert.ok(start >= 0, 'production function missing: ' + name);
@@ -42,6 +42,7 @@ function makeContext({type = 'WATER'} = {}) {
       move === 'GROUND' && types.includes('FLYING') ? 0 :
       move === 'WATER' && types.includes('FIRE') ? 2.5 : 1,
     UPSTREAM_FALLBACK_MOVE_MS:600, UPSTREAM_WAVE_MS:2600,
+    UPSTREAM_GLOBAL_ATTACK_MS:900,
     leadSignature: () => 'lead@2200',
     farmingSnapshotScope: () => 'boost:1',
     farmingObservedRates: () => null
@@ -289,4 +290,47 @@ test('controller metrics still exports current-hunt XP, economy and capture cove
   assert.equal(result.beastChance,.2);
   assert.equal(result.captureInputs.coveredSpecies,1);
   assert.ok(uses.length===3 && uses.every(Boolean));
+});
+
+test('lead must be confirmed active; strongest owned is NOT a hunting lead', () => {
+  const ctx = {
+    state: {
+      activePokemonId: 42,
+      pokemons: new Map([[42,{id:42,speciesId:8,name:'Actual lead'}]]),
+      lastLeadPokemon:null,
+      strongestPokemon:{id:99,speciesId:150,name:'Stronger but inactive'}
+    }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(functionBody('leadPokemon'),ctx);
+  assert.equal(ctx.leadPokemon()?.id, 42);
+  ctx.state.activePokemonId = null;
+  assert.equal(ctx.leadPokemon()?.id, 42,
+    'transient null retains the last confirmed active lead');
+  ctx.state.lastLeadPokemon = null;
+  assert.equal(ctx.leadPokemon(), null,
+    'unknown active must NOT fall back to strongest owned Pokémon');
+  ctx.state.activePokemonId = 999;
+  assert.equal(ctx.leadPokemon(), null,
+    'unresolved known activeId must not silently use old lead');
+  assert.ok(source.includes('state.lastLeadPokemon = null;'),
+    'hunt/session transitions clear previous confirmed lead');
+});
+
+test('upstream action pacing reduces unrealistic one-hit farming speed', () => {
+  const ctx = makeContext();
+  const diag = {};
+  ctx.leadPokemon().stats.atk = 1e8;
+  ctx.leadPokemon().stats.spAtk = 1e8;
+  ctx.rawPredictedKillMs(xatu, ctx.huntCombatCoverage(xatu), diag);
+  assert.equal(diag.allOneHit, true);
+  assert.ok(diag.pacingAllowanceMs >= 2000);
+  assert.ok(diag.idealKillMs > 0);
+  const adjusted = ctx.xpPacedKillMs(diag.idealKillMs,16,32);
+  assert.equal(Math.round(adjusted),Math.round(diag.idealKillMs + diag.pacingAllowanceMs));
+  assert.equal(ctx.xpPacedKillMs(1_342.5,16,32),3_662.5,
+    'upstream Hunt Analyser pace accounts for average action downtime');
+  const hard = ctx.xpPacedKillMs(10_000,16,32);
+  const easy = ctx.xpPacedKillMs(5_000,16,32);
+  assert.ok(hard > easy,'different combat difficulty must stay differentiated');
 });
