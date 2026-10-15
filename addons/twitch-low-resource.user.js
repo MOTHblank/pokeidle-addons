@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.1.5
-// @description  Uses one freshly opened Twitch popout for all live chats, minimizing chat and rendering work.
+// @version      3.2.0
+// @description  Keeps one Twitch IRC socket alive, dynamically JOINs/PARTs chats at safe rates, and limits chat rendering.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/*
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.1.5');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.2.0');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -40,24 +40,47 @@
         return /^[a-z0-9_]{1,25}$/.test(value) ? value : '';
     }
 
-    const requestedMultiChatChannels = (() => {
+    const initialMultiChatChannels = (() => {
         if (!isTwitchChatPopout) return [];
         let primary = '';
-        try { primary = decodeURIComponent(popoutMatch[1]); } catch (_) { primary = popoutMatch[1]; }
-        const queryChannels = new URLSearchParams(location.search)
-            .getAll('moth-channels')
-            .flatMap(value => value.split(','));
-        const values = [primary, ...queryChannels]
-            .map(normalizeTwitchChannel)
-            .filter(Boolean);
-        return [...new Set(values)];
+        try { primary = decodeURIComponent(popoutMatch[1]); }
+        catch (_) { primary = popoutMatch[1]; }
+        const channels = new URLSearchParams(location.search)
+            .getAll('moth-channels').flatMap(value => value.split(','));
+        return [...new Set([primary, ...channels]
+            .map(normalizeTwitchChannel).filter(Boolean))].slice(0, 100);
     })();
-    const isMultiChannelChat = requestedMultiChatChannels.length > 1;
+
+    let requestedMultiChatChannels = initialMultiChatChannels;
+    let onDesiredChanged = () => {};
+
+    function readDesiredChatChannels() {
+        const json = document.documentElement?.getAttribute('data-moth-twitch-desired');
+        if (json == null) return initialMultiChatChannels;
+        try {
+            const names = JSON.parse(json);
+            if (!Array.isArray(names)) return requestedMultiChatChannels;
+            const unique = [...new Set(names.map(normalizeTwitchChannel).filter(Boolean))];
+            if (unique.length > 100) {
+                console.warn('[Moth] Twitch concurrent IRC join cap is 100; extra channels skipped');
+            }
+            return unique.slice(0, 100);
+        } catch (_) {
+            return requestedMultiChatChannels;
+        }
+    }
+
+    if (isTwitchChatPopout) {
+        window.addEventListener('moth-twitch-desired-changed', () => {
+            requestedMultiChatChannels = readDesiredChatChannels();
+            onDesiredChanged();
+        });
+    }
 
     /*
-     * Popout chat does not need to display or process messages for this setup.
-     * Filter incoming IRC chat lines before Twitch's UI listeners see them, while
-     * passing PING/keepalive, connection, room-state, and moderation events through.
+     * Filter only high-volume chat text. IRC JOIN/PART, ROOMSTATE, USERSTATE,
+     * NOTICE, PING and related control messages must reach Twitch's own app,
+     * or its connection/room state can become inconsistent.
      */
     function isTwitchIrcSocket(socket) {
         try {
@@ -74,66 +97,111 @@
 
         const separator = payload.includes('\r\n') ? '\r\n' : payload.includes('\n') ? '\n' : '\r';
         const lines = payload.split(/\r\n|\n|\r/);
-        const kept = [];
-        const channelStateCommands = new Set([
-            'JOIN', 'PART', '353', '366', 'ROOMSTATE', 'USERSTATE',
-            'CLEARCHAT', 'CLEARMSG'
-        ]);
-
-        for (const line of lines) {
-            const match = line.match(/^(?:@[^ ]+\s+)?(?::[^ ]+\s+)?([A-Z0-9]+)(?:\s+([^ :]+))?/i);
-            const command = match ? match[1].toUpperCase() : '';
-            const target = match ? match[2] || '' : '';
-
-            if (command === 'PRIVMSG' || command === 'USERNOTICE') continue;
-
-            if (isMultiChannelChat) {
-                if (channelStateCommands.has(command)) continue;
-                if ((command === 'NOTICE' || command === 'MODE') && (target.startsWith('#') || line.includes(' #'))) {
-                    continue;
-                }
-            }
-
-            kept.push(line);
-        }
-
+        const kept = lines.filter(line => {
+            const match = line.match(/^(?:@[^ ]+\s+)?(?::[^ ]+\s+)?([A-Z0-9]+)(?:\s|$)/i);
+            const command = match?.[1]?.toUpperCase() || '';
+            return command !== 'PRIVMSG' && command !== 'USERNOTICE';
+        });
         if (kept.length === lines.length) {
             return { changed: false, drop: false, data: payload };
         }
-
         const data = kept.join(separator);
         return { changed: true, drop: !data.trim(), data };
     }
 
+    
+
     function installChatMessageFilter() {
         const NativeWebSocket = window.WebSocket;
-        if (!NativeWebSocket || NativeWebSocket.__mothTwitchChatFiltered) {
-            return false;
-        }
+        if (!NativeWebSocket || NativeWebSocket.__mothTwitchChatFiltered) return false;
 
-        const nativeOnMessage = Object.getOwnPropertyDescriptor(NativeWebSocket.prototype, 'onmessage');
+        const nativeOnMessage =
+            Object.getOwnPropertyDescriptor(NativeWebSocket.prototype, 'onmessage');
         const listenerWrappers = new WeakMap();
         const onMessageHandlers = new WeakMap();
         const filteredEvents = new WeakMap();
-        const multiJoinStarted = new WeakSet();
-        const joinBatchSize = 20;
-        const joinBatchDelayMs = 10_500;
+        const initializedSockets = new WeakSet();
+        const joinedChannels = new Set();
+        const JOIN_GAP_MS = 600; // < 20 joins per 10 seconds per Twitch user
+        let nextJoinAt = 0;
+        let activeSocket = null;
+        let syncTimer = null;
+
+        function setSocketStatus(status) {
+            const root = document.documentElement;
+            if (!root || root.getAttribute('data-moth-twitch-irc-status') === status)
+                return;
+            root.setAttribute('data-moth-twitch-irc-status', status);
+            window.dispatchEvent(new Event('moth-twitch-irc-status'));
+        }
+
+        function reconcile() {
+            syncTimer = null;
+            const socket = activeSocket;
+            if (!socket || socket.readyState !== NativeWebSocket.OPEN) return;
+
+            const desired = new Set(requestedMultiChatChannels);
+            // PART is cheap, and deliberately does not touch persistent rooms.
+            for (const channel of [...joinedChannels]) {
+                if (desired.has(channel)) continue;
+                try {
+                    NativeWebSocket.prototype.send.call(socket, 'PART #' + channel);
+                    joinedChannels.delete(channel);
+                } catch (error) {
+                    console.warn('[Moth] Could not PART Twitch chat:', channel, error);
+                }
+            }
+
+            const missing = requestedMultiChatChannels.find(channel =>
+                !joinedChannels.has(channel));
+            if (!missing) {
+                if (initializedSockets.has(socket)) setSocketStatus('ready');
+                return;
+            }
+
+            // Rate-limit individual channel joins, not JOIN command strings:
+            // Twitch counts each room joined even for comma-separated JOIN.
+            const delay = Math.max(0, nextJoinAt - Date.now());
+            if (delay) {
+                scheduleReconcile(delay);
+                return;
+            }
+            try {
+                NativeWebSocket.prototype.send.call(socket, 'JOIN #' + missing);
+                joinedChannels.add(missing);
+                nextJoinAt = Date.now() + JOIN_GAP_MS;
+                setSocketStatus('ready');
+            } catch (error) {
+                console.warn('[Moth] Could not JOIN Twitch chat:', missing, error);
+                nextJoinAt = Date.now() + 10_500;
+            }
+            scheduleReconcile(Math.max(50, nextJoinAt - Date.now()));
+        }
+
+        function scheduleReconcile(delay = 0) {
+            if (syncTimer !== null) {
+                if (delay > 0) return;
+                window.clearTimeout(syncTimer);
+            }
+            syncTimer = window.setTimeout(reconcile, delay);
+        }
+
+        onDesiredChanged = () => scheduleReconcile();
+        requestedMultiChatChannels = readDesiredChatChannels();
+        // Cross-script DOM events can be delayed in Firefox's isolated worlds.
+        // Poll a single attribute as a cheap, reliable fallback.
+        window.setInterval(() => {
+            const next = readDesiredChatChannels();
+            if (JSON.stringify(next) === JSON.stringify(requestedMultiChatChannels)) return;
+            requestedMultiChatChannels = next;
+            onDesiredChanged();
+        }, 5000);
+
         function filterEvent(event) {
             let result = filteredEvents.get(event);
             if (result) return result;
-
             result = filterIrcChatPayload(event?.data);
             filteredEvents.set(event, result);
-            if (result.changed && !result.drop) {
-                try {
-                    Object.defineProperty(event, 'data', {
-                        configurable: true,
-                        get: () => result.data
-                    });
-                } catch (_) {
-                    // A synthetic filtered MessageEvent is used as a fallback below.
-                }
-            }
             return result;
         }
 
@@ -143,16 +211,14 @@
                     ? listener.call(thisArg, event)
                     : listener.handleEvent.call(listener, event);
             }
-
             const result = filterEvent(event);
             if (result.drop) return;
 
             let deliveredEvent = event;
-            if (result.changed && event.data !== result.data) {
+            if (result.changed) {
                 try {
                     Object.defineProperty(event, 'data', {
-                        configurable: true,
-                        get: () => result.data
+                        configurable: true, get: () => result.data
                     });
                 } catch (_) {
                     deliveredEvent = new MessageEvent('message', {
@@ -164,24 +230,20 @@
                     });
                 }
             }
-
             return typeof listener === 'function'
                 ? listener.call(thisArg, deliveredEvent)
                 : listener.handleEvent.call(listener, deliveredEvent);
         }
 
         function getWrapper(socket, listener) {
-            if (!listener || (typeof listener !== 'function' && typeof listener.handleEvent !== 'function')) {
-                return listener;
-            }
-
+            if (!listener || (typeof listener !== 'function' &&
+                typeof listener.handleEvent !== 'function')) return listener;
             let map = listenerWrappers.get(socket);
             if (!map) {
                 map = new Map();
                 listenerWrappers.set(socket, map);
             }
             if (map.has(listener)) return map.get(listener);
-
             const wrapped = function (event) {
                 return deliverFiltered(socket, listener, this, event);
             };
@@ -193,51 +255,56 @@
             constructor(url, protocols) {
                 if (protocols === undefined) super(url);
                 else super(url, protocols);
+                if (isTwitchIrcSocket(this)) {
+                    this.addEventListener('open', () => {
+                        if (activeSocket === this) setSocketStatus('connecting');
+                    });
+                    this.addEventListener('close', () => {
+                        if (activeSocket !== this) return;
+                        activeSocket = null;
+                        joinedChannels.clear();
+                        if (syncTimer !== null) window.clearTimeout(syncTimer);
+                        syncTimer = null;
+                        setSocketStatus('closed');
+                    });
+                    this.addEventListener('error', () => {
+                        if (activeSocket === this) setSocketStatus('error');
+                    });
+                }
             }
 
             send(data) {
-                if (!isMultiChannelChat || !isTwitchIrcSocket(this) || typeof data !== 'string') {
+                if (!isTwitchIrcSocket(this) || typeof data !== 'string')
                     return super.send(data);
-                }
 
-                const pieces = data.split(/(\r\n|\n|\r)/);
-                for (let i = 0; i < pieces.length; i += 2) {
-                    const match = pieces[i].match(/^((?:@[^\s]+\s+)?JOIN\s+)(.+)$/i);
-                    if (!match || multiJoinStarted.has(this)) continue;
-
-                    multiJoinStarted.add(this);
-                    const batches = [];
-                    for (let start = 0; start < requestedMultiChatChannels.length; start += joinBatchSize) {
-                        batches.push(requestedMultiChatChannels.slice(start, start + joinBatchSize));
+                // Twitch itself sends the initial JOIN only after authentication.
+                // Use that point to bootstrap subscriptions on its existing
+                // authenticated WebSocket, without opening extra chat sockets.
+                const parts = data.split(/(\r\n|\n|\r)/);
+                let hasJoin = false;
+                for (let i = 0; i < parts.length; i += 2) {
+                    if (/^(?:@[^\s]+\s+)?JOIN\s+#[a-z0-9_]/i.test(parts[i])) {
+                        parts[i] = '';
+                        hasJoin = true;
                     }
-
-                    pieces[i] = match[1] + batches[0].map(channel => '#' + channel).join(',');
-                    for (let batchIndex = 1; batchIndex < batches.length; batchIndex += 1) {
-                        const batch = batches[batchIndex];
-                        window.setTimeout(() => {
-                            if (this.readyState !== NativeWebSocket.OPEN) return;
-                            try {
-                                NativeWebSocket.prototype.send.call(
-                                    this,
-                                    'JOIN ' + batch.map(channel => '#' + channel).join(',')
-                                );
-                            } catch (error) {
-                                console.warn('[Moth] Could not join next Twitch chat batch:', error);
-                            }
-                        }, batchIndex * joinBatchDelayMs);
-                    }
-
-                    console.info('[Moth] Multi-chat joined', batches[0].length, 'channel(s);', requestedMultiChatChannels.length, 'targeted in', batches.length, 'batch(es)');
-                    return super.send(pieces.join(''));
                 }
+                if (!hasJoin) return super.send(data);
 
-                return super.send(data);
+                if (activeSocket !== this) {
+                    activeSocket = this;
+                    joinedChannels.clear();
+                    if (syncTimer !== null) window.clearTimeout(syncTimer);
+                    syncTimer = null;
+                }
+                initializedSockets.add(this);
+                const other = parts.join('');
+                if (other.trim()) super.send(other);
+                scheduleReconcile();
             }
 
             addEventListener(type, listener, options) {
-                if (type === 'message' && isTwitchIrcSocket(this)) {
+                if (type === 'message' && isTwitchIrcSocket(this))
                     return super.addEventListener(type, getWrapper(this, listener), options);
-                }
                 return super.addEventListener(type, listener, options);
             }
 
@@ -254,29 +321,29 @@
                     if (nativeOnMessage?.set) nativeOnMessage.set.call(this, listener);
                     return;
                 }
-
                 if (!listener) {
                     onMessageHandlers.delete(this);
                     nativeOnMessage.set.call(this, listener);
                     return;
                 }
-
                 const wrapped = getWrapper(this, listener);
                 onMessageHandlers.set(this, { listener, wrapped });
                 nativeOnMessage.set.call(this, wrapped);
             }
 
             get onmessage() {
-                const saved = onMessageHandlers.get(this);
-                if (saved) return saved.listener;
-                return nativeOnMessage?.get ? nativeOnMessage.get.call(this) : null;
+                return onMessageHandlers.get(this)?.listener ||
+                    (nativeOnMessage?.get ? nativeOnMessage.get.call(this) : null);
             }
         }
 
-        Object.defineProperty(LowResourceWebSocket, '__mothTwitchChatFiltered', { value: true });
+        Object.defineProperty(LowResourceWebSocket,
+            '__mothTwitchChatFiltered', { value: true });
         window.WebSocket = LowResourceWebSocket;
         return true;
     }
+
+    
 
     // The controller checks the game page to confirm this userscript is enabled.
     // This marker is separate from Twitch's live-mode CSS because the script is
@@ -403,7 +470,7 @@
             document.addEventListener('DOMContentLoaded', installStyles, { once: true });
         }
 
-        console.info('[Moth] Twitch popout low-resource mode active · incoming PRIVMSG/USERNOTICE suppressed · keepalive/control events preserved · chat UI hidden');
+        console.info('[Moth] Twitch popout low-resource mode active · IRC JOIN/PART deltas paced · keepalive/control events preserved · chat UI hidden');
     }
 
     function runTwitch() {
