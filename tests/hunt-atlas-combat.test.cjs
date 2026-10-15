@@ -245,3 +245,48 @@ test('special-form capture rarity respects direct data and known Orre fallback',
   assert.equal(sandbox.captureRarityForSpecies(rarities, 13033), 8000);
   assert.equal(sandbox.captureRarityForSpecies(rarities, 13177), null);
 });
+
+test('controller metrics still exports current-hunt XP, economy and capture coverage', () => {
+  const hunt = {slug:'kanto', nivel:150, area:'kanto',
+    especies:[{pokeId:122,pontos:10}]};
+  const observed = {kills:80,throws:30,captures:3,byBall:{4:20,5:10},
+    byBallCaught:{4:2,5:1},windowMs:120000,bySpecies:{}};
+  const uses = [];
+  const sandbox = {
+    state: {combatCatalogStatus:'ready', combatCatalogError:null,
+      hunts:[hunt],huntSceneKnown:true,activeSocket:{},
+      captureRarities:new Map([[122,5000]]),
+      captureBallRates:new Map([[4,{}]]),
+      playerLevel:250,outlandTierSeen:false,farmingSnapshot:{outlandTier:1}},
+    currentHunt:()=>hunt,
+    huntXpEstimate:()=>({value:46e6,observed:false,killsH:120}),
+    captureObservedForHunt:()=>observed,
+    huntEconomyEstimate:(h,x,o)=>{
+      uses.push(o===observed);return {realizedH:null,killCoinsH:100000};
+    },
+    capturePlanForHunt:(h,ball,x,o)=>{
+      uses.push(o===observed);
+      return {chance:ball===4?.1:.2,catchesH:15,
+        ballsPerCapture:10,shinyCaughtH:.03};
+    },
+    outlandNormalizeSpeciesId:id=>id,
+    rareForHunt:()=>null,
+    outlandNativeTier:x=>x,
+    syncFromControllerBridge:()=>{throw new Error('unnecessary bridge refresh');},
+    ensureCombatCatalog:()=>{throw new Error('unnecessary catalog refresh');}
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(functionBody('captureRarityForSpecies'), sandbox);
+  const start = source.indexOf('    function controllerMetrics(');
+  const end = source.indexOf('    page.__mothHuntAtlasControllerV1', start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(source.slice(start, end), sandbox);
+  const result = sandbox.controllerMetrics();
+  assert.equal(result.xpH,46e6);
+  assert.equal(result.coinsH,100000);
+  assert.equal(result.capturesH,15);
+  assert.equal(result.ultraChance,.1);
+  assert.equal(result.beastChance,.2);
+  assert.equal(result.captureInputs.coveredSpecies,1);
+  assert.ok(uses.length===3 && uses.every(Boolean));
+});
