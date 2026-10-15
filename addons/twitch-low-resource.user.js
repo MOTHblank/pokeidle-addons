@@ -188,6 +188,14 @@
 
         onDesiredChanged = () => scheduleReconcile();
         requestedMultiChatChannels = readDesiredChatChannels();
+        // Cross-script DOM events can be delayed in Firefox's isolated worlds.
+        // Poll a single attribute as a cheap, reliable fallback.
+        window.setInterval(() => {
+            const next = readDesiredChatChannels();
+            if (JSON.stringify(next) === JSON.stringify(requestedMultiChatChannels)) return;
+            requestedMultiChatChannels = next;
+            onDesiredChanged();
+        }, 5000);
 
         function filterEvent(event) {
             let result = filteredEvents.get(event);
