@@ -4,6 +4,7 @@
 // @version      7.2.0
 // @description  Maintains one persistent Twitch chat tab and syncs channels with IRC JOIN/PART without reloads; KICK stays in Rust.
 // @match        https://pokeidle.io/app*
+// @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/popout/*/chat*
 // @grant        window.close
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
@@ -64,12 +65,19 @@
         }
 
         function closeIfSuperseded(active) {
-            if (!active || active === generation) return;
-            // An in-flight successor must not kill the working tab. Only a
-            // confirmed new owner (or an explicit stop) may retire this one.
-            if (active.startsWith('stop-') ||
-                (readStoredJson(CHAT_HEARTBEAT_KEY)?.generation === active &&
-                    chatHostIsAlive())) {
+            if (active === generation) return;
+            const target = String(GM_getValue(CHAT_TARGET_KEY, '') || '');
+            const launch = readStoredJson(CHAT_LAUNCH_KEY);
+            // A candidate remains open until it can replace the current tab.
+            // Unactivated contenders that lost a launch race retire promptly.
+            const lostLaunch = active !== generation && target !== generation &&
+                launch?.generation && launch.generation !== generation &&
+                Date.now() - launch.at < CHAT_READY_TIMEOUT_MS;
+            const confirmedSuccessor = active && active !== generation &&
+                readStoredJson(CHAT_HEARTBEAT_KEY)?.generation === active &&
+                chatHostIsAlive();
+            if (active?.startsWith('stop-') || lostLaunch ||
+                (confirmedSuccessor && target !== generation)) {
                 try { window.close(); }
                 catch (error) { console.warn('[Moth] Twitch tab close failed:', error); }
             }
@@ -118,6 +126,8 @@
 
         if (typeof GM_addValueChangeListener === 'function') {
             GM_addValueChangeListener(CHAT_DESIRED_KEY, deliverDesired);
+            GM_addValueChangeListener(CHAT_LAUNCH_KEY,
+                () => closeIfSuperseded(String(GM_getValue(CHAT_ACTIVE_KEY, '') || '')));
             GM_addValueChangeListener(CHAT_ACTIVE_KEY,
                 (_key, _old, value) => closeIfSuperseded(String(value || '')));
         }
