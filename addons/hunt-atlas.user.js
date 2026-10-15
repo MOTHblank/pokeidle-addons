@@ -6,7 +6,7 @@
 // @supportURL   https://github.com/MOTHblank/pokeidle-addons/issues
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/hunt-atlas.user.js
-// @version      1.9.24
+// @version      1.9.25
 // @description  Hunt finder with measured lead-Pokémon combat speed and personalized trainer XP/hour ranking.
 // @match        https://pokeidle.io/app*
 // @grant        unsafeWindow
@@ -20,7 +20,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.24');
+        document.documentElement?.setAttribute('data-moth-addon-version-hunt-atlas', '1.9.25');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -471,6 +471,7 @@
             'rank.unboosted': 'Unboosted / not validated against active server buffs',
             'rank.details': 'Hunt details (tap to expand)',
             'rank.pokemonXp': 'Pokémon XP/h',
+            'rank.trainerXpPerKill': 'Trainer XP/kill: {value} (one stream)',
             'rank.kills': 'Kills/h',
             'rank.coverage': 'Coverage {percent}%',
             'rank.rare': 'Selected rare item rate',
@@ -835,6 +836,7 @@
             'rank.unboosted': 'Sem bônus / não validado com bônus ativos do servidor',
             'rank.details': 'Detalhes da hunt (clique para abrir)',
             'rank.pokemonXp': 'XP do Pokémon/h',
+            'rank.trainerXpPerKill': 'XP do treinador/abate: {value} (um canal)',
             'rank.kills': 'Abates/h',
             'rank.coverage': 'Cobertura {percent}%',
             'rank.rare': 'Frequência do item raro escolhido',
@@ -8736,6 +8738,15 @@
         return latest?.rate || null;
     }
 
+    // Trainer and Pokemon XP are separate rewards. Upstream Hunt Analyser's
+    // generic session xpH combines streams; Atlas must never copy that number.
+    function xpSingleStreamRate(killsH, xpPerKill) {
+        const kills = Number(killsH), reward = Number(xpPerKill);
+        return Number.isFinite(kills) && kills >= 0 &&
+            Number.isFinite(reward) && reward >= 0
+            ? kills * reward : null;
+    }
+
     function huntXpEstimate(
         hunt
     ) {
@@ -8786,6 +8797,11 @@
                 value:
                     chosenObserved.trainerXpH,
                 pokemonValue: chosenObserved.pokemonXpH,
+                trainerXpPerKill: chosenObserved.killsH > 0
+                    ? chosenObserved.trainerXpH / chosenObserved.killsH : null,
+                pokemonXpPerKill: chosenObserved.killsH > 0 &&
+                    Number.isFinite(chosenObserved.pokemonXpH)
+                    ? chosenObserved.pokemonXpH / chosenObserved.killsH : null,
                 killGoldH: chosenObserved.killGoldH,
                 autoSaleH: chosenObserved.autoSaleH,
                 trainerKnown: chosenObserved.trainerKnown,
@@ -8899,7 +8915,7 @@
                         state.playerLevel).trainer,
                 idealKillMs: simulation.idealKillMs ?? null,
                 pacingAllowanceMs: simulation.pacingAllowanceMs ?? null,
-                modelVersion: '1.9.24',
+                modelVersion: '1.9.25',
                 leadId: lead?.id ?? null
             };
         }
@@ -8925,12 +8941,10 @@
         const pokemonXpPerKill = baseXp * nativeBonus.pokemon;
 
         const forecast = {
-            value:
-                trainerXpPerKill *
-                killsH,
-            pokemonValue:
-                pokemonXpPerKill *
-                killsH,
+            value: xpSingleStreamRate(killsH, trainerXpPerKill),
+            pokemonValue: xpSingleStreamRate(killsH, pokemonXpPerKill),
+            trainerXpPerKill,
+            pokemonXpPerKill,
             goldValue: farmGoldPrediction(hunt,killsH),
             goldSource: 'upstream-shared-model',
             killGoldH: null,
@@ -12435,6 +12449,9 @@
         ].join(' · ');
         const moreSub=[
             tr('rank.kills')+': '+metricRate(xpInfo?.killsH),
+            xpInfo?.trainerXpPerKill != null
+                ? tr('rank.trainerXpPerKill',{value:metricRate(
+                    xpInfo.trainerXpPerKill)}) : null,
             tr('rank.pokemonXp')+': '+metricRate(xpInfo?.pokemonValue),
             tr('econ.kill')+': '+metricRate(economicInfo.killCoinsH),
             tr('econ.loot')+': '+metricRate(economicInfo.npcLootEvH),
@@ -13996,6 +14013,8 @@
                     pokemonValue: Number(
                         xp?.pokemonValue || 0
                     ),
+                    trainerXpPerKill: xp?.trainerXpPerKill ?? null,
+                    pokemonXpPerKill: xp?.pokemonXpPerKill ?? null,
                     killsH: Number(
                         xp?.killsH || 0
                     ),
@@ -14170,7 +14189,7 @@
             const here = currentHunt();
             const xp = here ? huntXpEstimate(here) : null;
             return {
-                version: '1.9.24',
+                version: '1.9.25',
                 indexes: {
                     locations: state.locationIndexStatus,
                     markerCount: state.locationsBySlug.size,
@@ -14338,7 +14357,7 @@
         },3000);
 
         console.info(
-            '[PokéIdle Hunt Atlas] v1.9.24 experimental loaded'
+            '[PokéIdle Hunt Atlas] v1.9.25 experimental loaded'
         );
     }
 
