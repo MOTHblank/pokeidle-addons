@@ -166,6 +166,7 @@
     const MULTI_CHAT_KEY = 'twitch:multi-chat';
     let pendingReplacement = null;
     let nextChatGeneration = 0;
+    let twitchEmptySince = 0;
     let lastKickLive = [];
     let lastKickStateAvailable = false;
     let lastKickObservedAt = 0;
@@ -739,17 +740,26 @@
             }
 
             const twitchChannels = [...twitchByKey.values()];
-            if (twitchChannels.length) {
+            if (twitchStateIsAvailable && !twitchChannels.length) {
+                if (!twitchEmptySince) twitchEmptySince = Date.now();
+            } else {
+                twitchEmptySince = 0;
+            }
+            // One temporary empty live-list response is not evidence that
+            // every rewarded room went offline. Require sustained emptiness.
+            const confirmedEmpty = twitchEmptySince &&
+                Date.now() - twitchEmptySince >= 90_000;
+            if (twitchChannels.length || !confirmedEmpty) {
                 liveKeys.add(MULTI_CHAT_KEY);
-                if (openMultiChat(twitchChannels)) {
-                    opened = 1;
-                }
+            }
+            if (twitchChannels.length && openMultiChat(twitchChannels)) {
+                opened = 1;
             }
 
-            // Only close the consolidated chat when PokéIdle actually exposed
-            // its stream state; an empty/transient read must not close valid chats.
+            // Only close the consolidated chat after a sustained empty Twitch
+            // state, and never on a failed or unavailable stream-state read.
             if (twitchStateIsAvailable) {
-                if (!twitchChannels.length) {
+                if (confirmedEmpty) {
                     // Clear old consolidated popouts even if this /app page was
                     // reloaded and has no tab handles left in openStreams.
                     try {
