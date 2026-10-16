@@ -584,10 +584,14 @@ mod tests {
             "especies":[{"pokeId":123,"pontos":90},{"pokeId":16,"pontos":10}]}],
             "estado":{"huntSlug":"route-1","activeId":99,"level":850,"xp":1000,
                 "pokemons":[{"id":99,"nome":"Scizor","level":851,"xp":2000,"quality":1.3,
+                    "nota":9.4,"looktype":131,"lookShiny":132,
                     "ivs":{"atk":31,"speed":28}}]}}).to_string(),at);
         assert_eq!(m.view.hunts.len(),1);
         assert_eq!(m.view.hunts[0].species[0].weight,90.0);
         assert_eq!(m.view.active_pokemon.as_ref().unwrap().ivs[1],Some(31));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().grade,Some(9.4));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().looktype,Some(131));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().shiny_looktype,Some(132));
         m.ingest(&json!({"t":"estado","estado":{"pkMud":[{"id":99,"xp":2400}],
             "evento":{"xpTreinadorPct":30.0},"guildBonusPct":5.0}}).to_string(),
             at+Duration::from_secs(2));
