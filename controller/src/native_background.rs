@@ -6,7 +6,7 @@
 use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
-use crate::native_restock::Restock;
+use crate::native_restock::{Restock, RestockStatus};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -36,6 +36,7 @@ pub struct NativeSnapshot {
     pub native_auto_catch: bool,
     pub native_capture_queue: usize,
     pub native_throws: u64,
+    pub native_restock: RestockStatus,
     pub twitch_live: Vec<String>,
     pub twitch_watching: Vec<String>,
     pub twitch_bonus_pct: f32,
@@ -48,6 +49,7 @@ impl Default for NativeSnapshot {
             trainer_level: None, trainer_xp: None, gold: None, orbs: None,
             hunt_slug: None, frames: 0, battle_kills: 0, captures: 0, error: None,
             native_auto_catch: false, native_capture_queue: 0, native_throws: 0,
+            native_restock: RestockStatus::default(),
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
         }
     }
@@ -147,6 +149,7 @@ pub struct NativeSession {
     stop: Arc<AtomicBool>,
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
+    restock_enabled: Arc<AtomicBool>,
 }
 impl NativeSession {
     pub fn start(bootstrap: Value) -> Result<Self, String> {
@@ -169,6 +172,8 @@ impl NativeSession {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
+        let restock_enabled = Arc::new(AtomicBool::new(restock.status.enabled));
+        let worker_restock_enabled = Arc::clone(&restock_enabled);
         let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
         let worker_auto_catch = Arc::clone(&auto_catch);
         let (command_tx, command_rx) = mpsc::sync_channel(64);
@@ -181,7 +186,8 @@ impl NativeSession {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
-                        gameplay, restock, command_rx, worker_auto_catch);
+                        gameplay, restock, command_rx, worker_auto_catch,
+                        worker_restock_enabled);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -192,7 +198,7 @@ impl NativeSession {
                 }
             })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
-        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch })
+        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch, restock_enabled })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
         if !command.is_valid() {
@@ -206,6 +212,9 @@ impl NativeSession {
     }
     pub fn set_auto_catch(&self, enabled: bool) {
         self.auto_catch.store(enabled, Ordering::Relaxed);
+    }
+    pub fn set_restock_enabled(&self, enabled: bool) {
+        self.restock_enabled.store(enabled, Ordering::Relaxed);
     }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
@@ -372,7 +381,8 @@ fn session_loop(credentials: Credentials,
     desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
-    auto_catch: Arc<AtomicBool>) {
+    auto_catch: Arc<AtomicBool>,
+    restock_enabled: Arc<AtomicBool>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     while !stop.load(Ordering::Relaxed) {
@@ -382,6 +392,7 @@ fn session_loop(credentials: Credentials,
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
+                update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
@@ -409,6 +420,7 @@ fn session_loop(credentials: Credentials,
                     }
                     if send_failed { break; }
                     gameplay.status.auto_catch = auto_catch.load(Ordering::Relaxed);
+                    restock.set_enabled(restock_enabled.load(Ordering::Relaxed));
                     if let Some(command) = gameplay.next_capture(Instant::now()) {
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
                             gameplay.failed(&command, "native auto capture send failed");
@@ -416,8 +428,15 @@ fn session_loop(credentials: Credentials,
                         }
                     }
                     if let Some(command) = restock.next(Instant::now(), gameplay.status.auto_catch) {
+                        // Commands contain only category, product ID and
+                        // quantity. Never log authentication or personal data.
+                        if let GameCommand::ShopBuy { kind, id, qty } = &command {
+                            crate::logging::info(&format!(
+                                "Native restock: requesting {qty}x {kind} #{id}"
+                            ));
+                        }
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
-                            restock.failed();
+                            restock.write_failed(Instant::now());
                             break;
                         }
                     }
@@ -425,6 +444,7 @@ fn session_loop(credentials: Credentials,
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
                         s.native_throws = gameplay.status.throws;
+                        s.native_restock = restock.status.clone();
                     });
                     if last_ping.elapsed() >= HEARTBEAT_INTERVAL {
                         if socket.send(Message::Ping(Vec::new().into())).is_err() { break; }
@@ -449,7 +469,11 @@ fn session_loop(credentials: Credentials,
                 }
                 if !stop.load(Ordering::Relaxed) {
                     while command_rx.try_recv().is_ok() {}
-                    update(&snapshot, |s| s.phase = "Reconnecting".into());
+                    restock.on_disconnect(Instant::now());
+                    update(&snapshot, |s| {
+                        s.phase = "Reconnecting".into();
+                        s.native_restock = restock.status.clone();
+                    });
                 }
             }
             Err(error) => {
