@@ -1186,7 +1186,8 @@ struct NativeBrowserClosedEvent {
     index: usize,
     native: NativeSession,
     cache_warning: Option<String>,
-    child: Child,
+    child: Option<Child>,
+    orphaned_pid: Option<u32>,
     monitor: Option<MonitorHandle>,
     result: Result<(), String>,
 }
@@ -1428,11 +1429,13 @@ impl ControllerApp {
                 native.stop();
                 continue;
             }
-            let Some(mut child) = self.games[index].child.take() else {
+            let mut child = self.games[index].child.take();
+            let orphaned_pid = self.games[index].orphaned_pid.take();
+            if child.is_none() && orphaned_pid.is_none() {
                 native.stop();
-                self.set_status("Browser process not owned; native handoff canceled", true);
+                self.set_status("No Moth-owned Firefox process for verified native handoff", true);
                 continue;
-            };
+            }
             let monitor = self.games[index].monitor.take();
             self.games[index].handoff_closing = true;
             self.native_close_cancelled[index] = false;
@@ -1441,24 +1444,21 @@ impl ControllerApp {
                 "{} native game welcome + Twitch IRC 001 confirmed; closing Firefox",
                 self.account_name(profile)));
             std::thread::spawn(move || {
-                let mut result = firefox::stop_child(&mut child, monitor.as_ref());
+                let mut result = if let Some(child) = child.as_mut() {
+                    firefox::stop_child(child, monitor.as_ref())
+                } else {
+                    Ok(())
+                };
                 if result.is_ok() {
                     result = crate::config::Config::for_profile(profile)
-                        .and_then(|config| {
-                            if let Some(pid) = firefox::find_profile_process(&config)? {
-                                firefox::stop_existing(&config, pid)?;
-                            }
-                            if firefox::find_profile_process(&config)?.is_some() {
-                                Err("Firefox profile still active after native handoff close".into())
-                            } else { Ok(()) }
-                        });
+                        .and_then(|config| firefox::stop_profile_processes(&config));
                 }
                 if result.is_ok() {
                     if let Some(monitor) = monitor.as_ref() { monitor.stop(); }
                 }
                 let _ = tx.send(NativeBrowserClosedEvent {
                     index, native, cache_warning: event.cache_warning,
-                    child, monitor, result
+                    child, orphaned_pid, monitor, result
                 });
             });
         }
@@ -1497,7 +1497,8 @@ impl ControllerApp {
                     // tab was closed. Retain native ownership and the remaining
                     // Firefox handle for a later explicit cleanup attempt.
                     self.games[index].native = Some(event.native);
-                    self.games[index].child = Some(event.child);
+                    self.games[index].child = event.child;
+                    self.games[index].orphaned_pid = event.orphaned_pid;
                     self.games[index].monitor = event.monitor;
                     self.set_status(format!(
                         "{} native authenticated, but Firefox cleanup needs attention: {error}",
@@ -1918,14 +1919,23 @@ impl ControllerApp {
         // restarted or its Child handle was lost. Never spawn over that session.
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
+                // A previous crash may have left an authenticated, controlled
+                // Moth Firefox profile alive. Attach to its existing BiDi
+                // endpoint and complete native handoff; never spawn another
+                // Firefox on the same profile or kill it before Rust is ready.
                 self.games[index].orphaned_pid = Some(pid);
-                self.set_status(
-                    format!(
-                        "{}: Firefox already uses this profile (PID {}). Use Stop before launching.",
-                        account_name, pid
-                    ),
-                    true,
-                );
+                if self.games[index].monitor.is_none() {
+                    self.games[index].monitor = Some(MonitorHandle::start(
+                        config.remote_debug_port, headless));
+                }
+                logging::info(&format!(
+                    "{} adopting existing Moth Firefox profile PID {} for native handoff",
+                    account_name, pid
+                ));
+                self.set_status(format!(
+                    "{}: reusing existing Firefox authentication (PID {}) before native handoff",
+                    account_name, pid
+                ), false);
                 return;
             }
             Ok(None) => {}
@@ -2098,7 +2108,7 @@ impl ControllerApp {
             // Stop was explicitly clicked; never terminate a recovered process
             // automatically when the controller itself exits.
             let result = Config::for_profile(profile)
-                .and_then(|config| firefox::stop_existing(&config, pid));
+                .and_then(|config| firefox::stop_profile_processes(&config));
             match result {
                 Ok(()) => {
                     slot.orphaned_pid = None;
