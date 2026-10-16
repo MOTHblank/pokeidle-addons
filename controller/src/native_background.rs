@@ -241,12 +241,12 @@ impl NativeSession {
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
                         state.phase = "Failed".into();
-                        state.error = Some("Native game worker panicked; inspect sanitized controller log".into());
+                        state.error = Some("PokéIdle connection stopped unexpectedly. See the controller log.".into());
                     });
                     worker_stop.store(true, Ordering::Relaxed);
                 }
             })
-            .map_err(|error| format!("Could not spawn native session: {error}"))?;
+            .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
         Ok(Self {
             snapshot, profile, twitch, stop, command_tx, auto_catch, restock_enabled,
             capture_config, market_rules, session_reset, hunts, history, forecast_tx
@@ -269,7 +269,7 @@ impl NativeSession {
             }
         }
         if !command.is_valid() {
-            return Err("Invalid native game command".into());
+            return Err("This game action is not available".into());
         }
         if let GameCommand::SellPokemon(id) = &command {
             let view=self.hunt_snapshot();
@@ -279,17 +279,17 @@ impl NativeSession {
                 return Err("Cannot sell the active Pokémon".into());
             }
             if pokemon.shiny {
-                return Err("Shiny Pokémon are protected against native selling".into());
+                return Err("Shiny Pokémon cannot be sold automatically".into());
             }
             if self.snapshot().pending_pokemon_sale.is_some() {
                 return Err("Wait for the previous Pokémon sale to be confirmed".into());
             }
         }
         if self.snapshot().phase != "Online" {
-            return Err("Native game is not authenticated".into());
+            return Err("Sign in to PokéIdle before using this feature".into());
         }
         self.command_tx.try_send(command)
-            .map_err(|_| "Native command queue full or session stopped".to_owned())
+            .map_err(|_| "PokéIdle is busy or disconnected. Try again shortly.".to_owned())
     }
     pub fn reset_hunt_session(&self) {
         self.session_reset.store(true,Ordering::Relaxed);
@@ -353,7 +353,7 @@ fn open_session(credentials: &Credentials) -> Result<(
 ), String> {
     crate::native_tls::ensure()?;
     let addrs = (credentials.host.as_str(), credentials.port)
-        .to_socket_addrs().map_err(|_| "Could not resolve PokéIdle WebSocket".to_owned())?;
+        .to_socket_addrs().map_err(|_| "Could not find the PokéIdle server. Check your connection.".to_owned())?;
     // Try IPv4 and IPv6 rather than failing when the first DNS record is
     // unreachable on this machine.
     let mut stream = None;
@@ -363,11 +363,11 @@ fn open_session(credentials: &Credentials) -> Result<(
             break;
         }
     }
-    let stream = stream.ok_or_else(|| "Could not connect to any PokéIdle WebSocket address".to_owned())?;
+    let stream = stream.ok_or_else(|| "Could not connect to PokéIdle. Check your internet connection.".to_owned())?;
     stream.set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|error| format!("Native game read timeout: {error}"))?;
+        .map_err(|error| format!("PokéIdle stopped responding: {error}"))?;
     stream.set_write_timeout(Some(CONNECT_TIMEOUT))
-        .map_err(|error| format!("Native game write timeout: {error}"))?;
+        .map_err(|error| format!("Could not send data to PokéIdle: {error}"))?;
     let mut request = credentials.url.as_str().into_client_request()
         .map_err(|_| "Invalid game handshake URL".to_owned())?;
     request.headers_mut().insert(header::ORIGIN,
@@ -385,7 +385,7 @@ fn open_session(credentials: &Credentials) -> Result<(
             if response.contains("401") || response.contains("403") {
                 "AUTH_REQUIRED: PokéIdle refused native game authentication".to_owned()
             } else {
-                format!("Game TLS/WebSocket handshake failed: {response}")
+                format!("Secure connection to PokéIdle failed: {response}")
             }
         })?;
     socket.send(Message::Text(credentials.hello.clone().into()))
@@ -402,14 +402,14 @@ fn open_session(credentials: &Credentials) -> Result<(
                     return Ok((socket, text.to_string()));
                 }
             }
-            Ok(Message::Close(_)) => return Err("Server closed the native session before welcome".into()),
+            Ok(Message::Close(_)) => return Err("PokéIdle closed the connection during sign-in".into()),
             Err(tungstenite::Error::Io(ref error))
                 if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
-            Err(error) => return Err(format!("Game rejected native hello: {error}")),
+            Err(error) => return Err(format!("PokéIdle could not complete sign-in: {error}")),
             _ => {}
         }
     }
-    Err("Native game session did not receive welcome".into())
+    Err("PokéIdle did not confirm the connection".into())
 }
 
 fn normalize_twitch_login(value: &str) -> Option<String> {
@@ -588,7 +588,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             }
                         }
                         if socket.send(Message::Text(payload.into())).is_err() {
-                            gameplay.failed(&command, "native game command send failed");
+                            gameplay.failed(&command, "Could not send the action to PokéIdle");
                             if matches!(command, GameCommand::Hunt(_)) {
                                 hunt_intel.command_failed("Hunt selection transport failed");
                             }
@@ -690,7 +690,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     }
                     if let Some(command) = gameplay.next_capture(Instant::now()) {
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
-                            gameplay.failed(&command, "native auto capture send failed");
+                            gameplay.failed(&command, "Could not throw a Poké Ball");
                             break;
                         }
                     }

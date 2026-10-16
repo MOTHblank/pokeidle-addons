@@ -20,26 +20,26 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new("Market rule buying · Moth Watch")
+            ui.label(RichText::new("Automatic market buying · Moth Watch")
                 .size(14.0).strong().color(TEXT));
             if let Some(status)=&live_status {
                 let state=if !status.enabled {"Off"} else if status.pending.is_some() {"Buying"} else {"Scanning"};
                 ui.label(RichText::new(state).size(10.0)
                     .color(if status.enabled{GOOD}else{DIM}));
-                ui.label(RichText::new(format!("{} sent · {} confirmed · {} unverified",
+                ui.label(RichText::new(format!("{} attempts · {} purchases · {} awaiting confirmation",
                     status.sent,status.confirmed,status.unknown)).size(10.0).color(MUTED));
             } else {
-                ui.label(RichText::new("Saved rules apply when the native game connects")
+                ui.label(RichText::new("Your saved rules will start when this account connects")
                     .size(10.0).color(DIM));
             }
         });
         ui.label(RichText::new(
-            "Native authenticated game socket · no Violentmonkey · independent of Auto Catch. Buying stays off until enabled and saved."
+            "Automatically buy items or Pokémon that match your rules. Works without Firefox. Buying stays off until you enable it and save."
         ).size(10.0).color(DIM));
-        ui.label(RichText::new("Fast buying: 5 simultaneous attempts · up to 3 per item listing · 120 ms dispatch · 400 ms item retries · maximum affordable lot")
+        ui.label(RichText::new("Fast buying is enabled: checks several offers at once, retries quickly, and buys as many units as your rules and balance allow.")
             .size(10.0).color(MUTED));
         if let Some(status)=&live_status {
-            if let Some(p)=&status.pending {ui.label(RichText::new(format!("Awaiting receipt: {p}")).size(10.0).color(WARN));}
+            if let Some(p)=&status.pending {ui.label(RichText::new(format!("Waiting for purchase confirmation: {p}")).size(10.0).color(WARN));}
             if !status.last.is_empty() {ui.label(RichText::new(&status.last).size(10.0).color(MUTED));}
             if let Some(error)=&status.error {ui.label(RichText::new(error).size(10.0).color(WARN));}
         }
@@ -49,9 +49,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         let Some(cfg)=app.market_drafts[index].as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
-            ui.checkbox(&mut cfg.enabled,"Enable native market buying");
+            ui.checkbox(&mut cfg.enabled,"Enable automatic buying");
             ui.checkbox(&mut cfg.paused,"Pause purchases");
-            ui.label(RichText::new(if cfg.enabled&&!cfg.paused {"Save to arm"}else{"Disarmed"})
+            ui.label(RichText::new(if cfg.enabled&&!cfg.paused {"Save to activate"}else{"Not buying"})
                 .size(10.0).color(if cfg.enabled&&!cfg.paused{WARN}else{DIM}));
         });
         ui.separator();
@@ -73,7 +73,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 field(ui,"Purchases / session",&mut cfg.max_purchases_session);
                 field(ui,"Units / session",&mut cfg.max_quantity_session);
             });
-            ui.label(RichText::new("Unknown purchase outcomes retain their quoted spending exposure. Daily limits persist across app restarts.")
+            ui.label(RichText::new("Purchases awaiting confirmation still count toward your spending limits. Daily limits are kept after restarting the app.")
                 .size(10.0).color(DIM));
         });
         ui.add_space(7.0);
@@ -133,12 +133,12 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         if let Some(i)=remove {cfg.rules.remove(i);}
 
         ui.add_space(6.0);
-        ui.collapsing(format!("Snatch · {} armed listing(s) · release-window snipe",cfg.snatch_targets.len()),|ui|{
+        ui.collapsing(format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()),|ui|{
             ui.label(RichText::new(
-                "High-priority Moth Watch Snatch: up to 40 saved listing IDs, 45s pre-unlock verification, four-second burst with up to 8 sends per worker tick, then 150ms exact-listing retries. Snatch purchases share balance reserves and price ceilings. Native buying must be enabled and not paused."
+                "Snatch watches up to 40 offers and attempts to buy them immediately when they unlock. It checks shortly before release and retries rapidly during the four-second buying window. Your price and spending limits always apply. Enable automatic buying to use Snatch."
             ).size(10.0).color(MUTED));
             ui.label(RichText::new(
-                "Arm a real game listing by ID and authorized max unit price. The native worker checks market.anuncio for seller, stock, currency, price and unlock time BEFORE purchasing; an unknown listing is never blindly bought."
+                "Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify."
             ).size(10.0).color(DIM));
             ui.horizontal_wrapped(|ui|{
                 let t=&mut app.market_snatch_drafts[index];
@@ -158,7 +158,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 if t.kind=="item" {field(ui,"Item ID",&mut t.item_id);}
                 field(ui,"Max unit price",&mut t.max_price);
                 if ui.add_enabled(cfg.snatch_targets.len()<40,
-                    egui::Button::new("Arm Snatch")).clicked() {
+                    egui::Button::new("Add to Snatch")).clicked() {
                     let mut target=t.clone();
                     target.arm();
                     if target.id==0 || target.max_price==0 ||
@@ -167,10 +167,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                             "Enter a real listing ID, item ID (for items), and maximum price.".into();
                     } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
                         app.market_notices[index]=
-                            "That listing is already in the Snatch queue.".into();
+                            "This offer is already in your Snatch list.".into();
                     } else {
                         cfg.snatch_targets.push(target);
-                        app.market_notices[index]="Snatch armed. Saving queue for this account.".into();
+                        app.market_notices[index]="Offer added to Snatch and saved for this account.".into();
                         save=true;
                     }
                 }
@@ -187,26 +187,26 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                             t.id,if t.kind=="pokemon"{"Pokémon"}else{"Item"},
                             if t.currency=="orb"{"Gems"}else{"Gold"},t.max_price
                         )).size(11.0).strong().color(TEXT));
-                        if ui.small_button("Cancel Snatch").clicked(){remove=Some(i);}
+                        if ui.small_button("Remove from Snatch").clicked(){remove=Some(i);}
                     });
                     if let Some(s)=seen {
                         ui.label(RichText::new(format!(
-                            "{} · {} attempt(s) · {} units quoted",
+                            "{} · {} attempts · {} units available",
                             s.phase,s.attempts,s.quantity
                         )).size(10.0).color(if s.phase.contains("burst"){GOOD}else{MUTED}));
                     } else {
-                        ui.label(RichText::new("Queue saved · waiting for native session and exact market quote")
+                        ui.label(RichText::new("Saved · waiting for the account to connect and the offer to appear")
                             .size(10.0).color(DIM));
                     }
                 });
             }
             if let Some(i)=remove {
                 cfg.snatch_targets.remove(i);
-                app.market_notices[index]="Snatch cancelled. Saving queue.".into();
+                app.market_notices[index]="Offer removed from Snatch.".into();
                 save=true;
             }
             if let Some(status)=live_status.as_ref() {
-                ui.label(RichText::new(format!("Snatch attempts sent: {}",status.snatch_sent))
+                ui.label(RichText::new(format!("Snatch buy attempts: {}",status.snatch_sent))
                     .size(10.0).color(MUTED));
                 let automatic=status.snatches.iter().filter(|s|!s.manual)
                     .take(20).collect::<Vec<_>>();
@@ -214,10 +214,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     !cfg.snatch_targets.iter().any(|t|t.id==row.id))
                     .take(30).collect::<Vec<_>>();
                 if !discovery.is_empty() {
-                    ui.label(RichText::new("Held offers observed by native market scans")
+                    ui.label(RichText::new("Offers waiting to become available")
                         .strong().size(11.0).color(TEXT));
                     ui.label(RichText::new(
-                        "Snatch arms the exact listing at its observed maximum unit price. No purchase is made until native market buying is enabled."
+                        "Choose an offer to add it to Snatch at its current unit price. No purchase happens until automatic buying is enabled."
                     ).size(10.0).color(DIM));
                     let mut arm_from_scan=None;
                     for row in discovery {
@@ -241,7 +241,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         if !cfg.snatch_targets.iter().any(|t|t.id==target.id) &&
                             cfg.snatch_targets.len()<40 {
                             cfg.snatch_targets.push(target);
-                            app.market_notices[index]="Observed listing armed for Snatch. Saving account queue.".into();
+                            app.market_notices[index]="Offer added to your Snatch list.".into();
                             save=true;
                         }
                     }
@@ -260,7 +260,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         });
         ui.collapsing("Import existing Moth Watch rules",|ui|{
             ui.label(RichText::new(
-                "From a Firefox profile where Moth Watch is configured, copy localStorage.getItem('moth-pokeidle-market-bot-config-v1') and paste its JSON here. Import never enables native buying automatically."
+                "To import old Moth Watch rules, open Firefox developer tools and copy the result of localStorage.getItem('moth-pokeidle-market-bot-config-v1'). Paste it below. Imported rules stay disabled until you review and save them."
             ).size(10.0).color(DIM));
             ui.add(egui::TextEdit::multiline(&mut app.market_imports[index])
                 .hint_text("Paste Moth Watch JSON settings…")
@@ -269,7 +269,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 match MarketRules::import_watch(&app.market_imports[index]) {
                     Ok(imported)=>{
                         *cfg=imported;
-                        app.market_notices[index]="Rules imported but not yet saved; native buying is OFF.".into();
+                        app.market_notices[index]="Rules imported. Review and save them to use automatic buying.".into();
                     }
                     Err(error)=>app.market_notices[index]=format!("Import rejected: {error}"),
                 }
