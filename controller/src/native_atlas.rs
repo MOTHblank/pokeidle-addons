@@ -255,7 +255,7 @@ mod tests {
             ..Default::default()
         };
         view.hunt_slug=Some("route-a".into());
-        view.hunts=vec![hunt.clone()];
+        view.hunts=std::sync::Arc::new(vec![hunt.clone()]);
         view.measurements.seconds=60.0;
         view.measurements.kills=10;
         view.measurements.kills_h=600.0;
