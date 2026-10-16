@@ -526,10 +526,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 .size(12.0).strong().color(TEXT));
             ui.horizontal_wrapped(|ui| {
                 for (label, amount, valid) in [
-                    (tr("Trainer XP/h"), m.trainer_xp_h, m.valid_trainer),
-                    (tr("Pokémon XP/h"), m.pokemon_xp_h, m.valid_pokemon),
-                    (tr("Net gold/h"), m.gold_net_h, m.valid_gold),
-                    (tr("Kills/h"), m.kills_h, m.seconds >= 20.0),
+                    (tr("Trainer XP/h"), m.trainer_xp_h, live && m.valid_trainer),
+                    (tr("Pokémon XP/h"), m.pokemon_xp_h, live && m.valid_pokemon),
+                    (tr("Net gold/h"), m.gold_net_h, live && m.valid_gold),
+                    (tr("Kills/h"), m.kills_h, live && m.seconds >= 20.0 &&
+                        m.last_battle_age_secs.is_none_or(|age|age<=180)),
                 ] {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(label).size(10.0).color(DIM));
