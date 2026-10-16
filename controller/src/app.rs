@@ -11,6 +11,7 @@ use crate::native_items::{self, ItemCatalog};
 use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
+mod market_panel;
 use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
@@ -1597,6 +1598,9 @@ pub struct ControllerApp {
     hunt_account: usize,
     automation_account: usize,
     automation_drafts: [AutomationDraft;4],
+    market_drafts: [Option<crate::native_market::MarketRules>;4],
+    market_imports: [String;4],
+    market_notices: [String;4],
     history_rows_limit: usize,
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
@@ -1718,6 +1722,9 @@ impl ControllerApp {
             hunt_account: 0,
             automation_account: 0,
             automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
+            market_drafts: std::array::from_fn(|_|None),
+            market_imports: std::array::from_fn(|_|String::new()),
+            market_notices: std::array::from_fn(|_|String::new()),
             history_rows_limit: 100,
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
@@ -4112,10 +4119,12 @@ mod history_ui_tests {
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new(tr("Server settings · Native capture · Restock"))
+    ui.label(RichText::new(tr("Server settings · Native capture · Restock · Market rules"))
         .size(13.0).color(MUTED));
     ui.add_space(6.0);
     let index = app.automation_account;
+    market_panel::draw(app,ui,index);
+    ui.add_space(10.0);
     let Some(native) = app.games[index].native.as_ref() else {
         draw_native_missing_panel(app,ui,Some(index),
             tr("Server automation settings require a native session"));
@@ -4219,6 +4228,25 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.status_error=true;
             }
         }
+        ui.collapsing("Mission automation · observed server fields",|ui|{
+            // Do not invent mission commands. Surface only verified server
+            // state until an authenticated command/ack pair is documented.
+            let mission=automation.as_object().map(|obj|obj.iter()
+                .filter(|(key,_)| {
+                    let key=key.to_lowercase();
+                    key.contains("miss") || key.contains("quest") || key.contains("daily")
+                }).collect::<Vec<_>>()).unwrap_or_default();
+            if mission.is_empty() {
+                ui.label(RichText::new("No mission settings in the current server automation snapshot. Mission commands are not yet verified; no actions are sent.")
+                    .size(10.0).color(DIM));
+            } else {
+                for (name,value) in mission {
+                    ui.label(RichText::new(format!("{name}: {value}")).size(10.0).color(MUTED));
+                }
+                ui.label(RichText::new("Read only until the game's mission update and acknowledgement protocol is confirmed.")
+                    .size(10.0).color(DIM));
+            }
+        });
         ui.add_space(10.0);
     } else {
         ui.label(RichText::new(tr("Waiting for server automation settings"))

@@ -19,6 +19,8 @@ The Rust backend handles authenticated game sessions and Twitch IRC directly, Au
 
 The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall any previous user scripts from Premium to change their update feed. Moth Watch, Hunt Atlas browser mode, and advanced browser-only market workflows remain separate optional features.
 
+For configuration and protocol details of the **native Moth Watch rule buyer**, see [market rule buying](docs/native-market-rule-buying.md). It is off by default and can import existing Moth Watch rule JSON. The native Automation page also surfaces any observed mission fields read-only until their write/acknowledgement protocol has been verified.
+
 ## Verification
 
 ```sh
