@@ -1545,47 +1545,51 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .show(&mut cols[0],|ui|{
                                 ui.label(RichText::new("MATCHUP").size(10.0)
                                     .strong().color(DIM));
-                                ui.horizontal_wrapped(|ui|{
-                                    if let Some(p)=hunts.active_pokemon.as_ref(){
-                                        ui.horizontal(|ui|{
-                                            if let Some(id)=p.species_id{
-                                                app.visuals.show(ui,SpriteKind::Pokemon,
-                                                    id,None,42.0);
+                                ui.columns(2,|sides|{
+                                    sides[0].vertical_centered(|ui|{
+                                        ui.label(RichText::new("YOUR POKÉMON")
+                                            .size(9.0).strong().color(DIM));
+                                        if let Some(p)=hunts.active_pokemon.as_ref(){
+                                            let shown=p.species_id.is_some_and(|id|
+                                                app.visuals.show(
+                                                    ui,SpriteKind::Pokemon,id,None,46.0));
+                                            if !shown{
+                                                ui.label(RichText::new("◇")
+                                                    .size(26.0).color(MUTED));
                                             }
-                                            ui.vertical(|ui|{
-                                                ui.label(RichText::new(&p.name)
-                                                    .size(14.0).strong().color(TEXT));
-                                                ui.label(RichText::new(format!(
-                                                    "Lv {} · {}",p.level,
-                                                    if p.shiny{"Shiny"}else{"Lead Pokémon"}
-                                                )).size(10.0).color(MUTED));
-                                            });
-                                        });
-                                    }else{
-                                        ui.label(RichText::new("Lead not loaded")
-                                            .size(11.0).color(MUTED));
-                                    }
-                                    ui.label(RichText::new("VS").size(10.0)
-                                        .strong().color(DIM));
-                                    if let Some(wild)=hunts.wild.as_ref(){
-                                        ui.horizontal(|ui|{
-                                            if let Some(id)=wild.species_id{
-                                                app.visuals.show(ui,SpriteKind::Pokemon,
-                                                    id,None,42.0);
+                                            ui.label(RichText::new(&p.name)
+                                                .size(13.0).strong().color(TEXT));
+                                            ui.label(RichText::new(format!(
+                                                "Lv {} · {}",p.level,
+                                                if p.shiny{"Shiny"}else{"Active"}
+                                            )).size(10.0).color(MUTED));
+                                        }else{
+                                            ui.label(RichText::new("Lead not loaded")
+                                                .size(11.0).color(MUTED));
+                                        }
+                                    });
+                                    sides[1].vertical_centered(|ui|{
+                                        ui.label(RichText::new("OPPONENT")
+                                            .size(9.0).strong().color(DIM));
+                                        if let Some(wild)=hunts.wild.as_ref(){
+                                            let shown=wild.species_id.is_some_and(|id|
+                                                app.visuals.show(
+                                                    ui,SpriteKind::Pokemon,id,None,46.0));
+                                            if !shown{
+                                                ui.label(RichText::new("◇")
+                                                    .size(26.0).color(MUTED));
                                             }
-                                            ui.vertical(|ui|{
-                                                ui.label(RichText::new(&wild.name)
-                                                    .size(14.0).strong().color(TEXT));
-                                                ui.label(RichText::new(format!(
-                                                    "Lv {} · HP {}/{}",
-                                                    wild.level,wild.hp,wild.max_hp
-                                                )).size(10.0).color(MUTED));
-                                            });
-                                        });
-                                    }else{
-                                        ui.label(RichText::new("No wild target")
-                                            .size(11.0).color(MUTED));
-                                    }
+                                            ui.label(RichText::new(&wild.name)
+                                                .size(13.0).strong().color(TEXT));
+                                            ui.label(RichText::new(format!(
+                                                "Lv {} · HP {}/{}",wild.level,
+                                                wild.hp,wild.max_hp
+                                            )).size(10.0).color(MUTED));
+                                        }else{
+                                            ui.label(RichText::new("No wild encounter")
+                                                .size(11.0).color(MUTED));
+                                        }
+                                    });
                                 });
                                 if let Some(wild)=hunts.wild.as_ref(){
                                     if wild.max_hp>0{
