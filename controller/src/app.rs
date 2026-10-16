@@ -3428,329 +3428,329 @@ fn draw_game_details(
             if app.games[index].native.is_some() {
                 draw_native_automation(app, ui, index);
             } else {
-            // A browser FPS cap does not establish that Performance+ is enabled.
-            let performance_active = health.telemetry_is_fresh()
-                && health.performance_enabled == Some(true);
-            let performance_value = if !health.telemetry_is_fresh() {
-                tr("Not checked yet").to_string()
-            } else {
-                match health.performance_enabled {
-                    Some(false) => tr("Off").to_string(),
-                    Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
-                    Some(true) => format!("{} FPS", health.performance_fps),
-                    None => tr("Not detected in game").to_string(),
-                }
-            };
-
-            ui.horizontal_wrapped(|ui| {
-                automation_badge(
-                    ui,
-                    tr("Auto Catch"),
-                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Bridge data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
-                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
-                );
-                automation_badge(
-                    ui,
-                    tr("Restock"),
-                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
-                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
-                );
-                automation_badge(
-                    ui,
-                    tr("Stream scanner"),
-                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
-                        tr("Not checked")
-                    } else if health.stream_scan_status.is_empty() {
-                        tr("Waiting")
-                    } else {
-                        tr(&health.stream_scan_status)
-                    },
-                    health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
-                );
-                if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
-                    if let Some(channels) = health.stream_scan_twitch_channels {
-                        let shared_tabs = health.tabs.iter()
-                            .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
-                            .count();
-                        let (value, ready) = if channels == 0 {
-                            (tr("No live Twitch channels in last scan").to_string(), false)
-                        } else if shared_tabs == 0 {
-                            (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
-                        } else if shared_tabs == 1 {
-                            (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
-                        } else {
-                            (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
-                        };
-                        automation_badge(ui, tr("Twitch chats"), &value, ready)
-                            .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
+                // A browser FPS cap does not establish that Performance+ is enabled.
+                let performance_active = health.telemetry_is_fresh()
+                    && health.performance_enabled == Some(true);
+                let performance_value = if !health.telemetry_is_fresh() {
+                    tr("Not checked yet").to_string()
+                } else {
+                    match health.performance_enabled {
+                        Some(false) => tr("Off").to_string(),
+                        Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
+                        Some(true) => format!("{} FPS", health.performance_fps),
+                        None => tr("Not detected in game").to_string(),
                     }
-                }
-                automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
-            });
+                };
+
+                ui.horizontal_wrapped(|ui| {
+                    automation_badge(
+                        ui,
+                        tr("Auto Catch"),
+                        if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Bridge data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
+                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
+                    );
+                    automation_badge(
+                        ui,
+                        tr("Restock"),
+                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
+                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
+                    );
+                    automation_badge(
+                        ui,
+                        tr("Stream scanner"),
+                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
+                            tr("Not checked")
+                        } else if health.stream_scan_status.is_empty() {
+                            tr("Waiting")
+                        } else {
+                            tr(&health.stream_scan_status)
+                        },
+                        health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
+                    );
+                    if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
+                        if let Some(channels) = health.stream_scan_twitch_channels {
+                            let shared_tabs = health.tabs.iter()
+                                .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
+                                .count();
+                            let (value, ready) = if channels == 0 {
+                                (tr("No live Twitch channels in last scan").to_string(), false)
+                            } else if shared_tabs == 0 {
+                                (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
+                            } else if shared_tabs == 1 {
+                                (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
+                            } else {
+                                (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
+                            };
+                            automation_badge(ui, tr("Twitch chats"), &value, ready)
+                                .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
+                        }
+                    }
+                    automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
+                });
 
             }
 
             // Browser-only controls are irrelevant after successful native
             // takeover. The runtime and saved session now own game + IRC.
             if app.games[index].native.is_none() {
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new(tr("KICK MULTISTREAM"))
-                    .size(9.0)
-                    .strong()
-                    .color(DIM),
-            );
-            ui.add_space(6.0);
-
-            egui::Frame::new()
-                .fill(PANEL_ALT)
-                .corner_radius(10.0)
-                .inner_margin(10.0)
-                .show(ui, |ui| {
-                    if let Some((link, channels)) = multikick_link(&health.kick_streams) {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {}",
-                                channels.len(),
-                                tr("live KICK channels:")
-                            ))
-                            .size(10.0)
-                            .strong()
-                            .color(GOOD),
-                        );
-                        ui.label(
-                            RichText::new(channels.join(" · "))
-                                .size(10.0)
-                                .color(TEXT),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(link.as_str())
-                                .size(10.0)
-                                .color(ACCENT),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button(tr("Copy link")).clicked() {
-                                ui.ctx().copy_text(link.clone());
-                                app.set_status(
-                                    tr("Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox.").to_string(),
-                                    false,
-                                );
-                            }
-                            if ui.button(tr("Open live channels")).clicked() {
-                                match open_kick_channels_in_regular_browser(&channels) {
-                                    Ok(_) => app.set_status(
-                                        tr("Opened live KICK channels in the regular browser.").to_string(),
-                                        false,
-                                    ),
-                                    Err(error) => app.set_status(error, true),
-                                }
-                            }
-                        });
-                        ui.label(
-                            RichText::new(tr("Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser."))
-                                .size(9.0)
-                                .color(MUTED),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new(tr("No live KICK channels detected."))
-                                .size(10.0)
-                                .color(MUTED),
-                        );
-                    }
-                });
-
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
+                ui.add_space(12.0);
                 ui.label(
-                    RichText::new(tr(if health.telemetry_is_fresh() || health.last_successful_probe_at.is_none() { "OPEN TABS" } else { "Last reported tabs" }))
+                    RichText::new(tr("KICK MULTISTREAM"))
                         .size(9.0)
                         .strong()
                         .color(DIM),
                 );
+                ui.add_space(6.0);
 
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(age) = health.tab_inventory_age() {
-                        ui.label(
-                            RichText::new(format!("{} · {} {}",
-                                tr("Tabs checked"), age.as_secs() / 60, tr("min ago")))
-                                .size(9.0).color(DIM),
-                        );
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("+")
-                                    .size(13.0)
-                                    .strong()
-                            )
-                            .min_size(egui::vec2(24.0, 22.0)),
-                        )
-                        .on_hover_text(tr("Open a custom URL in this Firefox profile"))
-                        .clicked()
-                    {
-                        app.tab_url_open[index] = !app.tab_url_open[index];
-                    }
-                });
-            });
-            ui.add_space(6.0);
-
-            egui::Frame::new()
-                .fill(PANEL_ALT)
-                .corner_radius(10.0)
-                .inner_margin(10.0)
-                .show(ui, |ui| {
-                    if app.tab_url_open[index] {
-                        ui.horizontal(|ui| {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut app.tab_url_input[index])
-                                    .hint_text(tr("https://example.com"))
-                                    .desired_width((width - 150.0).max(180.0))
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .corner_radius(10.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        if let Some((link, channels)) = multikick_link(&health.kick_streams) {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}",
+                                    channels.len(),
+                                    tr("live KICK channels:")
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(GOOD),
                             );
-
-                            let enter = response.lost_focus()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-
-                            if ui.button(tr("Open")).clicked() || enter {
-                                let raw = app.tab_url_input[index].trim();
-                                if raw.is_empty() {
+                            ui.label(
+                                RichText::new(channels.join(" · "))
+                                    .size(10.0)
+                                    .color(TEXT),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(link.as_str())
+                                    .size(10.0)
+                                    .color(ACCENT),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(tr("Copy link")).clicked() {
+                                    ui.ctx().copy_text(link.clone());
                                     app.set_status(
-                                        format!(
-                                            "{}: {}",
-                                            &account_name,
-                                            tr("Enter a URL.")
-                                        ),
-                                        true,
+                                        tr("Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox.").to_string(),
+                                        false,
                                     );
-                                } else {
-                                    // Accept bare domains, pasted URLs, and mixed-case schemes.
-                                    // A malformed URL should not be reported as successfully queued.
-                                    let candidate = if raw
-                                        .get(..7)
-                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
-                                        || raw
-                                            .get(..8)
-                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-                                    {
-                                        raw.to_string()
-                                    } else if raw.contains("://") {
-                                        String::new()
-                                    } else {
-                                        format!("https://{}", raw)
-                                    };
-                                    let has_http_scheme = candidate
-                                        .get(..7)
-                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
-                                        || candidate
-                                            .get(..8)
-                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
-                                    let host = candidate
-                                        .split_once("://")
-                                        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
-                                        .unwrap_or_default();
-                                    let valid_url = has_http_scheme
-                                        && !host.is_empty()
-                                        && !host.contains(char::is_whitespace);
+                                }
+                                if ui.button(tr("Open live channels")).clicked() {
+                                    match open_kick_channels_in_regular_browser(&channels) {
+                                        Ok(_) => app.set_status(
+                                            tr("Opened live KICK channels in the regular browser.").to_string(),
+                                            false,
+                                        ),
+                                        Err(error) => app.set_status(error, true),
+                                    }
+                                }
+                            });
+                            ui.label(
+                                RichText::new(tr("Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser."))
+                                    .size(9.0)
+                                    .color(MUTED),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(tr("No live KICK channels detected."))
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                        }
+                    });
 
-                                    if valid_url {
-                                        if let Some(monitor) = app.games[index].monitor.as_ref() {
-                                            match monitor.send(json!({
-                                                "t": "browser.openTab",
-                                                "url": candidate
-                                            })) {
-                                                Ok(id) => {
-                                                    app.tab_url_input[index].clear();
-                                                    app.tab_url_open[index] = false;
-                                                    app.set_status(
-                                                        format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
-                                                        false,
-                                                    );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(tr(if health.telemetry_is_fresh() || health.last_successful_probe_at.is_none() { "OPEN TABS" } else { "Last reported tabs" }))
+                            .size(9.0)
+                            .strong()
+                            .color(DIM),
+                    );
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if let Some(age) = health.tab_inventory_age() {
+                            ui.label(
+                                RichText::new(format!("{} · {} {}",
+                                    tr("Tabs checked"), age.as_secs() / 60, tr("min ago")))
+                                    .size(9.0).color(DIM),
+                            );
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("+")
+                                        .size(13.0)
+                                        .strong()
+                                )
+                                .min_size(egui::vec2(24.0, 22.0)),
+                            )
+                            .on_hover_text(tr("Open a custom URL in this Firefox profile"))
+                            .clicked()
+                        {
+                            app.tab_url_open[index] = !app.tab_url_open[index];
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .corner_radius(10.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        if app.tab_url_open[index] {
+                            ui.horizontal(|ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut app.tab_url_input[index])
+                                        .hint_text(tr("https://example.com"))
+                                        .desired_width((width - 150.0).max(180.0))
+                                );
+
+                                let enter = response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+
+                                if ui.button(tr("Open")).clicked() || enter {
+                                    let raw = app.tab_url_input[index].trim();
+                                    if raw.is_empty() {
+                                        app.set_status(
+                                            format!(
+                                                "{}: {}",
+                                                &account_name,
+                                                tr("Enter a URL.")
+                                            ),
+                                            true,
+                                        );
+                                    } else {
+                                        // Accept bare domains, pasted URLs, and mixed-case schemes.
+                                        // A malformed URL should not be reported as successfully queued.
+                                        let candidate = if raw
+                                            .get(..7)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                            || raw
+                                                .get(..8)
+                                                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+                                        {
+                                            raw.to_string()
+                                        } else if raw.contains("://") {
+                                            String::new()
+                                        } else {
+                                            format!("https://{}", raw)
+                                        };
+                                        let has_http_scheme = candidate
+                                            .get(..7)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                            || candidate
+                                                .get(..8)
+                                                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+                                        let host = candidate
+                                            .split_once("://")
+                                            .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+                                            .unwrap_or_default();
+                                        let valid_url = has_http_scheme
+                                            && !host.is_empty()
+                                            && !host.contains(char::is_whitespace);
+
+                                        if valid_url {
+                                            if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                                match monitor.send(json!({
+                                                    "t": "browser.openTab",
+                                                    "url": candidate
+                                                })) {
+                                                    Ok(id) => {
+                                                        app.tab_url_input[index].clear();
+                                                        app.tab_url_open[index] = false;
+                                                        app.set_status(
+                                                            format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
+                                                            false,
+                                                        );
+                                                    }
+                                                    Err(error) => app.set_status(
+                                                        format!("{}: {}", &account_name, error),
+                                                        true,
+                                                    ),
                                                 }
-                                                Err(error) => app.set_status(
-                                                    format!("{}: {}", &account_name, error),
+                                            } else {
+                                                app.set_status(
+                                                    format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
                                                     true,
-                                                ),
+                                                );
                                             }
                                         } else {
                                             app.set_status(
-                                                format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
+                                                format!("{}: {}", &account_name, tr("Enter a valid http:// or https:// URL, or a domain such as example.com.")),
                                                 true,
                                             );
                                         }
-                                    } else {
-                                        app.set_status(
-                                            format!("{}: {}", &account_name, tr("Enter a valid http:// or https:// URL, or a domain such as example.com.")),
-                                            true,
-                                        );
                                     }
                                 }
-                            }
 
-                            if ui.button("×").clicked() {
-                                app.tab_url_open[index] = false;
-                            }
-                        });
-
-                        ui.add_space(6.0);
-                    }
-
-                    if health.tabs.is_empty() {
-                        ui.label(
-                            RichText::new(tr(if !running { "No active browser tabs" } else if !health.telemetry_is_fresh() { "Tab list not currently verified" } else if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
-                                .size(10.0)
-                                .color(DIM),
-                        );
-                    } else {
-                        for tab in &health.tabs {
-                            ui.horizontal(|ui| {
-                                let marker = if tab.kind == "Twitch" {
-                                    if tab.low_resource { "●" } else { "○" }
-                                } else {
-                                    "●"
-                                };
-
-                                ui.label(
-                                    RichText::new(marker)
-                                        .size(9.0)
-                                        .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
-                                );
-
-                                ui.label(
-                                    RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
-                                        .size(9.0)
-                                        .strong()
-                                        .color(TEXT),
-                                );
-
-                                ui.add_space(5.0);
-
-                                let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
-                                let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
-
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(compact_text(title, 54))
-                                            .size(9.0)
-                                            .color(MUTED),
-                                    )
-                                    .truncate(),
-                                );
-
-                                if tab.kind == "Twitch" {
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        ui.label(
-                                            RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
-                                                .size(8.0)
-                                                .strong()
-                                                .color(if tab.low_resource { GOOD } else { WARN }),
-                                        );
-                                    });
+                                if ui.button("×").clicked() {
+                                    app.tab_url_open[index] = false;
                                 }
                             });
+
+                            ui.add_space(6.0);
                         }
-                    }
-                });
+
+                        if health.tabs.is_empty() {
+                            ui.label(
+                                RichText::new(tr(if !running { "No active browser tabs" } else if !health.telemetry_is_fresh() { "Tab list not currently verified" } else if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
+                                    .size(10.0)
+                                    .color(DIM),
+                            );
+                        } else {
+                            for tab in &health.tabs {
+                                ui.horizontal(|ui| {
+                                    let marker = if tab.kind == "Twitch" {
+                                        if tab.low_resource { "●" } else { "○" }
+                                    } else {
+                                        "●"
+                                    };
+
+                                    ui.label(
+                                        RichText::new(marker)
+                                            .size(9.0)
+                                            .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
+                                    );
+
+                                    ui.label(
+                                        RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
+                                            .size(9.0)
+                                            .strong()
+                                            .color(TEXT),
+                                    );
+
+                                    ui.add_space(5.0);
+
+                                    let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
+                                    let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
+
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(compact_text(title, 54))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                        )
+                                        .truncate(),
+                                    );
+
+                                    if tab.kind == "Twitch" {
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            ui.label(
+                                                RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
+                                                    .size(8.0)
+                                                    .strong()
+                                                    .color(if tab.low_resource { GOOD } else { WARN }),
+                                            );
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    });
 
             }
 
@@ -3890,52 +3890,52 @@ fn draw_game_details(
                 });
 
             if app.games[index].native.is_none() {
-            ui.add_space(12.0);
+                ui.add_space(12.0);
 
-            ui.horizontal(|ui| {
-                // Unverified addon counts must not look like a live warning or success.
-                let addon_color = if !health.telemetry_is_fresh() {
-                    DIM
-                } else if health.addon_ok == health.addon_total {
-                    GOOD
-                } else {
-                    WARN
-                };
+                ui.horizontal(|ui| {
+                    // Unverified addon counts must not look like a live warning or success.
+                    let addon_color = if !health.telemetry_is_fresh() {
+                        DIM
+                    } else if health.addon_ok == health.addon_total {
+                        GOOD
+                    } else {
+                        WARN
+                    };
 
-                ui.label(
-                    RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
-                        .size(10.0)
-                        .strong()
-                        .color(addon_color),
-                );
-
-                if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
-                                .size(10.0)
-                                .color(WARN),
-                        )
-                        .truncate(),
-                    );
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {}/{}",
-                                tr("Optimized Twitch tabs"),
-                                health.twitch_low_resource_ok,
-                                health.twitch_tabs
-                            ))
+                    ui.label(
+                        RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
                             .size(10.0)
-                            .color(MUTED),
-                        ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
+                            .strong()
+                            .color(addon_color),
+                    );
+
+                    if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
+                                    .size(10.0)
+                                    .color(WARN),
+                            )
+                            .truncate(),
+                        );
                     }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}/{}",
+                                    tr("Optimized Twitch tabs"),
+                                    health.twitch_low_resource_ok,
+                                    health.twitch_tabs
+                                ))
+                                .size(10.0)
+                                .color(MUTED),
+                            ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
+                        }
+                    });
                 });
-            });
             }
         });
 }
