@@ -198,7 +198,7 @@ pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
 fn fetch_addon_versions() -> Result<BTreeMap<String, String>, String> {
     let mut result = BTreeMap::new();
     for file in accounts::discover_addon_files()? {
-        let url = format!("https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/{file}");
+        let url = format!("https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/{file}");
         let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
         #[cfg(windows)]
         {
