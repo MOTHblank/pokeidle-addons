@@ -142,7 +142,7 @@ impl EstimateCache {
             self.values.clear();
         }
         if !live || self.pending.is_some() ||
-            self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(8)) {
+            self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(20)) {
             return;
         }
         let Some(reference)=reference else {return};
