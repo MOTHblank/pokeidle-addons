@@ -142,7 +142,8 @@ impl Gameplay {
         // Never infer a numeric ball ID or spend a Master Ball accidentally.
         let id=self.priorities.iter().find_map(|priority|
             self.catalog.iter().find(|(id,name)|
-                !name.contains("master") && name.contains(priority) &&
+                !name.contains("master") &&
+                (name.contains(priority) || (priority=="poke" && name.contains("poké"))) &&
                 self.balls.get(id).copied().unwrap_or(0)>
                     self.reserves.get(priority).copied().unwrap_or(0))
                 .map(|(id,_)|*id))?;
