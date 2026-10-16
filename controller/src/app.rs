@@ -2706,12 +2706,15 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
+        // Live native panels publish snapshots at one-second cadence.
+        // Repaint only while visible; tray/background retains the cheap timer.
+        let background = self.controller_in_background(ui.ctx());
+        let native_detail = self.games.iter().any(|game| game.native.is_some())
+            && (self.selected_details.is_some() || self.panel_tab != PanelTab::Overview);
         ui.ctx().request_repaint_after(
-            if self.controller_in_background(ui.ctx()) {
-                UI_BACKGROUND_REPAINT_INTERVAL
-            } else {
-                UI_REPAINT_INTERVAL
-            }
+            if background { UI_BACKGROUND_REPAINT_INTERVAL }
+            else if native_detail { Duration::from_secs(1) }
+            else { UI_REPAINT_INTERVAL }
         );
 
         draw_sidebar(self, ui);
