@@ -11,6 +11,7 @@ mod native_background;
 mod native_gameplay;
 mod native_capture_config;
 mod native_items;
+mod native_visuals;
 mod native_hunts;
 mod native_history;
 mod native_automation;
