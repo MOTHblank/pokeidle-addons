@@ -9,6 +9,7 @@ mod monitor;
 mod native_auth;
 mod native_background;
 mod native_gameplay;
+mod native_hunts;
 mod native_restock;
 mod native_twitch;
 mod native_tls;
