@@ -843,9 +843,10 @@ fn atlas_filters_panel(
         }
     });
     ui.horizontal_wrapped(|ui|{
+        let search_width=(ui.available_width()*0.38).clamp(155.0,310.0);
         if ui.add(egui::TextEdit::singleline(&mut f.search)
             .hint_text("Search Pokémon, hunt, area or #ID")
-            .desired_width((ui.available_width()*0.38).clamp(155.0,310.0))).changed(){*page=0}
+            .desired_width(search_width)).changed(){*page=0}
         ui.label("Rank");
         egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
             .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
