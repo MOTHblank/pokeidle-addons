@@ -152,7 +152,20 @@ impl TwitchSession {
         let worker_desired = Arc::clone(&desired);
         let worker_stop = Arc::clone(&stop);
         thread::Builder::new().name("moth-native-twitch".into())
-            .spawn(move || run(identity, worker_state, worker_desired, worker_stop))
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(identity, Arc::clone(&worker_state), worker_desired,
+                        Arc::clone(&worker_stop));
+                }));
+                if result.is_err() {
+                    if let Ok(mut state) = worker_state.lock() {
+                        state.phase = "Failed".into();
+                        state.error = Some("Native IRC worker panicked; inspect sanitized controller log".into());
+                        state.joined = 0;
+                    }
+                    worker_stop.store(true, Ordering::Relaxed);
+                }
+            })
             .map_err(|_| "Could not spawn native Twitch IRC worker".to_owned())?;
         Ok(Self { state, desired, stop })
     }
