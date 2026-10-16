@@ -1889,7 +1889,7 @@ impl ControllerApp {
                 // saved credentials, or the same account may connect twice.
                 let detected = Config::for_profile(profile)
                     .and_then(|config| firefox::find_profile_process(&config));
-                let existing_firefox = matches!(detected, Ok(Some(_)));
+                let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
                 let result = detected.and_then(|_| {
                     if existing_firefox { return Ok(None); }
                     crate::native_auth::load(profile)
