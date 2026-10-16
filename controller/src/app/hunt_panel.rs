@@ -1674,6 +1674,104 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn guide_fixture()->AtlasReference{
+        let mut guide=AtlasReference::default();
+        guide.chart.insert("FIGHTING".into(),
+            [("NORMAL".into(),2.0)].into_iter().collect());
+        guide.chart.insert("GHOST".into(),
+            [("NORMAL".into(),0.0)].into_iter().collect());
+        guide.species.insert(1,native_atlas::ReferenceSpecies{
+            id:1,name:"Testmon".into(),types:vec!["NORMAL".into()],
+            base:vec![100.0;6],moves:vec![],
+            drops:vec![native_atlas::ReferenceDrop{
+                item_id:None,item_name:Some("Moon Stone".into()),
+                chance_pct:10.0,minimum:1.0,maximum:3.0,guide_price:5.0,
+            }],
+        });
+        guide.hunts.push(native_hunts::HuntEntry{
+            slug:"guide-locked".into(),name:"Guide Preview".into(),level:200,
+            area:"Region".into(),
+            species:vec![native_hunts::HuntSpecies{id:1,weight:100.0}],
+            ..Default::default()
+        });
+        guide
+    }
+    #[test]
+    fn explorer_preserves_authoritative_unlocked_and_locked_separation(){
+        let guide=guide_fixture();
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"server-unlocked".into(),name:"Current".into(),level:50,
+            species:vec![native_hunts::HuntSpecies{id:1,weight:80.0}],
+            ..Default::default()
+        }]);
+        let locations=atlas_destinations(&view,Some(&guide));
+        assert_eq!(locations.len(),2);
+        assert!(locations.iter().any(|(hunt,valid)|
+            *valid && hunt.slug=="server-unlocked"));
+        assert!(locations.iter().any(|(hunt,valid)|
+            !*valid && hunt.slug=="guide-locked"));
+        let cache=EstimateCache::default();
+        let mut filters=AtlasFilters::default();
+        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters)[0]
+            .destinations.len(),1);
+        filters.availability=AtlasAvailability::All;
+        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters)[0]
+            .destinations.len(),2);
+        filters.availability=AtlasAvailability::Locked;
+        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters)[0]
+            .destinations[0].hunt.slug,"guide-locked");
+        filters.min_level=250;
+        assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters).is_empty());
+    }
+    #[test]
+    fn explorer_weakness_and_depot_filters_follow_selected_account(){
+        let guide=guide_fixture();
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"current".into(),name:"Current".into(),level:100,
+            species:vec![native_hunts::HuntSpecies{id:1,weight:100.0}],
+            ..Default::default()
+        }]);
+        view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
+            species_id:Some(1),id:15,..Default::default()
+        }]);
+        let cache=EstimateCache::default();
+        let mut filters=AtlasFilters::default();
+        filters.collection=AtlasCollection::InDepot;
+        filters.weak_to.insert("FIGHTING".into());
+        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters).len(),1);
+        filters.weak_to.insert("GHOST".into());
+        filters.weakness_match_all=true;
+        assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters).is_empty());
+        filters.weakness_match_all=false;
+        filters.collection=AtlasCollection::NotInDepot;
+        assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters).is_empty());
+    }
+    #[test]
+    fn guide_drop_and_shiny_scenarios_never_infer_missing_capture_data(){
+        let guide=guide_fixture();
+        let meta=&guide.species[&1];
+        let hunt=native_hunts::HuntEntry{
+            slug:"a".into(),name:"A".into(),level:120,area:"Kanto".into(),
+            ..Default::default()
+        };
+        let forecast=native_atlas::Forecast{
+            kills_h:100.0,trainer_xp_h:1000.0,pokemon_xp_h:900.0,
+            gold_h:100.0,combat_gold_h:80.0,npc_loot_gold_h:20.0,
+            trainer_xp_per_kill:10.0,pokemon_xp_per_kill:9.0,
+            seconds_per_kill:36.0,coverage:1.0,calibrated:false,
+        };
+        assert!((atlas_objective(AtlasSort::Rare,Some(&forecast),&hunt,
+            0.5,Some(meta),"Moon Stone").unwrap()-10.0).abs()<1e-10);
+        assert_eq!(atlas_objective(AtlasSort::Rare,Some(&forecast),&hunt,
+            0.5,Some(meta),"Unknown"),None);
+        assert_eq!(atlas_objective(AtlasSort::Shiny,None,&hunt,
+            0.5,Some(meta),""),None);
+        let outland=native_hunts::HuntEntry{area:"Outland".into(),..hunt};
+        assert_eq!(atlas_objective(AtlasSort::Shiny,Some(&forecast),&outland,
+            0.5,Some(meta),""),None);
+    }
     #[test]
     fn unknown_rate_is_never_turned_into_zero(){
         let mut view=HuntView::default();
