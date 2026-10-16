@@ -92,7 +92,7 @@ impl RateSource {
         match self {
             Self::Measured => "Measured",
             Self::Calibrated => "Calibrated estimate",
-            Self::Experimental => "Experimental estimate",
+            Self::Experimental => "Early estimate",
             Self::Scenario => "Same-pace scenario",
             Self::Unavailable => "Unavailable",
         }
@@ -385,7 +385,7 @@ fn draw_hunt_row(
                 draw_rate(ui,rate_label(ranking),result.value,result.source);
             }
             ui.push_id(&hunt.slug,|ui|{
-                ui.collapsing("Spawn composition · forecast assumptions",|ui|{
+                ui.collapsing("Pokémon encounters · estimate assumptions",|ui|{
                     ui.label(RichText::new(format!(
                         "{} spawn slots · {} species",
                         hunt.total_spawns,hunt.species.len()
@@ -418,7 +418,7 @@ fn draw_hunt_row(
                                             ui.label("Only the first 12 guide drops shown.");
                                         }
                                         ui.label(RichText::new(
-                                            "Public guide probabilities and reference prices only; not observed drop rates or live market quotes."
+                                            "These probabilities and prices come from the game guide. They are not measured drop rates or current market prices."
                                         ).size(10.0).color(MUTED));
                                     });
                                 });
@@ -706,7 +706,7 @@ fn account_is_live(session:&NativeSession)->bool {
 /// toggles Hunt Atlas's account-comparison mode; no duplicate account strip.
 fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Native Hunt Atlas · species and destinations")
+        ui.label(RichText::new("Hunt Atlas · hunts and Pokémon")
             .size(11.0).color(MUTED));
         if app.hunt_subtab==HuntSubtab::Compare {
             if ui.small_button("← Back to explorer").clicked(){
@@ -812,7 +812,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ui.label(RichText::new(if *live &&
                                 app.hunt_estimate_cache[*index].is_pending(){
                                 "Calculating modeled rankings..."
-                            }else{"No validated combat forecast available."})
+                            }else{"Not enough battle data for a reliable estimate yet."})
                                 .size(10.0).color(MUTED));
                         }
                     });
@@ -1126,7 +1126,7 @@ fn draw_atlas_species(
                                         });
                                         ui.label(RichText::new(format!(
                                             "{} · combat gold {} / h · NPC loot {} / h · {:.0}% modeled species",
-                                            if f.calibrated{"Calibrated estimate"}else{"Experimental estimate"},
+                                            if f.calibrated{"Calibrated estimate"}else{"Early estimate"},
                                             format_hunt_amount(f.combat_gold_h),
                                             format_hunt_amount(f.npc_loot_gold_h),
                                             f.coverage*100.0
@@ -1192,7 +1192,7 @@ fn draw_atlas_explorer(
     });
     if matches!(filters.sort,AtlasSort::Shiny) {
         ui.label(RichText::new(
-            "Shiny previews assume the userscript's base 1/24,000 wild encounters outside Outland; no capture chance or bonus is implied."
+            "Shiny estimates use a base rate of 1 in 24,000 wild encounters outside Outland. Capture chances and extra bonuses are not included."
         ).size(10.0).color(WARN));
     }
     if matches!(filters.sort,AtlasSort::Rare) {
@@ -1237,7 +1237,7 @@ fn draw_atlas_explorer(
     }
     if let Some(error)=error {*command_error=Some(error);}
     ui.label(RichText::new(
-        "Guide-only destinations are previews, never executable. Forecasts are experimental and may differ significantly from measured combat throughput."
+        "Some locations are only shown for comparison and cannot be selected here. Estimates may differ considerably from your actual battle results."
     ).size(10.0).color(MUTED));
 }
 
@@ -1286,7 +1286,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 
     let index=app.hunt_account;
     let Some(native)=app.games[index].native.as_ref() else {
-        ui.label(RichText::new("Account offline. Start its native session to see hunts.")
+        ui.label(RichText::new("This account is offline. Start it to see available hunts.")
             .color(WARN));
         return;
     };
@@ -1311,7 +1311,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             .color(WARN).size(11.0));
     }
     if !view.catalog_ready {
-        ui.label(RichText::new("Waiting for server-authenticated hunt catalog…")
+        ui.label(RichText::new("Loading available hunts from the game…")
             .color(WARN));
         return;
     }
@@ -1488,7 +1488,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     ui.add_space(10.0);
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-            ui.label(RichText::new("Current hunt · experimental forecast")
+            ui.label(RichText::new("Current hunt · estimated results")
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
                 .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
@@ -1540,7 +1540,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 ).size(10.0).color(MUTED));
             } else {
                 ui.label(RichText::new(if app.hunt_estimate_cache[index].is_pending(){
-                    "Forecast computing on background worker."
+                    "Calculating your forecast…"
                 }else{
                     "Unavailable: reference species or active Pokémon combat data is incomplete."
                 }).size(10.0).color(MUTED));
@@ -1550,7 +1550,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 }
                 HuntSubtab::Session => {
                     let session=&view.session;
-                    ui.label(RichText::new("Native session · authoritative battle receipts")
+                    ui.label(RichText::new("Battle results recorded by the game")
                         .size(15.0).strong().color(TEXT));
                     ui.label(format!("Duration {:02}:{:02}:{:02}",
                         session.duration_secs/3600,
@@ -1577,7 +1577,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     session.ball_captures as f64*100.0/throws as f64,throws))
                                     .on_hover_text("Observed ball outcomes in this session; not a species capture probability.");
                             }else {
-                                ui.label(RichText::new("Capture success rate unavailable (no ball receipts)")
+                                ui.label(RichText::new("Capture success rate will appear after your first recorded throw.")
                                     .color(MUTED));
                             }
                         });
@@ -1784,7 +1784,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
                             known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
                         ));
-                        ui.label("Guide projections multiply the reported bonus factors. Same-pace scenarios do NOT assume these bonuses. Store boosts not present in native telemetry are not added.");
+                        ui.label("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded.");
                     });
                     ui.label(RichText::new("Gold forecasts are gross expected rewards, not measured net gold. Guide model uses approximate DPS and may significantly overestimate real combat throughput.")
                         .size(10.0).color(MUTED));
