@@ -34,11 +34,60 @@ struct RankedHunt<'a> {
     source: RateSource,
 }
 
+/// At most one guide simulation for a stable account and hunt catalog per
+/// eight seconds, regardless of egui's paint frequency or table filter changes.
+/// Actual measured rates remain live and bypass this cache entirely.
+#[derive(Default)]
+pub(super) struct EstimateCache {
+    account: Option<usize>,
+    catalog_ptr: usize,
+    reference_ptr: usize,
+    active_id: Option<u64>,
+    active_level: u32,
+    hunt_slug: Option<String>,
+    refreshed: Option<Instant>,
+    values: std::collections::BTreeMap<String,Option<native_atlas::Forecast>>,
+}
+impl EstimateCache {
+    fn refresh(&mut self, account:usize,view:&HuntView,
+        reference:Option<&AtlasReference>,live:bool,
+    ){
+        let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
+        let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
+        let active_id=view.active_pokemon.as_ref().map(|p|p.id);
+        let active_level=view.active_pokemon.as_ref().map_or(0,|p|p.level);
+        if self.account==Some(account) && self.catalog_ptr==catalog_ptr
+            && self.reference_ptr==reference_ptr && self.active_id==active_id
+            && self.active_level==active_level && self.hunt_slug==view.hunt_slug
+            && self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(8))
+        {return;}
+        self.account=Some(account);
+        self.catalog_ptr=catalog_ptr;
+        self.reference_ptr=reference_ptr;
+        self.active_id=active_id;
+        self.active_level=active_level;
+        self.hunt_slug=view.hunt_slug.clone();
+        self.refreshed=Some(Instant::now());
+        self.values.clear();
+        if !live {return;}
+        if let Some(reference)=reference {
+            for hunt in view.hunts.iter() {
+                self.values.insert(hunt.slug.clone(),
+                    native_atlas::estimate(view,hunt,reference));
+            }
+        }
+    }
+    fn get(&self,slug:&str)->Option<native_atlas::Forecast>{
+        self.values.get(slug).cloned().flatten()
+    }
+}
+
 /// Preserve uncertainty: an absent forecast, invalid observation and unknown
 /// kill rate must not become a plausible-looking zero in the recommendations.
 fn ranked_hunts<'a>(
     view: &'a HuntView, reference: Option<&AtlasReference>, ranking: HuntRanking,
     live: bool, query: &str, region: &str, species_type: &str,
+    cache: &EstimateCache,
 ) -> Vec<RankedHunt<'a>> {
     let needle = query.trim().to_lowercase();
     let m = &view.measurements;
@@ -70,9 +119,7 @@ fn ranked_hunts<'a>(
 
         // Do not run an optimistic guide simulation against a disconnected or
         // stale account. That account's combat and bonus state is not current.
-        let forecast = if live {
-            reference.and_then(|r| native_atlas::estimate(view, hunt, r))
-        } else { None };
+        let forecast = if live {cache.get(&hunt.slug)} else {None};
         let forecast_value = forecast.as_ref().map(|f|match ranking {
             HuntRanking::TrainerXp => f.trainer_xp_h,
             HuntRanking::PokemonXp => f.pokemon_xp_h,
@@ -658,8 +705,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
+                    app.hunt_estimate_cache.refresh(index,hunts,reference,live);
                     let ranked=ranked_hunts(hunts,reference,app.hunt_ranking,live,
-                        &app.hunt_query,&app.hunt_region,&app.hunt_type);
+                        &app.hunt_query,&app.hunt_region,&app.hunt_type,
+                        &app.hunt_estimate_cache);
                     ui.label(RichText::new(format!(
                         "{} matching hunts · measured = this hunt only · guide estimates are uncertain · scenarios are not combat predictions",
                         ranked.len()
@@ -713,7 +762,9 @@ mod tests {
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
             slug:"a".into(),name:"A".into(),level:100,..Default::default()
         }]);
-        let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","");
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true);
+        let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
         assert_eq!(rows.len(),1);
         assert!(rows[0].value.is_none());
         assert_eq!(rows[0].source,RateSource::Unavailable);
@@ -731,10 +782,12 @@ mod tests {
         view.measurements.kills_h=600.0;
         view.measurements.trainer_xp_h=1200.0;
         view.measurements.valid_trainer=true;
-        let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","");
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true);
+        let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="a").unwrap().source,RateSource::Measured);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="b").unwrap().source,RateSource::Scenario);
-        let stale=ranked_hunts(&view,None,HuntRanking::TrainerXp,false,"","","");
+        let stale=ranked_hunts(&view,None,HuntRanking::TrainerXp,false,"","","",&cache);
         assert!(stale.iter().all(|r|r.value.is_none()));
     }
 }
