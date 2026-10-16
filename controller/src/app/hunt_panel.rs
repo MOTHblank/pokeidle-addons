@@ -1097,6 +1097,12 @@ fn atlas_filters_panel(
         });
 }
 
+fn atlas_first_unlocked<'a,'b>(
+    row:&'b AtlasSpeciesRow<'a>
+)->Option<&'b AtlasDestination<'a>>{
+    row.destinations.iter().find(|destination|destination.unlocked)
+}
+
 /// Drilldown rows are compact by default; shared guide drops do not repeat
 /// once per destination, and the Hunt action never targets a guide-only entry.
 fn draw_atlas_destination(
@@ -1211,7 +1217,7 @@ fn draw_atlas_species(
                 if let Some(best)=row.destinations.first(){
                     // The highest projected destination may be guide-only. The
                     // action instead uses the highest ranked unlocked location.
-                    let available=row.destinations.iter().find(|d|d.unlocked);
+                    let available=atlas_first_unlocked(row);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
                             "Top: {} · Lv {} · {:.1}% encounter share",
@@ -2057,6 +2063,35 @@ mod tests {
             ..Default::default()
         });
         guide
+    }
+    #[test]
+    fn species_action_uses_an_unlocked_destination_not_a_locked_best(){
+        let locked=native_hunts::HuntEntry{
+            slug:"guide-only".into(),..Default::default()
+        };
+        let accessible=native_hunts::HuntEntry{
+            slug:"server-unlocked".into(),..Default::default()
+        };
+        let mut row=AtlasSpeciesRow{
+            id:1,name:"Testmon".into(),types:vec![],owned:false,
+            best:Some(200.0),
+            destinations:vec![
+                AtlasDestination{
+                    hunt:&locked,unlocked:false,share:0.7,
+                    forecast:None,objective:Some(200.0)
+                },
+                AtlasDestination{
+                    hunt:&accessible,unlocked:true,share:0.3,
+                    forecast:None,objective:Some(100.0)
+                }
+            ],
+        };
+        assert_eq!(
+            atlas_first_unlocked(&row).map(|destination|destination.hunt.slug.as_str()),
+            Some("server-unlocked")
+        );
+        row.destinations[1].unlocked=false;
+        assert!(atlas_first_unlocked(&row).is_none());
     }
     #[test]
     fn live_battle_status_requires_recent_real_combat(){
