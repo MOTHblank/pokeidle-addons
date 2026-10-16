@@ -778,9 +778,33 @@ fn atlas_filters_panel(
             f.clear();*page=0;
         }
     });
-    ui.label(RichText::new(
-        "Search Pokémon across locations. Unlocked destinations are confirmed by the account's game catalog; locked locations come from the public guide."
-    ).size(10.0).color(MUTED));
+    ui.horizontal_wrapped(|ui|{
+        if ui.add(egui::TextEdit::singleline(&mut f.search)
+            .hint_text("Search Pokémon, hunt, area or #ID")
+            .desired_width(230.0)).changed(){*page=0}
+        ui.label("Rank");
+        egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
+            .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
+                for item in [
+                    AtlasSort::TrainerXp,AtlasSort::PokemonXp,AtlasSort::Gold,
+                    AtlasSort::Rare,AtlasSort::Shiny,AtlasSort::Spawn,
+                    AtlasSort::Level,AtlasSort::Name
+                ]{
+                    if ui.selectable_value(&mut f.sort,item,
+                        atlas_sort_label(item)).changed(){
+                        f.ascending=matches!(item,AtlasSort::Name|AtlasSort::Level);
+                        *page=0;
+                    }
+                }
+            });
+        if ui.small_button(if f.ascending{"↑"}else{"↓"}).clicked(){
+            f.ascending=!f.ascending;*page=0;
+        }
+        if f.active_count()>0{
+            ui.label(RichText::new(format!("{} active filters",f.active_count()))
+                .size(10.0).color(ACCENT));
+        }
+    });
     if !f.filters_open {return}
     ui.add_space(6.0);
     egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
