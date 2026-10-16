@@ -1,61 +1,47 @@
-# Moth Controller (Rust)
+# Moth Controller
 
-The default application is a **native-first** PokéIdle and Twitch client with separate credentials/sessions for up to four accounts. Uses `egui/eframe`, native PokéIdle WebSocket and Twitch IRC, and Firefox WebDriver BiDi only for browser login, authentication handoff and interactive Firefox sessions.
+The desktop controller manages authenticated PokéIdle and Twitch connections for up to four accounts. Browser windows are needed for sign-in and optional interactive gameplay, not for ordinary background execution.
 
-## Run / Build
+## Run and build
 
-- Download a Windows or Linux binary from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest), or build with `cargo build --release` from `controller/`.
-- Run `cargo test` and `cargo check` from `controller/`.
-- Firefox or Firefox Developer Edition is needed only for initial authentication, expired sessions and **Open in Firefox**. Set `MOTH_FIREFOX` to its path if not detected. Linux interactive browser sessions need X11 or Wayland, and GUI/system dependencies installed.
-- Use **Accounts** to register accounts, **Start account** to connect and **Open in Firefox** for an interactive session. Credentials are cached in the existing protected OS store.
+- Download a Windows or Linux binary from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest).
+- To build locally, run `cargo build --release` from the `controller/` directory.
+- Firefox or Firefox Developer Edition is required if sign-in has not been saved or has expired. Set `MOTH_FIREFOX` to its executable path if necessary.
+- In **Accounts**, four cards show account names, PokéIdle login state, Twitch login state, and Start/Stop controls. A successful setup confirms both connections before saving the setup marker.
+- The **Open in Firefox** action is for manual browser play, while **Start account** prefers saved credentials and opens a visible Firefox window if authentication is needed.
 
-### Windows release builds while Moth Controller is open
+### Build while the Windows app is running
 
-If you build with `cargo build --release` while `target\\release\\moth-controller.exe` is still running, Windows can report `Access is denied (os error 5)` when Cargo tries to replace it. This is a Windows executable file lock, not a Rust compilation error.
-
-From PowerShell in the `controller` directory, use:
+Windows prevents overwriting an executable in use. From PowerShell in `controller/`, run:
 
 ```powershell
-.\\build-windows.ps1
+.\build-windows.ps1
 ```
 
-The script first tries the normal release output. If that executable is locked, it builds to `target\\build-while-running\\release\\moth-controller.exe`, or a timestamped folder if that copy is also running. It prints the exact executable path and **never closes the current controller or disconnects running accounts**. To run the newly built version, close the old window and launch the new executable. Alternatively, exit Moth Controller before using plain `cargo build --release`. Do not force-kill an account just to free a build output.
+The script detects a locked `target/release/moth-controller.exe` and builds to a separate output folder instead, without stopping active sessions. It prints the exact executable path.
 
-## Native functionality
+## Game icons and cache
 
-The Rust backend handles authenticated game sessions and Twitch IRC directly, Auto Catch ball selection and restock (including potions and revives), item catalogs, server automation settings, hunt metadata and Hunt Atlas projections, account dashboards, and persistent history. The options page includes independent focus/tray refresh throttling. See [native transport and automation notes](docs/native-background-experiment.md), [Hunt Atlas notes](docs/native-hunts-atlas.md) and [native visual cache](assets/visual/README.md) for implementation details and known limitations.
+In **Options**, **Download game icons** queues known public Poké Ball and item images on the dedicated cache worker. Downloads are stored per user:
 
-## Optional Firefox browser extensions
+- Windows: `%LOCALAPPDATA%\Moth\PokeIdle\VisualCache`
+- Linux: `~/.cache/moth-controller/visual` (or `$XDG_CACHE_HOME/moth-controller/visual`)
 
-**Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding. In **Accounts**, enable a slot and choose **Start account**; if necessary, authenticate in its temporary Firefox profile. The setup guide completes automatically after an authenticated session; there is no script-installation step. Connection state and login tools remain visible, while special Google/Twitch sign-in options are under **Login and profile tools**.
+The committed [asset manifest](assets/visual/manifest.json) currently contains no bundled sprites. Pokémon image URLs have not yet been mapped, so the button only downloads the known images. See [visual asset notes](assets/visual/README.md) for mapping, packaging, and permission details.
 
-For occasional Firefox scripts only, expand **Optional browser scripts (advanced)**. Legacy installers point to [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). Their versions are checked only when that optional panel is opened or its **Check now** button is pressed; missing scripts do not trigger dashboard warnings or get selected for installation automatically. Scripts must be chosen individually; there is no install-all action. If running optional browser Auto Catch, avoid simultaneously running native Auto Catch on the same account.
+## Automation and Hunt Atlas
 
-The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall any previous user scripts from Premium to change their update feed. Moth Watch's native rule buyer now includes an account-local Snatch queue, automatic held-listing observation, exact listing verification and high-priority release bursts; the browser-only full market browser and historical valuations remain optional features.
+The app handles Auto Catch, restocking (including potions and revives), Moth Watch market rules and Snatch, and Hunt Atlas estimates. Historical battle details are available through Dashboard details. Mission settings remain read-only until reliable update commands are identified.
 
-For configuration and protocol details of the **native Moth Watch rule buyer**, see [market rule buying](docs/native-market-rule-buying.md). It is off by default and can import existing Moth Watch rule JSON. The native Automation page also surfaces any observed mission fields read-only until their write/acknowledgement protocol has been verified.
+The ordinary desktop release version is **0.1.7**. The latest available published release may be older until a new release is built and uploaded.
 
-## Native Auto Catch fidelity
-
-For its runtime mechanics, capture receipt semantics, reserve accounting, and regression coverage, see [native Auto Catch notes](docs/native-autocatch.md).
-
-
-Moth Controller uses a separate native `ball.throw` engine; the premium Auto Catch+ userscript is optional, and running both at once on one account is not recommended. Native automation imports the user's normal `intervalMs`, two-ball priority and per-ball reserves from the protected account capture settings.
-
-As of `0.1.7-native.29`, the capture editor supports **100–3000 ms configurable throw spacing** (100 ms default like Auto Catch+). The oldest eligible corpse receives priority, using its server-observed death time and the game's 30-second lifetime as the available deadline signal. An unanswered throw can be retried after **1 second**; a server-confirmed failure may retry at the configured interval. A successful `batalha.ev` `bola` receipt closes that slot, and duplicate/late failures cannot reopen a captured corpse. A slot is discarded at expiration, on a hunt/center transition or disconnect, without guessing that it remains available.
-
-Every outbound native throw reserves one selected ball *immediately*, even when server `estado.balls` snapshots lag, so the configured reserve is not accidentally spent during rapid throws. New authenticated stock observations reconcile previously reserved uses when stock reductions are reflected. Socket send failures roll back local debits; reconnect clears all stale corpse/inventory state before starting new throws. Master Balls remain excluded and numeric ball IDs are resolved from the authenticated game ball catalog, never guessed from stale website assets.
-
-The Automation page shows distinct **native sends, matched captures, explicit failures, one-second timeout retries and per-ball capture usage**. Unrelated manual/server-auto catches remain part of the dashboard totals, not the native Auto Catch success count.
-
-These are source-level fixes with new Rust regression tests for deadline priority, fast cadence, unanswered/failed retries, stock reservations, duplicate receipts and disconnect/expiration. This environment lacks `cargo`/`rustc` and a live authenticated game session; compilation and in-game behavior **are not yet verified**.
-
-## Verification
+## Development
 
 ```sh
 cd controller
-cargo test
 cargo check
+cargo test
+cargo build --release
 ```
 
-Native connection and recovery need live PokéIdle/Twitch session verification, not only compilation. Do not log or commit authenticated game/Twitch tokens.
+The desktop app requires live authenticated PokéIdle and Twitch sessions to verify sign-in and game data. Keep credentials out of logs and commits. The validation workflow runs manually.

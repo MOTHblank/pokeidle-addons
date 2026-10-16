@@ -143,6 +143,33 @@ impl Default for VisualCache {
 }
 
 impl VisualCache {
+    /// Manual user request: fetch the small set of known public game icons.
+    /// Sprite mappings not yet supplied by the asset pipeline are deliberately
+    /// excluded. Never send account cookies or game authentication data.
+    pub fn download_known_icons(&mut self) -> usize {
+        let mut queued = 0;
+        for (kind, id) in [
+            (Kind::Ball, 1), (Kind::Ball, 2), (Kind::Ball, 3),
+            (Kind::Ball, 4), (Kind::Ball, 5),
+            (Kind::Item, 200), (Kind::Item, 201), (Kind::Item, 202),
+            (Kind::Item, 203), (Kind::Item, 204), (Kind::Item, 205),
+            (Kind::Item, 206), (Kind::Item, 70070),
+        ] {
+            if self.textures.contains_key(&(kind, id)) { continue; }
+            let Some(url) = asset_url(kind, id).and_then(trusted_url) else { continue; };
+            // These requests use the same worker and disk cache as normal art.
+            self.attempted.insert((kind, id));
+            if self.request.send(Request { kind, id, urls: vec![url] }).is_ok() {
+                queued += 1;
+            }
+        }
+        queued
+    }
+
+    pub fn loaded_count(&self) -> usize {
+        self.textures.len()
+    }
+
     fn put(&mut self, ctx: &egui::Context, key: (Kind, u64), bytes: &[u8]) {
         let Ok(img) = image::load_from_memory(bytes) else { return };
         if img.width() == 0 || img.height() == 0 ||
