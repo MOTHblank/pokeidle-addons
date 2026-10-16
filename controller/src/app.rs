@@ -327,6 +327,13 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Options" => "Opções",
         "Automation" => "Automação",
         "Stale" => "Dados antigos",
+        "Explore Pokémon" => "Explorar Pokémon",
+        "Hunt rankings" => "Ranking de hunts",
+        "Capture · Outland · Economy" => "Captura · Outland · Economia",
+        "Session & rewards" => "Sessão e recompensas",
+        "Compare accounts" => "Comparar contas",
+        "← Back to explorer" => "← Voltar à exploração",
+        "Account settings" => "Configurações da conta",
         "Waiting for data" => "Aguardando dados",
         "Capture preferences and live statistics" => "Preferências e estatísticas de captura",
         "Server settings and restock status" => "Opções do jogo e status da reposição",
@@ -3029,6 +3036,7 @@ fn draw_account_switcher(
         .corner_radius(8.0)
         .inner_margin(Margin::symmetric(9, 7))
         .show(ui, |ui| {
+            let button_width = if ui.available_width() < 780.0 { 112.0 } else { 128.0 };
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("ACCOUNT")).size(10.0).strong().color(DIM));
                 if include_all {
@@ -3070,7 +3078,7 @@ fn draw_account_switcher(
                     let name = compact_text(&app.accounts[index].name, 15);
                     let text = format!("{} {}\n{}", if color == GOOD { "●" } else if color == WARN { "◐" } else { "○" },
                         name, state);
-                    let response = ui.add_sized([if ui.available_width() < 145.0 { 112.0 } else { 128.0 }, 40.0],
+                    let response = ui.add_sized([button_width, 40.0],
                         egui::Button::new(RichText::new(text).size(10.0)
                             .color(if selected_here { TEXT } else { MUTED }))
                             .fill(if selected_here {
@@ -3078,7 +3086,10 @@ fn draw_account_switcher(
                             } else {
                                 PANEL_ALT
                             })
-                            .stroke(Stroke::new(1.0, if selected_here { ACCENT } else { BORDER }))
+                            .stroke(Stroke::new(1.0, if selected_here { ACCENT }
+                                else if color == GOOD { GOOD.linear_multiply(0.45) }
+                                else if color == WARN { WARN.linear_multiply(0.45) }
+                                else { BORDER }))
                             .corner_radius(6.0));
                     if response.on_hover_text(format!("{} · {}", profile.label(), state)).clicked() {
                         next = Some(index);
