@@ -159,11 +159,18 @@ fn open_session(credentials: &Credentials) -> Result<(
     tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
     String,
 ), String> {
-    let mut addrs = (credentials.host.as_str(), credentials.port)
+    let addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not resolve PokéIdle WebSocket".to_owned())?;
-    let address = addrs.next().ok_or_else(|| "No WebSocket addresses".to_owned())?;
-    let stream = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-        .map_err(|error| format!("Native game TCP connection failed: {error}"))?;
+    // Try IPv4 and IPv6 rather than failing when the first DNS record is
+    // unreachable on this machine.
+    let mut stream = None;
+    for address in addrs {
+        if let Ok(connected) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+            stream = Some(connected);
+            break;
+        }
+    }
+    let stream = stream.ok_or_else(|| "Could not connect to any PokéIdle WebSocket address".to_owned())?;
     stream.set_read_timeout(Some(READ_TIMEOUT))
         .map_err(|error| format!("Native game read timeout: {error}"))?;
     stream.set_write_timeout(Some(CONNECT_TIMEOUT))
