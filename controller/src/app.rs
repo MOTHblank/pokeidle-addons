@@ -8,6 +8,7 @@ use crate::native_gameplay::GameCommand;
 use crate::native_hunts::{self, HuntView};
 use crate::native_capture_config::CatchSettings;
 use crate::native_items::{self, ItemCatalog};
+use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
 use hunt_panel::HuntSubtab;
@@ -1620,6 +1621,7 @@ pub struct ControllerApp {
     capture_save_rx:Receiver<CaptureSavedEvent>,
     session_reset_confirm:[bool;4],
     inventory_catalog:Option<Arc<ItemCatalog>>,
+    visuals:VisualCache,
     inventory_catalog_error:Option<String>,
     inventory_catalog_busy:bool,
     inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
@@ -1739,6 +1741,7 @@ impl ControllerApp {
             capture_save_rx,
             session_reset_confirm:[false;4],
             inventory_catalog:None,
+            visuals:VisualCache::default(),
             inventory_catalog_error:None,
             inventory_catalog_busy:false,
             inventory_catalog_tx,
@@ -2931,6 +2934,7 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        self.visuals.poll(ui.ctx());
         if self.account_setup_checked_at
             .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
             .unwrap_or(true)
@@ -4413,21 +4417,30 @@ fn capture_ball_name(k:&str)->&'static str {
 // IDs are the server protocol IDs, shared with the userscript. Public metadata
 // only enriches captions; absent metadata never switches a saved selection.
 fn capture_restock_chip(
-    ui:&mut egui::Ui,selected:&mut u64,id:u64,name:&str,icon:&str,
-    price:Option<u64>,stock:Option<u64>
+    ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
+    selected:&mut u64, id:u64, name:&str, icon:&str,
+    icon_hint:Option<&str>, price:Option<u64>, stock:Option<u64>
 ) {
     let active=*selected==id;
-    let caption=format!("{icon}  {name}");
-    let response=ui.add(egui::Button::new(
-        RichText::new(caption).size(10.0).color(if active { TEXT } else { MUTED })
-    )
+    let response=egui::Frame::new()
         .fill(if active {Color32::from_rgb(52,45,95)} else {PANEL_ALT})
         .stroke(Stroke::new(if active {1.4} else {1.0},
             if active {ACCENT} else {BORDER}))
-        .corner_radius(6.0));
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(7,4))
+        .show(ui,|ui|{
+            ui.horizontal(|ui|{
+                if !visuals.show(ui,kind,id,icon_hint,20.0) {
+                    ui.label(RichText::new(icon).size(14.0));
+                }
+                ui.label(RichText::new(name).size(10.0)
+                    .color(if active { TEXT } else { MUTED }));
+            });
+        }).response.interact(egui::Sense::click());
     let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
     let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
-    if response.on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
+    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
         *selected=id;
     }
 }
@@ -4450,6 +4463,7 @@ fn capture_restock_threshold(
 }
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
     request_item_catalog(app);
+    app.visuals.poll(ui.ctx());
     let profile=app.games[index].profile;
     let Some(native)=app.games[index].native.as_ref() else {return};
     if app.capture_drafts[index].is_none() {
@@ -4518,16 +4532,18 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.add_space(5.0);
         ui.label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.ball_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                &mut cfg.ball_id,0,"Off","—",None,None,None);
             for (id,name) in &game_catalog.ball_names {
                 if name.to_lowercase().contains("master") { continue; }
-                capture_restock_chip(ui,&mut cfg.ball_id,*id,name,"●",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,*id,name,"●",None,
                     selected_price("ball",*id),selected_stock("ball",*id));
             }
             if cfg.ball_id>0 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
                 let id=cfg.ball_id;
-                capture_restock_chip(ui,&mut cfg.ball_id,id,
-                    &format!("Saved ball #{id}"),"●",None,None);
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
         ui.add_space(5.0);
@@ -4545,12 +4561,15 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             potion_choices.push((cfg.potion_id,name));
         }
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.potion_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
-                capture_restock_chip(ui,&mut cfg.potion_id,id,&name,"💊",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.potion_id,id,&name,"💊",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
         });
@@ -4572,12 +4591,15 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
         }
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.revive_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
-                capture_restock_chip(ui,&mut cfg.revive_id,id,&name,"✚",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.revive_id,id,&name,"✚",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
         });
