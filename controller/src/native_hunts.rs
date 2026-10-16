@@ -182,6 +182,18 @@ impl HuntIntel {
         self.pending_at = Some(now);
         Ok(())
     }
+    /// Only call after an explicit server sale receipt for this Pokémon.
+    /// The server's next full roster is still the final source of truth.
+    pub fn confirm_pokemon_sale(&mut self, id:u64) {
+        if self.pokemon.remove(&id).is_some() {
+            self.roster_dirty=true;
+            self.view.pokemon_count=self.pokemon.len();
+            if self.active_id==Some(id) {
+                self.active_id=None;
+                self.view.active_pokemon=None;
+            }
+        }
+    }
     pub fn command_failed(&mut self, error: &str) {
         self.view.pending_hunt_slug = None;
         self.pending_at = None;
@@ -594,6 +606,17 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn sale_receipt_updates_native_roster_without_guessing_other_ids() {
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"welcome","estado":{
+            "pokemons":[{"id":4,"nome":"Abra"},{"id":5,"nome":"Kadabra"}],
+            "activeId":5}}"#,now);
+        assert_eq!(m.snapshot().pokemon_roster.len(),2);
+        m.confirm_pokemon_sale(4);
+        assert_eq!(m.snapshot().pokemon_roster.len(),1);
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().id,5);
+    }
     #[test]
     fn nick_and_field_initialization_are_retained_without_guessing_hunt() {
         let now=Instant::now();let mut m=HuntIntel::new();
