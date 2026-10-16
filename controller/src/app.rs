@@ -4510,7 +4510,7 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                                 if active {"▶ "} else {""},pokemon.name,pokemon.level,
                                 if pokemon.shiny {" ✨"} else {""});
                             let detail = format!(
-                                "ID #{} · Species #{} · XP {} · Next {}\nTypes: {} · Power: {} · Held item #{}\nIVs: {}",
+                                "ID #{} · Species #{} · XP {} · Next {}\nTypes: {} · Power: {} · Held item #{}\nGrade: {} · Looktype: {} / {}\nIVs: {}",
                                 pokemon.id,
                                 pokemon.species_id.map(|id|id.to_string())
                                     .unwrap_or_else(|| "—".into()),
@@ -4520,6 +4520,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                                 pokemon.power.map(|n|n.to_string())
                                     .unwrap_or_else(|| "—".into()),
                                 pokemon.held_item_id.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.grade.map(|n|format!("{n:.2}"))
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.looktype.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.shiny_looktype.map(|n|n.to_string())
                                     .unwrap_or_else(|| "—".into()),
                                 pokemon.ivs.iter().map(|value|value.map(|n|n.to_string())
                                     .unwrap_or_else(|| "—".into()))
@@ -4577,6 +4583,25 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
         });
     ui.add_space(9.0);
     ui.label(RichText::new(tr("NATIVE AUTOMATION")).size(12.0).strong().color(TEXT));
+    if let Some(automation) = view.automation.as_ref() {
+        ui.horizontal_wrapped(|ui| {
+            for (key, label) in [
+                ("autoPotion", "Auto Potion"),
+                ("autoRevive", "Auto Revive"),
+                ("autoVendaLoot", "Auto Sell"),
+                ("autoLockShiny", "Lock Shiny"),
+                ("autoLockNota9", "Lock Grade 9"),
+                ("autoVoltarHunt", "Return to Hunt")
+            ] {
+                if let Some(enabled) = automation.get(key).and_then(|v|v.as_bool()) {
+                    automation_badge(ui, label, if enabled {"On"} else {"Off"}, enabled);
+                }
+            }
+        });
+    } else {
+        ui.label(RichText::new(tr("Waiting for server automation settings"))
+            .size(10.0).color(MUTED));
+    }
     draw_native_automation(app, ui, index);
 }
 
