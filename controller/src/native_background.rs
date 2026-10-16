@@ -516,8 +516,8 @@ fn session_loop(credentials: Credentials,
                     // browser or replay unconfirmed writes after reconnect.
                     let mut send_failed = false;
                     while let Ok(command) = command_rx.try_recv() {
-                        if let GameCommand::SetAutomation {field,value} = command {
-                            if let Err(error) = automation_writer.queue(field,value) {
+                        if let GameCommand::SetAutomation {field,value} = &command {
+                            if let Err(error) = automation_writer.queue(field.clone(),value.clone()) {
                                 crate::logging::warn(&format!(
                                     "Native server automation update rejected: {error}"
                                 ));
@@ -652,8 +652,6 @@ fn session_loop(credentials: Credentials,
                         s.native_capture_queue = gameplay.status.queue;
                         s.native_throws = gameplay.status.throws;
                         s.native_restock = restock.status.clone();
-                        s.native_automation = automation_writer.status.clone();
-                        s.pending_pokemon_sale=None;
                     });
                     if last_ping.elapsed() >= HEARTBEAT_INTERVAL {
                         if socket.send(Message::Ping(Vec::new().into())).is_err() { break; }
@@ -719,6 +717,9 @@ fn session_loop(credentials: Credentials,
                     update(&snapshot, |s| {
                         s.phase = "Reconnecting".into();
                         s.native_restock = restock.status.clone();
+                        s.native_automation = automation_writer.status.clone();
+                        s.pending_pokemon_sale=None;
+                        s.pokemon_sale_error=Some("Connection lost before Pokémon sale confirmation".into());
                     });
                 }
             }
