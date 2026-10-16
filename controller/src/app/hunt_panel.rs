@@ -142,7 +142,9 @@ fn ranked_hunts<'a>(
             match ranking {
                 HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
-                HuntRanking::Gold if m.valid_gold => Some(m.gold_net_h),
+                // Observed net gold includes restocking/spend; ranking it
+                // against modeled gross gold would compare different units.
+                HuntRanking::Gold => None,
                 _ => None,
             }
         } else { None }.filter(|n| n.is_finite());
@@ -228,7 +230,8 @@ fn draw_rate(ui:&mut egui::Ui,label:&str,value:Option<f64>,source:RateSource){
 fn draw_hunt_row(
     ui:&mut egui::Ui, result:&RankedHunt<'_>, rank:usize,
     ranking:HuntRanking, view:&HuntView, reference:Option<&AtlasReference>,
-    live:bool, native:&NativeSession, error:&mut Option<String>,
+    items:Option<&ItemCatalog>, live:bool, native:&NativeSession,
+    error:&mut Option<String>,
 ){
     let hunt=result.hunt;
     let current=view.hunt_slug.as_deref()==Some(hunt.slug.as_str());
@@ -303,6 +306,27 @@ fn draw_hunt_row(
                             name,spawn.id,pct.map(|v|format!("{v:.1}%"))
                                 .unwrap_or_else(||"weight unavailable".into())
                         )).size(10.0).color(TEXT));
+                        if let Some(species)=species {
+                            if !species.drops.is_empty(){
+                                ui.push_id(spawn.id,|ui|{
+                                    ui.collapsing(format!("{} possible drops",species.drops.len()),|ui|{
+                                        for drop in &species.drops {
+                                            let item=drop.item_id.and_then(|id|items
+                                                .and_then(|catalog|catalog.items.get(&id))
+                                                .map(|meta|meta.name.clone()))
+                                                .or_else(||drop.item_id
+                                                    .map(|id|format!("Item #{id}")))
+                                                .unwrap_or_else(||"Unidentified item".into());
+                                            ui.label(RichText::new(format!(
+                                                "{item} · {:.3}% / kill · {:.0}–{:.0} units · {} reference gold/unit",
+                                                drop.chance_pct,drop.min_quantity,
+                                                drop.max_quantity,format_hunt_amount(drop.unit_value)
+                                            )).size(10.0).color(MUTED));
+                                        }
+                                    });
+                                });
+                            }
+                        }
                     }
                     if hunt.species.len()>60 {ui.label("Only the first 60 species shown.");}
                     match result.source {
@@ -548,6 +572,55 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 hunts.sample_quality, m.seconds, m.kills, tr("kills in window")
             )).size(10.0).color(MUTED));
         });
+    ui.add_space(10.0);
+    egui::Frame::new().fill(PANEL).corner_radius(9.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.label(RichText::new("Current hunt · experimental forecast")
+                .size(12.0).strong().color(TEXT));
+            if let Some(forecast)=hunts.hunt_slug.as_deref()
+                .and_then(|slug|app.hunt_estimate_cache.get(slug)) {
+                ui.horizontal_wrapped(|ui|{
+                    for (label,value) in [
+                        ("Trainer XP/h",forecast.trainer_xp_h),
+                        ("Pokémon XP/h",forecast.pokemon_xp_h),
+                        ("Gross gold/h",forecast.gold_h),
+                        ("Kills/h",forecast.kills_h),
+                    ]{
+                        draw_rate(ui,label,Some(value),
+                            if forecast.calibrated {RateSource::Calibrated}
+                            else {RateSource::Experimental});
+                        ui.add_space(12.0);
+                    }
+                });
+                ui.label(RichText::new(format!(
+                    "{:.2}s / kill · {:.0}% guide species coverage",
+                    forecast.seconds_per_kill,forecast.coverage*100.0
+                )).size(10.0).color(MUTED));
+                for (channel,observed,valid,estimate) in [
+                    ("Trainer XP",m.trainer_xp_h,m.valid_trainer,forecast.trainer_xp_h),
+                    ("Pokémon XP",m.pokemon_xp_h,m.valid_pokemon,forecast.pokemon_xp_h),
+                ]{
+                    if live && valid && observed>0.0{
+                        let ratio=estimate/observed;
+                        ui.label(RichText::new(format!(
+                            "{channel}: measured {} / h vs model {} / h ({ratio:.2}×)",
+                            format_hunt_amount(observed),format_hunt_amount(estimate)
+                        )).size(10.0).color(
+                            if (ratio-1.0).abs()>=0.25 {WARN}else{MUTED}
+                        ));
+                    }
+                }
+                ui.label(RichText::new(
+                    "These trainer/Pokémon streams must not be added together. Modeled gross gold excludes spending."
+                ).size(10.0).color(MUTED));
+            } else {
+                ui.label(RichText::new(if app.hunt_estimate_cache.is_pending(){
+                    "Forecast computing on background worker."
+                }else{
+                    "Unavailable: reference species or active Pokémon combat data is incomplete."
+                }).size(10.0).color(MUTED));
+            }
+        });
 
                 }
                 HuntSubtab::Session => {
@@ -623,6 +696,41 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.collapsing("Most recent drops",|ui|{
                         for (name,count) in &session.recent_drops{
                             ui.label(format!("{name} ×{count}"));
+                        }
+                    });
+                    ui.separator();
+                    ui.collapsing("Persisted history for current hunt",|ui|{
+                        let history=native.history_snapshot();
+                        if let Some(error)=history.load_error.as_deref()
+                            .or(history.save_error.as_deref()) {
+                            ui.label(RichText::new(error).color(WARN));
+                        }
+                        if let Some(slug)=view.hunt_slug.as_deref(){
+                            let records:Vec<_>=history.days.iter()
+                                .filter(|row|row.hunt==slug).collect();
+                            if records.is_empty(){
+                                ui.label("No historical observations saved for this hunt.");
+                            }else{
+                                let sum=|getter:fn(&crate::native_history::HistoryDay)->u64|
+                                    records.iter().fold(0u64,|total,row|
+                                        total.saturating_add(getter(row)));
+                                ui.label(format!(
+                                    "{} retained days · {} kills · {} captures · {} shiny events",
+                                    records.len(),sum(|d|d.kills),sum(|d|d.captures),
+                                    sum(|d|d.shiny_seen)
+                                ));
+                                ui.label(format!(
+                                    "Trainer XP {} · Pokémon XP {} · Combat gold {}",
+                                    format_hunt_amount(sum(|d|d.trainer_xp) as f64),
+                                    format_hunt_amount(sum(|d|d.pokemon_xp) as f64),
+                                    format_hunt_amount(sum(|d|d.combat_gold) as f64),
+                                ));
+                                ui.label(RichText::new(
+                                    "These are persistent totals, not historical XP/hour; per-hunt elapsed time is not currently retained."
+                                ).size(10.0).color(MUTED));
+                            }
+                        }else{
+                            ui.label("No current hunt ID is available for historical grouping.");
                         }
                     });
                 }
@@ -730,7 +838,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     let first=app.hunt_page*PAGE_SIZE;
                     for (offset,result) in ranked.iter().skip(first).take(PAGE_SIZE).enumerate(){
                         draw_hunt_row(ui,result,first+offset+1,app.hunt_ranking,
-                            hunts,reference,live,native,&mut app.hunt_action_error[index]);
+                            hunts,reference,app.inventory_catalog.as_deref(),live,native,
+                            &mut app.hunt_action_error[index]);
                         ui.add_space(5.0);
                     }
                     if ranked.is_empty(){ui.label("No hunts match the current filters.");}
