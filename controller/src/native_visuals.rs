@@ -5,7 +5,7 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 mod generated {
@@ -171,21 +171,35 @@ impl Default for VisualCache {
     fn default() -> Self {
         let (request, jobs) = mpsc::channel::<Request>();
         let (output, results) = mpsc::channel::<Response>();
-        std::thread::Builder::new()
-            .name("moth-visual-cache".into())
-            .spawn(move || {
-                let root = cache_dir();
-                let _ = std::fs::create_dir_all(&root);
-                let Ok(client) = reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(8))
-                    .connect_timeout(std::time::Duration::from_secs(3))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build() else { return; };
-                for job in jobs {
-                    let bytes = load_worker_image(&client, &root, &job);
-                    if output.send(Response { key: (job.kind, job.id), bytes }).is_err() { break; }
-                }
-            }).ok();
+        // Four small workers allow the selected balls, potions and revives
+        // to load concurrently. HTTP and decoding still stay off UI frames.
+        let jobs = Arc::new(Mutex::new(jobs));
+        for worker in 0..4 {
+            let jobs = Arc::clone(&jobs);
+            let output = output.clone();
+            std::thread::Builder::new()
+                .name(format!("moth-visual-{worker}"))
+                .spawn(move || {
+                    let root = cache_dir();
+                    let _ = std::fs::create_dir_all(&root);
+                    let Ok(client) = reqwest::blocking::Client::builder()
+                        .timeout(std::time::Duration::from_secs(8))
+                        .connect_timeout(std::time::Duration::from_secs(3))
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build() else { return; };
+                    loop {
+                        let job = match jobs.lock() {
+                            Ok(receiver) => receiver.recv(),
+                            Err(_) => break,
+                        };
+                        let Ok(job) = job else { break };
+                        let bytes = load_worker_image(&client, &root, &job);
+                        if output.send(Response {
+                            key: (job.kind, job.id), bytes,
+                        }).is_err() { break; }
+                    }
+                }).ok();
+        }
         Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results }
     }
 }
@@ -255,6 +269,8 @@ mod tests {
     fn known_asset_paths_are_versioned_explicitly() {
         assert!(asset_url(Kind::Ball, 1).is_some());
         assert!(asset_url(Kind::Item, 70070).is_some());
+        assert!(asset_url(Kind::Item, 205).is_some());
+        assert!(asset_url(Kind::Item, 206).is_some());
         assert!(asset_url(Kind::Pokemon, 1).is_none());
         assert!(upstream_item_icons().len() >= 400);
         assert_eq!(upstream_item_url(200).as_deref(),
