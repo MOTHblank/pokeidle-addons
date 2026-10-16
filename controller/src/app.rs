@@ -295,6 +295,24 @@ fn tr<'a>(en: &'a str) -> &'a str {
     match en {
         "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
+        "Options" => "Opções",
+        "Performance and updates" => "Desempenho e atualizações",
+        "Background refresh" => "Atualização em segundo plano",
+        "Reduce updates when the window is not focused" =>
+            "Reduzir atualizações quando a janela estiver sem foco",
+        "Reduce updates when minimized to the system tray" =>
+            "Reduzir atualizações ao minimizar para a bandeja",
+        "Choose when the controller reduces its display and browser-monitor refresh rate." =>
+            "Escolha quando o controlador diminui a atualização da interface e do monitor do navegador.",
+        "On: 30-second UI refresh and lower Firefox monitoring frequency when you switch apps. Off: normal foreground refresh continues." =>
+            "Ativado: atualização da interface a cada 30 segundos e monitoramento Firefox mais lento ao alternar de aplicativo. Desativado: mantém o ritmo normal.",
+        "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden." =>
+            "Ativado: atualizações mais lentas na bandeja. Desativado: mantém o ritmo normal mesmo oculto.",
+        "Native PokéIdle and Twitch sessions continue at full speed regardless of these options. Only UI redraw and Firefox/BiDi monitoring are affected." =>
+            "As sessões nativas do PokéIdle e Twitch continuam na velocidade normal. Apenas a interface e o monitoramento Firefox/BiDi são afetados.",
+        "Changes are saved automatically and restored on the next launch." =>
+            "Alterações são salvas automaticamente e restauradas na próxima inicialização.",
+        "Controller options saved" => "Opções do controlador salvas",
         "Hunts · Atlas" => "Hunts · Atlas",
         "Hunt Atlas" => "Hunt Atlas",
         "Inventory" => "Inventário",
