@@ -645,9 +645,9 @@ impl HuntIntel {
         }
         measurements.window_samples = self.battle_samples.len();
         self.view.sample_quality = if kills < 5 {
-            "Low confidence · fewer than five observed kills".into()
+            "Early estimate · fewer than five battles recorded".into()
         } else {
-            "Observed battle receipts · rolling 10-minute window".into()
+            "Recorded battles · last 10 minutes".into()
         };
     }
     fn sample(&mut self, now: Instant) {
@@ -692,7 +692,7 @@ impl HuntIntel {
             last_battle_age_secs: self.view.measurements.last_battle_age_secs,
         };
         self.view.sample_quality = if kills < 5 {
-            "Low confidence · fewer than five observed kills".into()
+            "Early estimate · fewer than five battles recorded".into()
         } else { "Observed live · rolling 10-minute window".into() };
     }
 }
