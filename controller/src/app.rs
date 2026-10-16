@@ -681,8 +681,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Rechecking last order" => "Conferindo última compra",
         "ordered" => "pedidos",
         "confirmed" => "confirmados",
-        "Restock has no valid saved purchase rules" =>
-            "Reposição sem regras válidas nas configurações salvas",
+        "No restock rules imported for this account" =>
+            "Nenhuma regra de reposição importada nesta conta",
+        "Native Restock needs ball/item IDs and thresholds; browser settings are imported once during authentication." =>
+            "A reposição nativa precisa de IDs e limites; as configurações do navegador são importadas uma vez durante a autenticação.",
         "Authenticating in Firefox · automatic native game + Twitch handoff" =>
             "Autenticando no Firefox · transferência nativa do jogo + Twitch automática",
         "Reading native handshake…" => "Lendo handshake nativo…",
@@ -3211,9 +3213,12 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         restock.last_error.as_deref().unwrap_or("No errors")
                     ));
             });
-            if !game.native_restock.configured && game.native_restock.enabled {
-                ui.label(RichText::new(tr("Restock has no valid saved purchase rules"))
-                    .size(10.0).color(WARN));
+            if !game.native_restock.configured {
+                ui.label(RichText::new(tr("No restock rules imported for this account"))
+                    .size(10.0).color(DIM))
+                    .on_hover_text(tr(
+                        "Native Restock needs ball/item IDs and thresholds; browser settings are imported once during authentication."
+                    ));
             }
 
             if game.phase == "Online" {
