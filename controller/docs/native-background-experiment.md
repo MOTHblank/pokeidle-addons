@@ -1,7 +1,7 @@
 # Native-first Moth Controller — four-account game + Twitch IRC
 
 **Branch:** [experiment/native-background-sessions](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
-**Preview controller:** `0.1.7-native.7`
+**Preview controller:** `0.1.7-native.8`
 
 This experimental branch is **not an opt-in Firefox mode**. The standard runtime is one native Rust PokéIdle WebSocket **plus** one native Rust Twitch IRC connection per account. Firefox is an authentication helper and must close once both handshakes are captured.
 
@@ -73,3 +73,13 @@ This revision uses the public [DiuleJR/pokeidle-manager](https://github.com/Diul
 **Still outside scope of this migration:** fully porting the on-page interfaces and marketplace actions of Moth Watch, Snatch and Hunt Atlas; in-browser Pokémon inspection UIs; every advanced Auto Catch targeting detail. Do not assume those scripts keep running after Firefox closes. The underlying server-side battle automation continues when connected, but battle/XP must be confirmed in a live session.
 
 No Rust compiler or authenticated PokéIdle profile was available in this editing environment. Although protocol/unit tests were committed, **neither Windows compilation nor live four-account native gameplay has been independently verified here**. The test workflow builds the experimental branch and is not a reason to delay branch commits. Do not merge into production until the native implementation demonstrably replaces Firefox for your required actions.
+
+## TLS provider and recovered Firefox profiles (native.8)
+
+Windows logs from native.7 showed panics at `rustls-0.23.46/src/crypto/mod.rs:249` simultaneously in the native game, Twitch and cached-session workers. This is rustls' ambiguous process-default cryptography provider, **not** a rejected game login. The controller now links rustls 0.23 with `ring` and explicitly calls `rustls::crypto::ring::default_provider().install_default()` at the very beginning of `main()`, before launching any TLS workers. Rustls documents this as the correct remedy when transitive dependencies enable more than one provider. The initialization is once per process.
+
+Previous crash recovery could also leave multiple Firefox processes advertising the same dedicated Moth profile. A fresh Launch no longer rejects those with an unconditional `Use Stop before launching` message. It checks for an existing browser **before opening a cached game socket**; if one owns the account, the controller attaches to its existing BiDi endpoint and attempts the normal, server-confirmed native handoff. After game and Twitch are both verified, Firefox cleanup walks all processes with that *exact Moth profile argument*, selecting PIDs deterministically. Explicit Stop also cleans remaining exact-profile processes. Other Firefox profiles are never killed by process-name wildcard.
+
+If a stranded Firefox was launched without a BiDi debug endpoint (for example, a separate Google sign-in session), automatic attachment is not possible. Finish sign-in and close it using that profile's Stop action; do not kill all Firefox processes system-wide.
+
+This revision is committed but was **not compiled or authenticated-session-tested in the editing environment**. Build/test the branch locally, use one account to verify that both native welcome stages succeed, then try all four.
