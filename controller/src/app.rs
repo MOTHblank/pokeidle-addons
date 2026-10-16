@@ -326,6 +326,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Offline" => "Desconectado",
         "Options" => "Opções",
         "Automation" => "Automação",
+        "Selected item only" => "Apenas o item selecionado",
+        "No restock item selected" => "Nenhum item de reposição selecionado",
         "Stale" => "Dados antigos",
         "Explore Pokémon" => "Explorar Pokémon",
         "Hunt rankings" => "Ranking de hunts",
@@ -3993,6 +3995,50 @@ fn overview_stat_tile(ui: &mut egui::Ui, label: &str, value: &str, color: Color3
 }
 
 
+// Dashboard stock always refers to the selected restock item, never the sum
+// of every Poké Ball, potion or revive. Inventory snapshots omit zero-stock
+// entries; a missing selected ID means zero only when that inventory category
+// has actually been received. An empty map remains unknown.
+fn selected_restock_stock(inventory: &std::collections::BTreeMap<u64, u64>,
+                          selected_id: u64) -> Option<u64> {
+    if selected_id == 0 || inventory.is_empty() {
+        None
+    } else {
+        Some(inventory.get(&selected_id).copied().unwrap_or(0))
+    }
+}
+
+#[cfg(test)]
+mod selected_restock_stock_tests {
+    use super::selected_restock_stock;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn counts_only_the_selected_ball_or_healing_item() {
+        let balls = BTreeMap::from([(1, 125), (2, 73), (4, 8), (5, 1)]);
+        assert_eq!(selected_restock_stock(&balls, 1), Some(125));
+        assert_eq!(selected_restock_stock(&balls, 4), Some(8));
+        assert_eq!(selected_restock_stock(&balls, 3), Some(0));
+
+        let items = BTreeMap::from([
+            (200, 14), (201, 9), (204, 6), (70070, 2),
+            (205, 11), (206, 3), (999, 500),
+        ]);
+        assert_eq!(selected_restock_stock(&items, 200), Some(14));
+        assert_eq!(selected_restock_stock(&items, 70070), Some(2));
+        assert_eq!(selected_restock_stock(&items, 205), Some(11));
+        assert_eq!(selected_restock_stock(&items, 206), Some(3));
+    }
+
+    #[test]
+    fn unselected_and_unavailable_stock_is_not_reported_as_zero() {
+        let available = BTreeMap::from([(200, 20), (205, 4)]);
+        assert_eq!(selected_restock_stock(&available, 0), None);
+        assert_eq!(selected_restock_stock(&BTreeMap::new(), 200), None);
+        assert_eq!(selected_restock_stock(&BTreeMap::new(), 0), None);
+    }
+}
+
 fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
                           index: usize, label: &str, count: Option<u64>,
                           kind: SpriteKind, selected: u64) {
@@ -4017,7 +4063,9 @@ fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
             });
         }).response.interact(egui::Sense::click());
     if response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("{} · {}", tr(label), tr("Configure restock")))
+        .on_hover_text(format!("{} · {} · {}", tr(label),
+            tr(if selected == 0 { "No restock item selected" } else { "Selected item only" }),
+            tr("Configure restock")))
         .clicked() {
         app.restock_open[index] = !expanded;
     }
@@ -4081,19 +4129,17 @@ fn draw_overview_account_summary(
         } else { "—".into() });
     let gold_h = view.filter(|_|fresh).and_then(|v|
         v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
-    let balls = view.filter(|_|fresh).and_then(|v|
-        (!v.balls.is_empty()).then(||
-            v.balls.values().copied().fold(0u64,u64::saturating_add)));
-    let potions = view.filter(|_|fresh).and_then(|v|
-        (!v.items.is_empty()).then(||v.items.iter()
-            .filter(|(id,_)|matches!(**id,200..=204|70070))
-            .map(|(_,count)|*count).fold(0u64,u64::saturating_add)));
-    let revives = view.filter(|_|fresh).and_then(|v|
-        (!v.items.is_empty()).then(||v.items.iter()
-            .filter(|(id,_)|matches!(**id,205|206))
-            .map(|(_,count)|*count).fold(0u64,u64::saturating_add)));
-    let restock_selection = app.games[index].native.as_ref()
-        .map(|n|n.capture_settings()).unwrap_or_default();
+    // The restock editor stages selections while the encrypted save runs.
+    // Use those staged IDs immediately so the icon and count always agree.
+    let restock_selection = app.restock_drafts[index].as_ref().cloned()
+        .or_else(|| app.games[index].native.as_ref().map(|n| n.capture_settings()))
+        .unwrap_or_default();
+    let balls = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.balls.as_ref(), restock_selection.ball_id));
+    let potions = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.items.as_ref(), restock_selection.potion_id));
+    let revives = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.items.as_ref(), restock_selection.revive_id));
     let combat = overview_combat_state(view, fresh);
     ui.columns(2, |cols| {
         cols[0].label(RichText::new(tr("Your Pokémon"))
@@ -4928,9 +4974,18 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         let game_catalog=native.hunt_snapshot();
         let catalog=app.inventory_catalog.as_deref();
         let selected_stock=|kind:&str,id:u64| -> Option<u64> {
-            restock_status.rules.iter()
-                .find(|rule|rule.kind==kind && rule.id==id)
-                .and_then(|rule|rule.current)
+            // The authoritative HuntView inventory contains every owned item.
+            // RestockStatus only contains already-saved rules, so it cannot
+            // give stock for a newly selected potion/revive until saving ends.
+            let inventory = if kind == "ball" {
+                game_catalog.balls.as_ref()
+            } else {
+                game_catalog.items.as_ref()
+            };
+            selected_restock_stock(inventory, id).or_else(||
+                restock_status.rules.iter()
+                    .find(|rule|rule.kind==kind && rule.id==id)
+                    .and_then(|rule|rule.current))
         };
         let selected_price=|kind:&str,id:u64| -> Option<u64> {
             restock_status.rules.iter()
