@@ -4075,24 +4075,18 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 reference.and_then(|r| r.species.get(&sp.id))
                     .is_some_and(|meta| meta.name.to_lowercase().contains(&query))))
     }).collect();
-    // Baseline XP/kill is authoritative, but actual kills/hour for another
-    // hunt is unknown; show only a scenario at the observed CURRENT pace.
-    let kills_per_hour = if m.seconds >= 20.0 && m.kills >= 5 {
-        m.kills_h
-    } else { 0.0 };
-    let bonuses = &hunts.bonuses;
-    let trainer_factor = 1.0 +
-        (bonuses.trainer_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
-    let pokemon_factor = 1.0 +
-        (bonuses.pokemon_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
-    // Compute forecasts once per visible hunt rather than recalculating the
-    // combat simulator O(n log n) times during every sort comparison.
+    // Never turn a missing estimate into a real zero or mix trainer and
+    // Pokémon channels. The fallback is only a *conditional* pace scenario.
+    let kills_per_hour = (online && m.seconds >= 20.0 && m.kills >= 5)
+        .then_some(m.kills_h).filter(|n|n.is_finite() && *n>0.0);
+    let trainer_factor = native_atlas::xp_multiplier(&hunts, true);
+    let pokemon_factor = native_atlas::xp_multiplier(&hunts, false);
     let mut ranked: Vec<_> = rows.drain(..).map(|h| {
-        let forecast = reference.and_then(|refdata| native_atlas::estimate(&hunts,h,refdata));
-        let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
-            .unwrap_or((0.0,0.0));
-        let current_hunt = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
-        let actual = if current_hunt {
+        let forecast = forecasts.and_then(|cache| cache.get(&h.slug));
+        let scenario = kills_per_hour
+            .and_then(|pace| native_hunts::atlas_pace_scenario(h, pace));
+        let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
+        let measured = if current && online {
             match app.hunt_ranking {
                 HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
@@ -4100,32 +4094,38 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 _ => None
             }
         } else { None };
-        let value = if let Some(actual) = actual { actual }
-        else if let Some(forecast) = &forecast {
-            match app.hunt_ranking {
-                HuntRanking::TrainerXp => forecast.trainer_xp_h,
-                HuntRanking::PokemonXp => forecast.pokemon_xp_h,
-                HuntRanking::Gold => forecast.gold_h,
-            }
-        } else {
-            match app.hunt_ranking {
-                HuntRanking::TrainerXp => xp * trainer_factor,
-                HuntRanking::PokemonXp => xp * pokemon_factor,
-                HuntRanking::Gold => gold,
-            }
-        };
-        (h, forecast, value, actual.is_some())
+        let modeled = forecast.map(|forecast| match app.hunt_ranking {
+            HuntRanking::TrainerXp => forecast.trainer_xp_h,
+            HuntRanking::PokemonXp => forecast.pokemon_xp_h,
+            HuntRanking::Gold => forecast.gold_h,
+        });
+        let conditional = scenario.map(|(xp, gold)| match app.hunt_ranking {
+            HuntRanking::TrainerXp => xp * trainer_factor,
+            HuntRanking::PokemonXp => xp * pokemon_factor,
+            HuntRanking::Gold => gold,
+        });
+        let (value, origin) = select_hunt_rate(measured, modeled, conditional);
+        (h, forecast, value, origin)
     }).collect();
-    ranked.sort_by(|a,b| b.2.total_cmp(&a.2)
-        .then_with(|| a.0.level.cmp(&b.0.level))
-        .then_with(|| a.0.name.cmp(&b.0.name)));
+    // Missing values sort last; stable tie breaks make the list predictable
+    // even while asynchronously calculated rates arrive.
+    ranked.sort_by(|a,b| match (a.2,b.2) {
+        (Some(a),Some(b)) => b.total_cmp(&a),
+        (Some(_),None) => std::cmp::Ordering::Less,
+        (None,Some(_)) => std::cmp::Ordering::Greater,
+        (None,None) => std::cmp::Ordering::Equal,
+    }.then_with(|| a.0.level.cmp(&b.0.level))
+     .then_with(|| a.0.name.cmp(&b.0.name))
+     .then_with(|| a.0.slug.cmp(&b.0.slug)));
     ui.label(RichText::new(format!(
         "{} {} · {}",
         ranked.len(), tr("matching hunts"),
-        if reference.is_some() {
-            tr("Guide model: forecasts are uncertain; calibrated to observed combat where available.")
+        if forecasts.is_some() {
+            tr("Modeled forecasts; calibrated when sufficient battle samples exist. Current hunt uses measured data.")
+        } else if reference.is_some() {
+            tr("Model calculating in background; conditional pace scenarios until ready.")
         } else {
-            tr("Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance.")
+            tr("Conditional CURRENT-pace scenarios, not predictions of other-hunt combat speed.")
         }
     )).size(10.0).color(WARN));
     ui.add_space(7.0);
