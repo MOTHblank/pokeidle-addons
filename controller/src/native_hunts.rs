@@ -89,7 +89,7 @@ pub struct HuntSessionStats {
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntView {
-    pub hunts: Vec<HuntEntry>,
+    pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     pub pending_hunt_slug: Option<String>,
     pub in_center: bool,
@@ -350,7 +350,7 @@ impl HuntIntel {
             });
         }
         self.view.catalog_ready = true;
-        self.view.hunts = hunts;
+        self.view.hunts = Arc::new(hunts);
     }
     pub fn ingest(&mut self, raw: &str, now: Instant) {
         let Ok(frame) = serde_json::from_str::<Value>(raw) else { return };
