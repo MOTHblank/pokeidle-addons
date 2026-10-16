@@ -770,12 +770,35 @@ fn monitor_loop(
             let result = session.as_mut().ok_or_else(||
                 "Firefox BiDi session is no longer connected for recovery".to_owned()
             ).and_then(|browser| {
-                if browser.game_context.is_none() {
-                    open_custom_tab(browser, "https://pokeidle.io/app")?;
+                // The BiDi close may have succeeded even when its response
+                // timed out, leaving a stale cached context ID. Inspect the
+                // actual tab tree before deciding whether recovery is needed.
+                let tree_id = browser.next_id;
+                browser.next_id += 1;
+                let tree = send_and_wait(&mut browser.socket, tree_id, json!({
+                    "id": tree_id, "method": "browsingContext.getTree",
+                    "params": { "maxDepth": 1 }
+                }))?;
+                let mut contexts = Vec::new();
+                if let Some(items) = tree.get("result")
+                    .and_then(|v| v.get("contexts")).and_then(Value::as_array) {
+                    for item in items { collect_contexts(item, &mut contexts, 0); }
                 }
-                logging::info(&format!(
-                    "Restored PokéIdle game tab after failed native handoff on port {port}"
-                ));
+                let existing = contexts.iter().find(|ctx|
+                    ctx.url.starts_with("https://pokeidle.io/app")
+                );
+                if let Some(ctx) = existing {
+                    browser.game_context = Some(ctx.id.clone());
+                    logging::info(&format!(
+                        "PokéIdle game tab already present after native failure on port {port}"
+                    ));
+                } else {
+                    browser.game_context = None;
+                    open_custom_tab(browser, "https://pokeidle.io/app")?;
+                    logging::info(&format!(
+                        "Restored PokéIdle game tab after failed native handoff on port {port}"
+                    ));
+                }
                 Ok(())
             });
             let _ = reply.send(result);
@@ -975,6 +998,8 @@ fn monitor_loop(
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
                 || bootstrap_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || game_close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || game_restore_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
                 || pace.load(Ordering::Relaxed) != active_pace as u8
                 || (session.is_some() && commands.lock()
                     .map(|queue| !queue.pending.is_empty()).unwrap_or(false))
