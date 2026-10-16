@@ -4156,7 +4156,9 @@ fn draw_overview_matchup(
                     wild.and_then(|p|p.species_id),true);
                 ui.vertical(|ui| {
                     let name=wild.map(|w|w.name.as_str()).filter(|s|!s.is_empty())
-                        .unwrap_or(if fresh { "Between encounters" } else { "—" });
+                        .unwrap_or(if combat == OverviewCombatState::Between {
+                            tr("Between encounters")
+                        } else { "—" });
                     ui.add(egui::Label::new(RichText::new(compact_text(name,16))
                         .size(11.0).strong().color(TEXT))
                         .truncate()).on_hover_text(name);
