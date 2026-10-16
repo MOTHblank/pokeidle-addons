@@ -1,9 +1,7 @@
 name: Experimental native background transport
 
+# Native experiment checks require an explicit manual run.
 on:
-  push:
-    branches:
-      - experiment/native-background-sessions
   workflow_dispatch:
 
 permissions:
