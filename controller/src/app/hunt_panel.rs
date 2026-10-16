@@ -706,8 +706,6 @@ fn account_is_live(session:&NativeSession)->bool {
 /// toggles Hunt Atlas's account-comparison mode; no duplicate account strip.
 fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Hunt Atlas")
-            .size(12.0).strong().color(TEXT));
         ui.label(RichText::new("Explore, compare and model your hunts")
             .size(11.0).color(MUTED));
         if app.hunt_subtab==HuntSubtab::Compare {
@@ -1261,6 +1259,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         egui::ScrollArea::vertical()
             .id_salt("hunt-atlas-all-accounts")
             .auto_shrink([false,true]).show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
                 draw_atlas_compare(app,ui);
             });
         return;
@@ -1299,13 +1298,13 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 ).size(11.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
                     if app.accounts[index].enabled {
-                        if ui.button("Start account").clicked(){
+                        if ui.button(tr("Start account")).clicked(){
                             app.launch_one(app.games[index].profile);
                         }
-                    } else if ui.button("Enable account").clicked(){
+                    } else if ui.button(tr("Enable account")).clicked(){
                         app.panel_tab=PanelTab::Accounts;
                     }
-                    if ui.small_button("Account settings").clicked(){
+                    if ui.small_button(tr("Account settings")).clicked(){
                         app.panel_tab=PanelTab::Accounts;
                     }
                 });
@@ -1377,6 +1376,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     ui.separator();
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
         .auto_shrink([false,true]).show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
             match app.hunt_subtab {
                 HuntSubtab::Explorer => {
                     draw_atlas_explorer(ui,&view,native,live,index,
