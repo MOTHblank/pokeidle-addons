@@ -2857,8 +2857,13 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let idle_warning = app.idle_warning_for(index, &health);
     let addon_versions = app.addon_version_status.lock()
         .map(|status| status.clone()).unwrap_or_default();
-    let addon_problems = addon_needs_attention(&health, running, &addon_versions);
-    let needs_setup = !app.account_setup[index].setup_complete;
+    // Native accounts do not execute browser userscripts. Their old addon
+    // version inventory must not show a spurious maintenance warning.
+    let browser_runtime = app.games[index].native.is_none();
+    let addon_problems = if browser_runtime {
+        addon_needs_attention(&health, running, &addon_versions)
+    } else { 0 };
+    let needs_setup = browser_runtime && !app.account_setup[index].setup_complete;
     let fresh = running && health.telemetry_is_fresh();
     let repair_available = monitor_repair_available(
         running,
@@ -3030,68 +3035,51 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         app.launch_one(profile);
                     }
                 }
-                if let Some(native) = app.games[index].native.as_ref() {
-                    let stats = native.snapshot();
-                    let twitch = native.twitch_snapshot();
-                    ui.label(RichText::new(tr("Native game + Twitch IRC · browserless"))
-                        .size(10.0).color(GOOD));
-                    ui.label(RichText::new(format!(
-                        "Game {} · {} frames · {} kills · {} captures",
-                        stats.phase, stats.frames, stats.battle_kills, stats.captures
-                    )).size(10.0).color(DIM));
-                    ui.label(RichText::new(format!(
-                        "Twitch IRC {} · {}/{} channels joined",
-                        twitch.phase, twitch.joined, twitch.desired
-                    )).size(10.0).color(DIM));
-                    ui.label(RichText::new(format!(
-                        "Native Auto Catch {} · {} pending · {} throws",
-                        if stats.native_auto_catch { "ON" } else { "OFF" },
-                        stats.native_capture_queue, stats.native_throws
-                    )).size(10.0).color(if stats.native_auto_catch { GOOD } else { DIM }));
-                    ui.horizontal(|ui| {
-                        if ui.small_button(if stats.native_auto_catch {
-                            "Disable native Auto Catch"
-                        } else { "Enable native Auto Catch" }).clicked() {
-                            let enabled = !stats.native_auto_catch;
-                            native.set_auto_catch(enabled);
-                            let profile = app.games[index].profile;
-                            std::thread::spawn(move || {
-                                let _ = crate::native_auth::set_catch_enabled(profile, enabled);
-                            });
-                        }
-                        if stats.phase == "Online" {
-                            if ui.small_button("Pokémon Center").clicked() {
-                                if let Err(error) = native.send_command(GameCommand::Center) {
-                                    crate::logging::warn(&format!(
-                                        "Native center command rejected: {error}"));
-                                }
-                            }
-                            if let Some(slug) = stats.hunt_slug.as_ref() {
-                                if ui.small_button("Return to hunt").clicked() {
-                                    if let Err(error) = native.send_command(GameCommand::Hunt(slug.clone())) {
-                                        crate::logging::warn(&format!(
-                                            "Native hunt command rejected: {error}"));
-                                    }
-                                }
-                            }
-                        }
-                    });
+                // Only a short status goes beside Stop. Diagnostics and
+                // game actions belong to the full-width account details.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(native) = app.games[index].native.as_ref() {
+                        let game = native.snapshot();
+                        let twitch = native.twitch_snapshot();
+                        let online = game.phase == "Online" && twitch.phase == "Online";
+                        let summary = if online {
+                            format!("{} · IRC {}/{}", tr("Native"), twitch.joined, twitch.desired)
+                        } else {
+                            format!("{} · IRC {}", tr("Native"), twitch.phase)
+                        };
+                        ui.add(egui::Label::new(
+                            RichText::new(summary).size(10.0)
+                                .color(if online { GOOD } else { WARN })
+                        ).truncate()).on_hover_text(format!(
+                            "PokéIdle: {} · {} frames · {} kills · {} captures\nTwitch IRC: {} · {}/{} rooms",
+                            game.phase, game.frames, game.battle_kills, game.captures,
+                            twitch.phase, twitch.joined, twitch.desired
+                        ));
+                    } else if running {
+                        let stage = if app.native_verifying[index] {
+                            tr("Verifying native")
+                        } else if app.native_handoff_busy[index] {
+                            tr("Reading handshake")
+                        } else {
+                            tr("Firefox login")
+                        };
+                        ui.add(egui::Label::new(
+                            RichText::new(stage).size(10.0).color(WARN)
+                        ).truncate()).on_hover_text(tr(
+                            "Firefox is temporary; Rust takes over after game and Twitch authentication."
+                        ));
+                    }
+                });
+            });
+            if app.games[index].native.is_none() {
+                if let Some(error) = app.native_error[index].as_deref() {
+                    ui.add_space(5.0);
+                    ui.add(egui::Label::new(
+                        RichText::new(format!("{}: {}", tr("Native error"), compact_text(error, 60)))
+                            .size(10.0).color(BAD)
+                    ).truncate()).on_hover_text(error);
                 }
-                if running && app.games[index].native.is_none()
-                    && app.games[index].monitor.is_some() {
-                    let stage = if app.native_verifying[index] {
-                        "Verifying Rust game + Twitch authentication"
-                    } else if app.native_handoff_busy[index] {
-                        "Capturing game + Twitch handshakes"
-                    } else {
-                        "Firefox authentication · automatic native handoff pending"
-                    };
-                    ui.label(RichText::new(stage).size(10.0).color(WARN));
-                }
-                if let Some(error) = app.native_error[index].as_ref() {
-                    ui.label(RichText::new(format!("Native handoff: {error}"))
-                        .size(10.0).color(BAD));
-                }
+            }
                 // Native-first branch has no competing browser restart
                 // control in the normal account dashboard.
             });
