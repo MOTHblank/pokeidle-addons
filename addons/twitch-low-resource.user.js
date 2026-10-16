@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.2.1
+// @version      3.2.2
 // @description  Keeps one Twitch IRC socket alive, dynamically JOINs/PARTs chats at safe rates, and limits chat rendering.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.2.1');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.2.2');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -154,7 +154,7 @@
                     auth.pass = line.trim();
                 else if (/^NICK\s+[A-Za-z0-9_]{1,25}\s*$/i.test(line))
                     auth.nick = line.trim();
-                else if (/^CAP\s+REQ\s+:[a-z0-9\/\s_-]+$/i.test(line))
+                else if (/^CAP\s+REQ\s+:[a-z0-9.\/\s_-]+$/i.test(line))
                     auth.cap = line.trim();
             }
             authenticationBySocket.set(socket, auth);
