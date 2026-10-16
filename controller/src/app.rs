@@ -20,7 +20,7 @@ use crate::monitor::{
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -1359,7 +1359,6 @@ fn ball_stock_decreased(previous: &[String], current: &[String]) -> bool {
 #[derive(Clone, Debug, Default)]
 struct AccountSetup {
     profile_ready: bool,
-    violentmonkey_installed: bool,
     setup_complete: bool,
     check_error: Option<String>,
 }
@@ -1368,11 +1367,6 @@ struct UiEvent {
     at: Instant,
     message: String,
     is_error: bool,
-}
-
-enum AddonInstallEvent {
-    Progress { index: usize, message: String },
-    Finished { index: usize, result: Result<usize, String> },
 }
 
 #[cfg(windows)]
@@ -1681,13 +1675,6 @@ pub struct ControllerApp {
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
-    addon_install_tx: Sender<AddonInstallEvent>,
-    addon_install_rx: Receiver<AddonInstallEvent>,
-    addon_install_busy: [bool; 4],
-    addon_install_details: [Vec<String>; 4],
-    addon_selection: [BTreeSet<String>; 4],
-    addon_selection_initialized: [bool; 4],
-    addon_manager_open: [bool; 4],
     show_setup_guide: [bool; 4],
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
@@ -1697,8 +1684,6 @@ pub struct ControllerApp {
     xp_rates: [XpRateTracker; 4],
     selected_details: Option<usize>,
     update_status: SharedUpdateStatus,
-    addon_version_status: update::SharedAddonVersionStatus,
-    addon_refresh_tx: Sender<()>,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
     #[cfg(windows)]
@@ -1717,8 +1702,6 @@ impl ControllerApp {
         ));
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
-        let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
-        let (addon_install_tx, addon_install_rx) = mpsc::channel();
         let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
         let (cached_native_tx, cached_native_rx) = mpsc::channel();
         let (native_closed_tx, native_closed_rx) = mpsc::channel();
@@ -1807,13 +1790,6 @@ impl ControllerApp {
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
-            addon_install_tx,
-            addon_install_rx,
-            addon_install_busy: [false; 4],
-            addon_install_details: std::array::from_fn(|_| Vec::new()),
-            addon_selection: std::array::from_fn(|_| BTreeSet::new()),
-            addon_selection_initialized: [false; 4],
-            addon_manager_open: [false; 4],
             show_setup_guide: [false; 4],
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
@@ -1823,8 +1799,6 @@ impl ControllerApp {
             xp_rates: std::array::from_fn(|_| XpRateTracker::default()),
             selected_details: None,
             update_status,
-            addon_version_status,
-            addon_refresh_tx,
             #[cfg(windows)]
             tray,
             #[cfg(windows)]
@@ -1942,36 +1916,23 @@ impl ControllerApp {
                 }
             };
 
-            // Browser-extension inspection is opt-in; normal native account
-            // setup does not require reading Firefox's extensions registry.
-            let (vm_installed, check_error) = if self.addon_manager_open[index] {
-                match accounts::violentmonkey_installed(profile) {
-                    Ok(value) => (value, None),
-                    Err(error) => (false, Some(error)),
-                }
-            } else {
-                (false, None)
-            };
-
+            // The setup marker is earned only after both PokéIdle and Twitch
+            // report authenticated connections.
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
-            // Native authentication is sufficient to finish onboarding; userscripts
-            // and Violentmonkey are optional browser compatibility tools.
-            if !setup_complete {
-                let health = self.games[index].health();
-                if (health.telemetry_is_fresh() && health.logged_in)
-                    || self.games[index].native.is_some()
-                {
-                    match accounts::complete_setup(profile) {
-                        Ok(()) => setup_complete = true,
-                        Err(error) => logging::warn(&error),
-                    }
+            let verified = self.games[index].native.as_ref().is_some_and(|session| {
+                session.snapshot().phase == "Online"
+                    && session.twitch_snapshot().phase == "Online"
+            });
+            if verified && !setup_complete {
+                match accounts::complete_setup(profile) {
+                    Ok(()) => setup_complete = true,
+                    Err(error) => logging::warn(&error),
                 }
             }
             self.account_setup[index] = AccountSetup {
                 profile_ready: config.profile_dir.exists(),
-                violentmonkey_installed: vm_installed,
                 setup_complete,
-                check_error,
+                check_error: None,
             };
         }
 
@@ -2145,11 +2106,11 @@ impl ControllerApp {
                 // Do not create a competing native game socket from cache.
                 // Adopt its BiDi session and let the two-phase handoff close it.
                 self.require_browser_login[event.index] = true;
-                self.launch_firefox_bootstrap(profile, event.headless);
+                self.launch_firefox_bootstrap(profile, false);
                 continue;
             }
             if self.require_browser_login[event.index] {
-                self.launch_firefox_bootstrap(profile, event.headless);
+                self.launch_firefox_bootstrap(profile, false);
                 continue;
             }
             match event.result {
@@ -2166,14 +2127,14 @@ impl ControllerApp {
                     self.set_status(format!(
                         "{}: please sign in to continue",
                         self.account_name(profile)), false);
-                    self.launch_firefox_bootstrap(profile, event.headless);
+                    self.launch_firefox_bootstrap(profile, false);
                 }
                 Err(error) => {
                     self.require_browser_login[event.index] = true;
                     self.set_status(format!(
                         "{}: saved login unavailable: {error}",
                         self.account_name(profile)), true);
-                    self.launch_firefox_bootstrap(profile, event.headless);
+                    self.launch_firefox_bootstrap(profile, false);
                 }
             }
         }
@@ -2295,32 +2256,7 @@ impl ControllerApp {
             self.set_status(format!(
                 "{}: login expired, opening Firefox to sign in again",
                 self.account_name(profile)), true);
-            self.launch_firefox_bootstrap(profile, headless);
-        }
-        // Drain worker results on the UI thread. Never block egui on GitHub,
-        // curl, or Firefox installer tabs.
-        while let Ok(event) = self.addon_install_rx.try_recv() {
-            match event {
-                AddonInstallEvent::Progress { index, message } => {
-                    self.addon_install_details[index].push(message.clone());
-                    self.set_status(
-                        format!("{} · {}", self.accounts[index].name, message), false,
-                    );
-                }
-                AddonInstallEvent::Finished { index, result } => {
-                    self.addon_install_busy[index] = false;
-                    match result {
-                        Ok(opened) => self.set_status(
-                            format!("{} · {opened} {}", self.accounts[index].name, tr("addon installers opened")),
-                            false,
-                        ),
-                        Err(error) => {
-                            self.addon_install_details[index].push(error.clone());
-                            self.set_status(format!("{} · {error}", self.accounts[index].name), true);
-                        }
-                    }
-                }
-            }
+            self.launch_firefox_bootstrap(profile, false);
         }
         let mut command_feedback = Vec::new();
         for slot in &mut self.games {
@@ -2401,8 +2337,7 @@ impl ControllerApp {
                 continue;
             }
             let health = self.games[index].health();
-            if !(health.telemetry_is_fresh() && health.logged_in &&
-                 health.bridge_connected) {
+            if !(health.telemetry_is_fresh() && health.game_ready && health.logged_in) {
                 continue;
             }
             if self.native_handoff_last_attempt[index]
@@ -2439,42 +2374,6 @@ impl ControllerApp {
         self.events.truncate(80);
         if error {
             logging::warn(&self.status);
-        }
-    }
-
-    fn request_addon_refresh(&mut self) {
-        match self.addon_refresh_tx.send(()) {
-            Ok(()) => self.set_status(tr("Update check requested"), false),
-            Err(error) => self.set_status(
-                format!("{}: {error}", tr("Could not request addon update check")), true
-            ),
-        }
-    }
-
-    fn start_addon_install(&mut self, profile: GameProfile, selected: Option<Vec<String>>) {
-        let index = profile.index();
-        if self.addon_install_busy[index] {
-            self.set_status(format!("{} · {}", self.account_name(profile), tr("Installer already running")), true);
-            return;
-        }
-        self.addon_install_busy[index] = true;
-        self.addon_install_details[index].clear();
-        self.set_status(format!("{} · {}", self.account_name(profile), tr("Checking addons on GitHub…")), false);
-
-        let tx = self.addon_install_tx.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("moth-addons-{}", profile.label()))
-            .spawn(move || {
-                let progress_tx = tx.clone();
-                let result = accounts::open_addons(
-                    profile, selected.as_deref(),
-                    |message| { let _ = progress_tx.send(AddonInstallEvent::Progress { index, message }); },
-                );
-                let _ = tx.send(AddonInstallEvent::Finished { index, result });
-            });
-        if let Err(error) = spawned {
-            self.addon_install_busy[index] = false;
-            self.set_status(format!("{}: {error}", self.account_name(profile)), true);
         }
     }
 
@@ -2533,7 +2432,7 @@ impl ControllerApp {
         self.games[index].headless = headless;
         self.games[index].browser_only = false;
         if self.require_browser_login[index] {
-            self.launch_firefox_bootstrap(profile, headless);
+            self.launch_firefox_bootstrap(profile, false);
             return;
         }
         self.cached_native_busy[index] = true;
@@ -2579,7 +2478,7 @@ impl ControllerApp {
             self.cached_native_busy[index] = false;
             self.require_browser_login[index] = true;
             self.set_status(format!("Saved login could not be used: {error}"), true);
-            self.launch_firefox_bootstrap(profile, headless);
+            self.launch_firefox_bootstrap(profile, false);
         }
     }
 
@@ -2939,7 +2838,6 @@ impl ControllerApp {
                 return;
             }
             ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
-            ProfileAction::InstallViolentmonkey => accounts::open_violentmonkey(profile),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
         };
 
@@ -3306,7 +3204,6 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 enum ProfileAction {
     GoogleSignIn,
     Twitch,
-    InstallViolentmonkey,
     Folder,
 }
 
