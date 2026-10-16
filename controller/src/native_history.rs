@@ -24,6 +24,12 @@ pub struct HistoryDay {
     pub shiny_captured: u64,
     pub trainer_xp: u64,
     pub pokemon_xp: u64,
+    /// Only time between consecutive server-confirmed kills, with same-hunt
+    /// attribution and gaps capped at 120 seconds. Excludes idle/offline time.
+    pub observed_seconds:u64,
+    pub timed_kills:u64,
+    pub timed_trainer_xp:u64,
+    pub timed_pokemon_xp:u64,
     pub combat_gold: u64,
     pub auto_sale_gold: u64,
     pub balls_used: BTreeMap<u64,u64>,
@@ -36,6 +42,10 @@ impl HistoryDay {
             "kills":self.kills,"captures":self.captures,
             "shinySeen":self.shiny_seen,"shinyCaptured":self.shiny_captured,
             "trainerXp":self.trainer_xp,"pokemonXp":self.pokemon_xp,
+            "observedSeconds":self.observed_seconds,
+            "timedKills":self.timed_kills,
+            "timedTrainerXp":self.timed_trainer_xp,
+            "timedPokemonXp":self.timed_pokemon_xp,
             "combatGold":self.combat_gold,"autoSaleGold":self.auto_sale_gold,
             "ballsUsed":self.balls_used,"drops":self.drops
         })
@@ -55,6 +65,9 @@ impl HistoryDay {
         Some(Self {day,hunt,kills:n("kills"),captures:n("captures"),
             shiny_seen:n("shinySeen"),shiny_captured:n("shinyCaptured"),
             trainer_xp:n("trainerXp"),pokemon_xp:n("pokemonXp"),
+            observed_seconds:n("observedSeconds"),
+            timed_kills:n("timedKills"),
+            timed_trainer_xp:n("timedTrainerXp"),timed_pokemon_xp:n("timedPokemonXp"),
             combat_gold:n("combatGold"),auto_sale_gold:n("autoSaleGold"),
             balls_used,drops})
     }
@@ -162,6 +175,10 @@ impl HistoryDay {
                 (&mut total.shiny_captured,day.shiny_captured),
                 (&mut total.trainer_xp,day.trainer_xp),
                 (&mut total.pokemon_xp,day.pokemon_xp),
+                (&mut total.observed_seconds,day.observed_seconds),
+                (&mut total.timed_kills,day.timed_kills),
+                (&mut total.timed_trainer_xp,day.timed_trainer_xp),
+                (&mut total.timed_pokemon_xp,day.timed_pokemon_xp),
                 (&mut total.combat_gold,day.combat_gold),
                 (&mut total.auto_sale_gold,day.auto_sale_gold)
             ] {*dst=dst.saturating_add(src);}
@@ -250,6 +267,7 @@ pub struct HistoryRecorder {
     snapshot: HistorySnapshot,
     nick: String,
     last_hunt: Option<String>,
+    last_kill:Option<(String,Instant)>,
     dirty:bool,
     needs_publish:bool,
     last_publish:Instant,
@@ -297,7 +315,8 @@ impl HistoryRecorder {
                     if let Some(ack)=ack {let _=ack.send(());}
                 }
             }).ok();
-        Self {shared,snapshot,nick,last_hunt:None,dirty:false,needs_publish:false,
+        Self {shared,snapshot,nick,last_hunt:None,last_kill:None,
+            dirty:false,needs_publish:false,
             last_publish:Instant::now(),last_flush:Instant::now(),
             writer:writer_tx,path}
     }
@@ -307,6 +326,9 @@ impl HistoryRecorder {
         if matches!(kind,Some("welcome"|"estado")) {
             if let Some(slug)=frame.get("estado").and_then(|state|state.get("huntSlug"))
                 .and_then(Value::as_str).filter(|s|!s.is_empty() && s.len()<=128){
+                if self.last_hunt.as_deref()!=Some(slug){
+                    self.last_kill=None;
+                }
                 self.last_hunt=Some(slug.to_owned());
             }
             return;
@@ -326,6 +348,7 @@ impl HistoryRecorder {
                 if let Some(next)=event.get("slug").and_then(Value::as_str)
                     .filter(|s|!s.is_empty() && s.len()<=128) {
                     slug=next.to_owned();
+                    self.last_kill=None;
                     self.last_hunt=Some(slug.clone());
                     index=self.snapshot.days.iter().position(|row|
                         row.day==day && row.hunt==slug);
@@ -340,6 +363,30 @@ impl HistoryRecorder {
             });
             if self.snapshot.days[slot].from_event(event) {
                 self.snapshot.lifetime.from_event(event);
+                if event.get("k").and_then(Value::as_str)==Some("morte")
+                    && event.get("quem").and_then(Value::as_str)==Some("selvagem"){
+                    // Only count elapsed monotonic time since an earlier kill of
+                    // this same hunt. Do not turn 8h of AFK into 8h of combat.
+                    let now=Instant::now();
+                    if let Some((previous,at))=self.last_kill.as_ref(){
+                        let seconds=now.saturating_duration_since(*at).as_secs();
+                        if previous==&slug && (1..=120).contains(&seconds){
+                            let xp=event.get("xpTreinador").and_then(Value::as_u64);
+                            let pk=event.get("xpPokemon").and_then(Value::as_u64);
+                            for target in [&mut self.snapshot.days[slot],&mut self.snapshot.lifetime]{
+                                target.observed_seconds=target.observed_seconds.saturating_add(seconds);
+                                target.timed_kills=target.timed_kills.saturating_add(1);
+                                if let Some(v)=xp{
+                                    target.timed_trainer_xp=target.timed_trainer_xp.saturating_add(v);
+                                }
+                                if let Some(v)=pk{
+                                    target.timed_pokemon_xp=target.timed_pokemon_xp.saturating_add(v);
+                                }
+                            }
+                        }
+                    }
+                    self.last_kill=Some((slug.clone(),now));
+                }
                 self.dirty=true;
             }
         }
@@ -427,6 +474,25 @@ mod tests {
         assert_eq!(recovered.totals().captures,1);
         assert_eq!(recovered.totals().drops["Heart Stone"],2);
         assert!(HistorySnapshot::from_value(&serde_json::from_str::<Value>(&raw).unwrap(),"Other").is_err());
+    }
+    #[test]
+    fn old_history_with_no_time_observations_does_not_claim_a_rate(){
+        let old=serde_json::json!({"day":20261016,"hunt":"route-a",
+            "kills":40,"trainerXp":120000,"pokemonXp":90000});
+        let parsed=HistoryDay::from_value(&old).unwrap();
+        assert_eq!(parsed.observed_seconds,0);
+        assert_eq!(crate::native_atlas_models::retrospective_rate(
+            parsed.timed_trainer_xp,parsed.observed_seconds),None);
+    }
+    #[test]
+    fn observed_combat_duration_survives_history_serialization(){
+        let row=HistoryDay{day:123,hunt:"route-a".into(),
+            observed_seconds:3600,timed_kills:100,
+            timed_trainer_xp:13000,timed_pokemon_xp:9000,
+            ..Default::default()};
+        let decoded=HistoryDay::from_value(&row.to_value()).unwrap();
+        assert_eq!(decoded.observed_seconds,3600);
+        assert_eq!(decoded.timed_pokemon_xp,9000);
     }
     #[test]
     fn retained_lifetime_totals_outlive_daily_detail_pruning() {
