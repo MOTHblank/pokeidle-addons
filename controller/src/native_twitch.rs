@@ -90,6 +90,7 @@ fn write_irc(socket: &mut tungstenite::WebSocket<
 }
 fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
     tungstenite::stream::MaybeTlsStream<TcpStream>>, String> {
+    crate::native_tls::ensure()?;
     let addrs = (IRC_HOST, 443).to_socket_addrs()
         .map_err(|_| "Could not resolve Twitch IRC".to_owned())?;
     let mut tcp = None;
