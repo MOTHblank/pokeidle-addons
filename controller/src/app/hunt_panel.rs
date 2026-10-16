@@ -1371,6 +1371,7 @@ fn draw_atlas_explorer(
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     visuals:&mut VisualCache,command_error:&mut Option<String>,
+    viewport_height:f32,
 ){
     atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
@@ -1451,7 +1452,7 @@ fn draw_atlas_explorer(
         let spacing=ui.spacing().item_spacing.x;
         let list_width=(ui.available_width()*0.36).clamp(320.0,430.0);
         let details_width=(ui.available_width()-list_width-spacing).max(400.0);
-        let pane_height=(ui.available_height()-30.0).max(120.0);
+        let pane_height=(viewport_height-155.0).clamp(220.0,860.0);
         // 36/64 split: the list needs only a name and a ranking number;
         // destinations, forecast metrics and drops require the extra width.
         ui.horizontal(|ui|{
@@ -1497,7 +1498,7 @@ fn draw_atlas_explorer(
         egui::ScrollArea::vertical()
             .id_salt(("atlas-species-mobile",index))
             .auto_shrink([false,false])
-            .max_height(ui.available_height().max(260.0))
+            .max_height((viewport_height-155.0).clamp(220.0,860.0))
             .show(ui,|ui|{
                 ui.set_min_width(ui.available_width());
                 for row in rows.iter().skip(visible.start)
@@ -1641,15 +1642,23 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         app.hunt_subtab=HuntSubtab::Current;
     }
     ui.add_space(6.0);
-    // Explorer owns its two independent bounded scroll regions. Nesting it
-    // inside the generic workspace scroll would create an unbounded content
-    // height and defeat the master/detail layout.
+    // Capture the actual remaining viewport height BEFORE entering a
+    // ScrollArea (whose child has unbounded vertical space). The outer scroll
+    // handles expanded filters and short windows, while the bounded inner
+    // list/detail panes retain independent scroll positions.
     if app.hunt_subtab==HuntSubtab::Explorer{
-        draw_atlas_explorer(ui,&view,native,live,index,
-            app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
-            &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
-            &app.atlas_scenarios[index],&mut app.visuals,
-            &mut app.hunt_action_error[index]);
+        let viewport_height=ui.available_height().max(260.0);
+        egui::ScrollArea::vertical()
+            .id_salt(("hunt-atlas-explorer-workspace",index))
+            .auto_shrink([false,false])
+            .show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
+                draw_atlas_explorer(ui,&view,native,live,index,
+                    app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
+                    &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
+                    &app.atlas_scenarios[index],&mut app.visuals,
+                    &mut app.hunt_action_error[index],viewport_height);
+            });
         return;
     }
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
