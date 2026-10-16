@@ -296,6 +296,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
         "Options" => "Opções",
+        "Automation" => "Automação",
+        "Open Automation" => "Abrir automação",
+        "Server automation" => "Automação do servidor",
+        "Native controls are available after this account finishes authentication." =>
+            "Os controles nativos ficam disponíveis após a autenticação desta conta.",
+        "Choose an account to inspect its automation and restock status." =>
+            "Escolha uma conta para verificar a automação e o estado da reposição.",
+        "Restock details" => "Detalhes da reposição",
+        "Waiting for native account" => "Aguardando conta nativa",
         "Performance and updates" => "Desempenho e atualizações",
         "Background refresh" => "Atualização em segundo plano",
         "Reduce updates when the window is not focused" =>
@@ -1458,7 +1467,7 @@ struct NativeBrowserClosedEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Inventory, Options }
+enum PanelTab { Overview, Hunts, Inventory, Automation, Options }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
@@ -1487,6 +1496,7 @@ pub struct ControllerApp {
     panel_tab: PanelTab,
     ui_options: UiOptions,
     hunt_account: usize,
+    automation_account: usize,
     hunt_query: String,
     hunt_region: String,
     hunt_type: String,
@@ -1598,6 +1608,7 @@ impl ControllerApp {
                 UiOptions::default()
             }),
             hunt_account: 0,
+            automation_account: 0,
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_type: String::new(),
@@ -2790,7 +2801,7 @@ impl eframe::App for ControllerApp {
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
-            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory)
+            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory | PanelTab::Automation)
                 || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
@@ -2809,6 +2820,7 @@ impl eframe::App for ControllerApp {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
                             PanelTab::Inventory => "Inventory",
+                            PanelTab::Automation => "Automation",
                             PanelTab::Options => "Options",
                         }))
                             .font(FontId::proportional(26.0))
@@ -2929,6 +2941,7 @@ impl eframe::App for ControllerApp {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
                     PanelTab::Inventory => draw_inventory_panel(self, ui),
+                    PanelTab::Automation => draw_automation_panel(self, ui),
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
@@ -3044,6 +3057,10 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             if sidebar_button(ui, &format!("▤  {}", tr("Inventory")), app.panel_tab == PanelTab::Inventory).clicked() {
                 app.panel_tab = PanelTab::Inventory;
+            }
+
+            if sidebar_button(ui, &format!("⚙  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
+                app.panel_tab = PanelTab::Automation;
             }
 
             if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
@@ -4208,6 +4225,81 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
         });
 }
 
+/// Dedicated native automation workspace. Keeps settings out of the
+/// scrollable dashboard and provides a stable per-account selection.
+fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
+        egui::ComboBox::from_id_salt("automation-account")
+            .selected_text(app.account_name(app.games[app.automation_account].profile))
+            .show_ui(ui, |ui| {
+                for index in 0..app.games.len() {
+                    let name = app.account_name(app.games[index].profile);
+                    ui.selectable_value(&mut app.automation_account, index, name);
+                }
+            });
+        ui.label(RichText::new(tr("Choose an account to inspect its automation and restock status."))
+            .size(10.0).color(MUTED));
+    });
+    ui.add_space(12.0);
+    let index = app.automation_account;
+    let Some(native) = app.games[index].native.as_ref() else {
+        ui.label(RichText::new(tr("Waiting for native account")).size(13.0).color(WARN));
+        ui.label(RichText::new(tr("Native controls are available after this account finishes authentication."))
+            .size(11.0).color(MUTED));
+        return;
+    };
+    let snapshot = native.snapshot();
+    let view = native.hunt_snapshot();
+    if let Some(automation) = view.automation.as_ref() {
+        egui::Frame::new().fill(PANEL).corner_radius(10.0)
+            .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Server automation")).size(13.0).strong().color(TEXT));
+            ui.horizontal_wrapped(|ui| {
+                for (key, label) in [
+                    ("autoPotion", "Auto Potion"),
+                    ("autoRevive", "Auto Revive"),
+                    ("autoVendaLoot", "Auto Sell"),
+                    ("autoLockShiny", "Lock Shiny"),
+                    ("autoLockNota9", "Lock Grade 9"),
+                    ("autoVoltarHunt", "Return to Hunt")
+                ] {
+                    if let Some(enabled) = automation.get(key).and_then(|v|v.as_bool()) {
+                        automation_badge(ui, label, if enabled {"On"} else {"Off"}, enabled);
+                    }
+                }
+            });
+        });
+        ui.add_space(10.0);
+    }
+    let restock = &snapshot.native_restock;
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Restock details"))
+                    .size(13.0).strong().color(TEXT));
+                automation_badge(ui, "Restock", &restock.phase,
+                    restock.enabled && restock.phase == "Stock OK");
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{} {} · {} {}", restock.ordered, tr("ordered"),
+                    restock.confirmed, tr("confirmed")));
+                if restock.pending { ui.label(RichText::new(tr("Pending")).color(WARN)); }
+                if let Some(order) = restock.last_order.as_deref() {
+                    ui.label(RichText::new(order).size(10.0).color(MUTED));
+                }
+            });
+            if let Some(error) = restock.last_error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+        });
+    ui.add_space(10.0);
+    egui::ScrollArea::vertical().id_salt("automation-page")
+        .auto_shrink([false, false]).show(ui, |ui| {
+            draw_native_automation(app, ui, index);
+        });
+}
+
 fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     let profile = app.games[index].profile;
     let Some(native) = app.games[index].native.as_ref() else { return; };
@@ -4730,28 +4822,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 }
             });
         });
-    ui.add_space(9.0);
-    ui.label(RichText::new(tr("NATIVE AUTOMATION")).size(12.0).strong().color(TEXT));
-    if let Some(automation) = view.automation.as_ref() {
-        ui.horizontal_wrapped(|ui| {
-            for (key, label) in [
-                ("autoPotion", "Auto Potion"),
-                ("autoRevive", "Auto Revive"),
-                ("autoVendaLoot", "Auto Sell"),
-                ("autoLockShiny", "Lock Shiny"),
-                ("autoLockNota9", "Lock Grade 9"),
-                ("autoVoltarHunt", "Return to Hunt")
-            ] {
-                if let Some(enabled) = automation.get(key).and_then(|v|v.as_bool()) {
-                    automation_badge(ui, label, if enabled {"On"} else {"Off"}, enabled);
-                }
-            }
-        });
-    } else {
-        ui.label(RichText::new(tr("Waiting for server automation settings"))
-            .size(10.0).color(MUTED));
+    // Automation has its own sidebar page. Keep the dashboard for game data.
+    ui.add_space(7.0);
+    if ui.small_button(tr("Open Automation")).clicked() {
+        app.automation_account = index;
+        app.panel_tab = PanelTab::Automation;
     }
-    draw_native_automation(app, ui, index);
 }
 
 fn draw_game_details(
