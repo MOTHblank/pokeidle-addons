@@ -3084,6 +3084,7 @@ impl eframe::App for ControllerApp {
                 // One consistent, directly clickable account switcher across
                 // data pages. Disabled and offline accounts remain inspectable.
                 let active = match self.panel_tab {
+                    PanelTab::Overview => Some(self.selected_details),
                     PanelTab::Hunts => Some(Some(self.hunt_account)),
                     PanelTab::Inventory => Some(self.inventory_account),
                     PanelTab::Pokemon => Some(Some(self.pokemon_account)),
@@ -3093,10 +3094,15 @@ impl eframe::App for ControllerApp {
                 };
                 if let Some(selected) = active {
                     let next = draw_account_switcher(self, ui, selected,
-                        self.panel_tab == PanelTab::Inventory);
+                        matches!(self.panel_tab, PanelTab::Overview | PanelTab::Inventory));
                     if next != selected {
                         if let Some(index) = next {
                             self.select_workspace_account(index);
+                            if self.panel_tab == PanelTab::Overview {
+                                self.selected_details = Some(index);
+                            }
+                        } else if self.panel_tab == PanelTab::Overview {
+                            self.selected_details = None;
                         } else {
                             self.inventory_account = None;
                         }
@@ -3518,7 +3524,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical()
         .id_salt("instances_page")
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
         .show(ui, |ui| {
             let profiles: Vec<usize> = GameProfile::ALL
                 .iter()
@@ -3533,8 +3539,9 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .color(DIM),
                 );
             } else {
-                // Two compact cards fit at the app's default 1120px window
-                // without squeezing the old multi-section details side by side.
+                // Once selected, show the account's full detail immediately
+                // instead of leaving unrelated cards between it and the switcher.
+                if app.selected_details.is_none() {
                 let gap = 12.0;
                 let available = ui.available_width();
                 let columns = if available >= 650.0 { 2 } else { 1 };
@@ -3558,9 +3565,9 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(10.0);
                 }
 
-                // Only one account opens at a time, at full available width.
-                // Other overview cards never grow or move into a giant row.
-                if let Some(index) = app.selected_details.filter(|index| profiles.contains(index)) {
+                }
+                // The workspace chip selection also opens this detailed view.
+                if let Some(index) = app.selected_details {
                     ui.add_space(9.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!(
