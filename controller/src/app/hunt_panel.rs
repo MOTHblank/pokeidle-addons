@@ -484,59 +484,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     wild.name,wild.level,wild.hp,wild.max_hp
                 )).size(10.0).color(DIM));
             }
-            ui.add_space(5.0);
-            let session=&hunts.session;
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(format!(
-                    "{} {:02}:{:02}:{:02}",
-                    tr("Session"),
-                    session.duration_secs/3600,
-                    session.duration_secs%3600/60,
-                    session.duration_secs%60
-                )).size(11.0).strong().color(TEXT));
-                ui.label(format!("{} {} · {} {}",
-                    session.kills,tr("kills"),session.captures,tr("captures")));
-                ui.label(format!("{} {} · {} {}",
-                    session.shiny_seen,tr("shinies seen"),
-                    session.shiny_captured,tr("shinies caught")));
-            });
-            ui.horizontal_wrapped(|ui|{
-                ui.label(format!("{}: {}",
-                    tr("Trainer XP earned"),format_hunt_amount(session.trainer_xp as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Pokémon XP earned"),format_hunt_amount(session.pokemon_xp as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Combat gold"),format_hunt_amount(session.combat_gold as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Auto-sale gold"),format_hunt_amount(session.auto_sale_gold as f64)));
-            });
-            ui.horizontal_wrapped(|ui|{
-                if !app.session_reset_confirm[index] {
-                    if ui.small_button(tr("Reset session counters")).clicked(){
-                        app.session_reset_confirm[index]=true;
-                    }
-                }else {
-                    ui.label(RichText::new(tr("Reset all session loot/XP counters?"))
-                        .size(10.0).color(WARN));
-                    if ui.small_button(tr("Confirm reset")).clicked(){
-                        native.reset_hunt_session();
-                        app.session_reset_confirm[index]=false;
-                    }
-                    if ui.small_button(tr("Cancel")).clicked(){
-                        app.session_reset_confirm[index]=false;
-                    }
-                }
-            });
-            if !session.acquired.is_empty() {
-                ui.collapsing(format!("{} · {}",
-                    tr("Drops acquired"),session.acquired.len()),|ui|{
-                    let mut entries=session.acquired.iter().collect::<Vec<_>>();
-                    entries.sort_by(|a,b|b.1.cmp(a.1));
-                    for (name,amount) in entries.iter().take(40) {
-                        ui.label(RichText::new(format!("{} ×{}",name,amount))
-                            .size(10.0).color(TEXT));
-                    }
-                });
+            if let Some(map)=hunts.field_map.as_deref() {
+                ui.label(RichText::new(format!("Field: {map}")).size(10.0).color(DIM));
             }
         });
     ui.add_space(10.0);
