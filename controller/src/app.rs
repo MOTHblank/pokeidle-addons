@@ -3700,6 +3700,57 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
         });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HuntRateOrigin { Measured, Model, Scenario, Missing }
+
+fn select_hunt_rate(
+    measured: Option<f64>, model: Option<f64>, scenario: Option<f64>
+) -> (Option<f64>, HuntRateOrigin) {
+    let valid = |rate: Option<f64>| rate.filter(|n| n.is_finite());
+    if let Some(rate) = valid(measured) { (Some(rate), HuntRateOrigin::Measured) }
+    else if let Some(rate) = valid(model) { (Some(rate), HuntRateOrigin::Model) }
+    else if let Some(rate) = valid(scenario) { (Some(rate), HuntRateOrigin::Scenario) }
+    else { (None, HuntRateOrigin::Missing) }
+}
+
+fn request_hunt_forecasts(app: &mut ControllerApp, account: usize, view: &HuntView) {
+    let Some(guide) = app.hunt_reference.as_ref() else { return };
+    let key = hunt_forecast_key(account, view, guide);
+    if !hunt_model_needs_refresh(app.hunt_forecast_ready.as_ref(),
+        app.hunt_forecast_pending.as_ref(), &key) { return }
+    app.hunt_forecast_pending = Some((key.clone(), Instant::now()));
+    let tx = app.hunt_forecast_tx.clone();
+    let guide = Arc::clone(guide);
+    let snapshot = view.clone();
+    // Never perform per-hunt combat simulations inside an egui frame.
+    std::thread::spawn(move || {
+        let mut values = BTreeMap::new();
+        for hunt in snapshot.hunts.iter() {
+            if let Some(forecast) = native_atlas::estimate(&snapshot, hunt, &guide) {
+                values.insert(hunt.slug.clone(), forecast);
+            }
+        }
+        let _ = tx.send((key, values));
+    });
+}
+
+#[cfg(test)]
+mod hunt_atlas_ui_tests {
+    use super::{select_hunt_rate, HuntRateOrigin};
+    #[test]
+    fn rate_sources_do_not_fabricate_zero_or_mix_channels() {
+        assert_eq!(select_hunt_rate(None, None, None), (None, HuntRateOrigin::Missing));
+        assert_eq!(select_hunt_rate(Some(13.0), Some(46.0), Some(20.0)),
+            (Some(13.0), HuntRateOrigin::Measured));
+        assert_eq!(select_hunt_rate(None, Some(46.0), Some(20.0)),
+            (Some(46.0), HuntRateOrigin::Model));
+        assert_eq!(select_hunt_rate(None, None, Some(20.0)),
+            (Some(20.0), HuntRateOrigin::Scenario));
+        assert_eq!(select_hunt_rate(None, Some(f64::NAN), None),
+            (None, HuntRateOrigin::Missing));
+    }
+}
+
 fn format_hunt_amount(value: f64) -> String {
     if !value.is_finite() { return "—".into(); }
     let negative = if value < 0.0 { "-" } else { "" };
@@ -3760,14 +3811,36 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.add_space(10.0);
     let index = app.hunt_account;
-    let Some(native) = app.games[index].native.as_ref() else {
+    let Some(session) = app.games[index].native.as_ref() else {
         ui.add_space(20.0);
         ui.label(RichText::new(tr("Start the account to load its available hunts."))
             .size(13.0).color(WARN));
         ui.label(tr("The native game socket supplies the hunt catalog and active Pokémon after server authentication."));
         return;
     };
-    let hunts: HuntView = native.hunt_snapshot();
+    let hunts: HuntView = session.hunt_snapshot();
+    let connection = session.snapshot();
+    let online = connection.phase == "Online"
+        && connection.last_received.is_some_and(|at| at.elapsed() < Duration::from_secs(90));
+    // Drop the game-slot borrow before scheduling a worker on the app.
+    request_hunt_forecasts(app, index, &hunts);
+    let native = app.games[index].native.as_ref().expect("native session checked");
+    let expected_key = app.hunt_reference.as_ref()
+        .map(|guide| hunt_forecast_key(index, &hunts, guide));
+    let forecasts = app.hunt_forecast_ready.as_ref().filter(|batch|
+        expected_key.as_ref() == Some(&batch.key)).map(|batch|batch.values.as_ref());
+    if !online {
+        ui.label(RichText::new(format!("{}: {} · {}",
+            tr("Game connection"), connection.phase,
+            tr("cached hunt information is read-only until the game reconnects")))
+            .size(11.0).color(WARN));
+        if let Some(error) = connection.error.as_deref() {
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
+    }
+    if let Some(error) = hunts.last_error.as_deref() {
+        ui.label(RichText::new(error).size(10.0).color(WARN));
+    }
     if !hunts.catalog_ready {
         ui.label(RichText::new(tr("Waiting for authenticated game hunt catalog..."))
             .size(12.0).color(WARN));
@@ -3783,8 +3856,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.label(RichText::new(format!("{} · Lv. {}", p.name, p.level))
                             .size(16.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "P{} · Q {:.3} · {} · {} Pokémon",
-                            p.potency.unwrap_or(0), p.quality.unwrap_or(0.0),
+                            "P{} · Q {} · {} · {} Pokémon",
+                            p.potency.map(|p|p.to_string()).unwrap_or_else(||"—".into()),
+                            p.quality.map(|q|format!("{q:.3}")).unwrap_or_else(||"—".into()),
                             if p.shiny { "Shiny" } else { "Normal" },
                             hunts.pokemon_count
                         )).size(10.0).color(DIM));
@@ -3915,10 +3989,10 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 .size(12.0).strong().color(TEXT));
             ui.horizontal_wrapped(|ui| {
                 for (label, amount, valid) in [
-                    (tr("Trainer XP/h"), m.trainer_xp_h, m.valid_trainer),
-                    (tr("Pokémon XP/h"), m.pokemon_xp_h, m.valid_pokemon),
-                    (tr("Net gold/h"), m.gold_net_h, m.valid_gold),
-                    (tr("Kills/h"), m.kills_h, m.seconds >= 20.0),
+                    (tr("Trainer XP/h"), m.trainer_xp_h, m.valid_trainer && online),
+                    (tr("Pokémon XP/h"), m.pokemon_xp_h, m.valid_pokemon && online),
+                    (tr("Net gold/h"), m.gold_net_h, m.valid_gold && online),
+                    (tr("Kills/h"), m.kills_h, m.seconds >= 20.0 && online),
                 ] {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(label).size(10.0).color(DIM));
@@ -3932,7 +4006,8 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
             ui.label(RichText::new(format!(
                 "{} · {:.0}s · {} {}",
-                hunts.sample_quality, m.seconds, m.kills, tr("kills in window")
+                if online { hunts.sample_quality.as_str() } else { "Disconnected / stale" },
+                m.seconds, m.kills, tr("kills in window")
             )).size(10.0).color(MUTED));
         });
     ui.add_space(12.0);
