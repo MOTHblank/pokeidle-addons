@@ -541,10 +541,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             ui.label(format!("Shiny encounter events: {} · shiny captures: {}",
                                 session.shiny_seen,session.shiny_captured));
                             let throws=session.balls_used.values().sum::<u64>();
-                            ui.label(format!("Ball throws: {} · captures: {}",throws,session.captures));
+                            ui.label(format!("Identified ball throws: {} · confirmed successes: {}",
+                                throws,session.ball_captures));
                             if throws>0{
                                 ui.label(format!("Observed success per ball: {:.1}% ({} throws)",
-                                    session.captures as f64*100.0/throws as f64,throws))
+                                    session.ball_captures as f64*100.0/throws as f64,throws))
                                     .on_hover_text("Observed ball outcomes in this session; not a species capture probability.");
                             }else {
                                 ui.label(RichText::new("Capture success rate unavailable (no ball receipts)")
