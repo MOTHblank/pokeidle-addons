@@ -3821,13 +3821,21 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
-    let xp_per_hour = if running {
+    let xp_per_hour = if let Some(native) = app.games[index].native.as_ref() {
+        let measured = native.hunt_snapshot().measurements;
+        if measured.valid_trainer { Some(measured.trainer_xp_h) } else { None }
+    } else if running {
         app.xp_rates[index].observe(&health)
     } else {
         app.xp_rates[index] = XpRateTracker::default();
         None
     };
-    let idle_warning = app.idle_warning_for(index, &health);
+    // Bridge inactivity checks require Firefox telemetry; native battle
+    // receipts are assessed independently by the Hunts panel.
+    let idle_warning = if app.games[index].native.is_some() {
+        app.idle_progress[index] = IdleProgressTracker::default();
+        false
+    } else { app.idle_warning_for(index, &health) };
     let addon_versions = app.addon_version_status.lock()
         .map(|status| status.clone()).unwrap_or_default();
     // Native accounts do not execute browser userscripts. Their old addon
