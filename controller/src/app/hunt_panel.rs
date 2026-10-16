@@ -1020,13 +1020,15 @@ fn atlas_filters_panel(
 fn draw_atlas_species(
     ui:&mut egui::Ui, row:&AtlasSpeciesRow<'_>, sort:AtlasSort,
     view:&HuntView, reference:Option<&AtlasReference>,
-    native:&NativeSession, live:bool, error:&mut Option<String>,
+    native:&NativeSession, live:bool, visuals:&mut VisualCache,
+    error:&mut Option<String>,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(7.0)
             .stroke(Stroke::new(1.0,BORDER))
             .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
                 ui.horizontal_wrapped(|ui|{
+                    visuals.show(ui,SpriteKind::Pokemon,row.id,None,30.0);
                     ui.label(RichText::new(&row.name).size(14.0).strong().color(TEXT));
                     ui.label(RichText::new(format!("#{}",row.id))
                         .size(10.0).color(DIM));
@@ -1166,7 +1168,7 @@ fn draw_atlas_explorer(
     native:&NativeSession,live:bool,index:usize,
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
-    command_error:&mut Option<String>,
+    visuals:&mut VisualCache,command_error:&mut Option<String>,
 ){
     atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
@@ -1230,7 +1232,8 @@ fn draw_atlas_explorer(
     });
     let mut error=None;
     for row in rows.iter().skip(*page*PAGE).take(PAGE) {
-        draw_atlas_species(ui,row,filters.sort,view,reference,native,live,&mut error);
+        draw_atlas_species(ui,row,filters.sort,view,reference,native,live,
+            visuals,&mut error);
     }
     if let Some(error)=error {*command_error=Some(error);}
     ui.label(RichText::new(
@@ -1353,7 +1356,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     draw_atlas_explorer(ui,&view,native,live,index,
                         app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
                         &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
-                        &app.atlas_scenarios[index],&mut app.hunt_action_error[index]);
+                        &app.atlas_scenarios[index],&mut app.visuals,
+                        &mut app.hunt_action_error[index]);
                 }
                 HuntSubtab::Compare => {}
                 HuntSubtab::Models => {
