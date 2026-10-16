@@ -15,6 +15,16 @@ mod logging;
 mod update;
 
 fn main() {
+    // rustls 0.23 cannot infer a default when transitive dependencies enable
+    // both ring and aws-lc-rs. Initialize ONE process-wide provider before
+    // spawning cache, game, or Twitch TLS workers. No authentication is sent
+    // if provider installation fails.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        if rustls::crypto::ring::default_provider().install_default().is_err() {
+            eprintln!("Failed to initialize native TLS crypto provider");
+            return;
+        }
+    }
     // Windows release builds do not have an attached console. Without a
     // persistent panic hook, one unexpected panic during authentication
     // handoff looks like a silent whole-controller crash. Never include the
