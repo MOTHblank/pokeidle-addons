@@ -453,7 +453,14 @@ fn session_loop(credentials: Credentials,
                     match socket.read() {
                         Ok(Message::Text(text)) => {
                             gameplay.ingest(text.as_ref(), Instant::now());
+                            let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
+                            if restock.status.confirmed > confirmed_before {
+                                crate::logging::info(&format!(
+                                    "Native restock: confirmed and reconciled {}",
+                                    restock.status.last_order.as_deref().unwrap_or("purchase")
+                                ));
+                            }
                             observe(&snapshot, text.as_ref(), &desired);
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
