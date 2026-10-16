@@ -910,7 +910,10 @@ fn atlas_filters_panel(
                             AtlasSort::Level,AtlasSort::Name,
                         ]{
                             if ui.selectable_value(&mut f.sort,item,
-                                atlas_sort_label(item)).changed(){*page=0}
+                                atlas_sort_label(item)).changed(){
+                                f.ascending=matches!(item,AtlasSort::Name|AtlasSort::Level);
+                                *page=0;
+                            }
                         }
                     });
                 if ui.small_button(if f.ascending{"↑ Ascending"}else{"↓ Descending"})
@@ -1031,6 +1034,12 @@ fn draw_atlas_species(
                                             ui.label(RichText::new(
                                                 if f.calibrated{"Calibrated estimate"}else{"Experimental estimate"}
                                             ).size(9.0).color(WARN));
+                                            ui.label(RichText::new(format!(
+                                                "Combat gold {} + expected guide NPC drops {} / h · {:.0}% species coverage",
+                                                format_hunt_amount(f.combat_gold_h),
+                                                format_hunt_amount(f.npc_loot_gold_h),
+                                                f.coverage*100.0
+                                            )).size(10.0).color(MUTED));
                                         }else {
                                             ui.label(RichText::new("Combat prediction unavailable")
                                                 .size(10.0).color(MUTED));
@@ -1380,6 +1389,18 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     "{:.2}s / kill · {:.0}% guide species coverage",
                     forecast.seconds_per_kill,forecast.coverage*100.0
                 )).size(10.0).color(MUTED));
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(format!(
+                        "Trainer XP/kill {} · Pokémon XP/kill {}",
+                        format_hunt_amount(forecast.trainer_xp_per_kill),
+                        format_hunt_amount(forecast.pokemon_xp_per_kill)
+                    ));
+                    ui.label(format!(
+                        "Combat gold/h {} + expected NPC loot/h {}",
+                        format_hunt_amount(forecast.combat_gold_h),
+                        format_hunt_amount(forecast.npc_loot_gold_h)
+                    ));
+                });
                 for (channel,observed,valid,estimate) in [
                     ("Trainer XP",m.trainer_xp_h,m.valid_trainer,forecast.trainer_xp_h),
                     ("Pokémon XP",m.pokemon_xp_h,m.valid_pokemon,forecast.pokemon_xp_h),
