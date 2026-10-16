@@ -1297,7 +1297,14 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     "Start this account to load unlocked hunts, battle measurements and Pokémon."
                 ).size(11.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
-                    if app.accounts[index].enabled {
+                    let starting=app.games[index].is_running()
+                        || app.cached_native_busy[index]
+                        || app.native_verifying[index]
+                        || app.native_handoff_busy[index];
+                    if starting {
+                        ui.label(RichText::new("Account starting or waiting for sign-in")
+                            .size(11.0).color(WARN));
+                    } else if app.accounts[index].enabled {
                         if ui.button(tr("Start account")).clicked(){
                             app.launch_one(app.games[index].profile);
                         }
