@@ -16,6 +16,7 @@ mod native_hunts;
 mod native_history;
 mod native_automation;
 mod native_atlas;
+mod native_atlas_models;
 mod native_restock;
 mod native_twitch;
 mod native_tls;

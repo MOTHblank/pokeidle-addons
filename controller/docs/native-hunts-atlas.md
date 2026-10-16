@@ -1,7 +1,7 @@
 # Native Hunts / Hunt Atlas — experimental architecture
 
 **Branch:** `experiment/native-background-sessions`  
-**Preview:** `0.1.7-native.22`
+**Preview:** `0.1.7-native.25`
 
 The **Dashboard → Hunt Atlas** workspace is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
 
@@ -31,6 +31,55 @@ The original **premium Hunt Atlas** has substantially more economics, catch/shin
 Under **Dashboard → Hunt Atlas**, use the app-wide account switcher or open **Compare all accounts** for simultaneous current-rates and best modeled hunts. **Explore Pokémon** is now the default species-first view; it groups destinations, including non-executable public-guide previews of locked hunts. Each account preserves independent explorer filters and result pagination. Filter by location, level range, availability, type, weaknesses (any/all), depot ownership, species/name and objective. Expand details for source-labeled combat and loot estimates or switch immediately to an actual server-unlocked hunt. The existing **Hunt rankings**, **Current hunt** and **Session & rewards** subtabs remain. No background browser tab or userscript is required.
 
 The reference is lazy-loaded once per controller process, rather than polled; normal native gameplay and Twitch run unchanged. Estimated hunt rates are calculated on account-scoped background workers, no more often than a 20-second cache refresh when viewing the panel. Measured rates remain live. Collection means *present in the fully server-confirmed depot*, not historical Pokédex completion.
+
+## Native.23 capture, Outland, economy and comparison models
+
+The **Capture · Outland · Economy** tab now provides per-account Ultra/Beast
+capture modeling from bounded public creature catalogs (sell-value-derived
+rarity) and authenticated ball efficiency and price quotes where present.
+Without the creature rarity catalog, a capture probability remains
+**unavailable**. Wiki fallback efficiencies are explicitly labeled.
+Predicted captures and shiny catches use weighted spawn composition and the
+experimental lead kill rate. Default all-corpses-targeted assumptions are
+**upper bounds**; user-configured attempt fractions are optional.
+
+Outland 1–8 uses the userscript's actual level thresholds and tier
+multipliers. Bronze token, key/stone/bicycle fragment probabilities,
+expected hours, 24h chances and crafting times are shown separately from
+ordinary shiny egg thresholds. Tier choice is a *preview*, not a command
+confirmation. The Bicycle Fragment source is not verified against a live
+server hook. Capture, shiny, Kick, event, loot and guild boost factors are
+opt-in what-if controls, **never guessed as active**.
+
+Economics shows independently: modeled combat gold, guide reference NPC
+drops, optional expected named-item units/hour, manual player-market
+gold/unit assumption, and catalog-known ball costs in their actual
+currency. Only a fully sourced, gold-denominated scenario produces the
+conditional balance. Realized sales, market price histories, shop stocks
+or a complete tax/potion/revive ledger are not available here; no live
+profit claim is made. Capture/shiny, Outland rare and market scenarios can
+also sort the species explorer. The former sprawling advanced filter block
+now starts collapsed, with search and objective selection immediately
+visible and responsive model rows at narrow widths.
+
+Historical **current-model vs observed** comparisons use same-hunt
+time-attributed kill intervals, rejecting elapsed idle gaps over 120s
+and missing trainer/Pokémon reward keys. Past totals without a valid
+denominator are never converted into rates. Additionally, the authenticated
+native worker archives point-in-time forecasts at most once per 15 minutes
+while Atlas is visible, in the existing account-isolated 90-day history.
+The UI shows archived model checkpoints against same-day observed rates,
+with a clear warning that the observation and forecast hours may differ.
+Old history files remain readable without fabricating archived models.
+
+Added unit tests for public creature rarity, ball currency alternatives,
+all eight tier locking and rare probabilities, independent XP channels,
+capture edge cases, market input validation, time-attributed history
+serialization and archived model history. **Rust fmt/check/test/Clippy
+and actual desktop runtime checks were not executable in this connector
+environment**; static structural inspections alone do not establish a
+passing build. These limitations should be addressed before claiming
+production-verified, exact live-model parity.
 
 ## Validation
 
