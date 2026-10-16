@@ -360,12 +360,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "A venda só é concluída quando o jogo a confirma.",
         "Waiting for Pokémon roster" => "Aguardando lista de Pokémon",
         "Open Automation" => "Abrir automação",
-        "Server automation" => "Automação do servidor",
-        "Reload server values" => "Recarregar valores do servidor",
+        "Game automation" => "Automação do jogo",
+        "Reload game settings" => "Recarregar configurações do jogo",
         "Awaiting confirmation" => "Aguardando confirmação",
         "Confirmed" => "Confirmado",
-        "Changes are confirmed by the game server; unsent changes are not treated as active." =>
-            "Alterações devem ser confirmadas pelo servidor; valores enviados não são tratados como ativos.",
+        "Changes only take effect after PokéIdle confirms them." => "As alterações só entram em vigor depois da confirmação do PokéIdle.",
         "Potion HP threshold (%)" => "Limiar de HP para poção (%)",
         "Minimum lock grade" => "Nota mínima de bloqueio",
         "Apply HP" => "Aplicar HP",
@@ -975,6 +974,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No Auto Catch attempts recorded yet" => "Nenhuma tentativa de captura automática registrada ainda",
         "These numbers show Auto Catch only. Manual catches are included in the dashboard totals." => "Estes números mostram apenas a captura automática. As capturas manuais entram nos totais do painel.",
         "Auto Catch settings saved" => "Configurações de captura automática salvas",
+        "Loading game automation settings" => "Carregando configurações de automação do jogo",
         _ => en,
     }
 }
@@ -1039,7 +1039,7 @@ impl GameSlot {
     fn health(&self) -> Health {
         if self.handoff_closing {
             let mut health = Health::default();
-            health.state = "Switching to native".into();
+            health.state = "Connecting".into();
             return health;
         }
         if let Some(native) = self.native.as_ref() {
@@ -1052,7 +1052,7 @@ impl GameSlot {
             let view = native.hunt_snapshot();
             health.activity = if view.in_center { "Center".into() }
                 else if view.hunt_slug.is_some() { "Hunting".into() }
-                else { "Native background".into() };
+                else { "Online".into() };
             health.active_pokemon = view.active_pokemon.as_ref()
                 .map(|pokemon| pokemon.name.clone()).unwrap_or_default();
             health.pokemon_level = view.active_pokemon.as_ref()
@@ -2112,7 +2112,7 @@ impl ControllerApp {
                     self.automation_drafts[index]=AutomationDraft::default();
                     self.require_browser_login[index] = false;
                     let cache_note = event.cache_warning
-                        .map(|warning| format!(" · secure cache unavailable: {warning}"))
+                        .map(|warning| format!(" · You may need to sign in next time: {warning}"))
                         .unwrap_or_default();
                     self.set_status(format!(
                         "{}: PokéIdle and Twitch connected. Firefox closed{cache_note}",
@@ -2648,9 +2648,9 @@ impl ControllerApp {
                 self.games[index].monitor = Some(monitor);
                 self.set_status(
                     format!(
-                        "{}: Firefox opened in {} mode to sign in",
+                        "{}: Firefox started in {} for sign-in",
                         self.account_name(profile),
-                        if headless { "headless" } else { "visible" }
+                        if headless { "the background" } else { "a window" }
                     ),
                     false,
                 );
@@ -4462,8 +4462,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         egui::Frame::new().fill(PANEL).corner_radius(10.0)
             .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(tr("Server automation")).size(13.0).strong().color(TEXT));
-                if ui.small_button(tr("Reload server values")).clicked() {
+                ui.label(RichText::new(tr("Game automation")).size(13.0).strong().color(TEXT));
+                if ui.small_button(tr("Reload game settings")).clicked() {
                     app.automation_drafts[index]=AutomationDraft::from_server(automation);
                 }
                 if let Some(field)=snapshot.native_automation.pending_field.as_deref() {
@@ -4479,7 +4479,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(error).size(10.0).color(WARN));
             }
             ui.label(RichText::new(tr(
-                "Changes are confirmed by the game server; unsent changes are not treated as active."
+                "Changes only take effect after PokéIdle confirms them."
             )).size(10.0).color(DIM));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
@@ -4569,7 +4569,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
         ui.add_space(10.0);
     } else {
-        ui.label(RichText::new(tr("Waiting for server automation settings"))
+        ui.label(RichText::new(tr("Loading game automation settings"))
             .size(11.0).color(WARN));
     }
     let restock = &snapshot.native_restock;
