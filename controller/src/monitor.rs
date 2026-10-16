@@ -106,10 +106,6 @@ pub struct Health {
     pub active_pokemon: String,
     pub fallen_count: u32,
     pub economy_mode: bool,
-    pub addon_ok: u8,
-    pub addon_total: u8,
-    pub addon_missing: Vec<String>,
-    pub addon_versions: BTreeMap<String, String>,
     pub twitch_tabs: u8,
     pub twitch_low_resource_ok: u8,
     pub performance_enabled: Option<bool>,
@@ -174,10 +170,6 @@ impl Default for Health {
             active_pokemon: String::new(),
             fallen_count: 0,
             economy_mode: false,
-            addon_ok: 0,
-            addon_total: 7,
-            addon_missing: Vec::new(),
-            addon_versions: BTreeMap::new(),
             twitch_tabs: 0,
             twitch_low_resource_ok: 0,
             performance_enabled: None,
@@ -554,10 +546,6 @@ struct Probe {
     active_pokemon: String,
     fallen_count: u32,
     economy_mode: bool,
-    addon_ok: u8,
-    addon_total: u8,
-    addon_missing: Vec<String>,
-    addon_versions: BTreeMap<String, String>,
     performance_enabled: Option<bool>,
     performance_fps: String,
     performance_scene_runs: String,
@@ -869,10 +857,6 @@ fn monitor_loop(
                         current.active_pokemon = probe.active_pokemon;
                         current.fallen_count = probe.fallen_count;
                         current.economy_mode = probe.economy_mode;
-                        current.addon_ok = probe.addon_ok;
-                        current.addon_total = probe.addon_total;
-                        current.addon_missing = probe.addon_missing;
-                        current.addon_versions = probe.addon_versions;
                         // Keep the prior tab inventory until an actual inventory refresh.
                         current.performance_enabled = probe.performance_enabled;
                         current.performance_fps = probe.performance_fps;
@@ -1012,7 +996,7 @@ fn monitor_loop(
 }
 
 /// One tiny read of the already-known game context. No context enumeration,
-/// userscript snapshot, page-wide scanning or Firefox tab evaluations.
+/// browser automation snapshot, page-wide scanning or Firefox tab evaluations.
 #[derive(Clone, Copy)]
 struct Heartbeat {
     logged_in: bool,
@@ -1020,7 +1004,7 @@ struct Heartbeat {
 
 /// Capture the authenticated Twitch popout IRC socket from the same Firefox
 /// BiDi session before closing Firefox. Twitch authentication is independent
-/// of the game's cookies; the page's userscript observes PASS/NICK directly.
+/// of the game's cookies; the page's browser automation observes PASS/NICK directly.
 /// Failure to capture is not interpreted as a valid unauthenticated session.
 fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
     let tree_id = session.next_id;
@@ -1066,7 +1050,7 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     if saw_popout {
         Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
     } else {
-        // All profiles can authenticate Twitch without a userscript update.
+        // All profiles can authenticate Twitch without a browser automation update.
         // A single temporary Twitch chat is opened only if none exists.
         // The BiDi preload observes its authenticated PASS/NICK handshake.
         if session.native_twitch_auth_opened {
@@ -1109,7 +1093,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         json!({
             "id": id, "method": "script.evaluate",
             "params": {
-                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.game?.() || window.__mothControllerBridgeV1?.sessionBootstrap?.() || null)",
+                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.game?.() || null)",
                 "target": { "context": context },
                 "awaitPromise": false
             }
@@ -1119,9 +1103,9 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(|value| value.get("result"))
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
-        .ok_or_else(|| "Bridge did not provide a native handoff snapshot".to_owned())?;
+        .ok_or_else(|| "Firefox did not provide game login information".to_owned())?;
     let bootstrap: Value = serde_json::from_str(raw)
-        .map_err(|_| "Bridge returned invalid handoff metadata".to_owned())?;
+        .map_err(|_| "Firefox returned invalid game login data".to_owned())?;
     if bootstrap.is_null() {
         return reload_native_context_once(session, &context);
     }
@@ -1207,7 +1191,7 @@ fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
 }
 
 // BiDi-owned instrumentation makes native auth work for every Firefox profile,
-// even if that profile still has production versions of our userscripts.
+// even if that profile still has production versions of our browser automation.
 // Loaded by Firefox before the document scripts on its *next* navigation.
 // Never exposes tokens in DOM attributes, logs, localStorage or GM storage.
 const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
@@ -1224,7 +1208,7 @@ const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
         Object.defineProperty(window, '__mothNativeCaptureV1', {
             configurable: false, value: Object.freeze({
                 game() {
-                    const socket = window.__mothControllerBridgeV1?.socket?.() || gameSocket;
+                    const socket = gameSocket;
                     const hello = socket && hellos.get(socket);
                     return socket?.readyState === Ws.OPEN && hello
                         ? { url: socket.url, hello } : null;
@@ -1324,7 +1308,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
 
     // Install before the next game/Twitch navigation. This runs in the page
     // realm and observes the actual outgoing handshake, independent of the
-    // per-profile Violentmonkey extension version.
+    // per-profile Firefox extension version.
     let native_capture_installed = send_and_wait(&mut socket, 2, json!({
         "id": 2,
         "method": "script.addPreloadScript",
@@ -1447,42 +1431,6 @@ fn probe_page(
                     : 'Center';
         }
 
-        // Count only scripts reporting a version in this profile, rather than
-        // treating every available userscript as mandatory.
-        const readiness = {
-            'autocatch': exists('#moth-ac-panel') || exists('#moth-ac-toggle'),
-            'performance': exists('#moth-performance-panel') || exists('#moth-performance-trigger'),
-            'stream-auto-open': exists('#moth-scan-live-streams'),
-            'controller-bridge': (() => {
-                const bridge = window.__mothControllerBridgeV1;
-                return !!bridge && Number(bridge.version) >= 9
-                    && typeof bridge.snapshot === 'function'
-                    && typeof bridge.gameSnapshot === 'function'
-                    && typeof bridge.streamStateSnapshot === 'function'
-                    && typeof bridge.socket === 'function';
-            })(),
-            'twitch-low-resource': exists('#moth-twitch-low-resource-addon-ready') ||
-                exists('#moth-twitch-low-resource-css'),
-            'hunt-atlas': !!window.__mothHuntAtlasControllerV1,
-            'market-bot': !!window.__mothMarketWatchControllerV1 ||
-                document.documentElement?.dataset?.mothWatchReady === '1'
-        };
-        const displayNames = {
-            'autocatch': 'Auto Catch+', 'performance': 'Performance+',
-            'stream-auto-open': 'Stream Scanner', 'controller-bridge': 'Controller Bridge',
-            'twitch-low-resource': 'Twitch Low Resource', 'hunt-atlas': 'Hunt Atlas',
-            'market-bot': 'Moth Watch'
-        };
-        const prefix = 'data-moth-addon-version-';
-        const addonChecks = [...(document.documentElement?.attributes || [])]
-            .filter(attr => attr.name.startsWith(prefix))
-            .map(attr => {
-                const key = attr.name.slice(prefix.length);
-                const version = String(attr.value || '');
-                return { key, name: displayNames[key] || key, version,
-                    ok: Object.hasOwn(readiness, key) ? !!readiness[key] : !!version };
-            }).filter(entry => entry.key && entry.version);
-
         return JSON.stringify({
             url: location.href,
             title: document.title,
@@ -1495,11 +1443,6 @@ fn probe_page(
             activePokemon,
             fallenCount: document.querySelector('#caidos-lista')?.children.length || 0,
             economyMode: document.documentElement.classList.contains('modo-economia'),
-            addons: addonChecks.filter(entry => entry.ok).map(entry => entry.name),
-            addonTotal: addonChecks.length,
-            addonMissing: addonChecks.filter(entry => !entry.ok).map(entry => entry.name),
-            addonVersions: Object.fromEntries(addonChecks.filter(entry => entry.ok)
-                .map(entry => [entry.key + '.user.js', entry.version])),
             performanceEnabled,
             performanceFps: text('#mpp-browser-fps'),
             performanceSceneRuns: text('#mpp-scene-runs'),
@@ -1544,35 +1487,6 @@ fn probe_page(
 
     let page: Value = serde_json::from_str(raw)
         .map_err(|error| format!("invalid page probe: {error}"))?;
-
-    let addon_missing = page
-        .get("addonMissing")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    // Older scripts have no marker; never infer their installed version.
-    let addon_versions: BTreeMap<String, String> = page
-        .get("addonVersions")
-        .and_then(Value::as_object)
-        .map(|entries| entries.iter().filter_map(|(file, version)| {
-            let version = version.as_str()?;
-            if version.len() > 40 || !version.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-')) {
-                return None;
-            }
-            Some((file.clone(), version.to_string()))
-        }).collect())
-        .unwrap_or_default();
-
-    let addon_total = page.get("addonTotal").and_then(Value::as_u64)
-        .unwrap_or(0).min(u8::MAX as u64) as u8;
-    let addon_ok = addon_total.saturating_sub(addon_missing.len().min(u8::MAX as usize) as u8);
 
     // The upstream game intentionally performs several large downloads and CPU-heavy
     // catalog transforms before the login screen appears. Do not compete with that boot
@@ -1639,10 +1553,6 @@ fn probe_page(
                 .unwrap_or(0) as u32
         },
         economy_mode: page.get("economyMode").and_then(Value::as_bool).unwrap_or(false),
-        addon_ok,
-        addon_total,
-        addon_missing,
-        addon_versions,
         performance_enabled: page.get("performanceEnabled").and_then(Value::as_bool),
         performance_fps: page.get("performanceFps").and_then(Value::as_str).unwrap_or_default().to_string(),
         performance_scene_runs: page.get("performanceSceneRuns").and_then(Value::as_str).unwrap_or_default().to_string(),
