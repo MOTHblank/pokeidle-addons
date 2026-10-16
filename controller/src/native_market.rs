@@ -1196,7 +1196,7 @@ mod tests {
         buyer.failed_closed=false;buyer.nick="Me".into();buyer.balances=[Some(1000),Some(0)];
         buyer.offers.push(Offer::from_listing(&json!({"id":9,"preco":20,"qtd":80,"vendedor":"Other"}),"item",42,"gold",Instant::now()).unwrap());
         let cfg=MarketRules{enabled:true,gold_reserve:100,rules:vec![BuyRule{id:"a".into(),kind:"item".into(),item_id:42,enabled:true,buy_max:25,..BuyRule::default()}],..MarketRules::default()};
-        assert_eq!(buyer.budget(&cfg,&cfg.rules[0],&buyer.offers[0]),45);
+        assert_eq!(buyer.budget_for(&cfg,&cfg.rules[0],&buyer.offers[0],false),45);
     }
     #[test] fn scope_conflicts_and_closed_listings_are_not_buyable() {
         let now=Instant::now();
@@ -1224,13 +1224,13 @@ mod tests {
         let rule=BuyRule{id:"test".into(),kind:"item".into(),item_id:42,
             buy_max:11,enabled:true,..Default::default()};
         let cfg=MarketRules{enabled:true,rules:vec![rule.clone()],..Default::default()};
-        assert_eq!(buyer.budget(&cfg,&rule,&offer),100);
+        assert_eq!(buyer.budget_for(&cfg,&rule,&offer,false),100);
         buyer.journal.orders.push(Order{listing_id:17,rule_id:"test".into(),
             currency:"gold".into(),kind:"item".into(),quantity:60,spend:600,
             day:today(),session:buyer.session,status:"submitted".into(),
             sent_ms:clock_ms()});
         buyer.pending.push_back(0);
-        assert_eq!(buyer.budget(&cfg,&rule,&offer),40);
+        assert_eq!(buyer.budget_for(&cfg,&rule,&offer,false),40);
     }
     #[test] fn journal_compaction_keeps_spend_limits_and_live_indices() {
         let mut buyer=MarketBuyer::new(GameProfile::Game4);
