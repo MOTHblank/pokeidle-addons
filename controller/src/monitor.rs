@@ -395,8 +395,17 @@ impl MonitorHandle {
         if pending.is_some() { return Err("Game tab handoff already pending".into()); }
         *pending = Some(sender);
         drop(pending);
-        receiver.recv_timeout(timeout)
-            .map_err(|_| "Timed out waiting for game tab shutdown".to_owned())?
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => {
+                // A late BiDi close must never unexpectedly close a newly
+                // restored game tab after verification has already failed.
+                if let Ok(mut pending) = self.game_close_request.lock() {
+                    pending.take();
+                }
+                Err("Timed out waiting for game tab shutdown".into())
+            }
+        }
     }
 
     /// Recover the actual game tab with a confirmed BiDi result after native
@@ -412,8 +421,15 @@ impl MonitorHandle {
         if pending.is_some() { return Err("Game tab recovery is already pending".into()); }
         *pending = Some(sender);
         drop(pending);
-        receiver.recv_timeout(timeout)
-            .map_err(|_| "Timed out waiting for Firefox game tab recovery".to_owned())?
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => {
+                if let Ok(mut pending) = self.game_restore_request.lock() {
+                    pending.take();
+                }
+                Err("Timed out waiting for Firefox game tab recovery".into())
+            }
+        }
     }
 
     pub fn stop(&self) {
