@@ -36,7 +36,7 @@ Twitch room reconciliation uses PokéIdle's `twitch.lives` and `twitch.assistind
 
 ## Limitations / validation
 
-This is a native protocol experiment, **not a full port of Auto Catch+, Moth Watch, Snatch or the Hunt Atlas UI**. DOM userscripts stop running once Firefox closes; essential gameplay automation still needs native equivalents.
+This experimental runtime has its own game socket, command dispatcher, native Auto Catch and configurable stock replenishment, but **does not reproduce the complete Auto Catch+, Moth Watch, Snatch or Hunt Atlas features**. Firefox userscripts themselves stop running when the browser closes. Verify the native behavior and remaining gaps before treating it as a production replacement.
 
 The implementation has been committed and branch-specific build/test checks exist, but there has been **no authenticated end-to-end live run or local Rust compiler validation from this environment**. Rust TLS support also requires regenerating and committing `Cargo.lock` before using `cargo --locked`. Inspect CI build results before installing a preview executable.
 
@@ -56,7 +56,7 @@ The handoff now closes/reaps Firefox on a **separate worker per account** rather
 
 If a worker panics, its status becomes **Failed** while the controller should remain open. If a future crash still abruptly ends the log without `Rust panic`, investigate OS-level process termination, native-library faults, or an external restart instead of assuming the WebSocket protocol was rejected. No cookies, OAuth tokens or handshake payloads are written to logs.
 
-Test with one account first and only then all four. Native transport **still does not implement the browser-only gameplay addons**, so authenticated WebSockets are not proof of complete automated farming.
+Test one account and confirm actual battle XP, captured Pokémon, stock changes and IRC XP bonus before running four. Authenticated WebSockets alone are not proof of equivalent farming; native Auto Catch and replenishment still need a real live comparison to the established addons.
 
 ## Manager-style native runtime migration (native.7)
 
