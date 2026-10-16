@@ -1414,9 +1414,18 @@ impl ControllerApp {
             self.native_handoff_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
             match event.result {
-                Err(error) => self.set_status(
-                    format!("{}: native handoff unavailable: {error}", self.account_name(profile)), true
-                ),
+                Err(error) => {
+                    let is_bootstrap = error.contains("reloaded")
+                        || error.contains("waiting") || error.contains("pending")
+                        || error.contains("temporary Twitch")
+                        || error.contains("hook installed")
+                        || error.contains("login has not produced");
+                    self.set_status(format!(
+                        "{}: {}: {error}",
+                        self.account_name(profile),
+                        if is_bootstrap { "native login" } else { "native handoff error" }
+                    ), !is_bootstrap);
+                },
                 Ok(bootstrap) => {
                     // Never close Firefox without a usable authenticated hello
                     // and cookies, or if the slot changed while capture ran.
@@ -1574,11 +1583,11 @@ impl ControllerApp {
             }
             let health = self.games[index].health();
             if !(health.telemetry_is_fresh() && health.logged_in &&
-                 health.bridge_connected && health.stream_scan_status == "ok") {
+                 health.bridge_connected) {
                 continue;
             }
             if self.native_handoff_last_attempt[index]
-                .is_some_and(|at| at.elapsed() < Duration::from_secs(25)) { continue; }
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(8)) { continue; }
             self.start_native_handoff(profile);
         }
     }
