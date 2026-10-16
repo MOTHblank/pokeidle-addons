@@ -5831,7 +5831,6 @@ fn draw_game_details(
                         });
                     }
                 });
-            }
 
         });
 }
