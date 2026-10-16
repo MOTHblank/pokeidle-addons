@@ -112,9 +112,9 @@ pub const SHINY_EGG_LEVELS:[u32;30]=[
     50000,58900,64000,69300,86150,100000,114800,123350,132200,160300
 ];
 pub fn unlocked_tier(tier:u8,trainer_level:Option<u32>)->Option<f64>{
-    if !(1..=8).contains(&tier)||trainer_level?<TIER_LEVELS[(tier-1) as usize] {
-        return None;
-    }
+    if !(1..=8).contains(&tier){return None}
+    let level=trainer_level?;
+    if level<TIER_LEVELS[(tier-1) as usize]{return None}
     Some(TIER_MULTIPLIERS[(tier-1) as usize])
 }
 pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
