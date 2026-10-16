@@ -459,7 +459,7 @@ fn session_loop(credentials: Credentials,
     // Metadata is downloaded without cookies/credentials, and only if a
     // configured healing-item rule lacks a server shop price. Never block the
     // game WebSocket reader with HTTP requests.
-    let (metadata_tx, metadata_rx) = mpsc::channel();
+    let (metadata_tx, metadata_rx) = mpsc::channel::<Result<crate::native_items::ItemCatalog, String>>();
     let mut item_metadata: Option<crate::native_items::ItemCatalog> = None;
     let mut last_metadata_attempt: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
