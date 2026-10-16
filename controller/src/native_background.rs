@@ -82,7 +82,7 @@ impl Credentials {
                 };
                 let Some(value) = value else { continue };
                 if name.is_empty() || name.bytes().any(|b| b <= 32 || b >= 127 || b == b';' || b == b'=') ||
-                    value.contains(['\r', '\n', ';']) { continue; }
+                    value.chars().any(|ch| matches!(ch, '\r' | '\n' | ';')) { continue; }
                 cookie_parts.push(format!("{name}={value}"));
             }
         }
@@ -118,6 +118,10 @@ fn cookie_domain_matches(domain: &str, host: &str) -> bool {
     } else {
         host == domain
     }
+}
+
+pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
+    Credentials::parse(bootstrap).map(|_| ())
 }
 
 pub struct NativeSession {
@@ -180,8 +184,8 @@ fn open_session(credentials: &Credentials) -> Result<tungstenite::WebSocket<
                 if serde_json::from_str::<Value>(text.as_ref()).ok()
                     .and_then(|v| v.get("t").and_then(Value::as_str).map(str::to_owned))
                     .as_deref() == Some("welcome") {
-                    // The caller ingests subsequent state frames. This first
-                    // welcome is authenticated proof that the Rust WS works.
+                    // Receiving welcome confirms authentication. Initial values
+                    // arrive here; the subsequent state stream may be sparse.
                     return Ok(socket);
                 }
             }
