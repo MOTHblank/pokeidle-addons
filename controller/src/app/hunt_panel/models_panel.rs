@@ -191,7 +191,7 @@ pub(super) fn draw_atlas_models(
         ui.label("No available destination or public-guide preview.");return
     };
     if !unlocked {
-        ui.label(RichText::new("This hunt exists only in the guide. All displayed values are previews; native hunt switching is unavailable.")
+        ui.label(RichText::new("This location is listed in the guide but is not available for this account. You can compare estimates, but cannot switch to it here.")
             .size(10.0).color(WARN));
     }
     let observed_tier=view.outland_tier;
@@ -395,7 +395,7 @@ pub(super) fn draw_atlas_models(
                         ui.end_row();
                     }
                 });
-            ui.label(RichText::new("Bicycle Fragment hook is wiki-reported but not server-verified. Unlock level alone does not confirm destination access.")
+            ui.label(RichText::new("The guide mentions Bicycle Fragments here, but the game has not confirmed this. Reaching the required level does not guarantee access.")
                 .size(10.0).color(WARN));
         });
     }else{
