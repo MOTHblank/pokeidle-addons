@@ -396,7 +396,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Session,"Session & rewards");
     });
     ui.separator();
-    egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index))
+    egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
         .auto_shrink([false,false]).show(ui,|ui|{
             match app.hunt_subtab {
                 HuntSubtab::Current => {
