@@ -69,6 +69,20 @@ fn set_native_preference(profile: GameProfile, path: &[&str], enabled: bool)
     save(profile, &saved)
 }
 
+/// Persist the complete validated capture configuration atomically, preserving
+/// the encrypted authenticated session and unrelated bootstrap fields.
+pub fn set_capture_settings(profile: GameProfile,
+    config: &crate::native_capture_config::CatchSettings) -> Result<(),String> {
+    config.validate()?;
+    let _guard=PREFERENCE_WRITE.lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    let Some(mut saved)=load(profile)? else {
+        return Err("Native credential cache unavailable; authenticate again to save preferences".into());
+    };
+    saved["autocatch"]=config.as_value();
+    save(profile,&saved)
+}
+
 /// Native Auto Catch remains functional and configurable without the addon.
 pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
     set_native_preference(profile, &["enabled"], enabled)
