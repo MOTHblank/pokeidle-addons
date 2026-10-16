@@ -24,6 +24,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "controller" / "assets" / "visual"
+UPSTREAM_PATHS = ASSET_DIR / "upstream-available-images.json"
+UPSTREAM_ITEMS = ASSET_DIR / "upstream-item-icons.json"
 MANIFEST = ASSET_DIR / "manifest.json"
 GENERATED = ROOT / "controller" / "src" / "native_visual_assets.generated.rs"
 CATALOG_URL = "https://pokeidle.io/assets/items.json"
@@ -76,10 +78,48 @@ def candidates(path: str, allow_external: bool = False) -> list[str]:
 
 
 def image_extension(raw: bytes) -> str | None:
-    # Only embed PNG images: the native application uses a PNG-only decoder.
+    # egui's image crate decodes static PNGs and the first frame of GIFs.
     if raw.startswith(bytes.fromhex("89504e470d0a1a0a")):
         return "png"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
     return None
+
+
+def upstream_relative(origin: str) -> str | None:
+    """Convert a trusted game image path into a repository snapshot file."""
+    url = urllib.parse.urlsplit(origin)
+    if url.scheme or url.netloc:
+        if url.scheme != "https" or url.hostname not in (
+            "pokeidle.io", "www.pokeidle.io"
+        ):
+            return None
+        raw = url.path
+    else:
+        raw = origin
+    if not raw.startswith("/") or ".." in raw or "\\" in raw or "?" in raw:
+        return None
+    path = raw.lstrip("/")
+    if not (path.startswith("assets/site/assets/") or path.startswith("img/")):
+        return None
+    if not path.endswith((".png", ".gif")):
+        return None
+    return path
+
+
+def read_upstream_asset(directory: Path, origin: str,
+                        available: set[str]) -> bytes | None:
+    path = upstream_relative(origin)
+    if path is None or path not in available:
+        return None
+    target = (directory / path).resolve()
+    root = directory.resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        return None
+    raw = target.read_bytes()
+    if len(raw) > MAX_BYTES or image_extension(raw) is None:
+        return None
+    return raw
 
 
 def get(url: str) -> bytes:
@@ -111,6 +151,19 @@ def collect(args: argparse.Namespace) -> list[tuple[str, int, str]]:
         ("ball", ident): path for ident, path in BALLS.items()
     }
     sources.update({("item", ident): path for ident, path in HEALING.items()})
+    if args.upstream_dir:
+        # Exact item ID mapping from the same upstream snapshot as the images.
+        # No network calls and no guessed paths or IDs.
+        catalog = json.loads(UPSTREAM_ITEMS.read_text(encoding="utf-8"))
+        for key, icon in catalog.items():
+            try:
+                ident = int(key)
+            except (ValueError, TypeError):
+                continue
+            if ident > 0 and isinstance(icon, str):
+                sources[("item", ident)] = "/assets/" + icon if icon.startswith(
+                    "site/assets/"
+                ) else "/" + icon
     if args.all_items or args.catalog:
         catalog = load_catalog(args.catalog)
         for item in catalog.get("items", []):
@@ -161,6 +214,10 @@ def main() -> int:
                         help="download again instead of reusing the local cache")
     parser.add_argument("--dry-run", action="store_true",
                         help="report the asset list without network access or writing")
+    parser.add_argument("--upstream-dir", type=Path,
+                        help="read verified artwork from a local pokeidle-upstream checkout")
+    parser.add_argument("--local-only", action="store_true",
+                        help="do not request missing artwork from the game CDN")
     args = parser.parse_args()
     assets = collect(args)
     if args.dry_run:
@@ -177,6 +234,10 @@ def main() -> int:
         except (ValueError, KeyError, TypeError):
             pass
 
+    available = set()
+    if args.upstream_dir:
+        data = json.loads(UPSTREAM_PATHS.read_text(encoding="utf-8"))
+        available = set(data.get("files", []))
     successful: dict[tuple[str, int], dict] = {}
     for kind, ident, origin in assets:
         key = (kind, ident)
@@ -189,14 +250,23 @@ def main() -> int:
         urls = candidates(origin, args.allow_external)
         for url in urls:
             try:
-                raw = get(url)
+                raw = (read_upstream_asset(args.upstream_dir, origin, available)
+                       if args.upstream_dir else None)
+                if raw is None:
+                    if args.local_only:
+                        break
+                    raw = get(url)
                 ext = image_extension(raw)
                 if ext is None:
                     raise ValueError("unsupported image format / not image content")
                 filename = f"{kind}-{ident}.{ext}"
                 (ASSET_DIR / filename).write_bytes(raw)
                 successful[key] = {"kind": kind, "id": ident, "file": filename,
-                                   "source": url, "sha256": hashlib.sha256(raw).hexdigest()}
+                                   "source": ("pokeidle-upstream:" + upstream_relative(origin)
+                                              if args.upstream_dir and
+                                              read_upstream_asset(args.upstream_dir, origin, available)
+                                              is not None else url),
+                                   "sha256": hashlib.sha256(raw).hexdigest()}
                 print(f"OK  {kind} #{ident}: {filename} ({len(raw)} bytes)")
                 break
             except (ValueError, OSError, urllib.error.URLError) as error:
