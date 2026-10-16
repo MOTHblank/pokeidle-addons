@@ -891,6 +891,52 @@ struct Heartbeat {
     logged_in: bool,
 }
 
+/// Capture the authenticated Twitch popout IRC socket from the same Firefox
+/// BiDi session before closing Firefox. Twitch authentication is independent
+/// of the game's cookies; the page's userscript observes PASS/NICK directly.
+/// Failure to capture is not interpreted as a valid unauthenticated session.
+fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
+    let tree_id = session.next_id;
+    session.next_id += 1;
+    let tree = send_and_wait(&mut session.socket, tree_id, json!({
+        "id": tree_id,
+        "method": "browsingContext.getTree",
+        "params": { "maxDepth": 1 }
+    }))?;
+    let mut contexts = Vec::new();
+    if let Some(nodes) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
+        for node in nodes { collect_contexts(node, &mut contexts, 0); }
+    }
+    let mut saw_popout = false;
+    for context in contexts.iter().filter(|candidate| {
+        candidate.url.starts_with("https://www.twitch.tv/popout/")
+            && candidate.url.contains("/chat")
+            && candidate.url.contains("moth-generation=")
+    }) {
+        saw_popout = true;
+        let id = session.next_id;
+        session.next_id += 1;
+        let result = send_and_wait(&mut session.socket, id, json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": "JSON.stringify(window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
+                "target": { "context": context.id },
+                "awaitPromise": false
+            }
+        }))?;
+        let Some(raw) = result.get("result").and_then(|v| v.get("result"))
+            .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
+        let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
+        if !bootstrap.is_null() { return Ok(bootstrap); }
+    }
+    if saw_popout {
+        Err("Twitch IRC popout is still connecting or needs experimental Twitch Low Resource 3.2.1; retrying".to_owned())
+    } else {
+        Err("No managed authenticated Twitch chat popout yet; waiting for stream scanner or Twitch sign-in".to_owned())
+    }
+}
+
 /// Capture only the bridge-confirmed socket's initial hello. The storage
 /// command returns HttpOnly cookies (page JavaScript cannot access those).
 /// All sensitive results stay inside this in-process handoff.
@@ -931,7 +977,8 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(|result| result.get("cookies"))
         .and_then(Value::as_array)
         .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
-    Ok(json!({ "bootstrap": bootstrap, "cookies": entries }))
+    let twitch = read_twitch_bootstrap(session)?;
+    Ok(json!({ "bootstrap": bootstrap, "cookies": entries, "twitch": twitch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
