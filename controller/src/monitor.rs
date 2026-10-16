@@ -288,6 +288,7 @@ pub struct MonitorHandle {
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
     game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 }
 
@@ -302,6 +303,8 @@ impl MonitorHandle {
         let bootstrap_worker = Arc::clone(&bootstrap_request);
         let game_close_request = Arc::new(Mutex::new(None));
         let game_close_worker = Arc::clone(&game_close_request);
+        let game_restore_request = Arc::new(Mutex::new(None));
+        let game_restore_worker = Arc::clone(&game_restore_request);
         let pace = Arc::new(AtomicU8::new(MonitorPace::Compact as u8));
         let pace_worker = Arc::clone(&pace);
         let shared = Arc::clone(&health);
@@ -309,10 +312,10 @@ impl MonitorHandle {
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, game_close_worker, pace_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
         });
 
-        Self { health, stop, commands, close_request, bootstrap_request, game_close_request, pace }
+        Self { health, stop, commands, close_request, bootstrap_request, game_close_request, game_restore_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -396,6 +399,23 @@ impl MonitorHandle {
             .map_err(|_| "Timed out waiting for game tab shutdown".to_owned())?
     }
 
+    /// Recover the actual game tab with a confirmed BiDi result after native
+    /// verification fails. A queued openTab command is not enough: it returns
+    /// only a queue ID and could silently fail after this worker exits.
+    pub fn restore_game_after_failed_handoff(&self, timeout: Duration) -> Result<(), String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox BiDi monitor stopped before game tab recovery".into());
+        }
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = self.game_restore_request.lock()
+            .map_err(|_| "Game tab recovery mailbox unavailable".to_owned())?;
+        if pending.is_some() { return Err("Game tab recovery is already pending".into()); }
+        *pending = Some(sender);
+        drop(pending);
+        receiver.recv_timeout(timeout)
+            .map_err(|_| "Timed out waiting for Firefox game tab recovery".to_owned())?
+    }
+
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Ok(mut pending) = self.close_request.lock() {
@@ -405,6 +425,9 @@ impl MonitorHandle {
             pending.take();
         }
         if let Ok(mut pending) = self.game_close_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.game_restore_request.lock() {
             pending.take();
         }
         if let Ok(mut mailbox) = self.commands.lock() {
@@ -611,6 +634,7 @@ fn monitor_loop(
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
     game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 ) {
     let mut session: Option<BrowserSession> = None;
@@ -720,6 +744,22 @@ fn monitor_loop(
                 browser.game_context = None;
                 logging::info(&format!(
                     "BiDi closed only game tab on port {port}; verifying native welcome"));
+                Ok(())
+            });
+            let _ = reply.send(result);
+        }
+                let restore_reply = game_restore_request.lock().ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(reply) = restore_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi session is no longer connected for recovery".to_owned()
+            ).and_then(|browser| {
+                if browser.game_context.is_none() {
+                    open_custom_tab(browser, "https://pokeidle.io/app")?;
+                }
+                logging::info(&format!(
+                    "Restored PokéIdle game tab after failed native handoff on port {port}"
+                ));
                 Ok(())
             });
             let _ = reply.send(result);
