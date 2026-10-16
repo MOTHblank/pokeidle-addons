@@ -3154,8 +3154,6 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             )).size(10.0).color(DIM));
         });
 
-    ui.add_space(12.0);
-
     if next != app.ui_options {
         // The change is applied only after a successful disk write. If the
         // options directory is unavailable, keep the previous live setting.
