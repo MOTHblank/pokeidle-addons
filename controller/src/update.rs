@@ -137,7 +137,7 @@ fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
 }
 
 
-/// Versions from the same raw GitHub files used by Violentmonkey.
+/// Optional legacy userscript versions from the Premium archive.
 /// This is a read-only status check; it never installs or replaces scripts.
 #[derive(Debug, Clone, Default)]
 pub struct AddonVersionStatus {
@@ -198,7 +198,7 @@ pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
 fn fetch_addon_versions() -> Result<BTreeMap<String, String>, String> {
     let mut result = BTreeMap::new();
     for file in accounts::discover_addon_files()? {
-        let url = format!("https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/{file}");
+        let url = format!("https://raw.githubusercontent.com/MOTHblank/pokeidle-addons-premium/main/addons/{file}");
         let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
         #[cfg(windows)]
         {
