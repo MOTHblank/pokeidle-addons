@@ -6,6 +6,7 @@
 use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
+use crate::native_restock::Restock;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -167,6 +168,7 @@ impl NativeSession {
         initial: Option<(GameSocket, String)>, settings: Option<Value>) -> Result<Self, String> {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
+        let restock = Restock::new(settings.as_ref());
         let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
         let worker_auto_catch = Arc::clone(&auto_catch);
         let (command_tx, command_rx) = mpsc::sync_channel(64);
@@ -179,7 +181,7 @@ impl NativeSession {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
-                        gameplay, command_rx, worker_auto_catch);
+                        gameplay, restock, command_rx, worker_auto_catch);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -367,7 +369,8 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
 fn session_loop(credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
-    mut gameplay: Gameplay, command_rx: mpsc::Receiver<GameCommand>,
+    mut gameplay: Gameplay, mut restock: Restock,
+    command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
