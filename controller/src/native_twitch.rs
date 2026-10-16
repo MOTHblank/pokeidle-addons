@@ -49,7 +49,10 @@ impl IrcIdentity {
             .ok_or_else(|| "Twitch IRC PASS wasn't captured".to_owned())?;
         let nick = value.get("nick").and_then(serde_json::Value::as_str)
             .ok_or_else(|| "Twitch IRC NICK wasn't captured".to_owned())?;
+        // Twitch's web IRC client can omit its CAP request on reconnect.
+        // An empty captured capability string is not an authentication error.
         let cap = value.get("cap").and_then(serde_json::Value::as_str)
+            .filter(|cap| !cap.trim().is_empty())
             .unwrap_or("CAP REQ :twitch.tv/tags twitch.tv/commands");
         if !pass.starts_with("PASS oauth:") || pass.len() > 2048 ||
             !pass[11..].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
@@ -313,6 +316,11 @@ mod tests {
             "nick":"NICK myusername", "pass":"PASS oauth:secret",
             "cap":"CAP REQ :twitch.tv/tags twitch.tv/commands"});
         assert!(validate(&sample).is_ok());
+        let without_cap = serde_json::json!({
+            "url":"wss://irc-ws.chat.twitch.tv:443",
+            "pass":"PASS oauth:secret", "nick":"NICK myusername", "cap":""
+        });
+        assert!(validate(&without_cap).is_ok());
         let native_capture = json!({"url":"wss://irc-ws.chat.twitch.tv:443","nick":"NICK myusername","pass":"PASS oauth:secret","cap":"CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership"});
         assert!(validate(&native_capture).is_ok());
         assert!(validate(&json!({"url":"wss://evil.tld","nick":"NICK user","pass":"PASS oauth:secret"})).is_err());
