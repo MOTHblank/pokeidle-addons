@@ -485,7 +485,7 @@ mod tests{
             ..Default::default()};
         let mut guide=AtlasReference::default();
         guide.species.insert(1,native_atlas::ReferenceSpecies{
-            id:1,name:"A".into(),types:vec![],base:vec![1.0;6],
+            name:"A".into(),types:vec![],base:vec![1.0;6],
             moves:vec![],
             drops:vec![native_atlas::ReferenceDrop{
                 item_id:None,item_name:Some("Stone".into()),
@@ -494,7 +494,7 @@ mod tests{
         });
         assert_eq!(item_units_per_h(&hunt,&guide,"Stone",100.0,1.0),None);
         guide.species.insert(2,native_atlas::ReferenceSpecies{
-            id:2,name:"B".into(),types:vec![],base:vec![1.0;6],
+            name:"B".into(),types:vec![],base:vec![1.0;6],
             moves:vec![],drops:vec![],
         });
         let forecast=item_units_per_h(&hunt,&guide,"Stone",100.0,1.0).unwrap();

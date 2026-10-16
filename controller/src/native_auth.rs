@@ -36,6 +36,9 @@ pub fn save(profile: GameProfile, value: &Value) -> Result<(), String> {
     let bytes = serialize(value)?;
     platform::save(profile, &bytes)
 }
+// Revocation is intentionally retained for a future explicit sign-out action.
+// Never erase a player’s saved login as an incidental cleanup step.
+#[allow(dead_code)]
 pub fn clear(profile: GameProfile) -> Result<(), String> {
     platform::clear(profile)
 }
@@ -159,6 +162,7 @@ mod platform {
         fs::write(path, cipher)
             .map_err(|_| "Could not save DPAPI-protected native session".to_owned())
     }
+    #[allow(dead_code)]
     pub fn clear(profile: GameProfile) -> Result<(), String> {
         match fs::remove_file(location(profile)?) {
             Ok(()) => Ok(()),
@@ -220,6 +224,7 @@ mod platform {
         cmd.extend(args);
         secret_tool(&cmd, Some(bytes)).map(|_| ())
     }
+    #[allow(dead_code)]
     pub fn clear(profile: GameProfile) -> Result<(), String> {
         let args = base_args(profile);
         let mut cmd = vec!["clear"];
