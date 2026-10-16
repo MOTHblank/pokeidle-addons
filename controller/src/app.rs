@@ -1169,6 +1169,7 @@ struct NativeHandoffEvent {
 struct CachedNativeEvent {
     index: usize,
     headless: bool,
+    existing_firefox: bool,
     result: Result<Option<NativeSession>, String>,
 }
 
@@ -1513,6 +1514,14 @@ impl ControllerApp {
             self.cached_native_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
             if self.games[event.index].is_running() { continue; }
+            if event.existing_firefox {
+                // A stale managed Firefox process still owns this profile.
+                // Do not create a competing native game socket from cache.
+                // Adopt its BiDi session and let the two-phase handoff close it.
+                self.require_browser_login[event.index] = true;
+                self.launch_firefox_bootstrap(profile, event.headless);
+                continue;
+            }
             if self.require_browser_login[event.index] {
                 self.launch_firefox_bootstrap(profile, event.headless);
                 continue;
@@ -1875,22 +1884,30 @@ impl ControllerApp {
         let started = std::thread::Builder::new()
             .name(format!("moth-cache-{}", profile.name()))
             .spawn(move || {
-                let result = crate::native_auth::load(profile)
-                    .and_then(|saved| saved.map(|bootstrap| {
-                        // Even a cache startup must prove the game and IRC
-                        // session before reporting the account online.
-                        // For transient outages, keep reconnecting natively.
-                        NativeSession::start_verified(bootstrap.clone())
-                            .or_else(|error| {
-                                if error.contains("AUTH_REQUIRED:") ||
-                                    error.contains("rejected the captured OAuth") {
-                                    Err(error)
-                                } else {
-                                    NativeSession::start(bootstrap)
-                                }
-                            })
-                    }).transpose());
-                let _ = tx.send(CachedNativeEvent { index, headless, result });
+                // A managed Firefox profile from a previous crash may still
+                // have an active game socket. Determine ownership BEFORE using
+                // saved credentials, or the same account may connect twice.
+                let detected = Config::for_profile(profile)
+                    .and_then(|config| firefox::find_profile_process(&config));
+                let existing_firefox = matches!(detected, Ok(Some(_)));
+                let result = detected.and_then(|_| {
+                    if existing_firefox { return Ok(None); }
+                    crate::native_auth::load(profile)
+                        .and_then(|saved| saved.map(|bootstrap| {
+                            NativeSession::start_verified(bootstrap.clone())
+                                .or_else(|error| {
+                                    if error.contains("AUTH_REQUIRED:") ||
+                                        error.contains("rejected the captured OAuth") {
+                                        Err(error)
+                                    } else {
+                                        NativeSession::start(bootstrap)
+                                    }
+                                })
+                        }).transpose())
+                });
+                let _ = tx.send(CachedNativeEvent {
+                    index, headless, existing_firefox, result
+                });
             });
         if let Err(error) = started {
             self.cached_native_busy[index] = false;
