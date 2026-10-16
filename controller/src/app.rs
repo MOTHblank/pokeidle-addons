@@ -291,6 +291,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Guide model: forecasts are uncertain; calibrated to observed combat where available." =>
             "Modelo do guia: estimativas incertas, calibradas com combate real quando possível.",
         "Calibrated estimate" => "Estimativa calibrada",
+        "Measured" => "Medido",
+        "Actual observed rate during current hunt" => "Taxa real observada na hunt atual",
+        "Spawn composition" => "Composição de spawns",
         "Experimental estimate" => "Estimativa experimental",
 
         "PokéIdle controller" => "Controlador do PokéIdle",
@@ -3169,13 +3172,16 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         }
     });
     let query = app.hunt_query.trim().to_lowercase();
+    let reference = app.hunt_reference.as_deref();
     let mut rows: Vec<_> = hunts.hunts.iter().filter(|h| {
         (app.hunt_region.is_empty() || h.region == app.hunt_region) &&
         (query.is_empty() || h.name.to_lowercase().contains(&query) ||
             h.region.to_lowercase().contains(&query) ||
             h.area.to_lowercase().contains(&query) ||
             h.slug.to_lowercase().contains(&query) ||
-            h.species.iter().any(|sp| sp.id.to_string().contains(&query)))
+            h.species.iter().any(|sp| sp.id.to_string().contains(&query) ||
+                reference.and_then(|r| r.species.get(&sp.id))
+                    .is_some_and(|meta| meta.name.to_lowercase().contains(&query))))
     }).collect();
     // Baseline XP/kill is authoritative, but actual kills/hour for another
     // hunt is unknown; show only a scenario at the observed CURRENT pace.
@@ -3189,12 +3195,21 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         (bonuses.pokemon_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
     // Compute forecasts once per visible hunt rather than recalculating the
     // combat simulator O(n log n) times during every sort comparison.
-    let reference = app.hunt_reference.as_deref();
     let mut ranked: Vec<_> = rows.drain(..).map(|h| {
         let forecast = reference.and_then(|refdata| native_atlas::estimate(&hunts,h,refdata));
         let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
             .unwrap_or((0.0,0.0));
-        let value = if let Some(forecast) = &forecast {
+        let current_hunt = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
+        let actual = if current_hunt {
+            match app.hunt_ranking {
+                HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
+                HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
+                HuntRanking::Gold if m.valid_gold => Some(m.gold_net_h),
+                _ => None
+            }
+        } else { None };
+        let value = if let Some(actual) = actual { actual }
+        else if let Some(forecast) = &forecast {
             match app.hunt_ranking {
                 HuntRanking::TrainerXp => forecast.trainer_xp_h,
                 HuntRanking::PokemonXp => forecast.pokemon_xp_h,
@@ -3207,7 +3222,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 HuntRanking::Gold => gold,
             }
         };
-        (h, forecast, value)
+        (h, forecast, value, actual.is_some())
     }).collect();
     ranked.sort_by(|a,b| b.2.total_cmp(&a.2)
         .then_with(|| a.0.level.cmp(&b.0.level))
@@ -3225,7 +3240,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical().id_salt("atlas-hunt-results")
         .max_height(ui.available_height().max(240.0)).show(ui, |ui| {
-            for (index, (h, forecast, value)) in ranked.iter().take(200).enumerate() {
+            for (index, (h, forecast, value, measured)) in ranked.iter().take(200).enumerate() {
                 let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
                 let pending = hunts.pending_hunt_slug.as_deref() == Some(h.slug.as_str());
                 egui::Frame::new().fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
@@ -3271,7 +3286,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         format_hunt_amount(*value)
                                     } else { "—".into() })
                                         .strong().color(if current { GOOD } else { TEXT }))
-                                        .on_hover_text(if let Some(forecast) = forecast {
+                                        .on_hover_text(if *measured {
+                                            tr("Actual observed rate during current hunt").to_owned()
+                                        } else if let Some(forecast) = forecast {
                                             format!(
                                                 "{} · {:.0} kills/h · {:.1}s/kill · {:.0}% species coverage",
                                                 if forecast.calibrated { "Calibrated guide model" }
@@ -3282,7 +3299,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         } else {
                                             tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained.").into()
                                         });
-                                    if let Some(forecast) = forecast {
+                                    if *measured {
+                                        ui.label(RichText::new(tr("Measured")).size(9.0).color(GOOD));
+                                    } else if let Some(forecast) = forecast {
                                         ui.label(RichText::new(tr(if forecast.calibrated {
                                             "Calibrated estimate"
                                         } else { "Experimental estimate" }))
@@ -3291,6 +3310,28 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 });
                             });
                         });
+                        // Composition comes from the logged-in account's
+                        // actual unlock catalog, enriched with read-only Atlas
+                        // species names and types when the guide is available.
+                        if !h.species.is_empty() {
+                            ui.collapsing(tr("Spawn composition"), |ui| {
+                                let sum = h.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
+                                for spawn in h.species.iter().take(40) {
+                                    let meta = reference.and_then(|r|r.species.get(&spawn.id));
+                                    let name = meta.map(|s|s.name.as_str()).unwrap_or("Unknown");
+                                    let types = meta.map(|s|s.types.join("/")).unwrap_or_default();
+                                    let pct = if sum>0.0 {100.0*spawn.weight/sum}else{0.0};
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(format!(
+                                            "{} · #{} · {:.1}%",name,spawn.id,pct
+                                        )).size(10.0).color(TEXT));
+                                        if !types.is_empty() {
+                                            ui.label(RichText::new(types).size(10.0).color(DIM));
+                                        }
+                                    });
+                                }
+                            });
+                        }
                     });
                 ui.add_space(5.0);
             }
