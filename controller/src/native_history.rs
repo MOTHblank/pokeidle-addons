@@ -385,6 +385,12 @@ impl HistoryRecorder {
         // Capturing only one model per hour/hunt prevents redraw-generated
         // history inflation. The async history writer owns persistence.
         self.snapshot.retain_recent(unix_day());
+        // Never grow the 90-day journal beyond what the loader accepts.
+        if self.snapshot.forecasts.len()>5000 {
+            self.snapshot.forecasts.sort_by_key(|row|row.hour);
+            let extra=self.snapshot.forecasts.len()-5000;
+            self.snapshot.forecasts.drain(0..extra);
+        }
         self.dirty=true;
         self.needs_publish=true;
     }
