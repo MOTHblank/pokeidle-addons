@@ -3,9 +3,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use std::process::Command;
-use std::sync::{mpsc::{self, Sender, RecvTimeoutError}, Arc, Mutex};
+use std::sync::{mpsc::{self, Sender}, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 const RELEASE_API_URL: &str =
     "https://api.github.com/repos/MOTHblank/pokeidle-addons/releases/latest";
@@ -149,7 +148,8 @@ pub struct AddonVersionStatus {
 
 pub type SharedAddonVersionStatus = Arc<Mutex<AddonVersionStatus>>;
 
-/// Check versions at launch, every four hours thereafter, and immediately on manual request.
+/// Optional browser-script versions are checked only when explicitly requested
+/// from the Accounts advanced panel. Never scan Premium on native startup.
 /// All HTTP work stays off the UI thread.
 pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let status = Arc::new(Mutex::new(AddonVersionStatus::default()));
@@ -157,33 +157,29 @@ pub fn start_addon_version_check() -> (SharedAddonVersionStatus, Sender<()>) {
     let (tx, rx) = mpsc::channel::<()>();
     let spawn_result = thread::Builder::new()
         .name("addon-version-check".to_string())
-        .spawn(move || loop {
-            if let Ok(mut state) = worker_status.lock() {
-                state.checking = true;
-            }
-            let result = fetch_addon_versions();
-            if let Ok(mut state) = worker_status.lock() {
-                state.checking = false;
-                match result {
-                    Ok(versions) => {
-                        state.versions = versions;
-                        state.checked = true;
-                        state.error = None;
-                    }
-                    Err(error) => {
-                        crate::logging::warn(&format!("addon version check failed: {error}"));
-                        // Never present old remote data as freshly checked.
-                        state.checked = false;
-                        state.error = Some(error);
+        .spawn(move || {
+            while rx.recv().is_ok() {
+                // Repeated clicks while a scan is queued are coalesced.
+                while rx.try_recv().is_ok() {}
+                if let Ok(mut state) = worker_status.lock() {
+                    state.checking = true;
+                }
+                let result = fetch_addon_versions();
+                if let Ok(mut state) = worker_status.lock() {
+                    state.checking = false;
+                    match result {
+                        Ok(versions) => {
+                            state.versions = versions;
+                            state.checked = true;
+                            state.error = None;
+                        }
+                        Err(error) => {
+                            crate::logging::warn(&format!("addon version check failed: {error}"));
+                            state.checked = false;
+                            state.error = Some(error);
+                        }
                     }
                 }
-            }
-            match rx.recv_timeout(Duration::from_secs(4 * 60 * 60)) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {
-                    // Coalesce multiple requests made during the same scan.
-                    while rx.try_recv().is_ok() {}
-                }
-                Err(RecvTimeoutError::Disconnected) => break,
             }
         });
     if let Err(error) = spawn_result {
