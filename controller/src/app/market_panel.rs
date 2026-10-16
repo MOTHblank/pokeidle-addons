@@ -17,6 +17,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     }
     let live_status=app.games[index].native.as_ref().map(|n|n.snapshot().native_market);
     let mut save=false;
+    let mut jump_to_snatch=false;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
         ui.horizontal_wrapped(|ui|{
@@ -50,10 +51,20 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         let Some(cfg)=app.market_drafts[index].as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
-            ui.checkbox(&mut cfg.enabled,"Enable automatic buying");
-            ui.checkbox(&mut cfg.paused,"Pause purchases");
-            ui.label(RichText::new(if cfg.enabled&&!cfg.paused {"Save to activate"}else{"Not buying"})
-                .size(10.0).color(if cfg.enabled&&!cfg.paused{WARN}else{DIM}));
+            ui.checkbox(&mut cfg.enabled,"Enable automatic buying")
+                .on_hover_text("Affects this account after saving");
+            ui.checkbox(&mut cfg.paused,"Pause purchases")
+                .on_hover_text("Pause buying without deleting rules");
+            if ui.button("Save changes")
+                .on_hover_text("Apply the current editor settings to this account").clicked(){
+                save=true;
+            }
+            if ui.small_button("↓ Snatch queue")
+                .on_hover_text("Jump to saved offers and pending listings").clicked(){
+                jump_to_snatch=true;
+            }
+            ui.label(RichText::new("Save to apply changes")
+                .size(10.0).color(DIM));
         });
         ui.separator();
         ui.horizontal_wrapped(|ui|{
@@ -90,44 +101,57 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         }
         let mut remove=None;
         for (i,rule) in cfg.rules.iter_mut().enumerate() {
-            egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
-                .inner_margin(egui::Margin::symmetric(9,6)).show(ui,|ui|{
+            egui::Frame::new().fill(PANEL_ALT)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(7.0)
+                .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
                 ui.horizontal_wrapped(|ui|{
-                    ui.checkbox(&mut rule.enabled,"");
+                    ui.checkbox(&mut rule.enabled,"")
+                        .on_hover_text("Include this rule when automatic buying is enabled");
                     let item=if rule.kind=="item" {format!(" #{}",rule.item_id)} else {String::new()};
                     ui.label(RichText::new(format!("{}{} · max {}/unit · {}",
-                        kind_label(&rule.kind),item,rule.buy_max,rule.currency)).size(11.0).strong());
-                    if ui.small_button("Remove").clicked() {remove=Some(i);}
+                        kind_label(&rule.kind),item,rule.buy_max,
+                        if rule.currency=="orb"{"Gems"}else{"Gold"}))
+                        .size(11.0).strong().color(if rule.enabled{TEXT}else{MUTED}));
+                    if ui.small_button("Remove")
+                        .on_hover_text("Remove from the editor; save to apply").clicked(){
+                        remove=Some(i);
+                    }
                 });
-                ui.horizontal_wrapped(|ui|{
-                    egui::ComboBox::from_id_salt(("native-market-kind",index,i))
-                        .selected_text(kind_label(&rule.kind))
-                        .show_ui(ui,|ui|{
-                            for (value,label) in [
-                                ("item","Specific item"),("any_item","Any item"),
-                                ("pokemon_any","Any Pokémon"),("pokemon_p5","P5 Pokémon"),
-                                ("pokemon_shiny","Shiny Pokémon")] {
-                                ui.selectable_value(&mut rule.kind,value.into(),label);
-                            }
+                egui::CollapsingHeader::new("Edit rule & limits")
+                    .id_salt(("market-rule-editor",index,rule.id.as_str()))
+                    .default_open(false)
+                    .show(ui,|ui|{
+                        ui.horizontal_wrapped(|ui|{
+                            egui::ComboBox::from_id_salt(("native-market-kind",index,i))
+                                .selected_text(kind_label(&rule.kind))
+                                .show_ui(ui,|ui|{
+                                    for (value,label) in [
+                                        ("item","Specific item"),("any_item","Any item"),
+                                        ("pokemon_any","Any Pokémon"),("pokemon_p5","P5 Pokémon"),
+                                        ("pokemon_shiny","Shiny Pokémon")] {
+                                        ui.selectable_value(&mut rule.kind,value.into(),label);
+                                    }
+                                });
+                            if rule.kind=="pokemon_shiny"{rule.currency="orb".into();}
+                            egui::ComboBox::from_id_salt(("native-market-currency",index,i))
+                                .selected_text(if rule.currency=="orb"{"Gems"}else{"Gold"})
+                                .show_ui(ui,|ui|{
+                                    ui.selectable_value(&mut rule.currency,"gold".into(),"Gold");
+                                    ui.selectable_value(&mut rule.currency,"orb".into(),"Gems");
+                                });
+                            if rule.kind=="item"{field(ui,"Item ID",&mut rule.item_id);}
+                            field(ui,"Max unit price",&mut rule.buy_max);
                         });
-                    if rule.kind=="pokemon_shiny" {rule.currency="orb".into();}
-                    egui::ComboBox::from_id_salt(("native-market-currency",index,i))
-                        .selected_text(if rule.currency=="orb"{"Gems"}else{"Gold"})
-                        .show_ui(ui,|ui|{
-                            ui.selectable_value(&mut rule.currency,"gold".into(),"Gold");
-                            ui.selectable_value(&mut rule.currency,"orb".into(),"Gems");
+                        ui.collapsing("Per-rule limits (0 = unlimited)",|ui|{
+                            ui.horizontal_wrapped(|ui|{
+                                field(ui,"Spend / session",&mut rule.max_spend_session);
+                                field(ui,"Spend / UTC day",&mut rule.max_spend_day);
+                                field(ui,"Purchases / session",&mut rule.max_purchases_session);
+                                field(ui,"Units / session",&mut rule.max_quantity_session);
+                            });
                         });
-                    if rule.kind=="item" {field(ui,"Item ID",&mut rule.item_id);}
-                    field(ui,"Max unit price",&mut rule.buy_max);
-                });
-                ui.collapsing("Per-rule limits (0 = unlimited)",|ui|{
-                    ui.horizontal_wrapped(|ui|{
-                        field(ui,"Spend / session",&mut rule.max_spend_session);
-                        field(ui,"Spend / UTC day",&mut rule.max_spend_day);
-                        field(ui,"Purchases / session",&mut rule.max_purchases_session);
-                        field(ui,"Units / session",&mut rule.max_quantity_session);
                     });
-                });
             });
             ui.add_space(4.0);
         }
@@ -135,8 +159,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
 
         ui.add_space(8.0);
         ui.separator();
-        let jump_to_snatch = ui.small_button("Show Snatch queue ↓")
-            .on_hover_text("Jump to your saved offers and new listings").clicked();
+        if ui.small_button("Show Snatch queue ↓")
+            .on_hover_text("Jump to your saved offers and new listings").clicked(){
+            jump_to_snatch=true;
+        }
         ui.add_space(5.0);
         let snatch_response = egui::CollapsingHeader::new(
             format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()))
