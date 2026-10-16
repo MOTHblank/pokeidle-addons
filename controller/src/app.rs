@@ -3691,7 +3691,8 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
         }
     }
     if views.is_empty(){
-        draw_native_missing_panel(app,ui,app.inventory_account,
+        let selected=app.inventory_account;
+        draw_native_missing_panel(app,ui,selected,
             tr("Inventory requires an authenticated native game session"));
         return;
     }
