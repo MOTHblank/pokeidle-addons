@@ -3705,79 +3705,107 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             id.to_string().contains(&query))).collect::<Vec<_>>();
     rows.sort_by(|a,b|a.1.1.cmp(&b.1.1).then_with(||a.0.cmp(&b.0)));
     let total_items=rows.iter().map(|row|row.1.0).sum::<u64>();
-    ui.add_space(12.0);
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+    let mut drops=acquired.into_iter()
+        .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
+        .collect::<Vec<_>>();
+    drops.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+    ui.add_space(6.0);
+    if ui.available_width()>=720.0 {
+        // Side-by-side stocks and drops use the available width instead of
+        // forcing users to scroll past a mostly empty stacked section.
+        ui.columns(2,|cols|{
+            draw_inventory_stock(&mut cols[0],&rows,total_items,
+                &query,&app.inventory_category);
+            draw_inventory_drops(&mut cols[1],&drops,session_kills,session_catches,&query);
+        });
+    } else {
+        draw_inventory_stock(ui,&rows,total_items,&query,&app.inventory_category);
+        ui.add_space(8.0);
+        draw_inventory_drops(ui,&drops,session_kills,session_catches,&query);
+    }
+}
+
+fn draw_inventory_stock(
+    ui:&mut egui::Ui,
+    rows:&[((bool,u64),(u64,String,String))],
+    total_items:u64,
+    query:&str,
+    category:&str,
+) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Current inventory")).size(14.0).strong().color(TEXT));
-                ui.label(RichText::new(format!(
-                    "{} {} · {} {}",rows.len(),tr("items"),total_items,tr("units")
-                )).size(10.0).color(DIM));
-                ui.label(RichText::new(tr("Server-reported stock · not inferred purchases"))
-                    .size(10.0).color(MUTED));
+                ui.label(RichText::new(tr("Current inventory"))
+                    .size(13.0).strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {} · {} {}",rows.len(),
+                    tr("items"),total_items,tr("units"))).size(10.0).color(DIM));
             });
-            egui::ScrollArea::vertical().id_salt("inventory-stock-list")
-                .max_height(290.0).show(ui,|ui|{
-                    for ((is_ball,id),(quantity,name,category)) in &rows {
-                        ui.horizontal(|ui|{
-                            ui.label(RichText::new(if *is_ball{"●"}else{"◆"})
-                                .size(10.0).color(if *is_ball { ACCENT } else { MUTED }));
-                            ui.label(RichText::new(name).size(11.0).color(TEXT));
-                            ui.label(RichText::new(format!("#{id} · {}",tr(category)))
-                                .size(9.0).color(DIM));
-                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+            ui.label(RichText::new(tr("Server-reported stock")).size(10.0).color(DIM));
+            if rows.is_empty() {
+                ui.label(RichText::new(if query.is_empty() && category.is_empty() {
+                    tr("No server-reported stock yet")
+                } else {
+                    tr("No items match these filters")
+                }).size(11.0).color(MUTED));
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("inventory-stock-grid")
+                .max_height(400.0).show(ui,|ui|{
+                    egui::Grid::new("inventory-stock-table").striped(true)
+                        .spacing([8.0,5.0]).show(ui,|ui|{
+                            for ((is_ball,id),(quantity,name,category)) in rows {
+                                ui.label(RichText::new(
+                                    compact_text(name,23)).size(11.0).color(TEXT))
+                                    .on_hover_text(name);
+                                ui.label(RichText::new(format!("#{id} · {}",tr(category)))
+                                    .size(9.0).color(if *is_ball { ACCENT } else { DIM }));
                                 ui.label(RichText::new(format!("×{quantity}"))
-                                    .size(12.0).strong().color(GOOD));
-                            });
+                                    .size(11.0).strong().color(GOOD));
+                                ui.end_row();
+                            }
                         });
-                        ui.separator();
-                    }
-                    if rows.is_empty(){
-                        ui.label(if query.is_empty() && app.inventory_category.is_empty() {
-                            tr("No server-reported stock for these accounts yet")
-                        } else {
-                            tr("No inventory items match the filters")
-                        });
-                    }
                 });
         });
-    ui.add_space(10.0);
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+}
+
+fn draw_inventory_drops(
+    ui:&mut egui::Ui,
+    drops:&[(String,u64)],
+    session_kills:u64,
+    session_catches:u64,
+    query:&str,
+) {
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Items acquired in session"))
-                    .size(14.0).strong().color(TEXT));
-                ui.label(RichText::new(format!(
-                    "{} {} · {} {}",session_kills,tr("kills"),session_catches,tr("captures")
-                )).size(10.0).color(DIM));
+                ui.label(RichText::new(tr("Session drops"))
+                    .size(13.0).strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {} · {} {}",session_kills,
+                    tr("kills"),session_catches,tr("captures")))
+                    .size(10.0).color(DIM));
             });
-            ui.label(RichText::new(tr(
-                "From wild battle drops only. Does not count shop purchases or starting inventory."
-            )).size(10.0).color(MUTED));
-            let mut names=acquired.into_iter()
-                .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
-                .collect::<Vec<_>>();
-            names.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
-            let no_matching_drops=names.is_empty();
-            egui::ScrollArea::vertical().id_salt("inventory-session-drops")
-                .max_height(250.0).show(ui,|ui|{
-                    for (name,quantity) in names {
-                        ui.horizontal(|ui|{
-                            ui.label(RichText::new(name).size(11.0).color(TEXT));
-                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+            ui.label(RichText::new(tr("Battle-acquired only · excludes purchases"))
+                .size(10.0).color(DIM));
+            if drops.is_empty() {
+                ui.label(RichText::new(if query.is_empty() {
+                    tr("No battle drops recorded yet")
+                } else {
+                    tr("No acquired drops match this search")
+                }).size(11.0).color(MUTED));
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("inventory-drop-grid")
+                .max_height(400.0).show(ui,|ui|{
+                    egui::Grid::new("inventory-drop-table").striped(true)
+                        .spacing([8.0,5.0]).show(ui,|ui|{
+                            for (name,quantity) in drops {
+                                ui.label(RichText::new(compact_text(name,30))
+                                    .size(11.0).color(TEXT)).on_hover_text(name);
                                 ui.label(RichText::new(format!("+{quantity}"))
-                                    .size(12.0).color(GOOD).strong());
-                            });
+                                    .size(11.0).strong().color(GOOD));
+                                ui.end_row();
+                            }
                         });
-                        ui.separator();
-                    }
-                    if no_matching_drops {
-                        ui.label(if query.is_empty() {
-                            tr("No drops acquired in this session yet")
-                        } else {
-                            tr("No acquired drops match the search")
-                        });
-                    }
                 });
         });
 }
