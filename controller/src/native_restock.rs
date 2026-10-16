@@ -3,6 +3,7 @@
 //! shop.buy can be in flight per account. Purchase acknowledgments must match
 //! the pending order; unrelated purchases cannot unblock the worker.
 use crate::native_gameplay::GameCommand;
+use crate::native_capture_config::CatchSettings;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -95,6 +96,16 @@ impl Restock {
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
         }
+    }
+    /// Apply settings while maintaining pending transaction and authoritative
+    /// shop/inventory state. Replacing the Restock worker would lose in-flight
+    /// purchase identity and could trigger a duplicate order.
+    pub fn configure(&mut self, config: &CatchSettings) {
+        let candidate=Self::new(Some(&config.as_value()));
+        self.rules=candidate.rules;
+        self.reserve=candidate.reserve;
+        self.status.configured=candidate.status.configured;
+        self.set_enabled(config.restock_enabled);
     }
     pub fn set_enabled(&mut self, enabled: bool) {
         self.status.enabled = enabled;
@@ -416,6 +427,21 @@ mod tests {
         r.set_enabled(true);
         r.ingest(r#"{"t":"estado","estado":{"gold":105}}"#, now);
         assert!(r.next(now, true).is_none());
+    }
+    #[test]
+    fn reconfiguration_preserves_inflight_purchase() {
+        let now=Instant::now();let mut r=configured();
+        welcome(&mut r,now);
+        assert!(r.next(now,true).is_some());
+        let mut cfg=CatchSettings::from_value(Some(&json!({
+            "enabled":true,"restock":{"enabled":true,
+                "selectedBallId":4,"ballAt":5,"ballTo":40}
+        })));
+        r.configure(&cfg);
+        assert!(r.status.pending);
+        assert!(r.next(now+Duration::from_secs(1),true).is_none());
+        cfg.restock_enabled=false;r.configure(&cfg);
+        assert!(r.status.pending);
     }
     #[test]
     fn reconnect_discards_uncertain_purchase_and_requires_fresh_state() {
