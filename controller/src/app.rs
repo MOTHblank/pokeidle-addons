@@ -3804,6 +3804,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
+        let previous_account = app.hunt_account;
         egui::ComboBox::from_id_salt("hunt-account")
             .selected_text(app.account_name(app.games[app.hunt_account].profile))
             .show_ui(ui, |ui| {
@@ -3812,6 +3813,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.selectable_value(&mut app.hunt_account, index, name);
                 }
             });
+        if app.hunt_account != previous_account {
+            app.hunt_page = 0;
+        }
         ui.add_space(8.0);
         ui.label(RichText::new(tr("Native server catalog · no userscripts"))
             .size(10.0).color(MUTED));
@@ -3849,7 +3853,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let online = connection.phase == "Online"
         && connection.last_received.is_some_and(|at| at.elapsed() < Duration::from_secs(90));
     // Drop the game-slot borrow before scheduling a worker on the app.
-    request_hunt_forecasts(app, index, &hunts);
+    if online && hunts.catalog_ready {
+        request_hunt_forecasts(app, index, &hunts);
+    }
     let native = app.games[index].native.as_ref().expect("native session checked");
     let expected_key = app.hunt_reference.as_ref()
         .map(|guide| hunt_forecast_key(index, &hunts, guide));
