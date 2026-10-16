@@ -712,7 +712,7 @@ impl GameSlot {
             let mut health = Health::default();
             health.state = if state.phase == "Online" { "Running".into() }
                 else { state.phase.clone() };
-            health.activity = "Native background (experimental)".into();
+            health.activity = format!("Native background · {} kills observed", state.battle_kills);
             health.game_ready = state.phase == "Online";
             health.logged_in = state.phase == "Online";
             health.hunt = state.hunt_slug.unwrap_or_default();
@@ -2620,9 +2620,14 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         app.launch_one(profile);
                     }
                 }
-                if app.games[index].native.is_some() {
+                if let Some(native) = app.games[index].native.as_ref() {
+                    let stats = native.snapshot();
                     ui.label(RichText::new(tr("Native WS experiment · no browser userscripts"))
                         .size(10.0).color(WARN));
+                    ui.label(RichText::new(format!(
+                        "{} · {} frames · {} kills · {} captures",
+                        stats.phase, stats.frames, stats.battle_kills, stats.captures
+                    )).size(10.0).color(DIM));
                 }
                 if running && app.games[index].native.is_none()
                     && app.games[index].monitor.is_some()
