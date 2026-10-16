@@ -455,6 +455,7 @@ fn session_loop(credentials: Credentials,
                     .unwrap_or_default();
                 gameplay.configure(&last_config);
                 restock.configure(&last_config);
+                restock.publish_status();
                 update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -558,6 +559,7 @@ fn session_loop(credentials: Credentials,
                         if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                         last_hunt_publish = Instant::now();
                     }
+                    restock.publish_status();
                     update(&snapshot, |s| {
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
@@ -596,6 +598,7 @@ fn session_loop(credentials: Credentials,
                 if !stop.load(Ordering::Relaxed) {
                     while command_rx.try_recv().is_ok() {}
                     restock.on_disconnect(Instant::now());
+                    restock.publish_status();
                     hunt_intel.on_disconnect();
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {
