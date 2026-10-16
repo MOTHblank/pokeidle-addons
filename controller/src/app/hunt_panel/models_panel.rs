@@ -1,0 +1,503 @@
+//! Compact scenario lab: conditional, never presented as real server odds.
+use super::*;
+use crate::native_history::HistorySnapshot;
+
+fn value(n:Option<f64>)->String {
+    n.filter(|n|n.is_finite()).map(format_hunt_amount)
+        .unwrap_or_else(||"—".into())
+}
+fn selected_hunt<'a>(view:&'a HuntView,guide:Option<&'a AtlasReference>,
+    scenario:&AtlasScenario)->Option<(&'a native_hunts::HuntEntry,bool)>{
+    let hunts=atlas_destinations(view,guide);
+    let requested=if scenario.hunt_slug.is_empty(){
+        view.hunt_slug.as_deref()
+    }else{Some(scenario.hunt_slug.as_str())};
+    hunts.iter().find(|(h,_)|Some(h.slug.as_str())==requested)
+        .copied().or_else(||hunts.into_iter().next())
+}
+pub(super) fn item_units_per_h(hunt:&native_hunts::HuntEntry,
+    reference:&AtlasReference,name:&str,kills_h:f64,drop_factor:f64)->Option<f64>{
+    if name.is_empty()||!kills_h.is_finite()||kills_h<0.0{return None}
+    let total=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
+    if total<=0.0{return None}
+    let mut found=false;
+    let mut units=0.0;
+    let mut covered=0.0;
+    for spawn in &hunt.species{
+        if spawn.weight<=0.0{continue}
+        let meta=reference.species.get(&spawn.id)?;
+        covered+=spawn.weight;
+        for drop in &meta.drops{
+            if drop.item_name.as_deref().is_some_and(|v|v.eq_ignore_ascii_case(name))
+                || drop.item_id.is_some_and(|id|id.to_string()==name){
+                found=true;
+                units+=spawn.weight/total
+                    *(drop.chance_pct/100.0*drop_factor).min(1.0)
+                    *(drop.minimum+drop.maximum)/2.0;
+            }
+        }
+    }
+    if !found||covered<total{return None}
+    Some(units*kills_h)
+}
+
+pub(super) fn draw_retrospective(
+    ui:&mut egui::Ui,history:&HistorySnapshot,slug:Option<&str>,
+    forecast:Option<&native_atlas::Forecast>
+){
+    ui.label(RichText::new("Historical observation vs current forecast")
+        .size(13.0).strong().color(TEXT));
+    let Some(slug)=slug else{
+        ui.label("No selected hunt; history cannot be grouped.");return
+    };
+    let rows:Vec<_>=history.days.iter().filter(|d|d.hunt==slug).collect();
+    if rows.is_empty(){
+        ui.label("No retained observations for this hunt.");return
+    }
+    // Older history has no model checkpoints. Compare current models and
+    // archived snapshots only when the actual fields really exist.
+    let latest_day=rows.iter().map(|d|d.day).max().unwrap_or(0);
+    ui.label(RichText::new("The summary uses the CURRENT model. Archived checkpoints below preserve point-in-time predictions when Hunt Atlas was open. Old history without observed durations remains unavailable.")
+        .size(10.0).color(WARN));
+    egui::Grid::new(("atlas-history",slug)).striped(true)
+        .spacing([15.0,6.0]).show(ui,|ui|{
+            ui.strong("Retained window");ui.strong("Observed trainer/h");
+            ui.strong("Observed Pokémon/h");ui.strong("Current model / observed");ui.end_row();
+            for (days,title) in [(7,"7 days"),(30,"30 days"),(90,"90 days")]{
+                let matching=rows.iter().filter(|d|
+                    d.day<=latest_day&&latest_day-d.day<days);
+                let (seconds,trainer,pokemon,kills,tr_receipts,pk_receipts)=
+                    matching.fold((0u64,0u64,0u64,0u64,0u64,0u64),
+                    |(s,t,p,k,tr,pk),row|(
+                        s.saturating_add(row.observed_seconds),
+                        t.saturating_add(row.timed_trainer_xp),
+                        p.saturating_add(row.timed_pokemon_xp),
+                        k.saturating_add(row.timed_kills),
+                        tr.saturating_add(row.timed_trainer_receipts),
+                        pk.saturating_add(row.timed_pokemon_receipts)));
+                let train=if kills>0&&tr_receipts==kills {
+                    models::retrospective_rate(trainer,seconds)
+                }else{None};
+                let poke=if kills>0&&pk_receipts==kills{
+                    models::retrospective_rate(pokemon,seconds)
+                }else{None};
+                ui.label(title);
+                ui.label(format!("{} / h",value(train)));
+                ui.label(format!("{} / h",value(poke)));
+                let residual=train.filter(|n|*n>0.0)
+                    .and_then(|n|forecast.map(|f|f.trainer_xp_h/n));
+                ui.label(residual.map(|n|format!("{n:.2}×"))
+                    .unwrap_or_else(||"—".into()));
+                ui.end_row();
+            }
+        });
+    let mut archived=history.forecasts.iter().filter(|entry|entry.hunt==slug)
+        .collect::<Vec<_>>();
+    archived.sort_by_key(|record|std::cmp::Reverse(record.hour));
+    ui.collapsing(format!("Archived prediction checkpoints ({})",archived.len()),|ui|{
+        if archived.is_empty(){
+            ui.label("No point-in-time forecasts were captured yet. Open Hunt Atlas during an authenticated session to collect checkpoints.");
+        }else{
+            ui.label(RichText::new("Checkpoints are saved when this panel is open, no more than once per 15 minutes. Same-day observations may cover different hours and are not exact paired combat sessions.")
+                .size(10.0).color(MUTED));
+            egui::ScrollArea::vertical().id_salt(("atlas-archived",slug))
+                .max_height(240.0).show(ui,|ui|{
+                    egui::Grid::new(("atlas-archived-grid",slug))
+                        .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
+                            ui.strong("Day · hour");ui.strong("Archived trainer / Pokémon XP/h");
+                            ui.strong("Same-day trainer/h");ui.strong("Forecast / measured");
+                            ui.end_row();
+                            for sample in archived.iter().take(30){
+                                let observed=rows.iter().find(|row|row.day==sample.day)
+                                    .and_then(|row|if row.timed_kills>0
+                                        && row.timed_trainer_receipts==row.timed_kills{
+                                            models::retrospective_rate(
+                                                row.timed_trainer_xp,row.observed_seconds)
+                                        }else{None});
+                                let residual=observed.filter(|n|*n>0.0)
+                                    .map(|n|sample.trainer_xp_h/n);
+                                ui.label(format!("{} · {:02}:00 UTC",sample.day,
+                                    sample.hour%24));
+                                ui.label(format!("{} / {} · {:.0} kills/h",
+                                    value(Some(sample.trainer_xp_h)),
+                                    value(Some(sample.pokemon_xp_h)),sample.kills_h));
+                                ui.label(value(observed));
+                                ui.label(residual.map(|n|format!("{n:.2}×"))
+                                    .unwrap_or_else(||"—".into()));
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
+    });
+    let mut latest=rows.iter().filter(|r|r.observed_seconds>=60).collect::<Vec<_>>();
+    latest.sort_by_key(|row|std::cmp::Reverse(row.day));
+    ui.collapsing(format!("Daily time-attributed measurements ({})",latest.len()),|ui|{
+        egui::ScrollArea::vertical().id_salt(("atlas-daily",slug))
+            .max_height(215.0).show(ui,|ui|{
+                for d in latest.iter().take(90){
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(format!("Day {} · {} kills · {}s observed",
+                            d.day,d.timed_kills,d.observed_seconds));
+                        ui.label(format!("Trainer {} / h",
+                            value(if d.timed_kills>0 &&
+                                d.timed_trainer_receipts==d.timed_kills{
+                                models::retrospective_rate(
+                                    d.timed_trainer_xp,d.observed_seconds)
+                            }else{None})));
+                        ui.label(format!("Pokémon {} / h",
+                            value(if d.timed_kills>0 &&
+                                d.timed_pokemon_receipts==d.timed_kills{
+                                models::retrospective_rate(
+                                    d.timed_pokemon_xp,d.observed_seconds)
+                            }else{None})));
+                    });
+                }
+            });
+    });
+}
+
+pub(super) fn draw_atlas_models(
+    ui:&mut egui::Ui, view:&HuntView,reference:Option<&AtlasReference>,
+    cache:&EstimateCache,scenario:&mut AtlasScenario,history:&HistorySnapshot,live:bool
+){
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Capture, Outland & economy lab")
+            .size(16.0).strong().color(TEXT));
+        ui.label(RichText::new("What-if reference · not observed server outcomes")
+            .size(10.0).color(WARN));
+    });
+    ui.horizontal_wrapped(|ui|{
+        ui.label("Destination");
+        let current=selected_hunt(view,reference,scenario)
+            .map(|(hunt,unlocked)|format!("{} · {}",
+                hunt.name,if unlocked{"Unlocked"}else{"Guide-only"}))
+            .unwrap_or_else(||"No hunts loaded".into());
+        egui::ComboBox::from_id_salt("atlas-model-destination")
+            .width(245.0).selected_text(current).show_ui(ui,|ui|{
+                let hunts=atlas_destinations(view,reference);
+                for (hunt,unlocked) in hunts.iter().take(1500){
+                    ui.selectable_value(&mut scenario.hunt_slug,hunt.slug.clone(),
+                        format!("{} · Lv {} · {}",hunt.name,hunt.level,
+                            if *unlocked{"unlocked"}else{"guide-only"}));
+                }
+            });
+        ui.label("Ball");
+        for ball in [BallKind::Ultra,BallKind::Beast]{
+            ui.selectable_value(&mut scenario.ball,ball,ball.label());
+        }
+    });
+    let Some((hunt,unlocked))=selected_hunt(view,reference,scenario) else{
+        ui.label("No available destination or public-guide preview.");return
+    };
+    if !unlocked {
+        ui.label(RichText::new("This hunt exists only in the guide. All displayed values are previews; native hunt switching is unavailable.")
+            .size(10.0).color(WARN));
+    }
+    let observed_tier=view.outland_tier;
+    let outland=hunt.area.eq_ignore_ascii_case("outland");
+    if outland {
+        ui.horizontal_wrapped(|ui|{
+            ui.label("Outland tier preview");
+            ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
+            ui.label(format!("Required trainer Lv {}",
+                models::TIER_LEVELS[(scenario.tier-1) as usize]));
+            if let Some(actual)=observed_tier{
+                ui.label(RichText::new(format!("Server tier: {actual}"))
+                    .size(10.0).color(GOOD));
+            }else{
+                ui.label(RichText::new("Server tier unavailable")
+                    .size(10.0).color(MUTED));
+            }
+        });
+    }
+    ui.horizontal_wrapped(|ui|{
+        let mut override_active=scenario.accepted_fraction_override.is_some();
+        if ui.checkbox(&mut override_active,"Override target acceptance").changed(){
+            scenario.accepted_fraction_override=if override_active{Some(1.0)}else{None};
+        }
+        if let Some(fraction)=scenario.accepted_fraction_override.as_mut(){
+            ui.add(egui::Slider::new(fraction,0.0..=1.0).text("Attempt share"));
+        }else{
+            ui.label(RichText::new("Assumes all eligible corpses are targeted: optimistic ceiling")
+                .size(10.0).color(DIM));
+        }
+    });
+    ui.horizontal_wrapped(|ui|{
+        if ui.small_button(if scenario.modifiers_open{"▾ Hide modifiers"}else{"▸ Hypothetical modifiers"})
+            .clicked(){scenario.modifiers_open=!scenario.modifiers_open}
+        ui.label(RichText::new("No boost is treated as active automatically.")
+            .size(10.0).color(DIM));
+    });
+    if scenario.modifiers_open {
+        egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
+            .inner_margin(egui::Margin::same(9)).show(ui,|ui|{
+                let m=&mut scenario.modifiers;
+                ui.horizontal_wrapped(|ui|{
+                    ui.checkbox(&mut m.capture_boost,"Capture boost ×1.5");
+                    ui.checkbox(&mut m.shiny_boost,"Shiny boost ×1.5");
+                    ui.checkbox(&mut m.kick_capture,"Kick catch ×1.15");
+                    ui.checkbox(&mut m.kick_shiny,"Kick shiny ×1.15");
+                    ui.checkbox(&mut m.lure,"Shiny lure (1/12k)");
+                });
+                ui.horizontal_wrapped(|ui|{
+                    ui.label("Catch event %");
+                    ui.add(egui::DragValue::new(&mut m.catch_event_pct).range(0.0..=1000.0));
+                    ui.label("Shiny event %");
+                    ui.add(egui::DragValue::new(&mut m.shiny_event_pct).range(0.0..=1000.0));
+                    for (label,n) in [
+                        ("Loot ×",&mut m.loot),("Guild ×",&mut m.guild),
+                        ("Drop event ×",&mut m.drop_event),("Kick drop ×",&mut m.kick_drop)]{
+                        ui.label(label);ui.add(egui::DragValue::new(n)
+                            .range(1.0..=1000.0).speed(0.05));
+                    }
+                });
+                if ui.small_button("Restore neutral modifiers").clicked(){
+                    m.clone_from(&Modifiers::default());
+                }
+            });
+    }
+    ui.separator();
+    let f=if live{cache.get(&hunt.slug)}else{None};
+    let kills=f.as_ref().map(|f|f.kills_h);
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Combat baseline").size(12.0).strong().color(TEXT));
+        ui.label(format!("{} kills/h · {} trainer XP/h · {} Pokémon XP/h",
+            value(kills),value(f.as_ref().map(|f|f.trainer_xp_h)),
+            value(f.as_ref().map(|f|f.pokemon_xp_h))));
+        if let Some(f)=f.as_ref(){
+            ui.colored_label(WARN,if f.calibrated{"Calibrated estimate"}else{"Experimental model"});
+        }
+    });
+    let ball_quote=view.ball_quotes.get(&scenario.ball.id());
+    let efficiency=ball_quote.and_then(|q|q.efficiency)
+        .unwrap_or_else(||scenario.ball.wiki_efficiency());
+    let known_efficiency=ball_quote.and_then(|q|q.efficiency).is_some();
+    ui.label(RichText::new(format!("{} ball efficiency {:.2} ({}) · target HP assumed 0% for wiki scenario",
+        scenario.ball.label(),efficiency,
+        if known_efficiency{"server catalog"}else{"wiki default"}))
+        .size(10.0).color(MUTED));
+    let all_weight=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
+    let mut rows=Vec::new();
+    for spawn in &hunt.species{
+        if spawn.weight<=0.0||all_weight<=0.0 {continue}
+        let share=spawn.weight/all_weight;
+        let name=reference.and_then(|r|r.species.get(&spawn.id))
+            .map(|m|m.name.as_str()).unwrap_or("Unknown");
+        let rarity=reference.and_then(|r|r.capture_rarities.get(&spawn.id)).copied();
+        let plan=kills.and_then(|speed|models::capture_scenario(
+            rarity,efficiency,speed,share,
+            scenario.accepted_fraction_override,outland,&scenario.modifiers));
+        rows.push((spawn.id,name.to_owned(),share,rarity,plan));
+    }
+    rows.sort_by(|a,b|b.2.total_cmp(&a.2));
+    ui.label(RichText::new(format!("Capture forecasts · {} species · {} with rarity input",
+        rows.len(),rows.iter().filter(|r|r.3.is_some()).count()))
+        .size(12.0).strong().color(TEXT));
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
+            if ui.available_width()>=700.0{
+                egui::Grid::new(("atlas-capture-models",&hunt.slug,scenario.ball.id()))
+                    .striped(true).spacing([12.0,6.0]).show(ui,|ui|{
+                        ui.strong("Pokémon");ui.strong("Spawn");ui.strong("Catch / throw");
+                        ui.strong("Caught/h");ui.strong("Shiny/h");ui.strong("Shiny ≥1/24h");ui.end_row();
+                        for (_,name,share,_,plan) in rows.iter().take(32){
+                            ui.label(name);
+                            ui.label(format!("{:.1}%",share*100.0));
+                            ui.label(plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
+                                .unwrap_or_else(||"—".into()));
+                            ui.label(value(plan.as_ref().map(|p|p.catches_h)));
+                            ui.label(value(plan.as_ref().and_then(|p|p.shiny_caught_h)));
+                            ui.label(plan.as_ref().and_then(|p|p.shiny_caught_24h)
+                                .map(|p|format!("{:.2}%",p*100.0))
+                                .unwrap_or_else(||"—".into()));
+                            ui.end_row();
+                        }
+                    });
+            }else{
+                for (_,name,share,_,plan) in rows.iter().take(32){
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new(name).strong().size(11.0));
+                        ui.label(format!("Spawn {:.1}%",share*100.0));
+                        ui.label(format!("Catch {}",
+                            plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
+                                .unwrap_or_else(||"—".into())));
+                        ui.label(format!("Caught/h {}",
+                            value(plan.as_ref().map(|p|p.catches_h))));
+                        ui.label(format!("Shiny/h {}",
+                            value(plan.as_ref().and_then(|p|p.shiny_caught_h))));
+                    });
+                    ui.separator();
+                }
+            }
+            if rows.len()>32 {ui.label("First 32 species shown; highest spawn probability first.");}
+        });
+    ui.label(RichText::new("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds.")
+        .size(10.0).color(MUTED));
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Outland 1–8 and rare item probabilities")
+            .size(13.0).strong().color(TEXT));
+        ui.label("Ranking target");
+        egui::ComboBox::from_id_salt("atlas-rare-target")
+            .selected_text(match scenario.rare_target{
+                70000=>"Bronze Boss Token",70011=>"Key Fragment",
+                70012=>"Shiny Stone Fragment",70013=>"Bicycle Fragment",
+                70017=>"Shiny Egg Fragment",_=>"Unknown",
+            }).show_ui(ui,|ui|{
+                for (id,name) in [
+                    (70000,"Bronze Boss Token"),(70011,"Key Fragment"),
+                    (70012,"Shiny Stone Fragment"),(70013,"Bicycle Fragment"),
+                    (70017,"Shiny Egg Fragment"),
+                ]{
+                    ui.selectable_value(&mut scenario.rare_target,id,name);
+                }
+            });
+    });
+    if let Some(speed)=kills {
+        let rare=models::rare_scenarios(outland,hunt.level,scenario.tier,
+            view.trainer_level,speed,&scenario.modifiers);
+        if rare.is_empty(){
+            ui.label(RichText::new(if outland{
+                "Preview tier is locked at this trainer level, or the level is unavailable."
+            }else{"This destination is below the shiny-egg threshold."})
+                .size(11.0).color(MUTED));
+        }
+        for item in &rare{
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(item.name).size(11.0).strong().color(TEXT));
+                ui.label(format!("{:.6}%/kill · {:.5} units/h · 24h chance {:.2}% · crafting {:.1}h",
+                    item.per_kill*100.0,item.units_h,item.chance_24h*100.0,item.craft_hours))
+                    .on_hover_text(format!("Mean hours to next drop: {:.1}",item.mean_hours));
+            });
+        }
+    }else{
+        ui.label("Rare drops need a modeled or measured kill rate.");
+    }
+    if outland {
+        ui.collapsing("All eight Outland tiers · base drop probabilities",|ui|{
+            egui::Grid::new(("atlas-outland-all",&hunt.slug))
+                .striped(true).spacing([14.0,5.0]).show(ui,|ui|{
+                    ui.strong("Tier");ui.strong("Required Lv");ui.strong("Multiplier");
+                    ui.strong("Token %/kill");ui.strong("Key/Stone/Bicycle %/kill");
+                    ui.strong("Access");ui.end_row();
+                    for idx in 0..8{
+                        let tier=(idx+1) as u8;
+                        let mult=models::TIER_MULTIPLIERS[idx];
+                        ui.label(tier.to_string());
+                        ui.label(models::TIER_LEVELS[idx].to_string());
+                        ui.label(format!("{mult:.2}×"));
+                        ui.label(format!("{:.5}%",0.0005*mult*100.0));
+                        ui.label(format!("{:.6}%",0.000005*mult*100.0));
+                        ui.label(if models::unlocked_tier(tier,view.trainer_level).is_some(){
+                            "Level eligible"
+                        }else{"Locked / unknown"});
+                        ui.end_row();
+                    }
+                });
+            ui.label(RichText::new("Bicycle Fragment hook is wiki-reported but not server-verified. Unlock level alone does not confirm destination access.")
+                .size(10.0).color(WARN));
+        });
+    }else{
+        ui.label(RichText::new("Outside Outland: Shiny Egg Fragment uses the upstream 30-threshold level ladder; 10 fragments per craft, 168h reference incubation.")
+            .size(10.0).color(MUTED));
+    }
+    ui.add_space(8.0);
+    ui.label(RichText::new("Market and net-economy scenario")
+        .size(13.0).strong().color(TEXT));
+    let mut possible=std::collections::BTreeSet::new();
+    if let Some(reference)=reference{
+        for sp in &hunt.species{
+            if let Some(meta)=reference.species.get(&sp.id){
+                for drop in &meta.drops{
+                    if let Some(name)=drop.item_name.as_ref(){
+                        possible.insert(name.clone());
+                    }else if let Some(id)=drop.item_id{possible.insert(id.to_string());}
+                }
+            }
+        }
+    }
+    ui.horizontal_wrapped(|ui|{
+        ui.label("Sale item");
+        egui::ComboBox::from_id_salt("atlas-market-item")
+            .selected_text(if scenario.market_item.is_empty(){"Select a guide drop".to_owned()}
+                else{scenario.market_item.clone()})
+            .show_ui(ui,|ui|{
+                ui.selectable_value(&mut scenario.market_item,String::new(),"No item");
+                for name in possible.iter().take(150){
+                    ui.selectable_value(&mut scenario.market_item,name.clone(),name.as_str());
+                }
+            });
+        ui.label("User-assumed market gold / unit");
+        ui.add(egui::DragValue::new(&mut scenario.market_gold_per_unit)
+            .range(0.0..=1_000_000_000.0).speed(1.0));
+    });
+    let units=kills.and_then(|k|reference.and_then(|refdata|
+        item_units_per_h(hunt,refdata,&scenario.market_item,k,
+            scenario.modifiers.drop_factor())));
+    let market_value=units.and_then(|n|models::market_scenario(n,
+        scenario.market_gold_per_unit));
+    let accepted_h=kills.map(|k|k*scenario.accepted_fraction_override.unwrap_or(1.0));
+    let gold_cost=ball_quote.and_then(|q|q.gold_price)
+        .filter(|price|*price>0.0 && ball_quote.and_then(|q|q.diamond_price)
+            .is_none_or(|d|d<=0.0))
+        .zip(accepted_h).map(|(price,h)|price*h);
+    let diamond_cost=ball_quote.and_then(|q|q.diamond_price)
+        .filter(|price|*price>0.0 && ball_quote.and_then(|q|q.gold_price)
+            .is_none_or(|g|g<=0.0))
+        .zip(accepted_h).map(|(price,h)|price*h);
+    ui.horizontal_wrapped(|ui|{
+        for (label,num) in [
+            ("Modeled combat gold/h",f.as_ref().map(|f|f.combat_gold_h)),
+            ("Guide NPC loot gold/h",f.as_ref().map(|f|f.npc_loot_gold_h)),
+            ("Item units/h",units),("Assumed market proceeds/h",market_value),
+            ("Ball spending gold/h",gold_cost),
+            ("Ball spending diamonds/h",diamond_cost),
+        ]{
+            ui.vertical(|ui|{
+                ui.label(RichText::new(label).size(9.0).color(DIM));
+                ui.label(RichText::new(value(num)).size(12.0).strong().color(TEXT));
+            });
+            ui.add_space(15.0);
+        }
+    });
+    let hypothetical_net=match (f.as_ref(),market_value,gold_cost){
+        (Some(f),Some(market),Some(cost))=>Some(f.combat_gold_h+market-cost),
+        _=>None,
+    };
+    ui.label(RichText::new(format!(
+        "Conditional gold balance (combat + USER-QUOTED market - known ball gold cost): {} / h",
+        value(hypothetical_net)
+    )).size(11.0).strong().color(if hypothetical_net.is_some(){GOOD}else{MUTED}));
+    ui.label(RichText::new("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent.")
+        .size(10.0).color(WARN));
+    ui.add_space(10.0);
+    draw_retrospective(ui,history,Some(&hunt.slug),f.as_ref());
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test] fn market_units_require_full_species_reference_coverage(){
+        let hunt=native_hunts::HuntEntry{level:100,
+            species:vec![native_hunts::HuntSpecies{id:1,weight:60.0},
+                native_hunts::HuntSpecies{id:2,weight:40.0}],
+            ..Default::default()};
+        let mut guide=AtlasReference::default();
+        guide.species.insert(1,native_atlas::ReferenceSpecies{
+            id:1,name:"A".into(),types:vec![],base:vec![1.0;6],
+            moves:vec![],
+            drops:vec![native_atlas::ReferenceDrop{
+                item_id:None,item_name:Some("Stone".into()),
+                chance_pct:10.0,minimum:1.0,maximum:3.0,guide_price:10.0,
+            }],
+        });
+        assert_eq!(item_units_per_h(&hunt,&guide,"Stone",100.0,1.0),None);
+        guide.species.insert(2,native_atlas::ReferenceSpecies{
+            id:2,name:"B".into(),types:vec![],base:vec![1.0;6],
+            moves:vec![],drops:vec![],
+        });
+        let forecast=item_units_per_h(&hunt,&guide,"Stone",100.0,1.0).unwrap();
+        assert!((forecast-12.0).abs()<1e-10);
+    }
+}

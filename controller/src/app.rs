@@ -1,8 +1,17 @@
 use crate::accounts;
-use crate::config::{AccountConfig, Config, GameProfile};
+use crate::config::{AccountConfig, Config, GameProfile, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
+use crate::native_background::NativeSession;
+use crate::native_gameplay::GameCommand;
+use crate::native_hunts::{self, HuntView};
+use crate::native_capture_config::CatchSettings;
+use crate::native_items::{self, ItemCatalog};
+use crate::native_visuals::{Kind as SpriteKind, VisualCache};
+use crate::native_atlas::{self, Reference as AtlasReference};
+mod hunt_panel;
+use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -17,7 +26,6 @@ use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
 use tray_icon::{
@@ -36,6 +44,20 @@ const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
 // platforms where the OS cannot report it.
 fn controller_is_background(hidden_in_tray: bool, focused: Option<bool>) -> bool {
     hidden_in_tray || focused == Some(false)
+}
+
+/// Tray state has precedence over focus. The two toggles are independent:
+/// disabling blur throttling need not disable the tray resource-saving mode.
+fn reduce_updates_for_window(
+    hidden_in_tray: bool,
+    focused: Option<bool>,
+    options: UiOptions,
+) -> bool {
+    if hidden_in_tray {
+        options.reduce_updates_in_tray
+    } else {
+        options.reduce_updates_unfocused && controller_is_background(false, focused)
+    }
 }
 
 fn monitor_pace_for_slot(
@@ -71,7 +93,8 @@ fn monitor_repair_available(
 #[cfg(test)]
 mod adaptive_monitor_ui_tests {
     use super::{
-        controller_is_background, monitor_pace_for_slot, monitor_repair_available, MonitorPace,
+        controller_is_background, monitor_pace_for_slot, monitor_repair_available,
+        reduce_updates_for_window, MonitorPace, UiOptions,
     };
 
     #[test]
@@ -82,6 +105,38 @@ mod adaptive_monitor_ui_tests {
         assert!(controller_is_background(true, Some(true))); // tray override
         assert!(controller_is_background(true, Some(false)));
         assert!(controller_is_background(true, None));
+    }
+
+    #[test]
+    fn background_update_switches_are_independent_and_default_to_old_behavior() {
+        let default = UiOptions::default();
+        assert!(reduce_updates_for_window(false, Some(false), default));
+        assert!(reduce_updates_for_window(true, Some(true), default));
+        assert!(!reduce_updates_for_window(false, Some(true), default));
+
+        let normal_unfocused = UiOptions {
+            reduce_updates_unfocused: false,
+            reduce_updates_in_tray: true,
+        };
+        assert!(!reduce_updates_for_window(false, Some(false), normal_unfocused));
+        assert!(reduce_updates_for_window(true, Some(false), normal_unfocused));
+
+        let full_speed_tray = UiOptions {
+            reduce_updates_unfocused: true,
+            reduce_updates_in_tray: false,
+        };
+        assert!(reduce_updates_for_window(false, Some(false), full_speed_tray));
+        assert!(!reduce_updates_for_window(true, Some(false), full_speed_tray));
+
+        let full_speed_everywhere = UiOptions {
+            reduce_updates_unfocused: false,
+            reduce_updates_in_tray: false,
+        };
+        for hidden in [true, false] {
+            for focused in [Some(true), Some(false), None] {
+                assert!(!reduce_updates_for_window(hidden, focused, full_speed_everywhere));
+            }
+        }
     }
 
     #[test]
@@ -243,6 +298,197 @@ fn tr<'a>(en: &'a str) -> &'a str {
     match en {
         "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
+        "Options" => "Opções",
+        "Automation" => "Automação",
+        "History" => "Histórico",
+        "Persistent battle history" => "Histórico persistente de batalhas",
+        "Past 90 UTC days · saved locally per account every 5 seconds; no raw protocol or credentials." =>
+            "Últimos 90 dias UTC · salvo localmente a cada 5 segundos, sem protocolo bruto ou credenciais.",
+        "Recorded totals" => "Totais registrados",
+        "Reload saved history" => "Recarregar histórico salvo",
+        "Daily hunts" => "Hunts por dia",
+        "Lifetime totals" => "Totais de todos os tempos",
+        "No recorded battles yet" => "Nenhuma batalha registrada",
+        "Start this account to load its saved history." =>
+            "Inicie esta conta para carregar seu histórico salvo.",
+        "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively." =>
+            "O histórico começa nas primeiras batalhas desta versão. Sessões anteriores não podem ser recuperadas.",
+
+        "Pokémon management" => "Gerenciamento de Pokémon",
+        "Pokémon on account" => "Pokémon na conta",
+        "Shiny only" => "Apenas shiny",
+        "Sort by" => "Ordenar por",
+        "Grade" => "Nota",
+        "Power" => "Poder",
+        "Search Pokémon" => "Buscar Pokémon",
+        "Minimum total IV" => "IV total mínimo",
+        "All types" => "Todos os tipos",
+        "Quality" => "Qualidade",
+        "IV total" => "IV total",
+        "Inspect a Pokémon from the native roster." => "Inspecione um Pokémon da lista nativa.",
+        "Selected Pokémon" => "Pokémon selecionado",
+        "Sell Pokémon" => "Vender Pokémon",
+        "Confirm sale" => "Confirmar venda",
+        "Cannot sell active or shiny Pokémon." => "Não é possível vender Pokémon ativo ou shiny.",
+        "Authoritative server inventory determines whether the sale succeeded." =>
+            "O estoque confirmado pelo servidor determina se a venda foi concluída.",
+        "Waiting for Pokémon roster" => "Aguardando lista de Pokémon",
+        "Open Automation" => "Abrir automação",
+        "Server automation" => "Automação do servidor",
+        "Reload server values" => "Recarregar valores do servidor",
+        "Awaiting confirmation" => "Aguardando confirmação",
+        "Confirmed" => "Confirmado",
+        "Changes are confirmed by the game server; unsent changes are not treated as active." =>
+            "Alterações devem ser confirmadas pelo servidor; valores enviados não são tratados como ativos.",
+        "Potion HP threshold (%)" => "Limiar de HP para poção (%)",
+        "Minimum lock grade" => "Nota mínima de bloqueio",
+        "Apply HP" => "Aplicar HP",
+        "Apply grade" => "Aplicar nota",
+        "Apply" => "Aplicar",
+        "In-game nickname" => "Apelido no jogo",
+        "Field map" => "Mapa de combate",
+        "in stock" => "em estoque",
+        "No verified price" => "Preço não verificado",
+        "No valid restock rules configured" => "Nenhuma regra válida de reposição configurada",
+        "Native controls are available after this account finishes authentication." =>
+            "Os controles nativos ficam disponíveis após a autenticação desta conta.",
+        "Choose an account to inspect its automation and restock status." =>
+            "Escolha uma conta para verificar a automação e o estado da reposição.",
+        "Restock details" => "Detalhes da reposição",
+        "Waiting for native account" => "Aguardando conta nativa",
+        "Performance and updates" => "Desempenho e atualizações",
+        "Background refresh" => "Atualização em segundo plano",
+        "Reduce updates when the window is not focused" =>
+            "Reduzir atualizações quando a janela estiver sem foco",
+        "Reduce updates when minimized to the system tray" =>
+            "Reduzir atualizações ao minimizar para a bandeja",
+        "Choose when the controller reduces its display and browser-monitor refresh rate." =>
+            "Escolha quando o controlador diminui a atualização da interface e do monitor do navegador.",
+        "On: 30-second UI refresh and lower Firefox monitoring frequency when you switch apps. Off: normal foreground refresh continues." =>
+            "Ativado: atualização da interface a cada 30 segundos e monitoramento Firefox mais lento ao alternar de aplicativo. Desativado: mantém o ritmo normal.",
+        "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden." =>
+            "Ativado: atualizações mais lentas na bandeja. Desativado: mantém o ritmo normal mesmo oculto.",
+        "Native PokéIdle and Twitch sessions continue at full speed regardless of these options. Only UI redraw and Firefox/BiDi monitoring are affected." =>
+            "As sessões nativas do PokéIdle e Twitch continuam na velocidade normal. Apenas a interface e o monitoramento Firefox/BiDi são afetados.",
+        "Changes are saved automatically and restored on the next launch." =>
+            "Alterações são salvas automaticamente e restauradas na próxima inicialização.",
+        "Controller options saved" => "Opções do controlador salvas",
+        "Hunts · Atlas" => "Hunts · Atlas",
+        "Hunt Atlas" => "Hunt Atlas",
+        "Inventory" => "Inventário",
+        "All accounts" => "Todas as contas",
+        "Search items or drops" => "Buscar itens ou drops",
+        "All items" => "Todos os itens",
+        "Balls" => "Pokébolas",
+        "Potions" => "Poções",
+        "Stones" => "Pedras",
+        "Other" => "Outros",
+        "balls" => "Pokébolas",
+        "potions" => "Poções",
+        "stones" => "Pedras",
+        "other" => "Outros",
+        "Launch an account to see its native inventory" => "Inicie uma conta para visualizar o inventário nativo",
+        "Loading public item names..." => "Carregando nomes públicos de itens...",
+        "Item catalog unavailable" => "Catálogo de itens indisponível",
+        "Current inventory" => "Inventário atual",
+        "items" => "itens",
+        "units" => "unidades",
+        "Server-reported stock · not inferred purchases" => "Estoque informado pelo servidor · não calculado por compras",
+        "No inventory items match the filters" => "Nenhum item corresponde aos filtros",
+        "Items acquired in session" => "Itens obtidos na sessão",
+        "kills" => "abates",
+        "captures" => "capturas",
+        "From wild battle drops only. Does not count shop purchases or starting inventory." =>
+            "Somente drops de batalhas. Não inclui compras nem estoque inicial.",
+        "No drops acquired in this session yet" => "Nenhum drop obtido nesta sessão",
+        "Current hunt details" => "Detalhes da hunt atual",
+        "spawn slots" => "slots de spawn",
+        "At Pokémon Center" => "No Centro Pokémon",
+        "Switch pending" => "Mudança pendente",
+        "Wild encounter" => "Selvagem",
+        "Session" => "Sessão",
+        "shinies seen" => "shinies vistos",
+        "shinies caught" => "shinies capturados",
+        "Trainer XP earned" => "XP de treinador obtido",
+        "Pokémon XP earned" => "XP de Pokémon obtido",
+        "Combat gold" => "Ouro de combate",
+        "Auto-sale gold" => "Ouro de venda automática",
+        "Reset session counters" => "Resetar contadores da sessão",
+        "Reset all session loot/XP counters?" => "Resetar todos os contadores de drops/XP?",
+        "Confirm reset" => "Confirmar reset",
+        "Cancel" => "Cancelar",
+        "Drops acquired" => "Drops obtidos",
+        "Configure native Auto Catch" => "Configurar captura automática nativa",
+        "Enable native Auto Catch" => "Ativar captura automática nativa",
+        "Preferred balls (in order; Master Balls excluded)" =>
+            "Bolas preferidas (em ordem; Master Balls excluídas)",
+        "Primary" => "Principal",
+        "Fallback" => "Reserva",
+        "None" => "Nenhuma",
+        "Ball inventory reserves" => "Estoque reservado por bola",
+        "Automatic restock" => "Reposição automática",
+        "Gold reserve" => "Reserva de ouro",
+        "ID" => "ID",
+        "Buy at" => "Comprar ao chegar a",
+        "Fill to" => "Repor até",
+        "Select game ball" => "Selecionar bola do jogo",
+        "Select potion" => "Selecionar poção",
+        "Select revive" => "Selecionar revive",
+        "Revives" => "Revives",
+        "ID 0 disables that category; unknown shop prices cannot be spent." =>
+            "ID 0 desativa a categoria; compras exigem preço conhecido pelo servidor.",
+        "Save settings" => "Salvar configurações",
+        "Discard" => "Descartar",
+        "Saving encrypted preferences..." => "Salvando preferências criptografadas...",
+        "Account" => "Conta",
+        "Native server catalog · no userscripts" => "Catálogo nativo do servidor · sem userscripts",
+        "Start the account to load its available hunts." => "Inicie a conta para carregar as hunts disponíveis.",
+        "The native game socket supplies the hunt catalog and active Pokémon after server authentication." => "O socket Rust recebe hunts e Pokémon diretamente do servidor.",
+        "Waiting for authenticated game hunt catalog..." => "Aguardando catálogo de hunts do servidor...",
+        "Active Pokémon" => "Pokémon ativo",
+        "Waiting for active Pokémon state" => "Aguardando dados do Pokémon ativo",
+        "Bonuses considered" => "Bônus considerados",
+        "Current hunt" => "Hunt atual",
+        "available hunts" => "hunts disponíveis",
+        "observed kills" => "abates observados",
+        "Measured during current hunt" => "Medido durante a hunt atual",
+        "Trainer XP/h" => "XP treinador/h",
+        "Pokémon XP/h" => "XP Pokémon/h",
+        "Net gold/h" => "Ouro líquido/h",
+        "Kills/h" => "Abates/h",
+        "kills in window" => "abates na janela",
+        "Available hunts · Hunt Atlas" => "Hunts disponíveis · Hunt Atlas",
+        "Trainer XP" => "XP treinador",
+        "Pokémon XP" => "XP Pokémon",
+        "Gold" => "Ouro",
+        "Search hunt, region or species ID" => "Buscar hunt, região ou ID da espécie",
+        "All regions" => "Todas as regiões",
+        "All types" => "Todos os tipos",
+        "Clear filters" => "Limpar filtros",
+        "matching hunts" => "hunts encontradas",
+        "Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance." =>
+            "Outras hunts usam o ritmo atual como cenário, não como previsão de combate.",
+        "Conditional XP/gold per hour if the CURRENT observed kill rate were maintained." =>
+            "XP/ouro por hora apenas se o ritmo atual de abates fosse mantido.",
+        "species" => "espécies",
+        "No species weights reported" => "Sem pesos de spawn informados",
+        "CURRENT" => "ATUAL",
+        "Pending" => "Pendente",
+        "Hunt" => "Caçar",
+        "Showing first 200 hunts; refine search or region." => "Mostrando até 200 hunts; refine a busca.",
+        "Loading species and move reference..." => "Carregando espécies e golpes do guia...",
+        "Guide reference unavailable" => "Guia de referência indisponível",
+        "Retry" => "Tentar novamente",
+        "species in guide" => "espécies no guia",
+        "Server determines accessible hunts" => "Servidor define quais hunts estão liberadas",
+        "Guide model: forecasts are uncertain; calibrated to observed combat where available." =>
+            "Modelo do guia: estimativas incertas, calibradas com combate real quando possível.",
+        "Calibrated estimate" => "Estimativa calibrada",
+        "Measured" => "Medido",
+        "Actual observed rate during current hunt" => "Taxa real observada na hunt atual",
+        "Spawn composition" => "Composição de spawns",
+        "Experimental estimate" => "Estimativa experimental",
+
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
@@ -380,14 +626,20 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Check failed" => "Falha na verificação",
         "Stop" => "Parar",
         "Launch" => "Iniciar",
+        "Start native" => "Iniciar nativo",
+        "Open in Firefox" => "Abrir no Firefox",
+        "Stop Firefox" => "Fechar Firefox",
+        "Firefox running" => "Firefox aberto",
+        "Use this account in visible Firefox instead of the native session." =>
+            "Usar esta conta no Firefox visível em vez da sessão nativa.",
+        "Firefox remains open until you stop this account." =>
+            "O Firefox permanece aberto até você parar esta conta.",
+        "Stop login" => "Parar login",
         "COMPACT OVERVIEW" => "VISÃO COMPACTA",
         "Select an account to inspect its full statistics" => "Selecione uma conta para ver todas as estatísticas",
         "Show details" => "Ver detalhes",
         "Hide details" => "Ocultar detalhes",
         "Details for" => "Detalhes de",
-        "Current hunt" => "Caça atual",
-        "Active Pokémon" => "Pokémon ativo",
-        "Trainer XP" => "XP do treinador",
         "EXP/hour" => "EXP/h",
         "Next level" => "Próximo nível",
         "Estimated from recent gains; actual progress may vary" => "Estimativa com base no ganho recente de EXP; o tempo real pode variar",
@@ -497,7 +749,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "1 sec" => "1 s",
         "Map intelligence + observed XP/hour" => "Inteligência do mapa + XP/h observado",
         "Region" => "Região",
-        "All regions" => "Todas as regiões",
         "Min" => "Mín.",
         "Max" => "Máx.",
         "Availability" => "Disponibilidade",
@@ -505,7 +756,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Unlocked" => "Liberadas",
         "Locked" => "Bloqueadas",
         "Type" => "Tipo",
-        "All types" => "Todos os tipos",
         "Weak to" => "Fraco contra",
         "Any weakness" => "Qualquer fraqueza",
         "Match all selected" => "Exigir todos os selecionados",
@@ -519,7 +769,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Level" => "Nível",
         "Wait" => "Aguarde",
         "Go" => "Ir",
-        "Gold" => "Ouro",
         "Gems" => "Gemas",
         "listings" => "ofertas",
         "seller" => "vendedor",
@@ -601,8 +850,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Purchase command accepted" => "Comando de compra aceito",
         "Purchase pending" => "Compra pendente",
         "References" => "Referências",
-        "items" => "itens",
-        "units" => "unidades",
         "total" => "total",
         "Coin" => "Moeda",
         "Gem" => "Gema",
@@ -620,7 +867,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Seller:" => "Vendedor:",
         "retained" => "retido",
         "available" => "disponível",
-        "Pending" => "Pendente",
         "Balance" => "Saldo",
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
@@ -643,7 +889,47 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "ERROR" => "ERRO",
         "LANGUAGE" => "IDIOMA",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
-        "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
+        "Native game + Twitch IRC · browserless" => "Jogo + Twitch IRC nativos · sem navegador",
+        "Native" => "Nativo",
+        "Native error" => "Erro nativo",
+        "Verifying native" => "Verificando Rust",
+        "Reading handshake" => "Lendo sessão",
+        "Firefox login" => "Login Firefox",
+        "Firefox is temporary; Rust takes over after game and Twitch authentication." =>
+            "O Firefox é temporário; o Rust assume após autenticar jogo e Twitch.",
+        "Game actions" => "Ações do jogo",
+        "Pokémon Center" => "Centro Pokémon",
+        "Return to hunt" => "Voltar à caça",
+        "Enable" => "Ativar",
+        "Disable" => "Desativar",
+        "Change native Auto Catch for this account" =>
+            "Alterar a captura automática nativa desta conta",
+        "pending" => "pendentes",
+        "throws" => "bolas",
+        "Direct IRC" => "IRC direto",
+        "Native restock setting; saved without Firefox" =>
+            "Reposição nativa: ajuste salvo sem Firefox",
+        "Stock OK" => "Estoque OK",
+        "Waiting for inventory" => "Aguardando estoque",
+        "Waiting for gold" => "Aguardando ouro",
+        "Waiting for shop" => "Aguardando loja",
+        "Waiting for purchase" => "Aguardando compra",
+        "Confirming inventory" => "Confirmando estoque",
+        "Stock synced" => "Estoque atualizado",
+        "Backoff" => "Repetindo em breve",
+        "Gold reserve protected" => "Reserva de ouro protegida",
+        "Needs settings" => "Precisa configurar",
+        "Rechecking last order" => "Conferindo última compra",
+        "ordered" => "pedidos",
+        "confirmed" => "confirmados",
+        "No restock rules imported for this account" =>
+            "Nenhuma regra de reposição importada nesta conta",
+        "Native Restock needs ball/item IDs and thresholds; browser settings are imported once during authentication." =>
+            "A reposição nativa precisa de IDs e limites; as configurações do navegador são importadas uma vez durante a autenticação.",
+        "Authenticating in Firefox · automatic native game + Twitch handoff" =>
+            "Autenticando no Firefox · transferência nativa do jogo + Twitch automática",
+        "Reading native handshake…" => "Lendo handshake nativo…",
+         "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
         _ => en,
     }
 }
@@ -662,24 +948,32 @@ const BAD: Color32 = Color32::from_rgb(235, 91, 91);
 
 struct GameSlot {
     profile: GameProfile,
+    native: Option<NativeSession>,
+    handoff_closing: bool,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
     orphaned_pid: Option<u32>,
+    // User explicitly chose visible Firefox; never auto-handoff this browser.
+    browser_only: bool,
 }
 
 impl GameSlot {
     fn new(profile: GameProfile) -> Self {
         Self {
             profile,
+            native: None,
+            handoff_closing: false,
             child: None,
             monitor: None,
             headless: true,
             orphaned_pid: None,
+            browser_only: false,
         }
     }
 
     fn is_running(&mut self) -> bool {
+        if self.native.is_some() || self.handoff_closing { return true; }
         if let Some(child) = self.child.as_mut() {
             // On an OS inspection error, conservatively keep ownership rather
             // than offer a duplicate launch into a potentially locked profile.
@@ -698,6 +992,85 @@ impl GameSlot {
     }
 
     fn health(&self) -> Health {
+        if self.handoff_closing {
+            let mut health = Health::default();
+            health.state = "Switching to native".into();
+            return health;
+        }
+        if let Some(native) = self.native.as_ref() {
+            let state = native.snapshot();
+            let mut health = Health::default();
+            health.state = if state.phase == "Online" { "Running".into() }
+                else { state.phase.clone() };
+            // Project the same authoritative native account domains used by
+            // Hunts / Inventory. A Firefox Bridge snapshot is not required.
+            let view = native.hunt_snapshot();
+            health.activity = if view.in_center { "Center".into() }
+                else if view.hunt_slug.is_some() { "Hunting".into() }
+                else { "Native background".into() };
+            health.active_pokemon = view.active_pokemon.as_ref()
+                .map(|pokemon| pokemon.name.clone()).unwrap_or_default();
+            health.pokemon_level = view.active_pokemon.as_ref()
+                .map(|pokemon| pokemon.level.to_string()).unwrap_or_default();
+            health.pokemon_xp = view.active_pokemon.as_ref()
+                .and_then(|pokemon| pokemon.xp).map(|xp| xp.to_string())
+                .unwrap_or_default();
+            health.fallen_count = view.pokemon_roster.iter()
+                .filter(|pokemon| pokemon.hp == Some(0)).count()
+                .min(u32::MAX as usize) as u32;
+            health.ball_stock = view.balls.iter().map(|(id, qty)| {
+                format!("{}: {}", view.ball_names.get(id)
+                    .map(String::as_str).unwrap_or("Ball"), qty)
+            }).collect();
+            health.autocatch_rate = format!("{} throws · {} captures",
+                state.native_throws, state.captures);
+            health.autocatch_restock = state.native_restock.phase.clone();
+            health.xp_bonuses = vec![
+                format!("Twitch +{:.0}%", view.bonuses.twitch_pct),
+                format!("Guild +{:.0}%", view.bonuses.guild_pct),
+                format!("Trainer event +{:.0}%", view.bonuses.trainer_event_pct),
+                format!("Pokémon event +{:.0}%", view.bonuses.pokemon_event_pct),
+            ];
+            // Existing widgets consume hunt_atlas, but never claim a
+            // speculative rate is a measured one.
+            health.hunt_atlas = json!({
+                "huntSlug": view.hunt_slug.clone(),
+                "xpH": if view.measurements.valid_trainer {
+                    Some(view.measurements.trainer_xp_h)
+                } else { None },
+                "coinsH": if view.measurements.valid_gold {
+                    Some(view.measurements.gold_net_h)
+                } else { None },
+                "xpMeasured": view.measurements.valid_trainer,
+            });
+            health.bridge_connected = state.phase == "Online";
+            health.bridge_snapshot_ok = state.phase == "Online";
+            health.autocatch_on = state.native_auto_catch;
+            health.autocatch_balls_used = state.native_throws.min(u32::MAX as u64) as u32;
+            health.autocatch_captures = state.captures.min(u32::MAX as u64) as u32;
+            health.stream_watching = state.twitch_watching.clone();
+            health.stream_bonus_pct = state.twitch_bonus_pct;
+            health.stream_scan_twitch_channels = Some(state.twitch_live.len() as u32);
+            health.stream_bonus = if state.twitch_bonus_pct > 0.0 {
+                format!("+{}% XP", state.twitch_bonus_pct)
+            } else { String::new() };
+            health.game_ready = state.phase == "Online";
+            health.logged_in = state.phase == "Online";
+            health.hunt_slug = view.hunt_slug.clone().or(state.hunt_slug.clone()).unwrap_or_default();
+            health.hunt = view.hunts.iter()
+                .find(|hunt| hunt.slug == health.hunt_slug)
+                .map(|hunt| hunt.name.clone())
+                .unwrap_or_else(|| health.hunt_slug.clone());
+            health.player_level = view.trainer_level.or(state.trainer_level).unwrap_or_default();
+            health.player_total_xp = view.trainer_xp.or(state.trainer_xp);
+            health.player_xp = health.player_total_xp.map(|xp| xp.to_string()).unwrap_or_default();
+            health.gold = view.gold.or(state.gold).unwrap_or_default();
+            health.orbs = view.orbs.or(state.orbs).unwrap_or_default();
+            health.last_successful_probe_at = state.last_received;
+            health.last_heartbeat_at = state.last_received;
+            health.last_error = state.error;
+            return health;
+        }
         // The launcher process can exit while the exact-profile Firefox process
         // and its BiDi session remain alive. Preserve live monitoring in that case.
         if let Some(monitor) = self.monitor.as_ref() {
@@ -1111,10 +1484,151 @@ fn make_tray_icon() -> Result<tray_icon::Icon, String> {
         .map_err(|error| format!("could not create tray icon image: {error}"))
 }
 
+struct NativeHandoffEvent {
+    index: usize,
+    result: Result<serde_json::Value, String>,
+    cache_warning: Option<String>,
+}
+
+struct CachedNativeEvent {
+    index: usize,
+    headless: bool,
+    existing_firefox: bool,
+    result: Result<Option<NativeSession>, String>,
+}
+
+/// Authenticated Rust game WSS + Twitch IRC must both be confirmed before
+/// the complete Firefox process may close.
+struct NativeVerifiedEvent {
+    index: usize,
+    result: Result<NativeSession, String>,
+    cache_warning: Option<String>,
+}
+
+/// The child process and monitor are owned exclusively by the shutdown worker.
+/// Returning them to the UI on error preserves ownership for retry/recovery.
+struct NativeBrowserClosedEvent {
+    index: usize,
+    native: NativeSession,
+    cache_warning: Option<String>,
+    child: Option<Child>,
+    orphaned_pid: Option<u32>,
+    monitor: Option<MonitorHandle>,
+    result: Result<(), String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
+#[derive(Clone,Default)]
+struct AutomationDraft {
+    initialized: bool,
+    hp_limit: f64,
+    lock_grade: f64,
+    potion_ids: String,
+    ball_ids: String,
+    revive_ids: String,
+}
+impl AutomationDraft {
+    fn from_server(value:&serde_json::Value) -> Self {
+        let ids=|field:&str|value.get(field).and_then(serde_json::Value::as_array)
+            .map(|entries| entries.iter().filter_map(serde_json::Value::as_u64)
+                .map(|v|v.to_string()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        Self { initialized:true,
+            hp_limit:value.get("hpLimiar").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            lock_grade:value.get("autoLockNotaMin").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            potion_ids:ids("potionIds"),ball_ids:ids("ballIds"),revive_ids:ids("reviveIds") }
+    }
+}
+fn parse_automation_ids(text:&str)->Result<Vec<u64>,String>{
+    let trimmed=text.trim();
+    if trimmed.is_empty(){return Ok(Vec::new())}
+    let mut out=Vec::new();
+    for piece in trimmed.split(',') {
+        let id=piece.trim().parse::<u64>().map_err(|_|
+            "Use a comma-separated list of numeric item IDs".to_owned())?;
+        if id==0 || id>1_000_000 || out.contains(&id) || out.len()>=20 {
+            return Err("IDs must be unique, positive, and at most 20 values".into());
+        }
+        out.push(id);
+    }
+    Ok(out)
+}
+#[cfg(test)]
+mod automation_ui_tests {
+    use super::parse_automation_ids;
+    #[test]
+    fn item_ids_require_unique_valid_numbers() {
+        assert_eq!(parse_automation_ids("4, 5").unwrap(),vec![4,5]);
+        assert_eq!(parse_automation_ids("").unwrap(),Vec::<u64>::new());
+        assert!(parse_automation_ids("4,4").is_err());
+        assert!(parse_automation_ids("0").is_err());
+        assert!(parse_automation_ids("1,abc").is_err());
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HuntRanking { TrainerXp, PokemonXp, Gold }
+
+struct CaptureSavedEvent {
+    index:usize,
+    config:CatchSettings,
+    result:Result<(),String>
+}
 pub struct ControllerApp {
+    native_handoff_tx: Sender<NativeHandoffEvent>,
+    native_handoff_rx: Receiver<NativeHandoffEvent>,
+    native_handoff_busy: [bool; 4],
+    native_handoff_last_attempt: [Option<Instant>; 4],
+    native_verified_tx: Sender<NativeVerifiedEvent>,
+    native_verified_rx: Receiver<NativeVerifiedEvent>,
+    native_verifying: [bool; 4],
+    native_error: [Option<String>; 4],
+    native_closed_tx: Sender<NativeBrowserClosedEvent>,
+    native_closed_rx: Receiver<NativeBrowserClosedEvent>,
+    native_close_cancelled: [bool; 4],
+    cached_native_tx: Sender<CachedNativeEvent>,
+    cached_native_rx: Receiver<CachedNativeEvent>,
+    cached_native_busy: [bool; 4],
+    require_browser_login: [bool; 4],
     games: [GameSlot; 4],
-    show_accounts: bool,
+    panel_tab: PanelTab,
+    dashboard_show_history: bool,
+    ui_options: UiOptions,
+    hunt_account: usize,
+    automation_account: usize,
+    automation_drafts: [AutomationDraft;4],
+    history_rows_limit: usize,
+    offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
+    hunt_query: String,
+    hunt_region: String,
+    hunt_type: String,
+    hunt_ranking: HuntRanking,
+    hunt_subtab: HuntSubtab,
+    hunt_page: usize,
+    hunt_action_error: [Option<String>;4],
+    hunt_estimate_cache: [hunt_panel::EstimateCache;4],
+    atlas_filters: [hunt_panel::AtlasFilters;4],
+    atlas_scenarios: [hunt_panel::AtlasScenario;4],
+    atlas_page: [usize;4],
+    hunt_reference: Option<Arc<AtlasReference>>,
+    hunt_reference_error: Option<String>,
+    hunt_reference_busy: bool,
+    hunt_reference_tx: Sender<Result<AtlasReference,String>>,
+    hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
+    capture_drafts:[Option<CatchSettings>;4],
+    capture_save_busy:[bool;4],
+    capture_save_error:[Option<String>;4],
+    capture_save_tx:Sender<CaptureSavedEvent>,
+    capture_save_rx:Receiver<CaptureSavedEvent>,
+    session_reset_confirm:[bool;4],
+    inventory_catalog:Option<Arc<ItemCatalog>>,
+    visuals:VisualCache,
+    inventory_catalog_error:Option<String>,
+    inventory_catalog_busy:bool,
+    inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
+    inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     accounts: [AccountConfig; 4],
+    account_names_dirty: [bool; 4],
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
@@ -1148,10 +1662,22 @@ impl ControllerApp {
         configure_style(&cc.egui_ctx);
 
         logging::init();
+        logging::info(&format!(
+            "Moth native controller v{} · verified TLS provider initialized: {}",
+            env!("CARGO_PKG_VERSION"),
+            rustls::crypto::CryptoProvider::get_default().is_some()
+        ));
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
         let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
+        let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
+        let (cached_native_tx, cached_native_rx) = mpsc::channel();
+        let (native_closed_tx, native_closed_rx) = mpsc::channel();
+        let (native_verified_tx, native_verified_rx) = mpsc::channel();
+        let (hunt_reference_tx, hunt_reference_rx) = mpsc::channel();
+        let (capture_save_tx,capture_save_rx)=mpsc::channel();
+        let (inventory_catalog_tx,inventory_catalog_rx)=mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1165,10 +1691,64 @@ impl ControllerApp {
         };
 
         Self {
+            native_handoff_tx,
+            native_handoff_rx,
+            native_handoff_busy: [false; 4],
+            native_handoff_last_attempt: [None; 4],
+            native_verified_tx,
+            native_verified_rx,
+            native_verifying: [false; 4],
+            native_error: std::array::from_fn(|_| None),
+            native_closed_tx,
+            native_closed_rx,
+            native_close_cancelled: [false; 4],
+            cached_native_tx,
+            cached_native_rx,
+            cached_native_busy: [false; 4],
+            require_browser_login: [false; 4],
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
-            show_accounts: false,
+            panel_tab: PanelTab::Overview,
+            dashboard_show_history: false,
+            ui_options: Config::load_ui_options().unwrap_or_else(|error| {
+                logging::warn(&format!("controller options load failed: {error}"));
+                UiOptions::default()
+            }),
+            hunt_account: 0,
+            automation_account: 0,
+            automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
+            history_rows_limit: 100,
+            offline_histories: std::array::from_fn(|_|None),
+            hunt_query: String::new(),
+            hunt_region: String::new(),
+            hunt_type: String::new(),
+            hunt_ranking: HuntRanking::TrainerXp,
+            hunt_subtab: HuntSubtab::Explorer,
+            hunt_page: 0,
+            hunt_action_error: std::array::from_fn(|_|None),
+            hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
+            atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
+            atlas_scenarios: std::array::from_fn(|_|hunt_panel::AtlasScenario::default()),
+            atlas_page: [0;4],
+            hunt_reference: None,
+            hunt_reference_error: None,
+            hunt_reference_busy: false,
+            hunt_reference_tx,
+            hunt_reference_rx,
+            capture_drafts:std::array::from_fn(|_|None),
+            capture_save_busy:[false;4],
+            capture_save_error:std::array::from_fn(|_|None),
+            capture_save_tx,
+            capture_save_rx,
+            session_reset_confirm:[false;4],
+            inventory_catalog:None,
+            visuals:VisualCache::default(),
+            inventory_catalog_error:None,
+            inventory_catalog_busy:false,
+            inventory_catalog_tx,
+            inventory_catalog_rx,
+            account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
@@ -1214,10 +1794,20 @@ impl ControllerApp {
     }
 
     fn controller_in_background(&self, ctx: &egui::Context) -> bool {
-        // A visible but unfocused window should be just as inexpensive as
-        // one hidden in the tray. Focus changes arrive as native UI events.
+        // Keep native background transport untouched; only UI repaint and
+        // Firefox/BiDi monitoring pace respond to these preferences.
         let focused = ctx.input(|input| input.viewport().focused);
-        controller_is_background(self.hidden_in_tray(), focused)
+        reduce_updates_for_window(self.hidden_in_tray(), focused, self.ui_options)
+    }
+
+    fn save_ui_options(&mut self, updated: UiOptions) {
+        match Config::save_ui_options(&updated) {
+            Ok(()) => {
+                self.ui_options = updated;
+                self.set_status(tr("Controller options saved").to_owned(), false);
+            }
+            Err(error) => self.set_status(error, true),
+        }
     }
 
     fn sync_monitor_paces(&self, background: bool) {
@@ -1229,6 +1819,39 @@ impl ControllerApp {
             );
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.set_pace(pace);
+            }
+        }
+    }
+
+    /// Switching accounts changes the workspace selection, not a live session.
+    fn select_workspace_account(&mut self, index: usize) {
+        if index >= self.games.len() || index == self.hunt_account { return; }
+        self.save_dirty_account_names();
+        self.history_rows_limit = 100;
+        self.dashboard_show_history = false;
+        self.hunt_account = index;
+        if self.panel_tab == PanelTab::Hunts && self.hunt_subtab == HuntSubtab::Compare {
+            self.hunt_subtab = HuntSubtab::Explorer;
+        }
+        self.automation_account = index;
+        self.hunt_page = 0;
+    }
+
+    /// Account edits are buffered until focus is lost, the selected account
+    /// changes, or the user navigates away from Accounts.
+    fn save_dirty_account_names(&mut self) {
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if self.account_names_dirty[index] {
+                let name = self.accounts[index].name.trim();
+                self.accounts[index].name = if name.is_empty() {
+                    profile.label().to_owned()
+                } else {
+                    name.to_owned()
+                };
+                if self.save_account_config() {
+                    self.account_names_dirty[index] = false;
+                }
             }
         }
     }
@@ -1271,12 +1894,12 @@ impl ControllerApp {
             };
 
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
-            // Mark fully verified profiles automatically, without treating
-            // an absent script marker as evidence of an installation.
-            if !setup_complete && vm_installed {
+            // Native authentication is sufficient to finish onboarding; userscripts
+            // and Violentmonkey are optional browser compatibility tools.
+            if !setup_complete {
                 let health = self.games[index].health();
-                if health.telemetry_is_fresh() && health.logged_in
-                    && health.addon_ok > 0 && health.addon_missing.is_empty()
+                if (health.telemetry_is_fresh() && health.logged_in)
+                    || self.games[index].native.is_some()
                 {
                     match accounts::complete_setup(profile) {
                         Ok(()) => setup_complete = true,
@@ -1296,6 +1919,324 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        while let Ok(event)=self.capture_save_rx.try_recv() {
+            self.capture_save_busy[event.index]=false;
+            match event.result {
+                Ok(()) => {
+                    if let Some(native)=self.games[event.index].native.as_ref() {
+                        if let Err(error)=native.set_capture_settings(event.config) {
+                            self.capture_save_error[event.index]=Some(error);
+                            continue;
+                        }
+                    }
+                    self.capture_drafts[event.index]=None;
+                    self.capture_save_error[event.index]=None;
+                    self.set_status("Native capture settings saved",false);
+                }
+                Err(error) => {
+                    self.capture_save_error[event.index]=Some(error.clone());
+                    self.set_status(format!("Could not save capture settings: {error}"),true);
+                }
+            }
+        }
+        while let Ok(result)=self.inventory_catalog_rx.try_recv() {
+            self.inventory_catalog_busy=false;
+            match result {
+                Ok(catalog)=>{
+                    logging::info(&format!("Native inventory catalog ready: {} items",catalog.items.len()));
+                    self.inventory_catalog=Some(Arc::new(catalog));
+                    self.inventory_catalog_error=None;
+                }
+                Err(error)=>{
+                    logging::warn(&format!("Native inventory catalog unavailable: {error}"));
+                    self.inventory_catalog_error=Some(error);
+                }
+            }
+        }
+        while let Ok(loaded) = self.hunt_reference_rx.try_recv() {
+            self.hunt_reference_busy = false;
+            match loaded {
+                Ok(reference) => {
+                    logging::info(&format!(
+                        "Native Hunt Atlas reference ready: {} species",
+                        reference.species.len()
+                    ));
+                    self.hunt_reference = Some(Arc::new(reference));
+                    self.hunt_reference_error = None;
+                }
+                Err(error) => {
+                    logging::warn(&format!("Native Hunt Atlas reference unavailable: {error}"));
+                    self.hunt_reference_error = Some(error);
+                }
+            }
+        }
+        // Only the game TAB is closed before proof. The authentication browser
+        // stays alive until both native sockets have received real welcome.
+        while let Ok(event) = self.native_verified_rx.try_recv() {
+            let index = event.index;
+            if !self.native_verifying[index] { continue; }
+            self.native_verifying[index] = false;
+            let profile = GameProfile::from_index(index).expect("known slot");
+            let native = match event.result {
+                Ok(native) => native,
+                Err(error) => {
+                    self.native_error[index] = Some(error.clone());
+                    self.set_status(format!(
+                        "{}: native verification failed: {error}; Firefox game restored or recovery reported",
+                        self.account_name(profile)), true);
+                    continue;
+                }
+            };
+            if self.games[index].handoff_closing || self.games[index].native.is_some() {
+                native.stop();
+                continue;
+            }
+            let mut child = self.games[index].child.take();
+            let orphaned_pid = self.games[index].orphaned_pid.take();
+            if child.is_none() && orphaned_pid.is_none() {
+                native.stop();
+                self.set_status("No Moth-owned Firefox process for verified native handoff", true);
+                continue;
+            }
+            let monitor = self.games[index].monitor.take();
+            self.games[index].handoff_closing = true;
+            self.native_close_cancelled[index] = false;
+            let tx = self.native_closed_tx.clone();
+            logging::info(&format!(
+                "{} native game welcome + Twitch IRC 001 confirmed; closing Firefox",
+                self.account_name(profile)));
+            std::thread::spawn(move || {
+                let mut result = if let Some(child) = child.as_mut() {
+                    firefox::stop_child(child, monitor.as_ref())
+                } else {
+                    Ok(())
+                };
+                if result.is_ok() {
+                    result = crate::config::Config::for_profile(profile)
+                        .and_then(|config| firefox::stop_profile_processes(&config));
+                }
+                if result.is_ok() {
+                    if let Some(monitor) = monitor.as_ref() { monitor.stop(); }
+                }
+                let _ = tx.send(NativeBrowserClosedEvent {
+                    index, native, cache_warning: event.cache_warning,
+                    child, orphaned_pid, monitor, result
+                });
+            });
+        }
+        // Browser shutdown is asynchronous: the UI never blocks for BiDi
+        // browser.close, process reaping or a force-kill fallback.
+        while let Ok(event) = self.native_closed_rx.try_recv() {
+            let index = event.index;
+            let profile = GameProfile::from_index(index).expect("known slot");
+            self.games[index].handoff_closing = false;
+            let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
+            match event.result {
+                Ok(()) => {
+                    self.native_error[index] = None;
+                    // Successful Firefox close must be logged before any
+                    // attempt to start native sockets, so a crash is localizable.
+                    logging::info(&format!(
+                        "{} Firefox exited after authenticated handoff",
+                        self.account_name(profile)));
+                    if cancelled {
+                        self.set_status(format!(
+                            "{} native handoff canceled by Stop", self.account_name(profile)), false);
+                        continue;
+                    }
+                    logging::info(&format!(
+                        "{} starting native game + Twitch IRC workers", self.account_name(profile)));
+                    self.games[index].native = Some(event.native);
+                    self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
+                    self.require_browser_login[index] = false;
+                    let cache_note = event.cache_warning
+                        .map(|warning| format!(" · secure cache unavailable: {warning}"))
+                        .unwrap_or_default();
+                    self.set_status(format!(
+                        "{} native game + Twitch IRC authenticated and Firefox closed{cache_note}",
+                        self.account_name(profile)), false);
+                }
+                Err(error) => {
+                    // Native game is already authenticated; Firefox's game
+                    // tab was closed. Retain native ownership and the remaining
+                    // Firefox handle for a later explicit cleanup attempt.
+                    self.games[index].native = Some(event.native);
+                    self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
+                    self.games[index].child = event.child;
+                    self.games[index].orphaned_pid = event.orphaned_pid;
+                    self.games[index].monitor = event.monitor;
+                    self.set_status(format!(
+                        "{} native authenticated, but Firefox cleanup needs attention: {error}",
+                        self.account_name(profile)), true);
+                }
+            }
+        }
+        // Try the protected native credential vault BEFORE constructing any
+        // Firefox process. OS keyring requests run off the UI thread.
+        while let Ok(event) = self.cached_native_rx.try_recv() {
+            if !self.cached_native_busy[event.index] { continue; }
+            self.cached_native_busy[event.index] = false;
+            let profile = GameProfile::from_index(event.index).expect("known slot");
+            if self.games[event.index].is_running() { continue; }
+            if event.existing_firefox {
+                // A stale managed Firefox process still owns this profile.
+                // Do not create a competing native game socket from cache.
+                // Adopt its BiDi session and let the two-phase handoff close it.
+                self.require_browser_login[event.index] = true;
+                self.launch_firefox_bootstrap(profile, event.headless);
+                continue;
+            }
+            if self.require_browser_login[event.index] {
+                self.launch_firefox_bootstrap(profile, event.headless);
+                continue;
+            }
+            match event.result {
+                Ok(Some(session)) => {
+                    self.games[event.index].native = Some(session);
+                    self.capture_drafts[event.index]=None;
+                    self.automation_drafts[event.index]=AutomationDraft::default();
+                    self.set_status(format!(
+                        "{}: native game + Twitch IRC started from protected credentials (no Firefox)",
+                        self.account_name(profile)), false);
+                },
+                Ok(None) => {
+                    self.require_browser_login[event.index] = true;
+                    self.set_status(format!(
+                        "{}: first-time native authentication needed",
+                        self.account_name(profile)), false);
+                    self.launch_firefox_bootstrap(profile, event.headless);
+                }
+                Err(error) => {
+                    self.require_browser_login[event.index] = true;
+                    self.set_status(format!(
+                        "{} secure native credentials unavailable: {error}",
+                        self.account_name(profile)), true);
+                    self.launch_firefox_bootstrap(profile, event.headless);
+                }
+            }
+        }
+        // Finish BiDi capture on the UI thread. The authenticated bootstrap
+        // is never logged or written to a file.
+        while let Ok(event) = self.native_handoff_rx.try_recv() {
+            if !self.native_handoff_busy[event.index] { continue; }
+            self.native_handoff_busy[event.index] = false;
+            let profile = GameProfile::from_index(event.index).expect("known slot");
+            match event.result {
+                Err(error) => {
+                    let is_bootstrap = error.contains("reloaded")
+                        || error.contains("waiting") || error.contains("pending")
+                        || error.contains("temporary Twitch")
+                        || error.contains("hook installed")
+                        || error.contains("login has not produced");
+                    if !is_bootstrap {
+                        self.native_error[event.index] = Some(error.clone());
+                    }
+                    self.set_status(format!(
+                        "{}: {}: {error}",
+                        self.account_name(profile),
+                        if is_bootstrap { "native login" } else { "native handoff error" }
+                    ), !is_bootstrap);
+                },
+                Ok(bootstrap) => {
+                    // Never close Firefox without a usable authenticated hello
+                    // and cookies, or if the slot changed while capture ran.
+                    if self.games[event.index].native.is_some()
+                        || !self.games[event.index].is_running()
+                        || self.games[event.index].monitor.is_none()
+                    {
+                        self.set_status("Native handoff canceled: browser ownership changed", true);
+                        continue;
+                    }
+                    let validated = crate::native_background::validate_bootstrap(&bootstrap);
+                    if let Err(error) = validated {
+                        self.native_error[event.index] = Some(error.clone());
+                        self.set_status(format!("Native handoff rejected: {error}"), true);
+                        continue;
+                    }
+                    // Stage 1: close game TAB and prove Rust is authenticated,
+                    // leaving Firefox alive for recovery. Stage 2, above, closes
+                    // Firefox only after both native servers welcomed us.
+                    if self.games[event.index].handoff_closing ||
+                        self.native_verifying[event.index] { continue; }
+                    let Some(monitor) = self.games[event.index].monitor.clone() else {
+                        continue;
+                    };
+                    self.native_verifying[event.index] = true;
+                    self.native_error[event.index] = None;
+                    let tx = self.native_verified_tx.clone();
+                    let index = event.index;
+                    let cache_warning = event.cache_warning;
+                    logging::info(&format!(
+                        "{} validating game+Twitch native transport before browser close",
+                        self.account_name(profile)));
+                    let spawned = std::thread::Builder::new()
+                        .name(format!("moth-native-handoff-{}", profile.name()))
+                        .spawn(move || {
+                            let mut attempted_game_close = false;
+                            // A panic in TLS setup previously destroyed the
+                            // sender without clearing native_verifying, leaving
+                            // Firefox alive but its PokéIdle tab closed.
+                            let result = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| {
+                                    crate::native_tls::ensure()?;
+                                    attempted_game_close = true;
+                                    monitor.close_game_for_handoff(Duration::from_secs(18))?;
+                                    NativeSession::start_verified(profile, bootstrap)
+                                })
+                            ).unwrap_or_else(|_| {
+                                Err("Native verification thread panicked; see sanitized Rust panic log".to_owned())
+                            });
+                            let result = match (result, attempted_game_close) {
+                                (Err(error), true) => {
+                                    match monitor.restore_game_after_failed_handoff(
+                                        Duration::from_secs(20)
+                                    ) {
+                                        Ok(()) => Err(format!("{error}; game tab reopened")),
+                                        Err(recovery) => {
+                                            crate::logging::error(&format!(
+                                                "Native verification recovery failed: {recovery}"
+                                            ));
+                                            Err(format!("{error}; game tab recovery failed: {recovery}"))
+                                        }
+                                    }
+                                }
+                                (other, _) => other,
+                            };
+                            let _ = tx.send(NativeVerifiedEvent {
+                                index, result, cache_warning
+                            });
+                        });
+                    if let Err(error) = spawned {
+                        self.native_verifying[index] = false;
+                        self.native_error[index] = Some(format!(
+                            "Could not spawn native verification worker: {error}"
+                        ));
+                        self.set_status(format!(
+                            "{}: could not begin native handoff verification: {error}",
+                            self.account_name(profile)), true);
+                    }
+                }
+            }
+        }
+        let mut recover = Vec::new();
+        for slot in &mut self.games {
+            if slot.native.as_ref().is_some_and(|session|
+                session.snapshot().phase == "NeedsLogin" ||
+                session.twitch_snapshot().phase == "NeedsLogin"
+            ) {
+                if let Some(session) = slot.native.take() { session.stop(); }
+                recover.push((slot.profile, slot.headless));
+            }
+        }
+        for (profile, headless) in recover {
+            self.require_browser_login[profile.index()] = true;
+            self.set_status(format!(
+                "{} native authentication expired; opening Firefox for renewal",
+                self.account_name(profile)), true);
+            self.launch_firefox_bootstrap(profile, headless);
+        }
         // Drain worker results on the UI thread. Never block egui on GitHub,
         // curl, or Firefox installer tabs.
         while let Ok(event) = self.addon_install_rx.try_recv() {
@@ -1389,6 +2330,25 @@ impl ControllerApp {
                 !result.ok,
             );
         }
+        // Temporary Firefox authentication is auto-handed off to native.
+        // An explicitly opened interactive Firefox must stay open instead.
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if !self.accounts[index].enabled || self.games[index].browser_only ||
+               self.native_handoff_busy[index] || self.games[index].native.is_some() ||
+               self.native_verifying[index] ||
+               self.games[index].handoff_closing || self.games[index].monitor.is_none() {
+                continue;
+            }
+            let health = self.games[index].health();
+            if !(health.telemetry_is_fresh() && health.logged_in &&
+                 health.bridge_connected) {
+                continue;
+            }
+            if self.native_handoff_last_attempt[index]
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(8)) { continue; }
+            self.start_native_handoff(profile);
+        }
     }
 
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
@@ -1424,7 +2384,8 @@ impl ControllerApp {
 
     fn open_addon_manager(&mut self, profile: GameProfile) {
         let index = profile.index();
-        self.show_accounts = true;
+        self.select_workspace_account(index);
+        self.panel_tab = PanelTab::Accounts;
         self.addon_manager_open[index] = true;
         self.addon_focus = Some(index);
     }
@@ -1465,19 +2426,117 @@ impl ControllerApp {
         }
     }
 
+    fn start_native_handoff(&mut self, profile: GameProfile) {
+        let index = profile.index();
+        if self.native_handoff_busy[index] { return; }
+        let Some(monitor) = self.games[index].monitor.clone() else {
+            self.set_status("Start a Firefox game session before testing native handoff", true);
+            return;
+        };
+        if !self.games[index].health().logged_in {
+            self.set_status("Log into PokéIdle before testing native handoff", true);
+            return;
+        }
+        self.native_handoff_busy[index] = true;
+        self.native_handoff_last_attempt[index] = Some(Instant::now());
+        logging::info(&format!(
+            "{} capturing native game + Twitch IRC session via Firefox BiDi",
+            self.account_name(profile)));
+        self.set_status(format!("{}: transferring game + Twitch IRC authentication to Rust",
+            self.account_name(profile)), false);
+        let tx = self.native_handoff_tx.clone();
+        let result = std::thread::Builder::new()
+            .name(format!("moth-handoff-{}", profile.name()))
+            .spawn(move || {
+                let result = monitor.native_bootstrap(Duration::from_secs(18));
+                // Keep browser auth in memory, but cache *valid* credentials
+                // under the OS user account for future entirely native starts.
+                // Secret Service / DPAPI I/O stays outside the egui thread.
+                let mut cache_warning = None;
+                if let Ok(value) = &result {
+                    if crate::native_background::validate_bootstrap(value).is_ok() {
+                        if let Err(error) = crate::native_auth::save(profile, value) {
+                            cache_warning = Some(error);
+                        }
+                    }
+                }
+                let _ = tx.send(NativeHandoffEvent { index, result, cache_warning });
+            });
+        if let Err(error) = result {
+            self.native_handoff_busy[index] = false;
+            self.set_status(format!("Could not start native handoff: {error}"), true);
+        }
+    }
+
     fn launch_one(&mut self, profile: GameProfile) {
         self.launch_one_mode(profile, true);
     }
 
     fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
-        let account_name = self.account_name(profile);
-        self.refresh_processes();
-
-        if self.games[index].is_running() {
-            self.set_status(format!("{} is already running.", account_name), false);
+        if self.games[index].is_running() || self.cached_native_busy[index] ||
+            self.native_handoff_busy[index] {
             return;
         }
+        self.games[index].headless = headless;
+        self.games[index].browser_only = false;
+        if self.require_browser_login[index] {
+            self.launch_firefox_bootstrap(profile, headless);
+            return;
+        }
+        self.cached_native_busy[index] = true;
+        let tx = self.cached_native_tx.clone();
+        let started = std::thread::Builder::new()
+            .name(format!("moth-cache-{}", profile.name()))
+            .spawn(move || {
+                // A managed Firefox profile from a previous crash may still
+                // have an active game socket. Determine ownership BEFORE using
+                // saved credentials, or the same account may connect twice.
+                let detected = Config::for_profile(profile)
+                    .and_then(|config| firefox::find_profile_process(&config));
+                let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
+                // A cache preflight panic must never strand the UI in
+                // "starting" state. Report it, then authenticate via Firefox.
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        crate::native_tls::ensure()?;
+                        detected.and_then(|_| {
+                            if existing_firefox { return Ok(None); }
+                            crate::native_auth::load(profile)
+                                .and_then(|saved| saved.map(|bootstrap| {
+                                    NativeSession::start_verified(profile, bootstrap.clone())
+                                        .or_else(|error| {
+                                            if error.contains("AUTH_REQUIRED:") ||
+                                                error.contains("rejected the captured OAuth") {
+                                                Err(error)
+                                            } else {
+                                                NativeSession::start(profile, bootstrap)
+                                            }
+                                        })
+                                }).transpose())
+                        })
+                    })
+                ).unwrap_or_else(|_| {
+                    Err("Native cache verification panicked; see sanitized controller log".into())
+                });
+                let _ = tx.send(CachedNativeEvent {
+                    index, headless, existing_firefox, result
+                });
+            });
+        if let Err(error) = started {
+            self.cached_native_busy[index] = false;
+            self.require_browser_login[index] = true;
+            self.set_status(format!("Protected native cache could not start: {error}"), true);
+            self.launch_firefox_bootstrap(profile, headless);
+        }
+    }
+
+    /// Authentication-only browser fallback. Never call as the ordinary
+    /// Launch path while reusable native game + Twitch credentials exist.
+    fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
+        let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
+        if self.games[index].is_running() { return; }
 
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
@@ -1491,14 +2550,23 @@ impl ControllerApp {
         // restarted or its Child handle was lost. Never spawn over that session.
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
+                // A previous crash may have left an authenticated, controlled
+                // Moth Firefox profile alive. Attach to its existing BiDi
+                // endpoint and complete native handoff; never spawn another
+                // Firefox on the same profile or kill it before Rust is ready.
                 self.games[index].orphaned_pid = Some(pid);
-                self.set_status(
-                    format!(
-                        "{}: Firefox already uses this profile (PID {}). Use Stop before launching.",
-                        account_name, pid
-                    ),
-                    true,
-                );
+                if self.games[index].monitor.is_none() {
+                    self.games[index].monitor = Some(MonitorHandle::start(
+                        config.remote_debug_port, headless));
+                }
+                logging::info(&format!(
+                    "{} adopting existing Moth Firefox profile PID {} for native handoff",
+                    account_name, pid
+                ));
+                self.set_status(format!(
+                    "{}: reusing existing Firefox authentication (PID {}) before native handoff",
+                    account_name, pid
+                ), false);
                 return;
             }
             Ok(None) => {}
@@ -1546,47 +2614,32 @@ impl ControllerApp {
         }
     }
 
-    fn set_browser_mode(&mut self, profile: GameProfile, headless: bool) {
+    /// Explicit interactive browser mode, separate from the temporary native
+    /// authentication bootstrap. Do not open two game sockets for one account.
+    fn open_in_firefox(&mut self, profile: GameProfile) {
         let index = Self::game_index(profile);
-        self.refresh_processes();
+        let account_name = self.account_name(profile);
 
-        if self.games[index].orphaned_pid.is_some() {
-            self.set_status(
-                format!("{}: Close the existing Firefox profile before switching modes.", self.account_name(profile)),
-                true,
-            );
+        // A handoff worker might already be closing the Firefox game tab or
+        // shutting down its process. Never race it with a new browser session.
+        if self.native_verifying[index] || self.games[index].handoff_closing {
+            self.set_status(format!(
+                "{account_name}: native handoff in progress; open Firefox after it finishes."
+            ), true);
             return;
         }
 
-        if !self.games[index].is_running() {
-            self.games[index].headless = headless;
-            self.launch_one_mode(profile, headless);
+        if self.games[index].browser_only && !self.games[index].headless &&
+            self.games[index].is_running() {
+            self.set_status(format!("{account_name}: Firefox is already open."), false);
             return;
         }
 
-        if self.games[index].headless == headless {
-            self.set_status(
-                format!(
-                    "{} is already running in {} mode.",
-                    self.account_name(profile),
-                    if headless { "headless" } else { "visible" }
-                ),
-                false,
-            );
-            return;
-        }
-
-        self.set_status(
-            format!(
-                "{}: switching Firefox to {} mode...",
-                self.account_name(profile),
-                if headless { "headless" } else { "visible" }
-            ),
-            false,
-        );
-        if self.stop_one(profile) {
-            self.launch_one_mode(profile, headless);
-        }
+        // Stop native game/IRC or an authentication-only Firefox first. In
+        // particular, don't run native and Firefox on the same game account.
+        if !self.stop_one(profile) { return; }
+        self.games[index].browser_only = true;
+        self.launch_firefox_bootstrap(profile, false);
     }
 
     fn repair_monitor(&mut self, profile: GameProfile) {
@@ -1595,19 +2648,50 @@ impl ControllerApp {
         // never interrupt a running game automatically on telemetry failure.
         let index = Self::game_index(profile);
         let headless = self.games[index].headless;
+        let browser_only = self.games[index].browser_only;
         logging::warn(&format!(
             "{} repairing an exhausted BiDi session by user-requested Firefox restart",
             self.account_name(profile)
         ));
         if self.stop_one(profile) {
-            self.launch_one_mode(profile, headless);
+            if browser_only {
+                // A manual Firefox launch must remain a manual Firefox launch
+                // even after an explicit monitor repair/restart.
+                self.games[index].browser_only = true;
+                self.launch_firefox_bootstrap(profile, false);
+            } else {
+                self.launch_one_mode(profile, headless);
+            }
         }
     }
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
+        if self.games[index].handoff_closing {
+            // The dedicated shutdown worker already owns and is closing the
+            // Firefox process. Do not start native mode after explicit Stop.
+            self.native_close_cancelled[index] = true;
+            self.set_status(format!(
+                "{}: stopping pending native handoff", account_name), false);
+            return true;
+        }
+        // Cancel in-flight cache lookups and browser handoffs. Results from
+        // canceled workers are ignored even if a Stop is pressed mid-login.
+        self.cached_native_busy[index] = false;
+        self.native_handoff_busy[index] = false;
+        self.native_verifying[index] = false;
         let slot = &mut self.games[index];
+        if let Some(native) = slot.native.take() {
+            native.stop();
+            // A failed browser cleanup can leave an authenticated native game
+            // plus an owned Firefox launcher. Stop must close BOTH owners.
+            if slot.child.is_none() && slot.orphaned_pid.is_none() {
+                if let Some(monitor) = slot.monitor.take() { monitor.stop(); }
+                self.set_status(format!("{} native game and Twitch stopped.", account_name), false);
+                return true;
+            }
+        }
 
         // Stop also works after restarting the controller, before any attempt
         // to launch that profile has made the orphan process visible.
@@ -1628,13 +2712,16 @@ impl ControllerApp {
             logging::info(&format!(
                 "stopping {} Firefox PID {}", account_name, child.id()
             ));
-            match firefox::stop_child(&mut child, slot.monitor.as_ref()) {
+            let closed = firefox::stop_child(&mut child, slot.monitor.as_ref())
+                .and_then(|_| Config::for_profile(profile))
+                .and_then(|config| firefox::stop_profile_processes(&config));
+            match closed {
                 Ok(()) => {
                     if let Some(monitor) = slot.monitor.take() {
                         monitor.stop();
                     }
                     slot.orphaned_pid = None;
-                    self.set_status(format!("{} Firefox closed.", account_name), false);
+                    self.set_status(format!("{} Firefox profile completely closed.", account_name), false);
                     true
                 }
                 Err(error) => {
@@ -1644,11 +2731,11 @@ impl ControllerApp {
                     false
                 }
             }
-        } else if let Some(pid) = slot.orphaned_pid {
+        } else if slot.orphaned_pid.is_some() {
             // Stop was explicitly clicked; never terminate a recovered process
             // automatically when the controller itself exits.
             let result = Config::for_profile(profile)
-                .and_then(|config| firefox::stop_existing(&config, pid));
+                .and_then(|config| firefox::stop_profile_processes(&config));
             match result {
                 Ok(()) => {
                     slot.orphaned_pid = None;
@@ -1681,7 +2768,7 @@ impl ControllerApp {
         // Keep any launch error visible rather than overwriting it with a
         // success-shaped summary when a profile is already in use.
         if !self.status_error {
-            self.set_status("Launch enabled requested · monitoring will update as Firefox becomes ready", false);
+            self.set_status("Launch enabled requested · native game and Twitch starting; Firefox only if login needed", false);
         }
     }
 
@@ -1693,7 +2780,7 @@ impl ControllerApp {
             }
         }
         if all_stopped {
-            self.set_status("All Firefox instances closed.", false);
+            self.set_status("All native game/Twitch sessions and Firefox authentication windows stopped.", false);
         } else {
             self.set_status("Some Firefox instances could not be stopped; check the log.", true);
         }
@@ -1794,10 +2881,9 @@ impl ControllerApp {
     }
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
-        // "Open Game" uses the controller-owned visible Firefox process so it
-        // remains interactive and is tracked by the dashboard's process monitor.
+        // "Open Game" uses persistent visible Firefox, not native cache startup.
         if let ProfileAction::Game = action {
-            self.set_browser_mode(profile, false);
+            self.open_in_firefox(profile);
             return;
         }
 
@@ -1850,6 +2936,7 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        self.visuals.poll(ui.ctx());
         if self.account_setup_checked_at
             .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
             .unwrap_or(true)
@@ -1857,12 +2944,16 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
+        // Live native panels publish snapshots at one-second cadence.
+        // Repaint only while visible; tray/background retains the cheap timer.
+        let background = self.controller_in_background(ui.ctx());
+        let native_detail = self.games.iter().any(|game| game.native.is_some())
+            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Automation)
+                || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
         ui.ctx().request_repaint_after(
-            if self.controller_in_background(ui.ctx()) {
-                UI_BACKGROUND_REPAINT_INTERVAL
-            } else {
-                UI_REPAINT_INTERVAL
-            }
+            if background { UI_BACKGROUND_REPAINT_INTERVAL }
+            else if native_detail { Duration::from_secs(1) }
+            else { UI_REPAINT_INTERVAL }
         );
 
         draw_sidebar(self, ui);
@@ -1872,7 +2963,13 @@ impl eframe::App for ControllerApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(tr("Overview"))
+                        RichText::new(tr(match self.panel_tab {
+                            PanelTab::Overview => "Overview",
+                            PanelTab::Hunts => "Hunt Atlas",
+                            PanelTab::Accounts => "Accounts",
+                            PanelTab::Automation => "Automation",
+                            PanelTab::Options => "Options",
+                        }))
                             .font(FontId::proportional(26.0))
                             .strong()
                             .color(TEXT),
@@ -1983,19 +3080,181 @@ impl eframe::App for ControllerApp {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 10)))
             .show(ui, |ui| {
-                draw_instance_section(self, ui);
+                // Accounts has its own full page with an account selector.
+                // All other native workspaces share the same compact strip.
+                let active = match self.panel_tab {
+                    PanelTab::Overview => Some(self.selected_details),
+                    PanelTab::Hunts => Some(Some(self.hunt_account)),
+                    PanelTab::Automation => Some(Some(self.automation_account)),
+                    _ => None,
+                };
+                if let Some(selected) = active {
+                    let next = draw_account_switcher(
+                        self, ui, selected, self.panel_tab == PanelTab::Overview
+                    );
+                    if next != selected {
+                        if let Some(index) = next {
+                            self.select_workspace_account(index);
+                            if self.panel_tab == PanelTab::Overview {
+                                self.selected_details = Some(index);
+                            }
+                        } else if self.panel_tab == PanelTab::Overview {
+                            self.selected_details = None;
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
+                match self.panel_tab {
+                    PanelTab::Overview => draw_instance_section(self, ui),
+                    PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
+                    PanelTab::Accounts => draw_accounts_panel(self, ui),
+                    PanelTab::Automation => draw_automation_panel(self, ui),
+                    PanelTab::Options => draw_options_panel(self, ui),
+                }
             });
 
-        if self.show_accounts {
-            draw_accounts_window(self, ui.ctx());
+        // If the user leaves Accounts while editing the name, persist it
+        // without needing to close a dialog that no longer exists.
+        if self.panel_tab != PanelTab::Accounts {
+            self.save_dirty_account_names();
         }
-        // Apply after widgets so Show/Hide Details and tray hiding change
-        // polling in the same frame. Alt-tab also switches every account to
-        // the cheaper background pace; refocusing restores the open panel.
+        // Apply the persisted preference immediately to all Firefox monitors.
+        // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
     }
+}
+
+/// Same compact account navigation is reused by every native data page and
+/// the account manager. Clicking one account changes the workspace selection,
+/// not the running game. Status always reflects the real native session.
+fn draw_account_switcher(
+    app: &ControllerApp,
+    ui: &mut egui::Ui,
+    selected: Option<usize>,
+    include_all: bool,
+) -> Option<usize> {
+    let mut next = selected;
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("ACCOUNT")).size(10.0).strong().color(DIM));
+                if include_all {
+                    let is_all = selected.is_none();
+                    if ui.add_sized([105.0, 34.0],
+                        egui::Button::new(RichText::new(tr("All accounts")).size(11.0))
+                            .fill(if is_all { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                            .stroke(Stroke::new(1.0, if is_all { ACCENT } else { BORDER }))
+                            .corner_radius(6.0)).clicked() {
+                        next = None;
+                    }
+                }
+                for index in 0..app.games.len() {
+                    let slot = &app.games[index];
+                    let profile = slot.profile;
+                    let (state, color) = if let Some(native) = slot.native.as_ref() {
+                        let snapshot = native.snapshot();
+                        if snapshot.phase == "Online" {
+                            (tr("Online"), GOOD)
+                        } else {
+                            (tr("Reconnecting"), WARN)
+                        }
+                    } else if app.cached_native_busy[index] || app.native_verifying[index]
+                        || app.native_handoff_busy[index] || slot.handoff_closing {
+                        (tr("Starting"), WARN)
+                    } else if slot.child.is_some() || slot.orphaned_pid.is_some() {
+                        (tr("Firefox"), WARN)
+                    } else if !app.accounts[index].enabled {
+                        (tr("Disabled"), DIM)
+                    } else {
+                        (tr("Offline"), DIM)
+                    };
+                    let selected_here = selected == Some(index);
+                    let name = compact_text(&app.accounts[index].name, 15);
+                    let text = format!("{} {}\n{}", if color == GOOD { "●" } else { "○" },
+                        name, state);
+                    let response = ui.add_sized([128.0, 37.0],
+                        egui::Button::new(RichText::new(text).size(10.0)
+                            .color(if selected_here { TEXT } else { MUTED }))
+                            .fill(if selected_here {
+                                ACCENT.linear_multiply(0.20)
+                            } else {
+                                PANEL_ALT
+                            })
+                            .stroke(Stroke::new(1.0, if selected_here { ACCENT } else { BORDER }))
+                            .corner_radius(6.0));
+                    if response.on_hover_text(format!("{} · {}", profile.label(), state)).clicked() {
+                        next = Some(index);
+                    }
+                }
+            });
+        });
+    next
+}
+
+/// Performance preferences persist independently of accounts and profiles.
+fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.label(RichText::new(tr("Performance and updates"))
+        .size(17.0).strong().color(TEXT));
+    ui.add_space(5.0);
+    ui.label(RichText::new(tr("Choose when the controller reduces its display and browser-monitor refresh rate."))
+        .size(11.0).color(MUTED));
+    ui.add_space(12.0);
+
+    let mut next = app.ui_options;
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Background refresh"))
+                .size(13.0).strong().color(TEXT));
+            ui.add_space(8.0);
+
+            ui.checkbox(
+                &mut next.reduce_updates_unfocused,
+                tr("Reduce updates when the window is not focused"),
+            );
+            ui.label(RichText::new(tr(
+                "On: 30-second UI refresh and lower Firefox monitoring frequency when you switch apps. Off: normal foreground refresh continues."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.checkbox(
+                &mut next.reduce_updates_in_tray,
+                tr("Reduce updates when minimized to the system tray"),
+            );
+            ui.label(RichText::new(tr(
+                "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(RichText::new(tr(
+                "Native PokéIdle and Twitch sessions continue at full speed regardless of these options. Only UI redraw and Firefox/BiDi monitoring are affected."
+            )).size(10.0).color(DIM));
+        });
+
+    if next != app.ui_options {
+        // The change is applied only after a successful disk write. If the
+        // options directory is unavailable, keep the previous live setting.
+        app.save_ui_options(next);
+        ui.ctx().request_repaint();
+    }
+
+    ui.add_space(12.0);
+    let slowed=app.controller_in_background(ui.ctx());
+    ui.label(RichText::new(format!("{}: {}",
+        tr("Current refresh mode"),
+        tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
+        .size(11.0).color(if slowed { WARN } else { GOOD }));
+    if ui.small_button(tr("Restore default performance settings")).clicked() {
+        app.save_ui_options(UiOptions::default());
+    }
+    ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
+        .size(11.0).color(DIM));
 }
 
 #[derive(Clone, Copy)]
@@ -2034,16 +3293,28 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             section_label(ui, tr("WORKSPACE"));
 
-            if sidebar_button(ui, tr("▦  Dashboard"), true).clicked() {
-                app.set_status(tr("Dashboard · live health polling enabled").to_string(), false);
+            if sidebar_button(ui, tr("▦  Dashboard"), app.panel_tab == PanelTab::Overview).clicked() {
+                app.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
-                app.show_accounts = true;
+            if sidebar_button(ui, &format!("   ↳  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
+                app.panel_tab = PanelTab::Hunts;
+            }
+
+            if sidebar_button(ui, tr("◫  Accounts"), app.panel_tab == PanelTab::Accounts).clicked() {
+                app.panel_tab = PanelTab::Accounts;
+            }
+
+            if sidebar_button(ui, &format!("⚡  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
+                app.panel_tab = PanelTab::Automation;
             }
 
             if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
                 app.open_logs();
+            }
+
+            if sidebar_button(ui, &format!("⚙  {}", tr("Options")), app.panel_tab == PanelTab::Options).clicked() {
+                app.panel_tab = PanelTab::Options;
             }
 
             ui.add_space(18.0);
@@ -2119,6 +3390,9 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let active: Vec<_> = app.games.iter()
                         .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
                         .collect();
+                    let native_online = app.games.iter().filter(|game|
+                        game.native.as_ref().is_some_and(|native|
+                            native.snapshot().phase == "Online")).count();
                     let mode = if active.is_empty() {
                         tr("STOPPED")
                     } else if active.iter().all(|game| game.headless) {
@@ -2131,8 +3405,13 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let connected = active.iter()
                         .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                         .count();
+                    runtime_row(ui, "Native game", &format!("{native_online}/4 online"),
+                        if native_online>0 {GOOD} else {MUTED});
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
-                    runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
+                    if !active.is_empty() {
+                        runtime_row(ui, "BiDi login", &format!("{connected}/{} {}", active.len(), tr("Connected")),
+                            if connected == active.len() { GOOD } else { MUTED });
+                    }
                 });
 
             ui.add_space(12.0);
@@ -2230,7 +3509,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical()
         .id_salt("instances_page")
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
         .show(ui, |ui| {
             let profiles: Vec<usize> = GameProfile::ALL
                 .iter()
@@ -2238,15 +3517,16 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 .filter(|index| app.accounts[*index].enabled)
                 .collect();
 
-            if profiles.is_empty() {
+            if profiles.is_empty() && app.selected_details.is_none() {
                 ui.label(
                     RichText::new(tr("No accounts enabled. Open Account Manager to add or enable one."))
                         .size(12.0)
                         .color(DIM),
                 );
             } else {
-                // Two compact cards fit at the app's default 1120px window
-                // without squeezing the old multi-section details side by side.
+                // Once selected, show the account's full detail immediately
+                // instead of leaving unrelated cards between it and the switcher.
+                if app.selected_details.is_none() {
                 let gap = 12.0;
                 let available = ui.available_width();
                 let columns = if available >= 650.0 { 2 } else { 1 };
@@ -2270,16 +3550,23 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(10.0);
                 }
 
-                // Only one account opens at a time, at full available width.
-                // Other overview cards never grow or move into a giant row.
-                if let Some(index) = app.selected_details.filter(|index| profiles.contains(index)) {
+                }
+                // The workspace chip selection also opens this detailed view.
+                if let Some(index) = app.selected_details {
                     ui.add_space(9.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!(
                             "{} {}",
                             tr("Details for"),
                             app.account_name(app.games[index].profile)
-                        )).size(16.0).strong().color(TEXT));
+                        )).size(15.0).strong().color(TEXT));
+                        ui.add_space(8.0);
+                        if ui.selectable_label(!app.dashboard_show_history, tr("Live details")).clicked() {
+                            app.dashboard_show_history = false;
+                        }
+                        if ui.selectable_label(app.dashboard_show_history, tr("History")).clicked() {
+                            app.dashboard_show_history = true;
+                        }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button(tr("Hide details")).clicked() {
                                 app.selected_details = None;
@@ -2288,12 +3575,17 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(8.0);
                     if app.selected_details == Some(index) {
-                        // Keep the expanded dashboard at a readable measure on wide windows.
                         let width = ui.available_width().min(820.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(width, 0.0),
                             Layout::top_down(Align::Min),
-                            |ui| draw_game_details(app, ui, index, width),
+                            |ui| {
+                                if app.dashboard_show_history {
+                                    draw_history_panel(app, ui, index);
+                                } else {
+                                    draw_game_details(app, ui, index, width);
+                                }
+                            },
                         );
                         ui.add_space(12.0);
                     }
@@ -2307,6 +3599,76 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
 }
 
+
+/// Current game inventory (server quantities) and separately battle-acquired
+/// drops. Shop purchases are never labeled as loot.
+fn request_item_catalog(app:&mut ControllerApp) {
+    if app.inventory_catalog.is_none() && app.inventory_catalog_error.is_none() &&
+        !app.inventory_catalog_busy {
+        app.inventory_catalog_busy=true;
+        let tx=app.inventory_catalog_tx.clone();
+        std::thread::spawn(move || {
+            let result=std::panic::catch_unwind(native_items::load)
+                .unwrap_or_else(|_|Err("Item catalog loader panicked".into()));
+            let _=tx.send(result);
+        });
+    }
+}
+/// Offline pages should offer one useful next action instead of leaving an
+/// almost entirely empty workspace. Authentication is never inferred complete.
+fn draw_native_missing_panel(
+    app:&mut ControllerApp,
+    ui:&mut egui::Ui,
+    selected:Option<usize>,
+    purpose:&str,
+) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.label(RichText::new(purpose).size(13.0).strong().color(TEXT));
+            if let Some(index)=selected {
+                let profile=app.games[index].profile;
+                let running=app.games[index].is_running();
+                let name=app.account_name(profile);
+                ui.label(RichText::new(format!("{} · {}",name,
+                    if running { tr("Waiting for native authentication") }
+                    else { tr("Native session is stopped") }))
+                    .size(11.0).color(if running { WARN } else { DIM }));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.add_enabled(!running,egui::Button::new(tr("Start native")))
+                        .clicked() {
+                        app.launch_one(profile);
+                    }
+                    if ui.small_button(tr("Account settings")).clicked() {
+                        app.panel_tab=PanelTab::Accounts;
+                    }
+                });
+            } else {
+                ui.label(RichText::new(tr("No selected account has a native session yet"))
+                    .size(11.0).color(DIM));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.small_button(tr("Launch enabled accounts")).clicked() {
+                        app.launch_enabled();
+                    }
+                    if ui.small_button(tr("Manage accounts")).clicked() {
+                        app.panel_tab=PanelTab::Accounts;
+                    }
+                });
+            }
+        });
+}
+
+fn format_hunt_amount(value: f64) -> String {
+    if !value.is_finite() { return "—".into(); }
+    let negative = if value < 0.0 { "-" } else { "" };
+    let num = value.abs();
+    if num >= 1_000_000_000.0 { format!("{negative}{:.2}B", num / 1_000_000_000.0) }
+    else if num >= 1_000_000.0 { format!("{negative}{:.2}M", num / 1_000_000.0) }
+    else if num >= 1_000.0 { format!("{negative}{:.1}K", num / 1_000.0) }
+    else { format!("{negative}{num:.0}") }
+}
+
+// Hunt Atlas lives in a dedicated child module, sharing the native state and
+// rendering primitives without pulling browser JavaScript into the controller.
 /// At-a-glance card: keep the operational summary visible for every enabled
 /// account, independently of the much longer optional diagnostics panel.
 fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
@@ -2315,17 +3677,30 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
-    let xp_per_hour = if running {
+    let xp_per_hour = if let Some(native) = app.games[index].native.as_ref() {
+        let measured = native.hunt_snapshot().measurements;
+        if measured.valid_trainer { Some(measured.trainer_xp_h) } else { None }
+    } else if running {
         app.xp_rates[index].observe(&health)
     } else {
         app.xp_rates[index] = XpRateTracker::default();
         None
     };
-    let idle_warning = app.idle_warning_for(index, &health);
+    // Bridge inactivity checks require Firefox telemetry; native battle
+    // receipts are assessed independently by the Hunts panel.
+    let idle_warning = if app.games[index].native.is_some() {
+        app.idle_progress[index] = IdleProgressTracker::default();
+        false
+    } else { app.idle_warning_for(index, &health) };
     let addon_versions = app.addon_version_status.lock()
         .map(|status| status.clone()).unwrap_or_default();
-    let addon_problems = addon_needs_attention(&health, running, &addon_versions);
-    let needs_setup = !app.account_setup[index].setup_complete;
+    // Native accounts do not execute browser userscripts. Their old addon
+    // version inventory must not show a spurious maintenance warning.
+    let browser_runtime = app.games[index].native.is_none();
+    let addon_problems = if browser_runtime {
+        addon_needs_attention(&health, running, &addon_versions)
+    } else { 0 };
+    let needs_setup = browser_runtime && !app.account_setup[index].setup_complete;
     let fresh = running && health.telemetry_is_fresh();
     let repair_available = monitor_repair_available(
         running,
@@ -2349,6 +3724,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     let label = tr(if expanded { "Hide details" } else { "Show details" });
                     if ui.small_button(label).clicked() {
                         app.selected_details = if expanded { None } else { Some(index) };
+                        if !expanded { app.select_workspace_account(index); }
                     }
                 });
             });
@@ -2470,9 +3846,11 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                // Match the global STOP ALL / LAUNCH ENABLED visual language,
-                // but retain exactly one action for this account.
-                let action = tr(if running { "Stop" } else { "Launch" });
+                // Native and Firefox are mutually exclusive launch options.
+                let action = tr(if !running { "Start native" }
+                    else if app.games[index].native.is_some() { "Stop" }
+                    else if app.games[index].browser_only { "Stop Firefox" }
+                    else { "Stop login" });
                 let (fill, stroke) = if running {
                     (BAD.linear_multiply(0.18), Stroke::new(1.0, BAD.linear_multiply(0.55)))
                 } else {
@@ -2495,20 +3873,794 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         app.launch_one(profile);
                     }
                 }
-                if running && app.games[index].orphaned_pid.is_none() {
-                    ui.add_space(6.0);
-                    let mode = tr(if app.games[index].headless {
-                        "Restart visible"
+                if ui.add(
+                    egui::Button::new(
+                        RichText::new(tr("Open in Firefox").to_uppercase())
+                            .size(10.0).strong().color(TEXT),
+                    )
+                    .fill(PANEL_ALT)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .corner_radius(8.0),
+                ).on_hover_text(tr("Use this account in visible Firefox instead of the native session."))
+                .clicked() {
+                    app.open_in_firefox(profile);
+                }
+                // Keep diagnostics in the account details; show only a compact status.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let Some(native) = app.games[index].native.as_ref() {
+                        let game = native.snapshot();
+                        let twitch = native.twitch_snapshot();
+                        let online = game.phase == "Online" && twitch.phase == "Online";
+                        let summary = if online {
+                            format!("{} · IRC {}/{}", tr("Native"), twitch.joined, twitch.desired)
+                        } else {
+                            format!("{} · IRC {}", tr("Native"), twitch.phase)
+                        };
+                        ui.add(egui::Label::new(
+                            RichText::new(summary).size(10.0)
+                                .color(if online { GOOD } else { WARN })
+                        ).truncate()).on_hover_text(format!(
+                            "PokéIdle: {} · {} frames · {} kills · {} captures\nTwitch IRC: {} · {}/{} rooms",
+                            game.phase, game.frames, game.battle_kills, game.captures,
+                            twitch.phase, twitch.joined, twitch.desired
+                        ));
+                    } else if running {
+                        let stage = if app.games[index].browser_only {
+                            tr("Firefox running")
+                        } else if app.native_verifying[index] {
+                            tr("Verifying native")
+                        } else if app.native_handoff_busy[index] {
+                            tr("Reading handshake")
+                        } else {
+                            tr("Firefox login")
+                        };
+                        ui.add(egui::Label::new(
+                            RichText::new(stage).size(10.0).color(WARN)
+                        ).truncate()).on_hover_text(tr(if app.games[index].browser_only {
+                            "Firefox remains open until you stop this account."
+                        } else {
+                            "Firefox is temporary; Rust takes over after game and Twitch authentication."
+                        }));
+                    }
+                });
+            });
+            if app.games[index].native.is_none() {
+                if let Some(error) = app.native_error[index].as_deref() {
+                    ui.add_space(5.0);
+                    ui.add(egui::Label::new(
+                        RichText::new(format!("{}: {}", tr("Native error"), compact_text(error, 60)))
+                            .size(10.0).color(BAD)
+                    ).truncate()).on_hover_text(error);
+                }
+            }
+        });
+}
+
+/// Aggregated, 90-day battle history is loaded from the same account's
+/// local disk file and updated by the native game worker. Never reconstruct
+/// historical XP by adding Pokémon and trainer rewards together.
+fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    ui.label(RichText::new(tr("Persistent battle history")).size(14.0)
+        .strong().color(TEXT));
+    let profile=app.games[index].profile;
+    let history=if let Some(native)=app.games[index].native.as_ref() {
+        app.offline_histories[index]=None;
+        native.history_snapshot()
+    } else {
+        if ui.small_button(tr("Reload saved history")).clicked() {
+            app.offline_histories[index]=None;
+        }
+        app.offline_histories[index]
+            .get_or_insert_with(||crate::native_history::load_offline(profile)).clone()
+    };
+    if !history.owner.is_empty() {
+        ui.label(RichText::new(format!("{}: {}",tr("Account"),history.owner))
+            .size(11.0).color(MUTED));
+    }
+    let totals=history.totals();
+    ui.add_space(8.0);
+    ui.label(RichText::new(tr(
+        "Past 90 UTC days · saved locally per account every 5 seconds; no raw protocol or credentials."
+    )).size(10.0).color(DIM));
+    if let Some(error)=history.load_error.as_deref(){
+        ui.colored_label(WARN,format!("History load: {error}"));
+    }
+    if let Some(error)=history.save_error.as_deref(){
+        ui.colored_label(WARN,format!("History save: {error}"));
+    }
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+        ui.label(RichText::new(tr("Lifetime totals")).size(13.0).strong().color(TEXT));
+        ui.columns(3,|cols|{
+            detail_stat_line(&mut cols[0],tr("kills"),&format_number(totals.kills));
+            detail_stat_line(&mut cols[0],tr("captures"),&format_number(totals.captures));
+            detail_stat_line(&mut cols[1],tr("Trainer XP earned"),&format_number(totals.trainer_xp));
+            detail_stat_line(&mut cols[1],tr("Pokémon XP earned"),&format_number(totals.pokemon_xp));
+            detail_stat_line(&mut cols[2],tr("Combat gold"),&format_number(totals.combat_gold));
+            detail_stat_line(&mut cols[2],tr("Auto-sale gold"),&format_number(totals.auto_sale_gold));
+        });
+        ui.label(format!("{}: {} · {}: {}",tr("shinies seen"),totals.shiny_seen,
+            tr("shinies caught"),totals.shiny_captured));
+    });
+    // Only show days containing activity. Rendering fourteen empty progress
+    // bars made history look like an enormous blank table for new accounts.
+    if let Some(last_day)=history.days.iter().map(|entry|entry.day).max() {
+        let mut points=[(0u64,0u64,0u64);14];
+        for (index,point) in points.iter_mut().enumerate() {
+            point.0=last_day.saturating_sub((13-index) as u64);
+        }
+        for entry in &history.days {
+            let age=last_day.saturating_sub(entry.day);
+            if entry.day<=last_day && age<14 {
+                let point=&mut points[13-age as usize];
+                point.1=point.1.saturating_add(entry.kills);
+                point.2=point.2.saturating_add(entry.captures);
+            }
+        }
+        let active=points.iter().filter(|(_,kills,captures)|
+            *kills>0 || *captures>0).collect::<Vec<_>>();
+        if !active.is_empty() {
+            let max_kills=active.iter().map(|(_,kills,_)|*kills)
+                .max().unwrap_or(0).max(1);
+            ui.add_space(6.0);
+            egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+                .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+                    ui.label(RichText::new(tr("Recent active days · kills / captures"))
+                        .size(12.0).strong().color(TEXT));
+                    for (day,kills,captures) in active.into_iter().rev().take(7) {
+                        ui.horizontal(|ui|{
+                            ui.add_sized([83.0,16.0],egui::Label::new(
+                                RichText::new(history_day_label(*day)).size(10.0).color(DIM)));
+                            ui.add(egui::ProgressBar::new(*kills as f32/max_kills as f32)
+                                .desired_width(ui.available_width().clamp(100.0,350.0))
+                                .text(format!("{kills} / {captures}")));
+                        });
+                    }
+                });
+        }
+    }
+    ui.add_space(8.0);
+    let mut entries=history.days.iter().collect::<Vec<_>>();
+    entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
+    let total_entries=entries.len();
+    let displayed_entries=total_entries.min(app.history_rows_limit);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Hunt activity")).size(13.0).strong().color(TEXT));
+        ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
+            total_entries, tr("recorded hunt-days"))).size(10.0).color(DIM));
+    });
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
+            egui::ScrollArea::vertical().id_salt(("history-rows",index))
+                .max_height(360.0).show(ui,|ui|{
+                    if entries.is_empty() {
+                        ui.label(tr("No recorded battles yet"));
                     } else {
-                        "Restart headless"
-                    });
-                    if ui.small_button(mode).clicked() {
-                        let headless = !app.games[index].headless;
-                        app.set_browser_mode(profile, headless);
+                        egui::Grid::new(("history-grid",index))
+                            .striped(true).spacing([12.0,6.0])
+                            .show(ui,|ui|{
+                                for heading in ["Date","Hunt","Kills","Caught",
+                                    "Trainer XP","Pokémon XP","Gold","Drops"] {
+                                    ui.label(RichText::new(tr(heading))
+                                        .size(10.0).strong().color(MUTED));
+                                }
+                                ui.end_row();
+                                for day in entries.into_iter().take(displayed_entries) {
+                                    ui.label(RichText::new(history_day_label(day.day)).size(10.0));
+                                    ui.label(RichText::new(compact_text(&day.hunt,25)).size(10.0))
+                                        .on_hover_text(&day.hunt);
+                                    ui.label(format_number(day.kills));
+                                    ui.label(format_number(day.captures));
+                                    ui.label(format_number(day.trainer_xp));
+                                    ui.label(format_number(day.pokemon_xp));
+                                    ui.label(format_number(day.combat_gold.saturating_add(day.auto_sale_gold)))
+                                        .on_hover_text(format!("Combat: {} · Auto-sale: {}",
+                                            format_number(day.combat_gold),
+                                            format_number(day.auto_sale_gold)));
+                                    let drop_text=if day.drops.is_empty() {
+                                        "—".to_owned()
+                                    } else {
+                                        format!("{}",day.drops.len())
+                                    };
+                                    let drops=day.drops.iter()
+                                        .map(|(name,qty)|format!("{name} ×{qty}"))
+                                        .collect::<Vec<_>>().join("\n");
+                                    ui.label(drop_text).on_hover_text(if drops.is_empty() {
+                                        tr("No drops recorded").to_owned()
+                                    } else {drops});
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+        });
+    if displayed_entries<total_entries {
+        if ui.small_button(tr("Show 100 more hunt-days")).clicked() {
+            app.history_rows_limit=app.history_rows_limit.saturating_add(100);
+        }
+    }
+    ui.add_space(7.0);
+    ui.label(RichText::new(tr(
+        "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively."
+    )).size(10.0).color(DIM));
+}
+fn history_day_label(day:u64)->String {
+    // Civil-from-days (Gregorian UTC), no OS locale or timezone guesses.
+    let z=day as i64+719_468;
+    let era=if z>=0{z}else{z-146_096}/146_097;
+    let doe=z-era*146_097;
+    let yoe=(doe-doe/1460+doe/36_524-doe/146_096)/365;
+    let mut year=yoe+era*400;
+    let doy=doe-(365*yoe+yoe/4-yoe/100);
+    let mp=(5*doy+2)/153;
+    let d=doy-(153*mp+2)/5+1;
+    let month=mp+if mp<10{3}else{-9};
+    if month<=2 {year+=1;}
+    format!("{year:04}-{month:02}-{d:02}")
+}
+#[cfg(test)]
+mod history_ui_tests {
+    use super::history_day_label;
+    #[test]
+    fn utc_epoch_date_and_leap_day_are_stable() {
+        assert_eq!(history_day_label(0),"1970-01-01");
+        assert_eq!(history_day_label(19782),"2024-02-29");
+    }
+}
+
+/// Dedicated native automation workspace. Keeps settings out of the
+/// scrollable dashboard and provides a stable per-account selection.
+fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.label(RichText::new(tr("Server settings · Native capture · Restock"))
+        .size(13.0).color(MUTED));
+    ui.add_space(6.0);
+    let index = app.automation_account;
+    let Some(native) = app.games[index].native.as_ref() else {
+        draw_native_missing_panel(app,ui,Some(index),
+            tr("Server automation settings require a native session"));
+        return;
+    };
+    let snapshot = native.snapshot();
+    let view = native.hunt_snapshot();
+    if let Some(automation) = view.automation.as_ref() {
+        if !app.automation_drafts[index].initialized {
+            app.automation_drafts[index]=AutomationDraft::from_server(automation);
+        }
+        let mut commands:Vec<(String,serde_json::Value)>=Vec::new();
+        let can_edit=snapshot.phase=="Online" &&
+            snapshot.native_automation.pending_field.is_none();
+        egui::Frame::new().fill(PANEL).corner_radius(10.0)
+            .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Server automation")).size(13.0).strong().color(TEXT));
+                if ui.small_button(tr("Reload server values")).clicked() {
+                    app.automation_drafts[index]=AutomationDraft::from_server(automation);
+                }
+                if let Some(field)=snapshot.native_automation.pending_field.as_deref() {
+                    ui.label(RichText::new(format!("{}: {field}",tr("Awaiting confirmation")))
+                        .size(10.0).color(WARN));
+                }
+                ui.label(RichText::new(format!("{}: {} · {}: {}",
+                    tr("Confirmed"),snapshot.native_automation.confirmed,
+                    tr("Queued"),snapshot.native_automation.queued))
+                    .size(10.0).color(DIM));
+            });
+            if let Some(error)=snapshot.native_automation.error.as_deref(){
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.label(RichText::new(tr(
+                "Changes are confirmed by the game server; unsent changes are not treated as active."
+            )).size(10.0).color(DIM));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                for (key, label) in [
+                    ("autoPotion", "Auto Potion"),
+                    ("autoRevive", "Auto Revive"),
+                    ("autoVendaLoot", "Auto Sell"),
+                    ("autoLockShiny", "Lock Shiny"),
+                    ("autoLockNota9", "Lock Grade 9"),
+                    ("autoLockP5", "Lock Potency 5"),
+                    ("autoVoltarHunt", "Return to Hunt")
+                ] {
+                    if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
+                        let mut enabled=current;
+                        if ui.add_enabled(can_edit,
+                            egui::Checkbox::new(&mut enabled,label)).changed() {
+                            commands.push((key.into(),serde_json::json!(enabled)));
+                        }
                     }
                 }
             });
+            ui.add_space(10.0);
+            let draft=&mut app.automation_drafts[index];
+            ui.horizontal_wrapped(|ui| {
+                if automation.get("hpLimiar").is_some() {
+                    ui.label(tr("Potion HP threshold (%)"));
+                    ui.add(egui::DragValue::new(&mut draft.hp_limit)
+                        .range(0.0..=100.0).speed(0.5));
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply HP"))).clicked() {
+                        commands.push(("hpLimiar".into(),serde_json::json!(draft.hp_limit)));
+                    }
+                }
+                if automation.get("autoLockNotaMin").is_some() {
+                    ui.label(tr("Minimum lock grade"));
+                    ui.add(egui::DragValue::new(&mut draft.lock_grade)
+                        .range(0.0..=10.0).speed(0.1));
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply grade"))).clicked() {
+                        commands.push(("autoLockNotaMin".into(),
+                            serde_json::json!(draft.lock_grade)));
+                    }
+                }
+            });
+            for (key,label,value) in [
+                ("potionIds","Potion IDs",&mut draft.potion_ids),
+                ("ballIds","Ball IDs",&mut draft.ball_ids),
+                ("reviveIds","Revive IDs",&mut draft.revive_ids)
+            ] {
+                if automation.get(key).is_none(){continue}
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(label);
+                    ui.add(egui::TextEdit::singleline(value)
+                        .desired_width(210.0).hint_text("1, 2, 3"));
+                    if ui.add_enabled(can_edit,egui::Button::new(
+                        format!("{} {label}",tr("Apply")))).clicked() {
+                        match parse_automation_ids(value) {
+                            Ok(ids)=>commands.push((key.into(),serde_json::json!(ids))),
+                            Err(error)=>{app.status=error;app.status_error=true;}
+                        }
+                    }
+                });
+            }
         });
+        for (field,value) in commands {
+            if let Err(error)=native.send_command(GameCommand::SetAutomation {field,value}) {
+                app.status=format!("Server automation: {error}");
+                app.status_error=true;
+            }
+        }
+        ui.add_space(10.0);
+    } else {
+        ui.label(RichText::new(tr("Waiting for server automation settings"))
+            .size(11.0).color(WARN));
+    }
+    let restock = &snapshot.native_restock;
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Restock details"))
+                    .size(13.0).strong().color(TEXT));
+                automation_badge(ui, "Restock", &restock.phase,
+                    restock.enabled && restock.phase == "Stock OK");
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{} {} · {} {}", restock.ordered, tr("ordered"),
+                    restock.confirmed, tr("confirmed")));
+                if restock.pending { ui.label(RichText::new(tr("Pending")).color(WARN)); }
+                if let Some(order) = restock.last_order.as_deref() {
+                    ui.label(RichText::new(order).size(10.0).color(MUTED));
+                }
+            });
+            if let Some(error) = restock.last_error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.add_space(8.0);
+            for rule in &restock.rules {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!(
+                        "{} #{}",rule.name,rule.id)).size(11.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!(
+                        "{} {} / {} · {} {}",
+                        rule.current.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
+                        tr("in stock"),rule.target,
+                        tr("buy at"),rule.low
+                    )).size(10.0).color(DIM));
+                    let price = rule.price.map(|n|format!("{} gold",format_number(n)))
+                        .unwrap_or_else(||tr("No verified price").into());
+                    ui.label(RichText::new(format!("{} · {}",price,rule.price_source))
+                        .size(10.0).color(if rule.price.is_some() { MUTED } else { WARN }));
+                });
+            }
+            if restock.enabled && restock.rules.is_empty() {
+                ui.label(RichText::new(tr("No valid restock rules configured"))
+                    .size(10.0).color(WARN));
+            }
+        });
+    ui.add_space(10.0);
+    egui::ScrollArea::vertical().id_salt("automation-page")
+        .auto_shrink([false, false]).show(ui, |ui| {
+            draw_native_automation(app, ui, index);
+        });
+}
+
+fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    let profile = app.games[index].profile;
+    let Some(native) = app.games[index].native.as_ref() else { return; };
+    let game = native.snapshot();
+    let twitch = native.twitch_snapshot();
+
+    egui::Frame::new()
+        .fill(PANEL_ALT)
+        .corner_radius(10.0)
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                automation_badge(ui, "PokéIdle", &game.phase, game.phase == "Online");
+                let irc = format!("{} · {}/{}", twitch.phase, twitch.joined, twitch.desired);
+                automation_badge(ui, "Twitch IRC", &irc, twitch.phase == "Online");
+            });
+            ui.add_space(7.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // The native capture switch belongs to Automation, not the
+            // overview card footer beside the account's Stop button.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Auto Catch")).strong().size(11.0).color(TEXT));
+                ui.label(RichText::new(if game.native_auto_catch {
+                    tr("Active")
+                } else {
+                    tr("Off")
+                }).size(10.0).color(if game.native_auto_catch { GOOD } else { MUTED }));
+                ui.add_space(8.0);
+                if ui.small_button(tr(if game.native_auto_catch { "Disable" } else { "Enable" }))
+                    .on_hover_text(tr("Change native Auto Catch for this account"))
+                    .clicked()
+                {
+                    let enabled = !game.native_auto_catch;
+                    native.set_auto_catch(enabled);
+                    std::thread::spawn(move || {
+                        if let Err(error) = crate::native_auth::set_catch_enabled(profile, enabled) {
+                            crate::logging::warn(&format!(
+                                "{} could not save native Auto Catch preference: {error}",
+                                profile.label()
+                            ));
+                        }
+                    });
+                }
+                ui.label(RichText::new(format!(
+                    "{} {} · {} {}",
+                    game.native_capture_queue, tr("pending"),
+                    game.native_throws, tr("throws")
+                )).size(10.0).color(DIM));
+            });
+
+            ui.add_space(7.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let restock = &game.native_restock;
+                ui.label(RichText::new(tr("Restock")).size(11.0).strong().color(TEXT));
+                let active = restock.enabled && game.native_auto_catch;
+                ui.label(RichText::new(tr(&restock.phase))
+                    .size(10.0).color(if active && restock.phase == "Stock OK" {
+                        GOOD
+                    } else if restock.last_error.is_some() { WARN } else { DIM }));
+                if restock.configured {
+                    ui.add_space(8.0);
+                    if ui.small_button(tr(if restock.enabled { "Disable" } else { "Enable" }))
+                        .on_hover_text(tr("Native restock setting; saved without Firefox"))
+                        .clicked()
+                    {
+                        let enabled = !restock.enabled;
+                        native.set_restock_enabled(enabled);
+                        std::thread::spawn(move || {
+                            if let Err(error) = crate::native_auth::set_restock_enabled(profile, enabled) {
+                                crate::logging::warn(&format!(
+                                    "{} could not save native restock preference: {error}",
+                                    profile.label()
+                                ));
+                            }
+                        });
+                    }
+                }
+                let details = format!(
+                    "{} {} · {} {}",
+                    restock.ordered, tr("ordered"),
+                    restock.confirmed, tr("confirmed")
+                );
+                ui.label(RichText::new(details).size(10.0).color(DIM))
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        restock.last_order.as_deref().unwrap_or("No orders yet"),
+                        restock.last_error.as_deref().unwrap_or("No errors")
+                    ));
+            });
+            if !game.native_restock.configured {
+                ui.label(RichText::new(tr("No restock rules imported for this account"))
+                    .size(10.0).color(DIM))
+                    .on_hover_text(tr(
+                        "Native Restock needs ball/item IDs and thresholds; browser settings are imported once during authentication."
+                    ));
+            }
+
+            if game.phase == "Online" {
+                ui.add_space(5.0);
+                ui.collapsing(tr("Game actions"), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button(tr("Pokémon Center")).clicked() {
+                            if let Err(error) = native.send_command(GameCommand::Center) {
+                                crate::logging::warn(&format!(
+                                    "Native center command rejected: {error}"
+                                ));
+                            }
+                        }
+                        if let Some(slug) = game.hunt_slug.as_deref() {
+                            if ui.small_button(tr("Return to hunt"))
+                                .on_hover_text(slug).clicked()
+                            {
+                                if let Err(error) = native.send_command(
+                                    GameCommand::Hunt(slug.to_owned())
+                                ) {
+                                    crate::logging::warn(&format!(
+                                        "Native hunt command rejected: {error}"
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+        });
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(tr("Configure native Auto Catch"))
+        .id_salt(("native-capture-editor",index))
+        .default_open(true)
+        .show(ui,|ui|{
+            draw_native_capture_config(app,ui,index);
+        });
+}
+
+fn capture_ball_name(k:&str)->&'static str {
+    match k {"beast"=>"Beast Ball","ultra"=>"Ultra Ball","super"=>"Super Ball",
+        "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
+}
+// Auto Catch+ restock picker: compact selectable items instead of raw IDs.
+// IDs are the server protocol IDs, shared with the userscript. Public metadata
+// only enriches captions; absent metadata never switches a saved selection.
+fn capture_restock_chip(
+    ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
+    selected:&mut u64, id:u64, name:&str, icon:&str,
+    icon_hint:Option<&str>, price:Option<u64>, stock:Option<u64>
+) {
+    let active=*selected==id;
+    let response=egui::Frame::new()
+        .fill(if active {Color32::from_rgb(52,45,95)} else {PANEL_ALT})
+        .stroke(Stroke::new(if active {1.4} else {1.0},
+            if active {ACCENT} else {BORDER}))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(7,4))
+        .show(ui,|ui|{
+            ui.horizontal(|ui|{
+                if !visuals.show(ui,kind,id,icon_hint,20.0) {
+                    ui.label(RichText::new(icon).size(14.0));
+                }
+                ui.label(RichText::new(name).size(10.0)
+                    .color(if active { TEXT } else { MUTED }));
+            });
+        }).response.interact(egui::Sense::click());
+    let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
+    let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
+    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
+        *selected=id;
+    }
+}
+fn capture_restock_threshold(
+    ui:&mut egui::Ui,label:&str,at:&mut u64,to:&mut u64,
+    current:Option<u64>
+) {
+    ui.horizontal_wrapped(|ui|{
+        ui.add_sized([77.0,18.0],egui::Label::new(
+            RichText::new(label).strong().size(10.0).color(TEXT)));
+        ui.label(RichText::new("at ≤").size(10.0).color(DIM));
+        ui.add_sized([75.0,20.0],egui::DragValue::new(at).range(0..=1_000_000));
+        ui.label(RichText::new("to").size(10.0).color(DIM));
+        ui.add_sized([75.0,20.0],egui::DragValue::new(to).range(0..=1_000_000));
+        if let Some(count)=current {
+            ui.label(RichText::new(format!("{count} in bag")).size(10.0)
+                .color(if count <= *at {WARN} else {DIM}));
+        }
+    });
+}
+fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+    request_item_catalog(app);
+    app.visuals.poll(ui.ctx());
+    let profile=app.games[index].profile;
+    let Some(native)=app.games[index].native.as_ref() else {return};
+    if app.capture_drafts[index].is_none() {
+        app.capture_drafts[index]=Some(native.capture_settings());
+    }
+    let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
+    ui.checkbox(&mut cfg.enabled,tr("Enable native Auto Catch"));
+    ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
+        .size(11.0).color(TEXT));
+    let keys=["beast","ultra","super","great","poke"];
+    let mut chosen=[
+        cfg.priorities.first().cloned().unwrap_or_default(),
+        cfg.priorities.get(1).cloned().unwrap_or_default()
+    ];
+    ui.horizontal_wrapped(|ui|{
+        for slot in 0..2 {
+            ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
+            egui::ComboBox::from_id_salt(("cap-choice",index,slot))
+                .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
+                    ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
+                    for key in keys {
+                        ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
+                    }
+                });
+        }
+    });
+    cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
+    ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
+    ui.horizontal_wrapped(|ui|{
+        for key in keys {
+            ui.vertical(|ui|{
+                ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
+                ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
+                    .range(0..=1_000_000));
+            });
+        }
+    });
+    ui.separator();
+    let restock_status=native.snapshot().native_restock;
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+        ui.horizontal_wrapped(|ui|{
+            ui.checkbox(&mut cfg.restock_enabled,tr("Automatic restock"));
+            ui.label(RichText::new(tr(&restock_status.phase)).size(10.0)
+                .color(if restock_status.pending {WARN} else {DIM}));
+            ui.label(RichText::new(format!(
+                "{} ordered · {} confirmed",
+                restock_status.ordered,restock_status.confirmed
+            )).size(10.0).color(DIM));
+        });
+        ui.label(RichText::new(
+            "Choose one ball, one potion and one revive. Tap a choice to select it; choose Off to disable a category."
+        ).size(10.0).color(MUTED));
+        let game_catalog=native.hunt_snapshot();
+        let catalog=app.inventory_catalog.as_deref();
+        let selected_stock=|kind:&str,id:u64| -> Option<u64> {
+            restock_status.rules.iter()
+                .find(|rule|rule.kind==kind && rule.id==id)
+                .and_then(|rule|rule.current)
+        };
+        let selected_price=|kind:&str,id:u64| -> Option<u64> {
+            restock_status.rules.iter()
+                .find(|rule|rule.kind==kind && rule.id==id)
+                .and_then(|rule|rule.price)
+        };
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
+        ui.horizontal_wrapped(|ui|{
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                &mut cfg.ball_id,0,"Off","—",None,None,None);
+            for (id,name) in &game_catalog.ball_names {
+                if name.to_lowercase().contains("master") { continue; }
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,*id,name,"●",None,
+                    selected_price("ball",*id),selected_stock("ball",*id));
+            }
+            if cfg.ball_id>0 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
+                let id=cfg.ball_id;
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
+            }
+        });
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
+        // Match Auto Catch+: Small, Ultimate and Golden Potion. Preserve
+        // any existing selection even if the downloaded catalog is old.
+        let mut potion_choices=vec![
+            (200_u64,String::from("Small Potion")),
+            (204_u64,String::from("Ultimate Potion")),
+            (70070_u64,String::from("Golden Potion"))
+        ];
+        if cfg.potion_id>0 && !potion_choices.iter().any(|(id,_)|*id==cfg.potion_id) {
+            let name=catalog.map(|c|c.name(cfg.potion_id))
+                .unwrap_or_else(||format!("Saved potion #{}",cfg.potion_id));
+            potion_choices.push((cfg.potion_id,name));
+        }
+        ui.horizontal_wrapped(|ui|{
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.potion_id,0,"Off","—",None,None,None);
+            for (id,name) in potion_choices {
+                let price=selected_price("item",id)
+                    .or_else(||catalog.and_then(|c|c.items.get(&id))
+                        .and_then(|item|item.price_gold));
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.potion_id,id,&name,"💊",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
+                    price,selected_stock("item",id));
+            }
+        });
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
+        let mut revive_choices=vec![
+            (205_u64,String::from("Revive")),
+            (206_u64,String::from("Max Revive"))
+        ];
+        if let Some(c)=catalog {
+            for (id,item) in &c.items {
+                if item.name.to_lowercase().contains("revive") &&
+                    !revive_choices.iter().any(|(existing,_)|existing==id) {
+                    revive_choices.push((*id,item.name.clone()));
+                }
+            }
+        }
+        if cfg.revive_id>0 && !revive_choices.iter().any(|(id,_)|*id==cfg.revive_id) {
+            revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
+        }
+        ui.horizontal_wrapped(|ui|{
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.revive_id,0,"Off","—",None,None,None);
+            for (id,name) in revive_choices {
+                let price=selected_price("item",id)
+                    .or_else(||catalog.and_then(|c|c.items.get(&id))
+                        .and_then(|item|item.price_gold));
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.revive_id,id,&name,"✚",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
+                    price,selected_stock("item",id));
+            }
+        });
+        ui.add_space(10.0);
+        ui.label(RichText::new("Restock when stock is at or below a threshold; fill up to target")
+            .size(10.0).color(MUTED));
+        capture_restock_threshold(ui,tr("Balls"),&mut cfg.ball_at,&mut cfg.ball_to,
+            selected_stock("ball",cfg.ball_id));
+        capture_restock_threshold(ui,tr("Potions"),&mut cfg.potion_at,&mut cfg.potion_to,
+            selected_stock("item",cfg.potion_id));
+        capture_restock_threshold(ui,tr("Revives"),&mut cfg.revive_at,&mut cfg.revive_to,
+            selected_stock("item",cfg.revive_id));
+        ui.horizontal(|ui|{
+            ui.label(RichText::new(tr("Gold reserve")).size(10.0).color(MUTED));
+            ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
+        });
+        if let Some(error)=restock_status.last_error.as_deref() {
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
+        ui.label(RichText::new(
+            "Saved IDs are preserved when the shop catalog is missing. Reference-only prices are verified by a single-item purchase before bulk restocking."
+        ).size(9.0).color(DIM));
+    });
+
+    if let Some(error)=app.capture_save_error[index].as_deref(){
+        ui.colored_label(BAD,error);
+    }
+    let mut discard_edits=false;
+    ui.horizontal(|ui|{
+        if ui.add_enabled(!app.capture_save_busy[index],
+            egui::Button::new(tr("Save settings"))).clicked() {
+            let to_save=cfg.clone();
+            if let Err(error)=to_save.validate() {
+                app.capture_save_error[index]=Some(error);
+            } else {
+                app.capture_save_error[index]=None;
+                app.capture_save_busy[index]=true;
+                let tx=app.capture_save_tx.clone();
+                std::thread::spawn(move || {
+                    let result=std::panic::catch_unwind(
+                        std::panic::AssertUnwindSafe(||
+                            crate::native_auth::set_capture_settings(profile,&to_save))
+                    ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
+                    let _=tx.send(CaptureSavedEvent{index,config:to_save,result});
+                });
+            }
+        }
+        if ui.small_button(tr("Discard")).clicked() {
+            discard_edits=true;
+        }
+    });
+    if discard_edits {
+        app.capture_drafts[index]=Some(native.capture_settings());
+        app.capture_save_error[index]=None;
+    }
+    if app.capture_save_busy[index] {
+        ui.label(RichText::new(tr("Saving encrypted preferences..."))
+            .size(10.0).color(MUTED));
+    }
 }
 
 fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -2520,6 +4672,259 @@ fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
     ).on_hover_text(value);
 }
 
+
+fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    // Take one read-only snapshot for the entire render. All network parsing
+    // and commands remain on the game worker, never the egui render thread.
+    let (status, view, twitch) = {
+        let native = app.games[index].native.as_ref().expect("native details require a session");
+        (native.snapshot(), native.hunt_snapshot(), native.twitch_snapshot())
+    };
+    let phase_online = status.phase == "Online";
+    request_item_catalog(app);
+    let item_catalog = app.inventory_catalog.clone();
+    let hunt_name = view.hunts.iter()
+        .find(|hunt| Some(hunt.slug.as_str()) == view.hunt_slug.as_deref())
+        .map(|hunt| hunt.name.as_str())
+        .or(view.hunt_slug.as_deref()).unwrap_or("—");
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("NATIVE ACCOUNT")).size(12.0)
+                    .strong().color(TEXT));
+                automation_badge(ui, "Game socket", &status.phase, phase_online);
+                automation_badge(ui, "Twitch IRC", &twitch.phase,
+                    twitch.phase == "Online");
+                if let Some(last) = status.last_received {
+                    ui.label(RichText::new(format!("{}s since last game frame",
+                        last.elapsed().as_secs())).size(10.0).color(MUTED));
+                }
+            });
+            if !phase_online {
+                ui.colored_label(WARN, tr("Live game state is not confirmed; values below may be stale."));
+            }
+            if let Some(error) = status.error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.add_space(9.0);
+            ui.columns(3, |cols| {
+                detail_stat_line(&mut cols[0], tr("Hunt"),
+                    if view.in_center { tr("Pokémon Center") } else { hunt_name });
+                detail_stat_line(&mut cols[0], tr("In-game nickname"),
+                    view.account_nick.as_deref().unwrap_or("—"));
+                detail_stat_line(&mut cols[0], tr("Trainer level"),
+                    &view.trainer_level.map(|n| n.to_string()).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[0], tr("Trainer XP"),
+                    &view.trainer_xp.map(format_number).unwrap_or_else(|| "—".into()));
+
+                detail_stat_line(&mut cols[1], tr("Active Pokémon"),
+                    view.active_pokemon.as_ref().map(|p| p.name.as_str()).unwrap_or("—"));
+                detail_stat_line(&mut cols[1], tr("Pokémon level"),
+                    &view.active_pokemon.as_ref().map(|p|p.level.to_string())
+                        .unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[1], tr("Pokémon XP"),
+                    &view.active_pokemon.as_ref().and_then(|p|p.xp)
+                        .map(format_number).unwrap_or_else(|| "—".into()));
+
+                detail_stat_line(&mut cols[2], tr("Gold"),
+                    &view.gold.map(format_number).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[2], tr("Orbs"),
+                    &view.orbs.map(format_number).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[2], tr("Diamonds"),
+                    &view.diamonds.map(format_number).unwrap_or_else(|| "—".into()));
+            });
+            if let Some(hunt) = view.hunts.iter().find(|hunt|
+                Some(hunt.slug.as_str()) == view.hunt_slug.as_deref()) {
+                ui.label(RichText::new(format!("{} · {} · Lv {} · {} spawn slots",
+                    hunt.area, hunt.region, hunt.level, hunt.total_spawns))
+                    .size(10.0).color(DIM));
+            }
+            if let Some(map) = view.field_map.as_deref() {
+                ui.label(RichText::new(format!("{}: {}",tr("Field map"),map))
+                    .size(10.0).color(DIM));
+            }
+            if let Some(wild) = view.wild.as_ref() {
+                ui.label(RichText::new(format!("Wild: {} · Lv {} · HP {}/{}",
+                    wild.name, wild.level, wild.hp, wild.max_hp))
+                    .size(10.0).color(MUTED));
+            }
+            ui.horizontal_wrapped(|ui| {
+                let bonus = &view.bonuses;
+                for (label, percent) in [
+                    ("Twitch", bonus.twitch_pct),
+                    ("Guild", bonus.guild_pct),
+                    ("Event trainer", bonus.trainer_event_pct),
+                    ("Event Pokémon", bonus.pokemon_event_pct),
+                ] {
+                    ui.label(RichText::new(format!("{label} +{percent:.0}%"))
+                        .size(10.0).color(DIM));
+                }
+                if bonus.vip_active { ui.label(RichText::new("VIP").color(GOOD)); }
+                if bonus.guild_boost_active { ui.label(RichText::new("Guild boost").color(GOOD)); }
+            });
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("HUNT SESSION")).size(12.0)
+                    .strong().color(TEXT));
+                for text in [
+                    format!("{} {}",view.session.kills,tr("kills")),
+                    format!("{} {}",view.session.captures,tr("captures")),
+                    format!("{} {}",view.session.shiny_captured,tr("shinies caught")),
+                    format!("{:02}:{:02}:{:02}",view.session.duration_secs/3600,
+                        (view.session.duration_secs/60)%60,view.session.duration_secs%60),
+                ] {
+                    ui.label(RichText::new(text).size(10.0).color(MUTED));
+                }
+                if ui.small_button(tr("Open Hunt Atlas")).clicked() {
+                    app.hunt_account = index;
+                    app.panel_tab = PanelTab::Hunts;
+                }
+            });
+            ui.columns(3, |cols| {
+                let m = &view.measurements;
+                detail_stat_line(&mut cols[0], tr("Trainer XP/h"),
+                    &if m.valid_trainer { format_hunt_amount(m.trainer_xp_h) } else { "—".into() });
+                detail_stat_line(&mut cols[1], tr("Pokémon XP/h"),
+                    &if m.valid_pokemon { format_hunt_amount(m.pokemon_xp_h) } else { "—".into() });
+                detail_stat_line(&mut cols[2], tr("Net gold/h"),
+                    &if m.valid_gold { format_hunt_amount(m.gold_net_h) } else { "—".into() });
+            });
+            ui.label(RichText::new(format!("{} · {}s · {} kills/h",
+                view.sample_quality, view.measurements.seconds.round() as u64,
+                format_hunt_amount(view.measurements.kills_h)))
+                .size(10.0).color(MUTED));
+            ui.columns(2, |cols| {
+                detail_stat_line(&mut cols[0], tr("Trainer XP earned"),
+                    &format_number(view.session.trainer_xp));
+                detail_stat_line(&mut cols[0], tr("Pokémon XP earned"),
+                    &format_number(view.session.pokemon_xp));
+                detail_stat_line(&mut cols[1], tr("Combat gold"),
+                    &format_number(view.session.combat_gold));
+                detail_stat_line(&mut cols[1], tr("Auto-sale gold"),
+                    &format_number(view.session.auto_sale_gold));
+            });
+            if !view.session.balls_used.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr("Balls used")).size(10.0).color(DIM));
+                    for (id,quantity) in &view.session.balls_used {
+                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                            .map(String::as_str).unwrap_or("Ball"),quantity))
+                            .size(10.0).color(TEXT));
+                    }
+                });
+            }
+            if !view.session.recent_drops.is_empty() {
+                ui.collapsing(format!("{} ({})",tr("Recent drops"),
+                    view.session.recent_drops.len()), |ui| {
+                    for (name,qty) in view.session.recent_drops.iter().take(15) {
+                        ui.label(format!("{} ×{}", name, qty));
+                    }
+                });
+            }
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("POKÉMON DEPOT")).size(12.0)
+                    .strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {}",view.pokemon_roster.len(),
+                    tr("Pokémon"))).size(10.0).color(MUTED));
+                ui.label(RichText::new(format!("{} / {}",
+                    view.pokemon_roster.iter().filter(|p|p.hp==Some(0)).count(),
+                    tr("fallen"))).size(10.0).color(MUTED));
+            });
+            if view.pokemon_roster.is_empty() {
+                ui.label(RichText::new(tr("Waiting for native Pokémon roster"))
+                    .size(11.0).color(DIM));
+            } else {
+                egui::ScrollArea::vertical().id_salt(("native-roster",index))
+                    .max_height(185.0).show(ui, |ui| {
+                    for pokemon in view.pokemon_roster.iter() {
+                        ui.horizontal_wrapped(|ui| {
+                            let active = view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
+                            let name = format!("{}{} · Lv {}{}",
+                                if active {"▶ "} else {""},pokemon.name,pokemon.level,
+                                if pokemon.shiny {" ✨"} else {""});
+                            let detail = format!(
+                                "ID #{} · Species #{} · XP {} · Next {}\nTypes: {} · Power: {} · Held item #{}\nGrade: {} · Looktype: {} / {}\nIVs: {}",
+                                pokemon.id,
+                                pokemon.species_id.map(|id|id.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.xp.map(format_number).unwrap_or_else(|| "—".into()),
+                                pokemon.xp_next.map(format_number).unwrap_or_else(|| "—".into()),
+                                pokemon.types.join(", "),
+                                pokemon.power.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.held_item_id.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.grade.map(|n|format!("{n:.2}"))
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.looktype.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.shiny_looktype.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.ivs.iter().map(|value|value.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()))
+                                    .collect::<Vec<_>>().join(" / "),
+                            );
+                            ui.label(RichText::new(name).size(11.0)
+                                .color(if active { GOOD } else { TEXT }))
+                                .on_hover_text(detail);
+                            ui.label(RichText::new(format!(
+                                "HP {} / {} · Q {} · P{}",
+                                pokemon.hp.map(|n|n.to_string()).unwrap_or_else(|| "—".into()),
+                                pokemon.max_hp.map(|n|n.to_string()).unwrap_or_else(|| "—".into()),
+                                pokemon.quality.map(|n|format!("{n:.2}")).unwrap_or_else(|| "—".into()),
+                                pokemon.potency.unwrap_or_default()
+                            )).size(10.0).color(DIM));
+                        });
+                        ui.separator();
+                    }
+                });
+            }
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            let item_count = view.items.values().filter(|n|**n>0).count();
+            let ball_count = view.balls.values().filter(|n|**n>0).count();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("INVENTORY")).size(12.0)
+                    .strong().color(TEXT));
+                ui.label(format!("{} {} · {} {}",item_count,tr("items"),
+                    ball_count,tr("ball types")));
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (id,qty) in view.balls.iter().filter(|(_,qty)|**qty>0) {
+                    ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                        .map(String::as_str).unwrap_or("Ball"),qty))
+                        .size(10.0).color(TEXT));
+                }
+            });
+            let mut items = view.items.iter().filter(|(_,qty)| **qty>0)
+                .collect::<Vec<_>>();
+            items.sort_by(|a,b|b.1.cmp(a.1).then_with(||a.0.cmp(b.0)));
+            ui.horizontal_wrapped(|ui| {
+                for (id,qty) in items.into_iter().take(10) {
+                    let name = item_catalog.as_deref().map(|catalog|catalog.name(*id))
+                        .unwrap_or_else(||format!("Item #{id}"));
+                    ui.label(RichText::new(format!("{name} ×{qty}"))
+                        .size(10.0).color(DIM));
+                }
+            });
+        });
+    // Automation has its own sidebar page. Keep the dashboard for game data.
+    ui.add_space(7.0);
+    if ui.small_button(tr("Open Automation")).clicked() {
+        app.automation_account = index;
+        app.panel_tab = PanelTab::Automation;
+    }
+}
+
 fn draw_game_details(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
@@ -2527,6 +4932,10 @@ fn draw_game_details(
     width: f32,
 ) {
     ui.set_width(width);
+    if app.games[index].native.is_some() {
+        draw_native_manager_details(app, ui, index);
+        return;
+    }
 
     let profile = app.games[index].profile;
     let account_name = app.account_name(profile);
@@ -2754,324 +5163,334 @@ fn draw_game_details(
             );
             ui.add_space(6.0);
 
-            // A browser FPS cap does not establish that Performance+ is enabled.
-            let performance_active = health.telemetry_is_fresh()
-                && health.performance_enabled == Some(true);
-            let performance_value = if !health.telemetry_is_fresh() {
-                tr("Not checked yet").to_string()
+            if app.games[index].native.is_some() {
+                draw_native_automation(app, ui, index);
             } else {
-                match health.performance_enabled {
-                    Some(false) => tr("Off").to_string(),
-                    Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
-                    Some(true) => format!("{} FPS", health.performance_fps),
-                    None => tr("Not detected in game").to_string(),
-                }
-            };
+                // A browser FPS cap does not establish that Performance+ is enabled.
+                let performance_active = health.telemetry_is_fresh()
+                    && health.performance_enabled == Some(true);
+                let performance_value = if !health.telemetry_is_fresh() {
+                    tr("Not checked yet").to_string()
+                } else {
+                    match health.performance_enabled {
+                        Some(false) => tr("Off").to_string(),
+                        Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
+                        Some(true) => format!("{} FPS", health.performance_fps),
+                        None => tr("Not detected in game").to_string(),
+                    }
+                };
 
-            ui.horizontal_wrapped(|ui| {
-                automation_badge(
-                    ui,
-                    tr("Auto Catch"),
-                    if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Bridge data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
-                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
-                );
-                automation_badge(
-                    ui,
-                    tr("Restock"),
-                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
-                    health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
-                );
-                automation_badge(
-                    ui,
-                    tr("Stream scanner"),
-                    if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
-                        tr("Not checked")
-                    } else if health.stream_scan_status.is_empty() {
-                        tr("Waiting")
-                    } else {
-                        tr(&health.stream_scan_status)
-                    },
-                    health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
-                );
-                if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
-                    if let Some(channels) = health.stream_scan_twitch_channels {
-                        let shared_tabs = health.tabs.iter()
-                            .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
-                            .count();
-                        let (value, ready) = if channels == 0 {
-                            (tr("No live Twitch channels in last scan").to_string(), false)
-                        } else if shared_tabs == 0 {
-                            (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
-                        } else if shared_tabs == 1 {
-                            (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
+                ui.horizontal_wrapped(|ui| {
+                    automation_badge(
+                        ui,
+                        tr("Auto Catch"),
+                        if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Bridge data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
+                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
+                    );
+                    automation_badge(
+                        ui,
+                        tr("Restock"),
+                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
+                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
+                    );
+                    automation_badge(
+                        ui,
+                        tr("Stream scanner"),
+                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
+                            tr("Not checked")
+                        } else if health.stream_scan_status.is_empty() {
+                            tr("Waiting")
                         } else {
-                            (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
-                        };
-                        automation_badge(ui, tr("Twitch chats"), &value, ready)
-                            .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
+                            tr(&health.stream_scan_status)
+                        },
+                        health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
+                    );
+                    if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
+                        if let Some(channels) = health.stream_scan_twitch_channels {
+                            let shared_tabs = health.tabs.iter()
+                                .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
+                                .count();
+                            let (value, ready) = if channels == 0 {
+                                (tr("No live Twitch channels in last scan").to_string(), false)
+                            } else if shared_tabs == 0 {
+                                (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
+                            } else if shared_tabs == 1 {
+                                (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
+                            } else {
+                                (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
+                            };
+                            automation_badge(ui, tr("Twitch chats"), &value, ready)
+                                .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
+                        }
                     }
-                }
-                automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
-            });
-
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new(tr("KICK MULTISTREAM"))
-                    .size(9.0)
-                    .strong()
-                    .color(DIM),
-            );
-            ui.add_space(6.0);
-
-            egui::Frame::new()
-                .fill(PANEL_ALT)
-                .corner_radius(10.0)
-                .inner_margin(10.0)
-                .show(ui, |ui| {
-                    if let Some((link, channels)) = multikick_link(&health.kick_streams) {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {}",
-                                channels.len(),
-                                tr("live KICK channels:")
-                            ))
-                            .size(10.0)
-                            .strong()
-                            .color(GOOD),
-                        );
-                        ui.label(
-                            RichText::new(channels.join(" · "))
-                                .size(10.0)
-                                .color(TEXT),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(link.as_str())
-                                .size(10.0)
-                                .color(ACCENT),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button(tr("Copy link")).clicked() {
-                                ui.ctx().copy_text(link.clone());
-                                app.set_status(
-                                    tr("Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox.").to_string(),
-                                    false,
-                                );
-                            }
-                            if ui.button(tr("Open live channels")).clicked() {
-                                match open_kick_channels_in_regular_browser(&channels) {
-                                    Ok(_) => app.set_status(
-                                        tr("Opened live KICK channels in the regular browser.").to_string(),
-                                        false,
-                                    ),
-                                    Err(error) => app.set_status(error, true),
-                                }
-                            }
-                        });
-                        ui.label(
-                            RichText::new(tr("Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser."))
-                                .size(9.0)
-                                .color(MUTED),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new(tr("No live KICK channels detected."))
-                                .size(10.0)
-                                .color(MUTED),
-                        );
-                    }
+                    automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
                 });
 
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
+            }
+
+            // Browser-only controls are irrelevant after successful native
+            // takeover. The runtime and saved session now own game + IRC.
+            if app.games[index].native.is_none() {
+                ui.add_space(12.0);
                 ui.label(
-                    RichText::new(tr(if health.telemetry_is_fresh() || health.last_successful_probe_at.is_none() { "OPEN TABS" } else { "Last reported tabs" }))
+                    RichText::new(tr("KICK MULTISTREAM"))
                         .size(9.0)
                         .strong()
                         .color(DIM),
                 );
+                ui.add_space(6.0);
 
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(age) = health.tab_inventory_age() {
-                        ui.label(
-                            RichText::new(format!("{} · {} {}",
-                                tr("Tabs checked"), age.as_secs() / 60, tr("min ago")))
-                                .size(9.0).color(DIM),
-                        );
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("+")
-                                    .size(13.0)
-                                    .strong()
-                            )
-                            .min_size(egui::vec2(24.0, 22.0)),
-                        )
-                        .on_hover_text(tr("Open a custom URL in this Firefox profile"))
-                        .clicked()
-                    {
-                        app.tab_url_open[index] = !app.tab_url_open[index];
-                    }
-                });
-            });
-            ui.add_space(6.0);
-
-            egui::Frame::new()
-                .fill(PANEL_ALT)
-                .corner_radius(10.0)
-                .inner_margin(10.0)
-                .show(ui, |ui| {
-                    if app.tab_url_open[index] {
-                        ui.horizontal(|ui| {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut app.tab_url_input[index])
-                                    .hint_text(tr("https://example.com"))
-                                    .desired_width((width - 150.0).max(180.0))
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .corner_radius(10.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        if let Some((link, channels)) = multikick_link(&health.kick_streams) {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}",
+                                    channels.len(),
+                                    tr("live KICK channels:")
+                                ))
+                                .size(10.0)
+                                .strong()
+                                .color(GOOD),
                             );
-
-                            let enter = response.lost_focus()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-
-                            if ui.button(tr("Open")).clicked() || enter {
-                                let raw = app.tab_url_input[index].trim();
-                                if raw.is_empty() {
+                            ui.label(
+                                RichText::new(channels.join(" · "))
+                                    .size(10.0)
+                                    .color(TEXT),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(link.as_str())
+                                    .size(10.0)
+                                    .color(ACCENT),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(tr("Copy link")).clicked() {
+                                    ui.ctx().copy_text(link.clone());
                                     app.set_status(
-                                        format!(
-                                            "{}: {}",
-                                            &account_name,
-                                            tr("Enter a URL.")
-                                        ),
-                                        true,
+                                        tr("Copied MultiKick link. Open it in a regular browser, outside the controller-managed Firefox.").to_string(),
+                                        false,
                                     );
-                                } else {
-                                    // Accept bare domains, pasted URLs, and mixed-case schemes.
-                                    // A malformed URL should not be reported as successfully queued.
-                                    let candidate = if raw
-                                        .get(..7)
-                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
-                                        || raw
-                                            .get(..8)
-                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-                                    {
-                                        raw.to_string()
-                                    } else if raw.contains("://") {
-                                        String::new()
-                                    } else {
-                                        format!("https://{}", raw)
-                                    };
-                                    let has_http_scheme = candidate
-                                        .get(..7)
-                                        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
-                                        || candidate
-                                            .get(..8)
-                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
-                                    let host = candidate
-                                        .split_once("://")
-                                        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
-                                        .unwrap_or_default();
-                                    let valid_url = has_http_scheme
-                                        && !host.is_empty()
-                                        && !host.contains(char::is_whitespace);
+                                }
+                                if ui.button(tr("Open live channels")).clicked() {
+                                    match open_kick_channels_in_regular_browser(&channels) {
+                                        Ok(_) => app.set_status(
+                                            tr("Opened live KICK channels in the regular browser.").to_string(),
+                                            false,
+                                        ),
+                                        Err(error) => app.set_status(error, true),
+                                    }
+                                }
+                            });
+                            ui.label(
+                                RichText::new(tr("Copy link copies a MultiKick URL; Open live channels opens each stream individually in your regular browser."))
+                                    .size(9.0)
+                                    .color(MUTED),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(tr("No live KICK channels detected."))
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                        }
+                    });
 
-                                    if valid_url {
-                                        if let Some(monitor) = app.games[index].monitor.as_ref() {
-                                            match monitor.send(json!({
-                                                "t": "browser.openTab",
-                                                "url": candidate
-                                            })) {
-                                                Ok(id) => {
-                                                    app.tab_url_input[index].clear();
-                                                    app.tab_url_open[index] = false;
-                                                    app.set_status(
-                                                        format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
-                                                        false,
-                                                    );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(tr(if health.telemetry_is_fresh() || health.last_successful_probe_at.is_none() { "OPEN TABS" } else { "Last reported tabs" }))
+                            .size(9.0)
+                            .strong()
+                            .color(DIM),
+                    );
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if let Some(age) = health.tab_inventory_age() {
+                            ui.label(
+                                RichText::new(format!("{} · {} {}",
+                                    tr("Tabs checked"), age.as_secs() / 60, tr("min ago")))
+                                    .size(9.0).color(DIM),
+                            );
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("+")
+                                        .size(13.0)
+                                        .strong()
+                                )
+                                .min_size(egui::vec2(24.0, 22.0)),
+                            )
+                            .on_hover_text(tr("Open a custom URL in this Firefox profile"))
+                            .clicked()
+                        {
+                            app.tab_url_open[index] = !app.tab_url_open[index];
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+
+                egui::Frame::new()
+                    .fill(PANEL_ALT)
+                    .corner_radius(10.0)
+                    .inner_margin(10.0)
+                    .show(ui, |ui| {
+                        if app.tab_url_open[index] {
+                            ui.horizontal(|ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut app.tab_url_input[index])
+                                        .hint_text(tr("https://example.com"))
+                                        .desired_width((width - 150.0).max(180.0))
+                                );
+
+                                let enter = response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+
+                                if ui.button(tr("Open")).clicked() || enter {
+                                    let raw = app.tab_url_input[index].trim();
+                                    if raw.is_empty() {
+                                        app.set_status(
+                                            format!(
+                                                "{}: {}",
+                                                &account_name,
+                                                tr("Enter a URL.")
+                                            ),
+                                            true,
+                                        );
+                                    } else {
+                                        // Accept bare domains, pasted URLs, and mixed-case schemes.
+                                        // A malformed URL should not be reported as successfully queued.
+                                        let candidate = if raw
+                                            .get(..7)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                            || raw
+                                                .get(..8)
+                                                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+                                        {
+                                            raw.to_string()
+                                        } else if raw.contains("://") {
+                                            String::new()
+                                        } else {
+                                            format!("https://{}", raw)
+                                        };
+                                        let has_http_scheme = candidate
+                                            .get(..7)
+                                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                                            || candidate
+                                                .get(..8)
+                                                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+                                        let host = candidate
+                                            .split_once("://")
+                                            .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+                                            .unwrap_or_default();
+                                        let valid_url = has_http_scheme
+                                            && !host.is_empty()
+                                            && !host.contains(char::is_whitespace);
+
+                                        if valid_url {
+                                            if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                                match monitor.send(json!({
+                                                    "t": "browser.openTab",
+                                                    "url": candidate
+                                                })) {
+                                                    Ok(id) => {
+                                                        app.tab_url_input[index].clear();
+                                                        app.tab_url_open[index] = false;
+                                                        app.set_status(
+                                                            format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
+                                                            false,
+                                                        );
+                                                    }
+                                                    Err(error) => app.set_status(
+                                                        format!("{}: {}", &account_name, error),
+                                                        true,
+                                                    ),
                                                 }
-                                                Err(error) => app.set_status(
-                                                    format!("{}: {}", &account_name, error),
+                                            } else {
+                                                app.set_status(
+                                                    format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
                                                     true,
-                                                ),
+                                                );
                                             }
                                         } else {
                                             app.set_status(
-                                                format!("{}: {}", &account_name, tr("Browser monitor is not connected; tab was not queued.")),
+                                                format!("{}: {}", &account_name, tr("Enter a valid http:// or https:// URL, or a domain such as example.com.")),
                                                 true,
                                             );
                                         }
-                                    } else {
-                                        app.set_status(
-                                            format!("{}: {}", &account_name, tr("Enter a valid http:// or https:// URL, or a domain such as example.com.")),
-                                            true,
-                                        );
                                     }
                                 }
-                            }
 
-                            if ui.button("×").clicked() {
-                                app.tab_url_open[index] = false;
-                            }
-                        });
-
-                        ui.add_space(6.0);
-                    }
-
-                    if health.tabs.is_empty() {
-                        ui.label(
-                            RichText::new(tr(if !running { "No active browser tabs" } else if !health.telemetry_is_fresh() { "Tab list not currently verified" } else if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
-                                .size(10.0)
-                                .color(DIM),
-                        );
-                    } else {
-                        for tab in &health.tabs {
-                            ui.horizontal(|ui| {
-                                let marker = if tab.kind == "Twitch" {
-                                    if tab.low_resource { "●" } else { "○" }
-                                } else {
-                                    "●"
-                                };
-
-                                ui.label(
-                                    RichText::new(marker)
-                                        .size(9.0)
-                                        .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
-                                );
-
-                                ui.label(
-                                    RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
-                                        .size(9.0)
-                                        .strong()
-                                        .color(TEXT),
-                                );
-
-                                ui.add_space(5.0);
-
-                                let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
-                                let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
-
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(compact_text(title, 54))
-                                            .size(9.0)
-                                            .color(MUTED),
-                                    )
-                                    .truncate(),
-                                );
-
-                                if tab.kind == "Twitch" {
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        ui.label(
-                                            RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
-                                                .size(8.0)
-                                                .strong()
-                                                .color(if tab.low_resource { GOOD } else { WARN }),
-                                        );
-                                    });
+                                if ui.button("×").clicked() {
+                                    app.tab_url_open[index] = false;
                                 }
                             });
+
+                            ui.add_space(6.0);
                         }
-                    }
-                });
+
+                        if health.tabs.is_empty() {
+                            ui.label(
+                                RichText::new(tr(if !running { "No active browser tabs" } else if !health.telemetry_is_fresh() { "Tab list not currently verified" } else if !health.game_ready { "Tab list unavailable while game loads" } else { "No top-level tabs reported" }))
+                                    .size(10.0)
+                                    .color(DIM),
+                            );
+                        } else {
+                            for tab in &health.tabs {
+                                ui.horizontal(|ui| {
+                                    let marker = if tab.kind == "Twitch" {
+                                        if tab.low_resource { "●" } else { "○" }
+                                    } else {
+                                        "●"
+                                    };
+
+                                    ui.label(
+                                        RichText::new(marker)
+                                            .size(9.0)
+                                            .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
+                                    );
+
+                                    ui.label(
+                                        RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
+                                            .size(9.0)
+                                            .strong()
+                                            .color(TEXT),
+                                    );
+
+                                    ui.add_space(5.0);
+
+                                    let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
+                                    let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
+
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(compact_text(title, 54))
+                                                .size(9.0)
+                                                .color(MUTED),
+                                        )
+                                        .truncate(),
+                                    );
+
+                                    if tab.kind == "Twitch" {
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            ui.label(
+                                                RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
+                                                    .size(8.0)
+                                                    .strong()
+                                                    .color(if tab.low_resource { GOOD } else { WARN }),
+                                            );
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    });
+
+            }
 
             ui.add_space(12.0);
             ui.label(
@@ -3208,52 +5627,54 @@ fn draw_game_details(
                     }
                 });
 
-            ui.add_space(12.0);
+            if app.games[index].native.is_none() {
+                ui.add_space(12.0);
 
-            ui.horizontal(|ui| {
-                // Unverified addon counts must not look like a live warning or success.
-                let addon_color = if !health.telemetry_is_fresh() {
-                    DIM
-                } else if health.addon_ok == health.addon_total {
-                    GOOD
-                } else {
-                    WARN
-                };
+                ui.horizontal(|ui| {
+                    // Unverified addon counts must not look like a live warning or success.
+                    let addon_color = if !health.telemetry_is_fresh() {
+                        DIM
+                    } else if health.addon_ok == health.addon_total {
+                        GOOD
+                    } else {
+                        WARN
+                    };
 
-                ui.label(
-                    RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
-                        .size(10.0)
-                        .strong()
-                        .color(addon_color),
-                );
-
-                if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
-                                .size(10.0)
-                                .color(WARN),
-                        )
-                        .truncate(),
-                    );
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {}/{}",
-                                tr("Optimized Twitch tabs"),
-                                health.twitch_low_resource_ok,
-                                health.twitch_tabs
-                            ))
+                    ui.label(
+                        RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
                             .size(10.0)
-                            .color(MUTED),
-                        ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
+                            .strong()
+                            .color(addon_color),
+                    );
+
+                    if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
+                                    .size(10.0)
+                                    .color(WARN),
+                            )
+                            .truncate(),
+                        );
                     }
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}/{}",
+                                    tr("Optimized Twitch tabs"),
+                                    health.twitch_low_resource_ok,
+                                    health.twitch_tabs
+                                ))
+                                .size(10.0)
+                                .color(MUTED),
+                            ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
+                        }
+                    });
                 });
-            });
+            }
         });
 }
 
@@ -3377,7 +5798,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(tr("Open Profiles")).clicked() {
-                app.show_accounts = true;
+                app.panel_tab = PanelTab::Accounts;
             }
             if ui.button(tr("Open Logs")).clicked() {
                 app.open_logs();
@@ -3403,9 +5824,17 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let bidi_connected = app.games.iter()
                     .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                     .count();
+                let native_online = app.games.iter().filter(|game|
+                    game.native.as_ref().is_some_and(|native| native.snapshot().phase == "Online")
+                ).count();
+                let native_twitch_online = app.games.iter().filter(|game|
+                    game.native.as_ref().is_some_and(|native| native.twitch_snapshot().phase == "Online")
+                ).count();
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Headless"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
-                runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { WARN } else { GOOD });
+                runtime_chip(ui, "Native game", &format!("{native_online} online"), if native_online > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, "Native Twitch IRC", &format!("{native_twitch_online} online"), if native_twitch_online > 0 { GOOD } else { MUTED });
                 runtime_chip(ui, tr("BiDi"), &bidi_state, if running == 0 { MUTED } else if bidi_connected == running { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
@@ -3417,7 +5846,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
-                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 5 min"), MUTED);
+                runtime_chip(ui, tr("Stream chat"), tr("Direct IRC"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
@@ -3592,7 +6021,7 @@ fn addon_needs_attention(
     )).count()
 }
 
-fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
+fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if app
         .account_setup_checked_at
         .map(|checked| checked.elapsed() >= Duration::from_secs(30))
@@ -3603,24 +6032,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
     let remote_addons = app.addon_version_status.lock()
         .map(|state| state.clone()).unwrap_or_default();
-    let mut open = app.show_accounts;
-    egui::Window::new(tr("Account Manager"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_width(820.0)
-        .default_height(620.0)
-        .min_width(480.0)
-        .min_height(380.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .frame(
-            egui::Frame::new()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(12.0)
-                .inner_margin(18.0),
-        )
-        .show(ctx, |ui| {
+    // Accounts is a normal full-width workspace, not an egui floating window.
+    // Keep a local content layout and the existing per-account scroll area.
+    ui.vertical(|ui| {
             ui.vertical(|ui| {
                 ui.label(
                     RichText::new(tr("Account Manager"))
@@ -3629,19 +6043,30 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .color(TEXT),
                 );
                 ui.label(
-                    RichText::new(tr("Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection."))
+                    RichText::new("Up to four native game + Twitch accounts. Firefox is only for authentication.")
                         .size(11.0)
                         .color(MUTED),
                 );
             });
 
-            ui.add_space(12.0);
+            ui.add_space(8.0);
+            let selected = Some(app.hunt_account);
+            if let Some(index) = draw_account_switcher(app, ui, selected, false) {
+                if index != app.hunt_account {
+                    app.select_workspace_account(index);
+                }
+            }
+            ui.add_space(8.0);
 
+            // Edit one account at a time. Previously four complete setup and
+            // addon managers stacked vertically, causing very long blank gaps
+            // and making switching between accounts tedious.
             egui::ScrollArea::vertical()
-                .id_salt("account_manager_list")
-                .auto_shrink([false, false])
+                .id_salt(("account_manager_list",app.hunt_account))
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
+                        if profile.index() != app.hunt_account { continue; }
                         let index = profile.index();
                         let enabled = app.accounts[index].enabled;
                         let setup = app.account_setup[index].clone();
@@ -3721,7 +6146,14 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         egui::TextEdit::singleline(&mut app.accounts[index].name)
                                             .hint_text(profile.label()),
                                     );
-                                    changed |= response.changed();
+                                    // Editing is local until Enter/focus loss. Avoid a disk
+                                    // write and destructive whitespace trimming per keystroke.
+                                    if response.changed() {
+                                        app.account_names_dirty[index] = true;
+                                    }
+                                    if response.lost_focus() && app.account_names_dirty[index] {
+                                        changed = true;
+                                    }
 
                                     if app.accounts[index].name.trim().is_empty() {
                                         ui.colored_label(WARN, tr("Name cannot be empty"));
@@ -3729,7 +6161,39 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 });
 
                                 ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(native) = app.games[index].native.as_ref() {
+                                        let game = native.snapshot();
+                                        let twitch = native.twitch_snapshot();
+                                        status_chip(ui, "Game", &game.phase, game.phase == "Online");
+                                        status_chip(ui, "Twitch IRC",
+                                            &format!("{} {}/{}", twitch.phase, twitch.joined, twitch.desired),
+                                            twitch.phase == "Online");
+                                    } else {
+                                        let phase = if app.native_verifying[index] {
+                                            tr("Authenticating")
+                                        } else if app.cached_native_busy[index] || app.native_handoff_busy[index] {
+                                            tr("Starting")
+                                        } else if running {
+                                            tr("Firefox login")
+                                        } else {
+                                            tr("Stopped")
+                                        };
+                                        status_chip(ui, "Session", phase, false);
+                                    }
+                                    if running {
+                                        if ui.small_button(tr("Stop")).clicked() {
+                                            app.stop_one(profile);
+                                        }
+                                    } else if ui.small_button(tr("Start native")).clicked() {
+                                        app.launch_one(profile);
+                                    }
+                                    if ui.small_button(tr("Open in Firefox")).clicked() {
+                                        app.open_in_firefox(profile);
+                                    }
+                                });
 
+                                ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
                                     let profile_label = if setup.profile_ready {
                                         tr("Profile folder exists")
@@ -3744,7 +6208,11 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     let twitch_open = health.telemetry_is_fresh() && health.tabs.iter().any(|tab| tab.kind == "Twitch");
                                     // This check only observes tab existence. It does not
                                     // authenticate Twitch, so never label a profile as logged in.
-                                    let twitch_label = if twitch_open {
+                                    let twitch_native = app.games[index].native.as_ref()
+                                        .is_some_and(|native| native.twitch_snapshot().phase == "Online");
+                                    let twitch_label = if twitch_native {
+                                        "Native IRC connected"
+                                    } else if twitch_open {
                                         tr("Tab open")
                                     } else if running && health.telemetry_is_fresh() {
                                         tr("No Twitch tab open")
@@ -3753,11 +6221,11 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     };
 
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
-                                    let vm_chip = status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
+                                    let vm_chip = status_chip(ui, "Violentmonkey (optional)", vm_label, true);
                                     if let Some(error) = &setup.check_error {
                                         vm_chip.on_hover_text(error.as_str());
                                     }
-                                    status_chip(ui, "Twitch", twitch_label, twitch_open);
+                                    status_chip(ui, "Twitch", twitch_label, twitch_open || twitch_native);
 
                                     if running && health.telemetry_is_fresh() {
                                         let script_status = status_chip(
@@ -3793,27 +6261,20 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                 .size(10.0).color(MUTED));
                                             ui.horizontal_wrapped(|ui| {
                                                 status_chip(ui, tr("Firefox profile created"), if setup.profile_ready { "✓" } else { "…" }, setup.profile_ready);
-                                                status_chip(ui, tr("Violentmonkey installed"), if setup.violentmonkey_installed { "✓" } else { "…" }, setup.violentmonkey_installed);
+                                                // Browser userscript managers are entirely optional for native sessions.
                                                 let verified = running && health.telemetry_is_fresh();
                                                 status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
                                                 let script_count = format!("{} {}", health.addon_ok, tr("detected"));
-                                                status_chip(ui, tr("Scripts detected"),
-                                                    if verified { script_count.as_str() } else { "—" },
-                                                    verified && health.addon_ok > 0 && health.addon_missing.is_empty());
+                                                // Script versions are shown only in the optional addon manager.
+                                                let _ = script_count;
                                             });
-                                            ui.label(RichText::new(tr("You can finish with only the addons you want. Unverified steps are not automatically considered complete."))
+                                            ui.label(RichText::new("Native sessions need no Violentmonkey or browser scripts. Optional scripts are managed separately.")
                                                 .size(9.0).color(DIM));
                                             ui.horizontal_wrapped(|ui| {
-                                                if !setup.violentmonkey_installed {
-                                                    if ui.button(tr("Install Violentmonkey")).clicked() {
-                                                        app.profile_action(profile, ProfileAction::InstallViolentmonkey);
-                                                    }
-                                                } else {
-                                                    if ui.button(tr("Manage Addons")).clicked() {
-                                                        app.open_addon_manager(profile);
-                                                    }
+                                                if ui.button("Optional browser scripts").clicked() {
+                                                    app.open_addon_manager(profile);
                                                 }
-                                                if ui.add_enabled(setup.profile_ready && setup.violentmonkey_installed,
+                                                if ui.add_enabled(setup.profile_ready,
                                                     egui::Button::new(tr("Finish setup"))).clicked()
                                                 {
                                                     match accounts::complete_setup(profile) {
@@ -3839,7 +6300,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     if ui.button(tr("Manage Addons")).clicked() {
                                         app.addon_manager_open[index] = !app.addon_manager_open[index];
                                     }
-                                    if attention > 0 {
+                                    if attention > 0 && setup.violentmonkey_installed {
                                         ui.colored_label(WARN, format!("{attention} {}",
                                             tr(if attention == 1 { "addon needs attention" } else { "addons need attention" })));
                                     }
@@ -3853,7 +6314,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         .inner_margin(12.0)
                                         .show(ui, |ui| {
                                             ui.horizontal_wrapped(|ui| {
-                                                ui.label(RichText::new(tr("Manage Addons"))
+                                                ui.label(RichText::new("Optional browser scripts (Premium)")
                                                     .size(13.0).strong().color(TEXT));
                                                 if ui.add_enabled(!remote_addons.checking,
                                                     egui::Button::new(tr("Check now"))).clicked()
@@ -3865,6 +6326,12 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     ui.label(tr("Checking for updates…"));
                                                 }
                                             });
+                                            if !setup.violentmonkey_installed {
+                                                ui.label("Violentmonkey is optional; only install it to use browser scripts.");
+                                                if ui.button(tr("Install Violentmonkey")).clicked() {
+                                                    app.profile_action(profile, ProfileAction::InstallViolentmonkey);
+                                                }
+                                            }
                                             if !running || !health.telemetry_is_fresh() {
                                                 ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
                                                     .size(10.0).color(DIM));
@@ -3931,7 +6398,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             if !installer_visible {
                                                 ui.colored_label(WARN, tr("Switch to visible Firefox before opening installers."));
                                                 if ui.button(tr("Restart visible")).clicked() {
-                                                    app.set_browser_mode(profile, false);
+                                                    app.open_in_firefox(profile);
                                                 }
                                             }
                                             ui.horizontal_wrapped(|ui| {
@@ -3944,7 +6411,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                                     app.start_addon_install(profile, Some(selected));
                                                 }
                                                 if ui.add_enabled(setup.violentmonkey_installed && installer_visible && !app.addon_install_busy[index],
-                                                    egui::Button::new(tr("Install all (first setup)"))).clicked()
+                                                    egui::Button::new("Install all optional scripts")).clicked()
                                                 {
                                                     app.start_addon_install(profile, None);
                                                 }
@@ -3960,7 +6427,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                 ui.label(
                                     RichText::new(
-                                        tr("Twitch uses this Firefox profile for its session. All actions target this account."),
+                                        "Firefox stores login sessions; Rust owns game + Twitch IRC after automatic handoff.",
                                     )
                                     .size(9.0)
                                     .color(DIM),
@@ -4007,13 +6474,15 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         }
 
                         if changed {
-                            let trimmed = app.accounts[index].name.trim().to_string();
+                            let trimmed = app.accounts[index].name.trim().to_owned();
                             app.accounts[index].name = if trimmed.is_empty() {
-                                profile.label().to_string()
+                                profile.label().to_owned()
                             } else {
                                 trimmed
                             };
-                            app.save_account_config();
+                            if app.save_account_config() {
+                                app.account_names_dirty[index] = false;
+                            }
                         }
 
                         ui.add_space(10.0);
@@ -4027,8 +6496,6 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     );
                 });
         });
-
-    app.show_accounts = open;
 }
 
 fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {

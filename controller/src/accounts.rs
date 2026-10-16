@@ -8,10 +8,10 @@ pub const VIOLENTMONKEY_INSTALL: &str =
     "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
 const ADDONS_API: &str =
-    "https://api.github.com/repos/MOTHblank/pokeidle-addons/contents/addons?ref=master";
+    "https://api.github.com/repos/MOTHblank/pokeidle-addons-premium/contents/addons?ref=main";
 
-/// Discover the active addon scripts directly from GitHub. No versions or
-/// addon filenames are pinned in the native binary.
+/// Discover optional legacy browser scripts from Premium, independently of
+/// native account authentication. No script is required for native gameplay.
 pub(crate) fn discover_addon_files() -> Result<Vec<String>, String> {
     let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     #[cfg(windows)]
@@ -61,7 +61,7 @@ fn parse_addon_files(value: &Value) -> Result<Vec<String>, String> {
 
 fn installer_url(file: &str, nonce: u128) -> String {
     format!(
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/{file}?moth_install={nonce}"
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons-premium/main/addons/{file}?moth_install={nonce}"
     )
 }
 
@@ -230,6 +230,7 @@ mod tests {
         assert_eq!(parse_addon_files(&listing).unwrap(), vec!["autocatch.user.js"]);
         let url = installer_url("autocatch.user.js", 123);
         assert!(url.ends_with("?moth_install=123"));
+        assert!(url.contains("/main/addons/"));
         assert!(!url.contains("?v="));
     }
     #[test]

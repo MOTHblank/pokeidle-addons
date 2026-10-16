@@ -346,15 +346,20 @@ pub fn find_profile_process(config: &Config) -> Result<Option<u32>, String> {
         ));
     }
     let value = String::from_utf8_lossy(&output.stdout);
-    let mut ids = value.trim().split(',').filter(|id| !id.trim().is_empty());
-    let first = ids.next();
-    if ids.next().is_some() {
-        logging::warn("Multiple Firefox parent processes advertise the same profile");
-    }
-    first
+    // WMI enumeration order is not stable. The same PID must be chosen on
+    // successive checks, or a legitimate multiprocess Firefox profile can
+    // appear to change ownership halfway through a verified Stop.
+    let mut ids = value.split(',')
+        .filter(|id| !id.trim().is_empty())
         .map(|id| id.trim().parse::<u32>()
             .map_err(|error| format!("invalid Firefox PID from process inspection: {error}")))
-        .transpose()
+        .collect::<Result<Vec<_>, _>>()?;
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.len() > 1 {
+        logging::warn("Multiple Firefox parent processes advertise the same Moth profile; reconciling by stable PID");
+    }
+    Ok(ids.into_iter().next())
 }
 
 #[cfg(target_os = "linux")]
@@ -468,6 +473,30 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
         return Err("recovered Firefox did not exit after termination request".to_string());
     }
     Ok(())
+}
+
+/// Shut down every Firefox process whose *command line* explicitly names
+/// one of Moth's dedicated profile directories. A previous controller crash
+/// can strand multiple Firefox parents under the same profile; stopping only
+/// the first PID leaves the profile locked on the next Launch.
+///
+/// Never use taskkill /IM firefox.exe or wildcard process termination: other
+/// unrelated Firefox profiles must remain untouched.
+pub fn stop_profile_processes(config: &Config) -> Result<(), String> {
+    const MAX_PROCESSES: usize = 24;
+    for _ in 0..MAX_PROCESSES {
+        let Some(pid) = find_profile_process(config)? else { return Ok(()); };
+        logging::info(&format!(
+            "{}: closing existing Firefox profile process PID {pid}",
+            config.profile.label()
+        ));
+        stop_existing(config, pid)?;
+    }
+    if find_profile_process(config)?.is_some() {
+        Err("Moth Firefox profile still has processes after repeated verified shutdown".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn wait_pid(pid: u32, timeout: Duration) -> bool {

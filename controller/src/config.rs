@@ -133,8 +133,145 @@ impl Config {
         });
         let raw = serde_json::to_string_pretty(&value)
             .map_err(|error| format!("could not serialize account configuration: {error}"))?;
-        std::fs::write(path, raw)
-            .map_err(|error| format!("could not save account configuration: {error}"))
+        save_config_atomic(&path, &raw, "account configuration")
+    }
+}
+
+// A failed/interrupted write must not truncate the previously valid account
+// or options JSON. Both files live on the same filesystem as their staging file.
+fn save_config_atomic(path: &PathBuf, raw: &str, label: &str) -> Result<(), String> {
+    let staging = path.with_extension("json.tmp");
+    std::fs::write(&staging, raw)
+        .map_err(|error| format!("could not stage {label}: {error}"))?;
+    std::fs::rename(&staging, path).map_err(|error| {
+        let _ = std::fs::remove_file(&staging);
+        format!("could not save {label}: {error}")
+    })
+}
+
+/// Local controller preferences, independent of browser profiles and account auth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiOptions {
+    /// Keep native UI redraw and Firefox/BiDi polling at their foreground
+    /// cadence while the controller window is visible but has lost focus.
+    pub reduce_updates_unfocused: bool,
+    /// Same choice for a window hidden in the system tray. Tray wins over
+    /// focus, so the controls can be configured independently.
+    pub reduce_updates_in_tray: bool,
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        Self {
+            reduce_updates_unfocused: true,
+            reduce_updates_in_tray: true,
+        }
+    }
+}
+
+impl UiOptions {
+    fn from_value(value: &Value) -> Self {
+        let defaults = Self::default();
+        Self {
+            reduce_updates_unfocused: value.get("reduceUpdatesUnfocused")
+                .and_then(Value::as_bool)
+                .unwrap_or(defaults.reduce_updates_unfocused),
+            reduce_updates_in_tray: value.get("reduceUpdatesInTray")
+                .and_then(Value::as_bool)
+                .unwrap_or(defaults.reduce_updates_in_tray),
+        }
+    }
+
+    fn to_value(self) -> Value {
+        json!({
+            "version": 1,
+            "reduceUpdatesUnfocused": self.reduce_updates_unfocused,
+            "reduceUpdatesInTray": self.reduce_updates_in_tray,
+        })
+    }
+}
+
+impl Config {
+    pub fn ui_options_path() -> Result<PathBuf, String> {
+        Ok(data_root()?.join("controller-options.json"))
+    }
+
+    pub fn load_ui_options() -> Result<UiOptions, String> {
+        let path = Self::ui_options_path()?;
+        if !path.exists() {
+            return Ok(UiOptions::default());
+        }
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| format!("could not read controller options: {error}"))?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|error| format!("invalid controller options: {error}"))?;
+        if !value.is_object() {
+            return Err("invalid controller options: expected JSON object".into());
+        }
+        Ok(UiOptions::from_value(&value))
+    }
+
+    pub fn save_ui_options(options: &UiOptions) -> Result<(), String> {
+        let path = Self::ui_options_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("could not create controller options directory: {error}"))?;
+        }
+        let raw = serde_json::to_string_pretty(&options.to_value())
+            .map_err(|error| format!("could not serialize controller options: {error}"))?;
+        save_config_atomic(&path, &raw, "controller options")
+    }
+}
+
+#[cfg(test)]
+mod ui_options_tests {
+    use super::*;
+
+    #[test]
+    fn account_and_option_json_replaces_existing_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "moth-config-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("controller-options.json");
+        std::fs::write(&path, "old state").unwrap();
+        save_config_atomic(&path, r#"{"reduceUpdatesUnfocused":false}"#, "test").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"reduceUpdatesUnfocused":false}"#
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn defaults_preserve_existing_background_throttling() {
+        let options = UiOptions::default();
+        assert!(options.reduce_updates_unfocused);
+        assert!(options.reduce_updates_in_tray);
+    }
+
+    #[test]
+    fn stored_options_round_trip_and_partial_values_retain_defaults() {
+        let options = UiOptions {
+            reduce_updates_unfocused: false,
+            reduce_updates_in_tray: false,
+        };
+        assert_eq!(UiOptions::from_value(&options.to_value()), options);
+        assert_eq!(
+            UiOptions::from_value(&json!({"reduceUpdatesUnfocused": false})),
+            UiOptions { reduce_updates_unfocused: false, reduce_updates_in_tray: true }
+        );
+        assert_eq!(
+            UiOptions::from_value(&json!({"reduceUpdatesInTray": false})),
+            UiOptions { reduce_updates_unfocused: true, reduce_updates_in_tray: false }
+        );
+        assert_eq!(
+            UiOptions::from_value(&json!({"reduceUpdatesUnfocused": "no"})),
+            UiOptions::default()
+        );
     }
 }
 
