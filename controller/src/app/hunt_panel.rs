@@ -1448,39 +1448,50 @@ fn draw_atlas_explorer(
             .filter(|id|slice.iter().any(|row|row.id==*id))
             .unwrap_or(slice[0].id);
         filters.selected_species=Some(selected);
-        let available_height=ui.available_height().max(290.0);
-        ui.columns(2,|cols|{
-            cols[0].label(RichText::new("POKÉMON")
-                .size(10.0).strong().color(DIM));
-            cols[1].label(RichText::new("SPECIES DETAILS")
-                .size(10.0).strong().color(DIM));
-            cols[0].add_space(5.0);
-            cols[1].add_space(5.0);
-            egui::ScrollArea::vertical()
-                .id_salt(("atlas-species-list",index))
-                .auto_shrink([false,false])
-                .max_height(available_height)
-                .show(&mut cols[0],|ui|{
-                    ui.set_min_width(ui.available_width());
-                    for row in slice{
-                        if draw_atlas_species_selector(ui,row,filters.sort,
-                            filters.selected_species==Some(row.id),visuals){
-                            filters.selected_species=Some(row.id);
+        let spacing=ui.spacing().item_spacing.x;
+        let list_width=(ui.available_width()*0.36).clamp(320.0,430.0);
+        let details_width=(ui.available_width()-list_width-spacing).max(400.0);
+        let pane_height=(ui.available_height()-30.0).max(120.0);
+        // 36/64 split: the list needs only a name and a ranking number;
+        // destinations, forecast metrics and drops require the extra width.
+        ui.horizontal(|ui|{
+            ui.vertical(|ui|{
+                ui.set_width(list_width);
+                ui.label(RichText::new("POKÉMON")
+                    .size(10.0).strong().color(DIM));
+                ui.add_space(5.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("atlas-species-list",index))
+                    .auto_shrink([false,false])
+                    .max_height(pane_height)
+                    .show(ui,|ui|{
+                        ui.set_min_width(ui.available_width());
+                        for row in slice{
+                            if draw_atlas_species_selector(ui,row,filters.sort,
+                                filters.selected_species==Some(row.id),visuals){
+                                filters.selected_species=Some(row.id);
+                            }
                         }
-                    }
-                });
-            egui::ScrollArea::vertical()
-                .id_salt(("atlas-species-details",index,filters.selected_species))
-                .auto_shrink([false,false])
-                .max_height(available_height)
-                .show(&mut cols[1],|ui|{
-                    ui.set_min_width(ui.available_width());
-                    if let Some(row)=slice.iter().find(|row|
-                        filters.selected_species==Some(row.id)){
-                        draw_atlas_species(ui,row,filters.sort,view,reference,
-                            native,live,visuals,&mut error);
-                    }
-                });
+                    });
+            });
+            ui.vertical(|ui|{
+                ui.set_width(details_width);
+                ui.label(RichText::new("SPECIES DETAILS")
+                    .size(10.0).strong().color(DIM));
+                ui.add_space(5.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("atlas-species-details",index,filters.selected_species))
+                    .auto_shrink([false,false])
+                    .max_height(pane_height)
+                    .show(ui,|ui|{
+                        ui.set_min_width(ui.available_width());
+                        if let Some(row)=slice.iter().find(|row|
+                            filters.selected_species==Some(row.id)){
+                            draw_atlas_species(ui,row,filters.sort,view,reference,
+                                native,live,visuals,&mut error);
+                        }
+                    });
+            });
         });
     }else{
         egui::ScrollArea::vertical()
