@@ -484,6 +484,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Select potion" => "Selecionar poção",
         "Select revive" => "Selecionar revive",
         "Revives" => "Revives",
+        "Restock changes queued; saving previous selection..." =>
+            "Alterações da reposição na fila; salvando seleção anterior...",
         "ID 0 disables that category; unknown shop prices cannot be spent." =>
             "ID 0 desativa a categoria; compras exigem preço conhecido pelo servidor.",
         "Save settings" => "Salvar configurações",
@@ -1639,6 +1641,10 @@ pub struct ControllerApp {
     hunt_reference_tx: Sender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
     capture_drafts:[Option<CatchSettings>;4],
+    // Restock has optimistic per-account editing state. Never rebuild the
+    // picker from the last confirmed worker snapshot while a save is in flight.
+    restock_drafts:[Option<CatchSettings>;4],
+    restock_dirty:[bool;4],
     restock_open:[bool;4],
     capture_save_busy:[bool;4],
     capture_save_error:[Option<String>;4],
@@ -1759,6 +1765,8 @@ impl ControllerApp {
             hunt_reference_tx,
             hunt_reference_rx,
             capture_drafts:std::array::from_fn(|_|None),
+            restock_drafts:std::array::from_fn(|_|None),
+            restock_dirty:[false;4],
             restock_open:[false;4],
             capture_save_busy:[false;4],
             capture_save_error:std::array::from_fn(|_|None),
@@ -1930,12 +1938,20 @@ impl ControllerApp {
             match event.result {
                 Ok(()) => {
                     if let Some(native)=self.games[event.index].native.as_ref() {
-                        if let Err(error)=native.set_capture_settings(event.config) {
+                        if let Err(error)=native.set_capture_settings(event.config.clone()) {
                             self.capture_save_error[event.index]=Some(error);
                             continue;
                         }
                     }
                     self.capture_drafts[event.index]=None;
+                    if self.restock_drafts[event.index].as_ref()
+                        .is_some_and(|draft| restock_fields_equal(draft, &event.config))
+                    {
+                        // The save has caught up with what the user sees.
+                        // A different staged selection stays queued instead.
+                        self.restock_drafts[event.index]=Some(event.config);
+                        self.restock_dirty[event.index]=false;
+                    }
                     self.capture_save_error[event.index]=None;
                     self.set_status(tr("Auto Catch settings saved"),false);
                 }
@@ -2054,6 +2070,8 @@ impl ControllerApp {
                         "{}: connecting to PokéIdle and Twitch", self.account_name(profile)));
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.restock_drafts[index]=None;
+                    self.restock_dirty[index]=false;
                     self.automation_drafts[index]=AutomationDraft::default();
                     self.require_browser_login[index] = false;
                     let cache_note = event.cache_warning
@@ -2069,6 +2087,8 @@ impl ControllerApp {
                     // Firefox handle for a later explicit cleanup attempt.
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.restock_drafts[index]=None;
+                    self.restock_dirty[index]=false;
                     self.automation_drafts[index]=AutomationDraft::default();
                     self.games[index].child = event.child;
                     self.games[index].orphaned_pid = event.orphaned_pid;
@@ -4752,7 +4772,7 @@ fn restock_selector_columns(available_width: f32) -> usize {
     // Each full picker needs roughly 240 px for its six or seven icon cells.
     // Overview account cards are often only 350–500 px wide, so use stacked
     // full-width groups there instead of three unusably narrow columns.
-    if available_width >= 780.0 { 3 } else { 1 }
+    if available_width >= 900.0 { 3 } else { 1 }
 }
 
 #[cfg(test)]
@@ -4760,44 +4780,102 @@ mod restock_picker_layout_tests {
     use super::restock_selector_columns;
     #[test]
     fn full_width_groups_on_account_cards_and_three_columns_on_wide_panels() {
-        for width in [230.0, 350.0, 480.0, 779.0] {
+        for width in [230.0, 350.0, 480.0, 779.0, 899.0] {
             assert_eq!(restock_selector_columns(width), 1);
         }
-        for width in [780.0, 900.0, 1200.0] {
+        for width in [900.0, 1100.0, 1400.0] {
             assert_eq!(restock_selector_columns(width), 3);
         }
     }
 }
 
-fn capture_restock_chip(
-    ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
-    selected:&mut u64, id:u64, name:&str, icon:&str,
-    icon_hint:Option<&str>, price:Option<u64>, stock:Option<u64>
-) {
-    let active=*selected==id;
-    let response=egui::Frame::new()
-        .fill(if active { ACCENT.linear_multiply(0.25) } else { PANEL_ALT })
-        .stroke(Stroke::new(if active {1.5} else {1.0},
-            if active {ACCENT} else {BORDER}))
-        .corner_radius(5.0)
-        .inner_margin(Margin::same(RESTOCK_ICON_PADDING))
-        .show(ui,|ui|{
-            // Both the texture and the fallback use exactly the same space.
-            // Do not use centered_and_justified here: that layout consumes
-            // the parent's remaining width instead of the icon's width.
-            if !visuals.show(ui,kind,id,icon_hint,RESTOCK_ICON_SIZE) {
-                ui.add_sized(
-                    [RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE],
-                    egui::Label::new(RichText::new(icon).size(15.0)),
-                );
-            }
-        }).response.interact(egui::Sense::click());
-    let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
-    let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
-    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("{name}{price_hint}{stock_hint}")).clicked() {
-        *selected=id;
+// Rebase only the restock portion onto the latest worker preferences. This
+// prevents an old restock draft from resetting Auto Catch's ball priorities,
+// reserves or enabled state when the two settings pages are edited in sequence.
+fn copy_restock_fields(to: &mut CatchSettings, from: &CatchSettings) {
+    to.restock_enabled = from.restock_enabled;
+    to.gold_reserve = from.gold_reserve;
+    to.ball_id = from.ball_id;
+    to.potion_id = from.potion_id;
+    to.revive_id = from.revive_id;
+    to.ball_at = from.ball_at;
+    to.ball_to = from.ball_to;
+    to.potion_at = from.potion_at;
+    to.potion_to = from.potion_to;
+    to.revive_at = from.revive_at;
+    to.revive_to = from.revive_to;
+}
+
+fn restock_fields_equal(a: &CatchSettings, b: &CatchSettings) -> bool {
+    let mut updated = b.clone();
+    copy_restock_fields(&mut updated, a);
+    updated == *b
+}
+
+#[cfg(test)]
+mod restock_selection_tests {
+    use super::*;
+    #[test]
+    fn golden_potion_and_max_revive_preserve_independent_selections() {
+        let mut staged = CatchSettings::default();
+        staged.potion_id = 70070;
+        staged.revive_id = 206;
+        staged.restock_enabled = true;
+        staged.validate().unwrap();
+
+        let mut latest = CatchSettings::default();
+        latest.enabled = true;
+        latest.interval_ms = 200;
+        copy_restock_fields(&mut latest, &staged);
+        assert_eq!(latest.potion_id, 70070);
+        assert_eq!(latest.revive_id, 206);
+        assert!(latest.enabled);
+        assert_eq!(latest.interval_ms, 200);
+        assert!(restock_fields_equal(&staged, &latest));
+        assert_eq!(CatchSettings::from_value(Some(&latest.as_value())), latest);
+
+        staged.revive_id = 205;
+        assert!(!restock_fields_equal(&staged, &latest));
+        copy_restock_fields(&mut latest, &staged);
+        assert_eq!(latest.potion_id, 70070);
+        assert_eq!(latest.revive_id, 205);
     }
+}
+
+fn capture_restock_chip(
+    ui: &mut egui::Ui, visuals: &mut VisualCache, kind: SpriteKind,
+    group: &'static str, selected: &mut u64, id: u64, name: &str, icon: &str,
+    icon_hint: Option<&str>, price: Option<u64>, stock: Option<u64>,
+) {
+    let active = *selected == id;
+    // A real Button owns both its artwork and pointer/keyboard interaction.
+    // Interacting with a Frame's response after placing an Image inside it
+    // let adjacent/wrapped controls compete for clicks, particularly at the
+    // Golden Potion → Revives boundary. The ID is stable across icon loads.
+    ui.push_id(("restock-item", group, id), |ui| {
+        let button = if let Some(texture) = visuals.texture_id(ui, kind, id, icon_hint) {
+            // Button::image clamps artwork to the text height; use the
+            // regular Button atom to preserve the full 23px game icon.
+            egui::Button::new(egui::Image::new((
+                texture, egui::vec2(RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE)
+            )))
+        } else {
+            egui::Button::new(RichText::new(icon).size(15.0))
+        }
+        .fill(if active { ACCENT.linear_multiply(0.25) } else { PANEL_ALT })
+        .stroke(Stroke::new(if active { 1.5 } else { 1.0 },
+            if active { ACCENT } else { BORDER }))
+        .corner_radius(5.0)
+        .selected(active);
+        let price_hint = price.map(|p| format!(" · {p} gold")).unwrap_or_default();
+        let stock_hint = stock.map(|n| format!(" · {n} in bag")).unwrap_or_default();
+        if ui.add_sized(
+            [RESTOCK_ICON_SIZE + 2.0 * RESTOCK_ICON_PADDING as f32;
+             2], button
+        ).on_hover_text(format!("{name}{price_hint}{stock_hint}")).clicked() {
+            *selected = id;
+        }
+    });
 }
 fn capture_restock_threshold(
     ui:&mut egui::Ui,label:&str,at:&mut u64,to:&mut u64,
@@ -4828,11 +4906,13 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         return;
     };
     let profile = app.games[index].profile;
-    let mut draft = native.capture_settings();
-    let previous = draft.clone();
+    let current = native.capture_settings();
+    if app.restock_drafts[index].is_none() {
+        app.restock_drafts[index] = Some(current.clone());
+    }
+    let cfg = app.restock_drafts[index].as_mut().expect("restock draft initialized");
+    let previous = cfg.clone();
     {
-        let cfg = &mut draft;
-        ui.add_enabled_ui(!app.capture_save_busy[index], |ui| {
     let restock_status=native.snapshot().native_restock;
     egui::Frame::new().fill(PANEL).corner_radius(8.0)
         .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
@@ -4865,19 +4945,19 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         cols[0].label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         cols[0].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                &mut cfg.ball_id,0,"Off","—",None,None,None);
+                "ball", &mut cfg.ball_id,0,"Off","—",None,None,None);
             for (id, fallback) in [(1,"Poké Ball"),(2,"Great Ball"),
                 (3,"Super Ball"),(4,"Ultra Ball"),(5,"Beast Ball")] {
                 let name = game_catalog.ball_names.get(&id)
                     .map(String::as_str).unwrap_or(fallback);
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                    &mut cfg.ball_id,id,name,"●",None,
+                "ball", &mut cfg.ball_id,id,name,"●",None,
                     selected_price("ball",id),selected_stock("ball",id));
             }
             if cfg.ball_id>5 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
                 let id=cfg.ball_id;
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                    &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
+                "ball", &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
         if columns == 1 { cols[0].add_space(8.0); }
@@ -4909,13 +4989,13 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         }
         cols[potion_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                &mut cfg.potion_id,0,"Off","—",None,None,None);
+                "potion", &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                    &mut cfg.potion_id,id,&name,"💊",
+                "potion", &mut cfg.potion_id,id,&name,"💊",
                     catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
@@ -4939,13 +5019,13 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         }
         cols[revive_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                &mut cfg.revive_id,0,"Off","—",None,None,None);
+                "revive", &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                    &mut cfg.revive_id,id,&name,"✚",
+                "revive", &mut cfg.revive_id,id,&name,"✚",
                     catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
@@ -4967,29 +5047,41 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
             ui.label(RichText::new(error).size(10.0).color(WARN));
         }
     });
-
-        });
+    }
+    if *cfg != previous {
+        app.restock_dirty[index] = true;
     }
     if let Some(error) = app.capture_save_error[index].as_deref() {
         ui.label(RichText::new(error).size(10.0).color(WARN));
     }
     if app.capture_save_busy[index] {
-        ui.label(RichText::new(tr("Saving encrypted preferences..."))
-            .size(10.0).color(DIM));
+        ui.label(RichText::new(if app.restock_dirty[index] {
+            tr("Restock changes queued; saving previous selection...")
+        } else {
+            tr("Saving encrypted preferences...")
+        }).size(10.0).color(if app.restock_dirty[index] { WARN } else { DIM }));
     }
-    if draft != previous && !app.capture_save_busy[index] {
-        if let Err(error) = draft.validate() {
+    if app.restock_dirty[index] && !app.capture_save_busy[index] {
+        // A selection made during an earlier save stays visible and is sent
+        // immediately after the previous acknowledgement. The latest current
+        // worker configuration is used to avoid overwriting Auto Catch.
+        let mut next = current;
+        copy_restock_fields(&mut next,
+            app.restock_drafts[index].as_ref().expect("restock draft initialized"));
+        if let Err(error) = next.validate() {
             app.capture_save_error[index] = Some(error);
+            app.restock_dirty[index] = false; // Retry after the next edit.
         } else {
             app.capture_save_error[index] = None;
+            app.restock_dirty[index] = false;
             app.capture_save_busy[index] = true;
             let tx = app.capture_save_tx.clone();
             std::thread::spawn(move || {
                 let result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(||
-                        crate::native_auth::set_capture_settings(profile, &draft)))
+                        crate::native_auth::set_capture_settings(profile, &next)))
                     .unwrap_or_else(|_| Err("Encrypted restock save panicked".into()));
-                let _ = tx.send(CaptureSavedEvent { index, config: draft, result });
+                let _ = tx.send(CaptureSavedEvent { index, config: next, result });
             });
         }
     }

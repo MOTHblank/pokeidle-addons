@@ -261,12 +261,12 @@ impl VisualCache {
         }
     }
 
-    /// Returns true if an icon was drawn. Always fall back to text if false.
-    /// Unknown Pokémon can be added through the generated sprite manifest;
-    /// no guessed Pokémon CDN paths are constructed here.
-    pub fn show(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
-                icon_hint: Option<&str>, size: f32) -> bool {
-        if id == 0 { return false; }
+    /// Ensure the icon is requested once, returning the texture when ready.
+    /// Buttons use the texture ID directly so the image and click share
+    /// exactly one egui widget instead of overlapping Frame/Label responses.
+    pub fn texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
+                      icon_hint: Option<&str>) -> Option<egui::TextureId> {
+        if id == 0 { return None; }
         let key = (kind, id);
         if !self.attempted.contains(&key) {
             self.attempted.insert(key);
@@ -280,8 +280,16 @@ impl VisualCache {
                 }
             }
         }
-        if let Some(texture) = self.textures.get(&key) {
-            ui.image((texture.id(), egui::vec2(size, size)));
+        self.textures.get(&key).map(|texture| texture.id())
+    }
+
+    /// Returns true if an icon was drawn. Always fall back to text if false.
+    /// Unknown Pokémon can be added through the generated sprite manifest;
+    /// no guessed Pokémon CDN paths are constructed here.
+    pub fn show(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
+                icon_hint: Option<&str>, size: f32) -> bool {
+        if let Some(texture) = self.texture_id(ui, kind, id, icon_hint) {
+            ui.image((texture, egui::vec2(size, size)));
             true
         } else { false }
     }
