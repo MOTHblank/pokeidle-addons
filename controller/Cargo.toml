@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "links", "x11", "wayland"] }
 serde_json = "1.0"
-tungstenite = "0.30"
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26.1"
