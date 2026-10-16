@@ -383,7 +383,7 @@ impl MarketBuyer {
     }
     fn update_pending(&mut self) {
         self.status.pending=if self.pending.is_empty() {None} else {
-            Some(format!("{} market order(s) awaiting receipt",self.pending.len()))
+            Some(format!("{} market purchase(s) awaiting confirmation",self.pending.len()))
         };
     }
     fn settle_index(&mut self, idx:usize, success:bool, now:Instant) {
