@@ -387,8 +387,16 @@ mod tests {
     use super::*;
     #[test]
     fn active_hunt_updates_from_welcome_and_ordered_battle_events() {
-        let mut history=HistoryRecorder::new(GameProfile::Game1,
-            "test-history-slug-attribution".into());
+        // Keep unit tests entirely in memory; never touch a user's
+        // production history directory.
+        let (writer,_receiver)=mpsc::channel();
+        let snapshot=HistorySnapshot::default();
+        let mut history=HistoryRecorder{
+            shared:Arc::new(Mutex::new(snapshot.clone())),snapshot,
+            nick:"Test".into(),last_hunt:None,dirty:false,needs_publish:false,
+            last_publish:Instant::now(),last_flush:Instant::now(),
+            writer,path:None
+        };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
         history.ingest(r#"{"t":"batalha","ev":[
             {"k":"morte","quem":"selvagem","xpTreinador":5},
