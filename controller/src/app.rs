@@ -5080,9 +5080,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(tr("Balls used")).size(10.0).color(DIM));
                     for (id,quantity) in &view.session.balls_used {
-                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
-                            .map(String::as_str).unwrap_or("Ball"),quantity))
-                            .size(10.0).color(TEXT));
+                        ui.horizontal(|ui| {
+                            app.visuals.show(ui, SpriteKind::Ball, *id, None, 16.0);
+                            ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                                .map(String::as_str).unwrap_or("Ball"),quantity))
+                                .size(10.0).color(TEXT));
+                        });
                     }
                 });
             }
@@ -5170,9 +5173,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             });
             ui.horizontal_wrapped(|ui| {
                 for (id,qty) in view.balls.iter().filter(|(_,qty)|**qty>0) {
-                    ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
-                        .map(String::as_str).unwrap_or("Ball"),qty))
-                        .size(10.0).color(TEXT));
+                    ui.horizontal(|ui| {
+                        app.visuals.show(ui, SpriteKind::Ball, *id, None, 20.0);
+                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                            .map(String::as_str).unwrap_or("Ball"),qty))
+                            .size(10.0).color(TEXT));
+                    });
                 }
             });
             let mut items = view.items.iter().filter(|(_,qty)| **qty>0)
@@ -5182,8 +5188,13 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 for (id,qty) in items.into_iter().take(10) {
                     let name = item_catalog.as_deref().map(|catalog|catalog.name(*id))
                         .unwrap_or_else(||format!("Item #{id}"));
-                    ui.label(RichText::new(format!("{name} ×{qty}"))
-                        .size(10.0).color(DIM));
+                    let hint = item_catalog.as_deref().and_then(|catalog|
+                        catalog.items.get(id).and_then(|item|item.icon.as_deref()));
+                    ui.horizontal(|ui| {
+                        app.visuals.show(ui, SpriteKind::Item, *id, hint, 20.0);
+                        ui.label(RichText::new(format!("{name} ×{qty}"))
+                            .size(10.0).color(DIM));
+                    });
                 }
             });
         });
