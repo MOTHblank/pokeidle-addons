@@ -589,7 +589,6 @@ impl HuntIntel {
                                 self.view.wild = None;
                             },
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {
-                                self.view.wild = None; // Await the next confirmed spawn.
                                 self.session_kills = self.session_kills.saturating_add(1);
                                 self.last_battle_at=Some(now);
                                 self.last_combat_at=Some(now);
@@ -841,15 +840,16 @@ mod tests {
     }
 
     #[test]
-    fn kill_and_center_clear_opponent() {
+    fn enemy_remains_until_authoritative_replacement_or_center() {
         let mut intel=HuntIntel::new();
         let now=Instant::now();
         let spawn=r#"{"t":"estado","estado":{"selvagem":{
             "slot":1,"nome":"Scyther","hp":100}}}"#;
         intel.ingest(spawn,now);
         intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem"}]}"#,now);
-        assert!(intel.snapshot().wild.is_none());
-        intel.ingest(spawn,now);
+        // Death receipts do not necessarily carry the next encounter. Hold
+        // the last confirmed target until an estado replacement or null arrives.
+        assert_eq!(intel.snapshot().wild.unwrap().name,"Scyther");
         intel.ingest(r#"{"t":"estado","estado":{"noCentro":true}}"#,now);
         assert!(intel.snapshot().wild.is_none());
     }
