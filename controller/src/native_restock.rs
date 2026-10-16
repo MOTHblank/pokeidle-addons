@@ -80,6 +80,9 @@ impl Restock {
     pub fn next(&mut self,now:Instant,catch_enabled:bool)->Option<GameCommand> {
         if !catch_enabled||!self.enabled{return None;}
         if let Some(p)=&self.pending {
+            // After the purchase event, NEVER repeat the order merely because
+            // the inventory delta is delayed. Wait for authoritative stock.
+            if p.ack {return None;}
             if now.saturating_duration_since(p.at)<Duration::from_secs(10){return None;}
             self.pending=None;
             self.cooldown=Some(now+Duration::from_secs(30));
