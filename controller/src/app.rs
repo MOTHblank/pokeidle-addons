@@ -3080,9 +3080,90 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     ).truncate()).on_hover_text(error);
                 }
             }
-                // Native-first branch has no competing browser restart
-                // control in the normal account dashboard.
+             });
+        });
+}
+
+
+fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    let profile = app.games[index].profile;
+    let Some(native) = app.games[index].native.as_ref() else { return; };
+    let game = native.snapshot();
+    let twitch = native.twitch_snapshot();
+
+    egui::Frame::new()
+        .fill(PANEL_ALT)
+        .corner_radius(10.0)
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                automation_badge(ui, "PokéIdle", &game.phase, game.phase == "Online");
+                let irc = format!("{} · {}/{}", twitch.phase, twitch.joined, twitch.desired);
+                automation_badge(ui, "Twitch IRC", &irc, twitch.phase == "Online");
             });
+            ui.add_space(7.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // The native capture switch belongs to Automation, not the
+            // overview card footer beside the account's Stop button.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Auto Catch")).strong().size(11.0).color(TEXT));
+                ui.label(RichText::new(if game.native_auto_catch {
+                    tr("Active")
+                } else {
+                    tr("Off")
+                }).size(10.0).color(if game.native_auto_catch { GOOD } else { MUTED }));
+                ui.add_space(8.0);
+                if ui.small_button(tr(if game.native_auto_catch { "Disable" } else { "Enable" }))
+                    .on_hover_text(tr("Change native Auto Catch for this account"))
+                    .clicked()
+                {
+                    let enabled = !game.native_auto_catch;
+                    native.set_auto_catch(enabled);
+                    std::thread::spawn(move || {
+                        if let Err(error) = crate::native_auth::set_catch_enabled(profile, enabled) {
+                            crate::logging::warn(&format!(
+                                "{} could not save native Auto Catch preference: {error}",
+                                profile.label()
+                            ));
+                        }
+                    });
+                }
+                ui.label(RichText::new(format!(
+                    "{} {} · {} {}",
+                    game.native_capture_queue, tr("pending"),
+                    game.native_throws, tr("throws")
+                )).size(10.0).color(DIM));
+            });
+
+            if game.phase == "Online" {
+                ui.add_space(5.0);
+                ui.collapsing(tr("Game actions"), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button(tr("Pokémon Center")).clicked() {
+                            if let Err(error) = native.send_command(GameCommand::Center) {
+                                crate::logging::warn(&format!(
+                                    "Native center command rejected: {error}"
+                                ));
+                            }
+                        }
+                        if let Some(slug) = game.hunt_slug.as_deref() {
+                            if ui.small_button(tr("Return to hunt"))
+                                .on_hover_text(slug).clicked()
+                            {
+                                if let Err(error) = native.send_command(
+                                    GameCommand::Hunt(slug.to_owned())
+                                ) {
+                                    crate::logging::warn(&format!(
+                                        "Native hunt command rejected: {error}"
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                });
+            }
         });
 }
 
@@ -3329,6 +3410,9 @@ fn draw_game_details(
             );
             ui.add_space(6.0);
 
+            if app.games[index].native.is_some() {
+                draw_native_automation(app, ui, index);
+            } else {
             // A browser FPS cap does not establish that Performance+ is enabled.
             let performance_active = health.telemetry_is_fresh()
                 && health.performance_enabled == Some(true);
@@ -3388,6 +3472,8 @@ fn draw_game_details(
                 }
                 automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
             });
+
+            }
 
             ui.add_space(12.0);
             ui.label(
