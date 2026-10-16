@@ -249,6 +249,7 @@ pub struct HistoryRecorder {
     pub shared: Arc<Mutex<HistorySnapshot>>,
     snapshot: HistorySnapshot,
     nick: String,
+    last_hunt: Option<String>,
     dirty:bool,
     needs_publish:bool,
     last_publish:Instant,
@@ -296,38 +297,55 @@ impl HistoryRecorder {
                     if let Some(ack)=ack {let _=ack.send(());}
                 }
             }).ok();
-        Self {shared,snapshot,nick,dirty:false,needs_publish:false,
+        Self {shared,snapshot,nick,last_hunt:None,dirty:false,needs_publish:false,
             last_publish:Instant::now(),last_flush:Instant::now(),
             writer:writer_tx,path}
     }
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else{return};
-        if frame.get("t").and_then(Value::as_str)!=Some("batalha"){return}
+        let kind=frame.get("t").and_then(Value::as_str);
+        if matches!(kind,Some("welcome"|"estado")) {
+            if let Some(slug)=frame.get("estado").and_then(|state|state.get("huntSlug"))
+                .and_then(Value::as_str).filter(|s|!s.is_empty() && s.len()<=128){
+                self.last_hunt=Some(slug.to_owned());
+            }
+            return;
+        }
+        if kind!=Some("batalha"){return}
         let Some(events)=frame.get("ev").and_then(Value::as_array) else{return};
         let day=unix_day();
-        let hunt=hunt.unwrap_or("unknown");
-        let slug=if hunt.len()<=128 {hunt}else{"unknown"};
+        let mut slug=self.last_hunt.clone()
+            .or_else(||hunt.filter(|s|s.len()<=128).map(str::to_owned))
+            .unwrap_or_else(||"unknown".into());
         let mut index=self.snapshot.days.iter().position(|row|
             row.day==day && row.hunt==slug);
         for event in events {
-            // Only recognized gameplay events allocate history rows.
+            // Attribute server events to the hunt active at that exact point
+            // in a batch; the final HuntIntel state may already be switched.
+            if event.get("k").and_then(Value::as_str)==Some("hunt") {
+                if let Some(next)=event.get("slug").and_then(Value::as_str)
+                    .filter(|s|!s.is_empty() && s.len()<=128) {
+                    slug=next.to_owned();
+                    self.last_hunt=Some(slug.clone());
+                    index=self.snapshot.days.iter().position(|row|
+                        row.day==day && row.hunt==slug);
+                }
+                continue;
+            }
             if !matches!(event.get("k").and_then(Value::as_str),
                 Some("morte"|"bola"|"fugiu")) { continue; }
             let slot=*index.get_or_insert_with(||{
-                self.snapshot.days.push(HistoryDay{day,hunt:slug.into(),..Default::default()});
+                self.snapshot.days.push(HistoryDay{day,hunt:slug.clone(),..Default::default()});
                 self.snapshot.days.len()-1
             });
             if self.snapshot.days[slot].from_event(event) {
-                // The same server receipt contributes exactly once to
-                // lifetime statistics and its daily hunt breakdown.
                 self.snapshot.lifetime.from_event(event);
                 self.dirty=true;
             }
         }
+        self.last_hunt=Some(slug);
         if self.dirty{
             self.snapshot.retain_recent(day);
-            // A single battle can emit many frames per second. Only clone
-            // the bounded history into the UI at one-second cadence.
             self.needs_publish=true;
         }
     }
@@ -367,6 +385,21 @@ impl Drop for HistoryRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn active_hunt_updates_from_welcome_and_ordered_battle_events() {
+        let mut history=HistoryRecorder::new(GameProfile::Game1,
+            "test-history-slug-attribution".into());
+        history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
+        history.ingest(r#"{"t":"batalha","ev":[
+            {"k":"morte","quem":"selvagem","xpTreinador":5},
+            {"k":"hunt","slug":"route-b"},
+            {"k":"morte","quem":"selvagem","xpTreinador":10}
+        ]}"#,Some("route-b"));
+        assert_eq!(history.snapshot.days.iter().find(|d|d.hunt=="route-a")
+            .unwrap().trainer_xp,5);
+        assert_eq!(history.snapshot.days.iter().find(|d|d.hunt=="route-b")
+            .unwrap().trainer_xp,10);
+    }
     #[test]
     fn roundtrip_daily_gameplay_totals_excluding_raw_tokens() {
         let day=unix_day();
