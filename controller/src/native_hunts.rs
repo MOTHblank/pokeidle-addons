@@ -3,6 +3,7 @@
 //! Other-hunt projections are explicitly scenario comparisons, NOT combat forecasts.
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default)]
@@ -28,12 +29,26 @@ pub struct PokemonInfo {
     pub name: String,
     pub level: u32,
     pub xp: Option<u64>,
+    pub xp_level: Option<u64>,
+    pub xp_next: Option<u64>,
+    pub hp: Option<u64>,
+    pub max_hp: Option<u64>,
+    pub held_item_id: Option<u64>,
     pub power: Option<u64>,
     pub quality: Option<f64>,
     pub potency: Option<u64>,
     pub shiny: bool,
     pub ivs: [Option<u64>; 6],
     pub types: Vec<String>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct WildInfo {
+    pub slot: u64,
+    pub name: String,
+    pub level: u32,
+    pub species_id: Option<u64>,
+    pub hp: u64,
+    pub max_hp: u64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntBonuses {
@@ -65,6 +80,16 @@ pub struct HuntView {
     pub in_center: bool,
     pub active_pokemon: Option<PokemonInfo>,
     pub pokemon_count: usize,
+    pub pokemon_roster: Arc<Vec<PokemonInfo>>,
+    pub wild: Option<WildInfo>,
+    pub balls: Arc<BTreeMap<u64, u64>>,
+    pub items: Arc<BTreeMap<u64, u64>>,
+    pub automation: Option<Value>,
+    pub vip_until: Option<u64>,
+    pub server_now: Option<u64>,
+    pub center_free_at: Option<u64>,
+    pub diamonds: Option<u64>,
+    pub orbs: Option<u64>,
     pub trainer_level: Option<u32>,
     pub trainer_xp: Option<u64>,
     pub gold: Option<u64>,
@@ -146,6 +171,11 @@ impl HuntIntel {
         if let Some(n) = Self::num(value, "speciesId") { existing.species_id = Some(n); }
         if let Some(n) = Self::num(value, "level") { existing.level = n.min(u32::MAX as u64) as u32; }
         if let Some(n) = Self::num(value, "xp") { existing.xp = Some(n); }
+        if let Some(n) = Self::num(value, "xpNivel") { existing.xp_level = Some(n); }
+        if let Some(n) = Self::num(value, "xpProximo") { existing.xp_next = Some(n); }
+        if let Some(n) = Self::num(value, "hp") { existing.hp = Some(n); }
+        if let Some(n) = Self::num(value, "maxHp") { existing.max_hp = Some(n); }
+        if let Some(n) = Self::num(value, "heldItemId") { existing.held_item_id = Some(n); }
         if let Some(n) = Self::num(value, "poder") { existing.power = Some(n); }
         if let Some(n) = value.get("quality").and_then(Value::as_f64) { existing.quality = Some(n); }
         if let Some(n) = Self::num(value, "potencia") { existing.potency = Some(n); }
@@ -162,12 +192,58 @@ impl HuntIntel {
         }
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
+        if let Some(value) = Self::num(state, "diamonds") { self.view.diamonds = Some(value); }
+        if let Some(value) = Self::num(state, "orbs") { self.view.orbs = Some(value); }
+        if let Some(value) = Self::num(state, "servidorAgora") { self.view.server_now = Some(value); }
+        if let Some(value) = Self::num(state, "centroLivreEm") { self.view.center_free_at = Some(value); }
+        if let Some(value) = Self::num(state, "vipAte") { self.view.vip_until = Some(value); }
+        if let Some(data) = state.get("automation") {
+            if data.is_object() {
+                let mut merged = self.view.automation.take()
+                    .filter(Value::is_object).unwrap_or_else(||serde_json::json!({}));
+                if let (Some(a), Some(b)) = (merged.as_object_mut(),data.as_object()) {
+                    for (k,v) in b { a.insert(k.clone(),v.clone()); }
+                }
+                self.view.automation = Some(merged);
+            }
+        }
+        for (key, target) in [
+            ("balls", true), ("items", false)
+        ] {
+            if let Some(raw) = state.get(key).and_then(Value::as_object) {
+                let inventory = raw.iter().filter_map(|(id,count)|{
+                    Some((id.parse::<u64>().ok()?,count.as_u64()?))
+                }).collect::<BTreeMap<_,_>>();
+                if target { self.view.balls = Arc::new(inventory); }
+                else { self.view.items = Arc::new(inventory); }
+            }
+        }
+        if let Some(wild) = state.get("selvagem") {
+            self.view.wild = if wild.is_null() { None } else {
+                wild.get("slot").and_then(Value::as_u64).map(|slot| WildInfo {
+                    slot,
+                    name: wild.get("nome").and_then(Value::as_str).unwrap_or("").into(),
+                    level: Self::num(wild,"level").unwrap_or(0).min(u32::MAX as u64) as u32,
+                    species_id: Self::num(wild,"speciesId"),
+                    hp: Self::num(wild,"hp").unwrap_or(0),
+                    max_hp: Self::num(wild,"maxHp").unwrap_or(0)
+                })
+            };
+        }
         if let Some(level) = Self::num(state, "level") {
             self.view.trainer_level = Some(level.min(u32::MAX as u64) as u32);
         }
         if let Some(xp) = Self::num(state, "xp") { self.view.trainer_xp = Some(xp); }
         if let Some(gold) = Self::num(state, "gold") { self.view.gold = Some(gold); }
-        if let Some(id) = Self::num(state, "activeId") { self.active_id = Some(id); }
+        if let Some(id) = Self::num(state, "activeId") {
+            if self.active_id != Some(id) {
+                // Two Pokémon can have unrelated total XP values; do not
+                // compare across a switch and inflate measured Pokémon XP/h.
+                self.samples.clear();
+                self.view.measurements = HuntMeasurements::default();
+            }
+            self.active_id = Some(id);
+        }
         if let Some(center) = state.get("noCentro").and_then(Value::as_bool) {
             self.view.in_center = center;
         }
@@ -183,6 +259,9 @@ impl HuntIntel {
             for p in patches { self.set_pokemon(p); }
         }
         self.view.pokemon_count = self.pokemon.len();
+        if state.get("pokemons").is_some() || state.get("pkMud").is_some() {
+            self.view.pokemon_roster = Arc::new(self.pokemon.values().cloned().collect());
+        }
         self.view.active_pokemon = self.active_id.and_then(|id| self.pokemon.get(&id).cloned());
         if let Some(event) = state.get("evento") {
             if let Some(n) = event.get("xpTreinadorPct").and_then(Value::as_f64) {
@@ -383,6 +462,24 @@ mod tests {
         assert_eq!(m.view.measurements.trainer_xp_h,66000.0);
         assert_eq!(m.view.measurements.pokemon_xp_h,36000.0);
         assert_eq!(m.view.measurements.gold_net_h,3000.0);
+    }
+    #[test]
+    fn account_domains_merge_partial_state_without_erasing_missing_inventory() {
+        let mut intel = HuntIntel::new();
+        let now = Instant::now();
+        intel.ingest(r#"{"t":"welcome","hunts":[],"estado":{"balls":{"1":15},
+            "items":{"200":2},"diamonds":90,"orbs":12,
+            "automation":{"autoPotion":true,"hpLimiar":50},
+            "selvagem":{"slot":5,"nome":"Scyther","level":150,"hp":100,"maxHp":900}}}"#,now);
+        intel.ingest(r#"{"t":"estado","estado":{"automation":{"autoRevive":true},
+            "pkMud":[{"id":99,"nome":"X","level":20,"hp":99}]}}"#,
+            now+Duration::from_secs(1));
+        assert_eq!(intel.view.balls.get(&1),Some(&15));
+        assert_eq!(intel.view.items.get(&200),Some(&2));
+        assert_eq!(intel.view.automation.as_ref().unwrap()["autoPotion"],true);
+        assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
+        assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
+        assert_eq!(intel.view.pokemon_roster.len(),1);
     }
     #[test]
     fn unobserved_hunts_never_claim_actual_xp_per_hour() {
