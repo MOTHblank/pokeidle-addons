@@ -1534,7 +1534,27 @@ impl ControllerApp {
                     // The browser owns the active game socket until close. The
                     // native sockets start only after the worker confirms exit.
                     std::thread::spawn(move || {
-                        let result = firefox::stop_child(&mut child, monitor.as_ref());
+                        let mut result = firefox::stop_child(&mut child, monitor.as_ref());
+                        // Firefox Developer Edition can detach the original
+                        // launcher child while a different firefox.exe PID
+                        // keeps the exact same profile alive. A successful
+                        // wait on the launcher PID is NOT proof of handoff.
+                        if result.is_ok() {
+                            result = crate::config::Config::for_profile(profile)
+                                .and_then(|config| {
+                                    if let Some(pid) = firefox::find_profile_process(&config)? {
+                                        logging::warn(&format!(
+                                            "{} launcher exited but profile PID {} survived; closing owned profile",
+                                            profile.label(), pid));
+                                        firefox::stop_existing(&config, pid)?;
+                                    }
+                                    if firefox::find_profile_process(&config)?.is_some() {
+                                        Err("Firefox profile still active after native handoff close".into())
+                                    } else {
+                                        Ok(())
+                                    }
+                                });
+                        }
                         if result.is_ok() {
                             if let Some(monitor) = monitor.as_ref() { monitor.stop(); }
                         }
