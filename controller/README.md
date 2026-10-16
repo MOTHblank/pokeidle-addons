@@ -1,5 +1,8 @@
 # Moth Controller
 
+> **Experimental branch only:** [Native background transport prototype](docs/native-background-experiment.md). This opt-in test is not part of the public release. It is currently missing native replacements for browser userscripts.
+
+
 Native Rust controller for PokéIdle using dedicated Firefox profiles on **Windows and Linux**.
 
 The graphical app manages up to four isolated game accounts. Each account uses one
