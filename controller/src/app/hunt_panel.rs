@@ -855,10 +855,6 @@ fn atlas_filters_panel(
     egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
         .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label("Search");
-                if ui.add(egui::TextEdit::singleline(&mut f.search)
-                    .hint_text("Pokémon, number, location or hunt")
-                    .desired_width(235.0)).changed(){*page=0}
                 ui.label("Level");
                 if ui.add(egui::DragValue::new(&mut f.min_level)
                     .range(0..=25_000).speed(1.0)
@@ -973,26 +969,6 @@ fn atlas_filters_panel(
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                ui.label("Rank by");
-                egui::ComboBox::from_id_salt(("atlas-objective",account))
-                    .selected_text(atlas_sort_label(f.sort))
-                    .show_ui(ui,|ui|{
-                        for item in [
-                            AtlasSort::TrainerXp,AtlasSort::PokemonXp,AtlasSort::Gold,
-                            AtlasSort::NpcLoot,AtlasSort::Capture,AtlasSort::ShinyCaught,
-                            AtlasSort::OutlandRare,AtlasSort::Market,
-                            AtlasSort::Rare,AtlasSort::Shiny,AtlasSort::Spawn,
-                            AtlasSort::Level,AtlasSort::Name,
-                        ]{
-                            if ui.selectable_value(&mut f.sort,item,
-                                atlas_sort_label(item)).changed(){
-                                f.ascending=matches!(item,AtlasSort::Name|AtlasSort::Level);
-                                *page=0;
-                            }
-                        }
-                    });
-                if ui.small_button(if f.ascending{"↑ Ascending"}else{"↓ Descending"})
-                    .clicked(){f.ascending=!f.ascending;*page=0}
                 if f.sort==AtlasSort::Rare {
                     ui.label("Guide item");
                     let mut items=std::collections::BTreeSet::new();
