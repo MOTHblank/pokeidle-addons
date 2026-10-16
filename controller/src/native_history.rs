@@ -184,7 +184,8 @@ fn history_path(profile:GameProfile,nick:&str)->Result<PathBuf,String> {
     // FNV-1a is a stable filename namespace, not a security primitive.
     // File contents also verify identity before any old totals are loaded.
     let mut hash=0xcbf29ce484222325u64;
-    for b in nick.to_lowercase().as_bytes() {
+    let normalized_nick=nick.to_lowercase();
+    for b in normalized_nick.as_bytes() {
         hash^=*b as u64;hash=hash.wrapping_mul(0x100000001b3);
     }
     Ok(data_root()?.join("History").join(
