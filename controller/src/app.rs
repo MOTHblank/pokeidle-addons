@@ -3617,6 +3617,49 @@ fn request_item_catalog(app:&mut ControllerApp) {
         });
     }
 }
+/// Offline pages should offer one useful next action instead of leaving an
+/// almost entirely empty workspace. Authentication is never inferred complete.
+fn draw_native_missing_panel(
+    app:&mut ControllerApp,
+    ui:&mut egui::Ui,
+    selected:Option<usize>,
+    purpose:&str,
+) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.label(RichText::new(purpose).size(13.0).strong().color(TEXT));
+            if let Some(index)=selected {
+                let profile=app.games[index].profile;
+                let running=app.games[index].is_running();
+                let name=app.account_name(profile);
+                ui.label(RichText::new(format!("{} · {}",name,
+                    if running { tr("Waiting for native authentication") }
+                    else { tr("Native session is stopped") }))
+                    .size(11.0).color(if running { WARN } else { DIM }));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.add_enabled(!running,egui::Button::new(tr("Start native")))
+                        .clicked() {
+                        app.launch_one(profile);
+                    }
+                    if ui.small_button(tr("Account settings")).clicked() {
+                        app.show_accounts=true;
+                    }
+                });
+            } else {
+                ui.label(RichText::new(tr("No selected account has a native session yet"))
+                    .size(11.0).color(DIM));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.small_button(tr("Launch enabled accounts")).clicked() {
+                        app.launch_enabled();
+                    }
+                    if ui.small_button(tr("Manage accounts")).clicked() {
+                        app.show_accounts=true;
+                    }
+                });
+            }
+        });
+}
+
 fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
     request_item_catalog(app);
     ui.horizontal_wrapped(|ui|{
@@ -3648,9 +3691,8 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
         }
     }
     if views.is_empty(){
-        ui.add_space(20.0);
-        ui.label(RichText::new(tr("Launch an account to see its native inventory"))
-            .size(12.0).color(WARN));
+        draw_native_missing_panel(app,ui,app.inventory_account,
+            tr("Inventory requires an authenticated native game session"));
         return;
     }
     ui.label(RichText::new(format!("{} {}{}",
@@ -4278,7 +4320,8 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .strong().color(TEXT));
     let index=app.pokemon_account;
     let Some(native)=app.games[index].native.as_ref() else {
-        ui.label(tr("Waiting for native account"));
+        draw_native_missing_panel(app,ui,Some(index),
+            tr("Pokémon roster is unavailable until native login completes"));
         return;
     };
     let view=native.hunt_snapshot();
@@ -4467,9 +4510,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     let index = app.automation_account;
     let Some(native) = app.games[index].native.as_ref() else {
-        ui.label(RichText::new(tr("Waiting for native account")).size(13.0).color(WARN));
-        ui.label(RichText::new(tr("Native controls are available after this account finishes authentication."))
-            .size(11.0).color(MUTED));
+        draw_native_missing_panel(app,ui,Some(index),
+            tr("Server automation settings require a native session"));
         return;
     };
     let snapshot = native.snapshot();
@@ -6312,7 +6354,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
             // addon managers stacked vertically, causing very long blank gaps
             // and making switching between accounts tedious.
             egui::ScrollArea::vertical()
-                .id_salt("account_manager_list")
+                .id_salt(("account_manager_list",app.hunt_account))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
