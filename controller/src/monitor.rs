@@ -1,7 +1,7 @@
 use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
@@ -1123,7 +1123,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     let twitch = read_twitch_bootstrap(session)?;
     // Migrate existing Auto Catch preferences without changing them. The
     // native engine must not silently enable ball spending when the browser
-    // addon was disabled. Only settings, never authentication data.
+    // previous preferences can still be imported. Only settings, never login data.
     let settings_id = session.next_id;
     session.next_id += 1;
     let settings_response = send_and_wait(&mut session.socket, settings_id, json!({
@@ -1516,14 +1516,7 @@ fn probe_page(
     let runtime = if page_loading {
         RuntimeProbe::default()
     } else {
-        probe_runtime_details(session, &game.id).unwrap_or_else(|error| {
-            logging::warn(&format!(
-                "controller bridge runtime probe skipped on port {}: {}",
-                session.game_context.as_deref().unwrap_or("unknown"),
-                error
-            ));
-            RuntimeProbe::default()
-        })
+        probe_runtime_details(session, &game.id).unwrap_or_default()
     };
 
     Ok(Probe {
