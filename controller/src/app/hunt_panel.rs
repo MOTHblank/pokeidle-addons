@@ -630,11 +630,19 @@ fn atlas_species_rows<'a>(
                         .into_iter().find(|r|r.id==scenario.rare_target)
                         .map(|r|r.units_h)),
                 AtlasSort::Market=>forecast.as_ref().and_then(|f|
-                    reference.and_then(|r|models_panel::item_units_per_h(
-                        hunt,r,&scenario.market_item,f.kills_h,
-                        scenario.modifiers.drop_factor())))
-                    .and_then(|units|models::market_scenario(
-                        units,scenario.market_gold_per_unit)),
+                    meta.and_then(|species|{
+                        let drops=species.drops.iter().filter(|drop|
+                            drop.item_name.as_deref().is_some_and(|name|
+                                name.eq_ignore_ascii_case(&scenario.market_item))
+                            || drop.item_id.is_some_and(|id|
+                                id.to_string()==scenario.market_item)).collect::<Vec<_>>();
+                        if drops.is_empty(){return None}
+                        let units=f.kills_h*share*drops.iter().map(|drop|
+                            (drop.chance_pct/100.0*
+                                scenario.modifiers.drop_factor()).min(1.0)
+                            *(drop.minimum+drop.maximum)/2.0).sum::<f64>();
+                        models::market_scenario(units,scenario.market_gold_per_unit)
+                    })),
                 _=>base
             };
             grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
