@@ -4894,7 +4894,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
                 &mut cfg.ball_id,0,"Off","—",None,None,None);
-            for (id,name) in &game_catalog.ball_names {
+            for (id,name) in game_catalog.ball_names.iter() {
                 if name.to_lowercase().contains("master") { continue; }
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
                     &mut cfg.ball_id,*id,name,"●",None,
@@ -6632,7 +6632,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                     .size(10.0).color(DIM));
                                             }
                                             if let Some(error) = &setup.check_error {
-                                                ui.label(RichText::new(error).size(9.0).color(WARN));
+                                                ui.label(RichText::new(error.as_str()).size(9.0).color(WARN));
                                             }
                                             if !running || !health.telemetry_is_fresh() {
                                                 ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
