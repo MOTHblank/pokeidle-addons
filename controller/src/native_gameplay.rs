@@ -1,0 +1,169 @@
+//! Native stateful gameplay, implemented independently from public protocol behavior.
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, VecDeque};
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug)]
+pub enum GameCommand {
+    Throw { ball_id: u64, slot: u64 },
+    Hunt(String),
+    Center,
+    AutoSet(serde_json::Map<String, Value>),
+    ShopBuy { kind: String, id: u64, qty: u64 },
+}
+impl GameCommand {
+    pub fn wire(&self) -> Value {
+        match self {
+            Self::Throw { ball_id, slot } => json!({"t":"ball.throw","ballId":ball_id,"slot":slot}),
+            Self::Hunt(slug) => json!({"t":"hunt.select","slug":slug}),
+            Self::Center => json!({"t":"centro.ir"}),
+            Self::AutoSet(fields) => {
+                let mut fields=fields.clone();
+                fields.insert("t".into(),Value::String("auto.set".into()));
+                Value::Object(fields)
+            },
+            Self::ShopBuy {kind,id,qty} => json!({"t":"shop.buy","kind":kind,"id":id,"qty":qty}),
+        }
+    }
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::Throw{ball_id,slot} => *ball_id>0 && *slot>0,
+            Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
+                slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            Self::Center => true,
+            Self::AutoSet(fields) => fields.len()<128 && !fields.contains_key("t"),
+            Self::ShopBuy{kind,id,qty} =>
+                (kind=="ball" || kind=="item") && *id>0 && (1..=5000).contains(qty),
+        }
+    }
+}
+#[derive(Clone)]
+struct Corpse { slot:u64, at:Instant, last:Option<Instant>, pending:bool }
+#[derive(Clone,Default)]
+pub struct GameplayStatus {
+    pub auto_catch:bool, pub queue:usize, pub throws:u64,
+    pub catches:u64, pub at_center:bool, pub error:Option<String>,
+}
+pub struct Gameplay {
+    pub status:GameplayStatus,
+    corpses:VecDeque<Corpse>,
+    balls:BTreeMap<u64,u64>,
+    catalog:BTreeMap<u64,String>,
+    priorities:Vec<String>,
+    last_throw:Option<Instant>,
+    pub server_auto:serde_json::Map<String,Value>,
+}
+impl Gameplay {
+    pub fn new(settings: Option<&Value>) -> Self {
+        Self {
+            status:GameplayStatus {
+                auto_catch:settings.and_then(|v|v.get("enabled"))
+                    .and_then(Value::as_bool).unwrap_or(false),
+                ..Default::default()
+            },
+            corpses:VecDeque::new(),balls:BTreeMap::new(),catalog:BTreeMap::new(),
+            priorities:settings.and_then(|v|v.get("ballPriority"))
+                .and_then(Value::as_array)
+                .map(|a|a.iter().filter_map(Value::as_str).take(2)
+                    .map(str::to_lowercase).collect())
+                .unwrap_or_else(||vec!["beast".into(),"ultra".into()]),
+            last_throw:None,server_auto:serde_json::Map::new()
+        }
+    }
+    pub fn ingest(&mut self, raw:&str, now:Instant) {
+        let Ok(frame)=serde_json::from_str::<Value>(raw) else {return};
+        let kind=frame.get("t").and_then(Value::as_str);
+        if kind==Some("welcome") {
+            self.corpses.clear();
+            if let Some(catalog)=frame.get("catalogoBolas").and_then(Value::as_array) {
+                for entry in catalog {
+                    if let (Some(id),Some(name))=(
+                        entry.get("id").and_then(Value::as_u64),
+                        entry.get("nome").or_else(||entry.get("name")).and_then(Value::as_str)
+                    ){self.catalog.insert(id,name.to_lowercase());}
+                }
+            }
+        }
+        if matches!(kind,Some("welcome"|"estado")) {
+            if let Some(state)=frame.get("estado") {
+                if let Some(stock)=state.get("balls").and_then(Value::as_object) {
+                    self.balls=stock.iter().filter_map(|(id,v)|
+                        Some((id.parse::<u64>().ok()?,v.as_u64()?))).collect();
+                }
+                if let Some(auto)=state.get("automation").and_then(Value::as_object) {
+                    for (key,value) in auto {self.server_auto.insert(key.clone(),value.clone());}
+                }
+                if let Some(center)=state.get("noCentro").and_then(Value::as_bool) {
+                    self.status.at_center=center;
+                }
+            }
+        }
+        if kind==Some("batalha") {
+            if let Some(events)=frame.get("ev").and_then(Value::as_array) {
+                for event in events {
+                    let slot=event.get("slot").and_then(Value::as_u64);
+                    match event.get("k").and_then(Value::as_str) {
+                        Some("morte") if event.get("quem").and_then(Value::as_str)==Some("selvagem")=>{
+                            if let Some(slot)=slot {
+                                self.corpses.retain(|v|v.slot!=slot);
+                                self.corpses.push_back(Corpse{slot,at:now,last:None,pending:false});
+                            }
+                        }
+                        Some("bola")=>{
+                            if let Some(slot)=slot {
+                                self.status.throws+=1;
+                                if event.get("sucesso").and_then(Value::as_bool)==Some(true) {
+                                    self.status.catches+=1;
+                                    self.corpses.retain(|v|v.slot!=slot);
+                                } else if let Some(c)=self.corpses.iter_mut().find(|c|c.slot==slot) {
+                                    c.pending=false;c.last=Some(now);
+                                }
+                                self.last_throw=Some(now);
+                            }
+                        }
+                        Some("centro"|"hunt")=>self.corpses.clear(),
+                        _=>{}
+                    }
+                }
+            }
+        }
+        self.corpses.retain(|v|now.duration_since(v.at)<Duration::from_secs(30));
+        self.status.queue=self.corpses.len();
+    }
+    pub fn next_capture(&mut self,now:Instant)->Option<GameCommand> {
+        if !self.status.auto_catch || self.status.at_center ||
+            self.last_throw.is_some_and(|v|now.duration_since(v)<Duration::from_millis(1200)) {
+            return None;
+        }
+        // Never infer a numeric ball ID or spend a Master Ball accidentally.
+        let id=self.priorities.iter().find_map(|priority|
+            self.catalog.iter().find(|(id,name)|
+                !name.contains("master") && name.contains(priority) &&
+                self.balls.get(id).copied().unwrap_or(0)>0).map(|(id,_)|*id))?;
+        let corpse=self.corpses.iter_mut().find(|v|
+            (!v.pending || v.last.is_some_and(|at|now.duration_since(at)>=Duration::from_secs(3))) &&
+            v.last.is_none_or(|at|now.duration_since(at)>=Duration::from_millis(1200)))?;
+        corpse.last=Some(now);corpse.pending=true;
+        self.last_throw=Some(now);
+        Some(GameCommand::Throw{ball_id:id,slot:corpse.slot})
+    }
+    pub fn failed(&mut self,command:&GameCommand,reason:&str) {
+        self.status.error=Some(reason.to_owned());
+        if let GameCommand::Throw{slot,..}=command {
+            if let Some(c)=self.corpses.iter_mut().find(|c|c.slot==*slot) {c.pending=false;}
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+ use super::*;
+ #[test]
+ fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],"estado":{"balls":{"4":3}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":7}]}"#,at);
+    assert_eq!(g.next_capture(at).unwrap().wire(),json!({"t":"ball.throw","ballId":4,"slot":7}));
+    assert!(g.next_capture(at).is_none());
+ }
+}
