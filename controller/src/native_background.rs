@@ -332,6 +332,7 @@ fn session_loop(credentials: Credentials,
     while !stop.load(Ordering::Relaxed) {
         match open_session(&credentials) {
             Ok((mut socket, welcome)) => {
+                crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 observe(&snapshot, &welcome, &desired);
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
