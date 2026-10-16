@@ -311,6 +311,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Key" => "Chave",
         "Bicycle" => "Bicicleta",
         "HP" => "HP",
+        "Your Pokémon" => "Seu Pokémon",
+        "Opponent" => "Adversário",
+        "Fighting" => "Lutando",
+        "Between encounters" => "Entre batalhas",
+        "At Pokémon Center" => "No Centro Pokémon",
+        "Waiting for combat" => "Aguardando combate",
+        "No combat activity" => "Sem atividade de combate",
+        "No live connection" => "Sem conexão ativa",
+        "Last combat activity" => "Último combate",
         "Gold/h" => "Ouro/h",
         "XP/h" => "XP/h",
         "Live" => "Ao vivo",
@@ -3978,6 +3987,42 @@ fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverviewCombatState { Offline, Center, Fighting, Between, Waiting, Stalled }
+
+fn overview_combat_state(view: Option<&HuntView>, live: bool) -> OverviewCombatState {
+    if !live { return OverviewCombatState::Offline; }
+    let Some(view) = view else { return OverviewCombatState::Waiting; };
+    if view.in_center { return OverviewCombatState::Center; }
+    if view.measurements.combat_event_age_secs.is_some_and(|age| age > 90) {
+        return OverviewCombatState::Stalled;
+    }
+    if view.wild.is_some() &&
+        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 45) {
+        return OverviewCombatState::Fighting;
+    }
+    if view.wild.is_none() &&
+        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 45) {
+        return OverviewCombatState::Between;
+    }
+    OverviewCombatState::Waiting
+}
+
+fn overview_combat_image(app: &mut ControllerApp, ui: &mut egui::Ui,
+                         species_id: Option<u64>, opponent: bool) {
+    let drawn = species_id.is_some_and(|id|
+        app.visuals.show(ui, SpriteKind::Pokemon, id, None, 52.0));
+    if !drawn {
+        egui::Frame::new().fill(PANEL_ALT)
+            .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0)
+            .inner_margin(8.0).show(ui, |ui| {
+                ui.add_sized([36.0, 36.0], egui::Label::new(
+                    RichText::new(if opponent { "◇" } else { "◈" })
+                        .size(25.0).color(if opponent { WARN } else { ACCENT })));
+            });
+    }
+}
+
 fn draw_overview_account_summary(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
@@ -3987,100 +4032,119 @@ fn draw_overview_account_summary(
     xp_per_hour: Option<f64>,
     view: Option<&HuntView>,
 ) {
-    let pokemon = if fresh { view.and_then(|v| v.active_pokemon.as_ref()) } else { None };
-    let pokemon_name = if fresh && !health.active_pokemon.is_empty() {
-        health.active_pokemon.as_str()
-    } else { "—" };
-    let pokemon_level = if fresh && !health.pokemon_level.is_empty() {
-        health.pokemon_level.as_str()
-    } else { "—" };
-    let hp = pokemon.and_then(|pokemon| {
-        let current = pokemon.hp?;
-        let total = pokemon.max_hp.filter(|max| *max > 0)?;
-        Some((current as f32 / total as f32).clamp(0.0, 1.0))
-    });
-    let gold_h = view.filter(|_| fresh).and_then(|view| {
-        view.measurements.valid_gold.then_some(view.measurements.gold_net_h)
-    });
-    let balls = view.filter(|_| fresh).and_then(|view| {
-        (!view.balls.is_empty()).then(|| {
-            view.balls.values().copied().fold(0u64, u64::saturating_add)
-        })
-    });
-    let potions = view.filter(|_| fresh).and_then(|view| {
-        (!view.items.is_empty()).then(|| {
-            view.items.iter()
-                .filter(|(id, _)| matches!(**id, 200..=204 | 70070))
-                .map(|(_, count)| *count)
-                .fold(0u64, u64::saturating_add)
-        })
-    });
-
+    let pokemon = if fresh { view.and_then(|v|v.active_pokemon.as_ref()) } else { None };
+    let wild = if fresh { view.and_then(|v|v.wild.as_ref()) } else { None };
+    let pokemon_name = pokemon.map(|p|p.name.as_str())
+        .filter(|name|!name.is_empty())
+        .or_else(|| (fresh && !health.active_pokemon.is_empty())
+            .then_some(health.active_pokemon.as_str())).unwrap_or("—");
+    let pokemon_level = pokemon.map(|p|p.level.to_string())
+        .filter(|level|level!="0")
+        .unwrap_or_else(|| if fresh && !health.pokemon_level.is_empty() {
+            health.pokemon_level.clone()
+        } else { "—".into() });
+    let gold_h = view.filter(|_|fresh).and_then(|v|
+        v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
+    let balls = view.filter(|_|fresh).and_then(|v|
+        (!v.balls.is_empty()).then(||
+            v.balls.values().copied().fold(0u64,u64::saturating_add)));
+    let potions = view.filter(|_|fresh).and_then(|v|
+        (!v.items.is_empty()).then(||v.items.iter()
+            .filter(|(id,_)|matches!(**id,200..=204|70070))
+            .map(|(_,count)|*count).fold(0u64,u64::saturating_add)));
+    let revives = view.filter(|_|fresh).and_then(|v|
+        (!v.items.is_empty()).then(||v.items.iter()
+            .filter(|(id,_)|matches!(**id,205|206))
+            .map(|(_,count)|*count).fold(0u64,u64::saturating_add)));
     let restock_selection = app.games[index].native.as_ref()
-        .map(|native| native.capture_settings()).unwrap_or_default();
-    let revives = view.filter(|_| fresh).and_then(|view|
-        (!view.items.is_empty()).then(|| view.items.iter()
-            .filter(|(id, _)| matches!(**id, 205 | 206))
-            .map(|(_, count)| *count)
-            .fold(0u64, u64::saturating_add)));
-
-    let available = ui.available_width();
-    let stats_width = (available - 84.0).max(140.0);
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(egui::vec2(72.0, 0.0),
-            Layout::top_down(Align::Center), |ui| {
-                let sprite = pokemon.and_then(|pokemon| pokemon.species_id.or(pokemon.looktype));
-                let drawn = sprite.is_some_and(|id|
-                    app.visuals.show(ui, SpriteKind::Pokemon, id, None, 68.0));
-                if !drawn {
-                    egui::Frame::new().fill(PANEL_ALT)
-                        .stroke(Stroke::new(1.0, BORDER))
-                        .corner_radius(9.0).inner_margin(10.0).show(ui, |ui| {
-                            ui.add_sized([48.0, 48.0], egui::Label::new(
-                                RichText::new("◈").size(30.0).color(ACCENT)));
-                        });
-                }
-            });
-        ui.allocate_ui_with_layout(egui::vec2(stats_width, 0.0),
-            Layout::top_down(Align::Min), |ui| {
-                ui.add(egui::Label::new(
-                    RichText::new(compact_text(pokemon_name, 32))
-                        .size(13.0).strong().color(TEXT)
-                ).truncate()).on_hover_text(pokemon_name);
+        .map(|n|n.capture_settings()).unwrap_or_default();
+    let combat = overview_combat_state(view, fresh);
+    ui.columns(2, |cols| {
+        cols[0].label(RichText::new(tr("Your Pokémon"))
+            .size(9.0).color(DIM));
+        cols[0].horizontal(|ui| {
+            overview_combat_image(app,ui,
+                pokemon.and_then(|p|p.species_id.or(p.looktype)),false);
+            ui.vertical(|ui| {
+                ui.add(egui::Label::new(RichText::new(
+                    compact_text(pokemon_name, 16)).size(11.0)
+                    .strong().color(TEXT)).truncate()).on_hover_text(pokemon_name);
                 ui.label(RichText::new(format!("Lv. {pokemon_level}"))
-                    .size(10.0).color(MUTED));
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr("HP")).size(9.0).color(DIM));
-                    if let Some(ratio) = hp {
-                        ui.add_sized([(stats_width - 89.0).max(32.0), 11.0],
-                            egui::ProgressBar::new(ratio).fill(GOOD));
-                        ui.label(RichText::new(format!("{:.0}%", ratio * 100.0))
-                            .size(9.0).color(TEXT));
-                    } else {
-                        ui.label(RichText::new("—").size(10.0).color(MUTED));
-                    }
-                });
-                ui.add_space(5.0);
-                ui.columns(2, |cols| {
-                    overview_stat_tile(&mut cols[0], "XP/h",
-                        &if fresh { xp_per_hour.map(format_hunt_amount)
-                            .unwrap_or_else(|| "—".into()) } else { "—".into() },
-                        ACCENT);
-                    overview_stat_tile(&mut cols[1], "Gold/h",
-                        &gold_h.map(format_hunt_amount)
-                            .unwrap_or_else(|| "—".into()), WARN);
-                });
-                ui.add_space(4.0);
-                ui.columns(3, |cols| {
-                    overview_resource_tile(app, &mut cols[0], index, "Potions",
-                        potions, SpriteKind::Item, restock_selection.potion_id);
-                    overview_resource_tile(app, &mut cols[1], index, "Balls",
-                        balls, SpriteKind::Ball, restock_selection.ball_id);
-                    overview_resource_tile(app, &mut cols[2], index, "Revives",
-                        revives, SpriteKind::Item, restock_selection.revive_id);
+                    .size(9.0).color(DIM));
+            });
+        });
+        cols[1].with_layout(Layout::right_to_left(Align::Min), |ui| {
+            ui.label(RichText::new(tr("Opponent"))
+                .size(9.0).color(DIM));
+            ui.horizontal(|ui| {
+                overview_combat_image(app,ui,
+                    wild.and_then(|p|p.species_id),true);
+                ui.vertical(|ui| {
+                    let name=wild.map(|w|w.name.as_str()).filter(|s|!s.is_empty())
+                        .unwrap_or("—");
+                    ui.add(egui::Label::new(RichText::new(compact_text(name,16))
+                        .size(11.0).strong().color(TEXT))
+                        .truncate()).on_hover_text(name);
+                    ui.label(RichText::new(wild.map(|w|format!("Lv. {}",w.level))
+                        .unwrap_or_else(||"—".into())).size(9.0).color(DIM));
                 });
             });
+        });
     });
+    let (state_label, color)=match combat {
+        OverviewCombatState::Fighting=>(tr("Fighting"),GOOD),
+        OverviewCombatState::Between=>(tr("Between encounters"),GOOD),
+        OverviewCombatState::Center=>(tr("At Pokémon Center"),WARN),
+        OverviewCombatState::Waiting=>(tr("Waiting for combat"),WARN),
+        OverviewCombatState::Stalled=>(tr("No combat activity"),BAD),
+        OverviewCombatState::Offline=>(tr("No live connection"),DIM),
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("● {state_label}"))
+            .size(11.0).strong().color(color));
+        if let Some(age)=view.filter(|_|fresh)
+            .and_then(|v|v.measurements.combat_event_age_secs) {
+            ui.label(RichText::new(format!("{}: {age}s",
+                tr("Last combat activity"))).size(9.0).color(DIM));
+        }
+    });
+    ui.add_space(5.0);
+    ui.columns(2, |cols| {
+        overview_stat_tile(&mut cols[0],"XP/h",
+            &if fresh {xp_per_hour.map(format_hunt_amount)
+                .unwrap_or_else(||"—".into())}else{"—".into()},ACCENT);
+        overview_stat_tile(&mut cols[1],"Gold/h",
+            &gold_h.map(format_hunt_amount)
+                .unwrap_or_else(||"—".into()),WARN);
+    });
+    ui.add_space(4.0);
+    ui.columns(3, |cols| {
+        overview_resource_tile(app,&mut cols[0],index,"Potions",
+            potions,SpriteKind::Item,restock_selection.potion_id);
+        overview_resource_tile(app,&mut cols[1],index,"Balls",
+            balls,SpriteKind::Ball,restock_selection.ball_id);
+        overview_resource_tile(app,&mut cols[2],index,"Revives",
+            revives,SpriteKind::Item,restock_selection.revive_id);
+    });
+}
+
+#[cfg(test)]
+mod overview_combat_tests {
+    use super::{overview_combat_state,OverviewCombatState};
+    use crate::native_hunts::{HuntView,WildInfo};
+    #[test]
+    fn live_opponent_needs_recent_combat_before_claiming_fighting() {
+        let mut view=HuntView::default();
+        view.wild=Some(WildInfo {name:"Scyther".into(),..Default::default()});
+        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Waiting);
+        view.measurements.combat_event_age_secs=Some(10);
+        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Fighting);
+        view.measurements.combat_event_age_secs=Some(91);
+        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Stalled);
+        assert_eq!(overview_combat_state(Some(&view),false),OverviewCombatState::Offline);
+        view.in_center=true;
+        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Center);
+    }
 }
 
 fn rare_session_drop_count(drops: &std::collections::BTreeMap<String, u64>,
@@ -4328,6 +4392,20 @@ mod history_ui_tests {
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    // One scroll region owns the entire page, including the tall rule editor.
+    // Scrolling only the final Auto Catch subsection made earlier controls
+    // unreachable on ordinary display sizes.
+    let index = app.automation_account;
+    egui::ScrollArea::vertical()
+        .id_salt(("automation-page", index))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            draw_automation_contents(app, ui);
+        });
+}
+
+fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr("Auto Catch · Restock · Market · Game settings"))
         .size(13.0).color(MUTED));
     ui.add_space(6.0);
@@ -4466,10 +4544,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
         });
     ui.add_space(10.0);
-    egui::ScrollArea::vertical().id_salt("automation-page")
-        .auto_shrink([false, false]).show(ui, |ui| {
-            draw_native_automation(app, ui, index);
-        });
+    draw_native_automation(app, ui, index);
 }
 
 fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
