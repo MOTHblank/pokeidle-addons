@@ -298,6 +298,17 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Options" => "Opções",
         "Automation" => "Automação",
         "History" => "Histórico",
+        "Persistent battle history" => "Histórico persistente de batalhas",
+        "Past 90 UTC days · saved locally per account every 5 seconds; no raw protocol or credentials." =>
+            "Últimos 90 dias UTC · salvo localmente a cada 5 segundos, sem protocolo bruto ou credenciais.",
+        "Recorded totals" => "Totais registrados",
+        "Daily hunts" => "Hunts por dia",
+        "No recorded battles yet" => "Nenhuma batalha registrada",
+        "Start this account to load its saved history." =>
+            "Inicie esta conta para carregar seu histórico salvo.",
+        "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively." =>
+            "O histórico começa nas primeiras batalhas desta versão. Sessões anteriores não podem ser recuperadas.",
+
         "Pokémon management" => "Gerenciamento de Pokémon",
         "Pokémon on account" => "Pokémon na conta",
         "Shiny only" => "Apenas shiny",
@@ -4262,6 +4273,111 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
             }
         });
+}
+
+/// Aggregated, 90-day battle history is loaded from the same account's
+/// local disk file and updated by the native game worker. Never reconstruct
+/// historical XP by adding Pokémon and trainer rewards together.
+fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Persistent battle history")).size(17.0)
+            .strong().color(TEXT));
+        egui::ComboBox::from_id_salt("history-account")
+            .selected_text(app.account_name(app.games[app.history_account].profile))
+            .show_ui(ui,|ui|{
+                for i in 0..app.games.len(){
+                    let name=app.account_name(app.games[i].profile);
+                    ui.selectable_value(&mut app.history_account,i,name);
+                }
+            });
+    });
+    let index=app.history_account;
+    let Some(native)=app.games[index].native.as_ref() else {
+        ui.label(tr("Start this account to load its saved history."));
+        return;
+    };
+    let history=native.history_snapshot();
+    let totals=history.totals();
+    ui.add_space(8.0);
+    ui.label(RichText::new(tr(
+        "Past 90 UTC days · saved locally per account every 5 seconds; no raw protocol or credentials."
+    )).size(10.0).color(DIM));
+    if let Some(error)=history.load_error.as_deref(){
+        ui.colored_label(WARN,format!("History load: {error}"));
+    }
+    if let Some(error)=history.save_error.as_deref(){
+        ui.colored_label(WARN,format!("History save: {error}"));
+    }
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+        ui.label(RichText::new(tr("Recorded totals")).size(13.0).strong().color(TEXT));
+        ui.columns(3,|cols|{
+            detail_stat_line(&mut cols[0],tr("kills"),&format_number(totals.kills));
+            detail_stat_line(&mut cols[0],tr("captures"),&format_number(totals.captures));
+            detail_stat_line(&mut cols[1],tr("Trainer XP earned"),&format_number(totals.trainer_xp));
+            detail_stat_line(&mut cols[1],tr("Pokémon XP earned"),&format_number(totals.pokemon_xp));
+            detail_stat_line(&mut cols[2],tr("Combat gold"),&format_number(totals.combat_gold));
+            detail_stat_line(&mut cols[2],tr("Auto-sale gold"),&format_number(totals.auto_sale_gold));
+        });
+        ui.label(format!("{}: {} · {}: {}",tr("shinies seen"),totals.shiny_seen,
+            tr("shinies caught"),totals.shiny_captured));
+    });
+    ui.add_space(10.0);
+    ui.label(RichText::new(tr("Daily hunts")).size(13.0).strong().color(TEXT));
+    let mut entries=history.days.iter().collect::<Vec<_>>();
+    entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
+    egui::ScrollArea::vertical().id_salt("history-daily")
+        .max_height(310.0).show(ui,|ui|{
+            if entries.is_empty(){ui.label(tr("No recorded battles yet"));}
+            for day in entries {
+                egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(10,6)).show(ui,|ui|{
+                    ui.label(RichText::new(format!("{} · {}",history_day_label(day.day),day.hunt))
+                        .size(11.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!(
+                        "{} {} · {} {} · Trainer {} · Pokémon {} · Gold +{} (+{} sale)",
+                        day.kills,tr("kills"),day.captures,tr("captures"),
+                        format_number(day.trainer_xp),format_number(day.pokemon_xp),
+                        format_number(day.combat_gold),format_number(day.auto_sale_gold),
+                    )).size(10.0).color(DIM));
+                    if !day.drops.is_empty() {
+                        ui.collapsing(format!("{} ({})",tr("Drops acquired"),day.drops.len()),|ui|{
+                            for (name,qty) in &day.drops {
+                                ui.label(format!("{} ×{}",name,qty));
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    ui.add_space(7.0);
+    ui.label(RichText::new(tr(
+        "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively."
+    )).size(10.0).color(DIM));
+}
+fn history_day_label(day:u64)->String {
+    // Civil-from-days (Gregorian UTC), no OS locale or timezone guesses.
+    let z=day as i64+719_468;
+    let era=if z>=0{z}else{z-146_096}/146_097;
+    let doe=z-era*146_097;
+    let yoe=(doe-doe/1460+doe/36_524-doe/146_096)/365;
+    let mut year=yoe+era*400;
+    let doy=doe-(365*yoe+yoe/4-yoe/100);
+    let mp=(5*doy+2)/153;
+    let d=doy-(153*mp+2)/5+1;
+    let month=mp+if mp<10{3}else{-9};
+    if month<=2 {year+=1;}
+    format!("{year:04}-{month:02}-{d:02}")
+}
+#[cfg(test)]
+mod history_ui_tests {
+    use super::history_day_label;
+    #[test]
+    fn utc_epoch_date_and_leap_day_are_stable() {
+        assert_eq!(history_day_label(0),"1970-01-01");
+        assert_eq!(history_day_label(19782),"2024-02-29");
+    }
 }
 
 /// Depot operations are read-only until a user explicitly confirms a
