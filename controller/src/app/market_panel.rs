@@ -79,7 +79,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         });
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(format!("Rules ({})",cfg.rules.len())).strong().color(TEXT));
+            ui.label(RichText::new(format!("Buying rules ({})",cfg.rules.len())).strong().color(TEXT));
             if ui.small_button("+ Specific item").clicked() {new_rule(cfg,"item");}
             if ui.small_button("+ Any item").clicked() {new_rule(cfg,"any_item");}
             if ui.small_button("+ Pokémon").clicked() {new_rule(cfg,"pokemon_any");}
@@ -133,8 +133,16 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         }
         if let Some(i)=remove {cfg.rules.remove(i);}
 
-        ui.add_space(6.0);
-        ui.collapsing(format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()),|ui|{
+        ui.add_space(8.0);
+        ui.separator();
+        let jump_to_snatch = ui.small_button("Show Snatch queue ↓")
+            .on_hover_text("Jump to your saved offers and new listings").clicked();
+        ui.add_space(5.0);
+        let snatch_response = egui::CollapsingHeader::new(
+            format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()))
+            .id_salt(("market-snatch", index))
+            .default_open(true)
+            .show(ui,|ui|{
             ui.label(RichText::new(
                 "Snatch watches up to 40 offers and attempts to buy them immediately when they unlock. It checks shortly before release and retries rapidly during the four-second buying window. Your price and spending limits always apply. Enable automatic buying to use Snatch."
             ).size(10.0).color(MUTED));
@@ -259,6 +267,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 }
             }
         });
+        if jump_to_snatch {
+            ui.scroll_to_rect(snatch_response.header_response.rect, Some(Align::Min));
+        }
         ui.collapsing("Import existing Moth Watch rules",|ui|{
             ui.label(RichText::new(
                 "To import old Moth Watch rules, open Firefox developer tools and copy the result of localStorage.getItem('moth-pokeidle-market-bot-config-v1'). Paste it below. Imported rules stay disabled until you review and save them."
