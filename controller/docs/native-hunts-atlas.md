@@ -1,9 +1,9 @@
 # Native Hunts / Hunt Atlas — experimental architecture
 
 **Branch:** `experiment/native-background-sessions`  
-**Preview:** `0.1.7-native.17`
+**Preview:** `0.1.7-native.19`
 
-The **Panel → Hunts · Atlas** tab is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
+The **Dashboard → Hunt Atlas** tab is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
 
 ## Server as source of truth
 
@@ -28,9 +28,33 @@ The original **premium Hunt Atlas** has substantially more economics, catch/shin
 
 ## UI
 
-Under **Panel → Hunts · Atlas**, select one of the four accounts. The tab shows the active Pokémon/IVs, game-reported bonuses, current hunt, independently measured rates, and the unlocked hunt ranking. Filter by hunt, region, target species name/ID and type. Expand a hunt to inspect its weighted spawn composition. Switch directly using `hunt.select` without reopening Firefox. No background browser tab or userscript is required.
+Under **Dashboard → Hunt Atlas**, select one of the four accounts. The tab shows the active Pokémon/IVs, game-reported bonuses, current hunt, independently measured rates, and the unlocked hunt ranking. Filter by hunt, region, target species name/ID and type. Expand a hunt to inspect its weighted spawn composition. Switch directly using `hunt.select` without reopening Firefox. No background browser tab or userscript is required.
 
 The reference is lazy-loaded once per controller process, rather than polled; normal native gameplay and Twitch run unchanged.
+
+## Native.19 UI and data audit
+
+The native Hunt Atlas workspace now uses **Recommendations**, **Current hunt**, and **Session & rewards** subtabs. It is nested in Dashboard above Accounts. Hunt ranking is account-scoped, filters keep their state, rows have slug-stable IDs and are paged, and game-switch commands are disabled on disconnected sessions.
+
+| Feature | Status | Evidence / limitation |
+|---|---|---|
+| Current hunt, wild encounter, active lead/IVs | Supported | Authenticated native server state and Pokémon patches |
+| Recommendation ranking, search, region/type filtering, enemy composition | Supported | Server-unlocked hunts + optional guide reference |
+| Trainer and Pokémon measured EXP/hour | Supported in code | Distinct battle receipt channels; missing rewards cannot masquerade as zero |
+| Predicted EXP/hour, kill pace and gold/hour | Partial | Experimental guide DPS and spawn-weight approximation |
+| Measured vs predicted discrepancies | Supported | Current hunt displays separate channels and estimated/measured ratios |
+| Pokémon suitability and combat assumptions | Partial | Current-lead DPS and species coverage; no roster-wide survival/combat simulation |
+| Hunt rewards and drops | Partial | Acquired receipts, expected guide chance, range and unit value; no complete rare/shiny/capture/outland simulator |
+| Historical observations and statistics | Partial | Persistent account-scoped hunt totals from the last 90 days; no saved per-hunt elapsed-time-based EXP/hour |
+| Account isolation, switching and automation continuity | Supported in code | Session-scoped native state and validated command queue; still requires authenticated live testing |
+| Configurable background behavior | Supported in code | UI and monitoring preferences, native transport unaffected |
+| Unknown, loading, disconnected, stale, error states | Supported in code | Explicit labels and unavailable values, no silent synthetic rates |
+
+Forecast recalculation has been moved off egui's frame renderer to a background worker, with an account/lead/catalog-keyed cache and eight-second refresh window. A reconnect restarts the per-hunt rate baseline without erasing the accumulated session ledger. Trainer and Pokémon XP receipts require their own fields before being marked measured. **Observed net gold cannot be ranked against modeled gross gold**: gross models remain estimates and the current measured net figure stays in the current-hunt summary.
+
+**Known limitations:** unlike the premium userscript, this native module does not yet reproduce full capture and shiny probabilities, Outland 1–8, survival-aware enemy timing, rare fragments, or complete farming economics. The reference model remains an approximation; UI provenance is not a substitute for validating predictions. Historical rate comparisons need per-hunt saved durations.
+
+**Validation:** changes were committed through the GitHub connector; the editing environment has no Rust toolchain, native desktop display, or logged-in PokéIdle session. Cargo formatting, build, Clippy, test execution, live switching, multi-account navigation, and actual performance profiling **have not been run in this environment**. Regression tests were added for incomplete receipt streams and reconnect handling, and the earlier UI tests cover source classification and unknown bonus semantics. Do not claim full runtime verification until those checks are actually executed.
 
 ## Validation
 
@@ -43,7 +67,7 @@ cargo build --release
 .\target\release\moth-controller.exe
 ```
 
-Verify: `Panel → Hunts · Atlas` loads the account's hunts immediately after authenticated `welcome`; the guide data enriches species names when reachable; real XP/h becomes available after enough continuous play; switching to another hunt is acknowledged; returning from Firefox recovery or changing Pokémon resets stale measurements; native Twitch and capture remain online.
+Verify: `Dashboard → Hunt Atlas` loads the account's hunts immediately after authenticated `welcome`; the guide data enriches species names when reachable; real XP/h becomes available after enough continuous play; switching to another hunt is acknowledged; returning from Firefox recovery or changing Pokémon resets stale measurements; native Twitch and capture remain online.
 
 The code was committed without a local Rust compiler or authenticated game session. GitHub Actions are not a substitute for confirming the live rates and actual hunt-switch behavior on your account. In particular, **do not treat speculative guide forecasts as measured earnings**.
 
