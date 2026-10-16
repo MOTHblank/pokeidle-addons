@@ -315,12 +315,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Session duration" => "Tempo de sessão",
         "Rare drops" => "Drops raros",
         "Boss Token" => "Token de boss",
+        "Kills" => "Abates",
+        "Captures" => "Capturas",
         "Key" => "Chave",
         "Bicycle" => "Bicicleta",
         "HP" => "HP",
         "Gold/h" => "Ouro/h",
         "XP/h" => "XP/h",
         "Live" => "Ao vivo",
+        "Offline" => "Desconectado",
         "Options" => "Opções",
         "Automation" => "Automação",
         "History" => "Histórico",
@@ -2980,7 +2983,7 @@ impl eframe::App for ControllerApp {
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
             && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Automation)
-                || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
+                || self.panel_tab == PanelTab::Overview);
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
             else if native_detail { Duration::from_secs(1) }
@@ -3807,10 +3810,14 @@ fn format_hunt_amount(value: f64) -> String {
 fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
     ui.set_width(width);
     let profile = app.games[index].profile;
-    let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
     let native_view = app.games[index].native.as_ref().map(|native| native.hunt_snapshot());
+    let account_name = native_view.as_ref()
+        .and_then(|view| view.account_nick.as_deref())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| app.account_name(profile));
     let xp_per_hour = if let Some(view) = native_view.as_ref() {
         if view.measurements.valid_trainer { Some(view.measurements.trainer_xp_h) } else { None }
     } else if running {
@@ -3911,12 +3918,22 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 ui.label(RichText::new(format!("⌖ {}: {}", tr("Current hunt"),
                     compact_text(hunt, 36))).size(10.0).color(MUTED))
                     .on_hover_text(hunt);
+                // Native fields are Option-valued; an unreceived balance
+                // must not masquerade as a legitimate zero.
                 let verified = fresh && health.bridge_snapshot_ok;
+                let balances = app.games[index].native.as_ref()
+                    .map(|native| native.snapshot());
+                let gold = if !verified { None } else if let Some(view) = native_view.as_ref() {
+                    view.gold.or_else(|| balances.as_ref().and_then(|s| s.gold))
+                } else { Some(health.gold) };
+                let gems = if !verified { None } else if let Some(view) = native_view.as_ref() {
+                    view.orbs.or_else(|| balances.as_ref().and_then(|s| s.orbs))
+                } else { Some(health.orbs) };
                 ui.label(RichText::new(format!("◆ {}: {}",
-                    tr("Gold"), if verified { format_number(health.gold) } else { "—".into() }))
+                    tr("Gold"), gold.map(format_number).unwrap_or_else(|| "—".into())))
                     .size(10.0).color(WARN));
                 ui.label(RichText::new(format!("◇ {}: {}",
-                    tr("Gems"), if verified { format_number(health.orbs) } else { "—".into() }))
+                    tr("Gems"), gems.map(format_number).unwrap_or_else(|| "—".into())))
                     .size(10.0).color(ACCENT));
             });
 
