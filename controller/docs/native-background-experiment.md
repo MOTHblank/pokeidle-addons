@@ -83,3 +83,16 @@ Previous crash recovery could also leave multiple Firefox processes advertising 
 If a stranded Firefox was launched without a BiDi debug endpoint (for example, a separate Google sign-in session), automatic attachment is not possible. Finish sign-in and close it using that profile's Stop action; do not kill all Firefox processes system-wide.
 
 This revision is committed but was **not compiled or authenticated-session-tested in the editing environment**. Build/test the branch locally, use one account to verify that both native welcome stages succeed, then try all four.
+
+
+## Stuck verified handoff / TLS panic (native.9)
+
+The user reported a single-account handoff that closed the PokéIdle tab, then panicked at `rustls-0.23.46/src/crypto/mod.rs:249:14` in an unnamed thread. Firefox remained open but no native game connection took over. There were **two separate faults**: the TLS provider ambiguity, and the fact that an uncaught verification-worker panic prevented the controller from receiving any completion event. The UI then stayed indefinitely at `Authenticating in Firefox`.
+
+This build centralizes `native_tls::ensure()`, runs it at startup and **immediately before every PokéIdle/Twitch TLS connection**, and exercises it in a unit test. It also catches panics in both the verification and protected-cache workers, always sends their result to the UI, and shows a per-account native error instead of an indefinite generic login label.
+
+After any attempted game-tab close with failed verification, Firefox's **existing BiDi session** explicitly checks whether a PokéIdle game context exists; if not, it recreates the tab and waits for the BiDi acknowledgement. Close/recovery requests wake the monitor immediately, and timeouts cancel pending mailbox entries. A failed native connection must not silently leave the game absent from Firefox.
+
+The log now emits `Moth native controller v0.1.7-native.9 · verified TLS provider initialized: true` at startup. **Check this exact entry** when testing; older experimental controller binaries can still reproduce the panic. The controller must not log `native game welcome + Twitch IRC 001 confirmed` until both authenticated Rust sockets are real. Check `Native PokéIdle WSS received authenticated welcome`, `Native Twitch IRC received authenticated welcome`, and `Firefox exited after authenticated handoff` for completed migration.
+
+Rebuild the executable with `cargo test && cargo build --release` and launch **`controller/target/release/moth-controller.exe`**. The editing environment still has no Rust compiler or authenticated account, so the fix is committed but not locally compiled or live verified.
