@@ -42,7 +42,8 @@ fn ranked_hunts<'a>(
 ) -> Vec<RankedHunt<'a>> {
     let needle = query.trim().to_lowercase();
     let m = &view.measurements;
-    let observed_kills = if live && m.seconds >= 20.0 && m.kills >= 5
+    let observed_kills = if live && m.last_battle_age_secs.is_none_or(|age|age<=180)
+        && m.seconds >= 20.0 && m.kills >= 5
         && m.kills_h.is_finite() && m.kills_h > 0.0 { Some(m.kills_h) } else { None };
     let mut ranked = view.hunts.iter().filter(|h| {
         (region.is_empty() || h.region == region) &&
@@ -57,7 +58,8 @@ fn ranked_hunts<'a>(
                 reference.and_then(|r|r.species.get(&sp.id))
                     .is_some_and(|meta|meta.name.to_lowercase().contains(&needle))))
     }).map(|hunt| {
-        let actual = if live && view.hunt_slug.as_deref() == Some(hunt.slug.as_str()) {
+        let actual = if live && m.last_battle_age_secs.is_none_or(|age|age<=180)
+            && view.hunt_slug.as_deref() == Some(hunt.slug.as_str()) {
             match ranking {
                 HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
@@ -344,8 +346,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ui.label(RichText::new(format!("{} · Lv. {}", p.name, p.level))
                             .size(16.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "P{} · Q {:.3} · {} · {} Pokémon",
-                            p.potency.unwrap_or(0), p.quality.unwrap_or(0.0),
+                            "P{} · Q {} · {} · {} Pokémon",
+                            p.potency.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
+                            p.quality.map(|n|format!("{n:.3}")).unwrap_or_else(||"—".into()),
                             if p.shiny { "Shiny" } else { "Normal" },
                             hunts.pokemon_count
                         )).size(10.0).color(DIM));
