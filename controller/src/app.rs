@@ -4647,13 +4647,13 @@ fn capture_restock_threshold(
 /// own authenticated native settings, with no item-ID input or explicit save step.
 fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     if !app.restock_open[index] { return; }
+    request_item_catalog(app);
+    app.visuals.poll(ui.ctx());
     let Some(native) = app.games[index].native.as_ref() else {
         ui.label(RichText::new(tr("Start this account to configure restock"))
             .size(10.0).color(WARN));
         return;
     };
-    request_item_catalog(app);
-    app.visuals.poll(ui.ctx());
     let profile = app.games[index].profile;
     let mut draft = native.capture_settings();
     let previous = draft.clone();
@@ -4685,24 +4685,26 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                 .and_then(|rule|rule.price)
         };
         ui.add_space(5.0);
-        ui.label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
-        ui.horizontal_wrapped(|ui|{
+        ui.columns(3, |cols| {
+        cols[0].label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
+        cols[0].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
                 &mut cfg.ball_id,0,"Off","—",None,None,None);
-            for (id,name) in game_catalog.ball_names.iter() {
-                if name.to_lowercase().contains("master") { continue; }
+            for (id, fallback) in [(1,"Poké Ball"),(2,"Great Ball"),
+                (3,"Super Ball"),(4,"Ultra Ball"),(5,"Beast Ball")] {
+                let name = game_catalog.ball_names.get(&id)
+                    .map(String::as_str).unwrap_or(fallback);
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                    &mut cfg.ball_id,*id,name,"●",None,
-                    selected_price("ball",*id),selected_stock("ball",*id));
+                    &mut cfg.ball_id,id,name,"●",None,
+                    selected_price("ball",id),selected_stock("ball",id));
             }
-            if cfg.ball_id>0 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
+            if cfg.ball_id>5 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
                 let id=cfg.ball_id;
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
                     &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
-        ui.add_space(5.0);
-        ui.label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
+        cols[1].label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
         // Match Auto Catch+: Small, Ultimate and Golden Potion. Preserve
         // any existing selection even if the downloaded catalog is old.
         let mut potion_choices=vec![
@@ -4710,12 +4712,22 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
             (204_u64,String::from("Ultimate Potion")),
             (70070_u64,String::from("Golden Potion"))
         ];
+        if let Some(c) = catalog {
+            for (id, item) in &c.items {
+                let name = item.name.to_lowercase();
+                if (name.contains("potion") || name.contains("poção") ||
+                    name.contains("pocao")) && item.price_gold.unwrap_or(0)>0 &&
+                    !potion_choices.iter().any(|(existing,_)|existing==id) {
+                    potion_choices.push((*id,item.name.clone()));
+                }
+            }
+        }
         if cfg.potion_id>0 && !potion_choices.iter().any(|(id,_)|*id==cfg.potion_id) {
             let name=catalog.map(|c|c.name(cfg.potion_id))
                 .unwrap_or_else(||format!("Saved potion #{}",cfg.potion_id));
             potion_choices.push((cfg.potion_id,name));
         }
-        ui.horizontal_wrapped(|ui|{
+        cols[1].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
                 &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
@@ -4728,8 +4740,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     price,selected_stock("item",id));
             }
         });
-        ui.add_space(5.0);
-        ui.label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
+        cols[2].label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
         let mut revive_choices=vec![
             (205_u64,String::from("Revive")),
             (206_u64,String::from("Max Revive"))
@@ -4745,7 +4756,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         if cfg.revive_id>0 && !revive_choices.iter().any(|(id,_)|*id==cfg.revive_id) {
             revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
         }
-        ui.horizontal_wrapped(|ui|{
+        cols[2].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
                 &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
@@ -4757,6 +4768,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
+        });
         });
         ui.add_space(10.0);
         ui.label(RichText::new("Restock at ≤ / Fill to").size(10.0).color(DIM));
