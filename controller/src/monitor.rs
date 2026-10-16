@@ -287,6 +287,7 @@ pub struct MonitorHandle {
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
+    game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 }
 
@@ -299,6 +300,8 @@ impl MonitorHandle {
         let close_worker = Arc::clone(&close_request);
         let bootstrap_request = Arc::new(Mutex::new(None));
         let bootstrap_worker = Arc::clone(&bootstrap_request);
+        let game_close_request = Arc::new(Mutex::new(None));
+        let game_close_worker = Arc::clone(&game_close_request);
         let pace = Arc::new(AtomicU8::new(MonitorPace::Compact as u8));
         let pace_worker = Arc::clone(&pace);
         let shared = Arc::clone(&health);
@@ -306,10 +309,10 @@ impl MonitorHandle {
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, pace_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, game_close_worker, pace_worker);
         });
 
-        Self { health, stop, commands, close_request, bootstrap_request, pace }
+        Self { health, stop, commands, close_request, bootstrap_request, game_close_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -377,12 +380,31 @@ impl MonitorHandle {
             .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
     }
 
+    /// Close only the game tab; Firefox/Twitch remain alive until Rust has
+    /// received the server's authenticated welcome on its own connection.
+    pub fn close_game_for_handoff(&self, timeout: Duration) -> Result<(), String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox BiDi monitor is no longer available".into());
+        }
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = self.game_close_request.lock()
+            .map_err(|_| "Game tab close mailbox unavailable".to_owned())?;
+        if pending.is_some() { return Err("Game tab handoff already pending".into()); }
+        *pending = Some(sender);
+        drop(pending);
+        receiver.recv_timeout(timeout)
+            .map_err(|_| "Timed out waiting for game tab shutdown".to_owned())?
+    }
+
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Ok(mut pending) = self.close_request.lock() {
             pending.take();
         }
         if let Ok(mut pending) = self.bootstrap_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.game_close_request.lock() {
             pending.take();
         }
         if let Ok(mut mailbox) = self.commands.lock() {
@@ -588,6 +610,7 @@ fn monitor_loop(
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
+    game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 ) {
     let mut session: Option<BrowserSession> = None;
@@ -681,7 +704,27 @@ fn monitor_loop(
             // Do not log bootstrap content: it may contain authentication secrets.
             let _ = reply.send(result);
         }
-        let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
+        let game_reply = game_close_request.lock().ok().and_then(|mut pending| pending.take());
+        if let Some(reply) = game_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi is not connected for game handoff".to_owned()
+            ).and_then(|browser| {
+                let context = browser.game_context.as_ref()
+                    .ok_or_else(|| "No authenticated PokéIdle game context".to_owned())?.clone();
+                let id = browser.next_id;
+                browser.next_id += 1;
+                send_and_wait(&mut browser.socket, id, json!({
+                    "id": id, "method": "browsingContext.close",
+                    "params": { "context": context, "promptUnload": false }
+                }))?;
+                browser.game_context = None;
+                logging::info(&format!(
+                    "BiDi closed only game tab on port {port}; verifying native welcome"));
+                Ok(())
+            });
+            let _ = reply.send(result);
+        }
+                let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
         if let Some(reply) = reply {
             let result = match session.as_mut() {
                 Some(browser_session) => {
