@@ -381,6 +381,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Check failed" => "Falha na verificação",
         "Stop" => "Parar",
         "Launch" => "Iniciar",
+        "Start native" => "Iniciar nativo",
+        "Stop login" => "Parar login",
         "COMPACT OVERVIEW" => "VISÃO COMPACTA",
         "Select an account to inspect its full statistics" => "Selecione uma conta para ver todas as estatísticas",
         "Show details" => "Ver detalhes",
@@ -2734,7 +2736,9 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             ui.horizontal(|ui| {
                 // Match the global STOP ALL / LAUNCH ENABLED visual language,
                 // but retain exactly one action for this account.
-                let action = tr(if running { "Stop" } else { "Launch" });
+                let action = tr(if !running { "Start native" }
+                    else if app.games[index].native.is_none() { "Stop login" }
+                    else { "Stop" });
                 let (fill, stroke) = if running {
                     (BAD.linear_multiply(0.18), Stroke::new(1.0, BAD.linear_multiply(0.55)))
                 } else {
@@ -2779,19 +2783,8 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 if app.native_handoff_busy[index] {
                     ui.label(tr("Reading native handshake…"));
                 }
-                if running && app.games[index].native.is_none()
-                    && app.games[index].orphaned_pid.is_none() {
-                    ui.add_space(6.0);
-                    let mode = tr(if app.games[index].headless {
-                        "Restart visible"
-                    } else {
-                        "Restart headless"
-                    });
-                    if ui.small_button(mode).clicked() {
-                        let headless = !app.games[index].headless;
-                        app.set_browser_mode(profile, headless);
-                    }
-                }
+                // Native-first branch has no competing browser restart
+                // control in the normal account dashboard.
             });
         });
 }
@@ -3922,7 +3915,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         .color(TEXT),
                 );
                 ui.label(
-                    RichText::new(tr("Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection."))
+                    RichText::new("Up to four native game + Twitch accounts. Firefox is only for authentication.")
                         .size(11.0)
                         .color(MUTED),
                 );
