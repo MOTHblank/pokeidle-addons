@@ -46,6 +46,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         if !app.market_notices[index].is_empty() {
             ui.label(RichText::new(&app.market_notices[index]).size(10.0).color(WARN));
         }
+        draw_market_copy_controls(app,ui,index);
         let Some(cfg)=app.market_drafts[index].as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
@@ -298,6 +299,97 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         }
     }
 }
+/// Explicitly copy the editor's buying strategy (including unsaved edits).
+/// Each destination retains its own Snatch listing queue, login and ledger.
+fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source: usize) {
+    let mut apply = false;
+    ui.collapsing("Copy buying settings to other accounts", |ui| {
+        ui.label(RichText::new(
+            "Copy rules, price ceilings, reserves and spending limits. Existing buying settings on the selected accounts are replaced; their Snatch queues stay intact."
+        ).size(10.0).color(MUTED));
+        ui.label(RichText::new(
+            "Copies the values currently in this editor, including unsaved changes."
+        ).size(10.0).color(DIM));
+        ui.horizontal_wrapped(|ui| {
+            for dest in 0..app.games.len() {
+                if dest == source { continue; }
+                let name = app.accounts[dest].name.trim();
+                let label = if name.is_empty() {
+                    format!("Account {}", dest+1)
+                } else {
+                    format!("{} · {}", dest+1, name)
+                };
+                ui.checkbox(&mut app.market_copy_targets[dest],label);
+            }
+        });
+        ui.checkbox(&mut app.market_copy_activation,
+            "Also copy buying activation (may immediately start purchases)");
+        ui.label(RichText::new(
+            "Default: buying remains OFF on destination accounts. Only select the option above to copy the source's enabled/paused state."
+        ).size(10.0).color(DIM));
+        let selected=(0..app.games.len()).any(|dest|
+            dest!=source && app.market_copy_targets[dest]);
+        if ui.add_enabled(selected,egui::Button::new(
+            "Overwrite buying settings on selected accounts")).clicked() {
+            apply=true;
+        }
+    });
+    if !apply { return; }
+    let Some(source_rules)=app.market_drafts[source].as_ref().cloned() else { return };
+    if let Err(error)=source_rules.validate() {
+        app.market_notices[source]=format!("Copy canceled; fix source rules: {error}");
+        return;
+    }
+    let mut copied=Vec::new();
+    let mut failures=Vec::new();
+    for dest in 0..app.games.len() {
+        if dest==source || !app.market_copy_targets[dest] { continue; }
+        let profile=app.games[dest].profile;
+        // Respect the destination's in-memory draft first: a newly armed
+        // Snatch listing may not have been saved yet. Its queue must survive
+        // copying the separate automatic buying strategy.
+        let existing=if let Some(draft)=app.market_drafts[dest].as_ref() {
+            draft.clone()
+        } else {
+            match MarketRules::load(profile) {
+                Ok(rules)=>rules,
+                Err(error)=>{
+                    failures.push(format!("Account {}: cannot load: {error}",dest+1));
+                    continue;
+                }
+            }
+        };
+        let copied_rules=existing.copy_buying_from(
+            &source_rules,app.market_copy_activation);
+        let result=match app.games[dest].native.as_ref() {
+            Some(native)=>native.set_market_rules(copied_rules.clone()),
+            None=>copied_rules.save(profile)
+        };
+        match result {
+            Ok(())=>{
+                app.market_drafts[dest]=Some(copied_rules);
+                app.market_notices[dest]=format!(
+                    "Buying settings copied from account {}. Snatch queue preserved.",
+                    source+1);
+                app.market_copy_targets[dest]=false;
+                copied.push((dest+1).to_string());
+            }
+            Err(error)=>failures.push(format!("Account {}: {error}",dest+1)),
+        }
+    }
+    app.market_copy_activation=false;
+    let success=if copied.is_empty() {
+        "No accounts updated".to_owned()
+    } else {
+        format!("Buying settings copied to account(s) {}",copied.join(", "))
+    };
+    app.market_notices[source]=if failures.is_empty() {
+        success
+    } else {
+        format!("{success}. Failed: {}",failures.join(" · "))
+    };
+}
+
 fn field(ui:&mut egui::Ui,label:&str,value:&mut u64){
     ui.label(RichText::new(label).size(10.0).color(MUTED));
     ui.add(egui::DragValue::new(value).range(0..=1_000_000_000_000u64).speed(1.0));
