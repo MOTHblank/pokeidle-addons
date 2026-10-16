@@ -73,6 +73,21 @@ pub struct HuntMeasurements {
     pub window_samples: usize,
 }
 #[derive(Clone, Debug, Default)]
+pub struct HuntSessionStats {
+    pub duration_secs: u64,
+    pub kills:u64,
+    pub captures:u64,
+    pub trainer_xp:u64,
+    pub pokemon_xp:u64,
+    pub combat_gold:u64,
+    pub auto_sale_gold:u64,
+    pub shiny_seen:u64,
+    pub shiny_captured:u64,
+    pub balls_used:BTreeMap<u64,u64>,
+    pub acquired:BTreeMap<String,u64>,
+    pub recent_drops:Vec<(String,u64)>,
+}
+#[derive(Clone, Debug, Default)]
 pub struct HuntView {
     pub hunts: Vec<HuntEntry>,
     pub hunt_slug: Option<String>,
@@ -95,6 +110,7 @@ pub struct HuntView {
     pub gold: Option<u64>,
     pub bonuses: HuntBonuses,
     pub measurements: HuntMeasurements,
+    pub session: HuntSessionStats,
     pub sample_quality: String,
     pub battle_kills: u64,
     pub captures: u64,
@@ -114,6 +130,7 @@ pub struct HuntIntel {
     samples: VecDeque<Sample>,
     session_kills: u64,
     session_start: Instant,
+    recent_drops: VecDeque<(String,u64)>,
     pending_at: Option<Instant>,
 }
 impl HuntIntel {
@@ -122,17 +139,24 @@ impl HuntIntel {
             view: HuntView::default(), pokemon: BTreeMap::new(),
             roster_dirty: false, active_id: None,
             samples: VecDeque::new(), session_kills: 0,
-            session_start: Instant::now(), pending_at: None,
+            session_start: Instant::now(),
+            recent_drops: VecDeque::new(), pending_at: None,
         }
     }
     /// Produce a cheap UI snapshot: roster data is cloned only on the
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
+        self.view.session.duration_secs=self.session_start.elapsed().as_secs();
         if self.roster_dirty {
             self.view.pokemon_roster = Arc::new(self.pokemon.values().cloned().collect());
             self.roster_dirty = false;
         }
         self.view.clone()
+    }
+    pub fn reset_session(&mut self, now:Instant) {
+        self.session_start=now;
+        self.recent_drops.clear();
+        self.view.session=HuntSessionStats::default();
     }
     pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
         if !self.view.catalog_ready || !self.view.hunts.iter().any(|h| h.slug == slug) {
@@ -159,7 +183,8 @@ impl HuntIntel {
             self.view.hunt_slug = Some(slug.to_owned());
             self.samples.clear();
             self.session_kills = 0;
-            self.session_start = now;
+            // Like Manager, keep accumulated session loot and XP across
+            // confirmed hunt switches. Only this hunt's *rate* resets.
             self.view.battle_kills = 0;
             self.view.captures = 0;
             self.view.measurements = HuntMeasurements::default();
@@ -350,9 +375,49 @@ impl HuntIntel {
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {
                                 self.session_kills = self.session_kills.saturating_add(1);
                                 self.view.battle_kills = self.session_kills;
+                                let session=&mut self.view.session;
+                                session.kills=session.kills.saturating_add(1);
+                                for (key,dest) in [
+                                    ("xpTreinador",&mut session.trainer_xp),
+                                    ("xpPokemon",&mut session.pokemon_xp),
+                                    ("ouro",&mut session.combat_gold),
+                                    ("ouroVendaAuto",&mut session.auto_sale_gold)
+                                ] {
+                                    *dest=dest.saturating_add(Self::num(e,key).unwrap_or(0));
+                                }
+                                if let Some(drops)=e.get("drops").and_then(Value::as_array) {
+                                    for drop in drops {
+                                        let Some(name)=drop.get("nome").and_then(Value::as_str)
+                                            .map(str::trim).filter(|n|!n.is_empty()) else {continue};
+                                        let quantity=Self::num(drop,"ganho").filter(|n|*n>0)
+                                            .or_else(||Self::num(drop,"qtd")).unwrap_or(0);
+                                        if quantity==0 {continue}
+                                        *session.acquired.entry(name.to_owned()).or_default()=
+                                            session.acquired.get(name).copied().unwrap_or(0)
+                                                .saturating_add(quantity);
+                                        self.recent_drops.push_front((name.to_owned(),quantity));
+                                        self.recent_drops.truncate(30);
+                                    }
+                                    session.recent_drops=self.recent_drops.iter().cloned().collect();
+                                }
                             }
-                            Some("bola") if e.get("sucesso").and_then(Value::as_bool) == Some(true) => {
-                                self.view.captures = self.view.captures.saturating_add(1);
+                            Some("bola") => {
+                                let session=&mut self.view.session;
+                                if let Some(ball_id)=Self::num(e,"ballId") {
+                                    *session.balls_used.entry(ball_id).or_default()=
+                                        session.balls_used.get(&ball_id).copied().unwrap_or(0).saturating_add(1);
+                                }
+                                let captured=e.get("sucesso").and_then(Value::as_bool)==Some(true);
+                                let shiny=e.get("shiny").and_then(Value::as_bool)==Some(true);
+                                if shiny {session.shiny_seen=session.shiny_seen.saturating_add(1);}
+                                if captured {
+                                    self.view.captures=self.view.captures.saturating_add(1);
+                                    session.captures=session.captures.saturating_add(1);
+                                    if shiny {session.shiny_captured=session.shiny_captured.saturating_add(1);}
+                                }
+                            }
+                            Some("fugiu") if e.get("shiny").and_then(Value::as_bool)==Some(true) => {
+                                self.view.session.shiny_seen=self.view.session.shiny_seen.saturating_add(1);
                             }
                             _ => {}
                         }
@@ -505,6 +570,26 @@ mod tests {
         model.ingest(r#"{"t":"estado","estado":{"gold":500}}"#,now+Duration::from_secs(60));
         assert_eq!(model.view.measurements.gold_net_h,-30_000.0);
         assert!(model.view.measurements.valid_gold);
+    }
+    #[test]
+    fn acquired_drops_are_counted_from_death_receipts_not_inventory_purchases() {
+        let mut intel=HuntIntel::new();let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","hunts":[{"slug":"a","nome":"A"}],
+            "estado":{"huntSlug":"a","items":{"55":900}}}"#,now);
+        intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+            "xpTreinador":100,"xpPokemon":50,"ouro":33,"ouroVendaAuto":5,
+            "drops":[{"nome":"Moon Stone","qtd":3,"ganho":2}]}]}"#,now);
+        intel.ingest(r#"{"t":"batalha","ev":[{"k":"compra","nome":"Moon Stone",
+            "qtd":5,"gasto":400}]}"#,now);
+        intel.ingest(r#"{"t":"estado","estado":{"items":{"55":910}}}"#,now);
+        assert_eq!(intel.view.session.acquired["Moon Stone"],2);
+        assert_eq!(intel.view.session.trainer_xp,100);
+        assert_eq!(intel.view.session.pokemon_xp,50);
+        assert_eq!(intel.view.session.combat_gold,33);
+        assert_eq!(intel.view.session.auto_sale_gold,5);
+        intel.reset_session(now+Duration::from_secs(1));
+        assert!(intel.view.session.acquired.is_empty());
+        assert_eq!(intel.view.items.get(&55),Some(&910));
     }
     #[test]
     fn unobserved_hunts_never_claim_actual_xp_per_hour() {
