@@ -2,6 +2,7 @@
 //! native socket. The public guide provides optional, untrusted reference data.
 use super::*;
 use crate::native_atlas_models::{self as models, BallKind, Modifiers};
+mod models_panel;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum HuntSubtab { Explorer, Recommendations, Current, Models, Session, Compare }
@@ -1257,6 +1258,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Recommendations,
             "Hunt rankings");
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Current,"Current hunt");
+        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Models,"Capture · Outland · Economy");
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Session,"Session & rewards");
     });
     ui.separator();
@@ -1270,6 +1272,13 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         &mut app.hunt_action_error[index]);
                 }
                 HuntSubtab::Compare => {}
+                HuntSubtab::Models => {
+                    let history=native.history_snapshot();
+                    models_panel::draw_atlas_models(ui,&view,
+                        app.hunt_reference.as_deref(),
+                        &app.hunt_estimate_cache[index],
+                        &mut app.atlas_scenarios[index],&history,live);
+                }
                 HuntSubtab::Current => {
                     ui.label(RichText::new("Current Pokémon, combat measurements and bonuses")
                         .size(12.0).color(MUTED));
