@@ -87,6 +87,9 @@ pub struct HuntMeasurements {
     pub window_samples: usize,
     /// Age of the most recent server-confirmed kill, rather than a state poll.
     pub last_battle_age_secs: Option<u64>,
+    /// Age of the latest server-confirmed combat action or wild HP change.
+    /// Unlike last_battle_age_secs, this detects activity during long fights.
+    pub combat_event_age_secs: Option<u64>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntSessionStats {
@@ -176,6 +179,7 @@ pub struct HuntIntel {
     battle_trainer_receipts: u64,
     battle_pokemon_receipts: u64,
     last_battle_at: Option<Instant>,
+    last_combat_at: Option<Instant>,
     session_kills: u64,
     session_start: Instant,
     recent_drops: VecDeque<(String,u64)>,
@@ -189,7 +193,7 @@ impl HuntIntel {
             samples: VecDeque::new(), battle_samples: VecDeque::new(),
             battle_trainer: 0, battle_pokemon: 0,
             battle_trainer_receipts: 0, battle_pokemon_receipts: 0,
-            last_battle_at: None, session_kills: 0,
+            last_battle_at: None, last_combat_at: None, session_kills: 0,
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
         }
@@ -199,6 +203,8 @@ impl HuntIntel {
     pub fn snapshot(&mut self) -> HuntView {
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
         self.view.measurements.last_battle_age_secs=self.last_battle_at
+            .map(|at|at.elapsed().as_secs());
+        self.view.measurements.combat_event_age_secs=self.last_combat_at
             .map(|at|at.elapsed().as_secs());
         if self.view.measurements.last_battle_age_secs.is_some_and(|age|age>180) {
             // Keeping the previous 10-minute average on screen when combat has
@@ -256,6 +262,8 @@ impl HuntIntel {
         self.session_kills = 0; // Reset the per-hunt *rate* baseline, not session totals.
         self.view.battle_kills = 0;
         self.last_battle_at = None;
+        self.last_combat_at = None;
+        self.view.wild = None;
         self.view.roster_ready = false;
         self.view.measurements = HuntMeasurements::default();
         self.view.sample_quality = "Reconnecting; collecting fresh measurements".into();
@@ -270,6 +278,8 @@ impl HuntIntel {
             self.battle_trainer_receipts = 0;
             self.battle_pokemon_receipts = 0;
             self.last_battle_at = None;
+            self.last_combat_at = None;
+            self.view.wild = None;
             self.battle_samples.push_back(BattleSample {
                 at: now, trainer: 0, pokemon: 0, kills: 0,
                 trainer_receipts: 0, pokemon_receipts: 0,
@@ -367,6 +377,7 @@ impl HuntIntel {
             }
         }
         if let Some(wild) = state.get("selvagem") {
+            let previous_wild = self.view.wild.clone();
             self.view.wild = if wild.is_null() { None } else {
                 wild.get("slot").and_then(Value::as_u64).map(|slot| WildInfo {
                     slot,
@@ -377,6 +388,16 @@ impl HuntIntel {
                     max_hp: Self::num(wild,"maxHp").unwrap_or(0)
                 })
             };
+            // A fresh spawn or HP change confirms combat even when an
+            // individual fight has not produced its first kill.
+            if self.view.wild.as_ref().is_some_and(|current| {
+                previous_wild.as_ref().is_some_and(|previous|
+                    previous.slot != current.slot ||
+                    previous.hp != current.hp ||
+                    previous.max_hp != current.max_hp)
+            }) {
+                self.last_combat_at = Some(now);
+            }
         }
         if let Some(level) = Self::num(state, "level") {
             self.view.trainer_level = Some(level.min(u32::MAX as u64) as u32);
@@ -395,6 +416,7 @@ impl HuntIntel {
                 self.battle_trainer_receipts=0;
                 self.battle_pokemon_receipts=0;
                 self.last_battle_at=None;
+                self.last_combat_at=None;
                 self.battle_samples.push_back(BattleSample{
                     at:now,trainer:0,pokemon:0,kills:self.session_kills,
                     trainer_receipts:0,pokemon_receipts:0,
@@ -526,15 +548,26 @@ impl HuntIntel {
             Some("batalha") => {
                 if let Some(events) = frame.get("ev").and_then(Value::as_array) {
                     for e in events {
+                        // Navigation/status events do not establish fighting.
+                        // All other confirmed battle events do, even before a kill.
+                        if e.get("k").and_then(Value::as_str).is_some_and(|kind|
+                            !matches!(kind, "hunt" | "centro")
+                        ) {
+                            self.last_combat_at = Some(now);
+                        }
                         match e.get("k").and_then(Value::as_str) {
                             Some("hunt") => if let Some(slug) = e.get("slug").and_then(Value::as_str) {
                                 self.adopt_hunt(slug, now);
                                 self.view.in_center = false;
                             },
-                            Some("centro") => { self.view.in_center = true; },
+                            Some("centro") => {
+                                self.view.in_center = true;
+                                self.view.wild = None;
+                            },
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {
                                 self.session_kills = self.session_kills.saturating_add(1);
                                 self.last_battle_at=Some(now);
+                                self.last_combat_at=Some(now);
                                 self.view.battle_kills = self.session_kills;
                                 let session=&mut self.view.session;
                                 session.kills=session.kills.saturating_add(1);
@@ -724,6 +757,25 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn opponent_health_and_battle_events_update_combat_activity_without_a_kill() {
+        let mut intel = HuntIntel::new();
+        let now = Instant::now();
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{"slot":1,"nome":"Scyther","level":100,"speciesId":123,"hp":90,"maxHp":100}}}"#,now);
+        assert_eq!(intel.snapshot().measurements.combat_event_age_secs,None);
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{"slot":1,"nome":"Scyther","level":100,"speciesId":123,"hp":60,"maxHp":100}}}"#,now+Duration::from_secs(2));
+        let snap = intel.snapshot();
+        assert!(snap.measurements.combat_event_age_secs.is_some());
+        assert_eq!(snap.measurements.last_battle_age_secs,None);
+        assert_eq!(snap.wild.as_ref().unwrap().name,"Scyther");
+        intel.ingest(r#"{"t":"batalha","ev":[{"k":"ataque"}]}"#,now+Duration::from_secs(4));
+        assert!(intel.snapshot().measurements.combat_event_age_secs.is_some());
+        intel.on_disconnect();
+        let disconnected = intel.snapshot();
+        assert_eq!(disconnected.measurements.combat_event_age_secs,None);
+        assert!(disconnected.wild.is_none());
+    }
+
     #[test]
     fn nullable_pokemon_patches_remove_held_items_and_clear_active_id() {
         let now=Instant::now();let mut m=HuntIntel::new();
