@@ -98,6 +98,7 @@ pub struct HuntView {
     pub pokemon_roster: Arc<Vec<PokemonInfo>>,
     pub wild: Option<WildInfo>,
     pub balls: Arc<BTreeMap<u64, u64>>,
+    pub ball_names: Arc<BTreeMap<u64, String>>,
     pub items: Arc<BTreeMap<u64, u64>>,
     pub automation: Option<Value>,
     pub vip_until: Option<u64>,
@@ -355,6 +356,13 @@ impl HuntIntel {
         let Ok(frame) = serde_json::from_str::<Value>(raw) else { return };
         match frame.get("t").and_then(Value::as_str) {
             Some("welcome") => {
+                if let Some(catalog) = frame.get("catalogoBolas").and_then(Value::as_array) {
+                    self.view.ball_names=Arc::new(catalog.iter().filter_map(|ball| {
+                        Some((ball.get("id").and_then(Value::as_u64)?,
+                            ball.get("nome").or_else(||ball.get("name"))
+                                .and_then(Value::as_str)?.to_owned()))
+                    }).collect());
+                }
                 if let Some(hunts) = frame.get("hunts").and_then(Value::as_array) {
                     self.catalog(hunts);
                 }
