@@ -1127,7 +1127,7 @@ const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
     } catch (_) {}
 }"#;
 
-fn reload_native_context_once(session: &mut BrowserSession, id: &str) -> Result<(), String> {
+fn reload_native_context_once(session: &mut BrowserSession, id: &str) -> Result<Value, String> {
     if !session.native_capture_installed {
         return Err("BiDi could not install native authentication instrumentation".to_owned());
     }
