@@ -1,0 +1,40 @@
+name: Experimental native background transport
+
+on:
+  push:
+    branches:
+      - experiment/native-background-sessions
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-prototype:
+    name: Native WS experiment / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: controller -> target
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev libgtk-3-dev libudev-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxkbcommon-dev libwayland-dev \
+            libgl1-mesa-dev libegl1-mesa-dev
+      - name: Test experimental controller
+        working-directory: controller
+        run: cargo test
+      - name: Check experimental controller
+        working-directory: controller
+        run: cargo check
