@@ -1,45 +1,50 @@
-# Experimental browserless PokéIdle transport
+# Native-first Moth Controller: PokéIdle + Twitch IRC
 
-Branch: `experiment/native-background-sessions` (not merged into `master`).
+**Branch:** [`experiment/native-background-sessions`](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
+**Controller:** `0.1.7-native.2`  
+**Experimental browser helpers:** Controller Bridge `1.3.14`, Twitch Low Resource `3.2.1`, Stream Scanner `7.2.1`.
 
-This experiment independently implements a native, TLS-protected game WebSocket connection in Rust. It **does not implement the full PokéIdle Manager feature set**. The goal of the first stage is to verify a browserless authenticated transport and real server state updates on one disposable/test account.
+This is an **architecture-replacement branch**, not a separate optional plugin or an opt-in feature. The normal target runtime is **native Rust game WebSocket + native Rust Twitch IRC**. Firefox is a temporary authentication/bootstrap and recovery mechanism only. The old production `master` remains unchanged.
 
-## Preparation
+## Default lifecycle
 
-1. Check out this experimental branch locally. Build from the source with `cd controller && cargo run`. A first build without `--locked` refreshes `Cargo.lock` to include the TLS crates introduced by the experiment. Rust is not available in the current review environment, so this branch has **not been compiler- or live-session-validated**.
-2. In the test account's isolated Firefox profile, install the **experimental** Controller Bridge 1.3.14 manually using Violentmonkey:
-   [Controller Bridge experimental installer](https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/controller-bridge.user.js).
-   Don't replace other users' production Bridge installations. In this branch, both `@updateURL` and `@downloadURL` are isolated to the experimental branch, so the public `master` channel is unaffected.
-3. Start that account's Firefox through Moth Controller, authenticate normally, then **reload the game tab** so the bridge observes the opening WebSocket `hello`.
-4. Once the account is connected, click **Testar WS nativo / Try native WS** on that account's dashboard card.
+1. Launch an enabled account. If credentials are not already available in memory, Moth opens its isolated Firefox profile (headless by default) for PokéIdle login and its existing authenticated Twitch session. Twitch sign-in still happens in Firefox if required.
+2. The existing stream scanner reads `twitch.lives` and `twitch.assistindoEm` from the game; it starts one managed Twitch chat popout. Twitch Low Resource retains the current browser-authenticated IRC socket and its `PASS oauth:…`, `NICK`, and `CAP REQ` messages in memory only.
+3. When the game bridge and stream scanner are ready, the controller **automatically** requests both game + Twitch handshakes over its existing Firefox BiDi session. It validates both. Missing Twitch authorization means Firefox stays open and handoff is retried; the controller never fabricates an OAuth token.
+4. With both credentials captured, Moth closes the controlled Firefox instance, starts both Rust TLS WebSockets, and waits for server-authenticated `welcome` (PokéIdle) and IRC `001` (Twitch). The game and Twitch sockets have separate Rust workers and reconnect loops.
+5. Rust owns Twitch `JOIN` / `PART` reconciliation directly. The desired channels come from the native game stream (`twitch.lives` union rewarded `twitch.assistindoEm`). Identical channels remain joined without socket or tab reloads. Joins are paced at **600 ms per channel**, with a **100-room limit**.
+6. On persistent connection or authentication failure, the controller drops native workers and reopens that account's Firefox profile for recovery. The normal objective remains a **zero-browser** runtime.
 
-The experimental command captures the game-confirmed WebSocket URL/hello and Firefox cookie values through the **existing BiDi session**, without creating a second BiDi session. It validates a `wss://` PokéIdle hostname, closes the controlled Firefox, then connects Rust directly to the game. A real `welcome` is required before the native UI becomes Online.
+**No manual `Try native WS` button exists.** The dashboard reports the native game and IRC phases, IRC joined/desired room count, game frames, battle events and captures.
 
-If the first native handshake fails, the controller automatically attempts to reopen that profile's Firefox using its previous visible/headless preference. During subsequent network interruptions the Rust worker retries the native socket; after repeated failures the controller tries Firefox fallback. To return to Firefox voluntarily, **Stop** the native session and press **Launch**.
+## Installation and development
 
-## What works in this prototype
+The experimental controller installs and checks its userscripts from this **experimental branch**, not from `master`. This includes branch-specific `@updateURL` / `@downloadURL` for the three modified scripts.
 
-- A separate native WebSocket per opted-in account, independent of a rendered Firefox process after successful handoff
-- Authenticated `hello` / `welcome` and ongoing JSON `estado` observation
-- Native RFC WebSocket ping/pong, freshness tracking and basic reconnect attempts
-- Lightweight trainer level, total XP, gold, gems and hunt-slug projection where supplied by server patches
-- No credentials written to disk by the experimental handoff; no raw WebSocket messages printed in application logs
-- The original Firefox launch/stop behavior remains the default for all other accounts
+1. Check out the branch.
+2. Build and start using `cd controller && cargo run`. Because this experiment enables Rust TLS support on an existing `tungstenite` dependency, **`Cargo.lock` needs regeneration and committing** on a machine with Cargo and crate registry access before using `--locked`. The isolated branch CI runs `cargo test` and `cargo check` (without `--locked`).
+3. Ensure Controller Bridge `1.3.14`, Twitch Low Resource `3.2.1` and Stream Scanner `7.2.1` are installed in the target profile. Use **Manage Addons → Install all** for the branch versions and reload game/Twitch pages.
+4. Log into PokéIdle and Twitch using the same isolated Firefox profile as before.
+5. Watch the account dashboard: Firefox is the **authentication stage**, not the intended runtime. Once its game WebSocket and authenticated IRC socket have both been observed, Moth performs native handoff automatically.
 
-## Important restrictions
+## Scope and constraints
 
-**No browser userscripts run in native mode.** In particular, this first stage **does not provide** Auto Catch+, restocking, Moth Watch, Snatch, Hunt Atlas UI, Twitch chat joining, or browser-side action commands. Gameplay and XP progress **must be checked empirically**; an open native socket does not prove that all gameplay continues correctly without the client. Do not test with high-value market purchases, limited items or a critical farming session.
+This branch implements the **transport and chat participation**, not all features previously implemented in page userscripts. Auto Catch+, Moth Watch, Snatch, Hunt Atlas UI and any other DOM-dependent userscript **do not run with Firefox closed**. A native game socket can receive battles and XP but is **not equivalent to every browser-side automation**. This is a real limitation, not a reason to run a hidden browser indefinitely.
 
-Firefox WebDriver BiDi must support `storage.getCookies` for this approach; cookie and handshake behavior has not yet been validated against a live game instance. If authentication relies on different headers or token rotation, native login can fail or later expire.
+The user's established method of chat-only IRC bonus participation is preserved, not replaced by video playback. **Twitch videos are never opened or played by the native IRC worker.** Server-reported bonus data is exposed on the native dashboard.
 
-This branch has not been built or end-to-end tested in the current environment. Treat it as a transport prototype, not a replacement for Firefox or a production release.
+The current Twitch handoff requires the browser's real `PASS oauth:…` handshake from a managed authenticated chat popout. If Twitch changes its browser auth format, Moth will not silently forge credentials or downgrade to anonymous IRC. Credentials are retained in process memory for reconnects; no new credential files, token logs or storage are introduced.
 
-## Next validation milestones
+This environment had no Rust toolchain, package downloads or authenticated live game session. Accordingly, **the new branch is not compile-tested, session-tested, or production-ready** here. The native game protocol's progress and reward correctness require live comparison before leaving the experiment branch.
 
-1. Compile and run Rust unit tests on Windows and Linux, and regenerate/commit Cargo.lock
-2. Capture whether the server accepts Rust `hello` after Firefox closes and whether it keeps delivering meaningful state
-3. Compare XP, battle, capture and inventory changes against a browser session
-4. Implement confirmed native automation and browserless account lifecycle only after validating live protocol behavior
-5. Verify long-duration reconnects and logins before considering a merge
+## Test checklist
 
-Source references: `controller/src/native_background.rs`, `controller/src/monitor.rs` and `addons/controller-bridge.user.js`.
+- [ ] Windows and Linux: `cargo test` and `cargo check` compile and pass; regenerate `Cargo.lock`.
+- [ ] Both Firefox handshakes are observed after login, without a second BiDi session.
+- [ ] Automatic handoff closes Firefox and both Rust connections receive authenticated welcome frames.
+- [ ] Game battle/XP and native Twitch IRC joins continue after Firefox closes.
+- [ ] JOIN/PART updates preserve unchanged channels and reward-active channels.
+- [ ] Twitch chat-only XP bonus stays game-confirmed, as with the existing browser chat method.
+- [ ] Credential expiration and TCP disconnections reopen Firefox only when recovery is necessary.
+- [ ] All four account profiles remain isolated.
+- [ ] Native replacements for any remaining essential browser automations work before this branch becomes a release.
