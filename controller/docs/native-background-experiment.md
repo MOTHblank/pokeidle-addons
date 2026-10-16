@@ -41,3 +41,19 @@ This is a native protocol experiment, **not a full port of Auto Catch+, Moth Wat
 The implementation has been committed and branch-specific build/test checks exist, but there has been **no authenticated end-to-end live run or local Rust compiler validation from this environment**. Rust TLS support also requires regenerating and committing `Cargo.lock` before using `cargo --locked`. Inspect CI build results before installing a preview executable.
 
 To diagnose handoff stalls, share **sanitized logs** showing only the status/error messages. Never share browser cookies, OAuth data, or native credential vault contents.
+
+## Crash diagnostics in 0.1.7-native.6
+
+A reported Windows exit occurred directly after logging `stopping Charizard Firefox PID ...`, without a panic or native WebSocket confirmation. This log **does not establish an exact crash cause**. The previous release profile set `panic = "abort"`, which could terminate the whole GUI when *any* Rust thread panicked, without usable diagnostics. This preview switches to unwind panics, catches native game/Twitch worker panics, and records **sanitized thread and source-file location** in `moth-controller.log`.
+
+The handoff now closes/reaps Firefox on a **separate worker per account** rather than blocking egui's UI thread. The log records distinct milestones:
+
+1. `capturing native game + Twitch IRC session via Firefox BiDi`
+2. `validated native game + IRC handshakes; closing Firefox asynchronously`
+3. `Firefox exited after authenticated handoff`
+4. `starting native game + Twitch IRC workers`
+5. `Native PokéIdle WSS received authenticated welcome` and `Native Twitch IRC received authenticated welcome`
+
+If a worker panics, its status becomes **Failed** while the controller should remain open. If a future crash still abruptly ends the log without `Rust panic`, investigate OS-level process termination, native-library faults, or an external restart instead of assuming the WebSocket protocol was rejected. No cookies, OAuth tokens or handshake payloads are written to logs.
+
+Test with one account first and only then all four. Native transport **still does not implement the browser-only gameplay addons**, so authenticated WebSockets are not proof of complete automated farming.
