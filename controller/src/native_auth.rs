@@ -1,0 +1,192 @@
+//! Per-account native session cache. Credentials must never be placed in
+//! accounts.json, browser telemetry, logs, plain files, or command arguments.
+//!
+//! Windows: current-user DPAPI encrypts the *whole* game+Twitch bootstrap.
+//! Linux: Secret Service desktop keyring via secret-tool (stdin for writes).
+//! If an OS vault is unavailable, a one-time Firefox authentication is still
+//! required for that launch; there is deliberately no plaintext fallback.
+use crate::config::{self, GameProfile};
+use serde_json::Value;
+
+const MAX_BOOTSTRAP_BYTES: usize = 512 * 1024;
+
+fn serialize(value: &Value) -> Result<Vec<u8>, String> {
+    crate::native_background::validate_bootstrap(value)?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|_| "Could not encode native credentials".to_owned())?;
+    if bytes.len() > MAX_BOOTSTRAP_BYTES {
+        return Err("Native credential payload exceeds safe size limit".into());
+    }
+    Ok(bytes)
+}
+fn deserialize(bytes: &[u8]) -> Result<Value, String> {
+    if bytes.len() > MAX_BOOTSTRAP_BYTES {
+        return Err("Stored native credential payload is too large".into());
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|_| "Native credential cache is not valid JSON".to_owned())?;
+    crate::native_background::validate_bootstrap(&value)?;
+    Ok(value)
+}
+
+pub fn load(profile: GameProfile) -> Result<Option<Value>, String> {
+    platform::load(profile)?.map(|data| deserialize(&data)).transpose()
+}
+pub fn save(profile: GameProfile, value: &Value) -> Result<(), String> {
+    let bytes = serialize(value)?;
+    platform::save(profile, &bytes)
+}
+pub fn clear(profile: GameProfile) -> Result<(), String> {
+    platform::clear(profile)
+}
+
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    use std::{ffi::c_void, fs, ptr, slice};
+
+    #[repr(C)]
+    struct Blob { size: u32, data: *mut u8 }
+    #[link(name = "crypt32")]
+    unsafe extern "system" {
+        fn CryptProtectData(input: *mut Blob, description: *const u16,
+            entropy: *mut Blob, reserved: *mut c_void, prompt: *mut c_void,
+            flags: u32, output: *mut Blob) -> i32;
+        fn CryptUnprotectData(input: *mut Blob, description: *mut *mut u16,
+            entropy: *mut Blob, reserved: *mut c_void, prompt: *mut c_void,
+            flags: u32, output: *mut Blob) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+
+    fn crypt(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
+        if bytes.len() > MAX_BOOTSTRAP_BYTES + 4096 {
+            return Err("DPAPI input is oversized".into());
+        }
+        let mut source = bytes.to_vec();
+        let mut input = Blob { size: source.len() as u32, data: source.as_mut_ptr() };
+        let mut output = Blob { size: 0, data: ptr::null_mut() };
+        // CRYPTPROTECT_UI_FORBIDDEN: background startup cannot show prompts.
+        let ok = unsafe {
+            if encrypt {
+                CryptProtectData(&mut input, ptr::null(), ptr::null_mut(),
+                    ptr::null_mut(), ptr::null_mut(), 0x1, &mut output)
+            } else {
+                CryptUnprotectData(&mut input, ptr::null_mut(), ptr::null_mut(),
+                    ptr::null_mut(), ptr::null_mut(), 0x1, &mut output)
+            }
+        };
+        if ok == 0 { return Err("Windows user credential protection failed".into()); }
+        let result = unsafe {
+            let copied = slice::from_raw_parts(output.data, output.size as usize).to_vec();
+            LocalFree(output.data.cast::<c_void>());
+            copied
+        };
+        Ok(result)
+    }
+    fn location(profile: GameProfile) -> Result<std::path::PathBuf, String> {
+        Ok(config::data_root()?.join("native-credentials")
+            .join(format!("{}.dpapi", profile.name())))
+    }
+    pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let path = location(profile)?;
+        let cipher = match fs::read(path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err("Could not read protected native session".into()),
+        };
+        crypt(&cipher, false).map(Some)
+    }
+    pub fn save(profile: GameProfile, bytes: &[u8]) -> Result<(), String> {
+        let cipher = crypt(bytes, true)?;
+        let path = location(profile)?;
+        fs::create_dir_all(path.parent().expect("credential directory"))
+            .map_err(|_| "Could not create protected native credential directory".to_owned())?;
+        fs::write(path, cipher)
+            .map_err(|_| "Could not save DPAPI-protected native session".to_owned())
+    }
+    pub fn clear(profile: GameProfile) -> Result<(), String> {
+        match fs::remove_file(location(profile)?) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("Could not clear protected native session".into()),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod platform {
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    const APP: &str = "moth-pokeidle-native";
+    // User profile number is used only as an OS keyring attribute.
+    fn base_args(profile: GameProfile) -> [&'static str; 4] {
+        ["application", APP, "profile", profile.name()]
+    }
+    fn secret_tool(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        let mut child = Command::new("secret-tool")
+            .args(args)
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "Desktop keyring unavailable: install/unlock Secret Service and secret-tool".to_owned())?;
+        if let Some(data) = input {
+            let mut stdin = child.stdin.take()
+                .ok_or_else(|| "Could not reach desktop keyring input".to_owned())?;
+            stdin.write_all(data)
+                .map_err(|_| "Desktop keyring refused credential input".to_owned())?;
+            drop(stdin);
+        }
+        let output = child.wait_with_output()
+            .map_err(|_| "Desktop keyring request failed".to_owned())?;
+        if !output.status.success() {
+            return Err("Desktop keyring rejected native credentials".into());
+        }
+        if output.stdout.len() > MAX_BOOTSTRAP_BYTES + 4 {
+            return Err("Desktop keyring credential response too large".into());
+        }
+        Ok(output.stdout)
+    }
+    pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let args = base_args(profile);
+        let mut cmd = vec!["lookup"];
+        cmd.extend(args);
+        let mut found = secret_tool(&cmd, None)?;
+        if found.is_empty() { return Ok(None); }
+        // secret-tool lookup appends a line break after the stored secret.
+        while found.last() == Some(&b'\n') { found.pop(); }
+        if found.is_empty() { return Ok(None); }
+        Ok(Some(found))
+    }
+    pub fn save(profile: GameProfile, bytes: &[u8]) -> Result<(), String> {
+        let args = base_args(profile);
+        let mut cmd = vec!["store", "--label=Moth PokeIdle native game and Twitch"];
+        cmd.extend(args);
+        secret_tool(&cmd, Some(bytes)).map(|_| ())
+    }
+    pub fn clear(profile: GameProfile) -> Result<(), String> {
+        let args = base_args(profile);
+        let mut cmd = vec!["clear"];
+        cmd.extend(args);
+        secret_tool(&cmd, None).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn invalid_auth_data_is_never_persisted() {
+        assert!(serialize(&json!({"twitch": {"pass":"test"}})).is_err());
+        assert!(deserialize(b"{}").is_err());
+    }
+    #[test]
+    fn oversized_payload_is_rejected() {
+        assert!(deserialize(&vec![b'a'; MAX_BOOTSTRAP_BYTES + 1]).is_err());
+    }
+}
