@@ -769,7 +769,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "seller" => "vendedor",
         "Buy" => "Comprar",
         "Profiles" => "Perfis",
-        "Account and browser tools" => "Pontos de acesso a contas, navegador e addons",
+        "Account and browser tools" => "Ferramentas da conta e do navegador",
         "Close" => "Fechar",
         "Open Game" => "Abrir jogo",
         "Google sign-in" => "Login do Google",
@@ -1508,7 +1508,6 @@ struct NativeHandoffEvent {
 
 struct CachedNativeEvent {
     index: usize,
-    headless: bool,
     existing_firefox: bool,
     result: Result<Option<NativeSession>, String>,
 }
@@ -2135,7 +2134,7 @@ impl ControllerApp {
                     self.set_status(format!(
                         "{}: {}: {error}",
                         self.account_name(profile),
-                        if is_bootstrap { "native login" } else { "native handoff error" }
+                        if is_bootstrap { "waiting for login" } else { "login check" }
                     ), !is_bootstrap);
                 },
                 Ok(bootstrap) => {
@@ -2226,10 +2225,10 @@ impl ControllerApp {
                 session.twitch_snapshot().phase == "NeedsLogin"
             ) {
                 if let Some(session) = slot.native.take() { session.stop(); }
-                recover.push((slot.profile, slot.headless));
+                recover.push(slot.profile);
             }
         }
-        for (profile, headless) in recover {
+        for profile in recover {
             self.require_browser_login[profile.index()] = true;
             self.set_status(format!(
                 "{}: login expired, opening Firefox to sign in again",
@@ -2449,7 +2448,7 @@ impl ControllerApp {
                     Err("Native cache verification panicked; see sanitized controller log".into())
                 });
                 let _ = tx.send(CachedNativeEvent {
-                    index, headless, existing_firefox, result
+                    index, existing_firefox, result
                 });
             });
         if let Err(error) = started {
@@ -3547,7 +3546,9 @@ fn collect_overview_totals(app: &mut ControllerApp, profiles: &[usize]) -> Overv
         let health = app.games[index].health();
         let running = app.games[index].is_running();
         if !running || !health.logged_in || !health.bridge_snapshot_ok ||
-            !health.telemetry_is_fresh() { continue; }
+            (app.games[index].native.is_none() && !health.telemetry_is_fresh()) {
+            continue;
+        }
         result.online += 1;
         if let Some(native) = app.games[index].native.as_ref() {
             let view = native.hunt_snapshot();
@@ -3737,7 +3738,13 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     // Only actual account sign-in problems appear here.
     let needs_setup = !app.account_setup[index].setup_complete
         && app.games[index].native.is_none();
-    let fresh = running && health.telemetry_is_fresh();
+    // The authenticated game socket supplies the data directly. Browser
+    // sampling intervals must not hide its last confirmed snapshot.
+    let fresh = running && (health.telemetry_is_fresh()
+        || app.games[index].native.as_ref().is_some_and(|session| {
+            let state = session.snapshot();
+            state.phase == "Online" && state.last_received.is_some()
+        }));
     let repair_available = monitor_repair_available(
         running,
         health.last_error.as_deref(),
@@ -6250,6 +6257,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         ui.add_space(6.0);
 
         let game_label = if game_online { tr("Connected") }
+            else if game_phase.as_deref() == Some("NeedsLogin") { tr("Sign-in required") }
+            else if game_phase.as_deref() == Some("Reconnecting") { tr("Reconnecting") }
             else if connecting { tr("Connecting") }
             else if running { tr("Waiting for login") }
             else { tr("Not signed in") };
@@ -6297,8 +6306,9 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
 
         let show_guide = !setup.setup_complete || app.show_setup_guide[index];
         ui.add_space(6.0);
-        if ui.small_button(if show_guide { tr("Hide setup guide") }
-            else { tr("Show setup guide") }).clicked()
+        if setup.setup_complete &&
+            ui.small_button(if show_guide { tr("Hide setup guide") }
+                else { tr("Show setup guide") }).clicked()
         {
             app.show_setup_guide[index] = !show_guide;
         }
