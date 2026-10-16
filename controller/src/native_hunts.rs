@@ -109,6 +109,7 @@ const MIN_MEASUREMENT: f64 = 20.0;
 pub struct HuntIntel {
     pub view: HuntView,
     pokemon: BTreeMap<u64, PokemonInfo>,
+    roster_dirty: bool,
     active_id: Option<u64>,
     samples: VecDeque<Sample>,
     session_kills: u64,
@@ -118,10 +119,20 @@ pub struct HuntIntel {
 impl HuntIntel {
     pub fn new() -> Self {
         Self {
-            view: HuntView::default(), pokemon: BTreeMap::new(), active_id: None,
+            view: HuntView::default(), pokemon: BTreeMap::new(),
+            roster_dirty: false, active_id: None,
             samples: VecDeque::new(), session_kills: 0,
             session_start: Instant::now(), pending_at: None,
         }
+    }
+    /// Produce a cheap UI snapshot: roster data is cloned only on the
+    /// 1-second UI publish cadence, never once per high-rate game delta.
+    pub fn snapshot(&mut self) -> HuntView {
+        if self.roster_dirty {
+            self.view.pokemon_roster = Arc::new(self.pokemon.values().cloned().collect());
+            self.roster_dirty = false;
+        }
+        self.view.clone()
     }
     pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
         if !self.view.catalog_ready || !self.view.hunts.iter().any(|h| h.slug == slug) {
@@ -162,6 +173,7 @@ impl HuntIntel {
     fn num(record: &Value, key: &str) -> Option<u64> { record.get(key).and_then(Value::as_u64) }
     fn set_pokemon(&mut self, value: &Value) {
         let Some(id) = Self::num(value, "id") else { return };
+        self.roster_dirty = true;
         let existing = self.pokemon.entry(id).or_insert_with(|| PokemonInfo {
             id, ..PokemonInfo::default()
         });
@@ -259,9 +271,6 @@ impl HuntIntel {
             for p in patches { self.set_pokemon(p); }
         }
         self.view.pokemon_count = self.pokemon.len();
-        if state.get("pokemons").is_some() || state.get("pkMud").is_some() {
-            self.view.pokemon_roster = Arc::new(self.pokemon.values().cloned().collect());
-        }
         self.view.active_pokemon = self.active_id.and_then(|id| self.pokemon.get(&id).cloned());
         if let Some(event) = state.get("evento") {
             if let Some(n) = event.get("xpTreinadorPct").and_then(Value::as_f64) {
@@ -485,7 +494,7 @@ mod tests {
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoPotion"],true);
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
         assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
-        assert_eq!(intel.view.pokemon_roster.len(),1);
+        assert_eq!(intel.snapshot().pokemon_roster.len(),1);
     }
     #[test]
     fn measured_net_gold_includes_negative_spend() {
