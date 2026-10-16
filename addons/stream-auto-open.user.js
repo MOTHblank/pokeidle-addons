@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         PokéIdle Live Stream Scanner
 // @namespace    moth.pokeidle
-// @version      7.2.0
+// @version      7.2.1
 // @description  Maintains one persistent Twitch chat tab and syncs channels with IRC JOIN/PART without reloads; KICK stays in Rust.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
 // @match        https://www.twitch.tv/popout/*/chat*
 // @grant        window.close
-// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
-// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/stream-auto-open.user.js
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/stream-auto-open.user.js
+// @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/stream-auto-open.user.js
 // @run-at       document-start
 // @grant        GM_openInTab
 // @grant        GM_setValue
@@ -947,7 +947,7 @@
         }
     };
 
-    console.info('[Moth] live stream scanner v7.2.0 ready · persistent delta-synced Twitch IRC chat · KICK stays in Rust');
+    console.info('[Moth] live stream scanner v7.2.1 ready · persistent delta-synced Twitch IRC chat · KICK stays in Rust');
     }
 
     start();
