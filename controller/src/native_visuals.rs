@@ -105,7 +105,7 @@ fn image_urls(kind: Kind, id: u64, icon_hint: Option<&str>) -> Vec<String> {
         // The game publishes some healing items from either location.
         const SHORT: &str = "https://pokeidle.io/assets/markitems/";
         const LONG: &str = "https://pokeidle.io/assets/site/assets/markitems/";
-        const alternative = if source.starts_with(SHORT) {
+        let alternative = if source.starts_with(SHORT) {
             Some(source.replacen(SHORT, LONG, 1))
         } else if source.starts_with(LONG) {
             Some(source.replacen(LONG, SHORT, 1))
