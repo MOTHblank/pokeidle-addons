@@ -1023,9 +1023,9 @@ fn draw_atlas_species(
     native:&NativeSession, live:bool, error:&mut Option<String>,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
-        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+        egui::Frame::new().fill(PANEL).corner_radius(7.0)
             .stroke(Stroke::new(1.0,BORDER))
-            .inner_margin(egui::Margin::symmetric(13,10)).show(ui,|ui|{
+            .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
                 ui.horizontal_wrapped(|ui|{
                     ui.label(RichText::new(&row.name).size(14.0).strong().color(TEXT));
                     ui.label(RichText::new(format!("#{}",row.id))
@@ -1255,7 +1255,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     if app.hunt_subtab==HuntSubtab::Compare {
         egui::ScrollArea::vertical()
             .id_salt("hunt-atlas-all-accounts")
-            .auto_shrink([false,false]).show(ui,|ui|{
+            .auto_shrink([false,true]).show(ui,|ui|{
                 draw_atlas_compare(app,ui);
             });
         return;
@@ -1347,7 +1347,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     });
     ui.separator();
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
-        .auto_shrink([false,false]).show(ui,|ui|{
+        .auto_shrink([false,true]).show(ui,|ui|{
             match app.hunt_subtab {
                 HuntSubtab::Explorer => {
                     draw_atlas_explorer(ui,&view,native,live,index,
