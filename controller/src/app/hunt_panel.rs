@@ -323,6 +323,31 @@ fn draw_rate(ui:&mut egui::Ui,label:&str,value:Option<f64>,source:RateSource){
     });
 }
 
+/// Shared results pager: compact ranges make larger atlases manageable.
+fn atlas_pager(ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize)
+    ->std::ops::Range<usize>{
+    let total_pages=count.div_ceil(per_page).max(1);
+    *page=(*page).min(total_pages-1);
+    ui.horizontal_wrapped(|ui|{
+        let first=(*page*per_page).min(count);
+        let last=(first+per_page).min(count);
+        ui.label(RichText::new(if count==0 {
+            "No results".to_owned()
+        }else{
+            format!("Showing {}–{} of {}",first+1,last,count)
+        }).size(11.0).strong().color(TEXT));
+        ui.add_space(8.0);
+        if ui.add_enabled(*page>0,egui::Button::new("← Previous"))
+            .clicked(){*page-=1;}
+        ui.label(RichText::new(format!("{} / {}",*page+1,total_pages))
+            .size(10.0).color(MUTED));
+        if ui.add_enabled(*page+1<total_pages,
+            egui::Button::new("Next →")).clicked(){*page+=1;}
+    });
+    let first=*page*per_page;
+    first..(first+per_page).min(count)
+}
+
 /// A visible encounter is not sufficient evidence of active combat.
 /// Only an actual recent combat event allows the Fighting state.
 fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
@@ -347,6 +372,7 @@ fn draw_hunt_row(
         .stroke(Stroke::new(1.0,if current{ACCENT}else{BORDER}))
         .corner_radius(8.0).inner_margin(egui::Margin::symmetric(12,9))
         .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui|{
                 ui.label(RichText::new(format!("{rank:02}"))
                     .size(12.0).strong().color(DIM));
@@ -872,6 +898,7 @@ fn atlas_filters_panel(
     ui.add_space(6.0);
     egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
         .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.label("Level");
                 if ui.add(egui::DragValue::new(&mut f.min_level)
@@ -1027,7 +1054,8 @@ fn draw_atlas_species(
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(7.0)
             .stroke(Stroke::new(1.0,BORDER))
-            .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
+            .inner_margin(egui::Margin::symmetric(12,9)).show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
                 let compact=ui.available_width()<510.0;
                 ui.horizontal(|ui|{
                     if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,36.0){
@@ -1230,19 +1258,11 @@ fn draw_atlas_explorer(
         ui.label("No matching species with available model inputs. Check filters and assumptions; missing outcomes are never ranked as zero.");
         return;
     }
-    const PAGE:usize=18;
-    let pages=rows.len().div_ceil(PAGE).max(1);
-    *page=(*page).min(pages-1);
-    ui.horizontal_wrapped(|ui|{
-        if ui.add_enabled(*page>0,
-            egui::Button::new("← Previous")).clicked(){*page-=1}
-        ui.label(format!("Page {} / {} · {} results",
-            *page+1,pages,rows.len()));
-        if ui.add_enabled(*page+1<pages,
-            egui::Button::new("Next →")).clicked(){*page+=1}
-    });
+    let visible=atlas_pager(ui,page,rows.len(),12);
+    ui.add_space(7.0);
     let mut error=None;
-    for row in rows.iter().skip(*page*PAGE).take(PAGE) {
+    for row in rows.iter().skip(visible.start)
+        .take(visible.end-visible.start) {
         draw_atlas_species(ui,row,filters.sort,view,reference,native,live,
             visuals,&mut error);
     }
@@ -1831,24 +1851,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         &app.hunt_query,&app.hunt_region,&app.hunt_type,
                         &app.hunt_estimate_cache[index]);
                     ui.label(RichText::new(format!(
-                        "{} matching hunts · measured = this hunt only · guide estimates are uncertain · scenarios are not combat predictions",
+                        "{} matching hunts · only the current hunt has measured rates",
                         ranked.len()
-                    )).size(10.0).color(WARN));
+                    )).size(11.0).color(MUTED));
                     if !live {ui.label("Rankings disabled while account data is stale.");}
-                    const PAGE_SIZE:usize=35;
-                    let total_pages=ranked.len().div_ceil(PAGE_SIZE).max(1);
-                    app.hunt_page=app.hunt_page.min(total_pages-1);
-                    ui.horizontal(|ui|{
-                        if ui.add_enabled(app.hunt_page>0,egui::Button::new("Previous")).clicked(){
-                            app.hunt_page-=1;
-                        }
-                        ui.label(format!("Page {} of {}",app.hunt_page+1,total_pages));
-                        if ui.add_enabled(app.hunt_page+1<total_pages,
-                            egui::Button::new("Next")).clicked(){app.hunt_page+=1;}
-                    });
-                    let first=app.hunt_page*PAGE_SIZE;
-                    for (offset,result) in ranked.iter().skip(first).take(PAGE_SIZE).enumerate(){
-                        draw_hunt_row(ui,result,first+offset+1,app.hunt_ranking,
+                    let visible=atlas_pager(ui,&mut app.hunt_page,ranked.len(),16);
+                    ui.add_space(7.0);
+                    for (offset,result) in ranked.iter().skip(visible.start)
+                        .take(visible.end-visible.start).enumerate(){
+                        draw_hunt_row(ui,result,visible.start+offset+1,app.hunt_ranking,
                             hunts,reference,live,native,&mut app.hunt_action_error[index]);
                         ui.add_space(5.0);
                     }
