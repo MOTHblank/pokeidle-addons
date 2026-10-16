@@ -1606,6 +1606,7 @@ pub struct ControllerApp {
     pokemon_selected: [Option<u64>;4],
     pokemon_sale_confirm: [Option<u64>;4],
     history_account: usize,
+    history_rows_limit: usize,
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
     hunt_region: String,
@@ -1614,7 +1615,9 @@ pub struct ControllerApp {
     hunt_subtab: HuntSubtab,
     hunt_page: usize,
     hunt_action_error: [Option<String>;4],
-    hunt_estimate_cache: hunt_panel::EstimateCache,
+    hunt_estimate_cache: [hunt_panel::EstimateCache;4],
+    atlas_filters: [hunt_panel::AtlasFilters;4],
+    atlas_page: [usize;4],
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
@@ -1636,6 +1639,7 @@ pub struct ControllerApp {
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     show_accounts: bool,
     accounts: [AccountConfig; 4],
+    account_names_dirty: [bool; 4],
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
@@ -1733,15 +1737,18 @@ impl ControllerApp {
             pokemon_selected: [None;4],
             pokemon_sale_confirm: [None;4],
             history_account: 0,
+            history_rows_limit: 100,
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_type: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
-            hunt_subtab: HuntSubtab::Recommendations,
+            hunt_subtab: HuntSubtab::Explorer,
             hunt_page: 0,
             hunt_action_error: std::array::from_fn(|_|None),
-            hunt_estimate_cache: hunt_panel::EstimateCache::default(),
+            hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
+            atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
+            atlas_page: [0;4],
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
@@ -1762,6 +1769,7 @@ impl ControllerApp {
             inventory_catalog_tx,
             inventory_catalog_rx,
             show_accounts: false,
+            account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
@@ -1834,6 +1842,29 @@ impl ControllerApp {
                 monitor.set_pace(pace);
             }
         }
+    }
+
+    /// Keep the same selected account across Hunt Atlas, inventory, Pokémon,
+    /// automation and history. A switch never starts or stops a session.
+    fn select_workspace_account(&mut self, index: usize) {
+        if index >= self.games.len() { return; }
+        if self.history_account != index {
+            self.history_rows_limit = 100;
+        }
+        // Type choices come from the current roster; another account may not
+        // have that type. Keep search and sorting, but avoid a stale empty view.
+        if self.pokemon_account != index {
+            self.pokemon_type.clear();
+        }
+        self.hunt_account = index;
+        if self.panel_tab==PanelTab::Hunts && self.hunt_subtab==HuntSubtab::Compare {
+            self.hunt_subtab=HuntSubtab::Explorer;
+        }
+        self.automation_account = index;
+        self.pokemon_account = index;
+        self.history_account = index;
+        self.inventory_account = Some(index);
+        self.hunt_page = 0;
     }
 
     fn account_name(&self, profile: GameProfile) -> String {
@@ -2028,6 +2059,7 @@ impl ControllerApp {
                         "{} starting native game + Twitch IRC workers", self.account_name(profile)));
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
                     self.require_browser_login[index] = false;
                     let cache_note = event.cache_warning
                         .map(|warning| format!(" · secure cache unavailable: {warning}"))
@@ -2042,6 +2074,7 @@ impl ControllerApp {
                     // Firefox handle for a later explicit cleanup attempt.
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
                     self.games[index].child = event.child;
                     self.games[index].orphaned_pid = event.orphaned_pid;
                     self.games[index].monitor = event.monitor;
@@ -2074,6 +2107,7 @@ impl ControllerApp {
                 Ok(Some(session)) => {
                     self.games[event.index].native = Some(session);
                     self.capture_drafts[event.index]=None;
+                    self.automation_drafts[event.index]=AutomationDraft::default();
                     self.set_status(format!(
                         "{}: native game + Twitch IRC started from protected credentials (no Firefox)",
                         self.account_name(profile)), false);
@@ -3057,10 +3091,36 @@ impl eframe::App for ControllerApp {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 10)))
             .show(ui, |ui| {
-                // Workspace navigation lives in the sidebar; not in a second
-                // row of tabs competing with the main content.
+                // One consistent, directly clickable account switcher across
+                // data pages. Disabled and offline accounts remain inspectable.
+                let active = match self.panel_tab {
+                    PanelTab::Overview => Some(self.selected_details),
+                    PanelTab::Hunts => Some(Some(self.hunt_account)),
+                    PanelTab::Inventory => Some(self.inventory_account),
+                    PanelTab::Pokemon => Some(Some(self.pokemon_account)),
+                    PanelTab::Automation => Some(Some(self.automation_account)),
+                    PanelTab::History => Some(Some(self.history_account)),
+                    _ => None,
+                };
+                if let Some(selected) = active {
+                    let next = draw_account_switcher(self, ui, selected,
+                        matches!(self.panel_tab, PanelTab::Overview | PanelTab::Inventory));
+                    if next != selected {
+                        if let Some(index) = next {
+                            self.select_workspace_account(index);
+                            if self.panel_tab == PanelTab::Overview {
+                                self.selected_details = Some(index);
+                            }
+                        } else if self.panel_tab == PanelTab::Overview {
+                            self.selected_details = None;
+                        } else {
+                            self.inventory_account = None;
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
@@ -3079,6 +3139,77 @@ impl eframe::App for ControllerApp {
         // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
     }
+}
+
+/// Same compact account navigation is reused by every native data page and
+/// the account manager. Clicking one account changes the workspace selection,
+/// not the running game. Status always reflects the real native session.
+fn draw_account_switcher(
+    app: &ControllerApp,
+    ui: &mut egui::Ui,
+    selected: Option<usize>,
+    include_all: bool,
+) -> Option<usize> {
+    let mut next = selected;
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("ACCOUNT")).size(10.0).strong().color(DIM));
+                if include_all {
+                    let is_all = selected.is_none();
+                    if ui.add_sized([105.0, 34.0],
+                        egui::Button::new(RichText::new(tr("All accounts")).size(11.0))
+                            .fill(if is_all { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                            .stroke(Stroke::new(1.0, if is_all { ACCENT } else { BORDER }))
+                            .corner_radius(6.0)).clicked() {
+                        next = None;
+                    }
+                }
+                for index in 0..app.games.len() {
+                    let slot = &app.games[index];
+                    let profile = slot.profile;
+                    let (state, color) = if let Some(native) = slot.native.as_ref() {
+                        let snapshot = native.snapshot();
+                        if snapshot.phase == "Online" {
+                            (tr("Online"), GOOD)
+                        } else {
+                            (tr("Reconnecting"), WARN)
+                        }
+                    } else if app.cached_native_busy[index] || app.native_verifying[index]
+                        || app.native_handoff_busy[index] || slot.handoff_closing {
+                        (tr("Starting"), WARN)
+                    } else if slot.child.is_some() || slot.orphaned_pid.is_some() {
+                        (tr("Firefox"), WARN)
+                    } else if !app.accounts[index].enabled {
+                        (tr("Disabled"), DIM)
+                    } else {
+                        (tr("Offline"), DIM)
+                    };
+                    let selected_here = selected == Some(index);
+                    let name = compact_text(&app.accounts[index].name, 15);
+                    let text = format!("{} {}\n{}", if color == GOOD { "●" } else { "○" },
+                        name, state);
+                    let response = ui.add_sized([128.0, 37.0],
+                        egui::Button::new(RichText::new(text).size(10.0)
+                            .color(if selected_here { TEXT } else { MUTED }))
+                            .fill(if selected_here {
+                                ACCENT.linear_multiply(0.20)
+                            } else {
+                                PANEL_ALT
+                            })
+                            .stroke(Stroke::new(1.0, if selected_here { ACCENT } else { BORDER }))
+                            .corner_radius(6.0));
+                    if response.on_hover_text(format!("{} · {}", profile.label(), state)).clicked() {
+                        next = Some(index);
+                    }
+                }
+            });
+        });
+    next
 }
 
 /// Performance preferences persist independently of accounts and profiles.
@@ -3129,6 +3260,14 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
 
     ui.add_space(12.0);
+    let slowed=app.controller_in_background(ui.ctx());
+    ui.label(RichText::new(format!("{}: {}",
+        tr("Current refresh mode"),
+        tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
+        .size(11.0).color(if slowed { WARN } else { GOOD }));
+    if ui.small_button(tr("Restore default performance settings")).clicked() {
+        app.save_ui_options(UiOptions::default());
+    }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
 }
@@ -3177,7 +3316,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Hunts;
             }
 
-            if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
+            if sidebar_button(ui, tr("◫  Accounts"), app.show_accounts).clicked() {
                 app.show_accounts = true;
             }
 
@@ -3397,7 +3536,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical()
         .id_salt("instances_page")
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
         .show(ui, |ui| {
             let profiles: Vec<usize> = GameProfile::ALL
                 .iter()
@@ -3412,8 +3551,9 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .color(DIM),
                 );
             } else {
-                // Two compact cards fit at the app's default 1120px window
-                // without squeezing the old multi-section details side by side.
+                // Once selected, show the account's full detail immediately
+                // instead of leaving unrelated cards between it and the switcher.
+                if app.selected_details.is_none() {
                 let gap = 12.0;
                 let available = ui.available_width();
                 let columns = if available >= 650.0 { 2 } else { 1 };
@@ -3437,9 +3577,9 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(10.0);
                 }
 
-                // Only one account opens at a time, at full available width.
-                // Other overview cards never grow or move into a giant row.
-                if let Some(index) = app.selected_details.filter(|index| profiles.contains(index)) {
+                }
+                // The workspace chip selection also opens this detailed view.
+                if let Some(index) = app.selected_details {
                     ui.add_space(9.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!(
@@ -3489,20 +3629,54 @@ fn request_item_catalog(app:&mut ControllerApp) {
         });
     }
 }
+/// Offline pages should offer one useful next action instead of leaving an
+/// almost entirely empty workspace. Authentication is never inferred complete.
+fn draw_native_missing_panel(
+    app:&mut ControllerApp,
+    ui:&mut egui::Ui,
+    selected:Option<usize>,
+    purpose:&str,
+) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.label(RichText::new(purpose).size(13.0).strong().color(TEXT));
+            if let Some(index)=selected {
+                let profile=app.games[index].profile;
+                let running=app.games[index].is_running();
+                let name=app.account_name(profile);
+                ui.label(RichText::new(format!("{} · {}",name,
+                    if running { tr("Waiting for native authentication") }
+                    else { tr("Native session is stopped") }))
+                    .size(11.0).color(if running { WARN } else { DIM }));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.add_enabled(!running,egui::Button::new(tr("Start native")))
+                        .clicked() {
+                        app.launch_one(profile);
+                    }
+                    if ui.small_button(tr("Account settings")).clicked() {
+                        app.show_accounts=true;
+                    }
+                });
+            } else {
+                ui.label(RichText::new(tr("No selected account has a native session yet"))
+                    .size(11.0).color(DIM));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.small_button(tr("Launch enabled accounts")).clicked() {
+                        app.launch_enabled();
+                    }
+                    if ui.small_button(tr("Manage accounts")).clicked() {
+                        app.show_accounts=true;
+                    }
+                });
+            }
+        });
+}
+
 fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
     request_item_catalog(app);
     ui.horizontal_wrapped(|ui|{
-        ui.label(tr("Accounts"));
-        let selected=app.inventory_account.map(|index|
-            app.account_name(app.games[index].profile)).unwrap_or_else(||tr("All accounts").into());
-        egui::ComboBox::from_id_salt("inventory-account").selected_text(selected)
-            .show_ui(ui,|ui|{
-                ui.selectable_value(&mut app.inventory_account,None,tr("All accounts"));
-                for index in 0..app.games.len(){
-                    let label=app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.inventory_account,Some(index),label);
-                }
-            });
+        ui.label(RichText::new(tr("Inventory and battle drops"))
+            .size(14.0).strong().color(TEXT));
         ui.add(egui::TextEdit::singleline(&mut app.inventory_query)
             .desired_width(240.0).hint_text(tr("Search items or drops")));
         egui::ComboBox::from_id_salt("inventory-category")
@@ -3519,18 +3693,27 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             });
     });
     let mut views=Vec::new();
+    let mut unavailable=Vec::new();
     for index in 0..app.games.len() {
         if app.inventory_account.is_some_and(|selected| selected!=index){continue}
         if let Some(native)=app.games[index].native.as_ref() {
             views.push((app.account_name(app.games[index].profile),native.hunt_snapshot()));
+        } else if app.accounts[index].enabled || app.inventory_account==Some(index) {
+            unavailable.push(app.account_name(app.games[index].profile));
         }
     }
     if views.is_empty(){
-        ui.add_space(20.0);
-        ui.label(RichText::new(tr("Launch an account to see its native inventory"))
-            .size(12.0).color(WARN));
+        let selected=app.inventory_account;
+        draw_native_missing_panel(app,ui,selected,
+            tr("Inventory requires an authenticated native game session"));
         return;
     }
+    ui.label(RichText::new(format!("{} {}{}",
+        views.len(), tr("native inventories loaded"),
+        if unavailable.is_empty() { String::new() } else {
+            format!(" · {}: {}", tr("Unavailable"), unavailable.join(", "))
+        }
+    )).size(10.0).color(if unavailable.is_empty() { DIM } else { WARN }));
     if app.inventory_catalog_busy {
         ui.label(RichText::new(tr("Loading public item names..."))
             .size(10.0).color(DIM));
@@ -3584,68 +3767,107 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             id.to_string().contains(&query))).collect::<Vec<_>>();
     rows.sort_by(|a,b|a.1.1.cmp(&b.1.1).then_with(||a.0.cmp(&b.0)));
     let total_items=rows.iter().map(|row|row.1.0).sum::<u64>();
-    ui.add_space(12.0);
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+    let mut drops=acquired.into_iter()
+        .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
+        .collect::<Vec<_>>();
+    drops.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+    ui.add_space(6.0);
+    if ui.available_width()>=720.0 {
+        // Side-by-side stocks and drops use the available width instead of
+        // forcing users to scroll past a mostly empty stacked section.
+        ui.columns(2,|cols|{
+            draw_inventory_stock(&mut cols[0],&rows,total_items,
+                &query,&app.inventory_category);
+            draw_inventory_drops(&mut cols[1],&drops,session_kills,session_catches,&query);
+        });
+    } else {
+        draw_inventory_stock(ui,&rows,total_items,&query,&app.inventory_category);
+        ui.add_space(8.0);
+        draw_inventory_drops(ui,&drops,session_kills,session_catches,&query);
+    }
+}
+
+fn draw_inventory_stock(
+    ui:&mut egui::Ui,
+    rows:&[((bool,u64),(u64,String,String))],
+    total_items:u64,
+    query:&str,
+    category:&str,
+) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Current inventory")).size(14.0).strong().color(TEXT));
-                ui.label(RichText::new(format!(
-                    "{} {} · {} {}",rows.len(),tr("items"),total_items,tr("units")
-                )).size(10.0).color(DIM));
-                ui.label(RichText::new(tr("Server-reported stock · not inferred purchases"))
-                    .size(10.0).color(MUTED));
+                ui.label(RichText::new(tr("Current inventory"))
+                    .size(13.0).strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {} · {} {}",rows.len(),
+                    tr("items"),total_items,tr("units"))).size(10.0).color(DIM));
             });
-            egui::ScrollArea::vertical().id_salt("inventory-stock-list")
-                .max_height(290.0).show(ui,|ui|{
-                    for ((is_ball,id),(quantity,name,category)) in &rows {
-                        ui.horizontal(|ui|{
-                            ui.label(RichText::new(if *is_ball{"●"}else{"◆"})
-                                .size(10.0).color(if *is_ball { ACCENT } else { MUTED }));
-                            ui.label(RichText::new(name).size(11.0).color(TEXT));
-                            ui.label(RichText::new(format!("#{id} · {}",tr(category)))
-                                .size(9.0).color(DIM));
-                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+            ui.label(RichText::new(tr("Server-reported stock")).size(10.0).color(DIM));
+            if rows.is_empty() {
+                ui.label(RichText::new(if query.is_empty() && category.is_empty() {
+                    tr("No server-reported stock yet")
+                } else {
+                    tr("No items match these filters")
+                }).size(11.0).color(MUTED));
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("inventory-stock-grid")
+                .max_height(400.0).show(ui,|ui|{
+                    egui::Grid::new("inventory-stock-table").striped(true)
+                        .spacing([8.0,5.0]).show(ui,|ui|{
+                            for ((is_ball,id),(quantity,name,category)) in rows {
+                                ui.label(RichText::new(
+                                    compact_text(name,23)).size(11.0).color(TEXT))
+                                    .on_hover_text(name);
+                                ui.label(RichText::new(format!("#{id} · {}",tr(category)))
+                                    .size(9.0).color(if *is_ball { ACCENT } else { DIM }));
                                 ui.label(RichText::new(format!("×{quantity}"))
-                                    .size(12.0).strong().color(GOOD));
-                            });
+                                    .size(11.0).strong().color(GOOD));
+                                ui.end_row();
+                            }
                         });
-                        ui.separator();
-                    }
-                    if rows.is_empty(){ui.label(tr("No inventory items match the filters"));}
                 });
         });
-    ui.add_space(10.0);
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+}
+
+fn draw_inventory_drops(
+    ui:&mut egui::Ui,
+    drops:&[(String,u64)],
+    session_kills:u64,
+    session_catches:u64,
+    query:&str,
+) {
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Items acquired in session"))
-                    .size(14.0).strong().color(TEXT));
-                ui.label(RichText::new(format!(
-                    "{} {} · {} {}",session_kills,tr("kills"),session_catches,tr("captures")
-                )).size(10.0).color(DIM));
+                ui.label(RichText::new(tr("Session drops"))
+                    .size(13.0).strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {} · {} {}",session_kills,
+                    tr("kills"),session_catches,tr("captures")))
+                    .size(10.0).color(DIM));
             });
-            ui.label(RichText::new(tr(
-                "From wild battle drops only. Does not count shop purchases or starting inventory."
-            )).size(10.0).color(MUTED));
-            let mut names=acquired.into_iter()
-                .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
-                .collect::<Vec<_>>();
-            names.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
-            egui::ScrollArea::vertical().id_salt("inventory-session-drops")
-                .max_height(250.0).show(ui,|ui|{
-                    for (name,quantity) in names {
-                        ui.horizontal(|ui|{
-                            ui.label(RichText::new(name).size(11.0).color(TEXT));
-                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+            ui.label(RichText::new(tr("Battle-acquired only · excludes purchases"))
+                .size(10.0).color(DIM));
+            if drops.is_empty() {
+                ui.label(RichText::new(if query.is_empty() {
+                    tr("No battle drops recorded yet")
+                } else {
+                    tr("No acquired drops match this search")
+                }).size(11.0).color(MUTED));
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("inventory-drop-grid")
+                .max_height(400.0).show(ui,|ui|{
+                    egui::Grid::new("inventory-drop-table").striped(true)
+                        .spacing([8.0,5.0]).show(ui,|ui|{
+                            for (name,quantity) in drops {
+                                ui.label(RichText::new(compact_text(name,30))
+                                    .size(11.0).color(TEXT)).on_hover_text(name);
                                 ui.label(RichText::new(format!("+{quantity}"))
-                                    .size(12.0).color(GOOD).strong());
-                            });
+                                    .size(11.0).strong().color(GOOD));
+                                ui.end_row();
+                            }
                         });
-                        ui.separator();
-                    }
-                    if views.iter().all(|(_,v)|v.session.acquired.is_empty()) {
-                        ui.label(tr("No drops acquired in this session yet"));
-                    }
                 });
         });
 }
@@ -3717,6 +3939,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     let label = tr(if expanded { "Hide details" } else { "Show details" });
                     if ui.small_button(label).clicked() {
                         app.selected_details = if expanded { None } else { Some(index) };
+                        if !expanded { app.select_workspace_account(index); }
                     }
                 });
             });
@@ -3932,18 +4155,8 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 /// local disk file and updated by the native game worker. Never reconstruct
 /// historical XP by adding Pokémon and trainer rewards together.
 fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Persistent battle history")).size(17.0)
-            .strong().color(TEXT));
-        egui::ComboBox::from_id_salt("history-account")
-            .selected_text(app.account_name(app.games[app.history_account].profile))
-            .show_ui(ui,|ui|{
-                for i in 0..app.games.len(){
-                    let name=app.account_name(app.games[i].profile);
-                    ui.selectable_value(&mut app.history_account,i,name);
-                }
-            });
-    });
+    ui.label(RichText::new(tr("Persistent battle history")).size(14.0)
+        .strong().color(TEXT));
     let index=app.history_account;
     let profile=app.games[index].profile;
     let history=if let Some(native)=app.games[index].native.as_ref() {
@@ -3986,34 +4199,103 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(format!("{}: {} · {}: {}",tr("shinies seen"),totals.shiny_seen,
             tr("shinies caught"),totals.shiny_captured));
     });
-    ui.add_space(10.0);
-    ui.label(RichText::new(tr("Daily hunts")).size(13.0).strong().color(TEXT));
-    let mut entries=history.days.iter().collect::<Vec<_>>();
-    entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
-    egui::ScrollArea::vertical().id_salt("history-daily")
-        .max_height(310.0).show(ui,|ui|{
-            if entries.is_empty(){ui.label(tr("No recorded battles yet"));}
-            for day in entries {
-                egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(10,6)).show(ui,|ui|{
-                    ui.label(RichText::new(format!("{} · {}",history_day_label(day.day),day.hunt))
-                        .size(11.0).strong().color(TEXT));
-                    ui.label(RichText::new(format!(
-                        "{} {} · {} {} · Trainer {} · Pokémon {} · Gold +{} (+{} sale)",
-                        day.kills,tr("kills"),day.captures,tr("captures"),
-                        format_number(day.trainer_xp),format_number(day.pokemon_xp),
-                        format_number(day.combat_gold),format_number(day.auto_sale_gold),
-                    )).size(10.0).color(DIM));
-                    if !day.drops.is_empty() {
-                        ui.collapsing(format!("{} ({})",tr("Drops acquired"),day.drops.len()),|ui|{
-                            for (name,qty) in &day.drops {
-                                ui.label(format!("{} ×{}",name,qty));
-                            }
+    // Only show days containing activity. Rendering fourteen empty progress
+    // bars made history look like an enormous blank table for new accounts.
+    if let Some(last_day)=history.days.iter().map(|entry|entry.day).max() {
+        let mut points=[(0u64,0u64,0u64);14];
+        for (index,point) in points.iter_mut().enumerate() {
+            point.0=last_day.saturating_sub((13-index) as u64);
+        }
+        for entry in &history.days {
+            let age=last_day.saturating_sub(entry.day);
+            if entry.day<=last_day && age<14 {
+                let point=&mut points[13-age as usize];
+                point.1=point.1.saturating_add(entry.kills);
+                point.2=point.2.saturating_add(entry.captures);
+            }
+        }
+        let active=points.iter().filter(|(_,kills,captures)|
+            *kills>0 || *captures>0).collect::<Vec<_>>();
+        if !active.is_empty() {
+            let max_kills=active.iter().map(|(_,kills,_)|*kills)
+                .max().unwrap_or(0).max(1);
+            ui.add_space(6.0);
+            egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+                .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+                    ui.label(RichText::new(tr("Recent active days · kills / captures"))
+                        .size(12.0).strong().color(TEXT));
+                    for (day,kills,captures) in active.into_iter().rev().take(7) {
+                        ui.horizontal(|ui|{
+                            ui.add_sized([83.0,16.0],egui::Label::new(
+                                RichText::new(history_day_label(*day)).size(10.0).color(DIM)));
+                            ui.add(egui::ProgressBar::new(*kills as f32/max_kills as f32)
+                                .desired_width(ui.available_width().clamp(100.0,350.0))
+                                .text(format!("{kills} / {captures}")));
                         });
                     }
                 });
-            }
+        }
+    }
+    ui.add_space(8.0);
+    let mut entries=history.days.iter().collect::<Vec<_>>();
+    entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
+    let total_entries=entries.len();
+    let displayed_entries=total_entries.min(app.history_rows_limit);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Hunt activity")).size(13.0).strong().color(TEXT));
+        ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
+            total_entries, tr("recorded hunt-days"))).size(10.0).color(DIM));
+    });
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
+            egui::ScrollArea::vertical().id_salt(("history-rows",index))
+                .max_height(360.0).show(ui,|ui|{
+                    if entries.is_empty() {
+                        ui.label(tr("No recorded battles yet"));
+                    } else {
+                        egui::Grid::new(("history-grid",index))
+                            .striped(true).spacing([12.0,6.0])
+                            .show(ui,|ui|{
+                                for heading in ["Date","Hunt","Kills","Caught",
+                                    "Trainer XP","Pokémon XP","Gold","Drops"] {
+                                    ui.label(RichText::new(tr(heading))
+                                        .size(10.0).strong().color(MUTED));
+                                }
+                                ui.end_row();
+                                for day in entries.into_iter().take(displayed_entries) {
+                                    ui.label(RichText::new(history_day_label(day.day)).size(10.0));
+                                    ui.label(RichText::new(compact_text(&day.hunt,25)).size(10.0))
+                                        .on_hover_text(&day.hunt);
+                                    ui.label(format_number(day.kills));
+                                    ui.label(format_number(day.captures));
+                                    ui.label(format_number(day.trainer_xp));
+                                    ui.label(format_number(day.pokemon_xp));
+                                    ui.label(format_number(day.combat_gold.saturating_add(day.auto_sale_gold)))
+                                        .on_hover_text(format!("Combat: {} · Auto-sale: {}",
+                                            format_number(day.combat_gold),
+                                            format_number(day.auto_sale_gold)));
+                                    let drop_text=if day.drops.is_empty() {
+                                        "—".to_owned()
+                                    } else {
+                                        format!("{}",day.drops.len())
+                                    };
+                                    let drops=day.drops.iter()
+                                        .map(|(name,qty)|format!("{name} ×{qty}"))
+                                        .collect::<Vec<_>>().join("\n");
+                                    ui.label(drop_text).on_hover_text(if drops.is_empty() {
+                                        tr("No drops recorded").to_owned()
+                                    } else {drops});
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
         });
+    if displayed_entries<total_entries {
+        if ui.small_button(tr("Show 100 more hunt-days")).clicked() {
+            app.history_rows_limit=app.history_rows_limit.saturating_add(100);
+        }
+    }
     ui.add_space(7.0);
     ui.label(RichText::new(tr(
         "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively."
@@ -4047,25 +4329,20 @@ mod history_ui_tests {
 /// supported, server-authoritative individual sale. Never infer a success
 /// from pressing a button; only the following full roster can confirm it.
 fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Pokémon management")).size(17.0)
-            .strong().color(TEXT));
-        egui::ComboBox::from_id_salt("pokemon-account")
-            .selected_text(app.account_name(app.games[app.pokemon_account].profile))
-            .show_ui(ui, |ui| {
-                for i in 0..app.games.len() {
-                    let name=app.account_name(app.games[i].profile);
-                    ui.selectable_value(&mut app.pokemon_account,i,name);
-                }
-            });
-    });
+    ui.label(RichText::new(tr("Pokémon management")).size(14.0)
+        .strong().color(TEXT));
     let index=app.pokemon_account;
     let Some(native)=app.games[index].native.as_ref() else {
-        ui.label(tr("Waiting for native account"));
+        draw_native_missing_panel(app,ui,Some(index),
+            tr("Pokémon roster is unavailable until native login completes"));
         return;
     };
     let view=native.hunt_snapshot();
     let status=native.snapshot();
+    if status.phase != "Online" {
+        ui.label(RichText::new(format!("{}: {}", tr("Game connection"), status.phase))
+            .size(10.0).color(WARN));
+    }
     ui.add_space(9.0);
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("{}: {}",tr("Pokémon on account"),view.pokemon_roster.len()));
@@ -4104,6 +4381,12 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Type,"Type");
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Name,"Name");
             });
+        if ui.small_button(tr("Clear filters")).clicked() {
+            app.pokemon_query.clear();
+            app.pokemon_shiny_only=false;
+            app.pokemon_min_iv=0;
+            app.pokemon_type.clear();
+        }
     });
     ui.add_space(8.0);
     let query=app.pokemon_query.trim().to_lowercase();
@@ -4133,29 +4416,56 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         };
         cmp.then_with(||a.id.cmp(&b.id))
     });
+    let selected_id=app.pokemon_selected[index]
+        .filter(|id|filtered.iter().any(|pokemon|pokemon.id==*id))
+        .or_else(||filtered.first().map(|pokemon|pokemon.id));
+    ui.label(RichText::new(format!("{} {} / {}", filtered.len(),
+        tr("Pokémon matching filters"), view.pokemon_roster.len()))
+        .size(10.0).color(MUTED));
     ui.columns(2, |cols| {
         cols[0].label(RichText::new(tr("Pokémon on account")).strong().color(TEXT));
         egui::ScrollArea::vertical().id_salt(("pokemon-roster",index))
             .max_height(450.0).show(&mut cols[0],|ui|{
-                if filtered.is_empty() {ui.label(tr("Waiting for Pokémon roster"));}
-                for pokemon in &filtered {
-                    let active=view.active_pokemon.as_ref()
-                        .is_some_and(|current|current.id==pokemon.id);
-                    let name=format!("{}{} · Lv {}{} · Q {}",
-                        if active {"▶ "} else {""},
-                        pokemon.name,pokemon.level,
-                        if pokemon.shiny {" ✨"}else{""},
-                        pokemon.quality.map(|n|format!("{n:.2}"))
-                            .unwrap_or_else(||"—".into()));
-                    if ui.selectable_label(app.pokemon_selected[index]==Some(pokemon.id),name)
-                        .clicked() {
-                            app.pokemon_selected[index]=Some(pokemon.id);
-                            app.pokemon_sale_confirm[index]=None;
-                    }
+                if filtered.is_empty() {
+                    ui.label(if view.pokemon_roster.is_empty() {
+                        tr("No Pokémon roster received yet")
+                    } else {
+                        tr("No Pokémon match the current filters")
+                    });
+                }
+                if !filtered.is_empty() {
+                    egui::Grid::new(("pokemon-roster-grid",index))
+                        .striped(true).spacing([8.0,5.0]).show(ui,|ui|{
+                        for column in ["Pokémon","Lv","Grade","IV","Power"] {
+                            ui.label(RichText::new(tr(column)).size(10.0)
+                                .strong().color(DIM));
+                        }
+                        ui.end_row();
+                        for pokemon in &filtered {
+                            let active=view.active_pokemon.as_ref()
+                                .is_some_and(|current|current.id==pokemon.id);
+                            let name=format!("{}{}{}",if active {"▶ "} else {""},
+                                compact_text(&pokemon.name,17),
+                                if pokemon.shiny {" ✨"}else{""});
+                            if ui.selectable_label(selected_id==Some(pokemon.id),name)
+                                .on_hover_text(&pokemon.name).clicked() {
+                                app.pokemon_selected[index]=Some(pokemon.id);
+                                app.pokemon_sale_confirm[index]=None;
+                            }
+                            ui.label(pokemon.level.to_string());
+                            ui.label(pokemon.grade.map(|v|format!("{v:.1}"))
+                                .unwrap_or_else(||"—".into()));
+                            ui.label(pokemon.ivs.iter().filter_map(|iv|*iv)
+                                .sum::<u64>().to_string());
+                            ui.label(pokemon.power.map(format_number)
+                                .unwrap_or_else(||"—".into()));
+                            ui.end_row();
+                        }
+                    });
                 }
             });
         cols[1].label(RichText::new(tr("Selected Pokémon")).strong().color(TEXT));
-        if let Some(pokemon)=app.pokemon_selected[index]
+        if let Some(pokemon)=selected_id
             .and_then(|id|view.pokemon_roster.iter().find(|p|p.id==id)) {
             let active=view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
             let detail=[
@@ -4164,7 +4474,10 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ("Level",pokemon.level.to_string()),
                 ("XP",pokemon.xp.map(format_number).unwrap_or_default()),
                 ("Next XP",pokemon.xp_next.map(format_number).unwrap_or_default()),
-                ("HP",format!("{}/{}",pokemon.hp.unwrap_or(0),pokemon.max_hp.unwrap_or(0))),
+                ("HP",match (pokemon.hp,pokemon.max_hp) {
+                    (Some(hp),Some(max))=>format!("{hp}/{max}"),
+                    _=>"—".into(),
+                }),
                 ("Grade",pokemon.grade.map(|v|format!("{v:.2}")).unwrap_or_default()),
                 ("Quality",pokemon.quality.map(|v|format!("{v:.2}")).unwrap_or_default()),
                 ("Power",pokemon.power.map(|v|v.to_string()).unwrap_or_default()),
@@ -4179,12 +4492,14 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().max_height(330.0)
                 .id_salt(("pokemon-details",index)).show(&mut cols[1],|ui|{
                 ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
-                for (key,value) in detail {
-                    ui.horizontal(|ui|{
-                        ui.label(RichText::new(key).size(10.0).color(DIM));
-                        ui.label(RichText::new(value).size(10.0).color(TEXT));
+                egui::Grid::new(("pokemon-details-grid",index))
+                    .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
+                        for (key,value) in detail {
+                            ui.label(RichText::new(key).size(10.0).color(DIM));
+                            ui.label(RichText::new(value).size(10.0).color(TEXT));
+                            ui.end_row();
+                        }
                     });
-                }
             });
             cols[1].add_space(9.0);
             if active || pokemon.shiny {
@@ -4226,25 +4541,13 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
-        egui::ComboBox::from_id_salt("automation-account")
-            .selected_text(app.account_name(app.games[app.automation_account].profile))
-            .show_ui(ui, |ui| {
-                for index in 0..app.games.len() {
-                    let name = app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.automation_account, index, name);
-                }
-            });
-        ui.label(RichText::new(tr("Choose an account to inspect its automation and restock status."))
-            .size(10.0).color(MUTED));
-    });
-    ui.add_space(12.0);
+    ui.label(RichText::new(tr("Server settings · Native capture · Restock"))
+        .size(13.0).color(MUTED));
+    ui.add_space(6.0);
     let index = app.automation_account;
     let Some(native) = app.games[index].native.as_ref() else {
-        ui.label(RichText::new(tr("Waiting for native account")).size(13.0).color(WARN));
-        ui.label(RichText::new(tr("Native controls are available after this account finishes authentication."))
-            .size(11.0).color(MUTED));
+        draw_native_missing_panel(app,ui,Some(index),
+            tr("Server automation settings require a native session"));
         return;
     };
     let snapshot = native.snapshot();
@@ -4254,6 +4557,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             app.automation_drafts[index]=AutomationDraft::from_server(automation);
         }
         let mut commands:Vec<(String,serde_json::Value)>=Vec::new();
+        let can_edit=snapshot.phase=="Online" &&
+            snapshot.native_automation.pending_field.is_none();
         egui::Frame::new().fill(PANEL).corner_radius(10.0)
             .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -4265,8 +4570,9 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(RichText::new(format!("{}: {field}",tr("Awaiting confirmation")))
                         .size(10.0).color(WARN));
                 }
-                ui.label(RichText::new(format!("{}: {}",
-                    tr("Confirmed"),snapshot.native_automation.confirmed))
+                ui.label(RichText::new(format!("{}: {} · {}: {}",
+                    tr("Confirmed"),snapshot.native_automation.confirmed,
+                    tr("Queued"),snapshot.native_automation.queued))
                     .size(10.0).color(DIM));
             });
             if let Some(error)=snapshot.native_automation.error.as_deref(){
@@ -4288,7 +4594,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ] {
                     if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
                         let mut enabled=current;
-                        if ui.checkbox(&mut enabled,label).changed() && snapshot.phase=="Online" {
+                        if ui.add_enabled(can_edit,
+                            egui::Checkbox::new(&mut enabled,label)).changed() {
                             commands.push((key.into(),serde_json::json!(enabled)));
                         }
                     }
@@ -4301,7 +4608,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(tr("Potion HP threshold (%)"));
                     ui.add(egui::DragValue::new(&mut draft.hp_limit)
                         .range(0.0..=100.0).speed(0.5));
-                    if ui.small_button(tr("Apply HP")).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply HP"))).clicked() {
                         commands.push(("hpLimiar".into(),serde_json::json!(draft.hp_limit)));
                     }
                 }
@@ -4309,7 +4616,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(tr("Minimum lock grade"));
                     ui.add(egui::DragValue::new(&mut draft.lock_grade)
                         .range(0.0..=10.0).speed(0.1));
-                    if ui.small_button(tr("Apply grade")).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply grade"))).clicked() {
                         commands.push(("autoLockNotaMin".into(),
                             serde_json::json!(draft.lock_grade)));
                     }
@@ -4325,7 +4632,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(label);
                     ui.add(egui::TextEdit::singleline(value)
                         .desired_width(210.0).hint_text("1, 2, 3"));
-                    if ui.small_button(format!("{} {label}",tr("Apply"))).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(
+                        format!("{} {label}",tr("Apply")))).clicked() {
                         match parse_automation_ids(value) {
                             Ok(ids)=>commands.push((key.into(),serde_json::json!(ids))),
                             Err(error)=>{app.status=error;app.status_error=true;}
@@ -4524,21 +4832,55 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             }
         });
     ui.add_space(8.0);
-    ui.collapsing(tr("Configure native Auto Catch"),|ui|{
-        draw_native_capture_config(app,ui,index);
-    });
+    egui::CollapsingHeader::new(tr("Configure native Auto Catch"))
+        .id_salt(("native-capture-editor",index))
+        .default_open(true)
+        .show(ui,|ui|{
+            draw_native_capture_config(app,ui,index);
+        });
 }
 
 fn capture_ball_name(k:&str)->&'static str {
     match k {"beast"=>"Beast Ball","ultra"=>"Ultra Ball","super"=>"Super Ball",
         "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
 }
-fn capture_stock_input(ui:&mut egui::Ui,label:&str,id:&mut u64,at:&mut u64,to:&mut u64) {
+// Auto Catch+ restock picker: compact selectable items instead of raw IDs.
+// IDs are the server protocol IDs, shared with the userscript. Public metadata
+// only enriches captions; absent metadata never switches a saved selection.
+fn capture_restock_chip(
+    ui:&mut egui::Ui,selected:&mut u64,id:u64,name:&str,icon:&str,
+    price:Option<u64>,stock:Option<u64>
+) {
+    let active=*selected==id;
+    let caption=format!("{icon}  {name}");
+    let response=ui.add(egui::Button::new(
+        RichText::new(caption).size(10.0).color(if active { TEXT } else { MUTED })
+    )
+        .fill(if active {Color32::from_rgb(52,45,95)} else {PANEL_ALT})
+        .stroke(Stroke::new(if active {1.4} else {1.0},
+            if active {ACCENT} else {BORDER}))
+        .corner_radius(6.0));
+    let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
+    let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
+    if response.on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
+        *selected=id;
+    }
+}
+fn capture_restock_threshold(
+    ui:&mut egui::Ui,label:&str,at:&mut u64,to:&mut u64,
+    current:Option<u64>
+) {
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(label).strong());
-        ui.label(tr("ID"));ui.add(egui::DragValue::new(id).range(0..=1_000_000));
-        ui.label(tr("Buy at"));ui.add(egui::DragValue::new(at).range(0..=1_000_000));
-        ui.label(tr("Fill to"));ui.add(egui::DragValue::new(to).range(0..=1_000_000));
+        ui.add_sized([77.0,18.0],egui::Label::new(
+            RichText::new(label).strong().size(10.0).color(TEXT)));
+        ui.label(RichText::new("at ≤").size(10.0).color(DIM));
+        ui.add_sized([75.0,20.0],egui::DragValue::new(at).range(0..=1_000_000));
+        ui.label(RichText::new("to").size(10.0).color(DIM));
+        ui.add_sized([75.0,20.0],egui::DragValue::new(to).range(0..=1_000_000));
+        if let Some(count)=current {
+            ui.label(RichText::new(format!("{count} in bag")).size(10.0)
+                .color(if count <= *at {WARN} else {DIM}));
+        }
     });
 }
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
@@ -4581,52 +4923,120 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         }
     });
     ui.separator();
-    ui.checkbox(&mut cfg.restock_enabled,tr("Automatic restock"));
-    ui.horizontal(|ui|{
-        ui.label(tr("Gold reserve"));
-        ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
-    });
-    capture_stock_input(ui,tr("Balls"),&mut cfg.ball_id,&mut cfg.ball_at,&mut cfg.ball_to);
-    let game_catalog=native.hunt_snapshot();
-    if !game_catalog.ball_names.is_empty() {
+    let restock_status=native.snapshot().native_restock;
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(tr("Select game ball")).size(10.0).color(DIM));
-            let selected=game_catalog.ball_names.get(&cfg.ball_id).cloned()
-                .unwrap_or_else(||format!("Ball #{}",cfg.ball_id));
-            egui::ComboBox::from_id_salt(("cap-restock-ball",index))
-                .selected_text(selected).show_ui(ui,|ui|{
-                    ui.selectable_value(&mut cfg.ball_id,0,tr("Disabled"));
-                    for (id,name) in game_catalog.ball_names.iter() {
-                        ui.selectable_value(&mut cfg.ball_id,*id,
-                            format!("{name} · #{id}"));
-                    }
-                });
+            ui.checkbox(&mut cfg.restock_enabled,tr("Automatic restock"));
+            ui.label(RichText::new(tr(&restock_status.phase)).size(10.0)
+                .color(if restock_status.pending {WARN} else {DIM}));
+            ui.label(RichText::new(format!(
+                "{} ordered · {} confirmed",
+                restock_status.ordered,restock_status.confirmed
+            )).size(10.0).color(DIM));
         });
-    }
-    capture_stock_input(ui,tr("Potions"),&mut cfg.potion_id,&mut cfg.potion_at,&mut cfg.potion_to);
-    capture_stock_input(ui,tr("Revives"),&mut cfg.revive_id,&mut cfg.revive_at,&mut cfg.revive_to);
-    if let Some(catalog)=app.inventory_catalog.as_deref() {
+        ui.label(RichText::new(
+            "Choose one ball, one potion and one revive. Tap a choice to select it; choose Off to disable a category."
+        ).size(10.0).color(MUTED));
+        let game_catalog=native.hunt_snapshot();
+        let catalog=app.inventory_catalog.as_deref();
+        let selected_stock=|kind:&str,id:u64| -> Option<u64> {
+            restock_status.rules.iter()
+                .find(|rule|rule.kind==kind && rule.id==id)
+                .and_then(|rule|rule.current)
+        };
+        let selected_price=|kind:&str,id:u64| -> Option<u64> {
+            restock_status.rules.iter()
+                .find(|rule|rule.kind==kind && rule.id==id)
+                .and_then(|rule|rule.price)
+        };
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         ui.horizontal_wrapped(|ui|{
-            for (label,selection,needle) in [
-                (tr("Select potion"),&mut cfg.potion_id,"potion"),
-                (tr("Select revive"),&mut cfg.revive_id,"revive")
-            ] {
-                ui.label(RichText::new(label).size(10.0).color(DIM));
-                egui::ComboBox::from_id_salt(("cap-restock-item",index,needle))
-                    .selected_text(catalog.name(*selection)).show_ui(ui,|ui|{
-                        ui.selectable_value(selection,0,tr("Disabled"));
-                        for (id,meta) in catalog.items.iter() {
-                            let label=meta.name.to_lowercase();
-                            if label.contains(needle) || meta.category.to_lowercase().contains(needle) {
-                                ui.selectable_value(selection,*id,format!("{} · #{id}",meta.name));
-                            }
-                        }
-                    });
+            capture_restock_chip(ui,&mut cfg.ball_id,0,"Off","—",None,None);
+            for (id,name) in &game_catalog.ball_names {
+                if name.to_lowercase().contains("master") { continue; }
+                capture_restock_chip(ui,&mut cfg.ball_id,*id,name,"●",
+                    selected_price("ball",*id),selected_stock("ball",*id));
+            }
+            if cfg.ball_id>0 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
+                let id=cfg.ball_id;
+                capture_restock_chip(ui,&mut cfg.ball_id,id,
+                    &format!("Saved ball #{id}"),"●",None,None);
             }
         });
-    }
-    ui.label(RichText::new(tr("ID 0 disables that category; unknown shop prices cannot be spent."))
-        .size(10.0).color(MUTED));
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
+        // Match Auto Catch+: Small, Ultimate and Golden Potion. Preserve
+        // any existing selection even if the downloaded catalog is old.
+        let mut potion_choices=vec![
+            (200_u64,String::from("Small Potion")),
+            (204_u64,String::from("Ultimate Potion")),
+            (70070_u64,String::from("Golden Potion"))
+        ];
+        if cfg.potion_id>0 && !potion_choices.iter().any(|(id,_)|*id==cfg.potion_id) {
+            let name=catalog.map(|c|c.name(cfg.potion_id))
+                .unwrap_or_else(||format!("Saved potion #{}",cfg.potion_id));
+            potion_choices.push((cfg.potion_id,name));
+        }
+        ui.horizontal_wrapped(|ui|{
+            capture_restock_chip(ui,&mut cfg.potion_id,0,"Off","—",None,None);
+            for (id,name) in potion_choices {
+                let price=selected_price("item",id)
+                    .or_else(||catalog.and_then(|c|c.items.get(&id))
+                        .and_then(|item|item.price_gold));
+                capture_restock_chip(ui,&mut cfg.potion_id,id,&name,"💊",
+                    price,selected_stock("item",id));
+            }
+        });
+        ui.add_space(5.0);
+        ui.label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
+        let mut revive_choices=vec![
+            (205_u64,String::from("Revive")),
+            (206_u64,String::from("Max Revive"))
+        ];
+        if let Some(c)=catalog {
+            for (id,item) in &c.items {
+                if item.name.to_lowercase().contains("revive") &&
+                    !revive_choices.iter().any(|(existing,_)|existing==id) {
+                    revive_choices.push((*id,item.name.clone()));
+                }
+            }
+        }
+        if cfg.revive_id>0 && !revive_choices.iter().any(|(id,_)|*id==cfg.revive_id) {
+            revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
+        }
+        ui.horizontal_wrapped(|ui|{
+            capture_restock_chip(ui,&mut cfg.revive_id,0,"Off","—",None,None);
+            for (id,name) in revive_choices {
+                let price=selected_price("item",id)
+                    .or_else(||catalog.and_then(|c|c.items.get(&id))
+                        .and_then(|item|item.price_gold));
+                capture_restock_chip(ui,&mut cfg.revive_id,id,&name,"✚",
+                    price,selected_stock("item",id));
+            }
+        });
+        ui.add_space(10.0);
+        ui.label(RichText::new("Restock when stock is at or below a threshold; fill up to target")
+            .size(10.0).color(MUTED));
+        capture_restock_threshold(ui,tr("Balls"),&mut cfg.ball_at,&mut cfg.ball_to,
+            selected_stock("ball",cfg.ball_id));
+        capture_restock_threshold(ui,tr("Potions"),&mut cfg.potion_at,&mut cfg.potion_to,
+            selected_stock("item",cfg.potion_id));
+        capture_restock_threshold(ui,tr("Revives"),&mut cfg.revive_at,&mut cfg.revive_to,
+            selected_stock("item",cfg.revive_id));
+        ui.horizontal(|ui|{
+            ui.label(RichText::new(tr("Gold reserve")).size(10.0).color(MUTED));
+            ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
+        });
+        if let Some(error)=restock_status.last_error.as_deref() {
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
+        ui.label(RichText::new(
+            "Saved IDs are preserved when the shop catalog is missing. Reference-only prices are verified by a single-item purchase before bulk restocking."
+        ).size(9.0).color(DIM));
+    });
+
     if let Some(error)=app.capture_save_error[index].as_deref(){
         ui.colored_label(BAD,error);
     }
@@ -6043,9 +6453,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(true)
         .default_width(820.0)
-        .default_height(620.0)
-        .min_width(480.0)
-        .min_height(380.0)
+        .default_height(540.0)
+        .min_width(540.0)
+        .min_height(350.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
@@ -6069,13 +6479,24 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 );
             });
 
-            ui.add_space(12.0);
+            ui.add_space(8.0);
+            let selected = Some(app.hunt_account);
+            if let Some(index) = draw_account_switcher(app, ui, selected, false) {
+                if index != app.hunt_account {
+                    app.select_workspace_account(index);
+                }
+            }
+            ui.add_space(8.0);
 
+            // Edit one account at a time. Previously four complete setup and
+            // addon managers stacked vertically, causing very long blank gaps
+            // and making switching between accounts tedious.
             egui::ScrollArea::vertical()
-                .id_salt("account_manager_list")
-                .auto_shrink([false, false])
+                .id_salt(("account_manager_list",app.hunt_account))
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
+                        if profile.index() != app.hunt_account { continue; }
                         let index = profile.index();
                         let enabled = app.accounts[index].enabled;
                         let setup = app.account_setup[index].clone();
@@ -6155,7 +6576,14 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         egui::TextEdit::singleline(&mut app.accounts[index].name)
                                             .hint_text(profile.label()),
                                     );
-                                    changed |= response.changed();
+                                    // Editing is local until Enter/focus loss. Avoid a disk
+                                    // write and destructive whitespace trimming per keystroke.
+                                    if response.changed() {
+                                        app.account_names_dirty[index] = true;
+                                    }
+                                    if response.lost_focus() && app.account_names_dirty[index] {
+                                        changed = true;
+                                    }
 
                                     if app.accounts[index].name.trim().is_empty() {
                                         ui.colored_label(WARN, tr("Name cannot be empty"));
@@ -6163,7 +6591,39 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 });
 
                                 ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(native) = app.games[index].native.as_ref() {
+                                        let game = native.snapshot();
+                                        let twitch = native.twitch_snapshot();
+                                        status_chip(ui, "Game", &game.phase, game.phase == "Online");
+                                        status_chip(ui, "Twitch IRC",
+                                            &format!("{} {}/{}", twitch.phase, twitch.joined, twitch.desired),
+                                            twitch.phase == "Online");
+                                    } else {
+                                        let phase = if app.native_verifying[index] {
+                                            tr("Authenticating")
+                                        } else if app.cached_native_busy[index] || app.native_handoff_busy[index] {
+                                            tr("Starting")
+                                        } else if running {
+                                            tr("Firefox login")
+                                        } else {
+                                            tr("Stopped")
+                                        };
+                                        status_chip(ui, "Session", phase, false);
+                                    }
+                                    if running {
+                                        if ui.small_button(tr("Stop")).clicked() {
+                                            app.stop_one(profile);
+                                        }
+                                    } else if ui.small_button(tr("Start native")).clicked() {
+                                        app.launch_one(profile);
+                                    }
+                                    if ui.small_button(tr("Open in Firefox")).clicked() {
+                                        app.open_in_firefox(profile);
+                                    }
+                                });
 
+                                ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
                                     let profile_label = if setup.profile_ready {
                                         tr("Profile folder exists")
@@ -6445,13 +6905,15 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         }
 
                         if changed {
-                            let trimmed = app.accounts[index].name.trim().to_string();
+                            let trimmed = app.accounts[index].name.trim().to_owned();
                             app.accounts[index].name = if trimmed.is_empty() {
-                                profile.label().to_string()
+                                profile.label().to_owned()
                             } else {
                                 trimmed
                             };
-                            app.save_account_config();
+                            if app.save_account_config() {
+                                app.account_names_dirty[index] = false;
+                            }
                         }
 
                         ui.add_space(10.0);
@@ -6466,6 +6928,24 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 });
         });
 
+    // Closing the dialog must not silently discard an edit that still has
+    // keyboard focus. Persist the last name once, not on every text change.
+    if !open {
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if app.account_names_dirty[index] {
+                let name = app.accounts[index].name.trim();
+                app.accounts[index].name = if name.is_empty() {
+                    profile.label().to_owned()
+                } else {
+                    name.to_owned()
+                };
+                if app.save_account_config() {
+                    app.account_names_dirty[index] = false;
+                }
+            }
+        }
+    }
     app.show_accounts = open;
 }
 

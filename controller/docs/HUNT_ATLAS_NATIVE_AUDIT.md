@@ -4,7 +4,7 @@
 
 The controller uses **eframe / egui 0.36**, not React or a browser WebView.
 `controller/src/app.rs` handles the global dashboard/sidebar and stores user-selected
-account, sorting, query, region, type, subtab, pagination and transient command errors.
+account navigation, per-account explorer filters, subtab, pagination, cached forecasts and transient command errors.
 `controller/src/app/hunt_panel.rs` owns the native Hunt Atlas presentation and
 its bounded forecast cache. It consumes account-scoped `HuntView` snapshots.
 
@@ -38,22 +38,67 @@ for an unknown recommendation. Trainer and Pokémon XP streams remain separate.
 | Trainer/Pokémon XP/h | Implemented | Independent observed reward streams; no double counting |
 | Kills/h and net gold/h | Implemented | Measured window; negative net gold may reflect spend |
 | Battle forecast | Experimental | Reference move DPS is approximate; not a verified exact combat scheduler |
-| Recommendations and ranking | Implemented with caveat | Three ranking criteria, numerical provenance, no fabricated zero |
-| Hunt filters and search | Implemented | Region, reference-derived type, hunt/name/area/species search |
+| Recommendations and ranking | Expanded | Hunt ranking plus species-first explorer and Top 5, with source classification and no fabricated zero |
+| Hunt filters and search | Expanded | Per-account query, area, range of hunt levels, authoritative availability, type, multi-type weaknesses any/all, depot ownership and objective/direction |
 | Spawn composition | Implemented | Native server weights, optional guide species name/type |
+| Reference drop probabilities | Implemented, reference-only | Per-species guide item ID, chance, quantity and guide valuation, with no claim of observed odds |
 | Hunt switch | Implemented | Native game command; errors, pending confirmation, disabled if not live |
 | Session XP, gold, drops | Implemented | Server receipts, session reset and item counts |
 | Session ball tracking | Implemented | Ball counts and empirical per-ball success, not predicted capture odds |
 | Persistent battle history | Implemented | Native history panel, 90-day detail and unpruned lifetime totals |
 | Disconnected/stale/loading/error | Implemented | Connection phase, last-packet age, read-only stale view, retries |
 | Resize and long tables | Implemented | Single main scroll, compact responsive rows, 35-result pages |
-| Forecast calculation cost | Improved | Eight-second scoped cache, invalidated on catalog/account/Pokémon/reference/connection change |
+| Forecast calculation cost | Improved | Off-frame 20-second per-account cache; invalidated on catalog/Pokémon/reference/connection change; live measurements bypass models |
 | Species-specific capture odds | Not ported | Userscript capture-ball models need verified native rarity/efficiency inputs |
 | Shiny capture / egg outcomes | Not ported | Userscript probability engine and complete native sources are not yet available |
 | Rare loot/outland forecasts | Not ported | Userscript rare tiers, horizons and source probabilities absent from native reference |
 | Market profit and farming economics | Not ported | Native reference has only partial drop pricing and no verified live market signal |
 | Historical forecast residual charts | Not ported | Native history persists reward events, not model/observation pairs |
 | Atlas global map and encyclopedia | Not ported | Reference species exists, but map and captured-species screens are not in this UI |
+
+## Native.20 feature and UX expansion
+
+The default **Explore Pokémon** view is structured around a species, its known types,
+potential weaknesses and all matching destinations, rather than a single hunt row.
+Filters can be collapsed. Search restrictions and pagination are retained per
+account, with independent cached models. Each species exposes its best match,
+unlocked hunt action (game command validated by the server list), spawn composition,
+experimental XP/hour, gold/hour, kills/hour and guide-sourced expected item yields.
+The comparison screen shows all four accounts in parallel, with live trainer/Pokémon
+XP and net gold clearly distinct from each profile's three leading experimental
+hunts. The shared account strip above all native data pages shows connection state; switching takes one click and exits Atlas comparison when an account is selected.
+
+The guide's `hunts` catalog is parsed as bounded **read-only preview data**. It
+contains destinations which may be locked for the account; these are never
+presented as server-unlocked, cannot be selected, and are not written to the native
+game state. Only `welcome.hunts` can authorize hunt switching. Collection filtering
+means *currently in the server-confirmed Pokémon depot*, **not** ever caught.
+Until a full `pokemons` roster is received, both "in depot" and "not in depot"
+are unavailable. A reconnect marks the roster unknown again.
+
+The guide's item labels (often strings, not numeric IDs) are retained for expected
+drop units/hour. A selected item only yields a value if the reference has a
+validated chance/quantity and there is a supported combat forecast. The
+conditional shiny encounter model uses the userscript's base 1/24,000 outside
+Outland, explicitly **without** claiming capture or shiny-capture odds.
+Gross modeled gold is broken into combat and expected NPC loot and is **not**
+compared to observed net wallet change. Trainer and Pokémon XP/kill are separate.
+
+**Still missing relative to the 1.9.25 userscript:** verified Ultra/Beast species
+catch probabilities and ball-efficiency selection, full Outland 1–8 rare
+loot/egg outcomes, event/lure/Kick what-if controls, market valuations,
+species-specific historical capture completion, survival-aware combat timing,
+market-derived profitability and full forecast residuals. They require additional
+native inputs/model ports; generic guide loot probabilities or depot ownership
+cannot substitute for those features.
+
+New tests exercise locked-vs-unlocked source separation, no inferred ownership
+from partial rosters, selected weakness/ownership filters, named guide loot,
+forecast economics and missing conditional projections. **This editing environment
+does not have a Rust toolchain or a native game session.** Cargo fmt/check/test/
+Clippy and actual desktop scaling/performance checks were not executed here.
+Local runtime verification remains a blocker to claiming complete quality or
+full userscript parity.
 
 ## Parity checks
 

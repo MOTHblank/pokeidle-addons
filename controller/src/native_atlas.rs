@@ -1,7 +1,7 @@
 //! Read-only Hunt Atlas reference: fetched only when Hunts tab opens.
 //! Never execute public JavaScript or send credentials to the reference host.
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
-use crate::native_hunts::{HuntEntry, HuntView, PokemonInfo, base_xp, base_gold};
+use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, base_gold};
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
@@ -16,7 +16,17 @@ pub struct ReferenceSpecies {
     pub types: Vec<String>,
     pub base: Vec<f64>,
     pub moves: Vec<ReferenceMove>,
-    pub drops: Vec<(f64, f64, f64, f64)>,
+    pub drops: Vec<ReferenceDrop>,
+}
+#[derive(Clone, Debug)]
+pub struct ReferenceDrop {
+    pub item_id: Option<u64>,
+    /// The public guide often identifies loot by a name, not by a numeric ID.
+    pub item_name: Option<String>,
+    pub chance_pct: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub guide_price: f64,
 }
 #[derive(Clone, Debug)]
 pub struct ReferenceMove {
@@ -30,6 +40,9 @@ pub struct ReferenceMove {
 pub struct Reference {
     pub species: BTreeMap<u64, ReferenceSpecies>,
     pub chart: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Public-guide destinations, INCLUDING locked ones. Never infer game
+    /// unlocks from these; only the authenticated welcome.hunts may do that.
+    pub hunts: Vec<HuntEntry>,
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -37,6 +50,11 @@ pub struct Forecast {
     pub trainer_xp_h: f64,
     pub pokemon_xp_h: f64,
     pub gold_h: f64,
+    /// Gross modeled combat gold is separate from expected NPC drop value.
+    pub combat_gold_h: f64,
+    pub npc_loot_gold_h: f64,
+    pub trainer_xp_per_kill: f64,
+    pub pokemon_xp_per_kill: f64,
     pub seconds_per_kill: f64,
     pub coverage: f64,
     pub calibrated: bool,
@@ -91,7 +109,20 @@ pub fn parse(script: &str) -> Result<Reference, String> {
                 let Some(v)=entry.as_array().filter(|v|v.len()>=5) else {continue};
                 if let (Some(chance),Some(low),Some(high),Some(price)) =
                     (v[1].as_f64(),v[2].as_f64(),v[3].as_f64(),v[4].as_f64()) {
-                    drops.push((chance,low,high,price));
+                    if chance.is_finite() && (0.0..=100.0).contains(&chance)
+                        && low.is_finite() && high.is_finite()
+                        && low>=0.0 && high>=low
+                        && price.is_finite() && price>=0.0 {
+                        drops.push(ReferenceDrop {
+                            item_id:v[0].as_u64().or_else(||
+                                v[0].as_str().and_then(|id|id.parse::<u64>().ok())),
+                            item_name:v[0].as_str()
+                                .filter(|name|!name.trim().is_empty())
+                                .map(str::to_owned),
+                            chance_pct:chance,
+                            minimum:low,maximum:high,guide_price:price,
+                        });
+                    }
                 }
             }
         }
@@ -100,6 +131,36 @@ pub fn parse(script: &str) -> Result<Reference, String> {
             types:types.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
             base,moves,drops
         });
+    }
+    if let Some(hunts)=value.get("hunts").and_then(Value::as_array) {
+        let mut dedup=std::collections::BTreeSet::new();
+        for raw in hunts.iter().take(10_000) {
+            let (Some(slug),Some(name),Some(level))=(
+                raw.get("s").and_then(Value::as_str),
+                raw.get("n").and_then(Value::as_str),
+                raw.get("nv").and_then(Value::as_u64)
+            ) else {continue};
+            if slug.is_empty() || slug.len()>128 || !slug.bytes()
+                .all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')
+                || name.is_empty() || name.len()>160
+                || level==0 || level>u32::MAX as u64 || !dedup.insert(slug.to_owned())
+            {continue}
+            let species=raw.get("e").and_then(Value::as_array)
+                .map(|list|list.iter().filter_map(|row|{
+                    let pair=row.as_array().filter(|a|a.len()>=2)?;
+                    let id=pair[0].as_u64()?;
+                    let weight=pair[1].as_f64()?;
+                    if id==0 || !weight.is_finite() || weight<=0.0 {return None}
+                    Some(HuntSpecies{id,weight})
+                }).collect::<Vec<_>>()).unwrap_or_default();
+            if species.is_empty(){continue}
+            result.hunts.push(HuntEntry {
+                slug:slug.to_owned(),name:name.to_owned(),
+                area:raw.get("a").and_then(Value::as_str).unwrap_or("").to_owned(),
+                region:String::new(),level:level as u32,
+                species,total_spawns:0,looktype:None,
+            });
+        }
     }
     if result.species.is_empty() || result.chart.is_empty() {
         return Err("Incomplete public hunt reference".into());
@@ -187,8 +248,9 @@ fn raw_kills(hunt:&HuntEntry, mon:&PokemonInfo, meta:&ReferenceSpecies,
         let kill=(hp/dps(mon,meta,stats,wild,hunt.level,refdata).max(1.0)).max(0.9);
         let ratio=spawn.weight.max(0.0)/total;
         secs+=ratio*kill;
-        loot+=ratio*wild.drops.iter().map(|(p,lo,hi,price)|
-            p/100.0*(lo+hi)/2.0*price).sum::<f64>();
+        loot+=ratio*wild.drops.iter().map(|drop|
+            drop.chance_pct/100.0*(drop.minimum+drop.maximum)/2.0
+                *drop.guide_price).sum::<f64>();
         coverage+=ratio;
     }
     if coverage<0.6 {return None}
@@ -232,6 +294,10 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         trainer_xp_h:base_xp(hunt.level)*kills_h*bonus(view,true),
         pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
         gold_h:(base_gold(hunt.level)+loot)*kills_h,
+        combat_gold_h:base_gold(hunt.level)*kills_h,
+        npc_loot_gold_h:loot*kills_h,
+        trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
+        pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
         seconds_per_kill:if kills_h>0.0{3600.0/kills_h}else{0.0},
         coverage,
         calibrated:calibration.is_some()
@@ -288,6 +354,68 @@ mod tests {
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
     }
     #[test]
+    fn forecast_economy_channels_sum_to_gross_gold_and_xp_stays_separate(){
+        let mut view=HuntView::default();
+        view.hunt_slug=Some("hunt-a".into());
+        view.bonuses.trainer_event_pct=100.0;
+        let hunt=HuntEntry {
+            slug:"hunt-a".into(),name:"A".into(),level:100,
+            species:vec![HuntSpecies{id:2,weight:100.0}],
+            ..Default::default()
+        };
+        view.hunts=std::sync::Arc::new(vec![hunt.clone()]);
+        view.active_pokemon=Some(PokemonInfo {
+            id:1,species_id:Some(1),name:"Lead".into(),level:150,
+            quality:Some(1.2),potency:Some(3),ivs:[Some(25);6],
+            ..Default::default()
+        });
+        let mut guide=Reference::default();
+        guide.chart.insert("NORMAL".into(),
+            [("NORMAL".into(),1.0)].into_iter().collect());
+        for id in [1,2]{
+            guide.species.insert(id,ReferenceSpecies {
+                id,name:format!("Pokemon {id}"),types:vec!["NORMAL".into()],
+                base:vec![100.0;6],
+                moves:vec![ReferenceMove {
+                    move_type:"NORMAL".into(),special:false,
+                    power:60.0,cooldown:1200.0,min_level:1,
+                }],
+                drops:vec![ReferenceDrop{
+                    item_id:Some(20),item_name:None,chance_pct:10.0,
+                    minimum:1.0,maximum:2.0,guide_price:100.0,
+                }],
+            });
+        }
+        let result=estimate(&view,&hunt,&guide).unwrap();
+        assert!((result.gold_h-result.combat_gold_h-result.npc_loot_gold_h).abs()<0.001);
+        assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
+    }
+    #[test]
+    fn guide_loot_names_are_preserved_without_fabricating_item_ids(){
+        let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
+            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],
+            "l":[["Moon Stone",2.5,1,3,400]]}]};"#;
+        let guide=parse(script).unwrap();
+        assert_eq!(guide.species[&1].drops[0].item_name.as_deref(),
+            Some("Moon Stone"));
+        assert_eq!(guide.species[&1].drops[0].item_id,None);
+    }
+    #[test]
+    fn guide_catalog_is_read_only_and_does_not_fake_unlocks(){
+        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
+            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[10,10,10,10,10,10]}],
+            "hunts":[{"s":"forest-1","n":"Forest","a":"Kanto","nv":70,
+                "e":[[1,75],[2,25]]},
+                {"s":"bad slug","n":"Invalid","nv":30,"e":[[1,100]]}]};"#;
+        let guide=parse(text).unwrap();
+        assert_eq!(guide.hunts.len(),1);
+        assert_eq!(guide.hunts[0].slug,"forest-1");
+        assert_eq!(guide.hunts[0].species[0].weight,75.0);
+        // Being in the public guide says nothing about authenticated access.
+        let view=HuntView::default();
+        assert!(!view.hunts.iter().any(|hunt|hunt.slug=="forest-1"));
+    }
+    #[test]
     fn xp_calculation_keeps_separate_channels(){
         let mut view=HuntView::default();
         view.bonuses.trainer_event_pct=100.0;
@@ -295,4 +423,16 @@ mod tests {
         assert_eq!(bonus(&view,true),2.0);
         assert_eq!(bonus(&view,false),1.0);
     }
+    #[test]
+    fn guide_drop_probabilities_are_parsed_as_reference_not_game_receipts(){
+        let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
+            "especies":[{"id":4,"n":"Test","t":["NORMAL"],"b":[10,10,10,10,10,10],
+            "l":[[42,2.5,1,3,100],[43,120,1,2,100]]}]};"#;
+        let reference=parse(script).unwrap();
+        let drops=&reference.species[&4].drops;
+        assert_eq!(drops.len(),1);
+        assert_eq!(drops[0].item_id,Some(42));
+        assert_eq!(drops[0].chance_pct,2.5);
+    }
+
 }

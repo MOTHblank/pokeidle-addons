@@ -133,9 +133,20 @@ impl Config {
         });
         let raw = serde_json::to_string_pretty(&value)
             .map_err(|error| format!("could not serialize account configuration: {error}"))?;
-        std::fs::write(path, raw)
-            .map_err(|error| format!("could not save account configuration: {error}"))
+        save_config_atomic(&path, &raw, "account configuration")
     }
+}
+
+// A failed/interrupted write must not truncate the previously valid account
+// or options JSON. Both files live on the same filesystem as their staging file.
+fn save_config_atomic(path: &PathBuf, raw: &str, label: &str) -> Result<(), String> {
+    let staging = path.with_extension("json.tmp");
+    std::fs::write(&staging, raw)
+        .map_err(|error| format!("could not stage {label}: {error}"))?;
+    std::fs::rename(&staging, path).map_err(|error| {
+        let _ = std::fs::remove_file(&staging);
+        format!("could not save {label}: {error}")
+    })
 }
 
 /// Local controller preferences, independent of browser profiles and account auth.
@@ -208,14 +219,32 @@ impl Config {
         }
         let raw = serde_json::to_string_pretty(&options.to_value())
             .map_err(|error| format!("could not serialize controller options: {error}"))?;
-        std::fs::write(path, raw)
-            .map_err(|error| format!("could not save controller options: {error}"))
+        save_config_atomic(&path, &raw, "controller options")
     }
 }
 
 #[cfg(test)]
 mod ui_options_tests {
     use super::*;
+
+    #[test]
+    fn account_and_option_json_replaces_existing_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "moth-config-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("controller-options.json");
+        std::fs::write(&path, "old state").unwrap();
+        save_config_atomic(&path, r#"{"reduceUpdatesUnfocused":false}"#, "test").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"reduceUpdatesUnfocused":false}"#
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn defaults_preserve_existing_background_throttling() {

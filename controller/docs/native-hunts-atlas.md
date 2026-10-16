@@ -1,9 +1,9 @@
 # Native Hunts / Hunt Atlas — experimental architecture
 
 **Branch:** `experiment/native-background-sessions`  
-**Preview:** `0.1.7-native.17`
+**Preview:** `0.1.7-native.22`
 
-The **Panel → Hunts · Atlas** tab is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
+The **Dashboard → Hunt Atlas** workspace is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
 
 ## Server as source of truth
 
@@ -28,9 +28,9 @@ The original **premium Hunt Atlas** has substantially more economics, catch/shin
 
 ## UI
 
-Under **Panel → Hunts · Atlas**, select one of the four accounts. The tab shows the active Pokémon/IVs, game-reported bonuses, current hunt, independently measured rates, and the unlocked hunt ranking. Filter by hunt, region, target species name/ID and type. Expand a hunt to inspect its weighted spawn composition. Switch directly using `hunt.select` without reopening Firefox. No background browser tab or userscript is required.
+Under **Dashboard → Hunt Atlas**, use the app-wide account switcher or open **Compare all accounts** for simultaneous current-rates and best modeled hunts. **Explore Pokémon** is now the default species-first view; it groups destinations, including non-executable public-guide previews of locked hunts. Each account preserves independent explorer filters and result pagination. Filter by location, level range, availability, type, weaknesses (any/all), depot ownership, species/name and objective. Expand details for source-labeled combat and loot estimates or switch immediately to an actual server-unlocked hunt. The existing **Hunt rankings**, **Current hunt** and **Session & rewards** subtabs remain. No background browser tab or userscript is required.
 
-The reference is lazy-loaded once per controller process, rather than polled; normal native gameplay and Twitch run unchanged.
+The reference is lazy-loaded once per controller process, rather than polled; normal native gameplay and Twitch run unchanged. Estimated hunt rates are calculated on account-scoped background workers, no more often than a 20-second cache refresh when viewing the panel. Measured rates remain live. Collection means *present in the fully server-confirmed depot*, not historical Pokédex completion.
 
 ## Validation
 
@@ -43,7 +43,7 @@ cargo build --release
 .\target\release\moth-controller.exe
 ```
 
-Verify: `Panel → Hunts · Atlas` loads the account's hunts immediately after authenticated `welcome`; the guide data enriches species names when reachable; real XP/h becomes available after enough continuous play; switching to another hunt is acknowledged; returning from Firefox recovery or changing Pokémon resets stale measurements; native Twitch and capture remain online.
+Verify: `Dashboard → Hunt Atlas` loads the account's hunts immediately after authenticated `welcome`; the guide data enriches species names when reachable; real XP/h becomes available after enough continuous play; switching to another hunt is acknowledged; returning from Firefox recovery or changing Pokémon resets stale measurements; native Twitch and capture remain online.
 
 The code was committed without a local Rust compiler or authenticated game session. GitHub Actions are not a substitute for confirming the live rates and actual hunt-switch behavior on your account. In particular, **do not treat speculative guide forecasts as measured earnings**.
 
