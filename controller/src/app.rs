@@ -1847,6 +1847,11 @@ impl ControllerApp {
         if self.history_account != index {
             self.history_rows_limit = 100;
         }
+        // Type choices come from the current roster; another account may not
+        // have that type. Keep search and sorting, but avoid a stale empty view.
+        if self.pokemon_account != index {
+            self.pokemon_type.clear();
+        }
         self.hunt_account = index;
         self.automation_account = index;
         self.pokemon_account = index;
@@ -4369,6 +4374,12 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Type,"Type");
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Name,"Name");
             });
+        if ui.small_button(tr("Clear filters")).clicked() {
+            app.pokemon_query.clear();
+            app.pokemon_shiny_only=false;
+            app.pokemon_min_iv=0;
+            app.pokemon_type.clear();
+        }
     });
     ui.add_space(8.0);
     let query=app.pokemon_query.trim().to_lowercase();
@@ -4415,20 +4426,35 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         tr("No Pokémon match the current filters")
                     });
                 }
-                for pokemon in &filtered {
-                    let active=view.active_pokemon.as_ref()
-                        .is_some_and(|current|current.id==pokemon.id);
-                    let name=format!("{}{} · Lv {}{} · Q {}",
-                        if active {"▶ "} else {""},
-                        pokemon.name,pokemon.level,
-                        if pokemon.shiny {" ✨"}else{""},
-                        pokemon.quality.map(|n|format!("{n:.2}"))
-                            .unwrap_or_else(||"—".into()));
-                    if ui.selectable_label(selected_id==Some(pokemon.id),name)
-                        .clicked() {
-                            app.pokemon_selected[index]=Some(pokemon.id);
-                            app.pokemon_sale_confirm[index]=None;
-                    }
+                if !filtered.is_empty() {
+                    egui::Grid::new(("pokemon-roster-grid",index))
+                        .striped(true).spacing([8.0,5.0]).show(ui,|ui|{
+                        for column in ["Pokémon","Lv","Grade","IV","Power"] {
+                            ui.label(RichText::new(tr(column)).size(10.0)
+                                .strong().color(DIM));
+                        }
+                        ui.end_row();
+                        for pokemon in &filtered {
+                            let active=view.active_pokemon.as_ref()
+                                .is_some_and(|current|current.id==pokemon.id);
+                            let name=format!("{}{}{}",if active {"▶ "} else {""},
+                                compact_text(&pokemon.name,17),
+                                if pokemon.shiny {" ✨"}else{""});
+                            if ui.selectable_label(selected_id==Some(pokemon.id),name)
+                                .on_hover_text(&pokemon.name).clicked() {
+                                app.pokemon_selected[index]=Some(pokemon.id);
+                                app.pokemon_sale_confirm[index]=None;
+                            }
+                            ui.label(pokemon.level.to_string());
+                            ui.label(pokemon.grade.map(|v|format!("{v:.1}"))
+                                .unwrap_or_else(||"—".into()));
+                            ui.label(pokemon.ivs.iter().filter_map(|iv|*iv)
+                                .sum::<u64>().to_string());
+                            ui.label(pokemon.power.map(format_number)
+                                .unwrap_or_else(||"—".into()));
+                            ui.end_row();
+                        }
+                    });
                 }
             });
         cols[1].label(RichText::new(tr("Selected Pokémon")).strong().color(TEXT));
@@ -4459,12 +4485,14 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().max_height(330.0)
                 .id_salt(("pokemon-details",index)).show(&mut cols[1],|ui|{
                 ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
-                for (key,value) in detail {
-                    ui.horizontal(|ui|{
-                        ui.label(RichText::new(key).size(10.0).color(DIM));
-                        ui.label(RichText::new(value).size(10.0).color(TEXT));
+                egui::Grid::new(("pokemon-details-grid",index))
+                    .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
+                        for (key,value) in detail {
+                            ui.label(RichText::new(key).size(10.0).color(DIM));
+                            ui.label(RichText::new(value).size(10.0).color(TEXT));
+                            ui.end_row();
+                        }
                     });
-                }
             });
             cols[1].add_space(9.0);
             if active || pokemon.shiny {
