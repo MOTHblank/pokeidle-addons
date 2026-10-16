@@ -252,9 +252,6 @@ impl NativeSession {
             capture_config, market_rules, session_reset, hunts, history, forecast_tx
         })
     }
-    pub fn market_rules(&self) -> MarketRules {
-        self.market_rules.lock().map(|v|v.clone()).unwrap_or_default()
-    }
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
         rules.save(self.profile)?;
         let mut live=self.market_rules.lock().map_err(|_|"Market settings unavailable".to_owned())?;
