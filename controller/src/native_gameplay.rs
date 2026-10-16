@@ -25,7 +25,9 @@ impl GameCommand {
                 fields.insert("t".into(),Value::String("auto.set".into()));
                 Value::Object(fields)
             },
-            Self::SetAutomation {field,value} => json!({"t":"auto.set","field":field,"value":value}),
+            // Internal intent only: the game socket replaces it with a full
+            // server-based AutoSet payload. Never transmit this shape.
+            Self::SetAutomation { .. } => Value::Null,
             Self::SellPokemon(id) => json!({"t":"shop.sellPokemon","pokemonId":id}),
             Self::ShopBuy {kind,id,qty} => json!({"t":"shop.buy","kind":kind,"id":id,"qty":qty}),
         }
