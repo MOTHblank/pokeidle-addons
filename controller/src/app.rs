@@ -8,6 +8,7 @@ use crate::native_gameplay::GameCommand;
 use crate::native_hunts::{self, HuntView};
 use crate::native_capture_config::CatchSettings;
 use crate::native_items::{self, ItemCatalog};
+use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
 use hunt_panel::HuntSubtab;
@@ -1631,6 +1632,7 @@ pub struct ControllerApp {
     inventory_category:String,
     session_reset_confirm:[bool;4],
     inventory_catalog:Option<Arc<ItemCatalog>>,
+    visuals:VisualCache,
     inventory_catalog_error:Option<String>,
     inventory_catalog_busy:bool,
     inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
@@ -1760,6 +1762,7 @@ impl ControllerApp {
             inventory_category:String::new(),
             session_reset_confirm:[false;4],
             inventory_catalog:None,
+            visuals:VisualCache::default(),
             inventory_catalog_error:None,
             inventory_catalog_busy:false,
             inventory_catalog_tx,
@@ -3718,6 +3721,10 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
         });
     }
     let catalog=app.inventory_catalog.as_deref();
+    app.visuals.poll(ui.ctx());
+    let hints=catalog.map(|catalog|catalog.items.iter()
+        .filter_map(|(id,meta)|meta.icon.as_ref().map(|icon|(*id,icon.clone())))
+        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default();
     let mut amounts=std::collections::BTreeMap::<(bool,u64),(u64,String,String)>::new();
     let mut acquired=std::collections::BTreeMap::<String,u64>::new();
     let mut session_kills=0u64;
@@ -3769,12 +3776,13 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
         // Side-by-side stocks and drops use the available width instead of
         // forcing users to scroll past a mostly empty stacked section.
         ui.columns(2,|cols|{
-            draw_inventory_stock(&mut cols[0],&rows,total_items,
-                &query,&app.inventory_category);
+            draw_inventory_stock(&mut cols[0],&mut app.visuals,&hints,
+                &rows,total_items,&query,&app.inventory_category);
             draw_inventory_drops(&mut cols[1],&drops,session_kills,session_catches,&query);
         });
     } else {
-        draw_inventory_stock(ui,&rows,total_items,&query,&app.inventory_category);
+        draw_inventory_stock(ui,&mut app.visuals,&hints,
+            &rows,total_items,&query,&app.inventory_category);
         ui.add_space(8.0);
         draw_inventory_drops(ui,&drops,session_kills,session_catches,&query);
     }
@@ -3782,6 +3790,8 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
 
 fn draw_inventory_stock(
     ui:&mut egui::Ui,
+    visuals:&mut VisualCache,
+    hints:&std::collections::BTreeMap<u64,String>,
     rows:&[((bool,u64),(u64,String,String))],
     total_items:u64,
     query:&str,
@@ -3809,9 +3819,13 @@ fn draw_inventory_stock(
                     egui::Grid::new("inventory-stock-table").striped(true)
                         .spacing([8.0,5.0]).show(ui,|ui|{
                             for ((is_ball,id),(quantity,name,category)) in rows {
-                                ui.label(RichText::new(
+                                ui.horizontal(|ui|{
+                                    let kind=if *is_ball {SpriteKind::Ball} else {SpriteKind::Item};
+                                    visuals.show(ui,kind,*id,hints.get(id).map(String::as_str),20.0);
+                                    ui.label(RichText::new(
                                     compact_text(name,23)).size(11.0).color(TEXT))
                                     .on_hover_text(name);
+                                });
                                 ui.label(RichText::new(format!("#{id} · {}",tr(category)))
                                     .size(9.0).color(if *is_ball { ACCENT } else { DIM }));
                                 ui.label(RichText::new(format!("×{quantity}"))
@@ -4440,11 +4454,15 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             let name=format!("{}{}{}",if active {"▶ "} else {""},
                                 compact_text(&pokemon.name,17),
                                 if pokemon.shiny {" ✨"}else{""});
+                            ui.horizontal(|ui|{
+                                app.visuals.show(ui,SpriteKind::Pokemon,
+                                    pokemon.species_id.unwrap_or_default(),None,24.0);
                             if ui.selectable_label(selected_id==Some(pokemon.id),name)
                                 .on_hover_text(&pokemon.name).clicked() {
                                 app.pokemon_selected[index]=Some(pokemon.id);
                                 app.pokemon_sale_confirm[index]=None;
                             }
+                            });
                             ui.label(pokemon.level.to_string());
                             ui.label(pokemon.grade.map(|v|format!("{v:.1}"))
                                 .unwrap_or_else(||"—".into()));
@@ -4484,7 +4502,11 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ];
             egui::ScrollArea::vertical().max_height(330.0)
                 .id_salt(("pokemon-details",index)).show(&mut cols[1],|ui|{
-                ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
+                ui.horizontal(|ui|{
+                    app.visuals.show(ui,SpriteKind::Pokemon,
+                        pokemon.species_id.unwrap_or_default(),None,42.0);
+                    ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
+                });
                 egui::Grid::new(("pokemon-details-grid",index))
                     .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
                         for (key,value) in detail {
@@ -4841,18 +4863,26 @@ fn capture_ball_name(k:&str)->&'static str {
 // IDs are the server protocol IDs, shared with the userscript. Public metadata
 // only enriches captions; absent metadata never switches a saved selection.
 fn capture_restock_chip(
-    ui:&mut egui::Ui,selected:&mut u64,id:u64,name:&str,icon:&str,
-    price:Option<u64>,stock:Option<u64>
+    ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
+    selected:&mut u64, id:u64, name:&str, icon:&str,
+    icon_hint:Option<&str>, price:Option<u64>, stock:Option<u64>
 ) {
     let active=*selected==id;
-    let caption=format!("{icon}  {name}");
-    let response=ui.add(egui::Button::new(
-        RichText::new(caption).size(10.0).color(if active { TEXT } else { MUTED })
-    )
+    let response=egui::Frame::new()
         .fill(if active {Color32::from_rgb(52,45,95)} else {PANEL_ALT})
         .stroke(Stroke::new(if active {1.4} else {1.0},
             if active {ACCENT} else {BORDER}))
-        .corner_radius(6.0));
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(7,4))
+        .show(ui,|ui|{
+            ui.horizontal(|ui|{
+                if !visuals.show(ui,kind,id,icon_hint,20.0) {
+                    ui.label(RichText::new(icon).size(14.0));
+                }
+                ui.label(RichText::new(name).size(10.0)
+                    .color(if active { TEXT } else { MUTED }));
+            });
+        }).response.interact(egui::Sense::click());
     let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
     let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
     if response.on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
@@ -4878,6 +4908,7 @@ fn capture_restock_threshold(
 }
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
     request_item_catalog(app);
+    app.visuals.poll(ui.ctx());
     let profile=app.games[index].profile;
     let Some(native)=app.games[index].native.as_ref() else {return};
     if app.capture_drafts[index].is_none() {
@@ -4946,16 +4977,18 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.add_space(5.0);
         ui.label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.ball_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                &mut cfg.ball_id,0,"Off","—",None,None,None);
             for (id,name) in &game_catalog.ball_names {
                 if name.to_lowercase().contains("master") { continue; }
-                capture_restock_chip(ui,&mut cfg.ball_id,*id,name,"●",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,*id,name,"●",None,
                     selected_price("ball",*id),selected_stock("ball",*id));
             }
             if cfg.ball_id>0 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
                 let id=cfg.ball_id;
-                capture_restock_chip(ui,&mut cfg.ball_id,id,
-                    &format!("Saved ball #{id}"),"●",None,None);
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
+                    &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
         ui.add_space(5.0);
@@ -4973,12 +5006,15 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             potion_choices.push((cfg.potion_id,name));
         }
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.potion_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
-                capture_restock_chip(ui,&mut cfg.potion_id,id,&name,"💊",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.potion_id,id,&name,"💊",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
         });
@@ -5000,12 +5036,15 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
         }
         ui.horizontal_wrapped(|ui|{
-            capture_restock_chip(ui,&mut cfg.revive_id,0,"Off","—",None,None);
+            capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
-                capture_restock_chip(ui,&mut cfg.revive_id,id,&name,"✚",
+                capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
+                    &mut cfg.revive_id,id,&name,"✚",
+                    catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
         });
