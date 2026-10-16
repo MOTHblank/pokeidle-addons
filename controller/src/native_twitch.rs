@@ -189,6 +189,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                 }
                 let mut joined = BTreeSet::new();
                 let mut next_join = Instant::now();
+                let mut auth_rejected = false;
                 loop {
                     if stop.load(Ordering::Relaxed) { let _ = socket.close(None); break; }
                     let targets = desired.lock().map(|v| v.clone()).unwrap_or_default();
@@ -227,7 +228,9 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                                         rejected = true; break;
                                     }
                                 }
-                                if line.contains("Login authentication failed") {
+                                if line.contains("Login authentication failed") ||
+                                   line.contains("Improperly formatted auth") {
+                                    auth_rejected = true;
                                     rejected = true;
                                     break;
                                 }
@@ -250,19 +253,26 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                 }
                 if !stop.load(Ordering::Relaxed) {
                     if let Ok(mut s) = state.lock() {
-                        s.phase = "Reconnecting".into();
+                        s.phase = if auth_rejected { "NeedsLogin" } else { "Reconnecting" }.into();
                         s.joined = 0;
+                        if auth_rejected {
+                            s.error = Some("Twitch rejected cached IRC authorization".into());
+                        }
                     }
+                    if auth_rejected { break; }
                 }
             }
             Err(error) => {
                 failures += 1;
+                let auth_expired = error.contains("rejected the captured OAuth");
                 if let Ok(mut s) = state.lock() {
-                    s.phase = if failures >= 5 { "Failed" } else { "Reconnecting" }.into();
+                    s.phase = if auth_expired { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
                     s.joined = 0;
                 }
-                if failures >= 5 { break; }
+                // Network failures are handled within this native worker.
+                // No browser is opened for transient IRC outages.
+                if auth_expired { break; }
             }
         }
         let until = Instant::now() + RETRY_DELAY;
