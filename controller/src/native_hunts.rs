@@ -333,7 +333,10 @@ impl HuntIntel {
             self.adopt_hunt(slug, now);
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
+            // Even an empty authoritative depot must invalidate the previously
+            // published Arc roster; otherwise sold Pokémon remain visible.
             self.pokemon.clear();
+            self.roster_dirty=true;
             for p in pokemons { self.set_pokemon(p); }
         }
         if let Some(patches) = state.get("pkMud").and_then(Value::as_array) {
@@ -606,6 +609,14 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn full_empty_roster_replaces_previous_nonempty_snapshot() {
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"welcome","estado":{"pokemons":[{"id":7,"nome":"Pidgey"}]}}"#,now);
+        assert_eq!(m.snapshot().pokemon_roster.len(),1);
+        m.ingest(r#"{"t":"estado","estado":{"pokemons":[]}}"#,now);
+        assert!(m.snapshot().pokemon_roster.is_empty());
+    }
     #[test]
     fn sale_receipt_updates_native_roster_without_guessing_other_ids() {
         let now=Instant::now();let mut m=HuntIntel::new();
