@@ -147,7 +147,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.2.0');
+        document.documentElement?.setAttribute('data-moth-addon-version-stream-auto-open', '7.2.1');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
