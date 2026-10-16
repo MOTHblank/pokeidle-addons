@@ -3128,7 +3128,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 /// Current game inventory (server quantities) and separately battle-acquired
 /// drops. Shop purchases are never labeled as loot.
-fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
+fn request_item_catalog(app:&mut ControllerApp) {
     if app.inventory_catalog.is_none() && app.inventory_catalog_error.is_none() &&
         !app.inventory_catalog_busy {
         app.inventory_catalog_busy=true;
@@ -3139,6 +3139,9 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             let _=tx.send(result);
         });
     }
+}
+fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
+    request_item_catalog(app);
     ui.horizontal_wrapped(|ui|{
         ui.label(tr("Accounts"));
         let selected=app.inventory_account.map(|index|
@@ -4143,6 +4146,7 @@ fn capture_stock_input(ui:&mut egui::Ui,label:&str,id:&mut u64,at:&mut u64,to:&m
     });
 }
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+    request_item_catalog(app);
     let profile=app.games[index].profile;
     let Some(native)=app.games[index].native.as_ref() else {return};
     if app.capture_drafts[index].is_none() {
