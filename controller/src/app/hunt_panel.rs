@@ -548,10 +548,14 @@ fn atlas_species_rows<'a>(
             {continue}
             if !filters.weak_to.is_empty() {
                 let Some(reference)=reference else{continue};
-                let matches=filters.weak_to.iter().map(|attack|
-                    atlas_effectiveness(reference,&types,attack).is_some_and(|n|n>1.0));
-                if if filters.weakness_match_all { !matches.clone().all(|x|x) }
-                    else { !matches.into_iter().any(|x|x) } {continue}
+                let is_weak=|attack:&String|
+                    atlas_effectiveness(reference,&types,attack).is_some_and(|n|n>1.0);
+                let matches=if filters.weakness_match_all {
+                    filters.weak_to.iter().all(is_weak)
+                }else{
+                    filters.weak_to.iter().any(is_weak)
+                };
+                if !matches {continue}
             }
             let owned=known_roster.contains(&spawn.id);
             if filters.collection==AtlasCollection::InDepot && !owned ||
