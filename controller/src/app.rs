@@ -3082,6 +3082,17 @@ fn draw_account_switcher(
 
 /// Performance preferences persist independently of accounts and profiles.
 fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    // Settings must remain reachable at the minimum supported window height.
+    // Bound text width so explanatory copy never becomes a full-screen line.
+    egui::ScrollArea::vertical()
+        .id_salt("options-page")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = ui.available_width().min(720.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
     ui.label(RichText::new(tr("Performance and updates"))
         .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);
@@ -3091,6 +3102,7 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     let mut next = app.ui_options;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .stroke(Stroke::new(1.0, BORDER))
         .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.label(RichText::new(tr("Background refresh"))
                 .size(13.0).strong().color(TEXT));
@@ -3138,6 +3150,10 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
+
+                },
+            );
+        });
 }
 
 #[derive(Clone, Copy)]
