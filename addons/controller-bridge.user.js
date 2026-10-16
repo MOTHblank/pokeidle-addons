@@ -529,7 +529,7 @@
             // Only expose the server-confirmed game socket, not unrelated sockets.
             const ws = gameSocket;
             const hello = ws && helloBySocket.get(ws);
-            return ws && ws.readyState === NativeWebSocket.OPEN && hello
+            return ws && ws.readyState === page.WebSocket.OPEN && hello
                 ? { url: ws.url, hello } : null;
         },
         marketCatalogSnapshot() {
