@@ -95,6 +95,7 @@ pub struct HuntSessionStats {
     pub shiny_seen:u64,
     pub shiny_captured:u64,
     pub balls_used:BTreeMap<u64,u64>,
+    pub ball_captures:u64,
     pub acquired:BTreeMap<String,u64>,
     pub recent_drops:Vec<(String,u64)>,
 }
@@ -523,11 +524,14 @@ impl HuntIntel {
                             }
                             Some("bola") => {
                                 let session=&mut self.view.session;
+                                let captured=e.get("sucesso").and_then(Value::as_bool)==Some(true);
                                 if let Some(ball_id)=Self::num(e,"ballId") {
                                     let total=session.balls_used.entry(ball_id).or_default();
                                     *total=total.saturating_add(1);
+                                    if captured {
+                                        session.ball_captures=session.ball_captures.saturating_add(1);
+                                    }
                                 }
-                                let captured=e.get("sucesso").and_then(Value::as_bool)==Some(true);
                                 let shiny=e.get("shiny").and_then(Value::as_bool)==Some(true);
                                 if shiny {session.shiny_seen=session.shiny_seen.saturating_add(1);}
                                 if captured {
@@ -901,6 +905,19 @@ mod tests {
         assert_eq!(intel.view.bonuses.twitch_pct,0.0);
         assert!(intel.view.bonuses.vip_known);
         assert!(!intel.view.bonuses.vip_active);
+    }
+
+    #[test]
+    fn ball_success_ratio_uses_only_identified_ball_receipts(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"batalha","ev":[
+            {"k":"bola","ballId":3,"sucesso":true},
+            {"k":"bola","ballId":3,"sucesso":false},
+            {"k":"bola","sucesso":true}]}"#,now);
+        assert_eq!(intel.view.session.captures,2);
+        assert_eq!(intel.view.session.balls_used.get(&3),Some(&2));
+        assert_eq!(intel.view.session.ball_captures,1);
     }
 
 }
