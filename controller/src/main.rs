@@ -13,7 +13,24 @@ mod logging;
 mod update;
 
 fn main() {
+    // Windows release builds do not have an attached console. Without a
+    // persistent panic hook, one unexpected panic during authentication
+    // handoff looks like a silent whole-controller crash. Never include the
+    // panic payload here: authentication data must not leak into logs.
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed");
+        let location = info.location()
+            .map(|at| format!("{}:{}:{}", at.file(), at.line(), at.column()))
+            .unwrap_or_else(|| "unknown location".to_owned());
+        crate::logging::error(&format!(
+            "Rust panic in thread {name} at {location} (payload redacted)"
+        ));
+    }));
     if let Err(error) = app::run() {
+        crate::logging::error(&format!("Controller UI exited with error: {error}"));
         eprintln!("moth-controller: {error}");
+    } else {
+        crate::logging::info("Controller UI exited normally");
     }
 }
