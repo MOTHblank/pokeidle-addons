@@ -1854,6 +1854,38 @@ mod tests {
             0.5,Some(meta),""),None);
     }
     #[test]
+    fn capture_and_market_objectives_retain_source_coverage(){
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"route".into(),name:"Route".into(),level:120,
+            species:vec![native_hunts::HuntSpecies{id:1,weight:100.0}],
+            ..Default::default()
+        }]);
+        let mut guide=guide_fixture();
+        let forecast=native_atlas::Forecast{
+            kills_h:100.0,trainer_xp_h:10000.0,pokemon_xp_h:9000.0,
+            gold_h:1000.0,combat_gold_h:800.0,npc_loot_gold_h:200.0,
+            trainer_xp_per_kill:100.0,pokemon_xp_per_kill:90.0,
+            seconds_per_kill:36.0,coverage:1.0,calibrated:false,
+        };
+        let mut cache=EstimateCache::default();
+        cache.values.insert("route".into(),Some(forecast));
+        let mut filters=AtlasFilters::default();
+        filters.sort=AtlasSort::Capture;
+        let mut scenario=AtlasScenario::default();
+        let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows[0].best,None);
+        guide.capture_rarities.insert(1,12000.0);
+        let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert!(rows[0].best.is_some_and(|n|n>0.0));
+        filters.sort=AtlasSort::Market;
+        scenario.market_item="Moon Stone".into();
+        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario)[0].best,None);
+        scenario.market_gold_per_unit=400.0;
+        let after=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert!(after[0].best.is_some_and(|n|n>0.0));
+    }
+    #[test]
     fn unknown_rate_is_never_turned_into_zero(){
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
