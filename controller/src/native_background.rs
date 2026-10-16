@@ -7,6 +7,7 @@ use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
+use crate::native_gameplay::GameplayStatus;
 use crate::native_hunts::{HuntIntel, HuntView};
 use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
 use crate::config::GameProfile;
@@ -45,6 +46,7 @@ pub struct NativeSnapshot {
     pub native_auto_catch: bool,
     pub native_capture_queue: usize,
     pub native_throws: u64,
+    pub native_capture_status: GameplayStatus,
     pub native_restock: RestockStatus,
     pub native_automation: AutomationStatus,
     pub native_market: MarketStatus,
@@ -63,6 +65,7 @@ impl Default for NativeSnapshot {
             trainer_level: None, trainer_xp: None, gold: None, orbs: None,
             hunt_slug: None, frames: 0, battle_kills: 0, captures: 0, error: None,
             native_auto_catch: false, native_capture_queue: 0, native_throws: 0,
+            native_capture_status: GameplayStatus::default(),
             native_restock: RestockStatus::default(),
             native_automation: AutomationStatus::default(),
             native_market: MarketStatus::default(),
@@ -536,6 +539,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.native_restock = restock.status.clone();
                     s.native_automation = automation_writer.status.clone();
                     s.native_market = market.status.clone();
+                    s.native_capture_status = gameplay.status.clone();
                 });
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -717,6 +721,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
                         s.native_throws = gameplay.status.throws;
+                        s.native_capture_status = gameplay.status.clone();
                         s.native_restock = restock.status.clone();
                         s.native_market = market.status.clone();
                     });
@@ -794,6 +799,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     history_recorder.maybe_flush(true);
                     restock.on_disconnect(Instant::now());
                     market.on_disconnect();
+                    gameplay.on_disconnect();
                     restock.publish_status();
                     automation_writer.on_disconnect();
                     pending_sale=None;
@@ -804,6 +810,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         s.native_restock = restock.status.clone();
                         s.native_automation = automation_writer.status.clone();
                         s.native_market = market.status.clone();
+                        s.native_auto_catch = gameplay.status.auto_catch;
+                        s.native_capture_queue = gameplay.status.queue;
+                        s.native_capture_status = gameplay.status.clone();
                         s.pending_pokemon_sale=None;
                         s.pokemon_sale_error=Some("Connection lost before Pokémon sale confirmation".into());
                     });

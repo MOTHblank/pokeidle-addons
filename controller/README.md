@@ -21,6 +21,21 @@ The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall a
 
 For configuration and protocol details of the **native Moth Watch rule buyer**, see [market rule buying](docs/native-market-rule-buying.md). It is off by default and can import existing Moth Watch rule JSON. The native Automation page also surfaces any observed mission fields read-only until their write/acknowledgement protocol has been verified.
 
+## Native Auto Catch fidelity
+
+For its runtime mechanics, capture receipt semantics, reserve accounting, and regression coverage, see [native Auto Catch notes](docs/native-autocatch.md).
+
+
+Moth Controller uses a separate native `ball.throw` engine; the premium Auto Catch+ userscript is optional, and running both at once on one account is not recommended. Native automation imports the user's normal `intervalMs`, two-ball priority and per-ball reserves from the protected account capture settings.
+
+As of `0.1.7-native.29`, the capture editor supports **100–3000 ms configurable throw spacing** (100 ms default like Auto Catch+). The oldest eligible corpse receives priority, using its server-observed death time and the game's 30-second lifetime as the available deadline signal. An unanswered throw can be retried after **1 second**; a server-confirmed failure may retry at the configured interval. A successful `batalha.ev` `bola` receipt closes that slot, and duplicate/late failures cannot reopen a captured corpse. A slot is discarded at expiration, on a hunt/center transition or disconnect, without guessing that it remains available.
+
+Every outbound native throw reserves one selected ball *immediately*, even when server `estado.balls` snapshots lag, so the configured reserve is not accidentally spent during rapid throws. New authenticated stock observations reconcile previously reserved uses when stock reductions are reflected. Socket send failures roll back local debits; reconnect clears all stale corpse/inventory state before starting new throws. Master Balls remain excluded and numeric ball IDs are resolved from the authenticated game ball catalog, never guessed from stale website assets.
+
+The Automation page shows distinct **native sends, matched captures, explicit failures, one-second timeout retries and per-ball capture usage**. Unrelated manual/server-auto catches remain part of the dashboard totals, not the native Auto Catch success count.
+
+These are source-level fixes with new Rust regression tests for deadline priority, fast cadence, unanswered/failed retries, stock reservations, duplicate receipts and disconnect/expiration. This environment lacks `cargo`/`rustc` and a live authenticated game session; compilation and in-game behavior **are not yet verified**.
+
 ## Verification
 
 ```sh
