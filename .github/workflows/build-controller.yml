@@ -1,13 +1,8 @@
 name: Publicar release v0.1.6 (Windows e Linux)
 
+# Only run this workflow when explicitly requested.
 on:
   workflow_dispatch:
-  # As notas de v0.1.6 disparam a compilação, validação e publicação.
-  # Alterações normais no código não publicam versões por acidente.
-  push:
-    branches: [master]
-    paths:
-      - '.github/release-notes/v0.1.6.md'
 
 permissions:
   contents: read
