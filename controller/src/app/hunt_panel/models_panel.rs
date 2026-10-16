@@ -321,6 +321,34 @@ pub(super) fn draw_atlas_models(
     ui.label(RichText::new(format!("Capture forecasts · {} species · {} with rarity input",
         rows.len(),rows.iter().filter(|r|r.3.is_some()).count()))
         .size(12.0).strong().color(TEXT));
+    egui::Frame::new().fill(PANEL).corner_radius(9.0)
+        .inner_margin(egui::Margin::same(11)).show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("MOST COMMON ENCOUNTERS")
+                .size(10.0).strong().color(DIM));
+            for (_,name,share,_,plan) in rows.iter().take(5){
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(RichText::new(name).strong().size(11.0).color(TEXT));
+                    ui.label(RichText::new(format!(
+                        "{:.1}% spawn",share*100.0
+                    )).size(10.0).color(MUTED));
+                    ui.label(RichText::new(format!(
+                        "Catch {} · Caught/h {}",
+                        plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
+                            .unwrap_or_else(||"—".into()),
+                        value(plan.as_ref().map(|p|p.catches_h))
+                    )).size(10.0).color(TEXT));
+                });
+            }
+            if rows.is_empty(){
+                ui.label(RichText::new("No eligible species in this destination.")
+                    .size(10.0).color(MUTED));
+            }
+        });
+    egui::CollapsingHeader::new(format!(
+        "Full capture breakdown · up to {} species",
+        rows.len().min(32)
+    )).default_open(false).show(ui,|ui|{
     egui::Frame::new().fill(PANEL).corner_radius(8.0)
         .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
             if ui.available_width()>=860.0{
@@ -373,11 +401,12 @@ pub(super) fn draw_atlas_models(
             }
             if rows.len()>32 {ui.label("First 32 species shown; highest spawn probability first.");}
         });
+    });
     ui.label(RichText::new("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds.")
         .size(10.0).color(MUTED));
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Outland 1–8 and rare item probabilities")
+        ui.label(RichText::new("Rare items & Outland")
             .size(13.0).strong().color(TEXT));
         ui.label("Ranking target");
         egui::ComboBox::from_id_salt("atlas-rare-target")
@@ -405,12 +434,33 @@ pub(super) fn draw_atlas_models(
                 .size(11.0).color(MUTED));
         }
         for item in &rare{
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(item.name).size(11.0).strong().color(TEXT));
-                ui.label(format!("{:.6}%/kill · {:.5} units/h · 24h chance {:.2}% · crafting {:.1}h",
-                    item.per_kill*100.0,item.units_h,item.chance_24h*100.0,item.craft_hours))
-                    .on_hover_text(format!("Mean hours to next drop: {:.1}",item.mean_hours));
-            });
+            egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
+                .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new(item.name)
+                            .size(11.0).strong().color(TEXT));
+                        ui.label(RichText::new(format!(
+                            "{:.6}% per eligible kill",item.per_kill*100.0
+                        )).size(10.0).color(MUTED));
+                    });
+                    ui.horizontal_wrapped(|ui|{
+                        for (label,number) in [
+                            ("Units/h",format!("{:.5}",item.units_h)),
+                            ("Chance / 24h",format!("{:.2}%",item.chance_24h*100.0)),
+                            ("Craft time",format!("{:.1}h",item.craft_hours)),
+                        ]{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(label).size(9.0).color(DIM));
+                                ui.label(RichText::new(number)
+                                    .size(11.0).strong().color(TEXT));
+                            });
+                            ui.add_space(12.0);
+                        }
+                    });
+                }).response.on_hover_text(format!(
+                    "Mean hours to next drop: {:.1}",item.mean_hours
+                ));
         }
     }else{
         ui.label("Rare drops need a modeled or measured kill rate.");
@@ -444,7 +494,7 @@ pub(super) fn draw_atlas_models(
             .size(10.0).color(MUTED));
     }
     ui.add_space(8.0);
-    ui.label(RichText::new("Market and net-economy scenario")
+    ui.label(RichText::new("Market scenario")
         .size(13.0).strong().color(TEXT));
     let mut possible=std::collections::BTreeSet::new();
     if let Some(reference)=reference{
