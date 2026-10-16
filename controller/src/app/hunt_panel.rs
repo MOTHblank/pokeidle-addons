@@ -793,7 +793,7 @@ fn atlas_filters_panel(
             });
             ui.horizontal_wrapped(|ui|{
                 ui.label("Location");
-                let mut areas=atlas_destinations(view,reference).iter()
+                let mut areas=atlas_destinations(view,reference).into_iter()
                     .map(|(hunt,_)|if hunt.area.is_empty(){hunt.region.as_str()}
                          else{hunt.area.as_str()})
                     .filter(|area|!area.is_empty()).collect::<Vec<_>>();
@@ -1044,16 +1044,14 @@ fn draw_atlas_species(
 }
 
 fn draw_atlas_explorer(
-    app:&mut ControllerApp,ui:&mut egui::Ui,view:&HuntView,
+    ui:&mut egui::Ui,view:&HuntView,
     native:&NativeSession,live:bool,index:usize,
+    reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
+    page:&mut usize,cache:&EstimateCache,command_error:&mut Option<String>,
 ){
-    let reference=app.hunt_reference.as_deref();
-    atlas_filters_panel(ui,&mut app.atlas_filters[index],
-        &mut app.atlas_page[index],view,reference,index);
+    atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
-    let filters=&app.atlas_filters[index];
-    let rows=atlas_species_rows(view,reference,
-        &app.hunt_estimate_cache[index],filters);
+    let rows=atlas_species_rows(view,reference,cache,filters);
     if filters.collection!=AtlasCollection::All && view.pokemon_count==0 {
         ui.label(RichText::new(
             "Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures."
@@ -1066,7 +1064,7 @@ fn draw_atlas_explorer(
             "{} species · {} server-unlocked destinations · {} guide destinations",
             rows.len(),unlocked_count,guide_count
         )).strong().size(11.0).color(TEXT));
-        if app.hunt_estimate_cache[index].is_pending(){
+        if cache.is_pending(){
             ui.label(RichText::new("Calculating combat models...")
                 .size(10.0).color(WARN));
         }
@@ -1096,20 +1094,20 @@ fn draw_atlas_explorer(
     });
     const PAGE:usize=18;
     let pages=rows.len().div_ceil(PAGE).max(1);
-    app.atlas_page[index]=app.atlas_page[index].min(pages-1);
+    *page=*page.min(pages-1);
     ui.horizontal_wrapped(|ui|{
-        if ui.add_enabled(app.atlas_page[index]>0,
-            egui::Button::new("← Previous")).clicked(){app.atlas_page[index]-=1}
+        if ui.add_enabled(*page>0,
+            egui::Button::new("← Previous")).clicked(){*page-=1}
         ui.label(format!("Page {} / {} · {} results",
-            app.atlas_page[index]+1,pages,rows.len()));
-        if ui.add_enabled(app.atlas_page[index]+1<pages,
-            egui::Button::new("Next →")).clicked(){app.atlas_page[index]+=1}
+            *page+1,pages,rows.len()));
+        if ui.add_enabled(*page+1<pages,
+            egui::Button::new("Next →")).clicked(){*page+=1}
     });
     let mut error=None;
-    for row in rows.iter().skip(app.atlas_page[index]*PAGE).take(PAGE) {
+    for row in rows.iter().skip(*page*PAGE).take(PAGE) {
         draw_atlas_species(ui,row,filters.sort,view,reference,native,live,&mut error);
     }
-    if let Some(error)=error {app.hunt_action_error[index]=Some(error);}
+    if let Some(error)=error {*command_error=Some(error);}
     ui.label(RichText::new(
         "Guide-only destinations are previews, never executable. Forecasts are experimental and may differ significantly from measured combat throughput."
     ).size(10.0).color(MUTED));
@@ -1213,7 +1211,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         .auto_shrink([false,false]).show(ui,|ui|{
             match app.hunt_subtab {
                 HuntSubtab::Explorer => {
-                    draw_atlas_explorer(app,ui,&view,native,live,index);
+                    draw_atlas_explorer(ui,&view,native,live,index,
+                        app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
+                        &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
+                        &mut app.hunt_action_error[index]);
                 }
                 HuntSubtab::Compare => {}
                 HuntSubtab::Current => {
