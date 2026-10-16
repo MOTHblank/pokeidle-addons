@@ -134,6 +134,8 @@ pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
     crate::native_twitch::validate(twitch)
 }
 
+type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     twitch: TwitchSession,
@@ -144,6 +146,19 @@ impl NativeSession {
         let credentials = Credentials::parse(&bootstrap)?;
         let twitch = TwitchSession::start(bootstrap.get("twitch")
             .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
+        Self::spawn(credentials, twitch, None)
+    }
+    /// Establish *both* verified WebSockets before handing ownership away
+    /// from Firefox. This is blocking and MUST run on a background thread.
+    pub fn start_verified(bootstrap: Value) -> Result<Self, String> {
+        let credentials = Credentials::parse(&bootstrap)?;
+        let initial = open_session(&credentials)?;
+        let twitch = TwitchSession::start_verified(bootstrap.get("twitch")
+            .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
+        Self::spawn(credentials, twitch, Some(initial))
+    }
+    fn spawn(credentials: Credentials, twitch: TwitchSession,
+        initial: Option<(GameSocket, String)>) -> Result<Self, String> {
         let desired = twitch.desired_handle();
         let snapshot = Arc::new(Mutex::new(NativeSnapshot::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -153,7 +168,7 @@ impl NativeSession {
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
-                        Arc::clone(&worker_stop), desired);
+                        Arc::clone(&worker_stop), desired, initial);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -327,10 +342,11 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
 
 fn session_loop(credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    desired: Arc<Mutex<Vec<String>>>) {
+    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>) {
     let mut rejected_welcomes = 0usize;
+    let mut first_session = first_session;
     while !stop.load(Ordering::Relaxed) {
-        match open_session(&credentials) {
+        match first_session.take().map(Ok).unwrap_or_else(|| open_session(&credentials)) {
             Ok((mut socket, welcome)) => {
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 observe(&snapshot, &welcome, &desired);
