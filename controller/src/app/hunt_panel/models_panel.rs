@@ -433,7 +433,10 @@ pub(super) fn draw_atlas_models(
             }else{"This destination is below the shiny-egg threshold."})
                 .size(11.0).color(MUTED));
         }
-        for item in &rare{
+        let columns=if ui.available_width()>=820.0{2}else{1};
+        ui.columns(columns,|cols|{
+            for (i,item) in rare.iter().enumerate(){
+                let ui=&mut cols[i%columns];
             egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
                 .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
                     ui.set_min_width(ui.available_width());
@@ -461,12 +464,16 @@ pub(super) fn draw_atlas_models(
                 }).response.on_hover_text(format!(
                     "Mean hours to next drop: {:.1}",item.mean_hours
                 ));
-        }
+            }
+        });
     }else{
         ui.label("Rare drops need a modeled or measured kill rate.");
     }
     if outland {
         ui.collapsing("All eight Outland tiers · base drop probabilities",|ui|{
+            egui::ScrollArea::horizontal()
+                .id_salt(("atlas-outland-table-scroll",&hunt.slug))
+                .show(ui,|ui|{
             egui::Grid::new(("atlas-outland-all",&hunt.slug))
                 .striped(true).spacing([14.0,5.0]).show(ui,|ui|{
                     ui.strong("Tier");ui.strong("Required Lv");ui.strong("Multiplier");
@@ -485,6 +492,7 @@ pub(super) fn draw_atlas_models(
                         }else{"Locked / unknown"});
                         ui.end_row();
                     }
+                });
                 });
             ui.label(RichText::new("The guide mentions Bicycle Fragments here, but the game has not confirmed this. Reaching the required level does not guarantee access.")
                 .size(10.0).color(WARN));
@@ -571,7 +579,9 @@ pub(super) fn draw_atlas_models(
     ui.label(RichText::new("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent.")
         .size(10.0).color(WARN));
     ui.add_space(10.0);
-    draw_retrospective(ui,history,Some(&hunt.slug),f.as_ref());
+    ui.collapsing("History & forecast comparisons",|ui|{
+        draw_retrospective(ui,history,Some(&hunt.slug),f.as_ref());
+    });
 }
 
 #[cfg(test)]
