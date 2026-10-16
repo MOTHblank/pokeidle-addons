@@ -9,6 +9,8 @@ mod monitor;
 mod native_auth;
 mod native_background;
 mod native_gameplay;
+mod native_capture_config;
+mod native_items;
 mod native_hunts;
 mod native_atlas;
 mod native_restock;
