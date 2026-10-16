@@ -9,6 +9,8 @@ use crate::native_hunts::{self, HuntView};
 use crate::native_capture_config::CatchSettings;
 use crate::native_items::{self, ItemCatalog};
 use crate::native_atlas::{self, Reference as AtlasReference};
+mod hunt_panel;
+use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -1599,6 +1601,9 @@ pub struct ControllerApp {
     hunt_region: String,
     hunt_type: String,
     hunt_ranking: HuntRanking,
+    hunt_subtab: HuntSubtab,
+    hunt_page: usize,
+    hunt_action_error: [Option<String>;4],
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
@@ -1722,6 +1727,9 @@ impl ControllerApp {
             hunt_region: String::new(),
             hunt_type: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
+            hunt_subtab: HuntSubtab::Recommendations,
+            hunt_page: 0,
+            hunt_action_error: std::array::from_fn(|_|None),
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
@@ -3050,7 +3058,7 @@ impl eframe::App for ControllerApp {
                 // row of tabs competing with the main content.
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
-                    PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
+                    PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
                     PanelTab::Inventory => draw_inventory_panel(self, ui),
                     PanelTab::Pokemon => draw_pokemon_panel(self, ui),
                     PanelTab::Automation => draw_automation_panel(self, ui),
@@ -3160,7 +3168,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, &format!("⌖  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
+            if sidebar_button(ui, &format!("   ↳  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
                 app.panel_tab = PanelTab::Hunts;
             }
 
@@ -3647,454 +3655,8 @@ fn format_hunt_amount(value: f64) -> String {
     else { format!("{negative}{num:.0}") }
 }
 
-/// Manager-like Where to Hunt presentation, merged with server-only Atlas
-/// filters and separately labeled real samples vs current-pace scenarios.
-fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    // Only load the independent public reference when this tab is actually
-    // opened; game socket, Twitch and normal dashboard stay extremely light.
-    if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
-        !app.hunt_reference_busy {
-        app.hunt_reference_busy = true;
-        let tx = app.hunt_reference_tx.clone();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(native_atlas::load)
-                .unwrap_or_else(|_| Err("Guide reference loader panicked".into()));
-            let _ = tx.send(result);
-        });
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
-        egui::ComboBox::from_id_salt("hunt-account")
-            .selected_text(app.account_name(app.games[app.hunt_account].profile))
-            .show_ui(ui, |ui| {
-                for index in 0..app.games.len() {
-                    let name = app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.hunt_account, index, name);
-                }
-            });
-        ui.add_space(8.0);
-        ui.label(RichText::new(tr("Native server catalog · no userscripts"))
-            .size(10.0).color(MUTED));
-    });
-    ui.add_space(4.0);
-    if app.hunt_reference_busy {
-        ui.label(RichText::new(tr("Loading species and move reference..."))
-            .size(10.0).color(MUTED));
-    } else if let Some(error) = app.hunt_reference_error.clone() {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("{}: {}",
-                tr("Guide reference unavailable"), error)).size(10.0).color(WARN));
-            if ui.small_button(tr("Retry")).clicked() {
-                app.hunt_reference_error = None;
-            }
-        });
-    } else if let Some(reference) = app.hunt_reference.as_deref() {
-        ui.label(RichText::new(format!(
-            "{} {} · {}",
-            reference.species.len(), tr("species in guide"),
-            tr("Server determines accessible hunts")
-        )).size(10.0).color(MUTED));
-    }
-    ui.add_space(10.0);
-    let index = app.hunt_account;
-    let Some(native) = app.games[index].native.as_ref() else {
-        ui.add_space(20.0);
-        ui.label(RichText::new(tr("Start the account to load its available hunts."))
-            .size(13.0).color(WARN));
-        ui.label(tr("The native game socket supplies the hunt catalog and active Pokémon after server authentication."));
-        return;
-    };
-    let hunts: HuntView = native.hunt_snapshot();
-    if !hunts.catalog_ready {
-        ui.label(RichText::new(tr("Waiting for authenticated game hunt catalog..."))
-            .size(12.0).color(WARN));
-        return;
-    }
-
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Active Pokémon")).size(10.0).color(DIM));
-                    if let Some(p) = hunts.active_pokemon.as_ref() {
-                        ui.label(RichText::new(format!("{} · Lv. {}", p.name, p.level))
-                            .size(16.0).strong().color(TEXT));
-                        ui.label(RichText::new(format!(
-                            "P{} · Q {:.3} · {} · {} Pokémon",
-                            p.potency.unwrap_or(0), p.quality.unwrap_or(0.0),
-                            if p.shiny { "Shiny" } else { "Normal" },
-                            hunts.pokemon_count
-                        )).size(10.0).color(DIM));
-                        let labels = ["HP", "ATK", "DEF", "SpA", "SpD", "SPD"];
-                        let stats = labels.iter().enumerate()
-                            .map(|(i,k)| format!("{} {}", k,
-                                p.ivs[i].map(|v|v.to_string()).unwrap_or_else(|| "—".into())))
-                            .collect::<Vec<_>>().join(" · ");
-                        ui.label(RichText::new(stats).size(10.0).color(MUTED));
-                    } else {
-                        ui.label(tr("Waiting for active Pokémon state"));
-                    }
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Bonuses considered")).size(10.0).color(DIM));
-                    let b = &hunts.bonuses;
-                    ui.label(format!("Twitch +{:.0}% · Guild +{:.0}%",
-                        b.twitch_pct, b.guild_pct));
-                    ui.label(format!("Event: Trainer +{:.0}% · Pokémon +{:.0}%",
-                        b.trainer_event_pct, b.pokemon_event_pct));
-                    ui.label(RichText::new(format!(
-                        "VIP: {} · Guild boost: {}",
-                        if b.vip_active { "on" } else { "off/unknown" },
-                        if b.guild_boost_active { "on" } else { "off/unknown" },
-                    )).size(10.0).color(DIM));
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Current hunt")).size(10.0).color(DIM));
-                    let title = hunts.hunts.iter().find(|h|Some(h.slug.as_str()) == hunts.hunt_slug.as_deref())
-                        .map(|h|h.name.as_str()).or(hunts.hunt_slug.as_deref()).unwrap_or("—");
-                    ui.label(RichText::new(title).size(14.0).strong().color(TEXT));
-                    ui.label(RichText::new(format!(
-                        "{} {} · {} {}",
-                        hunts.hunts.len(), tr("available hunts"),
-                        hunts.battle_kills, tr("observed kills")
-                    )).size(10.0).color(DIM));
-                });
-            });
-        });
-    ui.add_space(10.0);
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(13)).show(ui,|ui|{
-            let current=hunts.hunts.iter().find(|h|
-                hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Current hunt details"))
-                    .size(13.0).strong().color(TEXT));
-                if let Some(h)=current {
-                    ui.label(RichText::new(format!(
-                        "{} · {} · Lv {} · {} {}",
-                        h.area,h.region,h.level,h.total_spawns,tr("spawn slots")
-                    )).size(11.0).color(MUTED));
-                }
-                if hunts.in_center {ui.label(RichText::new(tr("At Pokémon Center")).color(WARN));}
-                if let Some(slug)=hunts.pending_hunt_slug.as_deref() {
-                    ui.label(RichText::new(format!("{} {slug}",tr("Switch pending")))
-                        .size(10.0).color(WARN));
-                }
-            });
-            if let Some(wild)=hunts.wild.as_ref(){
-                ui.label(RichText::new(format!(
-                    "{}: {} · Lv {} · HP {}/{}",tr("Wild encounter"),
-                    wild.name,wild.level,wild.hp,wild.max_hp
-                )).size(10.0).color(DIM));
-            }
-            ui.add_space(5.0);
-            let session=&hunts.session;
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(format!(
-                    "{} {:02}:{:02}:{:02}",
-                    tr("Session"),
-                    session.duration_secs/3600,
-                    session.duration_secs%3600/60,
-                    session.duration_secs%60
-                )).size(11.0).strong().color(TEXT));
-                ui.label(format!("{} {} · {} {}",
-                    session.kills,tr("kills"),session.captures,tr("captures")));
-                ui.label(format!("{} {} · {} {}",
-                    session.shiny_seen,tr("shinies seen"),
-                    session.shiny_captured,tr("shinies caught")));
-            });
-            ui.horizontal_wrapped(|ui|{
-                ui.label(format!("{}: {}",
-                    tr("Trainer XP earned"),format_hunt_amount(session.trainer_xp as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Pokémon XP earned"),format_hunt_amount(session.pokemon_xp as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Combat gold"),format_hunt_amount(session.combat_gold as f64)));
-                ui.label(format!("{}: {}",
-                    tr("Auto-sale gold"),format_hunt_amount(session.auto_sale_gold as f64)));
-            });
-            ui.horizontal_wrapped(|ui|{
-                if !app.session_reset_confirm[index] {
-                    if ui.small_button(tr("Reset session counters")).clicked(){
-                        app.session_reset_confirm[index]=true;
-                    }
-                }else {
-                    ui.label(RichText::new(tr("Reset all session loot/XP counters?"))
-                        .size(10.0).color(WARN));
-                    if ui.small_button(tr("Confirm reset")).clicked(){
-                        native.reset_hunt_session();
-                        app.session_reset_confirm[index]=false;
-                    }
-                    if ui.small_button(tr("Cancel")).clicked(){
-                        app.session_reset_confirm[index]=false;
-                    }
-                }
-            });
-            if !session.acquired.is_empty() {
-                ui.collapsing(format!("{} · {}",
-                    tr("Drops acquired"),session.acquired.len()),|ui|{
-                    let mut entries=session.acquired.iter().collect::<Vec<_>>();
-                    entries.sort_by(|a,b|b.1.cmp(a.1));
-                    for (name,amount) in entries.iter().take(40) {
-                        ui.label(RichText::new(format!("{} ×{}",name,amount))
-                            .size(10.0).color(TEXT));
-                    }
-                });
-            }
-        });
-    ui.add_space(10.0);
-    let m = &hunts.measurements;
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(13)).show(ui, |ui| {
-            ui.label(RichText::new(tr("Measured during current hunt"))
-                .size(12.0).strong().color(TEXT));
-            ui.horizontal_wrapped(|ui| {
-                for (label, amount, valid) in [
-                    (tr("Trainer XP/h"), m.trainer_xp_h, m.valid_trainer),
-                    (tr("Pokémon XP/h"), m.pokemon_xp_h, m.valid_pokemon),
-                    (tr("Net gold/h"), m.gold_net_h, m.valid_gold),
-                    (tr("Kills/h"), m.kills_h, m.seconds >= 20.0),
-                ] {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(label).size(10.0).color(DIM));
-                        ui.label(RichText::new(if valid {
-                            format_hunt_amount(amount)
-                        } else { "—".into() }).size(15.0).strong()
-                            .color(if valid { GOOD } else { MUTED }));
-                    });
-                    ui.add_space(13.0);
-                }
-            });
-            ui.label(RichText::new(format!(
-                "{} · {:.0}s · {} {}",
-                hunts.sample_quality, m.seconds, m.kills, tr("kills in window")
-            )).size(10.0).color(MUTED));
-        });
-    ui.add_space(12.0);
-
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Available hunts · Hunt Atlas"))
-            .size(14.0).strong().color(TEXT));
-        ui.add_space(8.0);
-        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::TrainerXp, tr("Trainer XP"));
-        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::PokemonXp, tr("Pokémon XP"));
-        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::Gold, tr("Gold"));
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
-            .hint_text(tr("Search hunt, region or species ID"))
-            .desired_width(245.0));
-        let mut regions = hunts.hunts.iter().map(|h| h.region.as_str())
-            .filter(|r| !r.is_empty()).collect::<Vec<_>>();
-        regions.sort_unstable();
-        regions.dedup();
-        let selected_region = if app.hunt_region.is_empty() {
-            tr("All regions").to_owned()
-        } else { app.hunt_region.clone() };
-        egui::ComboBox::from_id_salt("hunt-region")
-            .selected_text(selected_region)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut app.hunt_region, String::new(), tr("All regions"));
-                for region in regions {
-                    ui.selectable_value(&mut app.hunt_region, region.to_owned(), region);
-                }
-            });
-        if let Some(reference) = app.hunt_reference.as_deref() {
-            let mut types = reference.species.values()
-                .flat_map(|sp| sp.types.iter().map(String::as_str))
-                .collect::<Vec<_>>();
-            types.sort_unstable();
-            types.dedup();
-            egui::ComboBox::from_id_salt("hunt-species-type")
-                .selected_text(if app.hunt_type.is_empty() {
-                    tr("All types").to_owned()
-                } else { app.hunt_type.clone() })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut app.hunt_type, String::new(), tr("All types"));
-                    for kind in types {
-                        ui.selectable_value(&mut app.hunt_type, kind.to_owned(), kind);
-                    }
-                });
-        }
-        if ui.small_button(tr("Clear filters")).clicked() {
-            app.hunt_region.clear(); app.hunt_query.clear(); app.hunt_type.clear();
-        }
-    });
-    let query = app.hunt_query.trim().to_lowercase();
-    let reference = app.hunt_reference.as_deref();
-    let mut rows: Vec<_> = hunts.hunts.iter().filter(|h| {
-        (app.hunt_region.is_empty() || h.region == app.hunt_region) &&
-        (app.hunt_type.is_empty() || h.species.iter().any(|sp|
-            reference.and_then(|r| r.species.get(&sp.id)).is_some_and(|meta|
-                meta.types.iter().any(|kind|kind==&app.hunt_type)))) &&
-        (query.is_empty() || h.name.to_lowercase().contains(&query) ||
-            h.region.to_lowercase().contains(&query) ||
-            h.area.to_lowercase().contains(&query) ||
-            h.slug.to_lowercase().contains(&query) ||
-            h.species.iter().any(|sp| sp.id.to_string().contains(&query) ||
-                reference.and_then(|r| r.species.get(&sp.id))
-                    .is_some_and(|meta| meta.name.to_lowercase().contains(&query))))
-    }).collect();
-    // Baseline XP/kill is authoritative, but actual kills/hour for another
-    // hunt is unknown; show only a scenario at the observed CURRENT pace.
-    let kills_per_hour = if m.seconds >= 20.0 && m.kills >= 5 {
-        m.kills_h
-    } else { 0.0 };
-    let bonuses = &hunts.bonuses;
-    let trainer_factor = 1.0 +
-        (bonuses.trainer_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
-    let pokemon_factor = 1.0 +
-        (bonuses.pokemon_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
-    // Compute forecasts once per visible hunt rather than recalculating the
-    // combat simulator O(n log n) times during every sort comparison.
-    let mut ranked: Vec<_> = rows.drain(..).map(|h| {
-        let forecast = reference.and_then(|refdata| native_atlas::estimate(&hunts,h,refdata));
-        let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
-            .unwrap_or((0.0,0.0));
-        let current_hunt = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
-        let actual = if current_hunt {
-            match app.hunt_ranking {
-                HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
-                HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
-                HuntRanking::Gold if m.valid_gold => Some(m.gold_net_h),
-                _ => None
-            }
-        } else { None };
-        let value = if let Some(actual) = actual { actual }
-        else if let Some(forecast) = &forecast {
-            match app.hunt_ranking {
-                HuntRanking::TrainerXp => forecast.trainer_xp_h,
-                HuntRanking::PokemonXp => forecast.pokemon_xp_h,
-                HuntRanking::Gold => forecast.gold_h,
-            }
-        } else {
-            match app.hunt_ranking {
-                HuntRanking::TrainerXp => xp * trainer_factor,
-                HuntRanking::PokemonXp => xp * pokemon_factor,
-                HuntRanking::Gold => gold,
-            }
-        };
-        (h, forecast, value, actual.is_some())
-    }).collect();
-    ranked.sort_by(|a,b| b.2.total_cmp(&a.2)
-        .then_with(|| a.0.level.cmp(&b.0.level))
-        .then_with(|| a.0.name.cmp(&b.0.name)));
-    ui.label(RichText::new(format!(
-        "{} {} · {}",
-        ranked.len(), tr("matching hunts"),
-        if reference.is_some() {
-            tr("Guide model: forecasts are uncertain; calibrated to observed combat where available.")
-        } else {
-            tr("Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance.")
-        }
-    )).size(10.0).color(WARN));
-    ui.add_space(7.0);
-
-    egui::ScrollArea::vertical().id_salt("atlas-hunt-results")
-        .max_height(ui.available_height().max(240.0)).show(ui, |ui| {
-            for (index, (h, forecast, value, measured)) in ranked.iter().take(200).enumerate() {
-                let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
-                let pending = hunts.pending_hunt_slug.as_deref() == Some(h.slug.as_str());
-                egui::Frame::new().fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
-                    .stroke(Stroke::new(1.0, if current { ACCENT } else { BORDER }))
-                    .corner_radius(7.0).inner_margin(egui::Margin::symmetric(11, 9))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("{:02}",index+1))
-                                .color(MUTED).size(10.0));
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&h.name).strong().size(12.0).color(TEXT));
-                                ui.label(RichText::new(format!(
-                                    "{} · {} · Lv. {}",
-                                    h.area, h.region, h.level
-                                )).size(10.0).color(DIM));
-                            });
-                            let species = h.species.iter()
-                                .map(|sp|format!("{} {:.0}%",
-                                    reference.and_then(|r|r.species.get(&sp.id))
-                                        .map(|s|s.name.clone())
-                                        .unwrap_or_else(||format!("#{}",sp.id)),
-                                    if h.species.iter().map(|p|p.weight).sum::<f64>() > 0.0 {
-                                        sp.weight*100.0/h.species.iter().map(|p|p.weight).sum::<f64>()
-                                    }else{0.0}))
-                                .collect::<Vec<_>>().join(" · ");
-                            ui.label(RichText::new(format!("{} {}",h.species.len(),tr("species")))
-                                .size(10.0).color(DIM)).on_hover_text(
-                                    if species.is_empty() { tr("No species weights reported").to_owned() } else {species}
-                                );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if current {
-                                    ui.label(RichText::new(tr("CURRENT")).color(GOOD));
-                                } else if pending {
-                                    ui.label(RichText::new(tr("Pending")).color(WARN));
-                                } else if ui.small_button(tr("Hunt")).clicked() {
-                                    if let Err(error) = native.send_command(GameCommand::Hunt(h.slug.clone())) {
-                                        crate::logging::warn(&format!("Hunt Atlas command rejected: {error}"));
-                                    }
-                                }
-                                ui.vertical(|ui| {
-                                    let show_value = *measured || forecast.is_some() || kills_per_hour > 0.0;
-                                    ui.label(RichText::new(if show_value {
-                                        format_hunt_amount(*value)
-                                    } else { "—".into() })
-                                        .strong().color(if current { GOOD } else { TEXT }))
-                                        .on_hover_text(if *measured {
-                                            tr("Actual observed rate during current hunt").to_owned()
-                                        } else if let Some(forecast) = forecast {
-                                            format!(
-                                                "{} · {:.0} kills/h · {:.1}s/kill · {:.0}% species coverage",
-                                                if forecast.calibrated { "Calibrated guide model" }
-                                                else { "Uncalibrated guide model" },
-                                                forecast.kills_h, forecast.seconds_per_kill,
-                                                forecast.coverage*100.0
-                                            )
-                                        } else {
-                                            tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained.").into()
-                                        });
-                                    if *measured {
-                                        ui.label(RichText::new(tr("Measured")).size(9.0).color(GOOD));
-                                    } else if let Some(forecast) = forecast {
-                                        ui.label(RichText::new(tr(if forecast.calibrated {
-                                            "Calibrated estimate"
-                                        } else { "Experimental estimate" }))
-                                            .size(9.0).color(if forecast.calibrated { WARN } else { MUTED }));
-                                    }
-                                });
-                            });
-                        });
-                        // Composition comes from the logged-in account's
-                        // actual unlock catalog, enriched with read-only Atlas
-                        // species names and types when the guide is available.
-                        if !h.species.is_empty() {
-                            ui.collapsing(tr("Spawn composition"), |ui| {
-                                let sum = h.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
-                                for spawn in h.species.iter().take(40) {
-                                    let meta = reference.and_then(|r|r.species.get(&spawn.id));
-                                    let name = meta.map(|s|s.name.as_str()).unwrap_or("Unknown");
-                                    let types = meta.map(|s|s.types.join("/")).unwrap_or_default();
-                                    let pct = if sum>0.0 {100.0*spawn.weight/sum}else{0.0};
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new(format!(
-                                            "{} · #{} · {:.1}%",name,spawn.id,pct
-                                        )).size(10.0).color(TEXT));
-                                        if !types.is_empty() {
-                                            ui.label(RichText::new(types).size(10.0).color(DIM));
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                    });
-                ui.add_space(5.0);
-            }
-            if ranked.len() > 200 {
-                ui.label(tr("Showing first 200 hunts; refine search or region."));
-            }
-        });
-}
-
+// Hunt Atlas lives in a dedicated child module, sharing the native state and
+// rendering primitives without pulling browser JavaScript into the controller.
 /// At-a-glance card: keep the operational summary visible for every enabled
 /// account, independently of the much longer optional diagnostics panel.
 fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
