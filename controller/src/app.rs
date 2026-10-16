@@ -4097,19 +4097,38 @@ fn overview_combat_state(view: Option<&HuntView>, live: bool) -> OverviewCombatS
     OverviewCombatState::Waiting
 }
 
-fn overview_combat_image(app: &mut ControllerApp, ui: &mut egui::Ui,
-                         species_id: Option<u64>, opponent: bool) {
-    let drawn = species_id.is_some_and(|id|
-        app.visuals.show(ui, SpriteKind::Pokemon, id, None, 52.0));
-    if !drawn {
-        egui::Frame::new().fill(PANEL_ALT)
-            .stroke(Stroke::new(1.0, BORDER)).corner_radius(8.0)
-            .inner_margin(8.0).show(ui, |ui| {
-                ui.add_sized([36.0, 36.0], egui::Label::new(
+// Looktypes are the game's visual IDs; species IDs require a separate
+// catalog lookup. Never treat an arbitrary species ID as a looktype.
+fn overview_combat_image(
+    app: &mut ControllerApp,
+    ui: &mut egui::Ui,
+    preferred_looktype: Option<u64>,
+    regular_looktype: Option<u64>,
+    species_id: Option<u64>,
+    opponent: bool,
+) {
+    let texture = [
+        (SpriteKind::PokemonLooktype, preferred_looktype),
+        (SpriteKind::PokemonLooktype, regular_looktype),
+        (SpriteKind::Pokemon, species_id),
+    ].into_iter().find_map(|(kind, id)| {
+        id.filter(|id| *id > 0)
+            .and_then(|id| app.visuals.texture_id(ui, kind, id, None))
+    });
+    egui::Frame::new()
+        .fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::same(4))
+        .show(ui, |ui| {
+            if let Some(texture) = texture {
+                ui.image((texture, egui::vec2(48.0, 48.0)));
+            } else {
+                ui.add_sized([48.0, 48.0], egui::Label::new(
                     RichText::new(if opponent { "◇" } else { "◈" })
-                        .size(25.0).color(if opponent { WARN } else { ACCENT })));
-            });
-    }
+                        .size(26.0).color(if opponent { WARN } else { ACCENT })));
+            }
+        });
 }
 
 /// Matchup is always visible, even when the card's lower metrics show Session.
@@ -4136,8 +4155,10 @@ fn draw_overview_matchup(
         cols[0].label(RichText::new(tr("Your Pokémon"))
             .size(9.0).color(DIM));
         cols[0].horizontal(|ui| {
-            overview_combat_image(app,ui,
-                pokemon.and_then(|p|p.species_id.or(p.looktype)),false);
+            overview_combat_image(app, ui,
+                pokemon.and_then(|p| if p.shiny { p.shiny_looktype } else { p.looktype }),
+                pokemon.and_then(|p| p.looktype),
+                pokemon.and_then(|p| p.species_id), false);
             ui.vertical(|ui| {
                 ui.add(egui::Label::new(RichText::new(
                     compact_text(pokemon_name, 16)).size(11.0)
@@ -4152,8 +4173,8 @@ fn draw_overview_matchup(
             ui.label(RichText::new(tr("Opponent"))
                 .size(9.0).color(DIM));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                overview_combat_image(app,ui,
-                    wild.and_then(|p|p.species_id),true);
+                overview_combat_image(app, ui,
+                    None, None, wild.and_then(|p| p.species_id), true);
                 ui.vertical(|ui| {
                     let name=wild.map(|w|w.name.as_str()).filter(|s|!s.is_empty())
                         .unwrap_or(if combat == OverviewCombatState::Between {

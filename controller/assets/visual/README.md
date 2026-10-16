@@ -8,16 +8,35 @@ Moth Controller includes a checked-in copy of the public `assets/items-icons.jso
 
 - `controller/assets/visual/upstream-item-icons.json` maps **419 real item IDs** to public game icon paths (395 PNG, 24 GIF).
 - `controller/src/native_visuals.rs` validates and resolves those paths under `https://pokeidle.io/assets/`, alongside the existing five Poké Ball icons and Golden Potion.
-- **Options → Download game icons** queues those assets for a single asynchronous worker. Images are decoded only as needed by the UI and stored in the per-user disk cache; downloads never include account credentials.
+- Visible item icons are requested on demand, asynchronously cached on the user's disk, and never include account credentials.
 - The Dashboard inventory, Poké Ball usage, and Auto Catch/Restock pickers display available images with existing text fallbacks. GIF icons display a still first frame.
 - The build now enables image PNG and GIF decoding with a synchronized Cargo lockfile. Missing URLs or unsupported images never prevent gameplay.
 
-**No Pokémon sprites were falsely mapped.** The updated upstream `image-index.json`
-contains empty `sprites`, `items`, and `balls` arrays, and its scrape manifest
-reports `imageFileCount: 0`. The published `assets/creatures-sprites-lab.json`
-contains looktypes and creature IDs, but not standalone, verified species sprite
-image URLs. The native Pokémon art path therefore remains unmapped until actual
-images and their correct species IDs are provided.
+## Pokémon sprites on Overview cards
+
+The player-versus-opponent artwork is now resolved from the same real game
+metadata as `DiuleJR/pokeidle-manager` (reference: GPL-3.0-only
+`src-tauri/src/assets.rs` and `src/inventory/asset-components.tsx`):
+
+- Owned Pokémon use their actual `looktype` (or `lookShiny` when shiny).
+  They **do not** use the species ID as a sprite looktype.
+- Wild opponents expose `speciesId`. On first use, the native cache resolves
+  those IDs using `creatures.json`, `creatures-novos.json`,
+  `creatures-outland-novos.json`, and `creatures-sprites-lab.json`.
+- Both sprites first try the game's verified `marker-atlas.json` slot and
+  associated image. If absent, the per-looktype `outfits-index.json` manifest
+  selects the original game sprite sheet and animation frame.
+- All metadata and sheets are downloaded **lazily**, off the UI thread,
+  and cached on the player's disk. Cropped PNG textures are reused in egui;
+  unneeded atlas sheets are not embedded in the executable.
+- If no sprite is available, the cards retain the Pokémon name, level, combat
+  state, and their small placeholder symbols. No third-party sprite hosts or
+  guessed filenames are used.
+
+This ports sprite *resolution* and cropping behavior, not third-party game
+artwork. The game is the only runtime art origin and redistribution of art
+is not implied by public access. The standalone embedded sprite manifest
+remains intentionally empty.
 
 The existing `manifest.json` and `native_visual_assets.generated.rs` still describe
 **embedded** art, which remains empty. That is intentional: the new mapped icons
@@ -26,7 +45,7 @@ public release. No downloaded binary images were added to this repository.
 
 ## Optional embedded cache generation
 
-Moth Controller has a reusable egui sprite renderer, currently used by the native **Auto Catch / Restock** picker. It supports ball, item, and Pokémon species IDs for reusing the same cache in other screens. The current simplified native navigation no longer exposes the old Inventory and Pokémon pages; those integrations can reuse this module when the pages return. It never requires a WebView.
+Moth Controller has a reusable egui sprite renderer, currently used by the native **Auto Catch / Restock** picker. It supports ball and item IDs, plus distinct Pokémon species and looktype keys, for reuse across native views. The current simplified native navigation no longer exposes the old Inventory and Pokémon pages; those integrations can reuse this module when the pages return. It never requires a WebView.
 
 ## Wiring the current pokeidle-upstream image snapshot
 
@@ -40,7 +59,7 @@ python scripts/sync-native-visuals.py --upstream-dir ../pokeidle-upstream --loca
 
 This command uses the checked-in mappings and copies only PNG/GIF files that exist at verified snapshot paths. It produces `controller/assets/visual/manifest.json` and `controller/src/native_visual_assets.generated.rs`; after reviewing distribution rights, commit those together with `controller/assets/visual/*.{png,gif}`. To additionally ask the game CDN for icons absent from the repository snapshot, omit `--local-only`.
 
-The source archive's `image-index.json` presently has **zero mapped Pokémon sprites**, so Pokémon icons are not invented from names, looktypes, or unrelated IDs. Once a later upstream export contains verified species IDs and sprite URLs, pass its index to `--pokemon-index` or add an audited mapping.
+The upstream `image-index.json` has no standalone sprite URLs, but Pokémon rendering no longer depends on that index: the game's looktypes, marker atlas and outfit manifests are now used by the native Overview.
 
 ## Developer: create the committed art cache once
 
