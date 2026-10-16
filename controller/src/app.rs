@@ -299,6 +299,28 @@ fn tr<'a>(en: &'a str) -> &'a str {
     match en {
         "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
+        "ACCOUNT OVERVIEW" => "VISÃO GERAL DAS CONTAS",
+        "Summary" => "Resumo",
+        "XP/h total" => "XP/h total",
+        "Gold/h total" => "Ouro/h total",
+        "Online accounts" => "Contas online",
+        "Live gold" => "Ouro atual",
+        "Live gems" => "Gemas atuais",
+        "Verified online balances only; unavailable accounts are not counted." =>
+            "Somente saldos online confirmados; contas indisponíveis não são somadas.",
+        "Rates are measured, never projected; unavailable data stays blank." =>
+            "Taxas medidas, não projetadas; dados indisponíveis ficam em branco.",
+        "Session view requires a live native account" =>
+            "A visualização da sessão exige uma conta nativa online",
+        "Session duration" => "Tempo de sessão",
+        "Rare drops" => "Drops raros",
+        "Boss Token" => "Token de boss",
+        "Key" => "Chave",
+        "Bicycle" => "Bicicleta",
+        "HP" => "HP",
+        "Gold/h" => "Ouro/h",
+        "XP/h" => "XP/h",
+        "Live" => "Ao vivo",
         "Options" => "Opções",
         "Automation" => "Automação",
         "History" => "Histórico",
@@ -1594,6 +1616,7 @@ pub struct ControllerApp {
     games: [GameSlot; 4],
     panel_tab: PanelTab,
     dashboard_show_history: bool,
+    dashboard_session_view: bool,
     ui_options: UiOptions,
     hunt_account: usize,
     automation_account: usize,
@@ -1715,6 +1738,7 @@ impl ControllerApp {
             }),
             panel_tab: PanelTab::Overview,
             dashboard_show_history: false,
+            dashboard_session_view: false,
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()
@@ -3499,72 +3523,65 @@ fn open_kick_channels_in_regular_browser(channels: &[String]) -> Result<usize, S
 
 fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(tr("COMPACT OVERVIEW"))
-                .font(FontId::proportional(17.0))
-                .strong()
-                .color(TEXT),
-        );
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(tr("Select an account to inspect its full statistics"))
-                .size(11.0)
-                .color(DIM),
-        );
+        ui.label(RichText::new(tr("ACCOUNT OVERVIEW"))
+            .font(FontId::proportional(17.0)).strong().color(TEXT));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.selectable_label(app.dashboard_session_view, tr("Session")).clicked() {
+                app.dashboard_session_view = true;
+            }
+            if ui.selectable_label(!app.dashboard_session_view, tr("Summary")).clicked() {
+                app.dashboard_session_view = false;
+            }
+        });
     });
-    ui.add_space(12.0);
+    ui.add_space(9.0);
 
     egui::ScrollArea::vertical()
         .id_salt("instances_page")
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            let profiles: Vec<usize> = GameProfile::ALL
-                .iter()
+            let profiles: Vec<usize> = GameProfile::ALL.iter()
                 .map(|profile| profile.index())
                 .filter(|index| app.accounts[*index].enabled)
                 .collect();
 
             if profiles.is_empty() && app.selected_details.is_none() {
-                ui.label(
-                    RichText::new(tr("No accounts enabled. Open Account Manager to add or enable one."))
-                        .size(12.0)
-                        .color(DIM),
-                );
+                ui.label(RichText::new(tr(
+                    "No accounts enabled. Open Account Manager to add or enable one."
+                )).size(12.0).color(DIM));
             } else {
-                // Once selected, show the account's full detail immediately
-                // instead of leaving unrelated cards between it and the switcher.
+                // The dashboard matches the React manager: aggregate metrics
+                // above a responsive grid of account cards. Details replace
+                // the grid rather than leaving an empty two-column workspace.
                 if app.selected_details.is_none() {
-                let gap = 12.0;
-                let available = ui.available_width();
-                let columns = if available >= 650.0 { 2 } else { 1 };
-                let card_width = if columns == 2 {
-                    (available - gap) / 2.0
-                } else {
-                    available
-                };
-
-                for chunk in profiles.chunks(columns) {
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
-                        for index in chunk {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(card_width, 0.0),
-                                Layout::top_down(Align::Min),
-                                |ui| draw_overview_card(app, ui, *index, card_width),
-                            );
-                        }
-                    });
-                    ui.add_space(10.0);
+                    let totals = collect_overview_totals(app, &profiles);
+                    draw_overview_totals(ui, &totals);
+                    ui.add_space(12.0);
+                    let gap = 12.0;
+                    let available = ui.available_width();
+                    let columns = if available >= 720.0 { 2 } else { 1 };
+                    let card_width = if columns == 2 {
+                        (available - gap) / 2.0
+                    } else { available };
+                    for chunk in profiles.chunks(columns) {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap;
+                            for index in chunk {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(card_width, 0.0),
+                                    Layout::top_down(Align::Min),
+                                    |ui| draw_overview_card(app, ui, *index, card_width),
+                                );
+                            }
+                        });
+                        ui.add_space(10.0);
+                    }
                 }
 
-                }
-                // The workspace chip selection also opens this detailed view.
                 if let Some(index) = app.selected_details {
-                    ui.add_space(9.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!(
-                            "{} {}",
-                            tr("Details for"),
+                            "{} {}", tr("Details for"),
                             app.account_name(app.games[index].profile)
                         )).size(15.0).strong().color(TEXT));
                         ui.add_space(8.0);
@@ -3582,7 +3599,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(8.0);
                     if app.selected_details == Some(index) {
-                        let width = ui.available_width().min(820.0);
+                        let width = ui.available_width().min(900.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(width, 0.0),
                             Layout::top_down(Align::Min),
@@ -3594,18 +3611,127 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 }
                             },
                         );
-                        ui.add_space(12.0);
                     }
                 }
             }
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
             ui.collapsing(tr("Technical details"), |ui| {
                 draw_runtime_section(app, ui);
             });
         });
 }
 
+#[derive(Default)]
+struct OverviewTotals {
+    online: usize,
+    xp_h: f64,
+    xp_samples: usize,
+    gold_h: f64,
+    gold_samples: usize,
+    gold: u64,
+    gold_balances: usize,
+    gems: u64,
+    gem_balances: usize,
+}
+
+// Only confirmed live snapshots contribute. Offline accounts are not assumed
+// to have zero balances; these totals explicitly describe online balances.
+fn collect_overview_totals(app: &mut ControllerApp, profiles: &[usize]) -> OverviewTotals {
+    let mut result = OverviewTotals::default();
+    for &index in profiles {
+        let health = app.games[index].health();
+        let running = app.games[index].is_running();
+        if !running || !health.logged_in || !health.bridge_snapshot_ok ||
+            !health.telemetry_is_fresh() { continue; }
+        result.online += 1;
+        if let Some(native) = app.games[index].native.as_ref() {
+            let view = native.hunt_snapshot();
+            let snapshot = native.snapshot();
+            if view.measurements.valid_trainer {
+                result.xp_h += view.measurements.trainer_xp_h;
+                result.xp_samples += 1;
+            }
+            if view.measurements.valid_gold {
+                result.gold_h += view.measurements.gold_net_h;
+                result.gold_samples += 1;
+            }
+            if let Some(value) = view.gold.or(snapshot.gold) {
+                result.gold = result.gold.saturating_add(value);
+                result.gold_balances += 1;
+            }
+            if let Some(value) = view.orbs.or(snapshot.orbs) {
+                result.gems = result.gems.saturating_add(value);
+                result.gem_balances += 1;
+            }
+        } else {
+            if let Some(rate) = app.xp_rates[index].observe(&health) {
+                result.xp_h += rate;
+                result.xp_samples += 1;
+            }
+            // Gold/h is not provided as an observed browser rate; do not
+            // silently include Hunt Atlas estimates in a measured total.
+            result.gold = result.gold.saturating_add(health.gold);
+            result.gems = result.gems.saturating_add(health.orbs);
+            result.gold_balances += 1;
+            result.gem_balances += 1;
+        }
+    }
+    result
+}
+
+fn draw_overview_totals(ui: &mut egui::Ui, totals: &OverviewTotals) {
+    let entries = [
+        ("✧", "XP/h total", if totals.xp_samples > 0 {
+            format_hunt_amount(totals.xp_h)
+        } else { "—".into() }, ACCENT),
+        ("◈", "Gold/h total", if totals.gold_samples > 0 {
+            format_hunt_amount(totals.gold_h)
+        } else { "—".into() }, WARN),
+        ("●", "Online accounts", format!("{}/4", totals.online), GOOD),
+        ("◆", "Live gold", if totals.gold_balances > 0 {
+            format_number(totals.gold)
+        } else { "—".into() }, WARN),
+        ("◇", "Live gems", if totals.gem_balances > 0 {
+            format_number(totals.gems)
+        } else { "—".into() }, ACCENT),
+    ];
+    let gap = 8.0;
+    let available = ui.available_width();
+    let columns = if available >= 900.0 { 5 }
+        else if available >= 550.0 { 3 } else { 2 };
+    let tile_width = ((available - gap * (columns - 1) as f32) / columns as f32).max(90.0);
+    for chunk in entries.chunks(columns) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (symbol, label, value, color) in chunk {
+                ui.allocate_ui_with_layout(egui::vec2(tile_width, 0.0),
+                    Layout::top_down(Align::Min), |ui| {
+                        egui::Frame::new().fill(PANEL)
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(9.0).inner_margin(10.0)
+                            .show(ui, |ui| {
+                                ui.set_width((tile_width - 20.0).max(70.0));
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(*symbol).size(15.0).color(*color));
+                                    ui.add(egui::Label::new(
+                                        RichText::new(tr(label)).size(10.0).color(MUTED)
+                                    ).truncate());
+                                });
+                                ui.add(egui::Label::new(
+                                    RichText::new(value).size(17.0).strong().color(TEXT)
+                                ).truncate());
+                            });
+                    });
+            }
+        });
+        ui.add_space(7.0);
+    }
+    ui.label(RichText::new(tr(
+        "Verified online balances only; unavailable accounts are not counted."
+    )).size(9.0).color(DIM))
+        .on_hover_text(tr("Rates are measured, never projected; unavailable data stays blank."));
+}
 
 /// Current game inventory (server quantities) and separately battle-acquired
 /// drops. Shop purchases are never labeled as loot.
@@ -3684,9 +3810,9 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
     let account_name = app.account_name(profile);
     let health = app.games[index].health();
     let running = app.games[index].is_running();
-    let xp_per_hour = if let Some(native) = app.games[index].native.as_ref() {
-        let measured = native.hunt_snapshot().measurements;
-        if measured.valid_trainer { Some(measured.trainer_xp_h) } else { None }
+    let native_view = app.games[index].native.as_ref().map(|native| native.hunt_snapshot());
+    let xp_per_hour = if let Some(view) = native_view.as_ref() {
+        if view.measurements.valid_trainer { Some(view.measurements.trainer_xp_h) } else { None }
     } else if running {
         app.xp_rates[index].observe(&health)
     } else {
@@ -3735,11 +3861,45 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     }
                 });
             });
-            ui.add_space(2.0);
-            status_badge(ui, &health, running);
-            ui.add_space(9.0);
+            ui.add_space(3.0);
+            ui.horizontal_wrapped(|ui| {
+                status_badge(ui, &health, running);
+                ui.label(RichText::new(if app.games[index].native.is_some() {
+                    tr("Native")
+                } else if running { "Firefox" } else { tr("Offline") })
+                    .size(10.0).color(DIM));
+                if fresh {
+                    if let Some(view) = native_view.as_ref() {
+                        if view.bonuses.vip_active {
+                            ui.label(RichText::new("VIP").size(10.0).strong().color(WARN));
+                        }
+                        if view.bonuses.guild_boost_active {
+                            ui.label(RichText::new("Guild boost").size(10.0).color(GOOD));
+                        }
+                        for (label, percent, known) in [
+                            ("Twitch", view.bonuses.twitch_pct, view.bonuses.twitch_known),
+                            ("Guild", view.bonuses.guild_pct, view.bonuses.guild_known),
+                            ("Event", view.bonuses.trainer_event_pct, view.bonuses.trainer_event_known),
+                        ] {
+                            if known && percent > 0.0 {
+                                ui.label(RichText::new(format!("{label} +{percent:.0}%"))
+                                    .size(10.0).color(GOOD));
+                            }
+                        }
+                    }
+                }
+            });
+            ui.add_space(8.0);
 
-            ui.columns(2, |columns| {
+            if app.dashboard_session_view {
+                draw_overview_session(ui, native_view.as_ref().filter(|_| fresh));
+            } else {
+                draw_overview_account_summary(app, ui, &health, fresh,
+                    xp_per_hour, native_view.as_ref());
+            }
+            ui.add_space(7.0);
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
                 let hunt = if !running { "—" } else if health.hunt.is_empty() {
                     match health.activity.as_str() {
                         "Center" => tr("Online · Center"),
@@ -3748,45 +3908,16 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         _ => "—",
                     }
                 } else { &health.hunt };
-                overview_value(&mut columns[0], "Current hunt", hunt);
-
-                let pokemon = if !running || health.active_pokemon.is_empty() {
-                    "—"
-                } else {
-                    health.active_pokemon.as_str()
-                };
-                overview_value(&mut columns[1], "Active Pokémon", pokemon);
-            });
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(5.0);
-
-            // Keep the compact card focused on spendable resources and income
-            // rate. Currencies come from the same verified bridge snapshot as
-            // the detailed resource panel; never present an unverified zero.
-            ui.columns(3, |columns| {
-                let balances_ready = fresh && health.bridge_snapshot_ok;
-                let gold = if balances_ready { format_number(health.gold) } else { "—".to_string() };
-                let gems = if balances_ready { format_number(health.orbs) } else { "—".to_string() };
-                overview_value(&mut columns[0], "Gold", &gold);
-                overview_value(&mut columns[1], "Gems", &gems);
-
-                columns[2].label(RichText::new(tr("EXP/hour")).size(9.0).color(DIM));
-                let rate_text = xp_per_hour
-                    .map(|rate| format_number(rate.round() as u64))
-                    .unwrap_or_else(|| "—".to_string());
-                columns[2].add(
-                    egui::Label::new(
-                        RichText::new(rate_text)
-                            .size(14.0).strong()
-                            .color(if xp_per_hour.is_some() && fresh { GOOD } else { MUTED }),
-                    ).truncate(),
-                ).on_hover_text(tr(match xp_per_hour {
-                    Some(rate) if rate > 0.0 => "Based on recent EXP gains",
-                    Some(_) => "No EXP gained recently",
-                    None => "Calculating EXP rate",
-                }));
+                ui.label(RichText::new(format!("⌖ {}: {}", tr("Current hunt"),
+                    compact_text(hunt, 36))).size(10.0).color(MUTED))
+                    .on_hover_text(hunt);
+                let verified = fresh && health.bridge_snapshot_ok;
+                ui.label(RichText::new(format!("◆ {}: {}",
+                    tr("Gold"), if verified { format_number(health.gold) } else { "—".into() }))
+                    .size(10.0).color(WARN));
+                ui.label(RichText::new(format!("◇ {}: {}",
+                    tr("Gems"), if verified { format_number(health.orbs) } else { "—".into() }))
+                    .size(10.0).color(ACCENT));
             });
 
             ui.add_space(9.0);
@@ -3941,6 +4072,179 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
             }
         });
+}
+
+fn overview_stat_tile(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
+        .inner_margin(Margin::symmetric(9, 6)).show(ui, |ui| {
+            ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
+            ui.add(egui::Label::new(
+                RichText::new(value).size(14.0).strong().color(color)
+            ).truncate()).on_hover_text(value);
+        });
+}
+
+fn draw_overview_account_summary(
+    app: &mut ControllerApp,
+    ui: &mut egui::Ui,
+    health: &Health,
+    fresh: bool,
+    xp_per_hour: Option<f64>,
+    view: Option<&HuntView>,
+) {
+    let pokemon = if fresh { view.and_then(|v| v.active_pokemon.as_ref()) } else { None };
+    let pokemon_name = if fresh && !health.active_pokemon.is_empty() {
+        health.active_pokemon.as_str()
+    } else { "—" };
+    let pokemon_level = if fresh && !health.pokemon_level.is_empty() {
+        health.pokemon_level.as_str()
+    } else { "—" };
+    let hp = pokemon.and_then(|pokemon| {
+        let current = pokemon.hp?;
+        let total = pokemon.max_hp.filter(|max| *max > 0)?;
+        Some((current as f32 / total as f32).clamp(0.0, 1.0))
+    });
+    let gold_h = view.filter(|_| fresh).and_then(|view| {
+        view.measurements.valid_gold.then_some(view.measurements.gold_net_h)
+    });
+    let balls = view.filter(|_| fresh).and_then(|view| {
+        (!view.balls.is_empty()).then(|| {
+            view.balls.values().copied().fold(0u64, u64::saturating_add)
+        })
+    });
+    let potions = view.filter(|_| fresh).and_then(|view| {
+        (!view.items.is_empty()).then(|| {
+            view.items.iter()
+                .filter(|(id, _)| matches!(**id, 200..=204 | 70070))
+                .map(|(_, count)| *count)
+                .fold(0u64, u64::saturating_add)
+        })
+    });
+
+    let available = ui.available_width();
+    let stats_width = (available - 84.0).max(140.0);
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(72.0, 0.0),
+            Layout::top_down(Align::Center), |ui| {
+                let sprite = pokemon.and_then(|pokemon| pokemon.species_id.or(pokemon.looktype));
+                let drawn = sprite.is_some_and(|id|
+                    app.visuals.show(ui, SpriteKind::Pokemon, id, None, 68.0));
+                if !drawn {
+                    egui::Frame::new().fill(PANEL_ALT)
+                        .stroke(Stroke::new(1.0, BORDER))
+                        .corner_radius(9.0).inner_margin(10.0).show(ui, |ui| {
+                            ui.add_sized([48.0, 48.0], egui::Label::new(
+                                RichText::new("◈").size(30.0).color(ACCENT)));
+                        });
+                }
+            });
+        ui.allocate_ui_with_layout(egui::vec2(stats_width, 0.0),
+            Layout::top_down(Align::Min), |ui| {
+                ui.add(egui::Label::new(
+                    RichText::new(compact_text(pokemon_name, 32))
+                        .size(13.0).strong().color(TEXT)
+                ).truncate()).on_hover_text(pokemon_name);
+                ui.label(RichText::new(format!("Lv. {pokemon_level}"))
+                    .size(10.0).color(MUTED));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("HP")).size(9.0).color(DIM));
+                    if let Some(ratio) = hp {
+                        ui.add_sized([(stats_width - 89.0).max(32.0), 11.0],
+                            egui::ProgressBar::new(ratio).fill(GOOD));
+                        ui.label(RichText::new(format!("{:.0}%", ratio * 100.0))
+                            .size(9.0).color(TEXT));
+                    } else {
+                        ui.label(RichText::new("—").size(10.0).color(MUTED));
+                    }
+                });
+                ui.add_space(5.0);
+                ui.columns(2, |cols| {
+                    overview_stat_tile(&mut cols[0], "XP/h",
+                        &if fresh { xp_per_hour.map(format_hunt_amount)
+                            .unwrap_or_else(|| "—".into()) } else { "—".into() },
+                        ACCENT);
+                    overview_stat_tile(&mut cols[1], "Gold/h",
+                        &gold_h.map(format_hunt_amount)
+                            .unwrap_or_else(|| "—".into()), WARN);
+                });
+                ui.add_space(4.0);
+                ui.columns(2, |cols| {
+                    overview_stat_tile(&mut cols[0], "Potions",
+                        &potions.map(format_number).unwrap_or_else(|| "—".into()), TEXT);
+                    overview_stat_tile(&mut cols[1], "Balls",
+                        &balls.map(format_number).unwrap_or_else(|| "—".into()), TEXT);
+                });
+            });
+    });
+}
+
+fn rare_session_drop_count(drops: &std::collections::BTreeMap<String, u64>,
+                           matches: &[&str]) -> u64 {
+    drops.iter()
+        .filter(|(name, _)| {
+            let name = name.to_lowercase();
+            matches.iter().any(|term| name.contains(term))
+        })
+        .map(|(_, quantity)| *quantity)
+        .fold(0u64, u64::saturating_add)
+}
+
+fn draw_overview_session(ui: &mut egui::Ui, view: Option<&HuntView>) {
+    let Some(view) = view else {
+        ui.label(RichText::new(tr("Session view requires a live native account"))
+            .size(11.0).color(MUTED));
+        return;
+    };
+    let session = &view.session;
+    ui.columns(3, |cols| {
+        overview_stat_tile(&mut cols[0], "Session duration",
+            &format!("{:02}:{:02}:{:02}",
+                session.duration_secs / 3600,
+                (session.duration_secs / 60) % 60,
+                session.duration_secs % 60), TEXT);
+        overview_stat_tile(&mut cols[1], "Kills", &format_number(session.kills), TEXT);
+        overview_stat_tile(&mut cols[2], "Captures", &format_number(session.captures), TEXT);
+    });
+    ui.add_space(6.0);
+    ui.label(RichText::new(tr("Rare drops")).size(9.0).strong().color(DIM));
+    let drops: [(&str, &[&str]); 4] = [
+        ("Boss Token", &["boss token"]),
+        ("Key", &["chave", "key"]),
+        ("Shiny Stone", &["shiny stone"]),
+        ("Bicycle", &["bicicleta", "bicycle"]),
+    ];
+    ui.columns(4, |cols| {
+        for (col, (label, matches)) in cols.iter_mut().zip(drops.iter()) {
+            overview_stat_tile(col, label,
+                &format_number(rare_session_drop_count(&session.acquired, matches)), TEXT);
+        }
+    });
+    ui.add_space(6.0);
+    ui.columns(2, |cols| {
+        overview_stat_tile(&mut cols[0], "shinies seen",
+            &format_number(session.shiny_seen), ACCENT);
+        overview_stat_tile(&mut cols[1], "shinies caught",
+            &format_number(session.shiny_captured), GOOD);
+    });
+}
+
+#[cfg(test)]
+mod dashboard_overview_tests {
+    use super::rare_session_drop_count;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn session_drop_tiles_count_only_matching_battle_drops() {
+        let drops = BTreeMap::from([
+            ("Boss Token".to_string(), 2),
+            ("Boss Token Fragment".to_string(), 3),
+            ("Great Ball".to_string(), 100),
+            ("Chave Dourada".to_string(), 1),
+        ]);
+        assert_eq!(rare_session_drop_count(&drops, &["boss token"]), 5);
+        assert_eq!(rare_session_drop_count(&drops, &["chave", "key"]), 1);
+        assert_eq!(rare_session_drop_count(&drops, &["bicycle"]), 0);
+    }
 }
 
 /// Aggregated, 90-day battle history is loaded from the same account's
