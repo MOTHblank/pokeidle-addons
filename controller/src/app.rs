@@ -318,6 +318,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Grade" => "Nota",
         "Power" => "Poder",
         "Search Pokémon" => "Buscar Pokémon",
+        "Minimum total IV" => "IV total mínimo",
+        "All types" => "Todos os tipos",
+        "Quality" => "Qualidade",
+        "IV total" => "IV total",
         "Inspect a Pokémon from the native roster." => "Inspecione um Pokémon da lista nativa.",
         "Selected Pokémon" => "Pokémon selecionado",
         "Sell Pokémon" => "Vender Pokémon",
@@ -1503,7 +1507,7 @@ struct NativeBrowserClosedEvent {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PanelTab { Overview, Hunts, Inventory, Pokemon, Automation, History, Options }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PokemonSort { Level, Grade, Power, Name }
+enum PokemonSort { Level, Grade, Quality, Power, IvTotal, Type, Name }
 #[derive(Clone,Default)]
 struct AutomationDraft {
     initialized: bool,
@@ -1585,6 +1589,8 @@ pub struct ControllerApp {
     pokemon_query: String,
     pokemon_sort: PokemonSort,
     pokemon_shiny_only: bool,
+    pokemon_min_iv: u64,
+    pokemon_type: String,
     pokemon_selected: [Option<u64>;4],
     pokemon_sale_confirm: [Option<u64>;4],
     history_account: usize,
@@ -1706,6 +1712,8 @@ impl ControllerApp {
             pokemon_query: String::new(),
             pokemon_sort: PokemonSort::Level,
             pokemon_shiny_only: false,
+            pokemon_min_iv: 0,
+            pokemon_type: String::new(),
             pokemon_selected: [None;4],
             pokemon_sale_confirm: [None;4],
             history_account: 0,
@@ -4482,18 +4490,36 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.add(egui::TextEdit::singleline(&mut app.pokemon_query)
             .hint_text(tr("Search Pokémon")).desired_width(190.0));
         ui.checkbox(&mut app.pokemon_shiny_only,tr("Shiny only"));
+        ui.label(tr("Minimum total IV"));
+        ui.add(egui::DragValue::new(&mut app.pokemon_min_iv).range(0..=186));
+        let types=view.pokemon_roster.iter().flat_map(|pokemon|pokemon.types.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        egui::ComboBox::from_id_salt("pokemon-type")
+            .selected_text(if app.pokemon_type.is_empty() {tr("All types")} else {&app.pokemon_type})
+            .show_ui(ui,|ui|{
+                ui.selectable_value(&mut app.pokemon_type,String::new(),tr("All types"));
+                for kind in types {
+                    ui.selectable_value(&mut app.pokemon_type,kind.clone(),kind);
+                }
+            });
         ui.label(tr("Sort by"));
         egui::ComboBox::from_id_salt("pokemon-sort")
             .selected_text(match app.pokemon_sort {
                 PokemonSort::Level => "Level",
                 PokemonSort::Grade => tr("Grade"),
+                PokemonSort::Quality => tr("Quality"),
                 PokemonSort::Power => tr("Power"),
+                PokemonSort::IvTotal => tr("IV total"),
+                PokemonSort::Type => "Type",
                 PokemonSort::Name => "Name"
             })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Level,"Level");
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Grade,tr("Grade"));
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Quality,tr("Quality"));
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Power,tr("Power"));
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::IvTotal,tr("IV total"));
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Type,"Type");
                 ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Name,"Name");
             });
     });
@@ -4502,6 +4528,10 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let mut filtered=view.pokemon_roster.iter()
         .filter(|pokemon|
             (!app.pokemon_shiny_only || pokemon.shiny) &&
+            (app.pokemon_type.is_empty() ||
+                pokemon.types.iter().any(|kind|kind==&app.pokemon_type)) &&
+            (app.pokemon_min_iv==0 || pokemon.ivs.iter()
+                .filter_map(|iv|*iv).sum::<u64>()>=app.pokemon_min_iv) &&
             (query.is_empty() || pokemon.name.to_lowercase().contains(&query) ||
                 pokemon.id.to_string().contains(&query) ||
                 pokemon.species_id.is_some_and(|id|id.to_string().contains(&query))))
@@ -4511,7 +4541,12 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             PokemonSort::Level => b.level.cmp(&a.level),
             PokemonSort::Grade => b.grade.unwrap_or(0.0)
                 .total_cmp(&a.grade.unwrap_or(0.0)),
+            PokemonSort::Quality => b.quality.unwrap_or(0.0)
+                .total_cmp(&a.quality.unwrap_or(0.0)),
             PokemonSort::Power => b.power.unwrap_or(0).cmp(&a.power.unwrap_or(0)),
+            PokemonSort::IvTotal => b.ivs.iter().filter_map(|iv|*iv).sum::<u64>()
+                .cmp(&a.ivs.iter().filter_map(|iv|*iv).sum::<u64>()),
+            PokemonSort::Type => a.types.first().cmp(&b.types.first()),
             PokemonSort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         };
         cmp.then_with(||a.id.cmp(&b.id))
