@@ -4355,6 +4355,7 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
     });
     let index=app.history_account;
+    let profile=app.games[index].profile;
     let history=if let Some(native)=app.games[index].native.as_ref() {
         app.offline_histories[index]=None;
         native.history_snapshot()
@@ -4363,8 +4364,7 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             app.offline_histories[index]=None;
         }
         app.offline_histories[index]
-            .get_or_insert_with(||crate::native_history::load_offline(
-                app.games[index].profile)).clone()
+            .get_or_insert_with(||crate::native_history::load_offline(profile)).clone()
     };
     if !history.owner.is_empty() {
         ui.label(RichText::new(format!("{}: {}",tr("Account"),history.owner))
