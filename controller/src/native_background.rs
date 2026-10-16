@@ -230,6 +230,7 @@ fn open_session(credentials: &Credentials) -> Result<(
     tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
     String,
 ), String> {
+    crate::native_tls::ensure()?;
     let addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not resolve PokéIdle WebSocket".to_owned())?;
     // Try IPv4 and IPv6 rather than failing when the first DNS record is
