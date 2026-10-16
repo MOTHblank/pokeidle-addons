@@ -247,6 +247,8 @@ pub struct HistoryRecorder {
     snapshot: HistorySnapshot,
     nick: String,
     dirty:bool,
+    needs_publish:bool,
+    last_publish:Instant,
     last_flush:Instant,
     writer:mpsc::Sender<(PathBuf,String)>,
     path:Option<PathBuf>,
@@ -290,8 +292,9 @@ impl HistoryRecorder {
                     }
                 }
             }).ok();
-        Self {shared,snapshot,nick,dirty:false,
-            last_flush:Instant::now(),writer:writer_tx,path}
+        Self {shared,snapshot,nick,dirty:false,needs_publish:false,
+            last_publish:Instant::now(),last_flush:Instant::now(),
+            writer:writer_tx,path}
     }
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else{return};
@@ -319,10 +322,22 @@ impl HistoryRecorder {
         }
         if self.dirty{
             self.snapshot.retain_recent(day);
-            if let Ok(mut shared)=self.shared.lock(){*shared=self.snapshot.clone();}
+            // A single battle can emit many frames per second. Only clone
+            // the bounded history into the UI at one-second cadence.
+            self.needs_publish=true;
         }
     }
     pub fn maybe_flush(&mut self,force:bool) {
+        if self.needs_publish &&
+            (force || self.last_publish.elapsed()>=Duration::from_secs(1)) {
+            if let Ok(mut shared)=self.shared.lock() {
+                let mut snapshot=self.snapshot.clone();
+                snapshot.save_error=shared.save_error.clone();
+                *shared=snapshot;
+                self.needs_publish=false;
+            }
+            self.last_publish=Instant::now();
+        }
         if !self.dirty || (!force && self.last_flush.elapsed()<SAVE_INTERVAL){return}
         if let Some(path)=self.path.as_ref(){
             let raw=self.snapshot.to_value(&self.nick).to_string();
