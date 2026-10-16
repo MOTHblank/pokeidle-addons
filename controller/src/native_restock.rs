@@ -47,6 +47,22 @@ struct Rule {
 }
 #[derive(Clone, Debug)]
 struct ShopEntry { price: u64, name: String, source: &'static str }
+
+// PokéIdle's published items catalog identifies these healing items by ID.
+// Its npcPrice is only reference metadata, NOT an authenticated shop quote.
+// A reference price permits a single-item probe; larger purchases require
+// the live shop price or the actual unit cost in a server purchase receipt.
+// Golden Potion is a separately observed market item absent from older JSON.
+const REFERENCE_HEALING_ITEMS: &[(u64, &str, u64)] = &[
+    (200, "Small Potion", 50),
+    (201, "Great Potion", 150),
+    (202, "Ultra Potion", 400),
+    (203, "Hyper Potion", 800),
+    (204, "Ultimate Potion", 1500),
+    (205, "Revive", 600),
+    (206, "Max Revive", 2500),
+    (70070, "Golden Potion", 2500),
+];
 #[derive(Clone, Debug)]
 struct Order {
     kind: &'static str,
@@ -96,7 +112,7 @@ impl Restock {
         let enabled = config.and_then(|v| v.get("enabled"))
             .and_then(Value::as_bool) == Some(true);
         let configured = !rules.is_empty();
-        Self {
+        let mut worker = Self {
             status: RestockStatus {
                 enabled, configured,
                 phase: if !enabled { "Off" } else if !configured {
@@ -109,7 +125,9 @@ impl Restock {
             stock: BTreeMap::new(),
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
-        }
+        };
+        worker.seed_reference_items();
+        worker
     }
     /// Apply settings while maintaining pending transaction and authoritative
     /// shop/inventory state. Replacing the Restock worker would lose in-flight
@@ -119,6 +137,7 @@ impl Restock {
         self.rules=candidate.rules;
         self.reserve=candidate.reserve;
         self.status.configured=candidate.status.configured;
+        self.seed_reference_items();
         self.set_enabled(config.restock_enabled);
     }
     pub fn set_enabled(&mut self, enabled: bool) {
@@ -133,6 +152,20 @@ impl Restock {
         self.status.pending = self.pending.is_some();
     }
     fn idx(kind: &str) -> usize { if kind == "ball" { 0 } else { 1 } }
+    fn seed_reference_items(&mut self) {
+        for rule in &self.rules {
+            if rule.kind != "item" || self.unavailable.contains(&("item", rule.id)) {
+                continue;
+            }
+            if let Some((_, name, price)) = REFERENCE_HEALING_ITEMS.iter()
+                .find(|(id, _, _)| *id == rule.id)
+            {
+                self.prices.entry(("item", rule.id)).or_insert(ShopEntry {
+                    price: *price, name: name.to_lowercase(), source: "Reference catalog"
+                });
+            }
+        }
+    }
     fn read_catalog(&mut self, kind: &'static str, raw: Option<&Value>) {
         let Some(items) = raw.and_then(Value::as_array) else { return };
         for item in items {
@@ -170,8 +203,9 @@ impl Restock {
     /// item metadata when the welcome omits the purchasable-item list.
     pub fn needs_item_metadata(&self) -> bool {
         self.status.enabled && self.rules.iter().any(|rule|
-            rule.kind == "item" && !self.prices.contains_key(&(rule.kind, rule.id))
-                && !self.unavailable.contains(&(rule.kind, rule.id))
+            rule.kind == "item" && !self.unavailable.contains(&(rule.kind, rule.id))
+                && self.prices.get(&(rule.kind, rule.id))
+                    .is_none_or(|meta| meta.source == "Reference catalog")
         )
     }
 
@@ -188,8 +222,12 @@ impl Restock {
                 name.contains("reviver")) { continue; }
             let Some(price) = meta.price_gold.filter(|value|*value>0) else { continue; };
             if self.unavailable.contains(&("item",rule.id)) { continue; }
-            self.prices.entry(("item",rule.id))
-                .or_insert(ShopEntry { price, name, source: "Public catalog" });
+            let key = ("item", rule.id);
+            if self.prices.get(&key).is_some_and(|meta|
+                meta.source == "Server" || meta.source == "Server purchase") {
+                continue;
+            }
+            self.prices.insert(key, ShopEntry { price, name, source: "Public catalog" });
         }
     }
 
@@ -228,6 +266,7 @@ impl Restock {
         }
         self.prices.clear();
         self.unavailable.clear();
+        self.seed_reference_items();
         self.stock.clear();
         self.gold = None;
         self.known_stock = [false, false];
@@ -241,6 +280,7 @@ impl Restock {
             }
             self.prices.clear();
             self.unavailable.clear();
+            self.seed_reference_items();
             self.stock.clear();
             self.gold = None;
             self.known_stock = [false, false];
@@ -288,6 +328,21 @@ impl Restock {
                     if id_matches || name_matches ||
                         (qty_matches && spent_matches && !explicit_name_conflicts) {
                         order.ack = true;
+                        // The paid amount, not npcPrice, determines the safe
+                        // size of all subsequent restock orders.
+                        if let (Some(qty), Some(spent)) = (
+                            event.get("qtd").and_then(Value::as_u64),
+                            event.get("gasto").and_then(Value::as_u64)
+                        ) {
+                            if qty == order.qty && qty > 0 && spent > 0 &&
+                                spent % qty == 0 {
+                                if let Some(meta) =
+                                    self.prices.get_mut(&(order.kind, order.id)) {
+                                    meta.price = spent / qty;
+                                    meta.source = "Server purchase";
+                                }
+                            }
+                        }
                         self.status.phase = "Confirming inventory".into();
                     }
                 }
@@ -392,8 +447,13 @@ impl Restock {
                 } else { missing_catalog = true; }
                 continue;
             };
-            let qty = (rule.target - current).min(MAX_QTY)
+            let mut qty = (rule.target - current).min(MAX_QTY)
                 .min(gold.saturating_sub(self.reserve) / meta.price);
+            if meta.source != "Server" && meta.source != "Server purchase" {
+                // The reference catalog proves the ID/name, not its current
+                // shop price. Buy one first and learn cost from the receipt.
+                qty = qty.min(1);
+            }
             if qty == 0 {
                 limited_by_reserve = true;
                 continue;
@@ -536,12 +596,14 @@ mod tests {
         assert_eq!(r.rules[1].id, 200);
     }
     #[test]
-    fn reports_missing_item_price_instead_of_misleading_stock_ok() {
+    fn unknown_item_id_waits_for_shop_instead_of_guessing_its_price() {
         let now = Instant::now();
-        let mut r = configured();
+        let mut r = Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":777,
+            "potionAt":2,"potionTo":12
+        }})));
         r.ingest(r#"{"t":"welcome",
-            "catalogoBolas":[{"id":4,"nome":"Ultra Ball","priceGold":10,"compravel":true}],
-            "estado":{"gold":10000,"balls":{"4":30},"items":{"200":0}}
+            "estado":{"gold":10000,"balls":{},"items":{"777":0}}
         }"#, now);
         assert!(r.next(now, true).is_none());
         assert_eq!(r.status.phase, "Waiting for shop");
@@ -585,15 +647,18 @@ mod tests {
     #[test]
     fn accepts_authoritative_shop_catalog_refreshes_from_estado() {
         let now = Instant::now();
-        let mut r = configured();
+        let mut r = Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":777,
+            "potionAt":2,"potionTo":12
+        }})));
         r.ingest(r#"{"t":"welcome","estado":{"gold":10000,
-            "balls":{"4":30},"items":{"200":0}}}"#,now);
+            "balls":{},"items":{"777":0}}}"#,now);
         assert!(r.next(now,true).is_none());
         assert_eq!(r.status.phase,"Waiting for shop");
         r.ingest(r#"{"t":"estado","estado":{"itensCompraveis":[
-            {"itemId":200,"nome":"Golden Potion","preco":5}]}}"#,now);
+            {"itemId":777,"nome":"Future Potion","preco":5}]}}"#,now);
         assert_eq!(r.next(now+Duration::from_secs(1),true).unwrap().wire(),
-            json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
+            json!({"t":"shop.buy","kind":"item","id":777,"qty":12}));
     }
 
     #[test]
@@ -609,12 +674,53 @@ mod tests {
         assert!(!r.prices.contains_key(&("item",999)));
         assert!(!r.prices.contains_key(&("ball",4)));
         let no_price=crate::native_items::parse(r#"{"items":[
-            {"id":200,"name":"Golden Potion","category":"heal"}]}"#).unwrap();
-        let mut empty=configured();
+            {"id":777,"name":"Future Potion","category":"heal"}]}"#).unwrap();
+        let mut empty=Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":777,
+            "potionAt":2,"potionTo":12
+        }})));
         empty.merge_item_metadata(&no_price);
-        assert!(!empty.prices.contains_key(&("item",200)));
+        assert!(!empty.prices.contains_key(&("item",777)));
     }
 
+    #[test]
+    fn known_potion_id_can_probe_without_live_shop_catalog_and_learn_real_price() {
+        let now = Instant::now();
+        let mut r = configured();
+        r.ingest(r#"{"t":"welcome","estado":{
+            "gold":10000,"balls":{"4":30},"items":{}
+        }}"#, now);
+        r.publish_status();
+        let potion = r.status.rules.iter().find(|rule|rule.id == 200).unwrap();
+        assert_eq!(potion.price_source, "Reference catalog");
+        assert_eq!(potion.current, Some(0));
+        assert_eq!(r.next(now, true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":1}));
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "id":200,"kind":"item","qtd":1,"gasto":77}]}"#,
+            now+Duration::from_secs(1));
+        r.ingest(r#"{"t":"estado","estado":{"items":{"200":1},"gold":9923}}"#,
+            now+Duration::from_secs(1));
+        assert_eq!(r.status.confirmed,1);
+        r.publish_status();
+        let potion = r.status.rules.iter().find(|rule|rule.id == 200).unwrap();
+        assert_eq!(potion.price,Some(77));
+        assert_eq!(potion.price_source,"Server purchase");
+        assert_eq!(r.next(now+Duration::from_secs(3),true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+    }
+    #[test]
+    fn authoritative_shop_price_overrides_reference_and_skips_probe() {
+        let now = Instant::now();
+        let mut r = configured();
+        r.ingest(r#"{"t":"welcome",
+            "itensCompraveis":[{"itemId":200,"nome":"Small Potion","preco":60}],
+            "estado":{"gold":10000,"balls":{"4":30},"items":{"200":0}}
+        }"#,now);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
+        assert_eq!(r.prices.get(&("item",200)).unwrap().source,"Server");
+    }
     #[test]
     fn unrelated_purchase_cannot_acknowledge_same_cost_different_item() {
         let now=Instant::now();
