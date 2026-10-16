@@ -198,7 +198,7 @@ impl Gameplay {
                                             if let Some(id)=id {
                                                 *self.status.caught_by_ball.entry(id).or_default()+=1;
                                             }
-                                            self.status.last_action=format!("Captured slot #{slot}");
+                                            self.status.last_action=format!("Pokémon captured (target #{slot})");
                                             self.status.error=None;
                                         }
                                         // A manual or server automation success also
@@ -209,7 +209,7 @@ impl Gameplay {
                                         if self.corpses[idx].pending {
                                             self.corpses[idx].pending=false;
                                             self.status.failures=self.status.failures.saturating_add(1);
-                                            self.status.last_action=format!("Slot #{slot} resisted; retry eligible");
+                                            self.status.last_action=format!("Capture failed for target #{slot}; retrying");
                                         }
                                         // Keep the original send timestamp. An
                                         // authoritative failure can be retried at
@@ -280,10 +280,10 @@ impl Gameplay {
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
         self.status.last_action=if timed_out {
-            format!("Retrying unconfirmed throw on slot #{}",corpse.slot)
+            format!("Retrying a Poké Ball throw (target #{})",corpse.slot)
         } else if corpse.attempts>1 {
-            format!("Retrying slot #{}",corpse.slot)
-        } else {format!("Throwing at slot #{}",corpse.slot)};
+            format!("Trying another Poké Ball (target #{})",corpse.slot)
+        } else {format!("Throwing a Poké Ball (target #{})",corpse.slot)};
         Some(GameCommand::Throw{ball_id:id,slot:corpse.slot})
     }
     pub fn failed(&mut self,command:&GameCommand,reason:&str) {
