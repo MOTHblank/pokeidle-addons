@@ -171,6 +171,7 @@ impl Restock {
     pub fn needs_item_metadata(&self) -> bool {
         self.status.enabled && self.rules.iter().any(|rule|
             rule.kind == "item" && !self.prices.contains_key(&(rule.kind, rule.id))
+                && !self.unavailable.contains(&(rule.kind, rule.id))
         )
     }
 
@@ -601,7 +602,7 @@ mod tests {
             {"id":200,"name":"Potion","preco":5}]}"#).unwrap();
         r.merge_item_metadata(&meta);
         assert!(!r.prices.contains_key(&("item",200)));
-        assert!(!r.prices.contains_key(&("item",200)));
+        assert!(!r.needs_item_metadata());
         assert!(r.next(now,true).is_none());
         assert_eq!(r.status.phase,"Shop item unavailable");
         r.publish_status();
