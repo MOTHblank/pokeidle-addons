@@ -668,6 +668,36 @@ mod tests {
         assert_eq!(r.status.phase, "Waiting for shop");
     }
     #[test]
+    fn selected_revive_is_a_separate_restock_category() {
+        let now=Instant::now();
+        let mut r=Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":0,
+            "selectedReviveId":205,"reviveAt":1,"reviveTo":5
+        }})));
+        r.ingest(r#"{"t":"welcome",
+            "itensCompraveis":[{"itemId":205,"name":"Revive","preco":600}],
+            "estado":{"gold":10000,"balls":{},"items":{"205":1}}
+        }"#,now);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":205,"qty":4}));
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "id":205,"kind":"item","qtd":4,"gasto":2400}]}"#,now);
+        assert_eq!(r.status.confirmed,1);
+    }
+    #[test]
+    fn golden_potion_is_known_without_synthetic_live_shop_quote() {
+        let now=Instant::now();
+        let mut r=Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":70070,
+            "potionAt":10,"potionTo":50
+        }})));
+        r.ingest(r#"{"t":"welcome",
+            "estado":{"gold":10000,"balls":{},"items":{"70070":0}}
+        }"#,now);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":70070,"qty":1}));
+    }
+    #[test]
     fn no_spend_below_gold_reserve_or_when_disabled() {
         let now = Instant::now();
         let mut r = configured();
