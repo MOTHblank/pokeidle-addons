@@ -22,7 +22,10 @@ use tungstenite::{client_tls, http::header, Message};
 use tungstenite::client::IntoClientRequest;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
-const READ_TIMEOUT: Duration = Duration::from_millis(250);
+// A 250 ms blocking read imposed a hidden floor on every rule-buy dispatch.
+// 60 ms permits Watch's 120 ms pacing while keeping the native worker blocking
+// (not spinning) when the authenticated game has no market activity.
+const READ_TIMEOUT: Duration = Duration::from_millis(60);
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(15);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 const CONNECTION_STALE_AFTER: Duration = Duration::from_secs(90);
