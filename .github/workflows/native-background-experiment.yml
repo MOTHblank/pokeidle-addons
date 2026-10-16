@@ -1,8 +1,9 @@
-name: Experimental native background transport
+name: Validate native Moth Controller
 
 on:
   push:
     branches:
+      - master
       - experiment/native-background-sessions
   workflow_dispatch:
 
@@ -32,13 +33,13 @@ jobs:
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
             libgl1-mesa-dev libegl1-mesa-dev
-      - name: Test experimental controller
+      - name: Test native controller
         working-directory: controller
         run: cargo test
-      - name: Check experimental controller
+      - name: Check native controller
         working-directory: controller
         run: cargo check
-      - name: Build native-first preview executable
+      - name: Build native controller
         working-directory: controller
         run: cargo build --release
       - name: Upload Windows preview (branch only)
