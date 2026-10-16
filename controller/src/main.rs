@@ -6,6 +6,7 @@ mod config;
 mod kick;
 mod firefox;
 mod monitor;
+mod native_background;
 mod logging;
 mod update;
 
