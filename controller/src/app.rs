@@ -6,6 +6,7 @@ use crate::logging;
 use crate::native_background::NativeSession;
 use crate::native_gameplay::GameCommand;
 use crate::native_hunts::{self, HuntView};
+use crate::native_atlas::{self, Reference as AtlasReference};
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -20,7 +21,6 @@ use std::time::{Duration, Instant};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
 use tray_icon::{
@@ -283,6 +283,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Pending" => "Pendente",
         "Hunt" => "Caçar",
         "Showing first 200 hunts; refine search or region." => "Mostrando até 200 hunts; refine a busca.",
+        "Loading species and move reference..." => "Carregando espécies e golpes do guia...",
+        "Guide reference unavailable" => "Guia de referência indisponível",
+        "Retry" => "Tentar novamente",
+        "species in guide" => "espécies no guia",
+        "Server determines accessible hunts" => "Servidor define quais hunts estão liberadas",
+        "Guide model: forecasts are uncertain; calibrated to observed combat where available." =>
+            "Modelo do guia: estimativas incertas, calibradas com combate real quando possível.",
+        "Calibrated estimate" => "Estimativa calibrada",
+        "Experimental estimate" => "Estimativa experimental",
 
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
@@ -1296,6 +1305,11 @@ pub struct ControllerApp {
     hunt_query: String,
     hunt_region: String,
     hunt_ranking: HuntRanking,
+    hunt_reference: Option<Arc<AtlasReference>>,
+    hunt_reference_error: Option<String>,
+    hunt_reference_busy: bool,
+    hunt_reference_tx: Sender<Result<AtlasReference,String>>,
+    hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
     show_accounts: bool,
     accounts: [AccountConfig; 4],
     status: String,
@@ -1344,6 +1358,7 @@ impl ControllerApp {
         let (cached_native_tx, cached_native_rx) = mpsc::channel();
         let (native_closed_tx, native_closed_rx) = mpsc::channel();
         let (native_verified_tx, native_verified_rx) = mpsc::channel();
+        let (hunt_reference_tx, hunt_reference_rx) = mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1380,6 +1395,11 @@ impl ControllerApp {
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
+            hunt_reference: None,
+            hunt_reference_error: None,
+            hunt_reference_busy: false,
+            hunt_reference_tx,
+            hunt_reference_rx,
             show_accounts: false,
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -1508,6 +1528,23 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        while let Ok(loaded) = self.hunt_reference_rx.try_recv() {
+            self.hunt_reference_busy = false;
+            match loaded {
+                Ok(reference) => {
+                    logging::info(&format!(
+                        "Native Hunt Atlas reference ready: {} species",
+                        reference.species.len()
+                    ));
+                    self.hunt_reference = Some(Arc::new(reference));
+                    self.hunt_reference_error = None;
+                }
+                Err(error) => {
+                    logging::warn(&format!("Native Hunt Atlas reference unavailable: {error}"));
+                    self.hunt_reference_error = Some(error);
+                }
+            }
+        }
         // Only the game TAB is closed before proof. The authentication browser
         // stays alive until both native sockets have received real welcome.
         while let Ok(event) = self.native_verified_rx.try_recv() {
@@ -2957,6 +2994,18 @@ fn format_hunt_amount(value: f64) -> String {
 /// Manager-like Where to Hunt presentation, merged with server-only Atlas
 /// filters and separately labeled real samples vs current-pace scenarios.
 fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    // Only load the independent public reference when this tab is actually
+    // opened; game socket, Twitch and normal dashboard stay extremely light.
+    if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
+        !app.hunt_reference_busy {
+        app.hunt_reference_busy = true;
+        let tx = app.hunt_reference_tx.clone();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(native_atlas::load)
+                .unwrap_or_else(|_| Err("Guide reference loader panicked".into()));
+            let _ = tx.send(result);
+        });
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
         egui::ComboBox::from_id_salt("hunt-account")
@@ -2971,6 +3020,25 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(RichText::new(tr("Native server catalog · no userscripts"))
             .size(10.0).color(MUTED));
     });
+    ui.add_space(4.0);
+    if app.hunt_reference_busy {
+        ui.label(RichText::new(tr("Loading species and move reference..."))
+            .size(10.0).color(MUTED));
+    } else if let Some(error) = app.hunt_reference_error.as_deref() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("{}: {}",
+                tr("Guide reference unavailable"), error)).size(10.0).color(WARN));
+            if ui.small_button(tr("Retry")).clicked() {
+                app.hunt_reference_error = None;
+            }
+        });
+    } else if let Some(reference) = app.hunt_reference.as_deref() {
+        ui.label(RichText::new(format!(
+            "{} {} · {}",
+            reference.species.len(), tr("species in guide"),
+            tr("Server determines accessible hunts")
+        )).size(10.0).color(MUTED));
+    }
     ui.add_space(10.0);
     let index = app.hunt_account;
     let Some(native) = app.games[index].native.as_ref() else {
@@ -3117,28 +3185,46 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         (bonuses.trainer_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
     let pokemon_factor = 1.0 +
         (bonuses.pokemon_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
-    let potential = |h: &native_hunts::HuntEntry| {
+    // Compute forecasts once per visible hunt rather than recalculating the
+    // combat simulator O(n log n) times during every sort comparison.
+    let reference = app.hunt_reference.as_deref();
+    let scored = |h: &'_ native_hunts::HuntEntry| {
+        let forecast = reference.and_then(|refdata| native_atlas::estimate(&hunts,h,refdata));
         let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
             .unwrap_or((0.0,0.0));
-        match app.hunt_ranking {
-            HuntRanking::TrainerXp => xp * trainer_factor,
-            HuntRanking::PokemonXp => xp * pokemon_factor,
-            HuntRanking::Gold => gold,
-        }
+        let value = if let Some(forecast) = &forecast {
+            match app.hunt_ranking {
+                HuntRanking::TrainerXp => forecast.trainer_xp_h,
+                HuntRanking::PokemonXp => forecast.pokemon_xp_h,
+                HuntRanking::Gold => forecast.gold_h,
+            }
+        } else {
+            match app.hunt_ranking {
+                HuntRanking::TrainerXp => xp * trainer_factor,
+                HuntRanking::PokemonXp => xp * pokemon_factor,
+                HuntRanking::Gold => gold,
+            }
+        };
+        (h, forecast, value)
     };
-    rows.sort_by(|a,b| potential(b).total_cmp(&potential(a))
-        .then_with(|| a.level.cmp(&b.level))
-        .then_with(|| a.name.cmp(&b.name)));
+    let mut ranked: Vec<_> = rows.drain(..).map(scored).collect();
+    ranked.sort_by(|a,b| b.2.total_cmp(&a.2)
+        .then_with(|| a.0.level.cmp(&b.0.level))
+        .then_with(|| a.0.name.cmp(&b.0.name)));
     ui.label(RichText::new(format!(
         "{} {} · {}",
-        rows.len(), tr("matching hunts"),
-        tr("Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance.")
+        ranked.len(), tr("matching hunts"),
+        if reference.is_some() {
+            tr("Guide model: forecasts are uncertain; calibrated to observed combat where available.")
+        } else {
+            tr("Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance.")
+        }
     )).size(10.0).color(WARN));
     ui.add_space(7.0);
 
     egui::ScrollArea::vertical().id_salt("atlas-hunt-results")
         .max_height(ui.available_height().max(240.0)).show(ui, |ui| {
-            for (index, h) in rows.iter().take(200).enumerate() {
+            for (index, (h, forecast, value)) in ranked.iter().take(200).enumerate() {
                 let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
                 let pending = hunts.pending_hunt_slug.as_deref() == Some(h.slug.as_str());
                 egui::Frame::new().fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
@@ -3156,7 +3242,10 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 )).size(10.0).color(DIM));
                             });
                             let species = h.species.iter()
-                                .map(|sp|format!("#{} {:.0}%",sp.id,
+                                .map(|sp|format!("{} {:.0}%",
+                                    reference.and_then(|r|r.species.get(&sp.id))
+                                        .map(|s|s.name.clone())
+                                        .unwrap_or_else(||format!("#{}",sp.id)),
                                     if h.species.iter().map(|p|p.weight).sum::<f64>() > 0.0 {
                                         sp.weight*100.0/h.species.iter().map(|p|p.weight).sum::<f64>()
                                     }else{0.0}))
@@ -3175,17 +3264,36 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         crate::logging::warn(&format!("Hunt Atlas command rejected: {error}"));
                                     }
                                 }
-                                ui.label(RichText::new(if kills_per_hour > 0.0 {
-                                    format_hunt_amount(potential(h))
-                                } else { "—".into() })
-                                    .strong().color(if current { GOOD } else { TEXT }))
-                                    .on_hover_text(tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained."));
+                                ui.vertical(|ui| {
+                                    let show_value = forecast.is_some() || kills_per_hour > 0.0;
+                                    ui.label(RichText::new(if show_value {
+                                        format_hunt_amount(*value)
+                                    } else { "—".into() })
+                                        .strong().color(if current { GOOD } else { TEXT }))
+                                        .on_hover_text(if let Some(forecast) = forecast {
+                                            format!(
+                                                "{} · {:.0} kills/h · {:.1}s/kill · {:.0}% species coverage",
+                                                if forecast.calibrated { "Calibrated guide model" }
+                                                else { "Uncalibrated guide model" },
+                                                forecast.kills_h, forecast.seconds_per_kill,
+                                                forecast.coverage*100.0
+                                            )
+                                        } else {
+                                            tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained.").into()
+                                        });
+                                    if let Some(forecast) = forecast {
+                                        ui.label(RichText::new(tr(if forecast.calibrated {
+                                            "Calibrated estimate"
+                                        } else { "Experimental estimate" }))
+                                            .size(9.0).color(if forecast.calibrated { WARN } else { MUTED }));
+                                    }
+                                });
                             });
                         });
                     });
                 ui.add_space(5.0);
             }
-            if rows.len() > 200 {
+            if ranked.len() > 200 {
                 ui.label(tr("Showing first 200 hunts; refine search or region."));
             }
         });
