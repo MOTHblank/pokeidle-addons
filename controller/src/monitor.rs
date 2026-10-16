@@ -439,6 +439,7 @@ struct BrowserSession {
     tab_signature: Vec<(String, String)>,
     native_capture_installed: bool,
     native_reloaded: BTreeSet<String>,
+    native_twitch_auth_opened: bool,
 }
 
 #[derive(Default)]
@@ -914,7 +915,6 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     for context in contexts.iter().filter(|candidate| {
         candidate.url.starts_with("https://www.twitch.tv/popout/")
             && candidate.url.contains("/chat")
-            && candidate.url.contains("moth-generation=")
     }) {
         saw_popout = true;
         let id = session.next_id;
@@ -942,7 +942,33 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     if saw_popout {
         Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
     } else {
-        Err("No managed authenticated Twitch chat popout yet; waiting for stream scanner or Twitch sign-in".to_owned())
+        // All profiles can authenticate Twitch without a userscript update.
+        // A single temporary Twitch chat is opened only if none exists.
+        // The BiDi preload observes its authenticated PASS/NICK handshake.
+        if session.native_twitch_auth_opened {
+            return Err("Twitch login has not produced an authenticated IRC connection yet".into());
+        }
+        session.native_twitch_auth_opened = true;
+        let id = session.next_id;
+        session.next_id += 1;
+        let created = send_and_wait(&mut session.socket, id, json!({
+            "id": id, "method": "browsingContext.create",
+            "params": { "type": "tab" }
+        }))?;
+        let context = created.get("result").and_then(|v| v.get("context"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Firefox did not create a temporary Twitch login tab".to_owned())?;
+        let id = session.next_id;
+        session.next_id += 1;
+        send_and_wait(&mut session.socket, id, json!({
+            "id": id, "method": "browsingContext.navigate",
+            "params": {
+                "context": context,
+                "url": "https://www.twitch.tv/popout/twitch/chat?moth-generation=native-auth",
+                "wait": "none"
+            }
+        }))?;
+        Err("Opening one temporary Twitch authentication chat; Rust will take over after login".into())
     }
 }
 
@@ -1174,6 +1200,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         tab_signature: Vec::new(),
         native_capture_installed,
         native_reloaded: BTreeSet::new(),
+        native_twitch_auth_opened: false,
     })
 }
 
