@@ -138,7 +138,8 @@ fn ranked_hunts<'a>(
         let (value,source) = if let Some(value) = actual {
             (Some(value),RateSource::Measured)
         } else if let Some(value) = forecast_value {
-            (Some(value),if forecast.as_ref().is_some_and(|f|f.calibrated) {
+            (Some(value),if forecast.as_ref().is_some_and(|f|f.calibrated)
+                && bonuses_complete(view,ranking) {
                 RateSource::Calibrated
             } else { RateSource::Experimental })
         } else if let Some(value) = scenario {
@@ -166,6 +167,24 @@ fn rate_label(ranking: HuntRanking) -> &'static str {
     }
 }
 
+fn known_percent(value:f64,known:bool)->String {
+    if known {format!("+{value:.1}%")} else {"— (not reported)".into()}
+}
+fn known_boost(active:bool,known:bool,clock_known:bool)->&'static str {
+    if !known || !clock_known {"unknown"}
+    else if active {"on"} else {"off"}
+}
+fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
+    if ranking==HuntRanking::Gold {return true;}
+    let b=&view.bonuses;
+    b.vip_known && b.guild_known && b.guild_boost_known && b.twitch_known
+        && view.server_now.is_some() &&
+        match ranking {
+            HuntRanking::TrainerXp=>b.trainer_event_known,
+            HuntRanking::PokemonXp=>b.pokemon_event_known,
+            HuntRanking::Gold=>true,
+        }
+}
 fn draw_rate(ui:&mut egui::Ui,label:&str,value:Option<f64>,source:RateSource){
     ui.vertical(|ui|{
         ui.label(RichText::new(label).size(10.0).color(DIM));
@@ -413,14 +432,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 ui.vertical(|ui| {
                     ui.label(RichText::new(tr("Bonuses considered")).size(10.0).color(DIM));
                     let b = &hunts.bonuses;
-                    ui.label(format!("Twitch +{:.0}% · Guild +{:.0}%",
-                        b.twitch_pct, b.guild_pct));
-                    ui.label(format!("Event: Trainer +{:.0}% · Pokémon +{:.0}%",
-                        b.trainer_event_pct, b.pokemon_event_pct));
+                    ui.label(format!("Twitch {} · Guild {}",
+                        known_percent(b.twitch_pct,b.twitch_known),
+                        known_percent(b.guild_pct,b.guild_known)));
+                    ui.label(format!("Event: Trainer {} · Pokémon {}",
+                        known_percent(b.trainer_event_pct,b.trainer_event_known),
+                        known_percent(b.pokemon_event_pct,b.pokemon_event_known)));
                     ui.label(RichText::new(format!(
                         "VIP: {} · Guild boost: {}",
-                        if b.vip_active { "on" } else { "off/unknown" },
-                        if b.guild_boost_active { "on" } else { "off/unknown" },
+                        known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
+                        known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some()),
                     )).size(10.0).color(DIM));
                 });
                 ui.separator();
@@ -737,13 +758,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.collapsing("XP bonus assumptions",|ui|{
                         let b=&hunts.bonuses;
                         ui.label(format!(
-                            "Trainer event: +{:.1}% · Pokémon event: +{:.1}% · Guild: +{:.1}% · Twitch: +{:.1}%",
-                            b.trainer_event_pct,b.pokemon_event_pct,b.guild_pct,b.twitch_pct
+                            "Trainer event: {} · Pokémon event: {} · Guild: {} · Twitch: {}",
+                            known_percent(b.trainer_event_pct,b.trainer_event_known),
+                            known_percent(b.pokemon_event_pct,b.pokemon_event_known),
+                            known_percent(b.guild_pct,b.guild_known),
+                            known_percent(b.twitch_pct,b.twitch_known)
                         ));
                         ui.label(format!(
                             "VIP: {} · Guild boost: {}",
-                            if b.vip_active {"active"}else{"inactive or unknown"},
-                            if b.guild_boost_active {"active"}else{"inactive or unknown"}
+                            known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
+                            known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
                         ));
                         ui.label("Guide projections multiply the reported bonus factors. Same-pace scenarios do NOT assume these bonuses. Store boosts not present in native telemetry are not added.");
                     });
@@ -791,4 +815,20 @@ mod tests {
         let stale=ranked_hunts(&view,None,HuntRanking::TrainerXp,false,"","","",&cache);
         assert!(stale.iter().all(|r|r.value.is_none()));
     }
+    #[test]
+    fn partial_bonus_data_downgrades_xp_forecast_confidence(){
+        let mut view=HuntView::default();
+        view.bonuses.trainer_event_pct=20.0;
+        assert!(!bonuses_complete(&view,HuntRanking::TrainerXp));
+        assert!(bonuses_complete(&view,HuntRanking::Gold));
+        view.server_now=Some(100);
+        view.bonuses.trainer_event_known=true;
+        view.bonuses.guild_known=true;
+        view.bonuses.guild_boost_known=true;
+        view.bonuses.twitch_known=true;
+        view.bonuses.vip_known=true;
+        assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
+        assert!(!bonuses_complete(&view,HuntRanking::PokemonXp));
+    }
+
 }
