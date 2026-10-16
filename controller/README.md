@@ -148,3 +148,11 @@ For local Git commits, run `git config core.hooksPath .githooks` once
 to enable the included version guard. It rejects staged userscript edits
 that do not increase the version or have a mismatching marker. No GitHub
 Actions, new controller release, or second userscript updater is needed.
+
+### Native account interfaces (experimental)
+
+- **Panel → Hunts · Atlas:** Current unlocked hunts, spawn composition, active Pokémon, live trainer/Pokémon XP/h, current hunt session totals, battle drops, shinies, and native hunt switching.
+- **Panel → Inventory:** Server-reported balls/items by account (or combined), names/categories from a lazily fetched public item catalog, and a separate tally of items acquired through battle drops rather than purchases.
+- **Account details → Automation → Configure native Auto Catch:** Ball priority and reserves, restock IDs/thresholds and protected gold reserve; settings are saved to the OS-encrypted account cache and applied to the running native worker.
+
+These features require no browser userscripts after authentication. Hunt projections remain experimental, and the session drop ledger starts with the current native controller runtime.
