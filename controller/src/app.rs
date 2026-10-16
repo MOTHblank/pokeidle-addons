@@ -2050,8 +2050,13 @@ impl ControllerApp {
         let slot = &mut self.games[index];
         if let Some(native) = slot.native.take() {
             native.stop();
-            self.set_status(format!("{} native session stopped.", account_name), false);
-            return true;
+            // A failed browser cleanup can leave an authenticated native game
+            // plus an owned Firefox launcher. Stop must close BOTH owners.
+            if slot.child.is_none() && slot.orphaned_pid.is_none() {
+                if let Some(monitor) = slot.monitor.take() { monitor.stop(); }
+                self.set_status(format!("{} native game and Twitch stopped.", account_name), false);
+                return true;
+            }
         }
 
         // Stop also works after restarting the controller, before any attempt
