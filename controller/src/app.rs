@@ -3806,6 +3806,101 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 });
             }
         });
+    ui.add_space(8.0);
+    ui.collapsing(tr("Configure native Auto Catch"),|ui|{
+        draw_native_capture_config(app,ui,index);
+    });
+}
+
+fn capture_ball_name(k:&str)->&'static str {
+    match k {"beast"=>"Beast Ball","ultra"=>"Ultra Ball","super"=>"Super Ball",
+        "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
+}
+fn capture_stock_input(ui:&mut egui::Ui,label:&str,id:&mut u64,at:&mut u64,to:&mut u64) {
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new(label).strong());
+        ui.label(tr("ID"));ui.add(egui::DragValue::new(id).range(0..=1_000_000));
+        ui.label(tr("Buy at"));ui.add(egui::DragValue::new(at).range(0..=1_000_000));
+        ui.label(tr("Fill to"));ui.add(egui::DragValue::new(to).range(0..=1_000_000));
+    });
+}
+fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+    let profile=app.games[index].profile;
+    let Some(native)=app.games[index].native.as_ref() else {return};
+    if app.capture_drafts[index].is_none() {
+        app.capture_drafts[index]=Some(native.capture_settings());
+    }
+    let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
+    ui.checkbox(&mut cfg.enabled,tr("Enable native Auto Catch"));
+    ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
+        .size(11.0).color(TEXT));
+    let keys=["beast","ultra","super","great","poke"];
+    let mut chosen=[
+        cfg.priorities.first().cloned().unwrap_or_default(),
+        cfg.priorities.get(1).cloned().unwrap_or_default()
+    ];
+    ui.horizontal_wrapped(|ui|{
+        for slot in 0..2 {
+            ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
+            egui::ComboBox::from_id_salt(("cap-choice",index,slot))
+                .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
+                    ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
+                    for key in keys {
+                        ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
+                    }
+                });
+        }
+    });
+    cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
+    ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
+    ui.horizontal_wrapped(|ui|{
+        for key in keys {
+            ui.vertical(|ui|{
+                ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
+                ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
+                    .range(0..=1_000_000));
+            });
+        }
+    });
+    ui.separator();
+    ui.checkbox(&mut cfg.restock_enabled,tr("Automatic restock"));
+    ui.horizontal(|ui|{
+        ui.label(tr("Gold reserve"));
+        ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
+    });
+    capture_stock_input(ui,tr("Balls"),&mut cfg.ball_id,&mut cfg.ball_at,&mut cfg.ball_to);
+    capture_stock_input(ui,tr("Potions"),&mut cfg.potion_id,&mut cfg.potion_at,&mut cfg.potion_to);
+    capture_stock_input(ui,tr("Revives"),&mut cfg.revive_id,&mut cfg.revive_at,&mut cfg.revive_to);
+    ui.label(RichText::new(tr("ID 0 disables that category; unknown shop prices cannot be spent."))
+        .size(10.0).color(MUTED));
+    if let Some(error)=app.capture_save_error[index].as_deref(){
+        ui.colored_label(BAD,error);
+    }
+    ui.horizontal(|ui|{
+        if ui.add_enabled(!app.capture_save_busy[index],
+            egui::Button::new(tr("Save settings"))).clicked() {
+            let to_save=cfg.clone();
+            if let Err(error)=to_save.validate() {
+                app.capture_save_error[index]=Some(error);
+            } else {
+                app.capture_save_error[index]=None;
+                app.capture_save_busy[index]=true;
+                let tx=app.capture_save_tx.clone();
+                std::thread::spawn(move || {
+                    let result=crate::native_auth::set_capture_settings(profile,&to_save);
+                    let _=tx.send(CaptureSavedEvent{index,config:to_save,result});
+                });
+            }
+        }
+        if ui.small_button(tr("Discard")).clicked() {
+            app.capture_drafts[index]=Some(native.capture_settings());
+            app.capture_save_error[index]=None;
+        }
+    });
+    if app.capture_save_busy[index] {
+        ui.label(RichText::new(tr("Saving encrypted preferences..."))
+            .size(10.0).color(MUTED));
+    }
 }
 
 fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
