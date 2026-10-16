@@ -220,42 +220,6 @@ impl VisualCache {
         }
     }
 
-    /// Queues known public Poké Ball and item artwork without touching
-    /// Pokémon paths, saved credentials, or game sessions. Cached images are
-    /// reused by the existing bounded background download worker.
-    pub fn download_game_icons(&mut self) -> usize {
-        let mut queued = 0;
-        let ids = [
-            (Kind::Ball, 1), (Kind::Ball, 2), (Kind::Ball, 3),
-            (Kind::Ball, 4), (Kind::Ball, 5),
-        ].into_iter().chain(
-            upstream_item_icons().keys().copied().map(|id| (Kind::Item, id))
-        ).chain([(Kind::Item, 70070)]);
-        for (kind, id) in ids {
-            let key = (kind, id);
-            if self.attempted.contains(&key) { continue; }
-            // Bundled assets are already available without an HTTP request;
-            // the next show() will decode those lazily.
-            if generated::bytes(kind.key(), id).is_some() { continue; }
-            let urls = image_urls(kind, id, None);
-            if urls.is_empty() { continue; }
-            if self.request.send(Request { kind, id, urls }).is_ok() {
-                self.attempted.insert(key);
-                self.queued += 1;
-                queued += 1;
-            }
-        }
-        queued
-    }
-
-    pub fn progress(&self) -> (usize, usize, usize, usize) {
-        (self.queued, self.finished, self.failed, self.textures.len())
-    }
-
-    pub fn known_icon_count() -> usize {
-        upstream_item_icons().len() + 5 + 1
-    }
-
     /// Returns true if an icon was drawn. Always fall back to text if false.
     /// Unknown Pokémon can be added through the generated sprite manifest;
     /// no guessed Pokémon CDN paths are constructed here.
