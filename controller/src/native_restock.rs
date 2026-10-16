@@ -42,7 +42,6 @@ struct Order {
     qty: u64,
     price: u64,
     before: u64,
-    gold_before: u64,
     sent: Instant,
     ack: bool,
 }
@@ -278,7 +277,7 @@ impl Restock {
             }
             let order = Order {
                 kind: rule.kind, id: rule.id, name: meta.name.clone(),
-                qty, price: meta.price, before: current, gold_before: gold,
+                qty, price: meta.price, before: current,
                 sent: now, ack: false,
             };
             self.status.last_order = Some(format!("{} ×{qty}", order.name));
