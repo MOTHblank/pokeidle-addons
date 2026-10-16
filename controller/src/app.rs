@@ -909,7 +909,7 @@ impl GameSlot {
             // Existing widgets consume hunt_atlas, but never claim a
             // speculative rate is a measured one.
             health.hunt_atlas = json!({
-                "huntSlug": view.hunt_slug,
+                "huntSlug": view.hunt_slug.clone(),
                 "xpH": if view.measurements.valid_trainer {
                     Some(view.measurements.trainer_xp_h)
                 } else { None },
@@ -3268,9 +3268,9 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             let cat=catalog.and_then(|c|c.items.get(id))
                 .map(|meta|meta.category.to_lowercase()).unwrap_or_default();
             let normalized=name.to_lowercase();
-            let category=if cat.contains("potion") || normalized.contains("potion") ||
+            let category=if cat == "heal" || cat.contains("potion") || normalized.contains("potion") ||
                 normalized.contains("poção") { "potions" }
-                else if cat.contains("stone") || normalized.contains("stone") ||
+                else if cat == "stone" || cat.contains("stone") || normalized.contains("stone") ||
                     normalized.contains("pedra") { "stones" }
                 else { "other" };
             let entry=amounts.entry((false,*id))
