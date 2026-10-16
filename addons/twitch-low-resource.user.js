@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Low Resource Mode
 // @namespace    moth.pokeidle
-// @version      3.2.0
+// @version      3.2.1
 // @description  Keeps one Twitch IRC socket alive, dynamically JOINs/PARTs chats at safe rates, and limits chat rendering.
 // @match        https://pokeidle.io/app*
 // @match        https://www.pokeidle.io/app*
@@ -10,7 +10,7 @@
 // @match        https://player.twitch.tv/*
 // @match        https://m.twitch.tv/*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js
+// @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/twitch-low-resource.user.js
 // @downloadURL  https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/twitch-low-resource.user.js
 // @run-at       document-start
 // @noframes
@@ -21,7 +21,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.2.0');
+        document.documentElement?.setAttribute('data-moth-addon-version-twitch-low-resource', '3.2.1');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -122,6 +122,43 @@
         const filteredEvents = new WeakMap();
         const initializedSockets = new WeakSet();
         const joinedChannels = new Set();
+        // The native-first branch hands this IRC handshake to Rust over an
+        // already-authenticated Firefox BiDi session, without storing the
+        // Twitch bearer token in the DOM, GM storage, console or on disk.
+        const authenticationBySocket = new WeakMap();
+        const nativeAuthApi = Object.freeze({
+            snapshot() {
+                const ws = activeSocket;
+                const auth = ws && authenticationBySocket.get(ws);
+                if (!ws || ws.readyState !== NativeWebSocket.OPEN ||
+                    !initializedSockets.has(ws) || !auth?.pass || !auth?.nick)
+                    return null;
+                return {
+                    url: ws.url,
+                    pass: auth.pass,
+                    nick: auth.nick,
+                    cap: auth.cap || ''
+                };
+            }
+        });
+        Object.defineProperty(window, '__mothTwitchNativeBootstrapV1', {
+            value: nativeAuthApi, configurable: true
+        });
+
+        function observeOutgoingIrc(socket, payload) {
+            if (!isTwitchIrcSocket(socket) || typeof payload !== 'string') return;
+            const auth = authenticationBySocket.get(socket) ||
+                { pass: '', nick: '', cap: '' };
+            for (const line of payload.split(/\r\n|\n|\r/)) {
+                if (/^PASS\s+oauth:[A-Za-z0-9_]+\s*$/i.test(line))
+                    auth.pass = line.trim();
+                else if (/^NICK\s+[A-Za-z0-9_]{1,25}\s*$/i.test(line))
+                    auth.nick = line.trim();
+                else if (/^CAP\s+REQ\s+:[a-z0-9\/\s_-]+$/i.test(line))
+                    auth.cap = line.trim();
+            }
+            authenticationBySocket.set(socket, auth);
+        }
         const JOIN_GAP_MS = 600; // < 20 joins per 10 seconds per Twitch user
         let nextJoinAt = 0;
         let activeSocket = null;
@@ -276,6 +313,7 @@
             send(data) {
                 if (!isTwitchIrcSocket(this) || typeof data !== 'string')
                     return super.send(data);
+                observeOutgoingIrc(this, data);
 
                 // Twitch itself sends the initial JOIN only after authentication.
                 // Use that point to bootstrap subscriptions on its existing
