@@ -99,6 +99,12 @@ pub struct HuntSessionStats {
     pub acquired:BTreeMap<String,u64>,
     pub recent_drops:Vec<(String,u64)>,
 }
+#[derive(Clone,Debug,Default)]
+pub struct BallQuote {
+    pub efficiency:Option<f64>,
+    pub gold_price:Option<f64>,
+    pub diamond_price:Option<f64>,
+}
 #[derive(Clone, Debug, Default)]
 pub struct HuntView {
     pub account_nick: Option<String>,
@@ -118,6 +124,9 @@ pub struct HuntView {
     pub wild: Option<WildInfo>,
     pub balls: Arc<BTreeMap<u64, u64>>,
     pub ball_names: Arc<BTreeMap<u64, String>>,
+    /// Catalog quotes are alternatives by currency, not additive costs.
+    pub ball_quotes: Arc<BTreeMap<u64,BallQuote>>,
+    pub outland_tier:Option<u8>,
     pub items: Arc<BTreeMap<u64, u64>>,
     pub automation: Option<Value>,
     pub vip_until: Option<u64>,
@@ -313,6 +322,12 @@ impl HuntIntel {
         }
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
+        if let Some(raw)=state.get("tierOutland")
+            .or_else(||state.get("outlandTier"))
+            .or_else(||state.get("outland_tier")) {
+            self.view.outland_tier=raw.as_u64()
+                .filter(|tier|(1..=8).contains(tier)).map(|tier|tier as u8);
+        }
         if let Some(nick) = state.get("nick").and_then(Value::as_str)
             .map(str::trim).filter(|nick|!nick.is_empty()) {
             self.view.account_nick = Some(nick.to_owned());
@@ -471,6 +486,17 @@ impl HuntIntel {
                         Some((ball.get("id").and_then(Value::as_u64)?,
                             ball.get("nome").or_else(||ball.get("name"))
                                 .and_then(Value::as_str)?.to_owned()))
+                    }).collect());
+                    self.view.ball_quotes=Arc::new(catalog.iter().filter_map(|ball|{
+                        let id=ball.get("id").and_then(Value::as_u64)?;
+                        let num=|keys:&[&str]|keys.iter().find_map(|key|
+                            ball.get(*key).and_then(Value::as_f64)
+                                .filter(|v|v.is_finite()&&*v>=0.0));
+                        Some((id,BallQuote{
+                            efficiency:num(&["catchRate","efficiency"]).filter(|v|*v>0.0),
+                            gold_price:num(&["priceGold","precoGold","goldPrice"]),
+                            diamond_price:num(&["priceDiamond","precoDiamantes","diamondPrice"]),
+                        }))
                     }).collect());
                 }
                 if let Some(hunts) = frame.get("hunts").and_then(Value::as_array) {
@@ -991,6 +1017,20 @@ mod tests {
         assert!(!intel.view.bonuses.vip_active);
     }
 
+    #[test]
+    fn capture_catalog_preserves_currency_alternatives_and_outland_tier(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,
+            "nome":"Ultra","catchRate":4,"priceGold":130},
+            {"id":5,"nome":"Beast","catchRate":8,"priceDiamond":4}],
+            "estado":{"tierOutland":5}}"#,now);
+        let view=intel.snapshot();
+        assert_eq!(view.outland_tier,Some(5));
+        assert_eq!(view.ball_quotes[&4].efficiency,Some(4.0));
+        assert_eq!(view.ball_quotes[&5].diamond_price,Some(4.0));
+        assert_eq!(view.ball_quotes[&5].gold_price,None);
+    }
     #[test]
     fn ball_success_ratio_uses_only_identified_ball_receipts(){
         let now=Instant::now();
