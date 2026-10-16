@@ -533,7 +533,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Disabled" => "Desabilitada",
         "Available slots" => "Slots disponíveis",
         "Unique profile" => "Perfil exclusivo",
-        "Manage up to 4 unique Firefox profiles. Each account has its own browser storage and BiDi connection." => "Gerencie até 4 perfis exclusivos do Firefox. Cada conta possui seu próprio armazenamento do navegador e conexão BiDi.",
+        "Manage up to four accounts, each with its own Firefox login." => "Gerencie até 4 perfis exclusivos do Firefox. Cada conta possui seu próprio armazenamento do navegador e conexão BiDi.",
         "Status" => "Status",
         "Name cannot be empty" => "O nome não pode ficar vazio",
         "Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled." => "Cada slot é um perfil separado do Firefox. Desabilitar um slot o remove do painel e de Iniciar habilitadas.",
@@ -575,7 +575,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
         "NO READINGS" => "SEM LEITURAS",
         "CONNECTION UNCONFIRMED" => "CONEXÃO NÃO CONFIRMADA",
-        "BIDI SESSION BLOCKED" => "SESSÃO BIDI BLOQUEADA",
+        "FIREFOX CONNECTION BLOCKED" => "SESSÃO BIDI BLOQUEADA",
         "Restart Firefox to reconnect" => "Reiniciar Firefox para reconectar",
         "Restarts Firefox for this account. The game will disconnect briefly." => "Reinicia o Firefox desta conta. O jogo será desconectado brevemente.",
         "Firefox isn't responding for this account. Restart Firefox to reconnect." => "O Firefox não está respondendo para esta conta. Reinicie o Firefox para reconectar.",
@@ -624,7 +624,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Setup completed" => "Configuração concluída",
         "Could not save setup progress" => "Não foi possível salvar o progresso da configuração",
         "Install Violentmonkey before completing setup." => "Instale o Violentmonkey antes de concluir a configuração.",
-        "Live addon status requires the game to be running and monitored." => "O status dos addons exige que o jogo esteja em execução e monitorado.",
+        "Script status is only available while playing in Firefox." => "O status dos addons exige que o jogo esteja em execução e monitorado.",
         "Open Account Manager to resolve addon problems" => "Abra o Gerenciador de contas para resolver problemas dos addons",
         "Reload the game only when you choose; an automatic reload could interrupt gameplay." => "Recarregue o jogo somente quando desejar; uma recarga automática poderia interromper a partida.",
         "Updates" => "Atualizações",
@@ -800,7 +800,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "seller" => "vendedor",
         "Buy" => "Comprar",
         "Profiles" => "Perfis",
-        "Account, browser and addon entry points" => "Pontos de acesso a contas, navegador e addons",
+        "Account and browser tools" => "Pontos de acesso a contas, navegador e addons",
         "Close" => "Fechar",
         "Open Game" => "Abrir jogo",
         "Google sign-in" => "Login do Google",
@@ -959,6 +959,22 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Loading your Pokémon" => "Carregando seus Pokémon",
         "PokéIdle connection" => "Conexão com PokéIdle",
         "Auto Catch · Restock · Market · Game settings" => "Captura automática · Reposição · Mercado · Opções do jogo",
+        "ACCOUNT DETAILS" => "DETALHES DA CONTA",
+        "Waiting for sign-in" => "Aguardando login",
+        "Account is stopped" => "Conta parada",
+        "Choose an account to get started" => "Escolha uma conta para começar",
+        "Start this account to manage game settings" => "Inicie esta conta para gerenciar as configurações do jogo",
+        "Manage up to four accounts. Firefox is only needed to sign in." => "Gerencie até quatro contas. O Firefox só é necessário para entrar.",
+        "Account setup" => "Configuração da conta",
+        "Select Start account. If Firefox opens, sign in to PokéIdle there. The account will connect automatically." => "Selecione Iniciar conta. Se o Firefox abrir, faça login no PokéIdle. A conta será conectada automaticamente.",
+        "No browser extensions are required. Setup finishes automatically after you sign in." => "Não é necessário instalar extensões no navegador. A configuração termina automaticamente depois do login.",
+        "These scripts are optional for playing in Firefox. Auto Catch, Restock, Twitch and Market work without them." => "Estes scripts são opcionais para jogar no Firefox. Captura automática, reposição, Twitch e mercado funcionam sem eles.",
+        "Firefox is only needed to sign in or play in the browser. PokéIdle and Twitch can keep running after it closes." => "O Firefox só é necessário para entrar ou jogar no navegador. PokéIdle e Twitch podem continuar funcionando depois que ele fecha.",
+        "No mission settings are available yet. This section does not make changes to your missions." => "As configurações de missão ainda não estão disponíveis. Esta seção não altera suas missões.",
+        "Mission settings can be viewed here but cannot be changed yet." => "Você pode consultar as configurações de missão aqui, mas ainda não pode alterá-las.",
+        "No Auto Catch attempts recorded yet" => "Nenhuma tentativa de captura automática registrada ainda",
+        "These numbers show Auto Catch only. Manual catches are included in the dashboard totals." => "Estes números mostram apenas a captura automática. As capturas manuais entram nos totais do painel.",
+        "Auto Catch settings saved" => "Configurações de captura automática salvas",
         _ => en,
     }
 }
@@ -1976,7 +1992,7 @@ impl ControllerApp {
                     }
                     self.capture_drafts[event.index]=None;
                     self.capture_save_error[event.index]=None;
-                    self.set_status("Native capture settings saved",false);
+                    self.set_status(tr("Auto Catch settings saved"),false);
                 }
                 Err(error) => {
                     self.capture_save_error[event.index]=Some(error.clone());
@@ -2040,7 +2056,7 @@ impl ControllerApp {
             let orphaned_pid = self.games[index].orphaned_pid.take();
             if child.is_none() && orphaned_pid.is_none() {
                 native.stop();
-                self.set_status("No Moth-owned Firefox process for verified native handoff", true);
+                self.set_status("Could not find the Firefox window used to sign in", true);
                 continue;
             }
             let monitor = self.games[index].monitor.take();
@@ -2086,11 +2102,11 @@ impl ControllerApp {
                         self.account_name(profile)));
                     if cancelled {
                         self.set_status(format!(
-                            "{} native handoff canceled by Stop", self.account_name(profile)), false);
+                            "{}: sign-in canceled", self.account_name(profile)), false);
                         continue;
                     }
                     logging::info(&format!(
-                        "{} starting native game + Twitch IRC workers", self.account_name(profile)));
+                        "{}: connecting to PokéIdle and Twitch", self.account_name(profile)));
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
                     self.automation_drafts[index]=AutomationDraft::default();
@@ -2099,7 +2115,7 @@ impl ControllerApp {
                         .map(|warning| format!(" · secure cache unavailable: {warning}"))
                         .unwrap_or_default();
                     self.set_status(format!(
-                        "{} native game + Twitch IRC authenticated and Firefox closed{cache_note}",
+                        "{}: PokéIdle and Twitch connected. Firefox closed{cache_note}",
                         self.account_name(profile)), false);
                 }
                 Err(error) => {
@@ -2113,7 +2129,7 @@ impl ControllerApp {
                     self.games[index].orphaned_pid = event.orphaned_pid;
                     self.games[index].monitor = event.monitor;
                     self.set_status(format!(
-                        "{} native authenticated, but Firefox cleanup needs attention: {error}",
+                        "{}: connected, but Firefox could not close automatically: {error}",
                         self.account_name(profile)), true);
                 }
             }
@@ -2143,20 +2159,20 @@ impl ControllerApp {
                     self.capture_drafts[event.index]=None;
                     self.automation_drafts[event.index]=AutomationDraft::default();
                     self.set_status(format!(
-                        "{}: native game + Twitch IRC started from protected credentials (no Firefox)",
+                        "{}: PokéIdle and Twitch connected with your saved login",
                         self.account_name(profile)), false);
                 },
                 Ok(None) => {
                     self.require_browser_login[event.index] = true;
                     self.set_status(format!(
-                        "{}: first-time native authentication needed",
+                        "{}: please sign in to continue",
                         self.account_name(profile)), false);
                     self.launch_firefox_bootstrap(profile, event.headless);
                 }
                 Err(error) => {
                     self.require_browser_login[event.index] = true;
                     self.set_status(format!(
-                        "{} secure native credentials unavailable: {error}",
+                        "{}: saved login unavailable: {error}",
                         self.account_name(profile)), true);
                     self.launch_firefox_bootstrap(profile, event.headless);
                 }
@@ -2191,13 +2207,13 @@ impl ControllerApp {
                         || !self.games[event.index].is_running()
                         || self.games[event.index].monitor.is_none()
                     {
-                        self.set_status("Native handoff canceled: browser ownership changed", true);
+                        self.set_status("Connection interrupted because the Firefox session changed", true);
                         continue;
                     }
                     let validated = crate::native_background::validate_bootstrap(&bootstrap);
                     if let Err(error) = validated {
                         self.native_error[event.index] = Some(error.clone());
-                        self.set_status(format!("Native handoff rejected: {error}"), true);
+                        self.set_status(format!("Could not connect to the game: {error}"), true);
                         continue;
                     }
                     // Stage 1: close game TAB and prove Rust is authenticated,
@@ -2214,7 +2230,7 @@ impl ControllerApp {
                     let index = event.index;
                     let cache_warning = event.cache_warning;
                     logging::info(&format!(
-                        "{} validating game+Twitch native transport before browser close",
+                        "{}: checking PokéIdle and Twitch connections before closing Firefox",
                         self.account_name(profile)));
                     let spawned = std::thread::Builder::new()
                         .name(format!("moth-native-handoff-{}", profile.name()))
@@ -2231,7 +2247,7 @@ impl ControllerApp {
                                     NativeSession::start_verified(profile, bootstrap)
                                 })
                             ).unwrap_or_else(|_| {
-                                Err("Native verification thread panicked; see sanitized Rust panic log".to_owned())
+                                Err("Login check failed unexpectedly. See the controller log.".to_owned())
                             });
                             let result = match (result, attempted_game_close) {
                                 (Err(error), true) => {
@@ -2241,7 +2257,7 @@ impl ControllerApp {
                                         Ok(()) => Err(format!("{error}; game tab reopened")),
                                         Err(recovery) => {
                                             crate::logging::error(&format!(
-                                                "Native verification recovery failed: {recovery}"
+                                                "Could not recover the connection: {recovery}"
                                             ));
                                             Err(format!("{error}; game tab recovery failed: {recovery}"))
                                         }
@@ -2256,10 +2272,10 @@ impl ControllerApp {
                     if let Err(error) = spawned {
                         self.native_verifying[index] = false;
                         self.native_error[index] = Some(format!(
-                            "Could not spawn native verification worker: {error}"
+                            "Could not start the login check: {error}"
                         ));
                         self.set_status(format!(
-                            "{}: could not begin native handoff verification: {error}",
+                            "{}: could not verify login: {error}",
                             self.account_name(profile)), true);
                     }
                 }
@@ -2278,7 +2294,7 @@ impl ControllerApp {
         for (profile, headless) in recover {
             self.require_browser_login[profile.index()] = true;
             self.set_status(format!(
-                "{} native authentication expired; opening Firefox for renewal",
+                "{}: login expired, opening Firefox to sign in again",
                 self.account_name(profile)), true);
             self.launch_firefox_bootstrap(profile, headless);
         }
@@ -2479,7 +2495,7 @@ impl ControllerApp {
         logging::info(&format!(
             "{} capturing native game + Twitch IRC session via Firefox BiDi",
             self.account_name(profile)));
-        self.set_status(format!("{}: transferring game + Twitch IRC authentication to Rust",
+        self.set_status(format!("{}: signing in to PokéIdle and Twitch",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
         let result = std::thread::Builder::new()
@@ -2501,7 +2517,7 @@ impl ControllerApp {
             });
         if let Err(error) = result {
             self.native_handoff_busy[index] = false;
-            self.set_status(format!("Could not start native handoff: {error}"), true);
+            self.set_status(format!("Could not finish sign-in: {error}"), true);
         }
     }
 
@@ -2563,7 +2579,7 @@ impl ControllerApp {
         if let Err(error) = started {
             self.cached_native_busy[index] = false;
             self.require_browser_login[index] = true;
-            self.set_status(format!("Protected native cache could not start: {error}"), true);
+            self.set_status(format!("Saved login could not be used: {error}"), true);
             self.launch_firefox_bootstrap(profile, headless);
         }
     }
@@ -2601,7 +2617,7 @@ impl ControllerApp {
                     account_name, pid
                 ));
                 self.set_status(format!(
-                    "{}: reusing existing Firefox authentication (PID {}) before native handoff",
+                    "{}: using your existing Firefox login to connect (process {})",
                     account_name, pid
                 ), false);
                 return;
@@ -2632,7 +2648,7 @@ impl ControllerApp {
                 self.games[index].monitor = Some(monitor);
                 self.set_status(
                     format!(
-                        "{} started · {} Firefox · Rust BiDi health monitor",
+                        "{}: Firefox opened in {} mode to sign in",
                         self.account_name(profile),
                         if headless { "headless" } else { "visible" }
                     ),
@@ -2661,7 +2677,7 @@ impl ControllerApp {
         // shutting down its process. Never race it with a new browser session.
         if self.native_verifying[index] || self.games[index].handoff_closing {
             self.set_status(format!(
-                "{account_name}: native handoff in progress; open Firefox after it finishes."
+                "{account_name}: Sign-in is still finishing. Open Firefox after it completes."
             ), true);
             return;
         }
@@ -2710,7 +2726,7 @@ impl ControllerApp {
             // Firefox process. Do not start native mode after explicit Stop.
             self.native_close_cancelled[index] = true;
             self.set_status(format!(
-                "{}: stopping pending native handoff", account_name), false);
+                "{}: stopping sign-in", account_name), false);
             return true;
         }
         // Cancel in-flight cache lookups and browser handoffs. Results from
@@ -2725,7 +2741,7 @@ impl ControllerApp {
             // plus an owned Firefox launcher. Stop must close BOTH owners.
             if slot.child.is_none() && slot.orphaned_pid.is_none() {
                 if let Some(monitor) = slot.monitor.take() { monitor.stop(); }
-                self.set_status(format!("{} native game and Twitch stopped.", account_name), false);
+                self.set_status(format!("{}: PokéIdle and Twitch stopped.", account_name), false);
                 return true;
             }
         }
@@ -2805,7 +2821,7 @@ impl ControllerApp {
         // Keep any launch error visible rather than overwriting it with a
         // success-shaped summary when a profile is already in use.
         if !self.status_error {
-            self.set_status("Launch enabled requested · native game and Twitch starting; Firefox only if login needed", false);
+            self.set_status("Starting enabled accounts. Firefox will open only if sign-in is needed.", false);
         }
     }
 
@@ -2817,7 +2833,7 @@ impl ControllerApp {
             }
         }
         if all_stopped {
-            self.set_status("All native game/Twitch sessions and Firefox authentication windows stopped.", false);
+            self.set_status("All accounts stopped. Firefox login windows were closed.", false);
         } else {
             self.set_status("Some Firefox instances could not be stopped; check the log.", true);
         }
@@ -3434,11 +3450,11 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let connected = active.iter()
                         .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                         .count();
-                    runtime_row(ui, "PokéIdle connection", &format!("{native_online}/4 online"),
+                    runtime_row(ui, tr("PokéIdle"), &format!("{native_online}/4 online"),
                         if native_online>0 {GOOD} else {MUTED});
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
                     if !active.is_empty() {
-                        runtime_row(ui, "BiDi login", &format!("{connected}/{} {}", active.len(), tr("Connected")),
+                        runtime_row(ui, tr("Firefox login"), &format!("{connected}/{} {}", active.len(), tr("Connected")),
                             if connected == active.len() { GOOD } else { MUTED });
                     }
                 });
@@ -3761,8 +3777,8 @@ fn draw_native_missing_panel(
                 let running=app.games[index].is_running();
                 let name=app.account_name(profile);
                 ui.label(RichText::new(format!("{} · {}",name,
-                    if running { tr("Waiting for native authentication") }
-                    else { tr("Native session is stopped") }))
+                    if running { tr("Waiting for sign-in") }
+                    else { tr("Account is stopped") }))
                     .size(11.0).color(if running { WARN } else { DIM }));
                 ui.horizontal_wrapped(|ui|{
                     if ui.add_enabled(!running,egui::Button::new(tr("Start account")))
@@ -3774,7 +3790,7 @@ fn draw_native_missing_panel(
                     }
                 });
             } else {
-                ui.label(RichText::new(tr("No selected account has a native session yet"))
+                ui.label(RichText::new(tr("Choose an account to get started"))
                     .size(11.0).color(DIM));
                 ui.horizontal_wrapped(|ui|{
                     if ui.small_button(tr("Launch enabled accounts")).clicked() {
@@ -4030,15 +4046,15 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         let twitch = native.twitch_snapshot();
                         let online = game.phase == "Online" && twitch.phase == "Online";
                         let summary = if online {
-                            format!("{} · IRC {}/{}", tr("PokéIdle"), twitch.joined, twitch.desired)
+                            format!("Twitch: {}/{} channels", twitch.joined, twitch.desired)
                         } else {
-                            format!("{} · IRC {}", tr("PokéIdle"), twitch.phase)
+                            format!("Twitch: {}", tr(&twitch.phase))
                         };
                         ui.add(egui::Label::new(
                             RichText::new(summary).size(10.0)
                                 .color(if online { GOOD } else { WARN })
                         ).truncate()).on_hover_text(format!(
-                            "PokéIdle: {} · {} frames · {} kills · {} captures\nTwitch IRC: {} · {}/{} rooms",
+                            "PokéIdle: {} · {} updates · {} battles · {} captures\nTwitch: {} · {}/{} channels",
                             game.phase, game.frames, game.battle_kills, game.captures,
                             twitch.phase, twitch.joined, twitch.desired
                         ));
@@ -4431,7 +4447,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(10.0);
     let Some(native) = app.games[index].native.as_ref() else {
         draw_native_missing_panel(app,ui,Some(index),
-            tr("Server automation settings require a native session"));
+            tr("Start this account to manage game settings"));
         return;
     };
     let snapshot = native.snapshot();
@@ -4532,7 +4548,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.status_error=true;
             }
         }
-        ui.collapsing("Mission automation · observed server fields",|ui|{
+        ui.collapsing("Mission automation · available settings",|ui|{
             // Do not invent mission commands. Surface only verified server
             // state until an authenticated command/ack pair is documented.
             let mission=automation.as_object().map(|obj|obj.iter()
@@ -4541,13 +4557,13 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     key.contains("miss") || key.contains("quest") || key.contains("daily")
                 }).collect::<Vec<_>>()).unwrap_or_default();
             if mission.is_empty() {
-                ui.label(RichText::new("No mission settings in the current server automation snapshot. Mission commands are not yet verified; no actions are sent.")
+                ui.label(RichText::new(tr("No mission settings are available yet. This section does not make changes to your missions."))
                     .size(10.0).color(DIM));
             } else {
                 for (name,value) in mission {
                     ui.label(RichText::new(format!("{name}: {value}")).size(10.0).color(MUTED));
                 }
-                ui.label(RichText::new("Read only until the game's mission update and acknowledgement protocol is confirmed.")
+                ui.label(RichText::new(tr("Mission settings can be viewed here but cannot be changed yet."))
                     .size(10.0).color(DIM));
             }
         });
@@ -4618,8 +4634,8 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 automation_badge(ui, "PokéIdle", &game.phase, game.phase == "Online");
-                let irc = format!("{} · {}/{}", twitch.phase, twitch.joined, twitch.desired);
-                automation_badge(ui, "Twitch IRC", &irc, twitch.phase == "Online");
+                let twitch_status = format!("{} · {}/{} channels", tr(&twitch.phase), twitch.joined, twitch.desired);
+                automation_badge(ui, "Twitch", &twitch_status, twitch.phase == "Online");
             });
             ui.add_space(7.0);
             ui.separator();
@@ -4652,7 +4668,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 }
                 let capture=&game.native_capture_status;
                 ui.label(RichText::new(format!(
-                    "{} pending · {} sent · {} caught · {} failed · {} timed-out retries",
+                    "{} waiting · {} throws · {} caught · {} failed · {} retries",
                     game.native_capture_queue,capture.throws,capture.catches,
                     capture.failures,capture.timeout_retries
                 )).size(10.0).color(DIM));
@@ -4668,7 +4684,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             ui.collapsing("Auto Catch · ball statistics",|ui|{
                 let capture=&game.native_capture_status;
                 if capture.used_by_ball.is_empty() {
-                    ui.label(RichText::new("No native throws recorded in this session")
+                    ui.label(RichText::new(tr("No Auto Catch attempts recorded yet"))
                         .size(10.0).color(DIM));
                 }
                 for (id,used) in &capture.used_by_ball {
@@ -4676,7 +4692,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     ui.label(format!("Ball #{id}: {used} sent · {caught} caught"));
                 }
                 ui.label(RichText::new(
-                    "Only attempts from native Auto Catch count here; unrelated manual/server captures remain in the dashboard totals."
+                    tr("These numbers show Auto Catch only. Manual catches are included in the dashboard totals.")
                 ).size(10.0).color(DIM));
             });
             ui.add_space(7.0);
@@ -5051,13 +5067,13 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(tr("NATIVE ACCOUNT")).size(12.0)
+                ui.label(RichText::new(tr("ACCOUNT DETAILS")).size(12.0)
                     .strong().color(TEXT));
                 automation_badge(ui, "PokéIdle connection", &status.phase, phase_online);
-                automation_badge(ui, "Twitch IRC", &twitch.phase,
+                automation_badge(ui, "Twitch", &twitch.phase,
                     twitch.phase == "Online");
                 if let Some(last) = status.last_received {
-                    ui.label(RichText::new(format!("{}s since last game frame",
+                    ui.label(RichText::new(format!("Last game update: {}s ago",
                         last.elapsed().as_secs())).size(10.0).color(MUTED));
                 }
             });
@@ -6194,8 +6210,8 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Hidden Firefox"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
                 runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { WARN } else { GOOD });
-                runtime_chip(ui, "PokéIdle connection", &format!("{native_online} online"), if native_online > 0 { GOOD } else { MUTED });
-                runtime_chip(ui, "Native Twitch IRC", &format!("{native_twitch_online} online"), if native_twitch_online > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, tr("PokéIdle"), &format!("{native_online} online"), if native_online > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, tr("Twitch"), &format!("{native_twitch_online} online"), if native_twitch_online > 0 { GOOD } else { MUTED });
                 runtime_chip(ui, tr("Firefox connection"), &bidi_state, if running == 0 { MUTED } else if bidi_connected == running { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
@@ -6207,7 +6223,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
-                runtime_chip(ui, tr("Stream chat"), tr("Connected in app"), MUTED);
+                runtime_chip(ui, tr("Twitch"), tr("Connected in app"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
@@ -6392,7 +6408,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .color(TEXT),
                 );
                 ui.label(
-                    RichText::new("Up to four native game + Twitch accounts. Firefox is only for authentication.")
+                    RichText::new(tr("Manage up to four accounts. Firefox is only needed to sign in."))
                         .size(11.0)
                         .color(MUTED),
                 );
@@ -6515,7 +6531,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         let game = native.snapshot();
                                         let twitch = native.twitch_snapshot();
                                         status_chip(ui, "Game", &game.phase, game.phase == "Online");
-                                        status_chip(ui, "Twitch IRC",
+                                        status_chip(ui, "Twitch",
                                             &format!("{} {}/{}", twitch.phase, twitch.joined, twitch.desired),
                                             twitch.phase == "Online");
                                     } else {
@@ -6565,16 +6581,16 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         .inner_margin(10.0)
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                ui.label(RichText::new("Native account setup").strong().color(TEXT));
+                                                ui.label(RichText::new(tr("Account setup")).strong().color(TEXT));
                                                 if setup.setup_complete && ui.small_button(tr("Hide setup guide")).clicked() {
                                                     app.show_setup_guide[index] = false;
                                                 }
                                             });
                                             ui.label(RichText::new(
-                                                "Choose Start native. If the session needs authentication, sign in through the Firefox window that opens. The controller connects directly afterward."
+                                                tr("Select Start account. If Firefox opens, sign in to PokéIdle there. The account will connect automatically.")
                                             ).size(10.0).color(MUTED));
                                             ui.label(RichText::new(
-                                                "No Violentmonkey, userscripts, or separate browser addons are required. Setup finishes automatically after native login."
+                                                tr("No browser extensions are required. Setup finishes automatically after you sign in.")
                                             ).size(10.0).color(DIM));
                                             if !running && app.games[index].native.is_none()
                                                 && ui.small_button(tr("Start account")).clicked()
@@ -6610,7 +6626,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         .inner_margin(12.0)
                                         .show(ui, |ui| {
                                             ui.label(RichText::new(
-                                                "For occasional Firefox use only. Native gameplay, Auto Catch, restock, Twitch and market automation need none of these scripts."
+                                                tr("These scripts are optional for playing in Firefox. Auto Catch, Restock, Twitch and Market work without them.")
                                             ).size(10.0).color(MUTED));
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.label(RichText::new("Optional browser scripts (Premium)")
@@ -6638,7 +6654,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                 ui.label(RichText::new(error.as_str()).size(9.0).color(WARN));
                                             }
                                             if !running || !health.telemetry_is_fresh() {
-                                                ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
+                                                ui.label(RichText::new(tr("Script status is only available while playing in Firefox."))
                                                     .size(10.0).color(DIM));
                                             }
                                             if !remote_addons.checked {
@@ -6728,7 +6744,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 ui.add_space(8.0);
                                 ui.collapsing("Login and profile tools", |ui| {
                                     ui.label(RichText::new(
-                                        "Firefox is only needed for sign-in or interactive play; game and Twitch connections run natively afterward."
+                                        tr("Firefox is only needed to sign in or play in the browser. PokéIdle and Twitch can keep running after it closes.")
                                     ).size(10.0).color(DIM));
                                     ui.horizontal_wrapped(|ui| {
                                         profile_button(ui, tr("Google sign-in"), || {
@@ -6816,7 +6832,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     let (label, color) = if !running {
         ("STOPPED", DIM)
     } else if session_blocked {
-        ("BIDI SESSION BLOCKED", WARN)
+        ("FIREFOX CONNECTION BLOCKED", WARN)
     } else if no_readings {
         ("CONNECTION UNCONFIRMED", DIM)
     } else if health.telemetry_is_fresh()
