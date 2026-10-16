@@ -1,5 +1,6 @@
 //! Native stateful gameplay, implemented independently from public protocol behavior.
 use serde_json::{json, Value};
+use crate::native_capture_config::CatchSettings;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -50,25 +51,28 @@ pub struct Gameplay {
     balls:BTreeMap<u64,u64>,
     catalog:BTreeMap<u64,String>,
     priorities:Vec<String>,
+    reserves:BTreeMap<String,u64>,
     last_throw:Option<Instant>,
     pub server_auto:serde_json::Map<String,Value>,
 }
 impl Gameplay {
     pub fn new(settings: Option<&Value>) -> Self {
+        let config=CatchSettings::from_value(settings);
         Self {
             status:GameplayStatus {
-                auto_catch:settings.and_then(|v|v.get("enabled"))
-                    .and_then(Value::as_bool).unwrap_or(false),
+                auto_catch:config.enabled,
                 ..Default::default()
             },
             corpses:VecDeque::new(),balls:BTreeMap::new(),catalog:BTreeMap::new(),
-            priorities:settings.and_then(|v|v.get("ballPriority"))
-                .and_then(Value::as_array)
-                .map(|a|a.iter().filter_map(Value::as_str).take(2)
-                    .map(str::to_lowercase).collect())
-                .unwrap_or_else(||vec!["beast".into(),"ultra".into()]),
+            priorities:config.priorities,
+            reserves:config.reserves,
             last_throw:None,server_auto:serde_json::Map::new()
         }
+    }
+    pub fn configure(&mut self, config:&CatchSettings) {
+        self.status.auto_catch=config.enabled;
+        self.priorities=config.priorities.clone();
+        self.reserves=config.reserves.clone();
     }
     pub fn ingest(&mut self, raw:&str, now:Instant) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else {return};
@@ -139,7 +143,9 @@ impl Gameplay {
         let id=self.priorities.iter().find_map(|priority|
             self.catalog.iter().find(|(id,name)|
                 !name.contains("master") && name.contains(priority) &&
-                self.balls.get(id).copied().unwrap_or(0)>0).map(|(id,_)|*id))?;
+                self.balls.get(id).copied().unwrap_or(0)>
+                    self.reserves.get(priority).copied().unwrap_or(0))
+                .map(|(id,_)|*id))?;
         let corpse=self.corpses.iter_mut().find(|v|
             (!v.pending || v.last.is_some_and(|at|now.duration_since(at)>=Duration::from_secs(3))) &&
             v.last.is_none_or(|at|now.duration_since(at)>=Duration::from_millis(1200)))?;
@@ -157,6 +163,23 @@ impl Gameplay {
 #[cfg(test)]
 mod tests {
  use super::*;
+ #[test]
+ fn ball_reserve_is_enforced_with_priority_fallback(){
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,
+        "ballPriority":["beast","ultra"],"reserve":{"beast":3,"ultra":1}})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[
+        {"id":5,"nome":"Beast Ball"},{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"balls":{"5":3,"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":7}]}"#,at);
+    assert_eq!(g.next_capture(at).unwrap().wire()["ballId"],4);
+    g.configure(&CatchSettings::from_value(Some(&json!({
+        "enabled":true,"ballPriority":["beast"],
+        "reserve":{"beast":3}
+    }))));
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":8}]}"#,at);
+    assert!(g.next_capture(at+Duration::from_secs(2)).is_none());
+ }
  #[test]
  fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
     let at=Instant::now();
