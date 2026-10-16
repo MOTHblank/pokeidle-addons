@@ -1297,7 +1297,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     "Start this account to load unlocked hunts, battle measurements and Pokémon."
                 ).size(11.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
-                    let starting=app.games[index].is_running()
+                    let starting=app.games[index].child.is_some()
+                        || app.games[index].orphaned_pid.is_some()
                         || app.cached_native_busy[index]
                         || app.native_verifying[index]
                         || app.native_handoff_busy[index];
