@@ -1,5 +1,31 @@
 # Native visual assets
 
+## Wired upstream icon catalog
+
+Moth Controller includes a checked-in copy of the public `assets/items-icons.json` from
+`MOTHblank/pokeidle-upstream` (snapshot 2026-10-16, revision
+`264aac7169ed21c27faf7ca2ffc8eee4368e9bc3`):
+
+- `controller/assets/visual/upstream-item-icons.json` maps **419 real item IDs** to public game icon paths (395 PNG, 24 GIF).
+- `controller/src/native_visuals.rs` validates and resolves those paths under `https://pokeidle.io/assets/`, alongside the existing five Poké Ball icons and Golden Potion.
+- **Options → Download game icons** queues those assets for a single asynchronous worker. Images are decoded only as needed by the UI and stored in the per-user disk cache; downloads never include account credentials.
+- The Dashboard inventory, Poké Ball usage, and Auto Catch/Restock pickers display available images with existing text fallbacks. GIF icons display a still first frame.
+- The build now enables image PNG and GIF decoding with a synchronized Cargo lockfile. Missing URLs or unsupported images never prevent gameplay.
+
+**No Pokémon sprites were falsely mapped.** The updated upstream `image-index.json`
+contains empty `sprites`, `items`, and `balls` arrays, and its scrape manifest
+reports `imageFileCount: 0`. The published `assets/creatures-sprites-lab.json`
+contains looktypes and creature IDs, but not standalone, verified species sprite
+image URLs. The native Pokémon art path therefore remains unmapped until actual
+images and their correct species IDs are provided.
+
+The existing `manifest.json` and `native_visual_assets.generated.rs` still describe
+**embedded** art, which remains empty. That is intentional: the new mapped icons
+download on request, rather than embedding private-upstream binary blobs in a
+public release. No downloaded binary images were added to this repository.
+
+## Optional embedded cache generation
+
 Moth Controller has a reusable egui sprite renderer, currently used by the native **Auto Catch / Restock** picker. It supports ball, item, and Pokémon species IDs for reusing the same cache in other screens. The current simplified native navigation no longer exposes the old Inventory and Pokémon pages; those integrations can reuse this module when the pages return. It never requires a WebView.
 
 ## Developer: create the committed art cache once
