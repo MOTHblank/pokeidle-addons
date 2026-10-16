@@ -192,6 +192,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
     while !stop.load(Ordering::Relaxed) {
         match connect(&identity) {
             Ok(mut socket) => {
+                crate::logging::info("Native Twitch IRC received authenticated welcome");
                 if let Ok(mut s) = state.lock() {
                     s.phase = "Online".into();
                     s.error = None;
