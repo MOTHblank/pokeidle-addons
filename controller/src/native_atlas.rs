@@ -117,7 +117,7 @@ pub fn load() -> Result<Reference, String> {
             } else { attempt.follow() }
         }))
         .build().map_err(|_| "Could not initialize guide downloader")?;
-    let mut response=client.get(URL)
+    let response=client.get(URL)
         .send().map_err(|e|format!("Guide unavailable: {e}"))?
         .error_for_status().map_err(|e|format!("Guide returned error: {e}"))?;
     if response.content_length().is_some_and(|n|n>MAX_BYTES) {
