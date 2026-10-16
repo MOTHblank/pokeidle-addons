@@ -1,7 +1,7 @@
 # Native-first Moth Controller — four-account game + Twitch IRC
 
 **Branch:** [experiment/native-background-sessions](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
-**Preview controller:** `0.1.7-native.15`
+**Preview controller:** `0.1.7-native.16`
 
 This experimental branch is **not an opt-in Firefox mode**. The standard runtime is one native Rust PokéIdle WebSocket **plus** one native Rust Twitch IRC connection per account. Firefox is an authentication helper and must close once both handshakes are captured.
 
