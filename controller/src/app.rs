@@ -3356,6 +3356,87 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
         });
     ui.add_space(10.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(13)).show(ui,|ui|{
+            let current=hunts.hunts.iter().find(|h|
+                hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(tr("Current hunt details"))
+                    .size(13.0).strong().color(TEXT));
+                if let Some(h)=current {
+                    ui.label(RichText::new(format!(
+                        "{} · {} · Lv {} · {} {}",
+                        h.area,h.region,h.level,h.total_spawns,tr("spawn slots")
+                    )).size(11.0).color(MUTED));
+                }
+                if hunts.in_center {ui.label(RichText::new(tr("At Pokémon Center")).color(WARN));}
+                if let Some(slug)=hunts.pending_hunt_slug.as_deref() {
+                    ui.label(RichText::new(format!("{} {slug}",tr("Switch pending")))
+                        .size(10.0).color(WARN));
+                }
+            });
+            if let Some(wild)=hunts.wild.as_ref(){
+                ui.label(RichText::new(format!(
+                    "{}: {} · Lv {} · HP {}/{}",tr("Wild encounter"),
+                    wild.name,wild.level,wild.hp,wild.max_hp
+                )).size(10.0).color(DIM));
+            }
+            ui.add_space(5.0);
+            let session=&hunts.session;
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(format!(
+                    "{} {:02}:{:02}:{:02}",
+                    tr("Session"),
+                    session.duration_secs/3600,
+                    session.duration_secs%3600/60,
+                    session.duration_secs%60
+                )).size(11.0).strong().color(TEXT));
+                ui.label(format!("{} {} · {} {}",
+                    session.kills,tr("kills"),session.captures,tr("captures")));
+                ui.label(format!("{} {} · {} {}",
+                    session.shiny_seen,tr("shinies seen"),
+                    session.shiny_captured,tr("shinies caught")));
+            });
+            ui.horizontal_wrapped(|ui|{
+                ui.label(format!("{}: {}",
+                    tr("Trainer XP earned"),format_hunt_amount(session.trainer_xp as f64)));
+                ui.label(format!("{}: {}",
+                    tr("Pokémon XP earned"),format_hunt_amount(session.pokemon_xp as f64)));
+                ui.label(format!("{}: {}",
+                    tr("Combat gold"),format_hunt_amount(session.combat_gold as f64)));
+                ui.label(format!("{}: {}",
+                    tr("Auto-sale gold"),format_hunt_amount(session.auto_sale_gold as f64)));
+            });
+            ui.horizontal_wrapped(|ui|{
+                if !app.session_reset_confirm[index] {
+                    if ui.small_button(tr("Reset session counters")).clicked(){
+                        app.session_reset_confirm[index]=true;
+                    }
+                }else {
+                    ui.label(RichText::new(tr("Reset all session loot/XP counters?"))
+                        .size(10.0).color(WARN));
+                    if ui.small_button(tr("Confirm reset")).clicked(){
+                        native.reset_hunt_session();
+                        app.session_reset_confirm[index]=false;
+                    }
+                    if ui.small_button(tr("Cancel")).clicked(){
+                        app.session_reset_confirm[index]=false;
+                    }
+                }
+            });
+            if !session.acquired.is_empty() {
+                ui.collapsing(format!("{} · {}",
+                    tr("Drops acquired"),session.acquired.len()),|ui|{
+                    let mut entries=session.acquired.iter().collect::<Vec<_>>();
+                    entries.sort_by(|a,b|b.1.cmp(a.1));
+                    for (name,amount) in entries.iter().take(40) {
+                        ui.label(RichText::new(format!("{} ×{}",name,amount))
+                            .size(10.0).color(TEXT));
+                    }
+                });
+            }
+        });
+    ui.add_space(10.0);
     let m = &hunts.measurements;
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
         .inner_margin(egui::Margin::same(13)).show(ui, |ui| {
