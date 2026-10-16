@@ -92,6 +92,10 @@ pub struct HuntSessionStats {
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntView {
+    pub account_nick: Option<String>,
+    pub field_map: Option<String>,
+    pub field_slug: Option<String>,
+    pub field_init_timestamp: Option<u64>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     pub pending_hunt_slug: Option<String>,
@@ -253,6 +257,10 @@ impl HuntIntel {
         }
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
+        if let Some(nick) = state.get("nick").and_then(Value::as_str)
+            .map(str::trim).filter(|nick|!nick.is_empty()) {
+            self.view.account_nick = Some(nick.to_owned());
+        }
         if let Some(value) = Self::num(state, "diamonds") { self.view.diamonds = Some(value); }
         if let Some(value) = Self::num(state, "orbs") { self.view.orbs = Some(value); }
         if let Some(value) = Self::num(state, "servidorAgora") { self.view.server_now = Some(value); }
@@ -393,6 +401,17 @@ impl HuntIntel {
             }
             Some("estado") => {
                 if let Some(state) = frame.get("estado") { self.merge_state(state, now); }
+            }
+            Some("campo.init") => {
+                if let Some(map) = frame.get("mapa").and_then(Value::as_str) {
+                    self.view.field_map = Some(map.to_owned());
+                }
+                if let Some(slug) = frame.get("slug").and_then(Value::as_str) {
+                    self.view.field_slug = Some(slug.to_owned());
+                }
+                if let Some(timestamp) = Self::num(&frame, "ts") {
+                    self.view.field_init_timestamp = Some(timestamp);
+                }
             }
             Some("batalha") => {
                 if let Some(events) = frame.get("ev").and_then(Value::as_array) {
@@ -575,6 +594,19 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn nick_and_field_initialization_are_retained_without_guessing_hunt() {
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"welcome","estado":{"nick":"Example","gold":5}}"#,now);
+        m.ingest(r#"{"t":"campo.init","slug":"route-map",
+            "mapa":"Grasslands","ts":12345}"#,now);
+        assert_eq!(m.view.account_nick.as_deref(),Some("Example"));
+        assert_eq!(m.view.field_map.as_deref(),Some("Grasslands"));
+        assert_eq!(m.view.field_slug.as_deref(),Some("route-map"));
+        assert_eq!(m.view.field_init_timestamp,Some(12345));
+        assert!(m.view.hunt_slug.is_none());
+    }
+
     #[test]
     fn catalog_pokemon_and_partial_patch_follow_manager_server_fields() {
         let mut m = HuntIntel::new();
