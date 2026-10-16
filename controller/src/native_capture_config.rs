@@ -153,6 +153,24 @@ mod tests {
         assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,100);
     }
     #[test]
+    fn golden_potion_selection_cannot_overwrite_revive_selection() {
+        let mut cfg = CatchSettings::default();
+        cfg.restock_enabled = true;
+        cfg.potion_id = 70070;
+        cfg.revive_id = 206;
+        cfg.validate().unwrap();
+        let saved = cfg.as_value();
+        assert_eq!(saved["restock"]["selectedPotionId"], 70070);
+        assert_eq!(saved["restock"]["selectedReviveId"], 206);
+        assert_eq!(CatchSettings::from_value(Some(&saved)), cfg);
+        cfg.revive_id = 0;
+        let saved = cfg.as_value();
+        assert_eq!(saved["restock"]["selectedPotionId"], 70070);
+        assert!(saved["restock"]["selectedReviveId"].is_null());
+        assert_eq!(CatchSettings::from_value(Some(&saved)), cfg);
+    }
+
+    #[test]
     fn no_master_ball_and_invalid_restock_targets() {
         let mut cfg=CatchSettings::default();
         cfg.priorities=vec!["master".into()];
