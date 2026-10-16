@@ -7,6 +7,7 @@ mod kick;
 mod firefox;
 mod monitor;
 mod native_background;
+mod native_twitch;
 mod logging;
 mod update;
 
