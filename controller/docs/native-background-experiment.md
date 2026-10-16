@@ -130,3 +130,16 @@ Manager React UI, market modules, or every Manager workflow. Live verification
 against an authenticated session is still required. There is no available
 Rust compiler here, so the branch commits are not asserted to be locally
 compiled or gameplay-verified.
+
+## Sidebar layout and configurable background polling (native.15)
+
+**Dashboard → Hunt Atlas → Accounts** are now consecutive entries in the left sidebar. Inventory and Options also live in the sidebar. The horizontal Overview/Hunts/Inventory tab row was removed to keep navigation in a single place.
+
+**Sidebar → Options → Performance and updates** provides two independent switches:
+
+- **Reduce updates when the window is not focused:** enabled by default. Turning it off preserves foreground UI refresh and Firefox/BiDi monitor polling while another application is focused.
+- **Reduce updates when minimized to the system tray:** enabled by default. Turning it off preserves the same foreground cadence while the controller is hidden in the tray.
+
+Tray state takes precedence over focus: disabling the unfocused-window option alone does not disable tray throttling. Both switches are persisted as non-secret UI preferences in `controller-options.json` beneath the existing Moth app data root, separate from browser profiles and encrypted native credentials. A failed write leaves the previous setting in effect, with the error in the status bar. No restart is required.
+
+These options affect only UI redraw and Firefox/BiDi polling, **not** authenticated native PokéIdle WebSocket communication, battle processing, Auto Catch, restock or Twitch IRC. Unfocused fast redraw may increase CPU use. This change was reviewed statically; a Rust compiler and authenticated game session were not available in the editing environment.
