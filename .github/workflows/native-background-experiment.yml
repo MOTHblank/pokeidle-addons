@@ -1,10 +1,8 @@
-name: Validate native Moth Controller
+name: Manual native Moth Controller validation
 
+# Run only when explicitly requested. Ordinary merges must not consume
+# Windows/Linux runner minutes or block the separate release workflow.
 on:
-  push:
-    branches:
-      - master
-      - experiment/native-background-sessions
   workflow_dispatch:
 
 permissions:

@@ -15,7 +15,9 @@ The Rust backend handles authenticated game sessions and Twitch IRC directly, Au
 
 ## Optional Firefox browser extensions
 
-**Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding, and script detection is not part of native game authentication. The Accounts page can optionally open installers for legacy scripts that now live in [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). The controller checks their published versions only as an auxiliary diagnostic when that panel is used. If running optional browser Auto Catch, avoid simultaneously running native Auto Catch on the same account.
+**Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding. In **Accounts**, enable a slot and choose **Start native**; if necessary, authenticate in its temporary Firefox profile. The setup guide completes automatically after an authenticated session; there is no script-installation step. Connection state and login tools remain visible, while special Google/Twitch sign-in options are under **Login and profile tools**.
+
+For occasional Firefox scripts only, expand **Optional browser scripts (advanced)**. Legacy installers point to [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). Their versions are checked only when that optional panel is opened or its **Check now** button is pressed; missing scripts do not trigger dashboard warnings or get selected for installation automatically. Scripts must be chosen individually; there is no install-all action. If running optional browser Auto Catch, avoid simultaneously running native Auto Catch on the same account.
 
 The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall any previous user scripts from Premium to change their update feed. Moth Watch's native rule buyer now includes an account-local Snatch queue, automatic held-listing observation, exact listing verification and high-priority release bursts; the browser-only full market browser and historical valuations remain optional features.
 
