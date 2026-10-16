@@ -50,6 +50,11 @@ pub struct Forecast {
     pub trainer_xp_h: f64,
     pub pokemon_xp_h: f64,
     pub gold_h: f64,
+    /// Gross modeled combat gold is separate from expected NPC drop value.
+    pub combat_gold_h: f64,
+    pub npc_loot_gold_h: f64,
+    pub trainer_xp_per_kill: f64,
+    pub pokemon_xp_per_kill: f64,
     pub seconds_per_kill: f64,
     pub coverage: f64,
     pub calibrated: bool,
@@ -289,6 +294,10 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         trainer_xp_h:base_xp(hunt.level)*kills_h*bonus(view,true),
         pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
         gold_h:(base_gold(hunt.level)+loot)*kills_h,
+        combat_gold_h:base_gold(hunt.level)*kills_h,
+        npc_loot_gold_h:loot*kills_h,
+        trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
+        pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
         seconds_per_kill:if kills_h>0.0{3600.0/kills_h}else{0.0},
         coverage,
         calibrated:calibration.is_some()
@@ -343,6 +352,43 @@ mod tests {
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
+    }
+    #[test]
+    fn forecast_economy_channels_sum_to_gross_gold_and_xp_stays_separate(){
+        let mut view=HuntView::default();
+        view.hunt_slug=Some("hunt-a".into());
+        view.bonuses.trainer_event_pct=100.0;
+        let hunt=HuntEntry {
+            slug:"hunt-a".into(),name:"A".into(),level:100,
+            species:vec![HuntSpecies{id:2,weight:100.0}],
+            ..Default::default()
+        };
+        view.hunts=std::sync::Arc::new(vec![hunt.clone()]);
+        view.active_pokemon=Some(PokemonInfo {
+            id:1,species_id:Some(1),name:"Lead".into(),level:150,
+            quality:Some(1.2),potency:Some(3),ivs:[Some(25);6],
+            ..Default::default()
+        });
+        let mut guide=Reference::default();
+        guide.chart.insert("NORMAL".into(),
+            [("NORMAL".into(),1.0)].into_iter().collect());
+        for id in [1,2]{
+            guide.species.insert(id,ReferenceSpecies {
+                id,name:format!("Pokemon {id}"),types:vec!["NORMAL".into()],
+                base:vec![100.0;6],
+                moves:vec![ReferenceMove {
+                    move_type:"NORMAL".into(),special:false,
+                    power:60.0,cooldown:1200.0,min_level:1,
+                }],
+                drops:vec![ReferenceDrop{
+                    item_id:Some(20),item_name:None,chance_pct:10.0,
+                    minimum:1.0,maximum:2.0,guide_price:100.0,
+                }],
+            });
+        }
+        let result=estimate(&view,&hunt,&guide).unwrap();
+        assert!((result.gold_h-result.combat_gold_h-result.npc_loot_gold_h).abs()<0.001);
+        assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
     }
     #[test]
     fn guide_loot_names_are_preserved_without_fabricating_item_ids(){
