@@ -10,6 +10,8 @@ pub enum GameCommand {
     Hunt(String),
     Center,
     AutoSet(serde_json::Map<String, Value>),
+    SetAutomation { field: String, value: Value },
+    SellPokemon(u64),
     ShopBuy { kind: String, id: u64, qty: u64 },
 }
 impl GameCommand {
@@ -23,6 +25,8 @@ impl GameCommand {
                 fields.insert("t".into(),Value::String("auto.set".into()));
                 Value::Object(fields)
             },
+            Self::SetAutomation {field,value} => json!({"t":"auto.set","field":field,"value":value}),
+            Self::SellPokemon(id) => json!({"t":"shop.sellPokemon","pokemonId":id}),
             Self::ShopBuy {kind,id,qty} => json!({"t":"shop.buy","kind":kind,"id":id,"qty":qty}),
         }
     }
@@ -33,6 +37,9 @@ impl GameCommand {
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::Center => true,
             Self::AutoSet(fields) => fields.len()<128 && !fields.contains_key("t"),
+            Self::SetAutomation {field,value} =>
+                crate::native_automation::AutomationWriter::valid(field,value),
+            Self::SellPokemon(id) => *id > 0,
             Self::ShopBuy{kind,id,qty} =>
                 (kind=="ball" || kind=="item") && *id>0 && (1..=5000).contains(qty),
         }
@@ -159,6 +166,19 @@ impl Gameplay {
         if let GameCommand::Throw{slot,..}=command {
             if let Some(c)=self.corpses.iter_mut().find(|c|c.slot==*slot) {c.pending=false;}
         }
+    }
+}
+#[cfg(test)]
+mod protocol_command_tests {
+    use super::*;
+    #[test]
+    fn sell_command_uses_managers_confirmed_wire_format() {
+        assert_eq!(GameCommand::SellPokemon(42).wire(),
+            json!({"t":"shop.sellPokemon","pokemonId":42}));
+        assert!(!GameCommand::SellPokemon(0).is_valid());
+        assert!(!GameCommand::SetAutomation {
+            field:"unsupported".into(),value:json!(true)
+        }.is_valid());
     }
 }
 #[cfg(test)]
