@@ -11,6 +11,8 @@ pub enum GameCommand {
     Center,
     AutoSet(serde_json::Map<String, Value>),
     SetAutomation { field: String, value: Value },
+    // Kept for the guarded Pokémon-sale command path and future UI controls.
+    #[allow(dead_code)]
     SellPokemon(u64),
     ShopBuy { kind: String, id: u64, qty: u64 },
 }

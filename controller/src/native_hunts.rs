@@ -19,6 +19,8 @@ pub struct HuntEntry {
     pub region: String,
     pub level: u32,
     pub total_spawns: u32,
+    // Retained for hunt artwork even when no current widget displays it.
+    #[allow(dead_code)]
     pub looktype: Option<u64>,
     pub species: Vec<HuntSpecies>,
 }
@@ -46,9 +48,12 @@ pub struct PokemonInfo {
 }
 #[derive(Clone, Debug, Default)]
 pub struct WildInfo {
+    // These identifiers are retained for reliable target/artwork matching.
+    #[allow(dead_code)]
     pub slot: u64,
     pub name: String,
     pub level: u32,
+    #[allow(dead_code)]
     pub species_id: Option<u64>,
     pub hp: u64,
     pub max_hp: u64,

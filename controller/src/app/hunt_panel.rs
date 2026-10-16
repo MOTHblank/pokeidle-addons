@@ -1803,7 +1803,7 @@ mod tests {
         guide.chart.insert("GHOST".into(),
             [("NORMAL".into(),0.0)].into_iter().collect());
         guide.species.insert(1,native_atlas::ReferenceSpecies{
-            id:1,name:"Testmon".into(),types:vec!["NORMAL".into()],
+            name:"Testmon".into(),types:vec!["NORMAL".into()],
             base:vec![100.0;6],moves:vec![],
             drops:vec![native_atlas::ReferenceDrop{
                 item_id:None,item_name:Some("Moon Stone".into()),

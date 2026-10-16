@@ -185,12 +185,6 @@ impl TwitchSession {
             .map_err(|_| "Could not start the Twitch connection".to_owned())?;
         Ok(Self { state, desired, stop })
     }
-    pub fn set_desired(&self, channels: Vec<String>) {
-        let channels = normalize_channels(channels);
-        if let Ok(mut current) = self.desired.lock() {
-            *current = channels;
-        }
-    }
     pub fn snapshot(&self) -> TwitchSnapshot {
         self.state.lock().map(|state| state.clone()).unwrap_or_default()
     }
@@ -222,7 +216,8 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                 let mut auth_rejected = false;
                 loop {
                     if stop.load(Ordering::Relaxed) { let _ = socket.close(None); break; }
-                    let targets = desired.lock().map(|v| v.clone()).unwrap_or_default();
+                    let targets = desired.lock().map(|v| normalize_channels(v.clone()))
+                        .unwrap_or_default();
                     let target_set: BTreeSet<_> = targets.iter().cloned().collect();
                     // Leave removed channels, but keep every unchanged room
                     // connected; never rebuild the socket on live-list deltas.
