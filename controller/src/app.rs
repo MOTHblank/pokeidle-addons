@@ -4198,7 +4198,9 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             match app.hunt_ranking {
                 HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
-                HuntRanking::Gold if m.valid_gold => Some(m.gold_net_h),
+                // Net observed gold includes purchases and spending, while
+                // modeled gold is *gross*. They are not comparable rankings.
+                HuntRanking::Gold => None,
                 _ => None
             }
         } else { None };
