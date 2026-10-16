@@ -361,7 +361,8 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
             if let Some(events) = payload.get("ev").and_then(Value::as_array) {
                 for event in events {
                     match event.get("k").and_then(Value::as_str) {
-                        Some("morte") => status.battle_kills = status.battle_kills.saturating_add(1),
+                        Some("morte") if event.get("quem").and_then(Value::as_str) == Some("selvagem") =>
+                            status.battle_kills = status.battle_kills.saturating_add(1),
                         Some("bola") if event.get("sucesso").and_then(Value::as_bool) == Some(true) =>
                             status.captures = status.captures.saturating_add(1),
                         _ => {}
