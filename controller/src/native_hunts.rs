@@ -112,6 +112,9 @@ pub struct HuntView {
     pub active_pokemon: Option<PokemonInfo>,
     pub pokemon_count: usize,
     pub pokemon_roster: Arc<Vec<PokemonInfo>>,
+    /// True only after a complete server-provided pokemons roster, not
+    /// inferred from partial pkMud updates or a previously online session.
+    pub roster_ready: bool,
     pub wild: Option<WildInfo>,
     pub balls: Arc<BTreeMap<u64, u64>>,
     pub ball_names: Arc<BTreeMap<u64, String>>,
@@ -239,6 +242,7 @@ impl HuntIntel {
         self.session_kills = 0; // Reset the per-hunt *rate* baseline, not session totals.
         self.view.battle_kills = 0;
         self.last_battle_at = None;
+        self.view.roster_ready = false;
         self.view.measurements = HuntMeasurements::default();
         self.view.sample_quality = "Reconnecting; collecting fresh measurements".into();
     }
@@ -387,6 +391,7 @@ impl HuntIntel {
             self.adopt_hunt(slug, now);
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
+            self.view.roster_ready = true;
             // Even an empty authoritative depot must invalidate the previously
             // published Arc roster; otherwise sold Pokémon remain visible.
             self.pokemon.clear();
@@ -701,6 +706,16 @@ mod tests {
         assert_eq!(roster.pokemon_roster[0].held_item_id,None);
         assert_eq!(roster.pokemon_roster[0].ivs[0],None);
         assert_eq!(roster.pokemon_roster[0].ivs[1],Some(20));
+    }
+    #[test]
+    fn partial_roster_is_not_credited_as_a_complete_collection(){
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"estado","estado":{"pkMud":[{"id":7,"speciesId":25}]}}"#,now);
+        assert!(!m.view.roster_ready);
+        m.ingest(r#"{"t":"welcome","estado":{"pokemons":[]}}"#,now);
+        assert!(m.view.roster_ready);
+        m.on_disconnect();
+        assert!(!m.view.roster_ready);
     }
     #[test]
     fn full_empty_roster_replaces_previous_nonempty_snapshot() {
