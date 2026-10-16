@@ -1670,7 +1670,6 @@ pub struct ControllerApp {
     addon_selection: [BTreeSet<String>; 4],
     addon_selection_initialized: [bool; 4],
     addon_manager_open: [bool; 4],
-    addon_focus: Option<usize>,
     show_setup_guide: [bool; 4],
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
@@ -1797,7 +1796,6 @@ impl ControllerApp {
             addon_selection: std::array::from_fn(|_| BTreeSet::new()),
             addon_selection_initialized: [false; 4],
             addon_manager_open: [false; 4],
-            addon_focus: None,
             show_setup_guide: [false; 4],
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
@@ -1926,9 +1924,15 @@ impl ControllerApp {
                 }
             };
 
-            let (vm_installed, check_error) = match accounts::violentmonkey_installed(profile) {
-                Ok(value) => (value, None),
-                Err(error) => (false, Some(error)),
+            // Browser-extension inspection is opt-in; normal native account
+            // setup does not require reading Firefox's extensions registry.
+            let (vm_installed, check_error) = if self.addon_manager_open[index] {
+                match accounts::violentmonkey_installed(profile) {
+                    Ok(value) => (value, None),
+                    Err(error) => (false, Some(error)),
+                }
+            } else {
+                (false, None)
             };
 
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
@@ -2418,14 +2422,6 @@ impl ControllerApp {
         if error {
             logging::warn(&self.status);
         }
-    }
-
-    fn open_addon_manager(&mut self, profile: GameProfile) {
-        let index = profile.index();
-        self.select_workspace_account(index);
-        self.panel_tab = PanelTab::Accounts;
-        self.addon_manager_open[index] = true;
-        self.addon_focus = Some(index);
     }
 
     fn request_addon_refresh(&mut self) {
@@ -2919,14 +2915,7 @@ impl ControllerApp {
     }
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
-        // "Open Game" uses persistent visible Firefox, not native cache startup.
-        if let ProfileAction::Game = action {
-            self.open_in_firefox(profile);
-            return;
-        }
-
         let result = match action {
-            ProfileAction::Game => unreachable!("game action handled above"),
             ProfileAction::GoogleSignIn => {
                 self.open_game_for_google_sign_in(profile);
                 return;
@@ -3297,7 +3286,6 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[derive(Clone, Copy)]
 enum ProfileAction {
-    Game,
     GoogleSignIn,
     Twitch,
     InstallViolentmonkey,
@@ -3836,15 +3824,10 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
         app.idle_progress[index] = IdleProgressTracker::default();
         false
     } else { app.idle_warning_for(index, &health) };
-    let addon_versions = app.addon_version_status.lock()
-        .map(|status| status.clone()).unwrap_or_default();
-    // Native accounts do not execute browser userscripts. Their old addon
-    // version inventory must not show a spurious maintenance warning.
-    let browser_runtime = app.games[index].native.is_none();
-    let addon_problems = if browser_runtime {
-        addon_needs_attention(&health, running, &addon_versions)
-    } else { 0 };
-    let needs_setup = browser_runtime && !app.account_setup[index].setup_complete;
+    // Only authentication/setup issues belong on the dashboard.
+    // Optional Firefox scripts must never create account warnings.
+    let needs_setup = !app.account_setup[index].setup_complete
+        && app.games[index].native.is_none();
     let fresh = running && health.telemetry_is_fresh();
     let repair_available = monitor_repair_available(
         running,
@@ -3964,19 +3947,12 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 automation_badge(ui, "XP bonus", &bonus_text, bonus_confirmed);
             });
 
-            if needs_setup || addon_problems > 0 {
+            if needs_setup {
                 ui.add_space(7.0);
-                let warning = if needs_setup {
-                    tr("Setup needed").to_string()
-                } else {
-                    format!("{} {}", addon_problems, tr(if addon_problems == 1 {
-                        "addon needs attention"
-                    } else {
-                        "addons need attention"
-                    }))
-                };
-                if ui.small_button(RichText::new(format!("⚠ {warning}")).color(WARN)).clicked() {
-                    app.open_addon_manager(profile);
+                if ui.small_button(RichText::new(tr("Setup needed")).color(WARN)).clicked() {
+                    app.select_workspace_account(index);
+                    app.panel_tab = PanelTab::Accounts;
+                    app.show_setup_guide[index] = true;
                 }
             }
             if idle_warning {
@@ -6393,16 +6369,6 @@ fn addon_condition(
     }
 }
 
-fn addon_needs_attention(
-    health: &Health, running: bool, latest: &update::AddonVersionStatus,
-) -> usize {
-    if !latest.checked { return 0; }
-    latest.versions.keys().filter(|file| matches!(
-        addon_condition(health, running, latest, file),
-        AddonCondition::Outdated | AddonCondition::NotDetected
-    )).count()
-}
-
 fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if app
         .account_setup_checked_at
@@ -6412,8 +6378,6 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         app.refresh_account_setup();
     }
 
-    let remote_addons = app.addon_version_status.lock()
-        .map(|state| state.clone()).unwrap_or_default();
     // Accounts is a normal full-width workspace, not an egui floating window.
     // Keep a local content layout and the existing per-account scroll area.
     ui.vertical(|ui| {
@@ -6577,53 +6541,17 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
                                 ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
-                                    let profile_label = if setup.profile_ready {
-                                        tr("Profile folder exists")
-                                    } else {
-                                        tr("Not configured")
-                                    };
-                                    let vm_label = if setup.violentmonkey_installed {
-                                        tr("Registered")
-                                    } else {
-                                        if setup.check_error.is_some() { tr("Check failed") } else { tr("Not installed") }
-                                    };
-                                    let twitch_open = health.telemetry_is_fresh() && health.tabs.iter().any(|tab| tab.kind == "Twitch");
-                                    // This check only observes tab existence. It does not
-                                    // authenticate Twitch, so never label a profile as logged in.
-                                    let twitch_native = app.games[index].native.as_ref()
-                                        .is_some_and(|native| native.twitch_snapshot().phase == "Online");
-                                    let twitch_label = if twitch_native {
-                                        "Native IRC connected"
-                                    } else if twitch_open {
-                                        tr("Tab open")
-                                    } else if running && health.telemetry_is_fresh() {
-                                        tr("No Twitch tab open")
-                                    } else {
-                                        tr("Not checked")
-                                    };
-
-                                    status_chip(ui, "Firefox", profile_label, setup.profile_ready);
-                                    let vm_chip = status_chip(ui, "Violentmonkey (optional)", vm_label, true);
-                                    if let Some(error) = &setup.check_error {
-                                        vm_chip.on_hover_text(error.as_str());
-                                    }
-                                    status_chip(ui, "Twitch", twitch_label, twitch_open || twitch_native);
-
-                                    if running && health.telemetry_is_fresh() {
-                                        let script_status = status_chip(
-                                            ui,
-                                            tr("Scripts"),
-                                            &format!("{} {}", health.addon_ok, tr("detected")),
-                                            health.addon_ok > 0 && health.addon_missing.is_empty(),
-                                        );
-                                        if !health.addon_missing.is_empty() {
-                                            script_status.on_hover_text(
-                                                format!("{} {}", tr("Missing:"), health.addon_missing.join(", "))
-                                            );
-                                        }
-                                    } else {
-                                        status_chip(ui, tr("Scripts"), tr("Not checked"), false);
-                                    }
+                                    status_chip(ui, "Firefox profile",
+                                        if setup.profile_ready { tr("Ready") } else { tr("Not configured") },
+                                        setup.profile_ready);
+                                    let game_online = app.games[index].native.as_ref()
+                                        .is_some_and(|native| native.snapshot().phase == "Online")
+                                        || (running && health.telemetry_is_fresh() && health.logged_in);
+                                    status_chip(ui, "PokéIdle login",
+                                        if game_online { tr("Connected") }
+                                        else if running { tr("Waiting for login") }
+                                        else { tr("Not signed in") },
+                                        game_online);
                                 });
 
                                 if enabled && (!setup.setup_complete || app.show_setup_guide[index]) {
@@ -6634,67 +6562,53 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         .inner_margin(10.0)
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                ui.label(RichText::new(tr("Initial setup")).strong().color(TEXT));
+                                                ui.label(RichText::new("Native account setup").strong().color(TEXT));
                                                 if setup.setup_complete && ui.small_button(tr("Hide setup guide")).clicked() {
                                                     app.show_setup_guide[index] = false;
                                                 }
                                             });
-                                            ui.label(RichText::new(tr("Complete these steps once for this profile."))
-                                                .size(10.0).color(MUTED));
-                                            ui.horizontal_wrapped(|ui| {
-                                                status_chip(ui, tr("Firefox profile created"), if setup.profile_ready { "✓" } else { "…" }, setup.profile_ready);
-                                                // Browser userscript managers are entirely optional for native sessions.
-                                                let verified = running && health.telemetry_is_fresh();
-                                                status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
-                                                let script_count = format!("{} {}", health.addon_ok, tr("detected"));
-                                                // Script versions are shown only in the optional addon manager.
-                                                let _ = script_count;
-                                            });
-                                            ui.label(RichText::new("Native sessions need no Violentmonkey or browser scripts. Optional scripts are managed separately.")
-                                                .size(9.0).color(DIM));
-                                            ui.horizontal_wrapped(|ui| {
-                                                if ui.button("Optional browser scripts").clicked() {
-                                                    app.open_addon_manager(profile);
-                                                }
-                                                if ui.add_enabled(setup.profile_ready,
-                                                    egui::Button::new(tr("Finish setup"))).clicked()
-                                                {
-                                                    match accounts::complete_setup(profile) {
-                                                        Ok(()) => {
-                                                            app.account_setup[index].setup_complete = true;
-                                                            app.show_setup_guide[index] = false;
-                                                            app.set_status(tr("Setup completed"), false);
-                                                        }
-                                                        Err(error) => app.set_status(error, true),
-                                                    }
-                                                }
-                                            });
+                                            ui.label(RichText::new(
+                                                "Choose Start native. If the session needs authentication, sign in through the Firefox window that opens. The controller connects directly afterward."
+                                            ).size(10.0).color(MUTED));
+                                            ui.label(RichText::new(
+                                                "No Violentmonkey, userscripts, or separate browser addons are required. Setup finishes automatically after native login."
+                                            ).size(10.0).color(DIM));
+                                            if !running && app.games[index].native.is_none()
+                                                && ui.small_button(tr("Start native")).clicked()
+                                            {
+                                                app.launch_one(profile);
+                                            }
                                         });
-                                } else if enabled {
-                                    if ui.small_button(tr("Show setup guide")).clicked() {
-                                        app.show_setup_guide[index] = true;
-                                    }
+                                } else if enabled && ui.small_button(tr("Show setup guide")).clicked() {
+                                    app.show_setup_guide[index] = true;
                                 }
 
                                 ui.add_space(8.0);
-                                let attention = addon_needs_attention(&health, running, &remote_addons);
-                                ui.horizontal_wrapped(|ui| {
-                                    if ui.button(tr("Manage Addons")).clicked() {
-                                        app.addon_manager_open[index] = !app.addon_manager_open[index];
+                                if ui.small_button(if app.addon_manager_open[index] {
+                                    "Hide optional browser scripts"
+                                } else {
+                                    "Optional browser scripts (advanced)"
+                                }).clicked() {
+                                    let opened = !app.addon_manager_open[index];
+                                    app.addon_manager_open[index] = opened;
+                                    if opened {
+                                        app.refresh_account_setup();
+                                        app.request_addon_refresh();
                                     }
-                                    if attention > 0 && setup.violentmonkey_installed {
-                                        ui.colored_label(WARN, format!("{attention} {}",
-                                            tr(if attention == 1 { "addon needs attention" } else { "addons need attention" })));
-                                    }
-                                });
+                                }
 
                                 if app.addon_manager_open[index] {
+                                    let remote_addons = app.addon_version_status.lock()
+                                        .map(|state| state.clone()).unwrap_or_default();
                                     egui::Frame::new()
                                         .fill(PANEL)
                                         .stroke(Stroke::new(1.0, BORDER))
                                         .corner_radius(8.0)
                                         .inner_margin(12.0)
                                         .show(ui, |ui| {
+                                            ui.label(RichText::new(
+                                                "For occasional Firefox use only. Native gameplay, Auto Catch, restock, Twitch and market automation need none of these scripts."
+                                            ).size(10.0).color(MUTED));
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.label(RichText::new("Optional browser scripts (Premium)")
                                                     .size(13.0).strong().color(TEXT));
@@ -6709,10 +6623,16 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                 }
                                             });
                                             if !setup.violentmonkey_installed {
-                                                ui.label("Violentmonkey is optional; only install it to use browser scripts.");
-                                                if ui.button(tr("Install Violentmonkey")).clicked() {
+                                                ui.label("Violentmonkey is only needed for scripts you explicitly choose to run in Firefox.");
+                                                if ui.small_button(tr("Install Violentmonkey")).clicked() {
                                                     app.profile_action(profile, ProfileAction::InstallViolentmonkey);
                                                 }
+                                            } else {
+                                                ui.label(RichText::new("Violentmonkey detected for this Firefox profile.")
+                                                    .size(10.0).color(DIM));
+                                            }
+                                            if let Some(error) = &setup.check_error {
+                                                ui.label(RichText::new(error).size(9.0).color(WARN));
                                             }
                                             if !running || !health.telemetry_is_fresh() {
                                                 ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
@@ -6721,9 +6641,11 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                             if !remote_addons.checked {
                                                 ui.label(RichText::new(tr(if remote_addons.error.is_some() {
                                                     "GitHub version check unavailable"
-                                                } else {
+                                                } else if remote_addons.checking {
                                                     "Checking GitHub versions…"
-                                                })).size(10.0).color(WARN));
+                                                } else {
+                                                    "Use Check now to list optional scripts."
+                                                })).size(10.0).color(DIM));
                                                 if let Some(error) = &remote_addons.error {
                                                     ui.label(RichText::new(error.as_str()).size(9.0).color(DIM));
                                                 }
@@ -6733,7 +6655,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                 {
                                                     for file in remote_addons.versions.keys() {
                                                         if matches!(addon_condition(&health, running, &remote_addons, file),
-                                                            AddonCondition::Outdated | AddonCondition::NotDetected)
+                                                            AddonCondition::Outdated)
                                                         {
                                                             app.addon_selection[index].insert(file.clone());
                                                         }
@@ -6755,7 +6677,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                         let (label, color) = match condition {
                                                             AddonCondition::Current => (tr("Up to date"), GOOD),
                                                             AddonCondition::Outdated => (tr("outdated"), WARN),
-                                                            AddonCondition::NotDetected => (tr("Not detected in game"), WARN),
+                                                            AddonCondition::NotDetected => ("Not detected (optional)", DIM),
                                                             AddonCondition::Unverified => {
                                                                 if running && health.telemetry_is_fresh() && remote_addons.checked {
                                                                     (tr("Not installed or inactive"), DIM)
@@ -6788,14 +6710,9 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                     && remote_addons.checked
                                                     && !app.addon_selection[index].is_empty()
                                                     && !app.addon_install_busy[index];
-                                                if ui.add_enabled(can_repair, egui::Button::new(tr("Repair selected"))).clicked() {
+                                                if ui.add_enabled(can_repair, egui::Button::new("Install / update selected")).clicked() {
                                                     let selected: Vec<String> = app.addon_selection[index].iter().cloned().collect();
                                                     app.start_addon_install(profile, Some(selected));
-                                                }
-                                                if ui.add_enabled(setup.violentmonkey_installed && installer_visible && !app.addon_install_busy[index],
-                                                    egui::Button::new("Install all optional scripts")).clicked()
-                                                {
-                                                    app.start_addon_install(profile, None);
                                                 }
                                             });
                                             ui.label(RichText::new(tr("Opens installer links through Firefox; confirm installation in Violentmonkey."))
@@ -6806,41 +6723,23 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 }
 
                                 ui.add_space(8.0);
-
-                                ui.label(
-                                    RichText::new(
-                                        "Firefox stores login sessions; Rust owns game + Twitch IRC after automatic handoff.",
-                                    )
-                                    .size(9.0)
-                                    .color(DIM),
-                                );
-
-                                ui.add_space(8.0);
-
-                                ui.horizontal_wrapped(|ui| {
-                                    profile_button(ui, tr("Open Game"), || {
-                                        app.profile_action(profile, ProfileAction::Game)
-                                    });
-                                    profile_button(ui, tr("Google sign-in"), || {
-                                        app.profile_action(profile, ProfileAction::GoogleSignIn)
-                                    });
-                                    profile_button(ui, tr("Twitch"), || {
-                                        app.profile_action(profile, ProfileAction::Twitch)
-                                    });
-                                    profile_button(ui, tr("Install Violentmonkey"), || {
-                                        app.profile_action(profile, ProfileAction::InstallViolentmonkey)
-                                    });
-                                    // All addon actions live under Manage Addons above.
-                                    profile_button(ui, tr("Profile folder"), || {
-                                        app.profile_action(profile, ProfileAction::Folder)
+                                ui.collapsing("Login and profile tools", |ui| {
+                                    ui.label(RichText::new(
+                                        "Firefox is only needed for sign-in or interactive play; game and Twitch connections run natively afterward."
+                                    ).size(10.0).color(DIM));
+                                    ui.horizontal_wrapped(|ui| {
+                                        profile_button(ui, tr("Google sign-in"), || {
+                                            app.profile_action(profile, ProfileAction::GoogleSignIn)
+                                        });
+                                        profile_button(ui, tr("Twitch"), || {
+                                            app.profile_action(profile, ProfileAction::Twitch)
+                                        });
+                                        profile_button(ui, tr("Profile folder"), || {
+                                            app.profile_action(profile, ProfileAction::Folder)
+                                        });
                                     });
                                 });
                             });
-                        if app.addon_focus == Some(index) {
-                            ui.scroll_to_rect(card.response.rect, Some(egui::Align::Center));
-                            app.addon_focus = None;
-                        }
-
                         if app.addon_install_busy[index] {
                             ui.horizontal(|ui| {
                                 ui.spinner();
