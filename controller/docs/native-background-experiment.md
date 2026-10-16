@@ -1,7 +1,7 @@
 # Native-first Moth Controller — four-account game + Twitch IRC
 
 **Branch:** [experiment/native-background-sessions](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
-**Preview controller:** `0.1.7-native.13`
+**Preview controller:** `0.1.7-native.14`
 
 This experimental branch is **not an opt-in Firefox mode**. The standard runtime is one native Rust PokéIdle WebSocket **plus** one native Rust Twitch IRC connection per account. Firefox is an authentication helper and must close once both handshakes are captured.
 
@@ -106,3 +106,27 @@ Existing Auto Catch preferences are imported once from `moth-pokeidle-autocatch-
 Important: completion of a Rust `cargo test` suite is not a replacement for a real shop purchase; this workspace has no Rust compiler or authenticated game session. Verify purchase logs and the corresponding in-game gold/stock deltas with one account. If it remains at **Waiting for shop**, the selected ID does not have an authoritative shop price in the current `welcome` catalog; don't try to force purchases using guessed prices.
 
 **Next userscript-independence milestones, deliberately incremental:** move the complete Auto Catch ball-choice, reserves and restock threshold editor into native controller settings; remove the remaining reliance on localStorage preference migration; replace page-bound Hunt Atlas diagnostics/controls with protocol-derived Rust state; then migrate marketplace and monitoring addons one at a time. Keep browser scripts as temporary authentication/migration helpers only until their behavior is covered natively. Never remove a working production userscript merely because an unverified native equivalent exists.
+
+
+## Native account information overhaul (native.14)
+
+The native account dashboard no longer relies on the older userscript/Firefox
+Bridge summary for its primary state. The renderer takes a single snapshot of
+the game worker's account-domain model: the confirmed hunt, active trainer and
+Pokémon, XP, balances, battle/session earnings, capture counters, full Pokémon
+roster, current inventory and Twitch IRC status. The account detail drawer
+links to the native Hunt Atlas and Inventory tabs.
+
+For XP throughput, incoming wild-death `batalha` receipts now contribute
+independently of the timing of `estado` frames. Trainer and Pokémon reward
+streams remain separate, and minimum measurement duration and hunt/disconnect
+resets prevent cross-hunt inflation. The compact card's XP/h reads this
+authoritative native measurement rather than a Firefox-only rate tracker.
+The old Firefox-Bridge inactivity warning is not shown for native sessions.
+
+The Manager reference is used for the *protocol and information domains*,
+not copied source. This does **not** constitute a complete port of the
+Manager React UI, market modules, or every Manager workflow. Live verification
+against an authenticated session is still required. There is no available
+Rust compiler here, so the branch commits are not asserted to be locally
+compiled or gameplay-verified.
