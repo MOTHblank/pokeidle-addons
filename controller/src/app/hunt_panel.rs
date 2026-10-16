@@ -323,67 +323,71 @@ fn draw_rate(ui:&mut egui::Ui,label:&str,value:Option<f64>,source:RateSource){
     });
 }
 
+/// A visible encounter is not sufficient evidence of active combat.
+/// Only an actual recent combat event allows the Fighting state.
+fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
+    if !live {("Offline / stale",WARN)}
+    else if view.in_center {("At Pokémon Center",WARN)}
+    else if view.wild.is_none() {("Waiting for encounter",MUTED)}
+    else if view.measurements.combat_event_age_secs
+        .is_some_and(|age|age<=45) {("Fighting",GOOD)}
+    else {("No recent combat",WARN)}
+}
+
 fn draw_hunt_row(
-    ui:&mut egui::Ui, result:&RankedHunt<'_>, rank:usize,
-    ranking:HuntRanking, view:&HuntView, reference:Option<&AtlasReference>,
-    live:bool, native:&NativeSession, error:&mut Option<String>,
+    ui:&mut egui::Ui,result:&RankedHunt<'_>,rank:usize,
+    ranking:HuntRanking,view:&HuntView,reference:Option<&AtlasReference>,
+    live:bool,native:&NativeSession,error:&mut Option<String>,
 ){
     let hunt=result.hunt;
     let current=view.hunt_slug.as_deref()==Some(hunt.slug.as_str());
     let pending=view.pending_hunt_slug.as_deref()==Some(hunt.slug.as_str());
     egui::Frame::new()
-        .fill(if current {ACCENT.linear_multiply(0.11)} else {PANEL})
-        .stroke(Stroke::new(1.0,if current {ACCENT}else{BORDER}))
+        .fill(if current{ACCENT.linear_multiply(0.12)}else{PANEL})
+        .stroke(Stroke::new(1.0,if current{ACCENT}else{BORDER}))
         .corner_radius(8.0).inner_margin(egui::Margin::symmetric(12,9))
         .show(ui,|ui|{
-            let wide=ui.available_width()>=650.0;
-            if wide {
-                ui.columns(3,|cols|{
-                    cols[0].horizontal(|ui|{
-                        ui.label(RichText::new(format!("{:02}",rank)).size(10.0).color(DIM));
-                        ui.vertical(|ui|{
-                            ui.add(egui::Label::new(RichText::new(&hunt.name)
-                                .strong().size(12.0).color(TEXT)).truncate())
-                                .on_hover_text(hunt.name.as_str());
-                            ui.label(RichText::new(format!("{} · {} · Lv {}",hunt.area,
-                                hunt.region,hunt.level)).size(10.0).color(MUTED));
-                        });
-                    });
-                    draw_rate(&mut cols[1],rate_label(ranking),result.value,result.source);
-                    cols[2].horizontal(|ui|{
-                        if current { ui.label(RichText::new("CURRENT").color(GOOD)); }
-                        else if pending { ui.label(RichText::new("Pending").color(WARN)); }
-                        else if ui.add_enabled(live,egui::Button::new("Hunt")).clicked() {
-                            if let Err(e)=native.send_command(GameCommand::Hunt(hunt.slug.clone())){
-                                *error=Some(e);
-                            } else {*error=None;}
-                        }
-                        if let Some(f)=result.forecast.as_ref(){
-                            ui.vertical(|ui|{
-                                ui.label(RichText::new(format!("{:.0} kills/h",f.kills_h))
-                                    .size(11.0).color(TEXT));
-                                ui.label(RichText::new(format!("{:.1}s / kill",f.seconds_per_kill))
-                                    .size(10.0).color(DIM));
-                            });
-                        }
-                    });
+            ui.horizontal(|ui|{
+                ui.label(RichText::new(format!("{rank:02}"))
+                    .size(12.0).strong().color(DIM));
+                ui.vertical(|ui|{
+                    ui.add(egui::Label::new(RichText::new(&hunt.name)
+                        .strong().size(13.0).color(TEXT)).truncate())
+                        .on_hover_text(hunt.name.as_str());
+                    ui.label(RichText::new(format!(
+                        "{} · {} · Lv {}",hunt.area,hunt.region,hunt.level
+                    )).size(10.0).color(MUTED));
                 });
-            } else {
-                ui.horizontal_wrapped(|ui|{
-                    ui.label(RichText::new(format!("{:02} · {} · Lv {}",
-                        rank,hunt.name,hunt.level)).strong().color(TEXT));
-                    if current {ui.label(RichText::new("CURRENT").color(GOOD));}
-                    else if pending {ui.label(RichText::new("Pending").color(WARN));}
-                    else if ui.add_enabled(live,egui::Button::new("Hunt")).clicked(){
-                        if let Err(e)=native.send_command(GameCommand::Hunt(hunt.slug.clone())){
-                            *error=Some(e);
-                        } else {*error=None;}
+                ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                    if current{
+                        ui.colored_label(GOOD,"● Current");
+                    }else if pending{
+                        ui.colored_label(WARN,"Switching…");
+                    }else if ui.add_enabled(live,
+                        egui::Button::new("Hunt →")).clicked(){
+                        match native.send_command(GameCommand::Hunt(hunt.slug.clone())){
+                            Ok(())=>*error=None,
+                            Err(e)=>*error=Some(e),
+                        }
                     }
                 });
-                ui.label(RichText::new(format!("{} · {}",hunt.area,hunt.region))
-                    .size(10.0).color(DIM));
+            });
+            ui.add_space(5.0);
+            ui.horizontal_wrapped(|ui|{
                 draw_rate(ui,rate_label(ranking),result.value,result.source);
-            }
+                if let Some(f)=result.forecast.as_ref(){
+                    ui.add_space(15.0);
+                    ui.vertical(|ui|{
+                        ui.label(RichText::new("Combat pace").size(10.0).color(DIM));
+                        ui.label(RichText::new(format!("{:.0} kills/h",f.kills_h))
+                            .size(13.0).strong().color(TEXT));
+                        ui.label(RichText::new(format!(
+                            "{:.1}s/kill · {:.0}% coverage",
+                            f.seconds_per_kill,f.coverage*100.0
+                        )).size(9.0).color(MUTED));
+                    });
+                }
+            });
             ui.push_id(&hunt.slug,|ui|{
                 ui.collapsing("Pokémon encounters · estimate assumptions",|ui|{
                     ui.label(RichText::new(format!(
@@ -450,7 +454,6 @@ fn draw_hunt_row(
             });
         });
 }
-
 
 #[derive(Clone)]
 struct AtlasDestination<'a> {
@@ -704,22 +707,23 @@ fn account_is_live(session:&NativeSession)->bool {
 
 /// Shared workspace navigation chooses the account. This control only
 /// toggles Hunt Atlas's account-comparison mode; no duplicate account strip.
+/// One navigation strip, including comparison for offline sessions.
 fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Explore, compare and model your hunts")
-            .size(11.0).color(MUTED));
-        if app.hunt_subtab==HuntSubtab::Compare {
-            if workspace_tab_button(ui,"← Back to explorer",false,
-                "Return to the selected account's hunts").clicked(){
-                app.hunt_subtab=HuntSubtab::Explorer;
+        for (tab,label,hint) in [
+            (HuntSubtab::Explorer,"Explorer","Find Pokémon and their destinations"),
+            (HuntSubtab::Recommendations,"Rankings","Compare unlocked hunt estimates"),
+            (HuntSubtab::Current,"Current hunt","Battle activity and measured gains"),
+            (HuntSubtab::Models,"Models","Capture, Outland and economy scenarios"),
+            (HuntSubtab::Session,"Session","Recorded battle rewards and history"),
+            (HuntSubtab::Compare,"Compare","Compare all four accounts"),
+        ]{
+            if workspace_tab_button(ui,label,app.hunt_subtab==tab,hint).clicked(){
+                app.hunt_subtab=tab;
             }
-        }else if workspace_tab_button(ui,"Compare accounts",false,
-            "Compare live battle measurements and modeled hunts across all four accounts")
-            .clicked(){
-            app.hunt_subtab=HuntSubtab::Compare;
         }
     });
-    ui.add_space(5.0);
+    ui.add_space(7.0);
 }
 
 fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
@@ -828,20 +832,21 @@ fn atlas_filters_panel(
     view:&HuntView, reference:Option<&AtlasReference>, account:usize,
 ){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("HUNT ATLAS · SPECIES FINDER")
+        ui.label(RichText::new("Pokémon explorer")
             .size(15.0).strong().color(TEXT));
         if ui.small_button(format!(
-            "{} filters ({})",
-            if f.filters_open{"Hide"}else{"Show"},f.active_count()
+            "{} filters · {} active",
+            if f.filters_open{"Hide"}else{"More"},f.active_count()
         )).clicked(){f.filters_open=!f.filters_open}
-        if ui.small_button("Clear search filters").clicked(){
+        if f.active_count()>0 && ui.small_button("Reset filters").clicked(){
             f.clear();*page=0;
         }
     });
     ui.horizontal_wrapped(|ui|{
+        let search_width=(ui.available_width()*0.38).clamp(155.0,310.0);
         if ui.add(egui::TextEdit::singleline(&mut f.search)
             .hint_text("Search Pokémon, hunt, area or #ID")
-            .desired_width(230.0)).changed(){*page=0}
+            .desired_width(search_width)).changed(){*page=0}
         ui.label("Rank");
         egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
             .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
@@ -861,10 +866,6 @@ fn atlas_filters_panel(
             });
         if ui.small_button(if f.ascending{"↑"}else{"↓"}).clicked(){
             f.ascending=!f.ascending;*page=0;
-        }
-        if f.active_count()>0{
-            ui.label(RichText::new(format!("{} active filters",f.active_count()))
-                .size(10.0).color(ACCENT));
         }
     });
     if !f.filters_open {return}
@@ -1027,55 +1028,74 @@ fn draw_atlas_species(
         egui::Frame::new().fill(PANEL).corner_radius(7.0)
             .stroke(Stroke::new(1.0,BORDER))
             .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
-                ui.horizontal_wrapped(|ui|{
-                    visuals.show(ui,SpriteKind::Pokemon,row.id,None,30.0);
-                    ui.label(RichText::new(&row.name).size(14.0).strong().color(TEXT));
-                    ui.label(RichText::new(format!("#{}",row.id))
-                        .size(10.0).color(DIM));
-                    for kind in &row.types {
-                        ui.label(RichText::new(kind).size(9.0).color(ACCENT));
+                let compact=ui.available_width()<510.0;
+                ui.horizontal(|ui|{
+                    if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,36.0){
+                        ui.label(RichText::new("◇").size(22.0).color(DIM));
                     }
-                    if row.owned {
-                        ui.label(RichText::new("In depot").size(9.0).color(GOOD));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
-                        ui.vertical(|ui|{
-                            ui.label(RichText::new(atlas_value_label(sort,row.best))
-                                .strong().size(13.0).color(TEXT));
-                            ui.label(RichText::new(atlas_sort_label(sort))
-                                .size(9.0).color(DIM));
+                    ui.vertical(|ui|{
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label(RichText::new(&row.name).size(14.0)
+                                .strong().color(TEXT));
+                            ui.label(RichText::new(format!("#{}",row.id))
+                                .size(10.0).color(DIM));
+                            if row.owned{
+                                ui.label(RichText::new("● In depot")
+                                    .size(10.0).color(GOOD));
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui|{
+                            for kind in &row.types{
+                                ui.label(RichText::new(kind).size(10.0).color(ACCENT));
+                            }
+                            ui.label(RichText::new(format!(
+                                "· {} destinations",row.destinations.len()
+                            )).size(10.0).color(MUTED));
                         });
                     });
+                    if !compact{
+                        ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(atlas_value_label(sort,row.best))
+                                    .strong().size(15.0).color(TEXT));
+                                ui.label(RichText::new(atlas_sort_label(sort))
+                                    .size(10.0).color(DIM));
+                            });
+                        });
+                    }
                 });
-                ui.horizontal_wrapped(|ui|{
+                if compact{
                     ui.label(RichText::new(format!(
-                        "{} matching {}",
-                        row.destinations.len(),
-                        if row.destinations.len()==1{"destination"}else{"destinations"}
-                    )).size(10.0).color(MUTED));
-                    if let Some(best)=row.destinations.first(){
+                        "{} · {}",atlas_sort_label(sort),atlas_value_label(sort,row.best)
+                    )).size(12.0).strong().color(TEXT));
+                }
+                if let Some(best)=row.destinations.first(){
+                    ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
                             "Best: {} · Lv {} · {:.1}% spawns",
                             best.hunt.name,best.hunt.level,best.share*100.0
                         )).size(10.0).color(MUTED));
-                        let current=view.hunt_slug.as_deref()==Some(best.hunt.slug.as_str());
-                        let pending=view.pending_hunt_slug.as_deref()==Some(best.hunt.slug.as_str());
+                        let current=view.hunt_slug.as_deref()
+                            ==Some(best.hunt.slug.as_str());
+                        let pending=view.pending_hunt_slug.as_deref()
+                            ==Some(best.hunt.slug.as_str());
                         if current {
-                            ui.colored_label(GOOD,"Current");
+                            ui.colored_label(GOOD,"● Current");
                         }else if pending {
-                            ui.colored_label(WARN,"Switch pending");
+                            ui.colored_label(WARN,"Switching…");
                         }else if !best.unlocked {
-                            ui.colored_label(WARN,"Guide-only / locked");
+                            ui.colored_label(WARN,"Guide-only · locked");
                         }else if ui.add_enabled(live,
                             egui::Button::new("Hunt best →")).clicked(){
-                            match native.send_command(GameCommand::Hunt(best.hunt.slug.clone())){
+                            match native.send_command(GameCommand::Hunt(
+                                best.hunt.slug.clone())){
                                 Ok(())=>*error=None,
                                 Err(e)=>*error=Some(e),
                             }
                         }
-                    }
-                });
-                ui.collapsing("Destinations, drops & combat details",|ui|{
+                    });
+                }
+                ui.collapsing("Destinations · forecasts and drops",|ui|{
                     for dest in row.destinations.iter().take(35) {
                         ui.push_id(&dest.hunt.slug,|ui|{
                             egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
@@ -1210,15 +1230,6 @@ fn draw_atlas_explorer(
         ui.label("No matching species with available model inputs. Check filters and assumptions; missing outcomes are never ranked as zero.");
         return;
     }
-    ui.collapsing("Top 5 matching Pokémon",|ui|{
-        for (i,row) in rows.iter().take(5).enumerate() {
-            ui.label(RichText::new(format!(
-                "{}. {} · {} {}",
-                i+1,row.name,atlas_value_label(filters.sort,row.best),
-                atlas_sort_label(filters.sort)
-            )).size(11.0).color(TEXT));
-        }
-    });
     const PAGE:usize=18;
     let pages=rows.len().div_ceil(PAGE).max(1);
     *page=(*page).min(pages-1);
@@ -1236,9 +1247,7 @@ fn draw_atlas_explorer(
             visuals,&mut error);
     }
     if let Some(error)=error {*command_error=Some(error);}
-    ui.label(RichText::new(
-        "Some locations are only shown for comparison and cannot be selected here. Estimates may differ considerably from your actual battle results."
-    ).size(10.0).color(MUTED));
+
 }
 
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -1264,7 +1273,6 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             });
         return;
     }
-    ui.add_space(4.0);
     if app.hunt_reference_busy {
         ui.label(RichText::new(tr("Loading species and move reference..."))
             .size(10.0).color(MUTED));
@@ -1283,7 +1291,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             tr("Server determines accessible hunts")
         )).size(10.0).color(MUTED));
     }
-    ui.add_space(10.0);
+    ui.add_space(6.0);
 
     let index=app.hunt_account;
     let Some(native)=app.games[index].native.as_ref() else {
@@ -1324,8 +1332,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         .is_some_and(|received|received.elapsed()<=Duration::from_secs(90));
     let view=native.hunt_snapshot();
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(format!("Game: {}",status.phase))
-            .strong().color(if live {GOOD}else{WARN}));
+        ui.label(RichText::new(if live {"● Game connected"}else{"● Game stale"})
+            .size(11.0).strong().color(if live {GOOD}else{WARN}));
         if let Some(received)=status.last_received {
             ui.label(RichText::new(format!("Last game packet: {}s ago",
                 received.elapsed().as_secs())).size(10.0).color(MUTED));
@@ -1367,20 +1375,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             if ui.small_button("Dismiss").clicked(){app.hunt_action_error[index]=None;}
         });
     }
-    ui.add_space(8.0);
-    ui.horizontal_wrapped(|ui|{
-        for (tab,label,hint) in [
-            (HuntSubtab::Explorer, "Explore Pokémon", "Find species, destinations and rankings"),
-            (HuntSubtab::Recommendations, "Hunt rankings", "Compare your unlocked hunts"),
-            (HuntSubtab::Current, "Current hunt", "Live team, battles and bonuses"),
-            (HuntSubtab::Models, "Capture · Outland · Economy", "Model capture, rare drops and market value"),
-            (HuntSubtab::Session, "Session & rewards", "Review kills, captures and earned items"),
-        ] {
-            if workspace_tab_button(ui,label,app.hunt_subtab==tab,hint).clicked() {
-                app.hunt_subtab=tab;
-            }
-        }
-    });
+    ui.add_space(5.0);
     ui.separator();
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
         .auto_shrink([false,true]).show(ui,|ui|{
@@ -1402,95 +1397,144 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         &mut app.atlas_scenarios[index],&history,live);
                 }
                 HuntSubtab::Current => {
-                    ui.label(RichText::new("Current Pokémon, combat measurements and bonuses")
-                        .size(12.0).color(MUTED));
                     let hunts=&view;
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Active Pokémon")).size(10.0).color(DIM));
-                    if let Some(p) = hunts.active_pokemon.as_ref() {
-                        ui.label(RichText::new(format!("{} · Lv. {}", p.name, p.level))
-                            .size(16.0).strong().color(TEXT));
-                        ui.label(RichText::new(format!(
-                            "P{} · Q {} · {} · {} Pokémon",
-                            p.potency.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
-                            p.quality.map(|n|format!("{n:.3}")).unwrap_or_else(||"—".into()),
-                            if p.shiny { "Shiny" } else { "Normal" },
-                            hunts.pokemon_count
-                        )).size(10.0).color(DIM));
-                        let labels = ["HP", "ATK", "DEF", "SpA", "SpD", "SPD"];
-                        let stats = labels.iter().enumerate()
-                            .map(|(i,k)| format!("{} {}", k,
-                                p.ivs[i].map(|v|v.to_string()).unwrap_or_else(|| "—".into())))
-                            .collect::<Vec<_>>().join(" · ");
-                        ui.label(RichText::new(stats).size(10.0).color(MUTED));
-                    } else {
-                        ui.label(tr("Waiting for active Pokémon state"));
-                    }
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Bonuses considered")).size(10.0).color(DIM));
-                    let b = &hunts.bonuses;
-                    ui.label(format!("Twitch {} · Guild {}",
-                        known_percent(b.twitch_pct,b.twitch_known),
-                        known_percent(b.guild_pct,b.guild_known)));
-                    ui.label(format!("Event: Trainer {} · Pokémon {}",
-                        known_percent(b.trainer_event_pct,b.trainer_event_known),
-                        known_percent(b.pokemon_event_pct,b.pokemon_event_known)));
+                    let (activity,activity_color)=atlas_combat_status(hunts,live);
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new("Live battle")
+                            .size(15.0).strong().color(TEXT));
+                        ui.colored_label(activity_color,format!("● {activity}"));
+                    });
+                    let current=hunts.hunts.iter().find(|h|
+                        hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
+                    let title=current.map(|h|h.name.as_str())
+                        .or(hunts.hunt_slug.as_deref()).unwrap_or("Unknown hunt");
                     ui.label(RichText::new(format!(
-                        "VIP: {} · Guild boost: {}",
-                        known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
-                        known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some()),
-                    )).size(10.0).color(DIM));
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr("Current hunt")).size(10.0).color(DIM));
-                    let title = hunts.hunts.iter().find(|h|Some(h.slug.as_str()) == hunts.hunt_slug.as_deref())
-                        .map(|h|h.name.as_str()).or(hunts.hunt_slug.as_deref()).unwrap_or("—");
-                    ui.label(RichText::new(title).size(14.0).strong().color(TEXT));
-                    ui.label(RichText::new(format!(
-                        "{} {} · {} {}",
-                        hunts.hunts.len(), tr("available hunts"),
-                        hunts.battle_kills, tr("observed kills")
-                    )).size(10.0).color(DIM));
-                });
-            });
-        });
-    ui.add_space(10.0);
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(13)).show(ui,|ui|{
-            let current=hunts.hunts.iter().find(|h|
-                hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Current hunt details"))
-                    .size(13.0).strong().color(TEXT));
-                if let Some(h)=current {
-                    ui.label(RichText::new(format!(
-                        "{} · {} · Lv {} · {} {}",
-                        h.area,h.region,h.level,h.total_spawns,tr("spawn slots")
+                        "{title} · {} unlocked hunts · {} recorded kills",
+                        hunts.hunts.len(),hunts.battle_kills
                     )).size(11.0).color(MUTED));
-                }
-                if hunts.in_center {ui.label(RichText::new(tr("At Pokémon Center")).color(WARN));}
-                if let Some(slug)=hunts.pending_hunt_slug.as_deref() {
-                    ui.label(RichText::new(format!("{} {slug}",tr("Switch pending")))
-                        .size(10.0).color(WARN));
-                }
-            });
-            if let Some(wild)=hunts.wild.as_ref(){
-                ui.label(RichText::new(format!(
-                    "{}: {} · Lv {} · HP {}/{}",tr("Wild encounter"),
-                    wild.name,wild.level,wild.hp,wild.max_hp
-                )).size(10.0).color(DIM));
-            }
-            if let Some(map)=hunts.field_map.as_deref() {
-                ui.label(RichText::new(format!("Field: {map}")).size(10.0).color(DIM));
-            }
-        });
-    ui.add_space(10.0);
+                    ui.add_space(8.0);
+                    let two_columns=ui.available_width()>=720.0;
+                    ui.columns(if two_columns{2}else{1},|cols|{
+                        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+                            .stroke(Stroke::new(1.0,BORDER))
+                            .inner_margin(egui::Margin::same(12))
+                            .show(&mut cols[0],|ui|{
+                                ui.label(RichText::new("MATCHUP").size(10.0)
+                                    .strong().color(DIM));
+                                ui.horizontal_wrapped(|ui|{
+                                    if let Some(p)=hunts.active_pokemon.as_ref(){
+                                        ui.horizontal(|ui|{
+                                            if let Some(id)=p.species_id{
+                                                app.visuals.show(ui,SpriteKind::Pokemon,
+                                                    id,None,42.0);
+                                            }
+                                            ui.vertical(|ui|{
+                                                ui.label(RichText::new(&p.name)
+                                                    .size(14.0).strong().color(TEXT));
+                                                ui.label(RichText::new(format!(
+                                                    "Lv {} · {}",p.level,
+                                                    if p.shiny{"Shiny"}else{"Lead Pokémon"}
+                                                )).size(10.0).color(MUTED));
+                                            });
+                                        });
+                                    }else{
+                                        ui.label(RichText::new("Lead not loaded")
+                                            .size(11.0).color(MUTED));
+                                    }
+                                    ui.label(RichText::new("VS").size(10.0)
+                                        .strong().color(DIM));
+                                    if let Some(wild)=hunts.wild.as_ref(){
+                                        ui.horizontal(|ui|{
+                                            if let Some(id)=wild.species_id{
+                                                app.visuals.show(ui,SpriteKind::Pokemon,
+                                                    id,None,42.0);
+                                            }
+                                            ui.vertical(|ui|{
+                                                ui.label(RichText::new(&wild.name)
+                                                    .size(14.0).strong().color(TEXT));
+                                                ui.label(RichText::new(format!(
+                                                    "Lv {} · HP {}/{}",
+                                                    wild.level,wild.hp,wild.max_hp
+                                                )).size(10.0).color(MUTED));
+                                            });
+                                        });
+                                    }else{
+                                        ui.label(RichText::new("No wild target")
+                                            .size(11.0).color(MUTED));
+                                    }
+                                });
+                                if let Some(wild)=hunts.wild.as_ref(){
+                                    if wild.max_hp>0{
+                                        ui.add(egui::ProgressBar::new(
+                                            (wild.hp as f32/wild.max_hp as f32)
+                                                .clamp(0.0,1.0)
+                                        ).text("Wild HP"));
+                                    }
+                                }
+                                if let Some(p)=hunts.active_pokemon.as_ref(){
+                                    ui.separator();
+                                    ui.label(RichText::new(format!(
+                                        "P{} · Quality {} · {} Pokémon in party",
+                                        p.potency.map(|n|n.to_string())
+                                            .unwrap_or_else(||"—".into()),
+                                        p.quality.map(|n|format!("{n:.3}"))
+                                            .unwrap_or_else(||"—".into()),
+                                        hunts.pokemon_count
+                                    )).size(10.0).color(MUTED));
+                                    let names=["HP","ATK","DEF","SpA","SpD","SPD"];
+                                    ui.label(RichText::new(names.iter().enumerate()
+                                        .map(|(i,k)|format!("{} {}",k,
+                                            p.ivs[i].map(|v|v.to_string())
+                                                .unwrap_or_else(||"—".into())))
+                                        .collect::<Vec<_>>().join(" · "))
+                                        .size(10.0).color(DIM));
+                                }
+                            });
+                        if !two_columns{cols[0].add_space(8.0);}
+                        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+                            .stroke(Stroke::new(1.0,BORDER))
+                            .inner_margin(egui::Margin::same(12))
+                            .show(&mut cols[if two_columns{1}else{0}],|ui|{
+                                let b=&hunts.bonuses;
+                                ui.label(RichText::new("BONUSES & LOCATION")
+                                    .size(10.0).strong().color(DIM));
+                                ui.label(format!(
+                                    "Twitch {} · Guild {}",
+                                    known_percent(b.twitch_pct,b.twitch_known),
+                                    known_percent(b.guild_pct,b.guild_known)
+                                ));
+                                ui.label(format!(
+                                    "Trainer event {} · Pokémon event {}",
+                                    known_percent(b.trainer_event_pct,b.trainer_event_known),
+                                    known_percent(b.pokemon_event_pct,b.pokemon_event_known)
+                                ));
+                                ui.label(RichText::new(format!(
+                                    "VIP {} · Guild boost {}",
+                                    known_boost(b.vip_active,b.vip_known,
+                                        hunts.server_now.is_some()),
+                                    known_boost(b.guild_boost_active,b.guild_boost_known,
+                                        hunts.server_now.is_some())
+                                )).size(10.0).color(MUTED));
+                                ui.separator();
+                                if let Some(h)=current{
+                                    ui.label(RichText::new(format!(
+                                        "{} · {} · Lv {} · {} spawn slots",
+                                        h.area,h.region,h.level,h.total_spawns
+                                    )).size(10.0).color(MUTED));
+                                }
+                                if let Some(slug)=hunts.pending_hunt_slug.as_deref(){
+                                    ui.colored_label(WARN,format!("Switch pending: {slug}"));
+                                }
+                                if hunts.in_center{
+                                    ui.colored_label(WARN,"At Pokémon Center");
+                                }
+                                if let Some(map)=hunts.field_map.as_deref(){
+                                    ui.label(RichText::new(format!("Field: {map}"))
+                                        .size(10.0).color(DIM));
+                                }
+                            });
+                    });
+                    ui.add_space(8.0);
     let m = &hunts.measurements;
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
         .inner_margin(egui::Margin::same(13)).show(ui, |ui| {
@@ -1593,13 +1637,19 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.add_space(8.0);
                     egui::Frame::new().fill(PANEL).corner_radius(8.0)
                         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-                            ui.columns(3,|cols|{
-                                detail_stat_line(&mut cols[0],"Kills",&format_number(session.kills));
-                                detail_stat_line(&mut cols[0],"Captures",&format_number(session.captures));
-                                detail_stat_line(&mut cols[1],"Trainer XP",&format_number(session.trainer_xp));
-                                detail_stat_line(&mut cols[1],"Pokémon XP",&format_number(session.pokemon_xp));
-                                detail_stat_line(&mut cols[2],"Combat gold",&format_number(session.combat_gold));
-                                detail_stat_line(&mut cols[2],"Auto-sale gold",&format_number(session.auto_sale_gold));
+                            let stats=[
+                                ("Kills",format_number(session.kills)),
+                                ("Captures",format_number(session.captures)),
+                                ("Trainer XP",format_number(session.trainer_xp)),
+                                ("Pokémon XP",format_number(session.pokemon_xp)),
+                                ("Combat gold",format_number(session.combat_gold)),
+                                ("Auto-sale gold",format_number(session.auto_sale_gold)),
+                            ];
+                            let count=if ui.available_width()>=600.0{3}else{2};
+                            ui.columns(count,|cols|{
+                                for (i,(label,value)) in stats.iter().enumerate(){
+                                    detail_stat_line(&mut cols[i%count],label,value);
+                                }
                             });
                             ui.label(format!("Shiny encounter events: {} · shiny captures: {}",
                                 session.shiny_seen,session.shiny_captured));
@@ -1851,6 +1901,20 @@ mod tests {
             ..Default::default()
         });
         guide
+    }
+    #[test]
+    fn live_battle_status_requires_recent_real_combat(){
+        let mut view=HuntView::default();
+        assert_eq!(atlas_combat_status(&view,false).0,"Offline / stale");
+        assert_eq!(atlas_combat_status(&view,true).0,"Waiting for encounter");
+        view.wild=Some(native_hunts::WildInfo::default());
+        assert_eq!(atlas_combat_status(&view,true).0,"No recent combat");
+        view.measurements.combat_event_age_secs=Some(10);
+        assert_eq!(atlas_combat_status(&view,true).0,"Fighting");
+        view.measurements.combat_event_age_secs=Some(60);
+        assert_eq!(atlas_combat_status(&view,true).0,"No recent combat");
+        view.in_center=true;
+        assert_eq!(atlas_combat_status(&view,true).0,"At Pokémon Center");
     }
     #[test]
     fn explorer_preserves_authoritative_unlocked_and_locked_separation(){
