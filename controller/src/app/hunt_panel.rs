@@ -1957,19 +1957,47 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ui.label(format!("{name} (#{id}) · {count}"));
                     }
                     ui.separator();
-                    ui.label(RichText::new("Items acquired from battles").size(13.0).strong().color(TEXT));
-                    if session.acquired.is_empty(){ui.label("No confirmed drops yet.");}
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new("Items acquired from battles")
+                            .size(13.0).strong().color(TEXT));
+                        ui.label(RichText::new(format!(
+                            "{} unique drops",session.acquired.len()
+                        )).size(10.0).color(MUTED));
+                    });
                     let mut drops=session.acquired.iter().collect::<Vec<_>>();
                     drops.sort_by(|a,b|b.1.cmp(a.1).then_with(||a.0.cmp(b.0)));
-                    for (name,qty) in drops.iter().take(200) {
-                        ui.label(format!("{name} ×{qty}"));
-                    }
-                    if drops.len()>200 {ui.label("Showing the first 200 items.");}
-                    ui.collapsing("Most recent drops",|ui|{
-                        for (name,count) in &session.recent_drops{
-                            ui.label(format!("{name} ×{count}"));
+                    if drops.is_empty(){
+                        ui.label(RichText::new("No confirmed battle drops yet.")
+                            .size(11.0).color(MUTED));
+                    }else{
+                        for (name,qty) in drops.iter().take(8){
+                            ui.horizontal_wrapped(|ui|{
+                                ui.label(RichText::new(*name)
+                                    .size(11.0).color(TEXT));
+                                ui.label(RichText::new(format!("×{qty}"))
+                                    .size(11.0).strong().color(ACCENT));
+                            });
                         }
-                    });
+                        if drops.len()>8{
+                            ui.collapsing(format!(
+                                "All acquired items ({} unique)",drops.len()
+                            ),|ui|{
+                                for (name,qty) in drops.iter().take(200){
+                                    ui.label(format!("{name} ×{qty}"));
+                                }
+                                if drops.len()>200{
+                                    ui.label("Showing the first 200 items.");
+                                }
+                            });
+                        }
+                    }
+                    if !session.recent_drops.is_empty(){
+                        ui.collapsing("Latest drop events",|ui|{
+                            for (name,count) in &session.recent_drops{
+                                ui.label(format!("{name} ×{count}"));
+                            }
+                        });
+                    }
                     ui.separator();
                     ui.collapsing("Persisted history for current hunt",|ui|{
                         let history=native.history_snapshot();
@@ -2008,36 +2036,17 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 }
                 HuntSubtab::Recommendations => {
                     let hunts=&view;
-                    let m=&hunts.measurements;
-                    let current=hunts.hunts.iter().find(|h|
-                        hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
-                    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
-                        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
-                            ui.horizontal_wrapped(|ui|{
-                                ui.vertical(|ui|{
-                                    ui.label(RichText::new("CURRENT HUNT").size(10.0).color(DIM));
-                                    ui.label(RichText::new(current.map(|h|h.name.as_str())
-                                        .or(hunts.hunt_slug.as_deref()).unwrap_or("Unavailable"))
-                                        .strong().size(14.0).color(TEXT));
-                                });
-                                ui.add_space(12.0);
-                                draw_rate(ui,"Trainer XP/h",
-                                    if live && m.valid_trainer {Some(m.trainer_xp_h)} else {None},
-                                    RateSource::Measured);
-                                ui.add_space(12.0);
-                                draw_rate(ui,"Pokémon XP/h",
-                                    if live && m.valid_pokemon {Some(m.pokemon_xp_h)} else {None},
-                                    RateSource::Measured);
-                                ui.add_space(12.0);
-                                draw_rate(ui,"Net gold/h",
-                                    if live && m.valid_gold {Some(m.gold_net_h)} else {None},
-                                    RateSource::Measured);
-                            });
-                            ui.label(RichText::new(format!("{} · {:.0}s · {} kills",
-                                hunts.sample_quality,m.seconds,m.kills))
-                                .size(10.0).color(MUTED));
-                        });
-                    ui.add_space(10.0);
+                    // The always-visible Hunt Atlas context already presents
+                    // the measured current-hunt rates. Rankings start with the
+                    // user's decision, not an identical second status card.
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new("Where should I hunt?")
+                            .size(15.0).strong().color(TEXT));
+                        ui.label(RichText::new(format!(
+                            "{} unlocked hunts",hunts.hunts.len()
+                        )).size(11.0).color(MUTED));
+                    });
+                    ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new("Sort recommendations by").size(12.0).strong());
                         ui.selectable_value(&mut app.hunt_ranking,HuntRanking::TrainerXp,"Trainer XP");
