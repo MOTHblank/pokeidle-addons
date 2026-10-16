@@ -369,20 +369,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             let _ = tx.send(result);
         });
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
-        egui::ComboBox::from_id_salt("hunt-account")
-            .selected_text(app.account_name(app.games[app.hunt_account].profile))
-            .show_ui(ui, |ui| {
-                for index in 0..app.games.len() {
-                    let name = app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.hunt_account, index, name);
-                }
-            });
-        ui.add_space(8.0);
-        ui.label(RichText::new(tr("Native server catalog · no userscripts"))
-            .size(10.0).color(MUTED));
-    });
+    // The shared account strip above the page owns navigation; Hunt Atlas
+    // retains only hunt-specific controls and data below it.
+    ui.label(RichText::new(tr("Native hunt intelligence · no browser userscripts"))
+        .size(11.0).color(MUTED));
     ui.add_space(4.0);
     if app.hunt_reference_busy {
         ui.label(RichText::new(tr("Loading species and move reference..."))
