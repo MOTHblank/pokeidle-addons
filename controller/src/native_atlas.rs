@@ -16,7 +16,15 @@ pub struct ReferenceSpecies {
     pub types: Vec<String>,
     pub base: Vec<f64>,
     pub moves: Vec<ReferenceMove>,
-    pub drops: Vec<(f64, f64, f64, f64)>,
+    pub drops: Vec<ReferenceDrop>,
+}
+#[derive(Clone, Debug)]
+pub struct ReferenceDrop {
+    pub item_id: Option<u64>,
+    pub chance_pct: f64,
+    pub min_quantity: f64,
+    pub max_quantity: f64,
+    pub unit_value: f64,
 }
 #[derive(Clone, Debug)]
 pub struct ReferenceMove {
@@ -91,7 +99,14 @@ pub fn parse(script: &str) -> Result<Reference, String> {
                 let Some(v)=entry.as_array().filter(|v|v.len()>=5) else {continue};
                 if let (Some(chance),Some(low),Some(high),Some(price)) =
                     (v[1].as_f64(),v[2].as_f64(),v[3].as_f64(),v[4].as_f64()) {
-                    drops.push((chance,low,high,price));
+                    if chance.is_finite() && (0.0..=100.0).contains(&chance)
+                        && low.is_finite() && low>=0.0 && high.is_finite()
+                        && high>=low && price.is_finite() && price>=0.0 {
+                        drops.push(ReferenceDrop {
+                            item_id: v[0].as_u64(), chance_pct: chance,
+                            min_quantity: low, max_quantity: high, unit_value: price,
+                        });
+                    }
                 }
             }
         }
@@ -187,8 +202,9 @@ fn raw_kills(hunt:&HuntEntry, mon:&PokemonInfo, meta:&ReferenceSpecies,
         let kill=(hp/dps(mon,meta,stats,wild,hunt.level,refdata).max(1.0)).max(0.9);
         let ratio=spawn.weight.max(0.0)/total;
         secs+=ratio*kill;
-        loot+=ratio*wild.drops.iter().map(|(p,lo,hi,price)|
-            p/100.0*(lo+hi)/2.0*price).sum::<f64>();
+        loot+=ratio*wild.drops.iter().map(|drop|
+            drop.chance_pct/100.0*(drop.min_quantity+drop.max_quantity)/2.0
+                *drop.unit_value).sum::<f64>();
         coverage+=ratio;
     }
     if coverage<0.6 {return None}
@@ -242,8 +258,13 @@ mod tests {
     use super::*;
     #[test]
     fn parses_json_only_and_rejects_executable_script(){
-        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"GHOST":0.0}},"especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],"m":[]}],"hunts":[]};"#;
-        assert_eq!(parse(text).unwrap().species.len(),1);
+        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"GHOST":0.0}},"especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],"m":[],"l":[[501,2.5,1,3,400]]}],"hunts":[]};"#;
+        let parsed=parse(text).unwrap();
+        assert_eq!(parsed.species.len(),1);
+        let drop=&parsed.species[&1].drops[0];
+        assert_eq!(drop.item_id,Some(501));
+        assert_eq!(drop.chance_pct,2.5);
+        assert_eq!(drop.max_quantity,3.0);
         assert!(parse("window.PI_DATA = alert(document.cookie);").is_err());
         assert!(parse("alert('hi');").is_err());
     }
