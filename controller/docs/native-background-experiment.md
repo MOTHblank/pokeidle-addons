@@ -1,7 +1,7 @@
 # Native-first Moth Controller — four-account game + Twitch IRC
 
 **Branch:** [experiment/native-background-sessions](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
-**Preview controller:** `0.1.7-native.10`
+**Preview controller:** `0.1.7-native.11`
 
 This experimental branch is **not an opt-in Firefox mode**. The standard runtime is one native Rust PokéIdle WebSocket **plus** one native Rust Twitch IRC connection per account. Firefox is an authentication helper and must close once both handshakes are captured.
 
@@ -96,3 +96,13 @@ After any attempted game-tab close with failed verification, Firefox's **existin
 The log now emits `Moth native controller v0.1.7-native.9 · verified TLS provider initialized: true` at startup. **Check this exact entry** when testing; older experimental controller binaries can still reproduce the panic. The controller must not log `native game welcome + Twitch IRC 001 confirmed` until both authenticated Rust sockets are real. Check `Native PokéIdle WSS received authenticated welcome`, `Native Twitch IRC received authenticated welcome`, and `Firefox exited after authenticated handoff` for completed migration.
 
 Rebuild the executable with `cargo test && cargo build --release` and launch **`controller/target/release/moth-controller.exe`**. The editing environment still has no Rust compiler or authenticated account, so the fix is committed but not locally compiled or live verified.
+
+## Native restock reliability and userscript retirement (native.11)
+
+This preview's native Auto Catch restocking has been aligned with the Auto Catch+ client protocol. It issues `shop.buy` for configured ball/potion/revive IDs using the game's **authoritative welcome shop catalog**, `estado.gold`, `estado.balls` and `estado.items`, with the saved `goldReserve`, thresholds and target quantities. It never assumes unknown prices are safe. A purchase is acknowledged only by a matching `compra` event (ID/kind/name or exact quantity+cost) or an increase in that specific inventory item's count. The native worker has **one order in flight per account**. It waits for the authoritative stock update after acknowledgement, and uses bounded backoff on missing acknowledgements, lost inventory updates, connection failures or uncertain sends. It does not blindly repeat a potentially accepted order.
+
+Existing Auto Catch preferences are imported once from `moth-pokeidle-autocatch-v4` during Firefox authentication and cached in the OS-protected native session. This revision also handles the old addon defaults when stored preferences omit individual thresholds. **The userscript does not need to execute during native restocking.** Restock on/off can now be changed in the controller under **Account details → Automation**; that change is saved without Firefox. The UI shows pending/confirmed purchase counts, stock/sync status, missing shop catalogs, gold protection and last error. The log records `Native restock: requesting ...` followed by `Native restock: confirmed and reconciled ...` **without logging tokens or cookies**.
+
+Important: completion of a Rust `cargo test` suite is not a replacement for a real shop purchase; this workspace has no Rust compiler or authenticated game session. Verify purchase logs and the corresponding in-game gold/stock deltas with one account. If it remains at **Waiting for shop**, the selected ID does not have an authoritative shop price in the current `welcome` catalog; don't try to force purchases using guessed prices.
+
+**Next userscript-independence milestones, deliberately incremental:** move the complete Auto Catch ball-choice, reserves and restock threshold editor into native controller settings; remove the remaining reliance on localStorage preference migration; replace page-bound Hunt Atlas diagnostics/controls with protocol-derived Rust state; then migrate marketplace and monitoring addons one at a time. Keep browser scripts as temporary authentication/migration helpers only until their behavior is covered natively. Never remove a working production userscript merely because an unverified native equivalent exists.
