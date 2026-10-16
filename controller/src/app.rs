@@ -1934,20 +1934,29 @@ impl ControllerApp {
                 let detected = Config::for_profile(profile)
                     .and_then(|config| firefox::find_profile_process(&config));
                 let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
-                let result = detected.and_then(|_| {
-                    if existing_firefox { return Ok(None); }
-                    crate::native_auth::load(profile)
-                        .and_then(|saved| saved.map(|bootstrap| {
-                            NativeSession::start_verified(bootstrap.clone())
-                                .or_else(|error| {
-                                    if error.contains("AUTH_REQUIRED:") ||
-                                        error.contains("rejected the captured OAuth") {
-                                        Err(error)
-                                    } else {
-                                        NativeSession::start(bootstrap)
-                                    }
-                                })
-                        }).transpose())
+                // A cache preflight panic must never strand the UI in
+                // "starting" state. Report it, then authenticate via Firefox.
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        crate::native_tls::ensure()?;
+                        detected.and_then(|_| {
+                            if existing_firefox { return Ok(None); }
+                            crate::native_auth::load(profile)
+                                .and_then(|saved| saved.map(|bootstrap| {
+                                    NativeSession::start_verified(bootstrap.clone())
+                                        .or_else(|error| {
+                                            if error.contains("AUTH_REQUIRED:") ||
+                                                error.contains("rejected the captured OAuth") {
+                                                Err(error)
+                                            } else {
+                                                NativeSession::start(bootstrap)
+                                            }
+                                        })
+                                }).transpose())
+                        })
+                    })
+                ).unwrap_or_else(|_| {
+                    Err("Native cache verification panicked; see sanitized controller log".into())
                 });
                 let _ = tx.send(CachedNativeEvent {
                     index, headless, existing_firefox, result
