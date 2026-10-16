@@ -3969,6 +3969,41 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            ui.collapsing("Recorded hunt history (last 90 days)", |ui| {
+                let history = native.history_snapshot();
+                if let Some(error) = history.load_error.as_deref().or(history.save_error.as_deref()) {
+                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+                if let Some(slug) = hunts.hunt_slug.as_deref() {
+                    let records: Vec<_> = history.days.iter()
+                        .filter(|day| day.hunt == slug).collect();
+                    if records.is_empty() {
+                        ui.label("No persisted observations for this hunt yet.");
+                    } else {
+                        let count = |get: fn(&crate::native_history::HistoryDay) -> u64| {
+                            records.iter().fold(0u64, |total, row| total.saturating_add(get(row)))
+                        };
+                        ui.label(RichText::new(format!(
+                            "{} daily records · {} kills · {} captures · {} shinies seen",
+                            records.len(), count(|d|d.kills), count(|d|d.captures),
+                            count(|d|d.shiny_seen)
+                        )).size(10.0).color(TEXT));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("Trainer XP: {}", format_hunt_amount(
+                                count(|d|d.trainer_xp) as f64)));
+                            ui.label(format!("Pokémon XP: {}", format_hunt_amount(
+                                count(|d|d.pokemon_xp) as f64)));
+                            ui.label(format!("Combat gold: {}", format_hunt_amount(
+                                count(|d|d.combat_gold) as f64)));
+                        });
+                        ui.label(RichText::new(
+                            "Historical totals are recorded per hunt, not historical XP/hour; time spent per hunt is not persisted."
+                        ).size(10.0).color(MUTED));
+                    }
+                } else {
+                    ui.label("Current hunt is unknown; historical records remain available in History.");
+                }
+            });
             if !session.acquired.is_empty() {
                 ui.collapsing(format!("{} · {}",
                     tr("Drops acquired"),session.acquired.len()),|ui|{
@@ -4009,6 +4044,47 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 if online { hunts.sample_quality.as_str() } else { "Disconnected / stale" },
                 m.seconds, m.kills, tr("kills in window")
             )).size(10.0).color(MUTED));
+        });
+    ui.add_space(8.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.label(RichText::new("Current hunt · experimental model")
+                .size(12.0).strong().color(TEXT));
+            if let Some(forecast) = hunts.hunt_slug.as_deref()
+                .and_then(|slug| forecasts.and_then(|data|data.get(slug)))
+            {
+                ui.horizontal_wrapped(|ui| {
+                    for (name, amount) in [
+                        ("Predicted trainer XP/h",forecast.trainer_xp_h),
+                        ("Predicted Pokémon XP/h",forecast.pokemon_xp_h),
+                        ("Predicted gross gold/h",forecast.gold_h),
+                        ("Predicted kills/h",forecast.kills_h)
+                    ] {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(name).size(9.0).color(DIM));
+                            ui.label(RichText::new(format_hunt_amount(amount))
+                                .size(13.0).strong().color(TEXT));
+                        });
+                        ui.add_space(12.0);
+                    }
+                });
+                ui.label(RichText::new(format!(
+                    "{} · {:.1}s/kill · {:.0}% modeled species",
+                    if forecast.calibrated { "Calibrated to current combat" }
+                    else { "Uncalibrated combat model" },
+                    forecast.seconds_per_kill, forecast.coverage*100.0
+                )).size(10.0).color(WARN));
+            } else if app.hunt_forecast_pending.is_some() {
+                ui.label(RichText::new("Calculating on background worker...")
+                    .size(10.0).color(MUTED));
+            } else {
+                ui.label(RichText::new(
+                    "Prediction unavailable: guide data or the active Pokémon's combat stats may be missing."
+                ).size(10.0).color(MUTED));
+            }
+            ui.label(RichText::new(
+                "Trainer and Pokémon XP are independent channels. Gross modeled gold is not measured net gold."
+            ).size(10.0).color(MUTED));
         });
     ui.add_space(12.0);
 
