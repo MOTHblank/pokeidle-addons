@@ -133,23 +133,37 @@ fn marker_slot(atlas: &Value, looktype: u64) -> Option<(String, u32, u32, u32)> 
     Some((image, x.checked_mul(cell)?, y.checked_mul(cell)?, cell))
 }
 
-fn crop_png(bytes: &[u8], x: u32, y: u32, width: u32, height: u32) -> Option<Vec<u8>> {
-    if width == 0 || height == 0 || width > MAX_SPRITE_EDGE || height > MAX_SPRITE_EDGE {
-        return None;
-    }
+// All frames from one outfit sheet are decoded once on the visual worker,
+// rather than decoding the same (potentially large) atlas for every animation
+// frame. Reject oversized sheets and invalid rectangles before cropping.
+fn crop_frames_png(bytes: &[u8], rectangles: &[[u32; 4]]) -> Option<Vec<Vec<u8>>> {
     let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format().ok()?;
     let (sheet_width, sheet_height) = reader.into_dimensions().ok()?;
-    if u64::from(sheet_width) * u64::from(sheet_height) > MAX_SHEET_PIXELS ||
-        x.checked_add(width)? > sheet_width || y.checked_add(height)? > sheet_height {
+    if u64::from(sheet_width) * u64::from(sheet_height) > MAX_SHEET_PIXELS {
         return None;
     }
     let sheet = image::load_from_memory(bytes).ok()?;
-    let sprite = sheet.crop_imm(x, y, width, height);
-    let mut output = Cursor::new(Vec::new());
-    sprite.write_to(&mut output, image::ImageFormat::Png).ok()?;
-    let png = output.into_inner();
-    valid_image(&png).then_some(png)
+    let mut frames = Vec::new();
+    for [x, y, width, height] in rectangles.iter().take(12).copied() {
+        if width == 0 || height == 0 ||
+            width > MAX_SPRITE_EDGE || height > MAX_SPRITE_EDGE ||
+            x.checked_add(width).is_none_or(|right| right > sheet_width) ||
+            y.checked_add(height).is_none_or(|bottom| bottom > sheet_height) {
+            continue;
+        }
+        let mut output = Cursor::new(Vec::new());
+        if sheet.crop_imm(x, y, width, height)
+            .write_to(&mut output, image::ImageFormat::Png).is_ok() {
+            let png = output.into_inner();
+            if valid_image(&png) { frames.push(png); }
+        }
+    }
+    (!frames.is_empty()).then_some(frames)
+}
+
+fn crop_png(bytes: &[u8], x: u32, y: u32, width: u32, height: u32) -> Option<Vec<u8>> {
+    crop_frames_png(bytes, &[[x, y, width, height]])?.into_iter().next()
 }
 
 fn marker_sprite(client: &Client, root: &Path, looktype: u64) -> Option<Vec<u8>> {
@@ -160,49 +174,77 @@ fn marker_sprite(client: &Client, root: &Path, looktype: u64) -> Option<Vec<u8>>
     crop_png(&sheet, x, y, cell, cell)
 }
 
-fn outfit_frame(manifest: &Value) -> Option<(String, u32, u32, u32, u32)> {
+/// Exact frame rectangles taken from the game outfit manifest, not inferred
+/// from a grid or synthesized from the Pokémon species ID. Preserve the
+/// original first frame and bound animated copies to twelve.
+fn outfit_frames(manifest: &Value) -> Option<(String, Vec<[u32; 4]>)> {
     let categories = manifest.get("categories")?.as_object()?;
     let category = categories.values().next()?;
     let page = category.get("pages")?.as_array()?.first()?;
     let image = asset_path(page.get("image")?.as_str()?)?;
-    let assets = manifest.get("assets")?.as_object()?;
-    let frame = assets.iter()
-        .find(|(name, _)| name.ends_with("/1_1_1_3.png"))?.1
-        .get("frames")?.as_array()?.first()?;
-    let num = |name: &str| u32::try_from(frame.get(name)?.as_u64()?).ok();
-    Some((image, num("x")?, num("y")?, num("w")?, num("h")?))
+    let page_width = u32::try_from(page.get("width")?.as_u64()?).ok()?;
+    let page_height = u32::try_from(page.get("height")?.as_u64()?).ok()?;
+    if page_width == 0 || page_height == 0 { return None; }
+    let frames = manifest.get("assets")?.as_object()?
+        .iter().find(|(name, _)| name.ends_with("/1_1_1_3.png"))?
+        .1.get("frames")?.as_array()?;
+    let mut rectangles = Vec::new();
+    for frame in frames.iter().take(12) {
+        let num = |key: &str| u32::try_from(frame.get(key)?.as_u64()?).ok();
+        let (Some(x), Some(y), Some(w), Some(h)) =
+            (num("x"), num("y"), num("w"), num("h")) else { continue };
+        if w == 0 || h == 0 || w > MAX_SPRITE_EDGE || h > MAX_SPRITE_EDGE ||
+            x.checked_add(w).is_none_or(|right| right > page_width) ||
+            y.checked_add(h).is_none_or(|bottom| bottom > page_height) {
+            continue;
+        }
+        rectangles.push([x, y, w, h]);
+    }
+    (!rectangles.is_empty()).then_some((image, rectangles))
 }
 
-fn outfit_sprite(client: &Client, root: &Path, looktype: u64) -> Option<Vec<u8>> {
+fn outfit_sprites(client: &Client, root: &Path, looktype: u64) -> Option<Vec<Vec<u8>>> {
     let index = catalog(client, root, "outfits-index.json",
         "/assets/asset-packs/outfits-index.json")?;
     let manifest_path = index.get("outfits")?.get(looktype.to_string())?
         .get("manifest")?.as_str()?;
     let manifest = catalog(client, root, &format!("outfit-{looktype}.json"), manifest_path)?;
-    let (image, x, y, width, height) = outfit_frame(&manifest)?;
+    let (image, frames) = outfit_frames(&manifest)?;
     let sheet = cached_bytes(client, root, &format!("outfit-{looktype}.img"),
         &image, MAX_SHEET_BYTES)?;
-    crop_png(&sheet, x, y, width, height)
+    crop_frames_png(&sheet, &frames)
 }
 
-pub(super) fn load(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<Vec<u8>> {
+/// Prefer the authentic outfit animation over the marker atlas. The first
+/// frame is always usable alone; cached old single-frame images provide a
+/// fallback on startup or when the game asset service is temporarily offline.
+pub(super) fn load(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<Vec<Vec<u8>>> {
+    if id == 0 { return None; }
     let output = root.join(format!("{}-{id}.img", kind.key()));
-    if let Ok(bytes) = std::fs::read(&output) {
-        if valid_image(&bytes) { return Some(bytes); }
-        let _ = std::fs::remove_file(&output);
-    }
+    let previous = std::fs::read(&output).ok().filter(|bytes| valid_image(bytes));
     let looktype = match kind {
-        Kind::Pokemon => species_looktype(client, root, id)?,
-        Kind::PokemonLooktype => id,
-        _ => return None,
+        Kind::Pokemon => species_looktype(client, root, id),
+        Kind::PokemonLooktype => Some(id),
+        _ => None,
     };
-    let image = marker_sprite(client, root, looktype)
-        .or_else(|| outfit_sprite(client, root, looktype))?;
-    let temporary = output.with_extension("tmp");
-    if std::fs::write(&temporary, &image).is_ok() {
-        let _ = std::fs::rename(temporary, output);
+    let Some(looktype) = looktype else {
+        return previous.map(|bytes| vec![bytes]);
+    };
+    let frames = outfit_sprites(client, root, looktype)
+        .or_else(|| marker_sprite(client, root, looktype).map(|bytes| vec![bytes]))
+        .or_else(|| previous.clone().map(|bytes| vec![bytes]))?;
+    // Keep the existing disk-cache format for compatibility. Metadata and
+    // entire outfit sheets are already cached for reconstructing animation on
+    // the next launch; no frame textures are embedded in the executable.
+    if previous.as_deref() != frames.first().map(Vec::as_slice) {
+        if let Some(first) = frames.first() {
+            let temporary = output.with_extension("tmp");
+            if std::fs::write(&temporary, first).is_ok() {
+                let _ = std::fs::rename(temporary, output);
+            }
+        }
     }
-    Some(image)
+    Some(frames)
 }
 
 #[cfg(test)]
@@ -238,7 +280,34 @@ mod tests {
         let manifest = serde_json::json!({"categories":{"main":{"pages":[
             {"image":"/assets-packs/mon/page.png"}]}} , "assets": {
             "test/1_1_1_3.png":{"frames":[{"x":1,"y":2,"w":32,"h":40}]}}});
-        assert_eq!(outfit_frame(&manifest),
-            Some(("assets/asset-packs/mon/page.png".into(),1,2,32,40)));
+        assert_eq!(outfit_frames(&serde_json::json!({
+            "categories":{"main":{"pages":[
+                {"image":"/assets-packs/mon/page.png","width":256,"height":256}]}},
+            "assets":{"test/1_1_1_3.png":{"frames":[
+                {"x":1,"y":2,"w":32,"h":40},
+                {"x":33,"y":2,"w":32,"h":40}
+            ]}}
+        })),
+            Some(("assets/asset-packs/mon/page.png".into(),
+                vec![[1,2,32,40],[33,2,32,40]])));
+        assert!(outfit_frames(&manifest).is_none());
     }
+    #[test]
+    fn rejects_frames_outside_sheet_without_losing_valid_first_frame() {
+        let manifest = serde_json::json!({
+            "categories":{"main":{"pages":[{
+                "image":"/assets-packs/mon/a.png","width":64,"height":64}]}},
+            "assets":{"some/1_1_1_3.png":{"frames":[
+                {"x":0,"y":0,"w":16,"h":16},
+                {"x":63,"y":63,"w":32,"h":32}
+            ]}}
+        });
+        assert_eq!(outfit_frames(&manifest).unwrap().1, vec![[0,0,16,16]]);
+        let mut sheet = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(64,64)
+            .write_to(&mut sheet, image::ImageFormat::Png).unwrap();
+        assert_eq!(crop_frames_png(&sheet.into_inner(), &[[0,0,16,16],[63,63,32,32]])
+            .unwrap().len(), 1);
+    }
+
 }
