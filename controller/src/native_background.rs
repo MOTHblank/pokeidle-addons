@@ -180,12 +180,6 @@ pub struct NativeSession {
     forecast_tx:mpsc::SyncSender<HistoryForecast>,
 }
 impl NativeSession {
-    pub fn start(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
-        let credentials = Credentials::parse(&bootstrap)?;
-        let twitch = TwitchSession::start(bootstrap.get("twitch")
-            .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(profile, credentials, twitch, None, bootstrap.get("autocatch").cloned())
-    }
     /// Establish *both* verified WebSockets before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
@@ -344,10 +338,21 @@ fn update(snapshot: &Arc<Mutex<NativeSnapshot>>, f: impl FnOnce(&mut NativeSnaps
     if let Ok(mut status) = snapshot.lock() { f(&mut status); }
 }
 
-fn open_session(credentials: &Credentials) -> Result<(
-    tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
-    String,
-), String> {
+// Return to low-latency reads only AFTER TLS, WebSocket upgrade and the
+// server's authenticated welcome are all complete.
+#[allow(unreachable_patterns)] // TLS feature sets expose different stream variants.
+fn set_live_read_timeout(socket: &mut GameSocket) -> Result<(), String> {
+    let result = match socket.get_mut() {
+        tungstenite::stream::MaybeTlsStream::Plain(tcp) =>
+            tcp.set_read_timeout(Some(READ_TIMEOUT)),
+        tungstenite::stream::MaybeTlsStream::Rustls(tls) =>
+            tls.get_mut().set_read_timeout(Some(READ_TIMEOUT)),
+        _ => return Err("Unsupported native WebSocket TLS stream".into()),
+    };
+    result.map_err(|error| format!("Could not configure live PokéIdle updates: {error}"))
+}
+
+fn open_session(credentials: &Credentials) -> Result<(GameSocket, String), String> {
     crate::native_tls::ensure()?;
     let addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not find the PokéIdle server. Check your connection.".to_owned())?;
@@ -361,8 +366,11 @@ fn open_session(credentials: &Credentials) -> Result<(
         }
     }
     let stream = stream.ok_or_else(|| "Could not connect to PokéIdle. Check your internet connection.".to_owned())?;
-    stream.set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|error| format!("PokéIdle stopped responding: {error}"))?;
+    // TLS and the initial authenticated welcome are network round trips.
+    // The 60 ms steady-state polling timeout must never apply to the
+    // handshake: it can abort valid connections before the server welcomes us.
+    stream.set_read_timeout(Some(CONNECT_TIMEOUT))
+        .map_err(|error| format!("PokéIdle handshake timeout setup failed: {error}"))?;
     stream.set_write_timeout(Some(CONNECT_TIMEOUT))
         .map_err(|error| format!("Could not send data to PokéIdle: {error}"))?;
     let mut request = credentials.url.as_str().into_client_request()
@@ -396,6 +404,7 @@ fn open_session(credentials: &Credentials) -> Result<(
                     .as_deref() == Some("welcome") {
                     // Receiving welcome confirms authentication. Keep the full
                     // initial state for the native read-only account dashboard.
+                    set_live_read_timeout(&mut socket)?;
                     return Ok((socket, text.to_string()));
                 }
             }
@@ -854,6 +863,14 @@ mod tests {
         assert!(websocket_authority("wss://pokeidle.io.evil.test/ws").is_err());
         assert!(websocket_authority("wss://someone@pokeidle.io/ws").is_err());
         assert!(websocket_authority("wss://ws.pokeidle.io/ws").is_ok());
+    }
+    #[test]
+    fn connection_setup_has_time_for_server_handshake() {
+        // A 60 ms WebSocket handshake timeout regressed otherwise valid
+        // Firefox-to-Rust handoffs. Live reads can remain at 60 ms.
+        assert!(CONNECT_TIMEOUT >= Duration::from_secs(2));
+        assert!(CONNECT_TIMEOUT > READ_TIMEOUT);
+        assert!(WELCOME_TIMEOUT > READ_TIMEOUT);
     }
     #[test]
     fn records_battle_events_without_requiring_browser_dom() {
