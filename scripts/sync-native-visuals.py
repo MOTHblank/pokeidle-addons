@@ -219,6 +219,10 @@ def main() -> int:
     parser.add_argument("--local-only", action="store_true",
                         help="do not request missing artwork from the game CDN")
     args = parser.parse_args()
+    if args.local_only and not args.upstream_dir:
+        parser.error("--local-only requires --upstream-dir")
+    if args.upstream_dir and not args.upstream_dir.is_dir():
+        parser.error("--upstream-dir must point to an existing checkout")
     assets = collect(args)
     if args.dry_run:
         for kind, ident, path in assets:
@@ -248,10 +252,11 @@ def main() -> int:
                 successful[key] = old
                 continue
         urls = candidates(origin, args.allow_external)
+        local_raw = (read_upstream_asset(args.upstream_dir, origin, available)
+                     if args.upstream_dir else None)
         for url in urls:
             try:
-                raw = (read_upstream_asset(args.upstream_dir, origin, available)
-                       if args.upstream_dir else None)
+                raw = local_raw
                 if raw is None:
                     if args.local_only:
                         break
@@ -263,9 +268,7 @@ def main() -> int:
                 (ASSET_DIR / filename).write_bytes(raw)
                 successful[key] = {"kind": kind, "id": ident, "file": filename,
                                    "source": ("pokeidle-upstream:" + upstream_relative(origin)
-                                              if args.upstream_dir and
-                                              read_upstream_asset(args.upstream_dir, origin, available)
-                                              is not None else url),
+                                              if local_raw is not None else url),
                                    "sha256": hashlib.sha256(raw).hexdigest()}
                 print(f"OK  {kind} #{ident}: {filename} ({len(raw)} bytes)")
                 break
