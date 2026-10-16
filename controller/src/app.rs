@@ -2376,7 +2376,8 @@ impl ControllerApp {
 
     fn open_addon_manager(&mut self, profile: GameProfile) {
         let index = profile.index();
-        self.show_accounts = true;
+        self.select_workspace_account(index);
+        self.panel_tab = PanelTab::Accounts;
         self.addon_manager_open[index] = true;
         self.addon_focus = Some(index);
     }
@@ -2938,7 +2939,7 @@ impl eframe::App for ControllerApp {
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
-            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory | PanelTab::Pokemon | PanelTab::Automation | PanelTab::History)
+            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Automation)
                 || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
@@ -2956,10 +2957,8 @@ impl eframe::App for ControllerApp {
                         RichText::new(tr(match self.panel_tab {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
-                            PanelTab::Inventory => "Inventory",
-                            PanelTab::Pokemon => "Pokémon",
+                            PanelTab::Accounts => "Accounts",
                             PanelTab::Automation => "Automation",
-                            PanelTab::History => "History",
                             PanelTab::Options => "Options",
                         }))
                             .font(FontId::proportional(26.0))
@@ -3074,20 +3073,18 @@ impl eframe::App for ControllerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 10)))
             .show(ui, |ui| {
-                // One consistent, directly clickable account switcher across
-                // data pages. Disabled and offline accounts remain inspectable.
+                // Accounts has its own full page with an account selector.
+                // All other native workspaces share the same compact strip.
                 let active = match self.panel_tab {
                     PanelTab::Overview => Some(self.selected_details),
                     PanelTab::Hunts => Some(Some(self.hunt_account)),
-                    PanelTab::Inventory => Some(self.inventory_account),
-                    PanelTab::Pokemon => Some(Some(self.pokemon_account)),
                     PanelTab::Automation => Some(Some(self.automation_account)),
-                    PanelTab::History => Some(Some(self.history_account)),
                     _ => None,
                 };
                 if let Some(selected) = active {
-                    let next = draw_account_switcher(self, ui, selected,
-                        matches!(self.panel_tab, PanelTab::Overview | PanelTab::Inventory));
+                    let next = draw_account_switcher(
+                        self, ui, selected, self.panel_tab == PanelTab::Overview
+                    );
                     if next != selected {
                         if let Some(index) = next {
                             self.select_workspace_account(index);
@@ -3096,8 +3093,6 @@ impl eframe::App for ControllerApp {
                             }
                         } else if self.panel_tab == PanelTab::Overview {
                             self.selected_details = None;
-                        } else {
-                            self.inventory_account = None;
                         }
                     }
                     ui.add_space(6.0);
@@ -3105,16 +3100,16 @@ impl eframe::App for ControllerApp {
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
-                    PanelTab::Inventory => draw_inventory_panel(self, ui),
-                    PanelTab::Pokemon => draw_pokemon_panel(self, ui),
+                    PanelTab::Accounts => draw_accounts_panel(self, ui),
                     PanelTab::Automation => draw_automation_panel(self, ui),
-                    PanelTab::History => draw_history_panel(self, ui),
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
 
-        if self.show_accounts {
-            draw_accounts_window(self, ui.ctx());
+        // If the user leaves Accounts while editing the name, persist it
+        // without needing to close a dialog that no longer exists.
+        if self.panel_tab != PanelTab::Accounts {
+            self.save_dirty_account_names();
         }
         // Apply the persisted preference immediately to all Firefox monitors.
         // Neither native game nor Twitch connections are throttled.
@@ -3297,24 +3292,12 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Hunts;
             }
 
-            if sidebar_button(ui, tr("◫  Accounts"), app.show_accounts).clicked() {
-                app.show_accounts = true;
-            }
-
-            if sidebar_button(ui, &format!("▤  {}", tr("Inventory")), app.panel_tab == PanelTab::Inventory).clicked() {
-                app.panel_tab = PanelTab::Inventory;
-            }
-
-            if sidebar_button(ui, &format!("♢  {}", tr("Pokémon")), app.panel_tab == PanelTab::Pokemon).clicked() {
-                app.panel_tab = PanelTab::Pokemon;
+            if sidebar_button(ui, tr("◫  Accounts"), app.panel_tab == PanelTab::Accounts).clicked() {
+                app.panel_tab = PanelTab::Accounts;
             }
 
             if sidebar_button(ui, &format!("⚡  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
                 app.panel_tab = PanelTab::Automation;
-            }
-
-            if sidebar_button(ui, &format!("◷  {}", tr("History")), app.panel_tab == PanelTab::History).clicked() {
-                app.panel_tab = PanelTab::History;
             }
 
             if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
@@ -3635,7 +3618,7 @@ fn draw_native_missing_panel(
                         app.launch_one(profile);
                     }
                     if ui.small_button(tr("Account settings")).clicked() {
-                        app.show_accounts=true;
+                        app.panel_tab=PanelTab::Accounts;
                     }
                 });
             } else {
@@ -3646,7 +3629,7 @@ fn draw_native_missing_panel(
                         app.launch_enabled();
                     }
                     if ui.small_button(tr("Manage accounts")).clicked() {
-                        app.show_accounts=true;
+                        app.panel_tab=PanelTab::Accounts;
                     }
                 });
             }
@@ -4876,10 +4859,6 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                     .strong().color(TEXT));
                 ui.label(format!("{} {} · {} {}",item_count,tr("items"),
                     ball_count,tr("ball types")));
-                if ui.small_button(tr("Open inventory")).clicked() {
-                    app.inventory_account = Some(index);
-                    app.panel_tab = PanelTab::Inventory;
-                }
             });
             ui.horizontal_wrapped(|ui| {
                 for (id,qty) in view.balls.iter().filter(|(_,qty)|**qty>0) {
@@ -5781,7 +5760,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(tr("Open Profiles")).clicked() {
-                app.show_accounts = true;
+                app.panel_tab = PanelTab::Accounts;
             }
             if ui.button(tr("Open Logs")).clicked() {
                 app.open_logs();
