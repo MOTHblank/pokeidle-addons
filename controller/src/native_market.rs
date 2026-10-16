@@ -131,6 +131,17 @@ impl Default for MarketRules {
     }
 }
 impl MarketRules {
+    /// Clone buying rules, reserves and limits across profiles while leaving
+    /// the destination's listing-specific Snatch queue untouched. Activation
+    /// is an explicit choice: the default is not to start spending money.
+    pub fn copy_buying_from(&self, source: &Self, copy_activation: bool) -> Self {
+        let mut result = source.clone();
+        result.snatch_targets = self.snatch_targets.clone();
+        if !copy_activation {
+            result.enabled = false;
+        }
+        result
+    }
     pub fn load(profile: GameProfile) -> Result<Self, String> {
         let rules: Self = read_json(profile, "rules")?.unwrap_or_default();
         rules.validate()?;
@@ -207,6 +218,36 @@ impl MarketRules {
         Ok(out)
     }
 }
+#[cfg(test)]
+mod buying_copy_tests {
+    use super::*;
+    #[test]
+    fn copy_preserves_target_snatches_and_disables_buying_by_default() {
+        let mut source=MarketRules::default();
+        source.enabled=true;
+        source.gold_reserve=1234;
+        source.rules=vec![BuyRule {id:"test-rule".into(),enabled:true,
+            buy_max:200,kind:"item".into(),item_id:66,..Default::default()}];
+        let mut target=MarketRules::default();
+        let mut snatch=SnatchTarget {
+            id:991, kind:"item".into(), item_id:66,
+            currency:"gold".into(), max_price:10,..Default::default()
+        };
+        snatch.arm();
+        target.snatch_targets.push(snatch.clone());
+        let copied=target.copy_buying_from(&source,false);
+        assert!(!copied.enabled);
+        assert_eq!(copied.gold_reserve,1234);
+        assert_eq!(copied.rules,source.rules);
+        assert_eq!(copied.snatch_targets,vec![snatch.clone()]);
+        copied.validate().unwrap();
+        let live=target.copy_buying_from(&source,true);
+        assert!(live.enabled);
+        assert_eq!(live.snatch_targets,vec![snatch]);
+        live.validate().unwrap();
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MarketStatus {
     pub enabled: bool, pub pending: Option<String>, pub sent: u64,
