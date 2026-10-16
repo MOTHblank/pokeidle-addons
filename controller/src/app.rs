@@ -4274,6 +4274,159 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
         });
 }
 
+/// Depot operations are read-only until a user explicitly confirms a
+/// supported, server-authoritative individual sale. Never infer a success
+/// from pressing a button; only the following full roster can confirm it.
+fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Pokémon management")).size(17.0)
+            .strong().color(TEXT));
+        egui::ComboBox::from_id_salt("pokemon-account")
+            .selected_text(app.account_name(app.games[app.pokemon_account].profile))
+            .show_ui(ui, |ui| {
+                for i in 0..app.games.len() {
+                    let name=app.account_name(app.games[i].profile);
+                    ui.selectable_value(&mut app.pokemon_account,i,name);
+                }
+            });
+    });
+    let index=app.pokemon_account;
+    let Some(native)=app.games[index].native.as_ref() else {
+        ui.label(tr("Waiting for native account"));
+        return;
+    };
+    let view=native.hunt_snapshot();
+    let status=native.snapshot();
+    ui.add_space(9.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("{}: {}",tr("Pokémon on account"),view.pokemon_roster.len()));
+        ui.add(egui::TextEdit::singleline(&mut app.pokemon_query)
+            .hint_text(tr("Search Pokémon")).desired_width(190.0));
+        ui.checkbox(&mut app.pokemon_shiny_only,tr("Shiny only"));
+        ui.label(tr("Sort by"));
+        egui::ComboBox::from_id_salt("pokemon-sort")
+            .selected_text(match app.pokemon_sort {
+                PokemonSort::Level => "Level",
+                PokemonSort::Grade => tr("Grade"),
+                PokemonSort::Power => tr("Power"),
+                PokemonSort::Name => "Name"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Level,"Level");
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Grade,tr("Grade"));
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Power,tr("Power"));
+                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Name,"Name");
+            });
+    });
+    ui.add_space(8.0);
+    let query=app.pokemon_query.trim().to_lowercase();
+    let mut filtered=view.pokemon_roster.iter()
+        .filter(|pokemon|
+            (!app.pokemon_shiny_only || pokemon.shiny) &&
+            (query.is_empty() || pokemon.name.to_lowercase().contains(&query) ||
+                pokemon.id.to_string().contains(&query) ||
+                pokemon.species_id.is_some_and(|id|id.to_string().contains(&query))))
+        .collect::<Vec<_>>();
+    filtered.sort_by(|a,b|{
+        let cmp=match app.pokemon_sort {
+            PokemonSort::Level => b.level.cmp(&a.level),
+            PokemonSort::Grade => b.grade.unwrap_or(0.0)
+                .total_cmp(&a.grade.unwrap_or(0.0)),
+            PokemonSort::Power => b.power.unwrap_or(0).cmp(&a.power.unwrap_or(0)),
+            PokemonSort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        };
+        cmp.then_with(||a.id.cmp(&b.id))
+    });
+    ui.columns(2, |cols| {
+        cols[0].label(RichText::new(tr("Pokémon on account")).strong().color(TEXT));
+        egui::ScrollArea::vertical().id_salt(("pokemon-roster",index))
+            .max_height(450.0).show(&mut cols[0],|ui|{
+                if filtered.is_empty() {ui.label(tr("Waiting for Pokémon roster"));}
+                for pokemon in &filtered {
+                    let active=view.active_pokemon.as_ref()
+                        .is_some_and(|current|current.id==pokemon.id);
+                    let name=format!("{}{} · Lv {}{} · Q {}",
+                        if active {"▶ "} else {""},
+                        pokemon.name,pokemon.level,
+                        if pokemon.shiny {" ✨"}else{""},
+                        pokemon.quality.map(|n|format!("{n:.2}"))
+                            .unwrap_or_else(||"—".into()));
+                    if ui.selectable_label(app.pokemon_selected[index]==Some(pokemon.id),name)
+                        .clicked() {
+                            app.pokemon_selected[index]=Some(pokemon.id);
+                            app.pokemon_sale_confirm[index]=None;
+                    }
+                }
+            });
+        cols[1].label(RichText::new(tr("Selected Pokémon")).strong().color(TEXT));
+        if let Some(pokemon)=app.pokemon_selected[index]
+            .and_then(|id|view.pokemon_roster.iter().find(|p|p.id==id)) {
+            let active=view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
+            let detail=[
+                ("ID",format!("#{}",pokemon.id)),
+                ("Species",pokemon.species_id.map(|id|id.to_string()).unwrap_or_default()),
+                ("Level",pokemon.level.to_string()),
+                ("XP",pokemon.xp.map(format_number).unwrap_or_default()),
+                ("Next XP",pokemon.xp_next.map(format_number).unwrap_or_default()),
+                ("HP",format!("{}/{}",pokemon.hp.unwrap_or(0),pokemon.max_hp.unwrap_or(0))),
+                ("Grade",pokemon.grade.map(|v|format!("{v:.2}")).unwrap_or_default()),
+                ("Quality",pokemon.quality.map(|v|format!("{v:.2}")).unwrap_or_default()),
+                ("Power",pokemon.power.map(|v|v.to_string()).unwrap_or_default()),
+                ("Potency",pokemon.potency.map(|v|v.to_string()).unwrap_or_default()),
+                ("Held item",pokemon.held_item_id.map(|id|id.to_string()).unwrap_or_default()),
+                ("Types",pokemon.types.join(", ")),
+                ("IVs",pokemon.ivs.iter().map(|n|n.map(|v|v.to_string())
+                    .unwrap_or_else(||"—".into())).collect::<Vec<_>>().join(" / ")),
+                ("Shiny",pokemon.shiny.to_string()),
+                ("Looktype",pokemon.looktype.map(|id|id.to_string()).unwrap_or_default()),
+            ];
+            egui::ScrollArea::vertical().max_height(330.0)
+                .id_salt(("pokemon-details",index)).show(&mut cols[1],|ui|{
+                ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
+                for (key,value) in detail {
+                    ui.horizontal(|ui|{
+                        ui.label(RichText::new(key).size(10.0).color(DIM));
+                        ui.label(RichText::new(value).size(10.0).color(TEXT));
+                    });
+                }
+            });
+            cols[1].add_space(9.0);
+            if active || pokemon.shiny {
+                cols[1].label(RichText::new(tr("Cannot sell active or shiny Pokémon."))
+                    .size(10.0).color(WARN));
+            } else if status.pending_pokemon_sale.is_some() {
+                cols[1].label(RichText::new(format!("Sale pending for #{}",
+                    status.pending_pokemon_sale.unwrap_or_default())).color(WARN));
+            } else if app.pokemon_sale_confirm[index]==Some(pokemon.id) {
+                cols[1].horizontal(|ui|{
+                    if ui.button(tr("Confirm sale")).clicked() {
+                        match native.send_command(GameCommand::SellPokemon(pokemon.id)) {
+                            Ok(())=>app.pokemon_sale_confirm[index]=None,
+                            Err(error)=>{app.status=format!("Sale rejected: {error}");app.status_error=true;}
+                        }
+                    }
+                    if ui.small_button(tr("Cancel")).clicked() {
+                        app.pokemon_sale_confirm[index]=None;
+                    }
+                });
+                cols[1].label(RichText::new(
+                    tr("Authoritative server inventory determines whether the sale succeeded.")
+                ).size(10.0).color(DIM));
+            } else if status.phase=="Online" {
+                if cols[1].button(tr("Sell Pokémon")).clicked() {
+                    app.pokemon_sale_confirm[index]=Some(pokemon.id);
+                }
+            }
+            if let Some(error)=status.pokemon_sale_error.as_deref() {
+                cols[1].label(RichText::new(error).size(10.0).color(WARN));
+            }
+            cols[1].label(format!("Confirmed sales: {}",status.confirmed_pokemon_sales));
+        } else {
+            cols[1].label(tr("Inspect a Pokémon from the native roster."));
+        }
+    });
+}
+
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
