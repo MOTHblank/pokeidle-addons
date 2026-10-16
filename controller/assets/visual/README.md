@@ -1,6 +1,6 @@
 # Native visual assets
 
-Moth Controller has a shared egui sprite renderer for **Restock**, **Inventory**, and **Pokémon**. It never requires a WebView.
+Moth Controller has a reusable egui sprite renderer, currently used by the native **Auto Catch / Restock** picker. It supports ball, item, and Pokémon species IDs for reusing the same cache in other screens. The current simplified native navigation no longer exposes the old Inventory and Pokémon pages; those integrations can reuse this module when the pages return. It never requires a WebView.
 
 ## Developer: create the committed art cache once
 
