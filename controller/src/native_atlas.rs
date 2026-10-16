@@ -218,7 +218,8 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
     let current_prediction=view.hunt_slug.as_deref()
         .and_then(|slug|view.hunts.iter().find(|h|h.slug==slug))
         .and_then(|h|raw_kills(h,mon,mon_meta,reference,&stats));
-    let calibration=if observed.seconds>=30.0 && observed.kills>=5 {
+    let calibration=if observed.seconds>=30.0 && observed.kills>=5
+        && observed.last_battle_age_secs.is_none_or(|age|age<=180) {
         current_prediction.and_then(|(k,_,_)|
             if k>0.0 && observed.kills_h.is_finite() && observed.kills_h>0.0 {
                 Some((observed.kills_h/k).clamp(0.001,10.0))
