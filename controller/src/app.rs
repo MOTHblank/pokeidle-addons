@@ -3105,62 +3105,62 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr("Performance and updates"))
-    .size(17.0).strong().color(TEXT));
+        .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);
     ui.label(RichText::new(tr("Choose when Moth Controller uses fewer resources in the background."))
-    .size(11.0).color(MUTED));
+        .size(11.0).color(MUTED));
     ui.add_space(12.0);
-    
+
     let mut next = app.ui_options;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
-    .stroke(Stroke::new(1.0, BORDER))
-    .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
-    ui.label(RichText::new(tr("Background refresh"))
-    .size(13.0).strong().color(TEXT));
-    ui.add_space(8.0);
-    
-    ui.checkbox(
-    &mut next.reduce_updates_unfocused,
-    tr("Reduce updates when the window is not focused"),
-    );
-    ui.label(RichText::new(tr(
-    "When enabled, refresh this window less often while you use other apps. The game keeps running normally."
-    )).size(10.0).color(MUTED));
-    
-    ui.add_space(10.0);
-    ui.checkbox(
-    &mut next.reduce_updates_in_tray,
-    tr("Reduce updates when minimized to the system tray"),
-    );
-    ui.label(RichText::new(tr(
-    "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden."
-    )).size(10.0).color(MUTED));
-    
-    ui.add_space(10.0);
-    ui.separator();
-    ui.label(RichText::new(tr(
-    "PokéIdle and Twitch keep running normally. These options only change how often the window and Firefox update."
-    )).size(10.0).color(DIM));
-    });
-    
+        .stroke(Stroke::new(1.0, BORDER))
+        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Background refresh"))
+                .size(13.0).strong().color(TEXT));
+            ui.add_space(8.0);
+
+            ui.checkbox(
+                &mut next.reduce_updates_unfocused,
+                tr("Reduce updates when the window is not focused"),
+            );
+            ui.label(RichText::new(tr(
+                "When enabled, refresh this window less often while you use other apps. The game keeps running normally."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.checkbox(
+                &mut next.reduce_updates_in_tray,
+                tr("Reduce updates when minimized to the system tray"),
+            );
+            ui.label(RichText::new(tr(
+                "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(RichText::new(tr(
+                "PokéIdle and Twitch keep running normally. These options only change how often the window and Firefox update."
+            )).size(10.0).color(DIM));
+        });
+
     if next != app.ui_options {
-    // The change is applied only after a successful disk write. If the
-    // options directory is unavailable, keep the previous live setting.
-    app.save_ui_options(next);
-    ui.ctx().request_repaint();
+        // The change is applied only after a successful disk write. If the
+        // options directory is unavailable, keep the previous live setting.
+        app.save_ui_options(next);
+        ui.ctx().request_repaint();
     }
-    
+
     ui.add_space(12.0);
     let slowed=app.controller_in_background(ui.ctx());
     ui.label(RichText::new(format!("{}: {}",
-    tr("Current refresh mode"),
-    tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
-    .size(11.0).color(if slowed { WARN } else { GOOD }));
+        tr("Current refresh mode"),
+        tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
+        .size(11.0).color(if slowed { WARN } else { GOOD }));
     if ui.small_button(tr("Restore default performance settings")).clicked() {
-    app.save_ui_options(UiOptions::default());
+        app.save_ui_options(UiOptions::default());
     }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
-    .size(11.0).color(DIM));
+        .size(11.0).color(DIM));
 }
 
 #[derive(Clone, Copy)]
