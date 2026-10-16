@@ -665,6 +665,25 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "pending" => "pendentes",
         "throws" => "bolas",
         "Direct IRC" => "IRC direto",
+        "Native restock setting; saved without Firefox" =>
+            "Reposição nativa: ajuste salvo sem Firefox",
+        "Stock OK" => "Estoque OK",
+        "Off" => "Desligado",
+        "Waiting for inventory" => "Aguardando estoque",
+        "Waiting for gold" => "Aguardando ouro",
+        "Waiting for shop" => "Aguardando loja",
+        "Waiting for purchase" => "Aguardando compra",
+        "Confirming inventory" => "Confirmando estoque",
+        "Stock synced" => "Estoque atualizado",
+        "Backoff" => "Repetindo em breve",
+        "Gold reserve protected" => "Reserva de ouro protegida",
+        "Needs settings" => "Precisa configurar",
+        "Reconnecting" => "Reconectando",
+        "Rechecking last order" => "Conferindo última compra",
+        "ordered" => "pedidos",
+        "confirmed" => "confirmados",
+        "Restock has no valid saved purchase rules" =>
+            "Reposição sem regras válidas nas configurações salvas",
         "Authenticating in Firefox · automatic native game + Twitch handoff" =>
             "Autenticando no Firefox · transferência nativa do jogo + Twitch automática",
         "Reading native handshake…" => "Lendo handshake nativo…",
@@ -3151,6 +3170,52 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     game.native_throws, tr("throws")
                 )).size(10.0).color(DIM));
             });
+
+            ui.add_space(7.0);
+            ui.separator();
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let restock = &game.native_restock;
+                ui.label(RichText::new(tr("Restock")).size(11.0).strong().color(TEXT));
+                let active = restock.enabled && game.native_auto_catch;
+                ui.label(RichText::new(tr(&restock.phase))
+                    .size(10.0).color(if active && restock.phase == "Stock OK" {
+                        GOOD
+                    } else if restock.last_error.is_some() { WARN } else { DIM }));
+                if restock.configured {
+                    ui.add_space(8.0);
+                    if ui.small_button(tr(if restock.enabled { "Disable" } else { "Enable" }))
+                        .on_hover_text(tr("Native restock setting; saved without Firefox"))
+                        .clicked()
+                    {
+                        let enabled = !restock.enabled;
+                        native.set_restock_enabled(enabled);
+                        std::thread::spawn(move || {
+                            if let Err(error) = crate::native_auth::set_restock_enabled(profile, enabled) {
+                                crate::logging::warn(&format!(
+                                    "{} could not save native restock preference: {error}",
+                                    profile.label()
+                                ));
+                            }
+                        });
+                    }
+                }
+                let details = format!(
+                    "{} {} · {} {}",
+                    restock.ordered, tr("ordered"),
+                    restock.confirmed, tr("confirmed")
+                );
+                ui.label(RichText::new(details).size(10.0).color(DIM))
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        restock.last_order.as_deref().unwrap_or("No orders yet"),
+                        restock.last_error.as_deref().unwrap_or("No errors")
+                    ));
+            });
+            if !game.native_restock.configured && game.native_restock.enabled {
+                ui.label(RichText::new(tr("Restock has no valid saved purchase rules"))
+                    .size(10.0).color(WARN));
+            }
 
             if game.phase == "Online" {
                 ui.add_space(5.0);
