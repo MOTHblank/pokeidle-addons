@@ -4974,9 +4974,18 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         let game_catalog=native.hunt_snapshot();
         let catalog=app.inventory_catalog.as_deref();
         let selected_stock=|kind:&str,id:u64| -> Option<u64> {
-            restock_status.rules.iter()
-                .find(|rule|rule.kind==kind && rule.id==id)
-                .and_then(|rule|rule.current)
+            // The authoritative HuntView inventory contains every owned item.
+            // RestockStatus only contains already-saved rules, so it cannot
+            // give stock for a newly selected potion/revive until saving ends.
+            let inventory = if kind == "ball" {
+                game_catalog.balls.as_ref()
+            } else {
+                game_catalog.items.as_ref()
+            };
+            selected_restock_stock(inventory, id).or_else(||
+                restock_status.rules.iter()
+                    .find(|rule|rule.kind==kind && rule.id==id)
+                    .and_then(|rule|rule.current))
         };
         let selected_price=|kind:&str,id:u64| -> Option<u64> {
             restock_status.rules.iter()
