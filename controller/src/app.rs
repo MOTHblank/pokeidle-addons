@@ -4770,34 +4770,37 @@ mod restock_picker_layout_tests {
 }
 
 fn capture_restock_chip(
-    ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
-    selected:&mut u64, id:u64, name:&str, icon:&str,
-    icon_hint:Option<&str>, price:Option<u64>, stock:Option<u64>
+    ui: &mut egui::Ui, visuals: &mut VisualCache, kind: SpriteKind,
+    group: &'static str, selected: &mut u64, id: u64, name: &str, icon: &str,
+    icon_hint: Option<&str>, price: Option<u64>, stock: Option<u64>,
 ) {
-    let active=*selected==id;
-    let response=egui::Frame::new()
+    let active = *selected == id;
+    // A real Button owns both its artwork and pointer/keyboard interaction.
+    // Interacting with a Frame's response after placing an Image inside it
+    // let adjacent/wrapped controls compete for clicks, particularly at the
+    // Golden Potion → Revives boundary. The ID is stable across icon loads.
+    ui.push_id(("restock-item", group, id), |ui| {
+        let button = if let Some(texture) = visuals.texture_id(ui, kind, id, icon_hint) {
+            egui::Button::image(egui::Image::new((
+                texture, egui::vec2(RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE)
+            )))
+        } else {
+            egui::Button::new(RichText::new(icon).size(15.0))
+        }
         .fill(if active { ACCENT.linear_multiply(0.25) } else { PANEL_ALT })
-        .stroke(Stroke::new(if active {1.5} else {1.0},
-            if active {ACCENT} else {BORDER}))
+        .stroke(Stroke::new(if active { 1.5 } else { 1.0 },
+            if active { ACCENT } else { BORDER }))
         .corner_radius(5.0)
-        .inner_margin(Margin::same(RESTOCK_ICON_PADDING))
-        .show(ui,|ui|{
-            // Both the texture and the fallback use exactly the same space.
-            // Do not use centered_and_justified here: that layout consumes
-            // the parent's remaining width instead of the icon's width.
-            if !visuals.show(ui,kind,id,icon_hint,RESTOCK_ICON_SIZE) {
-                ui.add_sized(
-                    [RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE],
-                    egui::Label::new(RichText::new(icon).size(15.0)),
-                );
-            }
-        }).response.interact(egui::Sense::click());
-    let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
-    let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
-    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("{name}{price_hint}{stock_hint}")).clicked() {
-        *selected=id;
-    }
+        .selected(active);
+        let price_hint = price.map(|p| format!(" · {p} gold")).unwrap_or_default();
+        let stock_hint = stock.map(|n| format!(" · {n} in bag")).unwrap_or_default();
+        if ui.add_sized(
+            [RESTOCK_ICON_SIZE + 2.0 * RESTOCK_ICON_PADDING as f32;
+             2], button
+        ).on_hover_text(format!("{name}{price_hint}{stock_hint}")).clicked() {
+            *selected = id;
+        }
+    });
 }
 fn capture_restock_threshold(
     ui:&mut egui::Ui,label:&str,at:&mut u64,to:&mut u64,
@@ -4865,19 +4868,19 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         cols[0].label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         cols[0].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                &mut cfg.ball_id,0,"Off","—",None,None,None);
+                "ball", &mut cfg.ball_id,0,"Off","—",None,None,None);
             for (id, fallback) in [(1,"Poké Ball"),(2,"Great Ball"),
                 (3,"Super Ball"),(4,"Ultra Ball"),(5,"Beast Ball")] {
                 let name = game_catalog.ball_names.get(&id)
                     .map(String::as_str).unwrap_or(fallback);
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                    &mut cfg.ball_id,id,name,"●",None,
+                "ball", &mut cfg.ball_id,id,name,"●",None,
                     selected_price("ball",id),selected_stock("ball",id));
             }
             if cfg.ball_id>5 && !game_catalog.ball_names.contains_key(&cfg.ball_id) {
                 let id=cfg.ball_id;
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
-                    &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
+                "ball", &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
         if columns == 1 { cols[0].add_space(8.0); }
@@ -4909,13 +4912,13 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         }
         cols[potion_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                &mut cfg.potion_id,0,"Off","—",None,None,None);
+                "potion", &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                    &mut cfg.potion_id,id,&name,"💊",
+                "potion", &mut cfg.potion_id,id,&name,"💊",
                     catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
@@ -4939,13 +4942,13 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         }
         cols[revive_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                &mut cfg.revive_id,0,"Off","—",None,None,None);
+                "revive", &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
                 let price=selected_price("item",id)
                     .or_else(||catalog.and_then(|c|c.items.get(&id))
                         .and_then(|item|item.price_gold));
                 capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
-                    &mut cfg.revive_id,id,&name,"✚",
+                "revive", &mut cfg.revive_id,id,&name,"✚",
                     catalog.and_then(|c|c.items.get(&id)).and_then(|m|m.icon.as_deref()),
                     price,selected_stock("item",id));
             }
