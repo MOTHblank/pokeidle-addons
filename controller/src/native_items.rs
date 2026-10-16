@@ -6,7 +6,6 @@ const LIMIT:u64=2*1024*1024;
 #[derive(Clone,Debug)]
 pub struct ItemMeta {
     pub name: String,
-    pub category: String,
     /// Relative game artwork path or public URL; never trusted blindly.
     pub icon: Option<String>,
     /// Only an explicitly positive price from PokéIdle's public catalog.
@@ -30,14 +29,12 @@ pub fn parse(source:&str)->Result<ItemCatalog,String> {
         let Some(id)=item.get("id").and_then(Value::as_u64) else {continue};
         let Some(name)=item.get("name").and_then(Value::as_str) else {continue};
         if name.trim().is_empty() {continue}
-        let category=item.get("category").and_then(Value::as_str)
-            .unwrap_or("other").to_owned();
         let price_gold = item.get("preco").or_else(||item.get("npcPrice"))
             .or_else(||item.get("priceGold"))
             .and_then(Value::as_u64).filter(|price|*price>0);
         let icon=item.get("icon").and_then(Value::as_str)
             .filter(|icon| !icon.trim().is_empty()).map(str::to_owned);
-        items.insert(id,ItemMeta{name:name.to_owned(),category,icon,price_gold});
+        items.insert(id,ItemMeta{name:name.to_owned(),icon,price_gold});
     }
     if items.is_empty(){return Err("Public item catalog is empty".into());}
     Ok(ItemCatalog{items})
