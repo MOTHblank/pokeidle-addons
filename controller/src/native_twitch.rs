@@ -176,11 +176,9 @@ impl Drop for TwitchSession {
 
 fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
        desired: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>) {
-    let mut failures = 0usize;
     while !stop.load(Ordering::Relaxed) {
         match connect(&identity) {
             Ok(mut socket) => {
-                failures = 0;
                 if let Ok(mut s) = state.lock() {
                     s.phase = "Online".into();
                     s.error = None;
@@ -263,7 +261,6 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                 }
             }
             Err(error) => {
-                failures += 1;
                 let auth_expired = error.contains("rejected the captured OAuth");
                 if let Ok(mut s) = state.lock() {
                     s.phase = if auth_expired { "NeedsLogin" } else { "Reconnecting" }.into();
