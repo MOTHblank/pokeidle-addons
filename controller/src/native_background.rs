@@ -1,21 +1,21 @@
-//! Opt-in experiment: keep a PokéIdle game WebSocket alive in Rust after Firefox
-//! closes. Independently implemented from observed game protocol. Not a drop-in
-//! replacement for browser userscripts (Auto Catch, Twitch, Hunt Atlas, etc.).
+//! Authenticated Rust game transport with state-driven native gameplay commands.
+//! Browser is only an authentication owner until the server welcomes Rust.
 //!
 //! Credentials are captured only from the existing, authenticated Firefox BiDi
 //! session, held in memory, and never printed or persisted by this module.
 use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
+use crate::native_gameplay::{GameCommand, Gameplay};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tungstenite::{client_tls, http::header, Message};
 use tungstenite::client::IntoClientRequest;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
-const READ_TIMEOUT: Duration = Duration::from_secs(2);
+const READ_TIMEOUT: Duration = Duration::from_millis(250);
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(15);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 const CONNECTION_STALE_AFTER: Duration = Duration::from_secs(90);
@@ -32,6 +32,9 @@ pub struct NativeSnapshot {
     pub frames: u64,
     pub battle_kills: u64,
     pub captures: u64,
+    pub native_auto_catch: bool,
+    pub native_capture_queue: usize,
+    pub native_throws: u64,
     pub twitch_live: Vec<String>,
     pub twitch_watching: Vec<String>,
     pub twitch_bonus_pct: f32,
@@ -43,6 +46,7 @@ impl Default for NativeSnapshot {
             phase: "Connecting".into(), last_received: None,
             trainer_level: None, trainer_xp: None, gold: None, orbs: None,
             hunt_slug: None, frames: 0, battle_kills: 0, captures: 0, error: None,
+            native_auto_catch: false, native_capture_queue: 0, native_throws: 0,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
         }
     }
@@ -140,13 +144,15 @@ pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     twitch: TwitchSession,
     stop: Arc<AtomicBool>,
+    command_tx: mpsc::SyncSender<GameCommand>,
+    auto_catch: Arc<AtomicBool>,
 }
 impl NativeSession {
     pub fn start(bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let twitch = TwitchSession::start(bootstrap.get("twitch")
             .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(credentials, twitch, None)
+        Self::spawn(credentials, twitch, None, bootstrap.get("autocatch").cloned())
     }
     /// Establish *both* verified WebSockets before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
@@ -155,11 +161,15 @@ impl NativeSession {
         let initial = open_session(&credentials)?;
         let twitch = TwitchSession::start_verified(bootstrap.get("twitch")
             .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(credentials, twitch, Some(initial))
+        Self::spawn(credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
     }
     fn spawn(credentials: Credentials, twitch: TwitchSession,
-        initial: Option<(GameSocket, String)>) -> Result<Self, String> {
+        initial: Option<(GameSocket, String)>, settings: Option<Value>) -> Result<Self, String> {
         let desired = twitch.desired_handle();
+        let gameplay = Gameplay::new(settings.as_ref());
+        let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
+        let worker_auto_catch = Arc::clone(&auto_catch);
+        let (command_tx, command_rx) = mpsc::sync_channel(64);
         let snapshot = Arc::new(Mutex::new(NativeSnapshot::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_snapshot = Arc::clone(&snapshot);
@@ -168,7 +178,8 @@ impl NativeSession {
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
-                        Arc::clone(&worker_stop), desired, initial);
+                        Arc::clone(&worker_stop), desired, initial,
+                        gameplay, command_rx, worker_auto_catch);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -179,7 +190,20 @@ impl NativeSession {
                 }
             })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
-        Ok(Self { snapshot, twitch, stop })
+        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch })
+    }
+    pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
+        if !command.is_valid() {
+            return Err("Invalid native game command".into());
+        }
+        if self.snapshot().phase != "Online" {
+            return Err("Native game is not authenticated".into());
+        }
+        self.command_tx.try_send(command)
+            .map_err(|_| "Native command queue full or session stopped".to_owned())
+    }
+    pub fn set_auto_catch(&self, enabled: bool) {
+        self.auto_catch.store(enabled, Ordering::Relaxed);
     }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
@@ -342,7 +366,9 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
 
 fn session_loop(credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>) {
+    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
+    mut gameplay: Gameplay, command_rx: mpsc::Receiver<GameCommand>,
+    auto_catch: Arc<AtomicBool>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     while !stop.load(Ordering::Relaxed) {
@@ -350,6 +376,7 @@ fn session_loop(credentials: Credentials,
             Ok((mut socket, welcome)) => {
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 observe(&snapshot, &welcome, &desired);
+                gameplay.ingest(&welcome, Instant::now());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
@@ -364,12 +391,39 @@ fn session_loop(credentials: Credentials,
                     }
                     if snapshot.lock().ok().and_then(|s| s.last_received)
                         .is_some_and(|last| last.elapsed() > CONNECTION_STALE_AFTER) { break; }
+                    // Every mutating action has one owner: this game socket.
+                    // Never enqueue commands against an older/disconnected
+                    // browser or replay unconfirmed writes after reconnect.
+                    let mut send_failed = false;
+                    while let Ok(command) = command_rx.try_recv() {
+                        let payload = command.wire().to_string();
+                        if socket.send(Message::Text(payload.into())).is_err() {
+                            gameplay.failed(&command, "native game command send failed");
+                            send_failed = true; break;
+                        }
+                    }
+                    if send_failed { break; }
+                    gameplay.status.auto_catch = auto_catch.load(Ordering::Relaxed);
+                    if let Some(command) = gameplay.next_capture(Instant::now()) {
+                        if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
+                            gameplay.failed(&command, "native auto capture send failed");
+                            break;
+                        }
+                    }
+                    update(&snapshot, |s| {
+                        s.native_auto_catch = gameplay.status.auto_catch;
+                        s.native_capture_queue = gameplay.status.queue;
+                        s.native_throws = gameplay.status.throws;
+                    });
                     if last_ping.elapsed() >= HEARTBEAT_INTERVAL {
                         if socket.send(Message::Ping(Vec::new().into())).is_err() { break; }
                         last_ping = Instant::now();
                     }
                     match socket.read() {
-                        Ok(Message::Text(text)) => observe(&snapshot, text.as_ref(), &desired),
+                        Ok(Message::Text(text)) => {
+                            gameplay.ingest(text.as_ref(), Instant::now());
+                            observe(&snapshot, text.as_ref(), &desired);
+                        },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
                             update(&snapshot, |s| s.last_received = Some(Instant::now()));
                         }
@@ -382,6 +436,7 @@ fn session_loop(credentials: Credentials,
                     }
                 }
                 if !stop.load(Ordering::Relaxed) {
+                    while command_rx.try_recv().is_ok() {}
                     update(&snapshot, |s| s.phase = "Reconnecting".into());
                 }
             }
