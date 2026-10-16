@@ -1,9 +1,30 @@
 //! Native Hunt Atlas workspace. All game state is read from the authenticated
 //! native socket. The public guide provides optional, untrusted reference data.
 use super::*;
+use crate::native_atlas_models::{self as models, BallKind, Modifiers};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum HuntSubtab { Explorer, Recommendations, Current, Session, Compare }
+pub(super) enum HuntSubtab { Explorer, Recommendations, Current, Models, Session, Compare }
+
+#[derive(Clone,Debug)]
+pub(super) struct AtlasScenario {
+    hunt_slug:String,
+    ball:BallKind,
+    tier:u8,
+    modifiers:Modifiers,
+    market_item:String,
+    market_gold_per_unit:f64,
+    accepted_fraction_override:Option<f64>,
+    modifiers_open:bool,
+}
+impl Default for AtlasScenario {
+    fn default()->Self{
+        Self{hunt_slug:String::new(),ball:BallKind::Ultra,tier:1,
+            modifiers:Modifiers::default(),market_item:String::new(),
+            market_gold_per_unit:0.0,accepted_fraction_override:None,
+            modifiers_open:false}
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AtlasAvailability { All, Unlocked, Locked }
@@ -36,7 +57,7 @@ impl Default for AtlasFilters {
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
             sort:AtlasSort::TrainerXp,ascending:false,
-            rare_item:String::new(),filters_open:true,
+            rare_item:String::new(),filters_open:false,
         }
     }
 }
