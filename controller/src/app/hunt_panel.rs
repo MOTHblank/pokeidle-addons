@@ -1470,7 +1470,7 @@ fn draw_atlas_explorer(
                     }
                 });
             egui::ScrollArea::vertical()
-                .id_salt(("atlas-species-details",index))
+                .id_salt(("atlas-species-details",index,filters.selected_species))
                 .auto_shrink([false,false])
                 .max_height(available_height)
                 .show(&mut cols[1],|ui|{
@@ -2049,9 +2049,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new("Sort recommendations by").size(12.0).strong());
-                        ui.selectable_value(&mut app.hunt_ranking,HuntRanking::TrainerXp,"Trainer XP");
-                        ui.selectable_value(&mut app.hunt_ranking,HuntRanking::PokemonXp,"Pokémon XP");
-                        ui.selectable_value(&mut app.hunt_ranking,HuntRanking::Gold,"Gold");
+                        for (ranking,label) in [
+                            (HuntRanking::TrainerXp,"Trainer XP"),
+                            (HuntRanking::PokemonXp,"Pokémon XP"),
+                            (HuntRanking::Gold,"Gold"),
+                        ]{
+                            if ui.selectable_value(&mut app.hunt_ranking,ranking,label)
+                                .changed(){
+                                app.hunt_page=0;
+                            }
+                        }
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
