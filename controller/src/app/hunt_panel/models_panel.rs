@@ -59,8 +59,10 @@ pub(super) fn draw_retrospective(
     let latest_day=rows.iter().map(|d|d.day).max().unwrap_or(0);
     ui.label(RichText::new("The summary uses the CURRENT model. Archived checkpoints below preserve point-in-time predictions when Hunt Atlas was open. Old history without observed durations remains unavailable.")
         .size(10.0).color(WARN));
-    egui::Grid::new(("atlas-history",slug)).striped(true)
-        .spacing([15.0,6.0]).show(ui,|ui|{
+    egui::ScrollArea::horizontal().id_salt(("atlas-history-x",slug))
+        .show(ui,|ui|{
+            egui::Grid::new(("atlas-history",slug)).striped(true)
+                .spacing([15.0,6.0]).show(ui,|ui|{
             ui.strong("Retained window");ui.strong("Observed trainer/h");
             ui.strong("Observed Pokémon/h");ui.strong("Current model / observed");ui.end_row();
             for (days,title) in [(7,"7 days"),(30,"30 days"),(90,"90 days")]{
@@ -90,6 +92,7 @@ pub(super) fn draw_retrospective(
                     .unwrap_or_else(||"—".into()));
                 ui.end_row();
             }
+        });
         });
     let mut archived=history.forecasts.iter().filter(|entry|entry.hunt==slug)
         .collect::<Vec<_>>();
@@ -162,11 +165,16 @@ pub(super) fn draw_atlas_models(
     cache:&EstimateCache,scenario:&mut AtlasScenario,history:&HistorySnapshot,live:bool
 ){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Capture, Outland & economy lab")
+        ui.label(RichText::new("Scenario lab")
             .size(16.0).strong().color(TEXT));
         ui.label(RichText::new("What-if reference · not observed server outcomes")
             .size(10.0).color(WARN));
     });
+    egui::Frame::new().fill(PANEL).corner_radius(9.0)
+        .stroke(Stroke::new(1.0,BORDER))
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.label(RichText::new("SCENARIO INPUTS").size(10.0)
+                .strong().color(DIM));
     ui.horizontal_wrapped(|ui|{
         ui.label("Destination");
         let current=selected_hunt(view,reference,scenario)
@@ -187,6 +195,8 @@ pub(super) fn draw_atlas_models(
             ui.selectable_value(&mut scenario.ball,ball,ball.label());
         }
     });
+        });
+    ui.add_space(8.0);
     let Some((hunt,unlocked))=selected_hunt(view,reference,scenario) else{
         ui.label("No available destination or public-guide preview.");return
     };
@@ -257,18 +267,35 @@ pub(super) fn draw_atlas_models(
                 }
             });
     }
-    ui.separator();
+    ui.add_space(9.0);
     let f=if live{cache.get(&hunt.slug)}else{None};
     let kills=f.as_ref().map(|f|f.kills_h);
-    ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Combat baseline").size(12.0).strong().color(TEXT));
-        ui.label(format!("{} kills/h · {} trainer XP/h · {} Pokémon XP/h",
-            value(kills),value(f.as_ref().map(|f|f.trainer_xp_h)),
-            value(f.as_ref().map(|f|f.pokemon_xp_h))));
-        if let Some(f)=f.as_ref(){
-            ui.colored_label(WARN,if f.calibrated{"Calibrated estimate"}else{"Experimental model"});
-        }
-    });
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(9.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new("Combat baseline")
+                    .size(13.0).strong().color(TEXT));
+                if let Some(f)=f.as_ref(){
+                    ui.colored_label(WARN,if f.calibrated{
+                        "Calibrated estimate"
+                    }else{"Experimental model"});
+                }
+            });
+            ui.horizontal_wrapped(|ui|{
+                for (label,number) in [
+                    ("Kills / h",kills),
+                    ("Trainer XP / h",f.as_ref().map(|f|f.trainer_xp_h)),
+                    ("Pokémon XP / h",f.as_ref().map(|f|f.pokemon_xp_h)),
+                ]{
+                    ui.vertical(|ui|{
+                        ui.label(RichText::new(label).size(10.0).color(DIM));
+                        ui.label(RichText::new(value(number))
+                            .size(15.0).strong().color(TEXT));
+                    });
+                    ui.add_space(14.0);
+                }
+            });
+        });
     let ball_quote=view.ball_quotes.get(&scenario.ball.id());
     let efficiency=ball_quote.and_then(|q|q.efficiency)
         .unwrap_or_else(||scenario.ball.wiki_efficiency());
@@ -296,7 +323,7 @@ pub(super) fn draw_atlas_models(
         .size(12.0).strong().color(TEXT));
     egui::Frame::new().fill(PANEL).corner_radius(8.0)
         .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
-            if ui.available_width()>=700.0{
+            if ui.available_width()>=860.0{
                 egui::Grid::new(("atlas-capture-models",&hunt.slug,scenario.ball.id()))
                     .striped(true).spacing([12.0,6.0]).show(ui,|ui|{
                         ui.strong("Pokémon");ui.strong("Spawn");ui.strong("Catch / throw");
@@ -317,15 +344,29 @@ pub(super) fn draw_atlas_models(
             }else{
                 for (_,name,share,_,plan) in rows.iter().take(32){
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new(name).strong().size(11.0));
-                        ui.label(format!("Spawn {:.1}%",share*100.0));
-                        ui.label(format!("Catch {}",
-                            plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
-                                .unwrap_or_else(||"—".into())));
-                        ui.label(format!("Caught/h {}",
-                            value(plan.as_ref().map(|p|p.catches_h))));
-                        ui.label(format!("Shiny/h {}",
-                            value(plan.as_ref().and_then(|p|p.shiny_caught_h))));
+                        ui.label(RichText::new(name).strong().size(12.0).color(TEXT));
+                        ui.label(RichText::new(format!("{:.1}% spawns",share*100.0))
+                            .size(10.0).color(MUTED));
+                    });
+                    ui.horizontal_wrapped(|ui|{
+                        for (label,result) in [
+                            ("Catch / throw",plan.as_ref()
+                                .map(|p|format!("{:.3}%",p.chance*100.0))
+                                .unwrap_or_else(||"—".into())),
+                            ("Caught / h",value(plan.as_ref().map(|p|p.catches_h))),
+                            ("Shiny / h",value(plan.as_ref()
+                                .and_then(|p|p.shiny_caught_h))),
+                            ("Shiny ≥1 / 24h",plan.as_ref()
+                                .and_then(|p|p.shiny_caught_24h)
+                                .map(|p|format!("{:.2}%",p*100.0))
+                                .unwrap_or_else(||"—".into())),
+                        ]{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(label).size(9.0).color(DIM));
+                                ui.label(RichText::new(result).size(11.0).color(TEXT));
+                            });
+                            ui.add_space(10.0);
+                        }
                     });
                     ui.separator();
                 }
@@ -446,21 +487,29 @@ pub(super) fn draw_atlas_models(
         .filter(|price|*price>0.0 && ball_quote.and_then(|q|q.gold_price)
             .is_none_or(|g|g<=0.0))
         .zip(accepted_h).map(|(price,h)|price*h);
-    ui.horizontal_wrapped(|ui|{
-        for (label,num) in [
-            ("Modeled combat gold/h",f.as_ref().map(|f|f.combat_gold_h)),
-            ("Guide NPC loot gold/h",f.as_ref().map(|f|f.npc_loot_gold_h)),
-            ("Item units/h",units),("Assumed market proceeds/h",market_value),
-            ("Ball spending gold/h",gold_cost),
-            ("Ball spending diamonds/h",diamond_cost),
-        ]{
-            ui.vertical(|ui|{
-                ui.label(RichText::new(label).size(9.0).color(DIM));
-                ui.label(RichText::new(value(num)).size(12.0).strong().color(TEXT));
+    egui::Frame::new().fill(PANEL).corner_radius(9.0)
+        .stroke(Stroke::new(1.0,BORDER))
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            let metrics=[
+                ("Combat gold / h",f.as_ref().map(|f|f.combat_gold_h)),
+                ("NPC loot gold / h",f.as_ref().map(|f|f.npc_loot_gold_h)),
+                ("Item units / h",units),
+                ("Market proceeds / h",market_value),
+                ("Ball gold cost / h",gold_cost),
+                ("Ball diamonds / h",diamond_cost),
+            ];
+            let columns=if ui.available_width()>=680.0{3}else{2};
+            ui.columns(columns,|cols|{
+                for (i,(label,num)) in metrics.iter().enumerate(){
+                    cols[i%columns].vertical(|ui|{
+                        ui.label(RichText::new(*label).size(10.0).color(DIM));
+                        ui.label(RichText::new(value(*num))
+                            .size(14.0).strong().color(TEXT));
+                        ui.add_space(6.0);
+                    });
+                }
             });
-            ui.add_space(15.0);
-        }
-    });
+        });
     let hypothetical_net=match (f.as_ref(),market_value,gold_cost){
         (Some(f),Some(market),Some(cost))=>Some(f.combat_gold_h+market-cost),
         _=>None,
