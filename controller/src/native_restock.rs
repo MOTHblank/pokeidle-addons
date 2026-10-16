@@ -87,6 +87,7 @@ pub struct Restock {
     pending: Option<Order>,
     settle_until: Option<Instant>,
     blocked_until: Option<Instant>,
+    awaiting_inventory: Option<&'static str>,
 }
 impl Restock {
     pub fn new(settings: Option<&Value>) -> Self {
@@ -125,6 +126,7 @@ impl Restock {
             stock: BTreeMap::new(),
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
+            awaiting_inventory: None,
         };
         worker.seed_reference_items();
         worker
@@ -269,6 +271,7 @@ impl Restock {
         self.seed_reference_items();
         self.stock.clear();
         self.gold = None;
+        self.awaiting_inventory = None;
         self.known_stock = [false, false];
         self.status.pending = false;
     }
@@ -283,6 +286,7 @@ impl Restock {
             self.seed_reference_items();
             self.stock.clear();
             self.gold = None;
+            self.awaiting_inventory = None;
             self.known_stock = [false, false];
         }
         // The live shop may be refreshed independently of welcome, including
@@ -296,6 +300,7 @@ impl Restock {
         }
         // Match purchase results by ID, kind, name, or exact quantity+spend.
         // It is common for the server to omit ID or kind in purchase events.
+        let mut acknowledged = false;
         if let Some(events) = frame.get("ev").and_then(Value::as_array) {
             for event in events {
                 if event.get("k").and_then(Value::as_str) != Some("compra") {
@@ -343,10 +348,20 @@ impl Restock {
                                 }
                             }
                         }
-                        self.status.phase = "Confirming inventory".into();
+                        acknowledged = true;
                     }
                 }
             }
+        }
+        if acknowledged {
+            // A purchase receipt is authoritative even if a healing item was
+            // consumed before the next inventory patch. Confirm the order,
+            // but wait for fresh stock before considering another purchase.
+            if let Some(order) = &self.pending {
+                self.awaiting_inventory = Some(order.kind);
+            }
+            self.confirm(now);
+            self.status.phase = "Waiting for updated inventory".into();
         }
         if let Some(state) = frame.get("estado") {
             if let Some(gold) = state.get("gold").and_then(Value::as_u64) {
@@ -362,6 +377,12 @@ impl Restock {
                         }
                     }
                     self.known_stock[Self::idx(kind)] = true;
+                    if self.awaiting_inventory == Some(kind) {
+                        self.awaiting_inventory = None;
+                        if self.pending.is_none() {
+                            self.status.phase = "Stock synced".into();
+                        }
+                    }
                     if let Some(order) = &self.pending {
                         if order.kind == kind {
                             let current = self.stock.get(&(kind, order.id))
@@ -426,6 +447,10 @@ impl Restock {
             self.settle_until.is_some_and(|until| now < until) {
             return None;
         }
+        if self.awaiting_inventory.is_some() {
+            self.status.phase = "Waiting for updated inventory".into();
+            return None;
+        }
         let Some(gold) = self.gold else {
             self.status.phase = "Waiting for gold".into();
             return None;
@@ -449,9 +474,10 @@ impl Restock {
             };
             let mut qty = (rule.target - current).min(MAX_QTY)
                 .min(gold.saturating_sub(self.reserve) / meta.price);
-            if meta.source != "Server" && meta.source != "Server purchase" {
-                // The reference catalog proves the ID/name, not its current
-                // shop price. Buy one first and learn cost from the receipt.
+            if meta.source == "Reference catalog" {
+                // A known ID alone does not establish the current shop price.
+                // Prices supplied by the public item catalog can fill the
+                // configured target just as Auto Catch+ does.
                 qty = qty.min(1);
             }
             if qty == 0 {
@@ -514,7 +540,8 @@ mod tests {
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":123,"qtd":9,"gasto":90}]}"#, now);
         assert!(!r.pending.as_ref().unwrap().ack);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,"qtd":9,"gasto":90}]}"#, now);
-        assert!(r.pending.as_ref().unwrap().ack);
+        assert_eq!(r.status.confirmed, 1);
+        assert!(!r.status.pending);
         assert!(r.next(now + Duration::from_secs(2), true).is_none());
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":12},"gold":100}}"#, now);
         assert_eq!(r.status.confirmed, 1);
@@ -532,7 +559,8 @@ mod tests {
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","nome":"Golden Potion",
             "qtd":11,"gasto":55}]}"#,now+Duration::from_secs(1));
-        assert_eq!(r.status.phase,"Confirming inventory");
+        assert_eq!(r.status.phase,"Waiting for updated inventory");
+        assert_eq!(r.status.confirmed,1);
         // Shop purchase succeeded, but all new potions were consumed before
         // the following authoritative stock snapshot.
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":1},"gold":130}}"#,
@@ -542,15 +570,46 @@ mod tests {
         assert_eq!(r.status.phase,"Stock synced");
     }
     #[test]
-    fn unrelated_item_state_does_not_complete_matching_ball_purchase() {
+    fn receipt_confirms_even_without_inventory_patch_but_prevents_double_buy() {
+        let now=Instant::now();
+        let mut r=configured();
+        welcome(&mut r,now);
+        r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":0}}}"#,now);
+        assert!(r.next(now,true).is_some());
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "id":200,"kind":"item","qtd":12,"gasto":60}]}"#,now);
+        assert_eq!(r.status.confirmed,1);
+        assert!(!r.status.pending);
+        assert!(r.next(now+Duration::from_secs(31),true).is_none());
+        assert_eq!(r.status.phase,"Waiting for updated inventory");
+        r.ingest(r#"{"t":"estado","estado":{"items":{"200":12},"gold":130}}"#,now);
+        assert!(r.next(now+Duration::from_secs(31),true).is_none());
+        assert_eq!(r.status.phase,"Stock OK");
+    }
+    #[test]
+    fn public_catalog_price_can_fill_target_without_one_item_probe() {
+        let now=Instant::now();
+        let mut r=configured();
+        r.ingest(r#"{"t":"welcome","estado":{"gold":10000,
+            "balls":{"4":30},"items":{"200":0}}}"#,now);
+        let cat=crate::native_items::parse(r#"{"items":[
+            {"id":200,"name":"Small Potion","preco":50}]}"#).unwrap();
+        r.merge_item_metadata(&cat);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
+    }
+    #[test]
+    fn unrelated_item_state_does_not_release_ball_purchase_receipt_wait() {
         let now=Instant::now();let mut r=configured();
         welcome(&mut r,now);
         r.next(now,true);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,
             "qtd":9,"gasto":90}]}"#,now);
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":50}}}"#,now);
-        assert!(r.status.pending);
-        assert_eq!(r.status.confirmed,0);
+        assert!(!r.status.pending);
+        assert_eq!(r.status.confirmed,1);
+        assert!(r.next(now+Duration::from_secs(3),true).is_none());
+        assert_eq!(r.status.phase,"Waiting for updated inventory");
     }
 
     #[test]
@@ -607,6 +666,36 @@ mod tests {
         }"#, now);
         assert!(r.next(now, true).is_none());
         assert_eq!(r.status.phase, "Waiting for shop");
+    }
+    #[test]
+    fn selected_revive_is_a_separate_restock_category() {
+        let now=Instant::now();
+        let mut r=Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":0,
+            "selectedReviveId":205,"reviveAt":1,"reviveTo":5
+        }})));
+        r.ingest(r#"{"t":"welcome",
+            "itensCompraveis":[{"itemId":205,"name":"Revive","preco":600}],
+            "estado":{"gold":10000,"balls":{},"items":{"205":1}}
+        }"#,now);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":205,"qty":4}));
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "id":205,"kind":"item","qtd":4,"gasto":2400}]}"#,now);
+        assert_eq!(r.status.confirmed,1);
+    }
+    #[test]
+    fn golden_potion_is_known_without_synthetic_live_shop_quote() {
+        let now=Instant::now();
+        let mut r=Restock::new(Some(&json!({"restock":{
+            "enabled":true,"selectedBallId":0,"selectedPotionId":70070,
+            "potionAt":10,"potionTo":50
+        }})));
+        r.ingest(r#"{"t":"welcome",
+            "estado":{"gold":10000,"balls":{},"items":{"70070":0}}
+        }"#,now);
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":70070,"qty":1}));
     }
     #[test]
     fn no_spend_below_gold_reserve_or_when_disabled() {

@@ -112,6 +112,9 @@ pub struct HuntView {
     pub active_pokemon: Option<PokemonInfo>,
     pub pokemon_count: usize,
     pub pokemon_roster: Arc<Vec<PokemonInfo>>,
+    /// True only after a complete server-provided pokemons roster, not
+    /// inferred from partial pkMud updates or a previously online session.
+    pub roster_ready: bool,
     pub wild: Option<WildInfo>,
     pub balls: Arc<BTreeMap<u64, u64>>,
     pub ball_names: Arc<BTreeMap<u64, String>>,
@@ -140,7 +143,10 @@ struct Sample { at: Instant, trainer: Option<u64>, pokemon: Option<u64>, gold: O
 /// Server-confirmed reward receipts, independent of the cadence of estado.
 /// Manager-style battle statistics must not depend on a full state refresh.
 #[derive(Clone, Debug)]
-struct BattleSample { at: Instant, trainer: u64, pokemon: u64, kills: u64 }
+struct BattleSample {
+    at: Instant, trainer: u64, pokemon: u64, kills: u64,
+    trainer_receipts: u64, pokemon_receipts: u64,
+}
 const WINDOW: Duration = Duration::from_secs(600);
 const MIN_MEASUREMENT: f64 = 20.0;
 
@@ -153,6 +159,8 @@ pub struct HuntIntel {
     battle_samples: VecDeque<BattleSample>,
     battle_trainer: u64,
     battle_pokemon: u64,
+    battle_trainer_receipts: u64,
+    battle_pokemon_receipts: u64,
     last_battle_at: Option<Instant>,
     session_kills: u64,
     session_start: Instant,
@@ -165,7 +173,9 @@ impl HuntIntel {
             view: HuntView::default(), pokemon: BTreeMap::new(),
             roster_dirty: false, active_id: None,
             samples: VecDeque::new(), battle_samples: VecDeque::new(),
-            battle_trainer: 0, battle_pokemon: 0, last_battle_at: None, session_kills: 0,
+            battle_trainer: 0, battle_pokemon: 0,
+            battle_trainer_receipts: 0, battle_pokemon_receipts: 0,
+            last_battle_at: None, session_kills: 0,
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
         }
@@ -227,7 +237,12 @@ impl HuntIntel {
         self.battle_samples.clear();
         self.battle_trainer = 0;
         self.battle_pokemon = 0;
+        self.battle_trainer_receipts = 0;
+        self.battle_pokemon_receipts = 0;
+        self.session_kills = 0; // Reset the per-hunt *rate* baseline, not session totals.
+        self.view.battle_kills = 0;
         self.last_battle_at = None;
+        self.view.roster_ready = false;
         self.view.measurements = HuntMeasurements::default();
         self.view.sample_quality = "Reconnecting; collecting fresh measurements".into();
     }
@@ -238,9 +253,12 @@ impl HuntIntel {
             self.battle_samples.clear();
             self.battle_trainer = 0;
             self.battle_pokemon = 0;
+            self.battle_trainer_receipts = 0;
+            self.battle_pokemon_receipts = 0;
             self.last_battle_at = None;
             self.battle_samples.push_back(BattleSample {
-                at: now, trainer: 0, pokemon: 0, kills: 0
+                at: now, trainer: 0, pokemon: 0, kills: 0,
+                trainer_receipts: 0, pokemon_receipts: 0,
             });
             self.session_kills = 0;
             // Like Manager, keep accumulated session loot and XP across
@@ -253,6 +271,7 @@ impl HuntIntel {
         if self.view.pending_hunt_slug.as_deref() == Some(slug) {
             self.view.pending_hunt_slug = None;
             self.pending_at = None;
+            self.view.last_error = None;
         }
     }
     fn num(record: &Value, key: &str) -> Option<u64> { record.get(key).and_then(Value::as_u64) }
@@ -353,9 +372,12 @@ impl HuntIntel {
                 self.battle_samples.clear();
                 self.battle_trainer=0;
                 self.battle_pokemon=0;
+                self.battle_trainer_receipts=0;
+                self.battle_pokemon_receipts=0;
                 self.last_battle_at=None;
                 self.battle_samples.push_back(BattleSample{
                     at:now,trainer:0,pokemon:0,kills:self.session_kills,
+                    trainer_receipts:0,pokemon_receipts:0,
                 });
                 self.view.measurements = HuntMeasurements::default();
             }
@@ -369,6 +391,7 @@ impl HuntIntel {
             self.adopt_hunt(slug, now);
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
+            self.view.roster_ready = true;
             // Even an empty authoritative depot must invalidate the previously
             // published Arc roster; otherwise sold Pokémon remain visible.
             self.pokemon.clear();
@@ -486,18 +509,27 @@ impl HuntIntel {
                                 session.kills=session.kills.saturating_add(1);
                                 // Battle receipts are authoritative even when the
                                 // game sends no subsequent estado/pkMud delta.
-                                self.battle_trainer = self.battle_trainer
-                                    .saturating_add(Self::num(e, "xpTreinador").unwrap_or(0));
-                                self.battle_pokemon = self.battle_pokemon
-                                    .saturating_add(Self::num(e, "xpPokemon").unwrap_or(0));
+                                if let Some(xp) = Self::num(e, "xpTreinador") {
+                                    self.battle_trainer=self.battle_trainer.saturating_add(xp);
+                                    self.battle_trainer_receipts=
+                                        self.battle_trainer_receipts.saturating_add(1);
+                                }
+                                if let Some(xp) = Self::num(e, "xpPokemon") {
+                                    self.battle_pokemon=self.battle_pokemon.saturating_add(xp);
+                                    self.battle_pokemon_receipts=
+                                        self.battle_pokemon_receipts.saturating_add(1);
+                                }
                                 if self.battle_samples.is_empty() {
                                     self.battle_samples.push_back(BattleSample {
-                                        at: now, trainer: 0, pokemon: 0, kills: 0
+                                        at: now, trainer: 0, pokemon: 0, kills: 0,
+                                        trainer_receipts: 0, pokemon_receipts: 0,
                                     });
                                 }
                                 self.battle_samples.push_back(BattleSample {
                                     at: now, trainer: self.battle_trainer,
-                                    pokemon: self.battle_pokemon, kills: self.session_kills
+                                    pokemon: self.battle_pokemon, kills: self.session_kills,
+                                    trainer_receipts: self.battle_trainer_receipts,
+                                    pokemon_receipts: self.battle_pokemon_receipts,
                                 });
                                 for (key,dest) in [
                                     ("xpTreinador",&mut session.trainer_xp),
@@ -573,12 +605,18 @@ impl HuntIntel {
         measurements.seconds = seconds;
         measurements.kills = kills;
         measurements.kills_h = kills as f64 * scale;
-        measurements.trainer_xp_h =
-            last.trainer.saturating_sub(first.trainer) as f64 * scale;
-        measurements.pokemon_xp_h =
-            last.pokemon.saturating_sub(first.pokemon) as f64 * scale;
-        measurements.valid_trainer = true;
-        measurements.valid_pokemon = true;
+        measurements.valid_trainer =
+            last.trainer_receipts.saturating_sub(first.trainer_receipts)==kills;
+        measurements.valid_pokemon =
+            last.pokemon_receipts.saturating_sub(first.pokemon_receipts)==kills;
+        if measurements.valid_trainer {
+            measurements.trainer_xp_h =
+                last.trainer.saturating_sub(first.trainer) as f64 * scale;
+        }
+        if measurements.valid_pokemon {
+            measurements.pokemon_xp_h =
+                last.pokemon.saturating_sub(first.pokemon) as f64 * scale;
+        }
         measurements.window_samples = self.battle_samples.len();
         self.view.sample_quality = if kills < 5 {
             "Low confidence · fewer than five observed kills".into()
@@ -668,6 +706,16 @@ mod tests {
         assert_eq!(roster.pokemon_roster[0].held_item_id,None);
         assert_eq!(roster.pokemon_roster[0].ivs[0],None);
         assert_eq!(roster.pokemon_roster[0].ivs[1],Some(20));
+    }
+    #[test]
+    fn partial_roster_is_not_credited_as_a_complete_collection(){
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"estado","estado":{"pkMud":[{"id":7,"speciesId":25}]}}"#,now);
+        assert!(!m.view.roster_ready);
+        m.ingest(r#"{"t":"welcome","estado":{"pokemons":[]}}"#,now);
+        assert!(m.view.roster_ready);
+        m.on_disconnect();
+        assert!(!m.view.roster_ready);
     }
     #[test]
     fn full_empty_roster_replaces_previous_nonempty_snapshot() {
@@ -834,6 +882,42 @@ mod tests {
             now+Duration::from_secs(26));
         assert!(!intel.view.measurements.valid_trainer);
         assert_eq!(intel.view.measurements.kills,0);
+    }
+    #[test]
+    fn missing_reward_channel_is_unknown_not_measured_zero() {
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","hunts":[{"slug":"a"}],
+            "estado":{"huntSlug":"a"}}"#,now);
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte",
+                "quem":"selvagem","xpTreinador":100}]}"#,
+                now+Duration::from_secs(5*(i+1)));
+        }
+        assert!(intel.view.measurements.valid_trainer);
+        assert!(!intel.view.measurements.valid_pokemon);
+    }
+    #[test]
+    fn reconnect_reanchors_rate_without_erasing_session_rewards() {
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","hunts":[{"slug":"a"}],
+            "estado":{"huntSlug":"a"}}"#,now);
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte",
+                "quem":"selvagem","xpTreinador":100,"xpPokemon":40}]}"#,
+                now+Duration::from_secs(5*(i+1)));
+        }
+        assert!(intel.view.measurements.valid_trainer);
+        let before=intel.view.session.kills;
+        intel.on_disconnect();
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte",
+                "quem":"selvagem","xpTreinador":100,"xpPokemon":40}]}"#,
+                now+Duration::from_secs(60+5*(i+1)));
+        }
+        assert_eq!(intel.view.measurements.kills,6);
+        assert_eq!(intel.view.session.kills,before+6);
     }
     #[test]
     fn unobserved_hunts_never_claim_actual_xp_per_hour() {
