@@ -131,6 +131,133 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             ui.add_space(4.0);
         }
         if let Some(i)=remove {cfg.rules.remove(i);}
+
+        ui.add_space(6.0);
+        ui.collapsing(format!("Snatch · {} armed listing(s) · release-window snipe",cfg.snatch_targets.len()),|ui|{
+            ui.label(RichText::new(
+                "High-priority Moth Watch Snatch: up to 40 saved listing IDs, 45s pre-unlock verification, four-second burst with up to 8 sends per worker tick, then 150ms exact-listing retries. Snatch purchases share balance reserves and price ceilings. Native buying must be enabled and not paused."
+            ).size(10.0).color(MUTED));
+            ui.label(RichText::new(
+                "Arm a real game listing by ID and authorized max unit price. The native worker checks market.anuncio for seller, stock, currency, price and unlock time BEFORE purchasing; an unknown listing is never blindly bought."
+            ).size(10.0).color(DIM));
+            ui.horizontal_wrapped(|ui|{
+                let t=&mut app.market_snatch_drafts[index];
+                egui::ComboBox::from_id_salt(("snatch-kind",index))
+                    .selected_text(if t.kind=="pokemon"{"Pokémon"}else{"Item"})
+                    .show_ui(ui,|ui|{
+                        ui.selectable_value(&mut t.kind,"item".into(),"Item");
+                        ui.selectable_value(&mut t.kind,"pokemon".into(),"Pokémon");
+                    });
+                egui::ComboBox::from_id_salt(("snatch-currency",index))
+                    .selected_text(if t.currency=="orb"{"Gems"}else{"Gold"})
+                    .show_ui(ui,|ui|{
+                        ui.selectable_value(&mut t.currency,"gold".into(),"Gold");
+                        ui.selectable_value(&mut t.currency,"orb".into(),"Gems");
+                    });
+                field(ui,"Listing #",&mut t.id);
+                if t.kind=="item" {field(ui,"Item ID",&mut t.item_id);}
+                field(ui,"Max unit price",&mut t.max_price);
+                if ui.add_enabled(cfg.snatch_targets.len()<40,
+                    egui::Button::new("Arm Snatch")).clicked() {
+                    let mut target=t.clone();
+                    target.arm();
+                    if target.id==0 || target.max_price==0 ||
+                        (target.kind=="item" && target.item_id==0) {
+                        app.market_notices[index]=
+                            "Enter a real listing ID, item ID (for items), and maximum price.".into();
+                    } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
+                        app.market_notices[index]=
+                            "That listing is already in the Snatch queue.".into();
+                    } else {
+                        cfg.snatch_targets.push(target);
+                        app.market_notices[index]="Snatch armed. Saving queue for this account.".into();
+                        save=true;
+                    }
+                }
+            });
+            let mut remove=None;
+            for (i,t) in cfg.snatch_targets.iter().enumerate() {
+                let seen=live_status.as_ref().and_then(|st|
+                    st.snatches.iter().find(|row|row.id==t.id));
+                egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
+                    .inner_margin(egui::Margin::symmetric(9,6)).show(ui,|ui|{
+                    ui.horizontal_wrapped(|ui|{
+                        ui.label(RichText::new(format!(
+                            "#{} · {} · {} · max {} / unit",
+                            t.id,if t.kind=="pokemon"{"Pokémon"}else{"Item"},
+                            if t.currency=="orb"{"Gems"}else{"Gold"},t.max_price
+                        )).size(11.0).strong().color(TEXT));
+                        if ui.small_button("Cancel Snatch").clicked(){remove=Some(i);}
+                    });
+                    if let Some(s)=seen {
+                        ui.label(RichText::new(format!(
+                            "{} · {} attempt(s) · {} units quoted",
+                            s.phase,s.attempts,s.quantity
+                        )).size(10.0).color(if s.phase.contains("burst"){GOOD}else{MUTED}));
+                    } else {
+                        ui.label(RichText::new("Queue saved · waiting for native session and exact market quote")
+                            .size(10.0).color(DIM));
+                    }
+                });
+            }
+            if let Some(i)=remove {
+                cfg.snatch_targets.remove(i);
+                app.market_notices[index]="Snatch cancelled. Saving queue.".into();
+                save=true;
+            }
+            if let Some(status)=live_status.as_ref() {
+                ui.label(RichText::new(format!("Snatch attempts sent: {}",status.snatch_sent))
+                    .size(10.0).color(MUTED));
+                let automatic=status.snatches.iter().filter(|s|!s.manual)
+                    .take(20).collect::<Vec<_>>();
+                let discovery=status.held_offers.iter().filter(|row|
+                    !cfg.snatch_targets.iter().any(|t|t.id==row.id))
+                    .take(30).collect::<Vec<_>>();
+                if !discovery.is_empty() {
+                    ui.label(RichText::new("Held offers observed by native market scans")
+                        .strong().size(11.0).color(TEXT));
+                    ui.label(RichText::new(
+                        "Snatch arms the exact listing at its observed maximum unit price. No purchase is made until native market buying is enabled."
+                    ).size(10.0).color(DIM));
+                    let mut arm_from_scan=None;
+                    for row in discovery {
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label(RichText::new(format!(
+                                "#{} · {} · {} {} /unit · {}x · {}",
+                                row.id,row.kind,row.price,row.currency,row.quantity,row.phase
+                            )).size(10.0).color(MUTED));
+                            if ui.add_enabled(cfg.snatch_targets.len()<40,
+                                egui::Button::new("Snatch")).clicked() {
+                                let mut target=crate::native_market::SnatchTarget {
+                                    id:row.id,kind:row.kind.clone(),currency:row.currency.clone(),
+                                    item_id:row.item_id,max_price:row.price,..Default::default()
+                                };
+                                target.arm();
+                                arm_from_scan=Some(target);
+                            }
+                        });
+                    }
+                    if let Some(target)=arm_from_scan {
+                        if !cfg.snatch_targets.iter().any(|t|t.id==target.id) &&
+                            cfg.snatch_targets.len()<40 {
+                            cfg.snatch_targets.push(target);
+                            app.market_notices[index]="Observed listing armed for Snatch. Saving account queue.".into();
+                            save=true;
+                        }
+                    }
+                }
+                if !automatic.is_empty() {
+                    ui.label(RichText::new("Rule-triggered held listings").strong()
+                        .size(11.0).color(TEXT));
+                    for row in automatic {
+                        ui.label(RichText::new(format!(
+                            "#{} · {} {} · {} · {} attempts",
+                            row.id,row.price,row.currency,row.phase,row.attempts
+                        )).size(10.0).color(MUTED));
+                    }
+                }
+            }
+        });
         ui.collapsing("Import existing Moth Watch rules",|ui|{
             ui.label(RichText::new(
                 "From a Firefox profile where Moth Watch is configured, copy localStorage.getItem('moth-pokeidle-market-bot-config-v1') and paste its JSON here. Import never enables native buying automatically."

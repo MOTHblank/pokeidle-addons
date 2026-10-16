@@ -518,7 +518,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
-                market.ingest(&welcome, Instant::now());
+                let initial_market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                market.ingest(&welcome, Instant::now(), &initial_market_cfg);
                 if let Some(catalog) = item_metadata.as_ref() {
                     restock.merge_item_metadata(catalog);
                 }
@@ -662,6 +663,21 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     }
                     // Rule buys share this authenticated game socket.
                     let market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                    // Snatch owns the four-second release lottery. Send up to
+                    // eight authorized maximum-quantity attempts per wake,
+                    // prioritizing each queued listing's first attempt. Exact
+                    // market.anuncio verifications never wait behind ordinary
+                    // rule-scanning, and share the same authenticated socket.
+                    let snatch_payloads=market.snatch_actions(&market_cfg,Instant::now());
+                    let mut snatch_send_failed=false;
+                    for payload in snatch_payloads {
+                        if socket.send(Message::Text(payload.to_string().into())).is_err() {
+                            market.send_failed();
+                            snatch_send_failed=true;
+                            break;
+                        }
+                    }
+                    if snatch_send_failed {break;}
                     if let Some(payload)=market.next(&market_cfg,Instant::now()) {
                         if socket.send(Message::Text(payload.to_string().into())).is_err() {
                             market.send_failed();
@@ -713,7 +729,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             gameplay.ingest(text.as_ref(), Instant::now());
                             let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
-                            market.ingest(text.as_ref(), Instant::now());
+                            let market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                            market.ingest(text.as_ref(), Instant::now(), &market_cfg);
                             hunt_intel.ingest(text.as_ref(), Instant::now());
                             history_recorder.ingest(text.as_ref(),hunt_intel.view.hunt_slug.as_deref());
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
