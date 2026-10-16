@@ -78,6 +78,35 @@ fn upstream_item_url(id: u64) -> Option<String> {
     trusted_url(&url)
 }
 
+// The upstream snapshot contains actual file blobs for a small subset of the
+// 419 public item paths. Use its exact tree manifest for fallback URLs; never
+// construct arbitrary raw.githubusercontent.com paths from untrusted metadata.
+fn upstream_available_paths() -> &'static BTreeSet<String> {
+    static FILES: OnceLock<BTreeSet<String>> = OnceLock::new();
+    FILES.get_or_init(|| {
+        let manifest: serde_json::Value = serde_json::from_str(
+            include_str!("../assets/visual/upstream-available-images.json")
+        ).unwrap_or_default();
+        manifest.get("files").and_then(serde_json::Value::as_array)
+            .into_iter().flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|path| path.starts_with("assets/site/assets/") ||
+                path.starts_with("img/"))
+            .filter(|path| !path.contains("..") &&
+                !path.contains('\\') && !path.contains('?') && !path.contains('#') &&
+                (path.ends_with(".png") || path.ends_with(".gif")))
+            .map(str::to_owned).collect()
+    })
+}
+
+fn snapshot_asset_url(game_url: &str) -> Option<String> {
+    let path = game_url.strip_prefix("https://pokeidle.io/")?;
+    if !upstream_available_paths().contains(path) { return None; }
+    Some(format!(
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/{path}"
+    ))
+}
+
 fn asset_url(kind: Kind, id: u64) -> Option<String> {
     let fixed = match (kind, id) {
         (Kind::Ball, 1) => Some("/assets/site/assets/ui/ball-poke.png"),
@@ -109,6 +138,11 @@ fn image_urls(kind: Kind, id: u64, icon_hint: Option<&str>) -> Vec<String> {
         } else { None };
         if let Some(alt) = alternative {
             if !urls.contains(&alt) { urls.push(alt); }
+        }
+        // Game CDN first; fall back to the exact file exported in upstream.
+        // This also covers broken/removed public URLs without guessing art.
+        if let Some(snapshot) = snapshot_asset_url(&source) {
+            if !urls.contains(&snapshot) { urls.push(snapshot); }
         }
     }
     urls
@@ -264,6 +298,20 @@ mod tests {
         assert!(trusted_url("https://pokeidle.io/assets/a.png?token=a").is_none());
         assert_eq!(trusted_url("/assets/a.png").unwrap(),
             "https://pokeidle.io/assets/a.png");
+    }
+    #[test]
+    fn only_verified_upstream_paths_have_mirror_fallbacks() {
+        assert!(upstream_available_paths().len() >= 80);
+        let url = "https://pokeidle.io/assets/site/assets/ui/ball-poke.png";
+        let mirror = snapshot_asset_url(url).unwrap();
+        assert_eq!(mirror,
+            "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/assets/site/assets/ui/ball-poke.png");
+        assert!(snapshot_asset_url("https://pokeidle.io/assets/unknown.png").is_none());
+        assert!(snapshot_asset_url("https://evil.example/pokemon.png").is_none());
+        let ball = image_urls(Kind::Ball, 1, None);
+        assert_eq!(ball.first().map(String::as_str), Some(url));
+        assert_eq!(ball.last().map(String::as_str), Some(mirror.as_str()));
+        assert!(image_urls(Kind::Pokemon, 999999, None).is_empty());
     }
     #[test]
     fn known_asset_paths_are_versioned_explicitly() {
