@@ -3024,7 +3024,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if app.hunt_reference_busy {
         ui.label(RichText::new(tr("Loading species and move reference..."))
             .size(10.0).color(MUTED));
-    } else if let Some(error) = app.hunt_reference_error.as_deref() {
+    } else if let Some(error) = app.hunt_reference_error.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(format!("{}: {}",
                 tr("Guide reference unavailable"), error)).size(10.0).color(WARN));
@@ -3153,9 +3153,11 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .filter(|r| !r.is_empty()).collect::<Vec<_>>();
         regions.sort_unstable();
         regions.dedup();
+        let selected_region = if app.hunt_region.is_empty() {
+            tr("All regions").to_owned()
+        } else { app.hunt_region.clone() };
         egui::ComboBox::from_id_salt("hunt-region")
-            .selected_text(if app.hunt_region.is_empty() {
-                tr("All regions") } else { &app.hunt_region })
+            .selected_text(selected_region)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut app.hunt_region, String::new(), tr("All regions"));
                 for region in regions {
@@ -3188,7 +3190,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Compute forecasts once per visible hunt rather than recalculating the
     // combat simulator O(n log n) times during every sort comparison.
     let reference = app.hunt_reference.as_deref();
-    let scored = |h: &'_ native_hunts::HuntEntry| {
+    let mut ranked: Vec<_> = rows.drain(..).map(|h| {
         let forecast = reference.and_then(|refdata| native_atlas::estimate(&hunts,h,refdata));
         let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
             .unwrap_or((0.0,0.0));
@@ -3206,8 +3208,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
         };
         (h, forecast, value)
-    };
-    let mut ranked: Vec<_> = rows.drain(..).map(scored).collect();
+    }).collect();
     ranked.sort_by(|a,b| b.2.total_cmp(&a.2)
         .then_with(|| a.0.level.cmp(&b.0.level))
         .then_with(|| a.0.name.cmp(&b.0.name)));
