@@ -286,6 +286,7 @@ pub struct MonitorHandle {
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
     pace: Arc<AtomicU8>,
 }
 
@@ -296,6 +297,8 @@ impl MonitorHandle {
         let commands = Arc::new(Mutex::new(CommandMailbox::default()));
         let close_request = Arc::new(Mutex::new(None));
         let close_worker = Arc::clone(&close_request);
+        let bootstrap_request = Arc::new(Mutex::new(None));
+        let bootstrap_worker = Arc::clone(&bootstrap_request);
         let pace = Arc::new(AtomicU8::new(MonitorPace::Compact as u8));
         let pace_worker = Arc::clone(&pace);
         let shared = Arc::clone(&health);
@@ -303,10 +306,10 @@ impl MonitorHandle {
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, pace_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, pace_worker);
         });
 
-        Self { health, stop, commands, close_request, pace }
+        Self { health, stop, commands, close_request, bootstrap_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -354,9 +357,32 @@ impl MonitorHandle {
             .map_err(|error| format!("BiDi browser.close did not respond: {error}"))?
     }
 
+    /// Request a verified game WebSocket hello and Firefox's cookie jar through
+    /// the *existing* BiDi session. Nothing is written to disk or to logs.
+    /// The caller must keep this result in memory and hand it to a trusted local
+    /// native session; cookie values and hello may contain session credentials.
+    pub fn native_bootstrap(&self, timeout: Duration) -> Result<Value, String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox monitor has stopped".to_owned());
+        }
+        let (reply, received) = mpsc::channel();
+        let mut pending = self.bootstrap_request.lock()
+            .map_err(|_| "native bootstrap mailbox is unavailable".to_owned())?;
+        if pending.is_some() {
+            return Err("native bootstrap already pending".to_owned());
+        }
+        *pending = Some(reply);
+        drop(pending);
+        received.recv_timeout(timeout)
+            .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
+    }
+
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Ok(mut pending) = self.close_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.bootstrap_request.lock() {
             pending.take();
         }
         if let Ok(mut mailbox) = self.commands.lock() {
@@ -558,6 +584,7 @@ fn monitor_loop(
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
     pace: Arc<AtomicU8>,
 ) {
     let mut session: Option<BrowserSession> = None;
@@ -639,6 +666,17 @@ fn monitor_loop(
 
         if stop.load(Ordering::Relaxed) {
             break;
+        }
+        // One-shot handoff requests must use the monitor's existing BiDi
+        // connection. Firefox permits only one active session per profile.
+        let bootstrap_reply = bootstrap_request.lock().ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(reply) = bootstrap_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi session is not connected".to_owned()
+            ).and_then(read_native_bootstrap);
+            // Do not log bootstrap content: it may contain authentication secrets.
+            let _ = reply.send(result);
         }
         let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
         if let Some(reply) = reply {
@@ -834,6 +872,7 @@ fn monitor_loop(
         for _ in 0..(wait.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || bootstrap_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
                 || pace.load(Ordering::Relaxed) != active_pace as u8
                 || (session.is_some() && commands.lock()
                     .map(|queue| !queue.pending.is_empty()).unwrap_or(false))
@@ -850,6 +889,49 @@ fn monitor_loop(
 #[derive(Clone, Copy)]
 struct Heartbeat {
     logged_in: bool,
+}
+
+/// Capture only the bridge-confirmed socket's initial hello. The storage
+/// command returns HttpOnly cookies (page JavaScript cannot access those).
+/// All sensitive results stay inside this in-process handoff.
+fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
+    let context = session.game_context.clone()
+        .ok_or_else(|| "game context has not been discovered yet".to_owned())?;
+    let id = session.next_id;
+    session.next_id += 1;
+    let frame = send_and_wait(
+        &mut session.socket, id,
+        json!({
+            "id": id, "method": "script.evaluate",
+            "params": {
+                "expression": "JSON.stringify(window.__mothControllerBridgeV1?.sessionBootstrap?.() || null)",
+                "target": { "context": context },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+    let raw = frame.get("result")
+        .and_then(|value| value.get("result"))
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Bridge did not provide a native handoff snapshot".to_owned())?;
+    let bootstrap: Value = serde_json::from_str(raw)
+        .map_err(|_| "Bridge returned invalid handoff metadata".to_owned())?;
+    if bootstrap.is_null() {
+        return Err("Upgrade the experimental Controller Bridge and reload a logged-in game tab".into());
+    }
+    let cookie_id = session.next_id;
+    session.next_id += 1;
+    let cookies = send_and_wait(&mut session.socket, cookie_id, json!({
+        "id": cookie_id,
+        "method": "storage.getCookies",
+        "params": { "partition": { "type": "context", "context": context } }
+    }))?;
+    let entries = cookies.get("result")
+        .and_then(|result| result.get("cookies"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
+    Ok(json!({ "bootstrap": bootstrap, "cookies": entries }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
