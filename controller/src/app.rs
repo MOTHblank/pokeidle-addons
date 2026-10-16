@@ -4129,108 +4129,205 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         }
     )).size(10.0).color(WARN));
     ui.add_space(7.0);
-
-    egui::ScrollArea::vertical().id_salt("atlas-hunt-results")
-        .max_height(ui.available_height().max(240.0)).show(ui, |ui| {
-            for (index, (h, forecast, value, measured)) in ranked.iter().take(200).enumerate() {
+    const PAGE_SIZE: usize = 30;
+    let pages = ranked.len().div_ceil(PAGE_SIZE).max(1);
+    app.hunt_page = app.hunt_page.min(pages - 1);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("{} {} · {}/{}",
+            ranked.len(), tr("matching hunts"), app.hunt_page + 1, pages))
+            .size(10.0).color(MUTED));
+        if ui.add_enabled(app.hunt_page > 0, egui::Button::new(tr("Previous"))).clicked() {
+            app.hunt_page -= 1;
+        }
+        if ui.add_enabled(app.hunt_page + 1 < pages, egui::Button::new(tr("Next"))).clicked() {
+            app.hunt_page += 1;
+        }
+    });
+    let start = app.hunt_page * PAGE_SIZE;
+    let mut command_error = None;
+    egui::ScrollArea::vertical()
+        .id_salt(("atlas-hunt-results", index))
+        .max_height(ui.available_height().max(220.0))
+        .show(ui, |ui| {
+            for (offset, (h, forecast, value, source)) in
+                ranked.iter().skip(start).take(PAGE_SIZE).enumerate()
+            {
                 let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
                 let pending = hunts.pending_hunt_slug.as_deref() == Some(h.slug.as_str());
-                egui::Frame::new().fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
-                    .stroke(Stroke::new(1.0, if current { ACCENT } else { BORDER }))
-                    .corner_radius(7.0).inner_margin(egui::Margin::symmetric(11, 9))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("{:02}",index+1))
-                                .color(MUTED).size(10.0));
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&h.name).strong().size(12.0).color(TEXT));
-                                ui.label(RichText::new(format!(
-                                    "{} · {} · Lv. {}",
-                                    h.area, h.region, h.level
-                                )).size(10.0).color(DIM));
-                            });
-                            let species = h.species.iter()
-                                .map(|sp|format!("{} {:.0}%",
-                                    reference.and_then(|r|r.species.get(&sp.id))
-                                        .map(|s|s.name.clone())
-                                        .unwrap_or_else(||format!("#{}",sp.id)),
-                                    if h.species.iter().map(|p|p.weight).sum::<f64>() > 0.0 {
-                                        sp.weight*100.0/h.species.iter().map(|p|p.weight).sum::<f64>()
-                                    }else{0.0}))
-                                .collect::<Vec<_>>().join(" · ");
-                            ui.label(RichText::new(format!("{} {}",h.species.len(),tr("species")))
-                                .size(10.0).color(DIM)).on_hover_text(
-                                    if species.is_empty() { tr("No species weights reported").to_owned() } else {species}
-                                );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if current {
-                                    ui.label(RichText::new(tr("CURRENT")).color(GOOD));
-                                } else if pending {
-                                    ui.label(RichText::new(tr("Pending")).color(WARN));
-                                } else if ui.small_button(tr("Hunt")).clicked() {
-                                    if let Err(error) = native.send_command(GameCommand::Hunt(h.slug.clone())) {
-                                        crate::logging::warn(&format!("Hunt Atlas command rejected: {error}"));
-                                    }
-                                }
+                // The slug scopes both expander state and row identity when
+                // sorting/filtering/refreshing moves a row to another position.
+                ui.push_id(&h.slug, |ui| {
+                    egui::Frame::new()
+                        .fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
+                        .stroke(Stroke::new(1.0, if current { ACCENT } else { BORDER }))
+                        .corner_radius(7.0)
+                        .inner_margin(egui::Margin::symmetric(11, 9))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(format!("{:03}",start + offset + 1))
+                                    .size(10.0).color(DIM));
                                 ui.vertical(|ui| {
-                                    let show_value = *measured || forecast.is_some() || kills_per_hour > 0.0;
-                                    ui.label(RichText::new(if show_value {
-                                        format_hunt_amount(*value)
-                                    } else { "—".into() })
-                                        .strong().color(if current { GOOD } else { TEXT }))
-                                        .on_hover_text(if *measured {
-                                            tr("Actual observed rate during current hunt").to_owned()
-                                        } else if let Some(forecast) = forecast {
-                                            format!(
-                                                "{} · {:.0} kills/h · {:.1}s/kill · {:.0}% species coverage",
-                                                if forecast.calibrated { "Calibrated guide model" }
-                                                else { "Uncalibrated guide model" },
-                                                forecast.kills_h, forecast.seconds_per_kill,
-                                                forecast.coverage*100.0
-                                            )
-                                        } else {
-                                            tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained.").into()
-                                        });
-                                    if *measured {
-                                        ui.label(RichText::new(tr("Measured")).size(9.0).color(GOOD));
-                                    } else if let Some(forecast) = forecast {
-                                        ui.label(RichText::new(tr(if forecast.calibrated {
-                                            "Calibrated estimate"
-                                        } else { "Experimental estimate" }))
-                                            .size(9.0).color(if forecast.calibrated { WARN } else { MUTED }));
+                                    ui.label(RichText::new(&h.name).strong().size(12.0).color(TEXT));
+                                    ui.label(RichText::new(format!(
+                                        "{} · {} · Lv {} · {} {}",
+                                        h.area, h.region, h.level, h.species.len(), tr("species")
+                                    )).size(10.0).color(DIM));
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if current {
+                                        ui.label(RichText::new(tr("CURRENT")).color(GOOD));
+                                    } else if pending {
+                                        ui.label(RichText::new(tr("Pending")).color(WARN));
+                                    } else if ui.add_enabled(online,
+                                        egui::Button::new(tr("Hunt"))).clicked()
+                                    {
+                                        if let Err(error) = native.send_command(
+                                            GameCommand::Hunt(h.slug.clone()))
+                                        {
+                                            command_error = Some(error);
+                                        }
                                     }
+                                    ui.vertical(|ui| {
+                                        let displayed = value.map(format_hunt_amount)
+                                            .unwrap_or_else(||"—".into());
+                                        ui.label(RichText::new(format!("{displayed} / h"))
+                                            .strong()
+                                            .color(if current && *source == HuntRateOrigin::Measured {
+                                                GOOD
+                                            } else { TEXT }))
+                                            .on_hover_text(match source {
+                                                HuntRateOrigin::Measured =>
+                                                    "Observed game receipts for this current hunt",
+                                                HuntRateOrigin::Model =>
+                                                    "Experimental combat estimate for this hunt",
+                                                HuntRateOrigin::Scenario =>
+                                                    "Conditional result at the currently observed kill pace",
+                                                HuntRateOrigin::Missing =>
+                                                    "No valid measurement or projection is available",
+                                            });
+                                        let (label, color) = match source {
+                                            HuntRateOrigin::Measured => (tr("Measured"), GOOD),
+                                            HuntRateOrigin::Model => (
+                                                if forecast.is_some_and(|f|f.calibrated) {
+                                                    tr("Calibrated estimate")
+                                                } else { tr("Experimental estimate") }, WARN),
+                                            HuntRateOrigin::Scenario => ("Pace scenario", MUTED),
+                                            HuntRateOrigin::Missing => ("Unavailable", DIM),
+                                        };
+                                        ui.label(RichText::new(label).size(9.0).color(color));
+                                    });
                                 });
                             });
-                        });
-                        // Composition comes from the logged-in account's
-                        // actual unlock catalog, enriched with read-only Atlas
-                        // species names and types when the guide is available.
-                        if !h.species.is_empty() {
-                            ui.collapsing(tr("Spawn composition"), |ui| {
-                                let sum = h.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
-                                for spawn in h.species.iter().take(40) {
-                                    let meta = reference.and_then(|r|r.species.get(&spawn.id));
-                                    let name = meta.map(|s|s.name.as_str()).unwrap_or("Unknown");
-                                    let types = meta.map(|s|s.types.join("/")).unwrap_or_default();
-                                    let pct = if sum>0.0 {100.0*spawn.weight/sum}else{0.0};
+                            ui.collapsing("Rates & explanation", |ui| {
+                                if let Some(f) = forecast {
+                                    ui.label(RichText::new(format!(
+                                        "Model · {:.1} kills/h · {:.2}s/kill · {:.0}% known species",
+                                        f.kills_h, f.seconds_per_kill, f.coverage*100.0
+                                    )).size(10.0).color(MUTED));
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new(format!(
-                                            "{} · #{} · {:.1}%",name,spawn.id,pct
-                                        )).size(10.0).color(TEXT));
-                                        if !types.is_empty() {
-                                            ui.label(RichText::new(types).size(10.0).color(DIM));
+                                        for (title, metric) in [
+                                            ("Trainer XP/h", f.trainer_xp_h),
+                                            ("Pokémon XP/h", f.pokemon_xp_h),
+                                            ("Gross gold/h (estimated)", f.gold_h)
+                                        ] {
+                                            ui.vertical(|ui| {
+                                                ui.label(RichText::new(title).size(9.0).color(DIM));
+                                                ui.label(RichText::new(format_hunt_amount(metric))
+                                                    .size(12.0).color(TEXT));
+                                            });
+                                            ui.add_space(12.0);
                                         }
                                     });
+                                    ui.label(RichText::new(if f.calibrated {
+                                        "Calibrated with current-hunt observed kills; different enemies can change combat speed."
+                                    } else {
+                                        "Uncalibrated combat approximation; not an observed rate or a guarantee."
+                                    }).size(10.0).color(WARN));
+                                    if current && online {
+                                        for (title, measured, valid, projected) in [
+                                            ("Trainer XP",m.trainer_xp_h,m.valid_trainer,f.trainer_xp_h),
+                                            ("Pokémon XP",m.pokemon_xp_h,m.valid_pokemon,f.pokemon_xp_h)
+                                        ] {
+                                            if valid && measured > 0.0 {
+                                                ui.label(RichText::new(format!(
+                                                    "{title}: measured {} / h vs modeled {} / h ({:.2}×)",
+                                                    format_hunt_amount(measured),
+                                                    format_hunt_amount(projected),
+                                                    projected/measured
+                                                )).size(10.0).color(
+                                                    if (projected/measured - 1.0).abs() >= 0.25 {
+                                                        WARN
+                                                    } else { MUTED }
+                                                ));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    ui.label(RichText::new(if app.hunt_reference_busy ||
+                                        app.hunt_forecast_pending.is_some() {
+                                        "Combat forecast calculating in background."
+                                    } else {
+                                        "No combat forecast: active Pokémon stats, coverage or guide may be unavailable."
+                                    }).size(10.0).color(MUTED));
+                                }
+                                if let Some(pace) = kills_per_hour {
+                                    if let Some((xp, base_gold)) =
+                                        native_hunts::atlas_pace_scenario(h, pace) {
+                                        ui.label(RichText::new(format!(
+                                            "Current-pace scenario ({:.1} kills/h): trainer {} / h · Pokémon {} / h · base gold {} / h",
+                                            pace,
+                                            format_hunt_amount(xp*trainer_factor),
+                                            format_hunt_amount(xp*pokemon_factor),
+                                            format_hunt_amount(base_gold)
+                                        )).size(10.0).color(MUTED))
+                                            .on_hover_text("Assumes identical kill speed at this destination; not a combat prediction.");
+                                    }
+                                }
+                                if current && m.valid_gold && online {
+                                    ui.label(RichText::new(format!(
+                                        "Measured net gold: {} / h (includes spending; not directly comparable to modeled gross gold)",
+                                        format_hunt_amount(m.gold_net_h)
+                                    )).size(10.0).color(MUTED));
                                 }
                             });
-                        }
-                    });
+                            if !h.species.is_empty() {
+                                ui.collapsing(tr("Spawn composition"), |ui| {
+                                    let total = h.species.iter()
+                                        .map(|spawn|spawn.weight.max(0.0)).sum::<f64>();
+                                    for spawn in h.species.iter().take(100) {
+                                        let meta = reference.and_then(|r|r.species.get(&spawn.id));
+                                        let name = meta.map(|s|s.name.as_str()).unwrap_or("Unknown");
+                                        let percent = if total>0.0 {
+                                            100.0*spawn.weight.max(0.0)/total
+                                        } else { 0.0 };
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(RichText::new(format!(
+                                                "{name} · #{} · {:.1}%",spawn.id,percent
+                                            )).size(10.0).color(TEXT));
+                                            if let Some(meta) = meta {
+                                                ui.label(RichText::new(meta.types.join(" / "))
+                                                    .size(10.0).color(DIM));
+                                            }
+                                        });
+                                    }
+                                    if h.species.len()>100 {
+                                        ui.label("Showing 100 species; filter the catalog for a narrower hunt.");
+                                    }
+                                });
+                            }
+                        });
+                });
                 ui.add_space(5.0);
             }
-            if ranked.len() > 200 {
-                ui.label(tr("Showing first 200 hunts; refine search or region."));
+            if ranked.is_empty() {
+                ui.label("No hunts match these filters. Clear filters to see the server catalog.");
             }
         });
+    if let Some(error) = command_error {
+        crate::logging::warn(&format!("Hunt Atlas command rejected: {error}"));
+        app.set_status(error, true);
+    }
+
 }
 
 /// At-a-glance card: keep the operational summary visible for every enabled
