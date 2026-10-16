@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::time::{Duration,Instant};
 use std::collections::BTreeMap;
 #[derive(Clone,Debug)]
-struct Order { kind:&'static str, id:u64, at:Instant, ack:bool }
+struct Order { kind:&'static str, at:Instant, ack:bool }
 struct Rule { kind:&'static str, id:u64, low:u64, target:u64 }
 pub struct Restock {
     enabled:bool,rules:Vec<Rule>,reserve:u64,
@@ -96,7 +96,7 @@ impl Restock {
             let qty=(rule.target-amount).min(5000)
                 .min(gold.saturating_sub(self.reserve)/price);
             if qty==0{continue;}
-            self.pending=Some(Order{kind:rule.kind,id:rule.id,at:now,ack:false});
+            self.pending=Some(Order{kind:rule.kind,at:now,ack:false});
             return Some(GameCommand::ShopBuy{kind:rule.kind.into(),id:rule.id,qty});
         }
         None
