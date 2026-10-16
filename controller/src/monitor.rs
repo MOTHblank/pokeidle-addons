@@ -1,7 +1,7 @@
 use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
@@ -437,6 +437,8 @@ struct BrowserSession {
     game_context: Option<String>,
     /// Top-level context id+URL fingerprint from the last full tab inspection.
     tab_signature: Vec<(String, String)>,
+    native_capture_installed: bool,
+    native_reloaded: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -920,7 +922,7 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
             "id": id,
             "method": "script.evaluate",
             "params": {
-                "expression": "JSON.stringify(window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
+                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.twitch?.() || window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
                 "target": { "context": context.id },
                 "awaitPromise": false
             }
@@ -929,9 +931,10 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
             .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
         let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
         if !bootstrap.is_null() { return Ok(bootstrap); }
+        return reload_native_context_once(session, &context.id);
     }
     if saw_popout {
-        Err("Twitch IRC popout is still connecting or needs experimental Twitch Low Resource 3.2.1; retrying".to_owned())
+        Err("Twitch IRC authentication pending; trying again".to_owned())
     } else {
         Err("No managed authenticated Twitch chat popout yet; waiting for stream scanner or Twitch sign-in".to_owned())
     }
@@ -950,7 +953,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         json!({
             "id": id, "method": "script.evaluate",
             "params": {
-                "expression": "JSON.stringify(window.__mothControllerBridgeV1?.sessionBootstrap?.() || null)",
+                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.game?.() || window.__mothControllerBridgeV1?.sessionBootstrap?.() || null)",
                 "target": { "context": context },
                 "awaitPromise": false
             }
@@ -964,7 +967,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     let bootstrap: Value = serde_json::from_str(raw)
         .map_err(|_| "Bridge returned invalid handoff metadata".to_owned())?;
     if bootstrap.is_null() {
-        return Err("Upgrade the experimental Controller Bridge and reload a logged-in game tab".into());
+        return reload_native_context_once(session, &context);
     }
     let cookie_id = session.next_id;
     session.next_id += 1;
@@ -1031,6 +1034,83 @@ fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
     }
 }
 
+// BiDi-owned instrumentation makes native auth work for every Firefox profile,
+// even if that profile still has production versions of our userscripts.
+// Loaded by Firefox before the document scripts on its *next* navigation.
+// Never exposes tokens in DOM attributes, logs, localStorage or GM storage.
+const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
+    try {
+        if (!/(^|\.)pokeidle\.io$|(^|\.)twitch\.tv$/.test(location.hostname)) return;
+        if (window.__mothNativeCaptureV1) return;
+        const Ws = window.WebSocket;
+        if (!Ws || !Ws.prototype || typeof Ws.prototype.send !== 'function') return;
+        const send = Ws.prototype.send;
+        const hellos = new WeakMap();
+        const auths = new WeakMap();
+        let gameSocket = null;
+        let twitchSocket = null;
+        Object.defineProperty(window, '__mothNativeCaptureV1', {
+            configurable: false, value: Object.freeze({
+                game() {
+                    const socket = window.__mothControllerBridgeV1?.socket?.() || gameSocket;
+                    const hello = socket && hellos.get(socket);
+                    return socket?.readyState === Ws.OPEN && hello
+                        ? { url: socket.url, hello } : null;
+                },
+                twitch() {
+                    const socket = twitchSocket;
+                    const auth = socket && auths.get(socket);
+                    return socket?.readyState === Ws.OPEN && auth?.pass && auth?.nick
+                        ? { url: socket.url, ...auth } : null;
+                }
+            })
+        });
+        Ws.prototype.send = function(data) {
+            try {
+                if (typeof data === 'string' && data.length < 32768) {
+                    const host = new URL(this.url).hostname.toLowerCase();
+                    if (host === 'pokeidle.io' || host.endsWith('.pokeidle.io')) {
+                        const payload = JSON.parse(data);
+                        if (payload?.t === 'hello') {
+                            hellos.set(this, data);
+                            gameSocket = this;
+                        }
+                    } else if (host === 'irc-ws.chat.twitch.tv') {
+                        const auth = auths.get(this) || { pass: '', nick: '', cap: '' };
+                        for (const line of data.split(/\r\n|\r|\n/)) {
+                            if (/^PASS\s+oauth:[a-z0-9_-]+$/i.test(line))
+                                auth.pass = line.trim();
+                            if (/^NICK\s+[a-z0-9_]+$/i.test(line))
+                                auth.nick = line.trim();
+                            if (/^CAP\s+REQ\s+:[a-z0-9.\/\s_-]+$/i.test(line))
+                                auth.cap = line.trim();
+                        }
+                        auths.set(this, auth);
+                        twitchSocket = this;
+                    }
+                }
+            } catch (_) {}
+            return Reflect.apply(send, this, arguments);
+        };
+    } catch (_) {}
+}"#;
+
+fn reload_native_context_once(session: &mut BrowserSession, id: &str) -> Result<(), String> {
+    if !session.native_capture_installed {
+        return Err("BiDi could not install native authentication instrumentation".to_owned());
+    }
+    if !session.native_reloaded.insert(id.to_owned()) {
+        return Err("Waiting for authenticated WebSocket after one native instrumentation reload".to_owned());
+    }
+    let command_id = session.next_id;
+    session.next_id += 1;
+    send_and_wait(&mut session.socket, command_id, json!({
+        "id": command_id, "method": "browsingContext.reload",
+        "params": { "context": id, "wait": "none" }
+    }))?;
+    Err("Native authentication hook installed; reloaded this tab once to capture its WebSocket".into())
+}
+
 fn open_session(port: u16) -> Result<BrowserSession, String> {
     // tungstenite::connect performs the WebSocket handshake *before* callers
     // can set I/O timeouts. A stalled Firefox listener could otherwise park
@@ -1070,11 +1150,24 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         return Err(error);
     }
 
+    // Install before the next game/Twitch navigation. This runs in the page
+    // realm and observes the actual outgoing handshake, independent of the
+    // per-profile Violentmonkey extension version.
+    let native_capture_installed = send_and_wait(&mut socket, 2, json!({
+        "id": 2,
+        "method": "script.addPreloadScript",
+        "params": { "functionDeclaration": NATIVE_CAPTURE_PRELOAD }
+    })).is_ok();
+    if !native_capture_installed {
+        logging::warn("Firefox BiDi native authentication preload unavailable; bridge fallback required");
+    }
     Ok(BrowserSession {
         socket,
-        next_id: 2,
+        next_id: 3,
         game_context: None,
         tab_signature: Vec::new(),
+        native_capture_installed,
+        native_reloaded: BTreeSet::new(),
     })
 }
 
