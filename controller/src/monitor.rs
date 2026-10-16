@@ -1056,7 +1056,23 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(Value::as_array)
         .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
     let twitch = read_twitch_bootstrap(session)?;
-    Ok(json!({ "bootstrap": bootstrap, "cookies": entries, "twitch": twitch }))
+    // Migrate existing Auto Catch preferences without changing them. The
+    // native engine must not silently enable ball spending when the browser
+    // addon was disabled. Only settings, never authentication data.
+    let settings_id = session.next_id;
+    session.next_id += 1;
+    let settings_response = send_and_wait(&mut session.socket, settings_id, json!({
+        "id": settings_id, "method": "script.evaluate",
+        "params": {
+            "expression": "JSON.stringify((() => { try { return JSON.parse(localStorage.getItem('moth-pokeidle-autocatch-v4') || '{}'); } catch (_) { return {}; } })())",
+            "target": { "context": context }, "awaitPromise": false
+        }
+    }));
+    let autocatch = settings_response.ok()
+        .and_then(|frame| frame.get("result")?.get("result")?.get("value")?
+            .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
+    Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
+        "twitch": twitch, "autocatch": autocatch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
