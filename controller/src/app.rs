@@ -3097,10 +3097,8 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     ).truncate()).on_hover_text(error);
                 }
             }
-             });
         });
 }
-
 
 fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     let profile = app.games[index].profile;
