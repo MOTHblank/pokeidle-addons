@@ -273,6 +273,29 @@ fn draw_hunt_row(
                             name,spawn.id,pct.map(|v|format!("{v:.1}%"))
                                 .unwrap_or_else(||"weight unavailable".into())
                         )).size(10.0).color(TEXT));
+                        if let Some(species)=species {
+                            if !species.drops.is_empty() {
+                                ui.push_id(spawn.id,|ui|{
+                                    ui.collapsing("Guide item-drop probabilities",|ui|{
+                                        for drop in species.drops.iter().take(12) {
+                                            let item=drop.item_id.map(|id|format!("#{id}"))
+                                                .unwrap_or_else(||"unknown item".into());
+                                            ui.label(format!(
+                                                "Item {} · {:.3}% per eligible kill · {:.0}–{:.0} units · guide value {:.0}/unit",
+                                                item,drop.chance_pct,drop.minimum,
+                                                drop.maximum,drop.guide_price
+                                            ));
+                                        }
+                                        if species.drops.len()>12 {
+                                            ui.label("Only the first 12 guide drops shown.");
+                                        }
+                                        ui.label(RichText::new(
+                                            "Public guide probabilities and reference prices only; not observed drop rates or live market quotes."
+                                        ).size(10.0).color(MUTED));
+                                    });
+                                });
+                            }
+                        }
                     }
                     if hunt.species.len()>60 {ui.label("Only the first 60 species shown.");}
                     match result.source {
