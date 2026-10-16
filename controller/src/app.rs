@@ -299,6 +299,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Automation" => "Automação",
         "Open Automation" => "Abrir automação",
         "Server automation" => "Automação do servidor",
+        "In-game nickname" => "Apelido no jogo",
+        "Field map" => "Mapa de combate",
         "in stock" => "em estoque",
         "No verified price" => "Preço não verificado",
         "No valid restock rules configured" => "Nenhuma regra válida de reposição configurada",
@@ -3062,7 +3064,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Inventory;
             }
 
-            if sidebar_button(ui, &format!("⚙  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
+            if sidebar_button(ui, &format!("⚡  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
                 app.panel_tab = PanelTab::Automation;
             }
 
@@ -4641,6 +4643,8 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             ui.columns(3, |cols| {
                 detail_stat_line(&mut cols[0], tr("Hunt"),
                     if view.in_center { tr("Pokémon Center") } else { hunt_name });
+                detail_stat_line(&mut cols[0], tr("In-game nickname"),
+                    view.account_nick.as_deref().unwrap_or("—"));
                 detail_stat_line(&mut cols[0], tr("Trainer level"),
                     &view.trainer_level.map(|n| n.to_string()).unwrap_or_else(|| "—".into()));
                 detail_stat_line(&mut cols[0], tr("Trainer XP"),
@@ -4666,6 +4670,10 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 Some(hunt.slug.as_str()) == view.hunt_slug.as_deref()) {
                 ui.label(RichText::new(format!("{} · {} · Lv {} · {} spawn slots",
                     hunt.area, hunt.region, hunt.level, hunt.total_spawns))
+                    .size(10.0).color(DIM));
+            }
+            if let Some(map) = view.field_map.as_deref() {
+                ui.label(RichText::new(format!("{}: {}",tr("Field map"),map))
                     .size(10.0).color(DIM));
             }
             if let Some(wild) = view.wild.as_ref() {
