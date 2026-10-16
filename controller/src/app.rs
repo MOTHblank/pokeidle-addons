@@ -1894,12 +1894,12 @@ impl ControllerApp {
             };
 
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
-            // Mark fully verified profiles automatically, without treating
-            // an absent script marker as evidence of an installation.
-            if !setup_complete && vm_installed {
+            // Native authentication is sufficient to finish onboarding; userscripts
+            // and Violentmonkey are optional browser compatibility tools.
+            if !setup_complete {
                 let health = self.games[index].health();
-                if health.telemetry_is_fresh() && health.logged_in
-                    && health.addon_ok > 0 && health.addon_missing.is_empty()
+                if (health.telemetry_is_fresh() && health.logged_in)
+                    || self.games[index].native.is_some()
                 {
                     match accounts::complete_setup(profile) {
                         Ok(()) => setup_complete = true,
@@ -6221,7 +6221,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     };
 
                                     status_chip(ui, "Firefox", profile_label, setup.profile_ready);
-                                    let vm_chip = status_chip(ui, tr("Violentmonkey"), vm_label, setup.violentmonkey_installed);
+                                    let vm_chip = status_chip(ui, "Violentmonkey (optional)", vm_label, true);
                                     if let Some(error) = &setup.check_error {
                                         vm_chip.on_hover_text(error.as_str());
                                     }
@@ -6261,27 +6261,20 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                 .size(10.0).color(MUTED));
                                             ui.horizontal_wrapped(|ui| {
                                                 status_chip(ui, tr("Firefox profile created"), if setup.profile_ready { "✓" } else { "…" }, setup.profile_ready);
-                                                status_chip(ui, tr("Violentmonkey installed"), if setup.violentmonkey_installed { "✓" } else { "…" }, setup.violentmonkey_installed);
+                                                // Browser userscript managers are entirely optional for native sessions.
                                                 let verified = running && health.telemetry_is_fresh();
                                                 status_chip(ui, tr("Game signed in"), if verified && health.logged_in { "✓" } else { "…" }, verified && health.logged_in);
                                                 let script_count = format!("{} {}", health.addon_ok, tr("detected"));
-                                                status_chip(ui, tr("Scripts detected"),
-                                                    if verified { script_count.as_str() } else { "—" },
-                                                    verified && health.addon_ok > 0 && health.addon_missing.is_empty());
+                                                // Script versions are shown only in the optional addon manager.
+                                                let _ = script_count;
                                             });
-                                            ui.label(RichText::new(tr("You can finish with only the addons you want. Unverified steps are not automatically considered complete."))
+                                            ui.label(RichText::new("Native sessions need no Violentmonkey or browser scripts. Optional scripts are managed separately.")
                                                 .size(9.0).color(DIM));
                                             ui.horizontal_wrapped(|ui| {
-                                                if !setup.violentmonkey_installed {
-                                                    if ui.button(tr("Install Violentmonkey")).clicked() {
-                                                        app.profile_action(profile, ProfileAction::InstallViolentmonkey);
-                                                    }
-                                                } else {
-                                                    if ui.button(tr("Manage Addons")).clicked() {
-                                                        app.open_addon_manager(profile);
-                                                    }
+                                                if ui.button("Optional browser scripts").clicked() {
+                                                    app.open_addon_manager(profile);
                                                 }
-                                                if ui.add_enabled(setup.profile_ready && setup.violentmonkey_installed,
+                                                if ui.add_enabled(setup.profile_ready,
                                                     egui::Button::new(tr("Finish setup"))).clicked()
                                                 {
                                                     match accounts::complete_setup(profile) {
@@ -6307,7 +6300,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     if ui.button(tr("Manage Addons")).clicked() {
                                         app.addon_manager_open[index] = !app.addon_manager_open[index];
                                     }
-                                    if attention > 0 {
+                                    if attention > 0 && setup.violentmonkey_installed {
                                         ui.colored_label(WARN, format!("{attention} {}",
                                             tr(if attention == 1 { "addon needs attention" } else { "addons need attention" })));
                                     }
@@ -6321,7 +6314,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         .inner_margin(12.0)
                                         .show(ui, |ui| {
                                             ui.horizontal_wrapped(|ui| {
-                                                ui.label(RichText::new(tr("Manage Addons"))
+                                                ui.label(RichText::new("Optional browser scripts (Premium)")
                                                     .size(13.0).strong().color(TEXT));
                                                 if ui.add_enabled(!remote_addons.checking,
                                                     egui::Button::new(tr("Check now"))).clicked()
@@ -6333,6 +6326,12 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                     ui.label(tr("Checking for updates…"));
                                                 }
                                             });
+                                            if !setup.violentmonkey_installed {
+                                                ui.label("Violentmonkey is optional; only install it to use browser scripts.");
+                                                if ui.button(tr("Install Violentmonkey")).clicked() {
+                                                    app.profile_action(profile, ProfileAction::InstallViolentmonkey);
+                                                }
+                                            }
                                             if !running || !health.telemetry_is_fresh() {
                                                 ui.label(RichText::new(tr("Live addon status requires the game to be running and monitored."))
                                                     .size(10.0).color(DIM));
@@ -6412,7 +6411,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                     app.start_addon_install(profile, Some(selected));
                                                 }
                                                 if ui.add_enabled(setup.violentmonkey_installed && installer_visible && !app.addon_install_busy[index],
-                                                    egui::Button::new(tr("Install all (first setup)"))).clicked()
+                                                    egui::Button::new("Install all optional scripts")).clicked()
                                                 {
                                                     app.start_addon_install(profile, None);
                                                 }
