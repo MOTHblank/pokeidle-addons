@@ -3,6 +3,7 @@ use crate::config::{AccountConfig, Config, GameProfile};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
+use crate::native_background::NativeSession;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -643,6 +644,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "ERROR" => "ERRO",
         "LANGUAGE" => "IDIOMA",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
+        "Try native WS" => "Testar WS nativo",
+        "Reading native handshake…" => "Lendo handshake nativo…",
+        "Native WS experiment · no browser userscripts" => "WS nativo experimental · userscripts inativos",
+        "EXPERIMENT: closes Firefox, loses Auto Catch/Twitch/userscripts; recovers Firefox if the initial Rust handshake fails." =>
+            "EXPERIMENTO: fecha Firefox, desativa Auto Catch/Twitch/userscripts; volta ao Firefox se o handshake Rust inicial falhar.",
         "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
         _ => en,
     }
@@ -662,6 +668,7 @@ const BAD: Color32 = Color32::from_rgb(235, 91, 91);
 
 struct GameSlot {
     profile: GameProfile,
+    native: Option<NativeSession>,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
@@ -672,6 +679,7 @@ impl GameSlot {
     fn new(profile: GameProfile) -> Self {
         Self {
             profile,
+            native: None,
             child: None,
             monitor: None,
             headless: true,
@@ -680,6 +688,7 @@ impl GameSlot {
     }
 
     fn is_running(&mut self) -> bool {
+        if self.native.is_some() { return true; }
         if let Some(child) = self.child.as_mut() {
             // On an OS inspection error, conservatively keep ownership rather
             // than offer a duplicate launch into a potentially locked profile.
@@ -698,6 +707,26 @@ impl GameSlot {
     }
 
     fn health(&self) -> Health {
+        if let Some(native) = self.native.as_ref() {
+            let state = native.snapshot();
+            let mut health = Health::default();
+            health.state = if state.phase == "Online" { "Running".into() }
+                else { state.phase.clone() };
+            health.activity = "Native background (experimental)".into();
+            health.game_ready = state.phase == "Online";
+            health.logged_in = state.phase == "Online";
+            health.hunt = state.hunt_slug.unwrap_or_default();
+            health.hunt_slug = health.hunt.clone();
+            health.player_level = state.trainer_level.unwrap_or_default();
+            health.player_total_xp = state.trainer_xp;
+            health.player_xp = state.trainer_xp.map(|xp| xp.to_string()).unwrap_or_default();
+            health.gold = state.gold.unwrap_or_default();
+            health.orbs = state.orbs.unwrap_or_default();
+            health.last_successful_probe_at = state.last_received;
+            health.last_heartbeat_at = state.last_received;
+            health.last_error = state.error;
+            return health;
+        }
         // The launcher process can exit while the exact-profile Firefox process
         // and its BiDi session remain alive. Preserve live monitoring in that case.
         if let Some(monitor) = self.monitor.as_ref() {
@@ -1111,7 +1140,15 @@ fn make_tray_icon() -> Result<tray_icon::Icon, String> {
         .map_err(|error| format!("could not create tray icon image: {error}"))
 }
 
+struct NativeHandoffEvent {
+    index: usize,
+    result: Result<serde_json::Value, String>,
+}
+
 pub struct ControllerApp {
+    native_handoff_tx: Sender<NativeHandoffEvent>,
+    native_handoff_rx: Receiver<NativeHandoffEvent>,
+    native_handoff_busy: [bool; 4],
     games: [GameSlot; 4],
     show_accounts: bool,
     accounts: [AccountConfig; 4],
@@ -1152,6 +1189,7 @@ impl ControllerApp {
         let update_status = update::start_update_check();
         let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
+        let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1165,6 +1203,9 @@ impl ControllerApp {
         };
 
         Self {
+            native_handoff_tx,
+            native_handoff_rx,
+            native_handoff_busy: [false; 4],
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
@@ -1296,6 +1337,58 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        // Finish BiDi capture on the UI thread. The authenticated bootstrap
+        // is never logged or written to a file.
+        while let Ok(event) = self.native_handoff_rx.try_recv() {
+            self.native_handoff_busy[event.index] = false;
+            let profile = GameProfile::from_index(event.index).expect("known slot");
+            match event.result {
+                Err(error) => self.set_status(
+                    format!("{}: native handoff unavailable: {error}", self.account_name(profile)), true
+                ),
+                Ok(bootstrap) => {
+                    // Never close Firefox without a usable authenticated hello
+                    // and cookies, or if the slot changed while capture ran.
+                    if self.games[event.index].native.is_some()
+                        || !self.games[event.index].is_running()
+                        || self.games[event.index].monitor.is_none()
+                    {
+                        self.set_status("Native handoff canceled: browser ownership changed", true);
+                        continue;
+                    }
+                    let validated = crate::native_background::validate_bootstrap(&bootstrap);
+                    if let Err(error) = validated {
+                        self.set_status(format!("Native handoff rejected: {error}"), true);
+                        continue;
+                    }
+                    if !self.stop_one(profile) { continue; }
+                    match NativeSession::start(bootstrap) {
+                        Ok(native) => {
+                            self.games[event.index].native = Some(native);
+                            self.set_status(format!(
+                                "{}: experimental native WebSocket connecting (Firefox closed)",
+                                self.account_name(profile)), false);
+                        }
+                        Err(error) => {
+                            self.set_status(format!("Native handoff failed: {error}; reopening Firefox"), true);
+                            self.launch_one_mode(profile, self.games[event.index].headless);
+                        }
+                    }
+                }
+            }
+        }
+        let mut recover = Vec::new();
+        for slot in &mut self.games {
+            if slot.native.as_ref().is_some_and(|session| session.snapshot().phase == "Failed") {
+                if let Some(session) = slot.native.take() { session.stop(); }
+                recover.push((slot.profile, slot.headless));
+            }
+        }
+        for (profile, headless) in recover {
+            self.set_status(format!(
+                "{} native WebSocket failed; returning to Firefox", self.account_name(profile)), true);
+            self.launch_one_mode(profile, headless);
+        }
         // Drain worker results on the UI thread. Never block egui on GitHub,
         // curl, or Firefox installer tabs.
         while let Ok(event) = self.addon_install_rx.try_recv() {
@@ -1465,6 +1558,33 @@ impl ControllerApp {
         }
     }
 
+    fn start_native_handoff(&mut self, profile: GameProfile) {
+        let index = profile.index();
+        if self.native_handoff_busy[index] { return; }
+        let Some(monitor) = self.games[index].monitor.clone() else {
+            self.set_status("Start a Firefox game session before testing native handoff", true);
+            return;
+        };
+        if !self.games[index].health().logged_in {
+            self.set_status("Log into PokéIdle before testing native handoff", true);
+            return;
+        }
+        self.native_handoff_busy[index] = true;
+        self.set_status(format!("{}: reading authenticated WebSocket from existing BiDi session",
+            self.account_name(profile)), false);
+        let tx = self.native_handoff_tx.clone();
+        let result = std::thread::Builder::new()
+            .name(format!("moth-handoff-{}", profile.name()))
+            .spawn(move || {
+                let result = monitor.native_bootstrap(Duration::from_secs(18));
+                let _ = tx.send(NativeHandoffEvent { index, result });
+            });
+        if let Err(error) = result {
+            self.native_handoff_busy[index] = false;
+            self.set_status(format!("Could not start native handoff: {error}"), true);
+        }
+    }
+
     fn launch_one(&mut self, profile: GameProfile) {
         self.launch_one_mode(profile, true);
     }
@@ -1608,6 +1728,11 @@ impl ControllerApp {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
         let slot = &mut self.games[index];
+        if let Some(native) = slot.native.take() {
+            native.stop();
+            self.set_status(format!("{} native session stopped.", account_name), false);
+            return true;
+        }
 
         // Stop also works after restarting the controller, before any attempt
         // to launch that profile has made the orphan process visible.
@@ -2495,7 +2620,25 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         app.launch_one(profile);
                     }
                 }
-                if running && app.games[index].orphaned_pid.is_none() {
+                if app.games[index].native.is_some() {
+                    ui.label(RichText::new(tr("Native WS experiment · no browser userscripts"))
+                        .size(10.0).color(WARN));
+                }
+                if running && app.games[index].native.is_none()
+                    && app.games[index].monitor.is_some()
+                    && !app.native_handoff_busy[index] {
+                    ui.add_space(6.0);
+                    if ui.small_button(tr("Try native WS")).on_hover_text(
+                        tr("EXPERIMENT: closes Firefox, loses Auto Catch/Twitch/userscripts; recovers Firefox if the initial Rust handshake fails.")
+                    ).clicked() {
+                        app.start_native_handoff(profile);
+                    }
+                }
+                if app.native_handoff_busy[index] {
+                    ui.label(tr("Reading native handshake…"));
+                }
+                if running && app.games[index].native.is_none()
+                    && app.games[index].orphaned_pid.is_none() {
                     ui.add_space(6.0);
                     let mode = tr(if app.games[index].headless {
                         "Restart visible"
