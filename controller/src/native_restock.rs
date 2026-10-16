@@ -311,9 +311,13 @@ impl Restock {
                         if order.kind == kind {
                             let current = self.stock.get(&(kind, order.id))
                                 .copied().unwrap_or(0);
-                            // A purchase's stock delta is sufficient evidence
-                            // even if its event arrives late or gets lost.
-                            if current > order.before {
+                            // A positive stock delta confirms an order even
+                            // if its event was lost. When a matching server
+                            // compra was already received, the next matching
+                            // inventory patch also reconciles the purchase:
+                            // a potion may be consumed before that patch,
+                            // leaving unchanged or even lower net stock.
+                            if current > order.before || order.ack {
                                 self.confirm(now);
                             }
                         }
@@ -456,6 +460,39 @@ mod tests {
         assert_eq!(r.status.confirmed, 1);
         assert!(r.next(now + Duration::from_secs(1), true).is_none());
     }
+    #[test]
+    fn matching_purchase_and_flat_stock_reconciles_consumed_potion() {
+        let now=Instant::now();
+        let mut r=configured();
+        welcome(&mut r,now);
+        r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},
+            "items":{"200":1}}}"#,now);
+        let cmd=r.next(now,true).unwrap();
+        assert_eq!(cmd.wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","nome":"Golden Potion",
+            "qtd":11,"gasto":55}]}"#,now+Duration::from_secs(1));
+        assert_eq!(r.status.phase,"Confirming inventory");
+        // Shop purchase succeeded, but all new potions were consumed before
+        // the following authoritative stock snapshot.
+        r.ingest(r#"{"t":"estado","estado":{"items":{"200":1},"gold":130}}"#,
+            now+Duration::from_secs(2));
+        assert_eq!(r.status.confirmed,1);
+        assert!(!r.status.pending);
+        assert_eq!(r.status.phase,"Stock synced");
+    }
+    #[test]
+    fn unrelated_item_state_does_not_complete_matching_ball_purchase() {
+        let now=Instant::now();let mut r=configured();
+        welcome(&mut r,now);
+        r.next(now,true);
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,
+            "qtd":9,"gasto":90}]}"#,now);
+        r.ingest(r#"{"t":"estado","estado":{"items":{"200":50}}}"#,now);
+        assert!(r.status.pending);
+        assert_eq!(r.status.confirmed,0);
+    }
+
     #[test]
     fn no_purchases_without_authoritative_inventory_and_price() {
         let mut r = configured();
