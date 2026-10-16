@@ -486,6 +486,7 @@ fn session_loop(credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest(&welcome, Instant::now());
+                history_recorder.ingest(&welcome,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
                 let mut last_config = capture_config.lock().map(|v|v.clone())
