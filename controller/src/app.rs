@@ -6,6 +6,8 @@ use crate::logging;
 use crate::native_background::NativeSession;
 use crate::native_gameplay::GameCommand;
 use crate::native_hunts::{self, HuntView};
+use crate::native_capture_config::CatchSettings;
+use crate::native_items::{self, ItemCatalog};
 use crate::native_atlas::{self, Reference as AtlasReference};
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
@@ -1283,10 +1285,15 @@ struct NativeBrowserClosedEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts }
+enum PanelTab { Overview, Hunts, Inventory }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
+struct CaptureSavedEvent {
+    index:usize,
+    config:CatchSettings,
+    result:Result<(),String>
+}
 pub struct ControllerApp {
     native_handoff_tx: Sender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
@@ -1315,6 +1322,18 @@ pub struct ControllerApp {
     hunt_reference_busy: bool,
     hunt_reference_tx: Sender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
+    capture_drafts:[Option<CatchSettings>;4],
+    capture_save_busy:[bool;4],
+    capture_save_error:[Option<String>;4],
+    capture_save_tx:Sender<CaptureSavedEvent>,
+    capture_save_rx:Receiver<CaptureSavedEvent>,
+    inventory_account:Option<usize>,
+    inventory_query:String,
+    inventory_catalog:Option<Arc<ItemCatalog>>,
+    inventory_catalog_error:Option<String>,
+    inventory_catalog_busy:bool,
+    inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
+    inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     show_accounts: bool,
     accounts: [AccountConfig; 4],
     status: String,
@@ -1364,6 +1383,8 @@ impl ControllerApp {
         let (native_closed_tx, native_closed_rx) = mpsc::channel();
         let (native_verified_tx, native_verified_rx) = mpsc::channel();
         let (hunt_reference_tx, hunt_reference_rx) = mpsc::channel();
+        let (capture_save_tx,capture_save_rx)=mpsc::channel();
+        let (inventory_catalog_tx,inventory_catalog_rx)=mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1406,6 +1427,18 @@ impl ControllerApp {
             hunt_reference_busy: false,
             hunt_reference_tx,
             hunt_reference_rx,
+            capture_drafts:std::array::from_fn(|_|None),
+            capture_save_busy:[false;4],
+            capture_save_error:std::array::from_fn(|_|None),
+            capture_save_tx,
+            capture_save_rx,
+            inventory_account:Some(0),
+            inventory_query:String::new(),
+            inventory_catalog:None,
+            inventory_catalog_error:None,
+            inventory_catalog_busy:false,
+            inventory_catalog_tx,
+            inventory_catalog_rx,
             show_accounts: false,
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -1534,6 +1567,40 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        while let Ok(event)=self.capture_save_rx.try_recv() {
+            self.capture_save_busy[event.index]=false;
+            match event.result {
+                Ok(()) => {
+                    if let Some(native)=self.games[event.index].native.as_ref() {
+                        if let Err(error)=native.set_capture_settings(event.config) {
+                            self.capture_save_error[event.index]=Some(error);
+                            continue;
+                        }
+                    }
+                    self.capture_drafts[event.index]=None;
+                    self.capture_save_error[event.index]=None;
+                    self.set_status("Native capture settings saved".into(),false);
+                }
+                Err(error) => {
+                    self.capture_save_error[event.index]=Some(error.clone());
+                    self.set_status(format!("Could not save capture settings: {error}"),true);
+                }
+            }
+        }
+        while let Ok(result)=self.inventory_catalog_rx.try_recv() {
+            self.inventory_catalog_busy=false;
+            match result {
+                Ok(catalog)=>{
+                    logging::info(&format!("Native inventory catalog ready: {} items",catalog.items.len()));
+                    self.inventory_catalog=Some(Arc::new(catalog));
+                    self.inventory_catalog_error=None;
+                }
+                Err(error)=>{
+                    logging::warn(&format!("Native inventory catalog unavailable: {error}"));
+                    self.inventory_catalog_error=Some(error);
+                }
+            }
+        }
         while let Ok(loaded) = self.hunt_reference_rx.try_recv() {
             self.hunt_reference_busy = false;
             match loaded {
@@ -2542,6 +2609,7 @@ impl eframe::App for ControllerApp {
                         RichText::new(tr(match self.panel_tab {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
+                            PanelTab::Inventory => "Inventory",
                         }))
                             .font(FontId::proportional(26.0))
                             .strong()
@@ -2658,11 +2726,13 @@ impl eframe::App for ControllerApp {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.panel_tab, PanelTab::Overview, tr("Overview"));
                     ui.selectable_value(&mut self.panel_tab, PanelTab::Hunts, tr("Hunts · Atlas"));
+                    ui.selectable_value(&mut self.panel_tab, PanelTab::Inventory, tr("Inventory"));
                 });
                 ui.add_space(11.0);
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
+                    PanelTab::Inventory => draw_inventory_panel(self, ui),
                 }
             });
 
