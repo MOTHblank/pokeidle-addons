@@ -6,6 +6,7 @@
 use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
+use crate::native_capture_config::CatchSettings;
 use crate::native_hunts::{HuntIntel, HuntView};
 use crate::native_restock::{Restock, RestockStatus};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -151,6 +152,7 @@ pub struct NativeSession {
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
+    capture_config: Arc<Mutex<CatchSettings>>,
     hunts: Arc<Mutex<HuntView>>,
 }
 impl NativeSession {
@@ -174,6 +176,8 @@ impl NativeSession {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
+        let capture_config=Arc::new(Mutex::new(CatchSettings::from_value(settings.as_ref())));
+        let worker_capture_config=Arc::clone(&capture_config);
         let hunt_intel = HuntIntel::new();
         let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
         let worker_hunts = Arc::clone(&hunts);
@@ -192,7 +196,8 @@ impl NativeSession {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
-                        worker_restock_enabled, hunt_intel, worker_hunts);
+                        worker_restock_enabled, worker_capture_config,
+                        hunt_intel, worker_hunts);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -203,7 +208,10 @@ impl NativeSession {
                 }
             })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
-        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch, restock_enabled, hunts })
+        Ok(Self {
+            snapshot, twitch, stop, command_tx, auto_catch, restock_enabled,
+            capture_config, hunts
+        })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
         if let GameCommand::Hunt(slug) = &command {
@@ -224,11 +232,25 @@ impl NativeSession {
     pub fn hunt_snapshot(&self) -> HuntView {
         self.hunts.lock().map(|view| view.clone()).unwrap_or_default()
     }
+    pub fn capture_settings(&self)->CatchSettings {
+        self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
+    }
+    pub fn set_capture_settings(&self, settings:CatchSettings)->Result<(),String> {
+        settings.validate()?;
+        let mut current=self.capture_config.lock()
+            .map_err(|_|"Capture preferences currently unavailable".to_owned())?;
+        *current=settings.clone();
+        self.auto_catch.store(settings.enabled,Ordering::Relaxed);
+        self.restock_enabled.store(settings.restock_enabled,Ordering::Relaxed);
+        Ok(())
+    }
     pub fn set_auto_catch(&self, enabled: bool) {
         self.auto_catch.store(enabled, Ordering::Relaxed);
+        if let Ok(mut cfg)=self.capture_config.lock() {cfg.enabled=enabled;}
     }
     pub fn set_restock_enabled(&self, enabled: bool) {
         self.restock_enabled.store(enabled, Ordering::Relaxed);
+        if let Ok(mut cfg)=self.capture_config.lock() {cfg.restock_enabled=enabled;}
     }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
@@ -397,6 +419,7 @@ fn session_loop(credentials: Credentials,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
+    capture_config: Arc<Mutex<CatchSettings>>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>) {
     let mut rejected_welcomes = 0usize;
@@ -411,6 +434,8 @@ fn session_loop(credentials: Credentials,
                 hunt_intel.ingest(&welcome, Instant::now());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
+                let mut last_config = capture_config.lock().map(|v|v.clone())
+                    .unwrap_or_default();
                 update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -447,6 +472,13 @@ fn session_loop(credentials: Credentials,
                         }
                     }
                     if send_failed { break; }
+                    if let Ok(cfg) = capture_config.lock() {
+                        if *cfg != last_config {
+                            gameplay.configure(&cfg);
+                            restock.configure(&cfg);
+                            last_config=cfg.clone();
+                        }
+                    }
                     gameplay.status.auto_catch = auto_catch.load(Ordering::Relaxed);
                     restock.set_enabled(restock_enabled.load(Ordering::Relaxed));
                     if let Some(command) = gameplay.next_capture(Instant::now()) {
