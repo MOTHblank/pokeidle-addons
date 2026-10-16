@@ -3,7 +3,59 @@
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum HuntSubtab { Recommendations, Current, Session }
+pub(super) enum HuntSubtab { Explorer, Recommendations, Current, Session, Compare }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtlasAvailability { All, Unlocked, Locked }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtlasCollection { All, InDepot, NotInDepot }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtlasSort { TrainerXp, PokemonXp, Gold, Rare, Shiny, Spawn, Level, Name }
+
+#[derive(Clone, Debug)]
+pub(super) struct AtlasFilters {
+    search: String,
+    region: String,
+    kind: String,
+    min_level: u32,
+    max_level: u32,
+    availability: AtlasAvailability,
+    collection: AtlasCollection,
+    weak_to: std::collections::BTreeSet<String>,
+    weakness_match_all: bool,
+    sort: AtlasSort,
+    ascending: bool,
+    rare_item: u64,
+    filters_open: bool,
+}
+impl Default for AtlasFilters {
+    fn default()->Self {
+        Self{
+            search:String::new(),region:String::new(),kind:String::new(),
+            min_level:0,max_level:0,availability:AtlasAvailability::Unlocked,
+            collection:AtlasCollection::All,
+            weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
+            sort:AtlasSort::TrainerXp,ascending:false,rare_item:70000,filters_open:true,
+        }
+    }
+}
+impl AtlasFilters {
+    fn clear(&mut self) {
+        let sort=self.sort;
+        let ascending=self.ascending;
+        *self=Self::default();
+        self.sort=sort;self.ascending=ascending;
+    }
+    fn active_count(&self)->usize {
+        usize::from(!self.search.trim().is_empty())+
+        usize::from(!self.region.is_empty())+
+        usize::from(!self.kind.is_empty())+
+        usize::from(self.min_level>0)+usize::from(self.max_level>0)+
+        usize::from(self.availability!=AtlasAvailability::Unlocked)+
+        usize::from(self.collection!=AtlasCollection::All)+
+        usize::from(!self.weak_to.is_empty())
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RateSource { Measured, Calibrated, Experimental, Scenario, Unavailable }
@@ -102,6 +154,12 @@ impl EstimateCache {
             for hunt in snapshot.hunts.iter(){
                 values.insert(hunt.slug.clone(),
                     native_atlas::estimate(&snapshot,hunt,&guide));
+            }
+            for hunt in guide.hunts.iter(){
+                if !values.contains_key(&hunt.slug) {
+                    values.insert(hunt.slug.clone(),
+                        native_atlas::estimate(&snapshot,hunt,&guide));
+                }
             }
             let _=tx.send(values);
         });
