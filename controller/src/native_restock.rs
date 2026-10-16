@@ -5,7 +5,7 @@
 use crate::native_gameplay::GameCommand;
 use crate::native_capture_config::CatchSettings;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 const MAX_QTY: u64 = 5000;
@@ -64,6 +64,7 @@ pub struct Restock {
     rules: Vec<Rule>,
     reserve: u64,
     prices: BTreeMap<(&'static str, u64), ShopEntry>,
+    unavailable: BTreeSet<(&'static str, u64)>,
     stock: BTreeMap<(&'static str, u64), u64>,
     known_stock: [bool; 2],
     gold: Option<u64>,
@@ -104,7 +105,8 @@ impl Restock {
                 ..Default::default()
             },
             rules, reserve: num("goldReserve", 0),
-            prices: BTreeMap::new(), stock: BTreeMap::new(),
+            prices: BTreeMap::new(), unavailable: BTreeSet::new(),
+            stock: BTreeMap::new(),
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
         }
@@ -134,18 +136,26 @@ impl Restock {
     fn read_catalog(&mut self, kind: &'static str, raw: Option<&Value>) {
         let Some(items) = raw.and_then(Value::as_array) else { return };
         for item in items {
+            let Some(id) = item.get("itemId").or_else(|| item.get("id"))
+                .and_then(Value::as_u64).filter(|id| *id > 0) else { continue };
             if item.get("compravel").and_then(Value::as_bool) == Some(false) {
+                // An explicit denial from the authenticated shop wins over
+                // older public catalog metadata.
+                self.unavailable.insert((kind,id));
+                self.prices.remove(&(kind,id));
                 continue;
             }
             // Pokéballs explicitly advertise buyability in the welcome.
             if kind == "ball" && item.get("compravel").and_then(Value::as_bool) != Some(true) {
                 continue;
             }
-            let Some(id) = item.get("itemId").or_else(|| item.get("id"))
-                .and_then(Value::as_u64).filter(|id| *id > 0) else { continue };
-            let Some(price) = item.get("priceGold").or_else(|| item.get("preco"))
-                .or_else(|| item.get("npcPrice"))
-                .and_then(Value::as_u64).filter(|p| *p > 0) else { continue };
+            let price = ["priceGold","preco","npcPrice"].iter()
+                .filter_map(|field|item.get(field).and_then(Value::as_u64))
+                .find(|price| *price > 0);
+            let Some(price) = price else { continue };
+            if item.get("compravel").and_then(Value::as_bool) == Some(true) {
+                self.unavailable.remove(&(kind,id));
+            }
             let name = item.get("nome").or_else(|| item.get("name"))
                 .and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
             // For items, only potion and revive entries may be auto-purchased.
@@ -176,6 +186,7 @@ impl Restock {
                 name.contains("pocao") || name.contains("revive") ||
                 name.contains("reviver")) { continue; }
             let Some(price) = meta.price_gold.filter(|value|*value>0) else { continue; };
+            if self.unavailable.contains(&("item",rule.id)) { continue; }
             self.prices.entry(("item",rule.id))
                 .or_insert(ShopEntry { price, name, source: "Public catalog" });
         }
@@ -195,7 +206,9 @@ impl Restock {
                 low:rule.low,
                 target:rule.target,
                 price:item.map(|meta|meta.price),
-                price_source:item.map(|meta|meta.source).unwrap_or("Unknown").into(),
+                price_source: if self.unavailable.contains(&(rule.kind,rule.id)) {
+                    "Not purchasable".into()
+                } else {item.map(|meta|meta.source).unwrap_or("Unknown").into()},
             }
         }).collect()
     }
@@ -213,6 +226,7 @@ impl Restock {
             self.status.phase = "Reconnecting".into();
         }
         self.prices.clear();
+        self.unavailable.clear();
         self.stock.clear();
         self.gold = None;
         self.known_stock = [false, false];
@@ -225,6 +239,7 @@ impl Restock {
                 self.on_disconnect(now);
             }
             self.prices.clear();
+            self.unavailable.clear();
             self.stock.clear();
             self.gold = None;
             self.known_stock = [false, false];
@@ -356,6 +371,7 @@ impl Restock {
             return None;
         };
         let mut missing_catalog = false;
+        let mut unavailable = false;
         let mut missing_inventory = false;
         let mut limited_by_reserve = false;
         for rule in &self.rules {
@@ -366,7 +382,9 @@ impl Restock {
             let current = self.stock.get(&(rule.kind, rule.id)).copied().unwrap_or(0);
             if current > rule.low || current >= rule.target { continue; }
             let Some(meta) = self.prices.get(&(rule.kind, rule.id)) else {
-                missing_catalog = true;
+                if self.unavailable.contains(&(rule.kind,rule.id)) {
+                    unavailable = true;
+                } else { missing_catalog = true; }
                 continue;
             };
             let qty = (rule.target - current).min(MAX_QTY)
@@ -389,7 +407,8 @@ impl Restock {
                 kind: rule.kind.to_owned(), id: rule.id, qty
             });
         }
-        self.status.phase = if missing_catalog { "Waiting for shop" }
+        self.status.phase = if unavailable { "Shop item unavailable" }
+            else if missing_catalog { "Waiting for shop" }
             else if missing_inventory { "Waiting for inventory" }
             else if limited_by_reserve { "Gold reserve protected" }
             else { "Stock OK" }.into();
@@ -570,6 +589,25 @@ mod tests {
         assert!(!r.pending.as_ref().unwrap().ack);
     }
 
+
+    #[test]
+    fn explicit_server_unbuyable_item_cannot_be_reenabled_by_public_metadata() {
+        let now=Instant::now();
+        let mut r=configured();
+        r.ingest(r#"{"t":"welcome","itensCompraveis":[
+            {"itemId":200,"name":"Potion","preco":5,"compravel":false}],
+            "estado":{"gold":1000,"balls":{"4":40},"items":{"200":0}}}"#,now);
+        let meta=crate::native_items::parse(r#"{"items":[
+            {"id":200,"name":"Potion","preco":5}]}"#).unwrap();
+        r.merge_item_metadata(&meta);
+        assert!(!r.prices.contains_key(&("item",200)));
+        assert!(!r.prices.contains_key(&("item",200)));
+        assert!(r.next(now,true).is_none());
+        assert_eq!(r.status.phase,"Shop item unavailable");
+        r.publish_status();
+        assert_eq!(r.status.rules.iter().find(|v|v.id==200).unwrap().price_source,
+            "Not purchasable");
+    }
     #[test]
     fn status_explains_stock_price_and_catalog_provenance() {
         let now=Instant::now();
