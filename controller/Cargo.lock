@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "moth-controller"
-version = "0.1.7-native.16"
+version = "0.1.7-native.17"
 dependencies = [
  "eframe",
  "serde_json",
