@@ -3034,7 +3034,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, tr("⌖  Hunt Atlas"), app.panel_tab == PanelTab::Hunts).clicked() {
+            if sidebar_button(ui, &format!("⌖  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
                 app.panel_tab = PanelTab::Hunts;
             }
 
@@ -3042,7 +3042,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.show_accounts = true;
             }
 
-            if sidebar_button(ui, tr("▤  Inventory"), app.panel_tab == PanelTab::Inventory).clicked() {
+            if sidebar_button(ui, &format!("▤  {}", tr("Inventory")), app.panel_tab == PanelTab::Inventory).clicked() {
                 app.panel_tab = PanelTab::Inventory;
             }
 
@@ -3050,7 +3050,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.open_logs();
             }
 
-            if sidebar_button(ui, tr("⚙  Options"), app.panel_tab == PanelTab::Options).clicked() {
+            if sidebar_button(ui, &format!("⚙  {}", tr("Options")), app.panel_tab == PanelTab::Options).clicked() {
                 app.panel_tab = PanelTab::Options;
             }
 
