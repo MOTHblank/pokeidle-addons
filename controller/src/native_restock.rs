@@ -272,15 +272,24 @@ impl Restock {
             self.status.phase = "Waiting for gold".into();
             return None;
         };
+        let mut missing_catalog = false;
+        let mut missing_inventory = false;
+        let mut limited_by_reserve = false;
         for rule in &self.rules {
-            if !self.known_stock[Self::idx(rule.kind)] { continue; }
-            let Some(meta) = self.prices.get(&(rule.kind, rule.id)) else { continue };
+            if !self.known_stock[Self::idx(rule.kind)] {
+                missing_inventory = true;
+                continue;
+            }
             let current = self.stock.get(&(rule.kind, rule.id)).copied().unwrap_or(0);
             if current > rule.low || current >= rule.target { continue; }
+            let Some(meta) = self.prices.get(&(rule.kind, rule.id)) else {
+                missing_catalog = true;
+                continue;
+            };
             let qty = (rule.target - current).min(MAX_QTY)
                 .min(gold.saturating_sub(self.reserve) / meta.price);
             if qty == 0 {
-                self.status.phase = "Gold reserve protected".into();
+                limited_by_reserve = true;
                 continue;
             }
             let order = Order {
@@ -297,12 +306,10 @@ impl Restock {
                 kind: rule.kind.to_owned(), id: rule.id, qty
             });
         }
-        if self.status.phase != "Gold reserve protected" {
-            self.status.phase = if self.prices.is_empty() { "Waiting for shop" }
-                else if !self.known_stock.iter().any(|v| *v) {
-                    "Waiting for inventory"
-                } else { "Stock OK" }.into();
-        }
+        self.status.phase = if missing_catalog { "Waiting for shop" }
+            else if missing_inventory { "Waiting for inventory" }
+            else if limited_by_reserve { "Gold reserve protected" }
+            else { "Stock OK" }.into();
         None
     }
     pub fn write_failed(&mut self, now: Instant) {
@@ -387,6 +394,17 @@ mod tests {
         assert_eq!(r.rules[0].low, 50);
         assert_eq!(r.rules[0].target, 500);
         assert_eq!(r.rules[1].id, 200);
+    }
+    #[test]
+    fn reports_missing_item_price_instead_of_misleading_stock_ok() {
+        let now = Instant::now();
+        let mut r = configured();
+        r.ingest(r#"{"t":"welcome",
+            "catalogoBolas":[{"id":4,"nome":"Ultra Ball","priceGold":10,"compravel":true}],
+            "estado":{"gold":10000,"balls":{"4":30},"items":{"200":0}}
+        }"#, now);
+        assert!(r.next(now, true).is_none());
+        assert_eq!(r.status.phase, "Waiting for shop");
     }
     #[test]
     fn no_spend_below_gold_reserve_or_when_disabled() {
