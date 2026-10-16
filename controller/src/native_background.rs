@@ -150,7 +150,19 @@ impl NativeSession {
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_stop = Arc::clone(&stop);
         thread::Builder::new().name("moth-native-game".to_owned())
-            .spawn(move || session_loop(credentials, worker_snapshot, worker_stop, desired))
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    session_loop(credentials, Arc::clone(&worker_snapshot),
+                        Arc::clone(&worker_stop), desired);
+                }));
+                if result.is_err() {
+                    update(&worker_snapshot, |state| {
+                        state.phase = "Failed".into();
+                        state.error = Some("Native game worker panicked; inspect sanitized controller log".into());
+                    });
+                    worker_stop.store(true, Ordering::Relaxed);
+                }
+            })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
         Ok(Self { snapshot, twitch, stop })
     }
