@@ -392,9 +392,8 @@ impl HuntIntel {
                                         let quantity=Self::num(drop,"ganho").filter(|n|*n>0)
                                             .or_else(||Self::num(drop,"qtd")).unwrap_or(0);
                                         if quantity==0 {continue}
-                                        *session.acquired.entry(name.to_owned()).or_default()=
-                                            session.acquired.get(name).copied().unwrap_or(0)
-                                                .saturating_add(quantity);
+                                        let total=session.acquired.entry(name.to_owned()).or_default();
+                                        *total=total.saturating_add(quantity);
                                         self.recent_drops.push_front((name.to_owned(),quantity));
                                         self.recent_drops.truncate(30);
                                     }
@@ -404,8 +403,8 @@ impl HuntIntel {
                             Some("bola") => {
                                 let session=&mut self.view.session;
                                 if let Some(ball_id)=Self::num(e,"ballId") {
-                                    *session.balls_used.entry(ball_id).or_default()=
-                                        session.balls_used.get(&ball_id).copied().unwrap_or(0).saturating_add(1);
+                                    let total=session.balls_used.entry(ball_id).or_default();
+                                    *total=total.saturating_add(1);
                                 }
                                 let captured=e.get("sucesso").and_then(Value::as_bool)==Some(true);
                                 let shiny=e.get("shiny").and_then(Value::as_bool)==Some(true);
