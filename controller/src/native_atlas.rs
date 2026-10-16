@@ -220,7 +220,9 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         .and_then(|h|raw_kills(h,mon,mon_meta,reference,&stats));
     let calibration=if observed.seconds>=30.0 && observed.kills>=5 {
         current_prediction.and_then(|(k,_,_)|
-            if k>0.0 {Some((observed.kills_h/k).clamp(0.1,2.0))}else{None})
+            if k>0.0 && observed.kills_h.is_finite() && observed.kills_h>0.0 {
+                Some((observed.kills_h/k).clamp(0.001,10.0))
+            } else {None})
     }else{None};
     let kills_h=(base_kills*calibration.unwrap_or(1.0))
         .min(3600.0/if hunt.level<20{4.2}else{3.2});
@@ -243,6 +245,46 @@ mod tests {
         assert_eq!(parse(text).unwrap().species.len(),1);
         assert!(parse("window.PI_DATA = alert(document.cookie);").is_err());
         assert!(parse("alert('hi');").is_err());
+    }
+    #[test]
+    fn forecast_calibrates_kills_in_current_hunt_instead_of_double_counting_xp() {
+        let mut view=HuntView::default();
+        let hunt=HuntEntry{
+            slug:"route-a".into(),level:100,
+            species:vec![crate::native_hunts::HuntSpecies{id:2,weight:100.0}],
+            ..Default::default()
+        };
+        view.hunt_slug=Some("route-a".into());
+        view.hunts=vec![hunt.clone()];
+        view.measurements.seconds=60.0;
+        view.measurements.kills=10;
+        view.measurements.kills_h=600.0;
+        view.active_pokemon=Some(PokemonInfo {
+            id:42,species_id:Some(1),name:"Attacker".into(),level:150,
+            potency:Some(3),quality:Some(1.2),ivs:[Some(25);6],
+            ..Default::default()
+        });
+        let base = |id,name:&str| ReferenceSpecies {
+            id,name:name.into(),types:vec!["NORMAL".into()],
+            base:vec![100.0;6],
+            moves:vec![ReferenceMove{
+                move_type:"NORMAL".into(),special:false,
+                power:60.0,cooldown:1200.0,min_level:1
+            }],
+            drops:vec![]
+        };
+        let mut data=Reference::default();
+        data.chart.insert("NORMAL".into(),
+            [("NORMAL".into(),1.0)].into_iter().collect());
+        data.species.insert(1,base(1,"Attacker"));
+        data.species.insert(2,base(2,"Target"));
+        let forecast=estimate(&view,&hunt,&data).unwrap();
+        assert!(forecast.calibrated);
+        assert!((forecast.kills_h-600.0).abs()<1.0);
+        assert_eq!(forecast.trainer_xp_h,forecast.pokemon_xp_h);
+        view.bonuses.trainer_event_pct=100.0;
+        let forecast=estimate(&view,&hunt,&data).unwrap();
+        assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
     }
     #[test]
     fn xp_calculation_keeps_separate_channels(){
