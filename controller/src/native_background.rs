@@ -8,7 +8,7 @@ use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_hunts::{HuntIntel, HuntView};
-use crate::native_history::{HistoryRecorder, HistorySnapshot};
+use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
 use crate::config::GameProfile;
 use crate::native_restock::{Restock, RestockStatus};
 use crate::native_automation::{AutomationWriter, AutomationStatus};
@@ -166,6 +166,7 @@ pub struct NativeSession {
     session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
     history: Arc<Mutex<HistorySnapshot>>,
+    forecast_tx:mpsc::SyncSender<HistoryForecast>,
 }
 impl NativeSession {
     pub fn start(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
@@ -205,6 +206,7 @@ impl NativeSession {
         let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
         let worker_auto_catch = Arc::clone(&auto_catch);
         let (command_tx, command_rx) = mpsc::sync_channel(64);
+        let (forecast_tx,forecast_rx)=mpsc::sync_channel(8);
         let snapshot = Arc::new(Mutex::new(NativeSnapshot::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_snapshot = Arc::clone(&snapshot);
@@ -217,7 +219,7 @@ impl NativeSession {
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
                         worker_session_reset, hunt_intel, worker_hunts,
-                        history_recorder);
+                        history_recorder,forecast_rx);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -230,7 +232,7 @@ impl NativeSession {
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
         Ok(Self {
             snapshot, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, session_reset, hunts, history
+            capture_config, session_reset, hunts, history, forecast_tx
         })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
@@ -271,6 +273,14 @@ impl NativeSession {
     }
     pub fn history_snapshot(&self) -> HistorySnapshot {
         self.history.lock().map(|data|data.clone()).unwrap_or_default()
+    }
+    /// Nonblocking delivery to the running worker. Never write to disk on egui.
+    pub fn archive_hunt_forecast(&self,hunt:&str,
+        trainer_xp_h:f64,pokemon_xp_h:f64,kills_h:f64,calibrated:bool)->bool{
+        if self.snapshot().phase!="Online"{return false}
+        let Some(sample)=HistoryForecast::now(hunt,trainer_xp_h,
+            pokemon_xp_h,kills_h,calibrated)else{return false};
+        self.forecast_tx.try_send(sample).is_ok()
     }
     pub fn capture_settings(&self)->CatchSettings {
         self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
@@ -464,7 +474,8 @@ fn session_loop(credentials: Credentials,
     session_reset: Arc<AtomicBool>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>,
-    mut history_recorder: HistoryRecorder) {
+    mut history_recorder: HistoryRecorder,
+    forecast_rx:mpsc::Receiver<HistoryForecast>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
@@ -640,6 +651,9 @@ fn session_loop(credentials: Credentials,
                             restock.write_failed(Instant::now());
                             break;
                         }
+                    }
+                    while let Ok(sample)=forecast_rx.try_recv(){
+                        history_recorder.record_forecast(sample);
                     }
                     history_recorder.maybe_flush(false);
                     if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
