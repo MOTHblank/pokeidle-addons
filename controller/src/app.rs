@@ -484,6 +484,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Select potion" => "Selecionar poção",
         "Select revive" => "Selecionar revive",
         "Revives" => "Revives",
+        "Restock changes queued; saving previous selection..." =>
+            "Alterações da reposição na fila; salvando seleção anterior...",
         "ID 0 disables that category; unknown shop prices cannot be spent." =>
             "ID 0 desativa a categoria; compras exigem preço conhecido pelo servidor.",
         "Save settings" => "Salvar configurações",
@@ -4770,7 +4772,7 @@ fn restock_selector_columns(available_width: f32) -> usize {
     // Each full picker needs roughly 240 px for its six or seven icon cells.
     // Overview account cards are often only 350–500 px wide, so use stacked
     // full-width groups there instead of three unusably narrow columns.
-    if available_width >= 780.0 { 3 } else { 1 }
+    if available_width >= 900.0 { 3 } else { 1 }
 }
 
 #[cfg(test)]
@@ -4778,10 +4780,10 @@ mod restock_picker_layout_tests {
     use super::restock_selector_columns;
     #[test]
     fn full_width_groups_on_account_cards_and_three_columns_on_wide_panels() {
-        for width in [230.0, 350.0, 480.0, 779.0] {
+        for width in [230.0, 350.0, 480.0, 779.0, 899.0] {
             assert_eq!(restock_selector_columns(width), 1);
         }
-        for width in [780.0, 900.0, 1200.0] {
+        for width in [900.0, 1100.0, 1400.0] {
             assert_eq!(restock_selector_columns(width), 3);
         }
     }
@@ -4852,7 +4854,9 @@ fn capture_restock_chip(
     // Golden Potion → Revives boundary. The ID is stable across icon loads.
     ui.push_id(("restock-item", group, id), |ui| {
         let button = if let Some(texture) = visuals.texture_id(ui, kind, id, icon_hint) {
-            egui::Button::image(egui::Image::new((
+            // Button::image clamps artwork to the text height; use the
+            // regular Button atom to preserve the full 23px game icon.
+            egui::Button::new(egui::Image::new((
                 texture, egui::vec2(RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE)
             )))
         } else {
@@ -5051,8 +5055,11 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         ui.label(RichText::new(error).size(10.0).color(WARN));
     }
     if app.capture_save_busy[index] {
-        ui.label(RichText::new(tr("Saving encrypted preferences..."))
-            .size(10.0).color(DIM));
+        ui.label(RichText::new(if app.restock_dirty[index] {
+            tr("Restock changes queued; saving previous selection...")
+        } else {
+            tr("Saving encrypted preferences...")
+        }).size(10.0).color(if app.restock_dirty[index] { WARN } else { DIM }));
     }
     if app.restock_dirty[index] && !app.capture_save_busy[index] {
         // A selection made during an earlier save stays visible and is sent
