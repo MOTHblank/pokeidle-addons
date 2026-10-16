@@ -3564,7 +3564,16 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.allocate_ui_with_layout(
                             egui::vec2(width, 0.0),
                             Layout::top_down(Align::Min),
-                            |ui| draw_game_details(app, ui, index, width),
+                            |ui| {
+                                draw_game_details(app, ui, index, width);
+                                ui.add_space(10.0);
+                                // History belongs to Dashboard > Show details;
+                                // keep local history available even while stopped.
+                                egui::CollapsingHeader::new(tr("Battle history"))
+                                    .id_salt(("dashboard-battle-history", index))
+                                    .default_open(true)
+                                    .show(ui, |ui| draw_history_panel(app, ui, index));
+                            },
                         );
                         ui.add_space(12.0);
                     }
@@ -3918,10 +3927,9 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 /// Aggregated, 90-day battle history is loaded from the same account's
 /// local disk file and updated by the native game worker. Never reconstruct
 /// historical XP by adding Pokémon and trainer rewards together.
-fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     ui.label(RichText::new(tr("Persistent battle history")).size(14.0)
         .strong().color(TEXT));
-    let index=app.history_account;
     let profile=app.games[index].profile;
     let history=if let Some(native)=app.games[index].native.as_ref() {
         app.offline_histories[index]=None;
@@ -5983,7 +5991,7 @@ fn addon_needs_attention(
     )).count()
 }
 
-fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
+fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if app
         .account_setup_checked_at
         .map(|checked| checked.elapsed() >= Duration::from_secs(30))
@@ -5994,24 +6002,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
     let remote_addons = app.addon_version_status.lock()
         .map(|state| state.clone()).unwrap_or_default();
-    let mut open = app.show_accounts;
-    egui::Window::new(tr("Account Manager"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_width(820.0)
-        .default_height(540.0)
-        .min_width(540.0)
-        .min_height(350.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .frame(
-            egui::Frame::new()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(12.0)
-                .inner_margin(18.0),
-        )
-        .show(ctx, |ui| {
+    // Accounts is a normal full-width workspace, not an egui floating window.
+    // Keep a local content layout and the existing per-account scroll area.
+    ui.vertical(|ui| {
             ui.vertical(|ui| {
                 ui.label(
                     RichText::new(tr("Account Manager"))
@@ -6474,26 +6467,6 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                     );
                 });
         });
-
-    // Closing the dialog must not silently discard an edit that still has
-    // keyboard focus. Persist the last name once, not on every text change.
-    if !open {
-        for profile in GameProfile::ALL {
-            let index = profile.index();
-            if app.account_names_dirty[index] {
-                let name = app.accounts[index].name.trim();
-                app.accounts[index].name = if name.is_empty() {
-                    profile.label().to_owned()
-                } else {
-                    name.to_owned()
-                };
-                if app.save_account_config() {
-                    app.account_names_dirty[index] = false;
-                }
-            }
-        }
-    }
-    app.show_accounts = open;
 }
 
 fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
