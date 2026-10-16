@@ -443,6 +443,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "None" => "Nenhuma",
         "Ball inventory reserves" => "Estoque reservado por bola",
         "Automatic restock" => "Reposição automática",
+        "Configure restock" => "Configurar reposição",
+        "Start this account to configure restock" => "Inicie esta conta para configurar a reposição",
+        "Restock is configured on each Overview account card" => "Configure a reposição no cartão de cada conta na Visão geral",
         "Gold reserve" => "Reserva de ouro",
         "ID" => "ID",
         "Buy at" => "Comprar ao chegar a",
@@ -1604,6 +1607,7 @@ pub struct ControllerApp {
     hunt_reference_tx: Sender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
     capture_drafts:[Option<CatchSettings>;4],
+    restock_open:[bool;4],
     capture_save_busy:[bool;4],
     capture_save_error:[Option<String>;4],
     capture_save_tx:Sender<CaptureSavedEvent>,
@@ -1720,6 +1724,7 @@ impl ControllerApp {
             hunt_reference_tx,
             hunt_reference_rx,
             capture_drafts:std::array::from_fn(|_|None),
+            restock_open:[false;4],
             capture_save_busy:[false;4],
             capture_save_error:std::array::from_fn(|_|None),
             capture_save_tx,
@@ -3754,9 +3759,10 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             if app.dashboard_session_view {
                 draw_overview_session(ui, native_view.as_ref().filter(|_| fresh));
             } else {
-                draw_overview_account_summary(app, ui, &health, fresh,
+                draw_overview_account_summary(app, ui, index, &health, fresh,
                     xp_per_hour, native_view.as_ref());
             }
+            draw_overview_restock(app, ui, index);
             ui.add_space(7.0);
             ui.separator();
             ui.horizontal_wrapped(|ui| {
@@ -3947,9 +3953,41 @@ fn overview_stat_tile(ui: &mut egui::Ui, label: &str, value: &str, color: Color3
         });
 }
 
+
+fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
+                          index: usize, label: &str, count: Option<u64>,
+                          kind: SpriteKind, selected: u64) {
+    let expanded = app.restock_open[index];
+    let response = egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, if expanded { ACCENT } else { BORDER }))
+        .corner_radius(7.0).inner_margin(Margin::symmetric(6, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
+                    ui.label(RichText::new(count.map(format_number)
+                        .unwrap_or_else(|| "—".into()))
+                        .size(12.0).strong().color(TEXT));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if !app.visuals.show(ui, kind, selected, None, 23.0) {
+                        ui.label(RichText::new(if selected == 0 { "×" } else { "◆" })
+                            .size(15.0).color(ACCENT));
+                    }
+                });
+            });
+        }).response.interact(egui::Sense::click());
+    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{} · {}", tr(label), tr("Configure restock")))
+        .clicked() {
+        app.restock_open[index] = !expanded;
+    }
+}
+
 fn draw_overview_account_summary(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
+    index: usize,
     health: &Health,
     fresh: bool,
     xp_per_hour: Option<f64>,
@@ -3983,6 +4021,14 @@ fn draw_overview_account_summary(
                 .fold(0u64, u64::saturating_add)
         })
     });
+
+    let restock_selection = app.games[index].native.as_ref()
+        .map(|native| native.capture_settings()).unwrap_or_default();
+    let revives = view.filter(|_| fresh).and_then(|view|
+        (!view.items.is_empty()).then(|| view.items.iter()
+            .filter(|(id, _)| matches!(**id, 205 | 206))
+            .map(|(_, count)| *count)
+            .fold(0u64, u64::saturating_add)));
 
     let available = ui.available_width();
     let stats_width = (available - 84.0).max(140.0);
@@ -4031,11 +4077,13 @@ fn draw_overview_account_summary(
                             .unwrap_or_else(|| "—".into()), WARN);
                 });
                 ui.add_space(4.0);
-                ui.columns(2, |cols| {
-                    overview_stat_tile(&mut cols[0], "Potions",
-                        &potions.map(format_number).unwrap_or_else(|| "—".into()), TEXT);
-                    overview_stat_tile(&mut cols[1], "Balls",
-                        &balls.map(format_number).unwrap_or_else(|| "—".into()), TEXT);
+                ui.columns(3, |cols| {
+                    overview_resource_tile(app, &mut cols[0], index, "Potions",
+                        potions, SpriteKind::Item, restock_selection.potion_id);
+                    overview_resource_tile(app, &mut cols[1], index, "Balls",
+                        balls, SpriteKind::Ball, restock_selection.ball_id);
+                    overview_resource_tile(app, &mut cols[2], index, "Revives",
+                        revives, SpriteKind::Item, restock_selection.revive_id);
                 });
             });
     });
@@ -4551,6 +4599,7 @@ fn capture_ball_name(k:&str)->&'static str {
 // Auto Catch+ restock picker: compact selectable items instead of raw IDs.
 // IDs are the game protocol IDs. Public metadata
 // only enriches captions; absent metadata never switches a saved selection.
+// Compact, icon-only Auto Catch+ choice. Names and stock remain in tooltips.
 fn capture_restock_chip(
     ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
     selected:&mut u64, id:u64, name:&str, icon:&str,
@@ -4558,24 +4607,22 @@ fn capture_restock_chip(
 ) {
     let active=*selected==id;
     let response=egui::Frame::new()
-        .fill(if active {Color32::from_rgb(52,45,95)} else {PANEL_ALT})
-        .stroke(Stroke::new(if active {1.4} else {1.0},
+        .fill(if active { ACCENT.linear_multiply(0.25) } else { PANEL_ALT })
+        .stroke(Stroke::new(if active {1.5} else {1.0},
             if active {ACCENT} else {BORDER}))
-        .corner_radius(6.0)
-        .inner_margin(egui::Margin::symmetric(7,4))
+        .corner_radius(5.0).inner_margin(Margin::same(4))
         .show(ui,|ui|{
-            ui.horizontal(|ui|{
-                if !visuals.show(ui,kind,id,icon_hint,20.0) {
-                    ui.label(RichText::new(icon).size(14.0));
+            ui.set_min_size(egui::vec2(23.0,23.0));
+            ui.centered_and_justified(|ui|{
+                if !visuals.show(ui,kind,id,icon_hint,23.0) {
+                    ui.label(RichText::new(icon).size(15.0));
                 }
-                ui.label(RichText::new(name).size(10.0)
-                    .color(if active { TEXT } else { MUTED }));
             });
         }).response.interact(egui::Sense::click());
     let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
     let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
     if response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
+        .on_hover_text(format!("{name}{price_hint}{stock_hint}")).clicked() {
         *selected=id;
     }
 }
@@ -4596,54 +4643,23 @@ fn capture_restock_threshold(
         }
     });
 }
-fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+/// Live restock picker ported from Auto Catch+. Each account card edits only its
+/// own authenticated native settings, with no item-ID input or explicit save step.
+fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    if !app.restock_open[index] { return; }
+    let Some(native) = app.games[index].native.as_ref() else {
+        ui.label(RichText::new(tr("Start this account to configure restock"))
+            .size(10.0).color(WARN));
+        return;
+    };
     request_item_catalog(app);
     app.visuals.poll(ui.ctx());
-    let profile=app.games[index].profile;
-    let Some(native)=app.games[index].native.as_ref() else {return};
-    if app.capture_drafts[index].is_none() {
-        app.capture_drafts[index]=Some(native.capture_settings());
-    }
-    let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
-    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
-    ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Throw interval").size(10.0).color(MUTED));
-        ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(100..=3000).speed(10.0).suffix(" ms"));
-        ui.label(RichText::new("100 ms matches Auto Catch+; unanswered throws retry after 1 s")
-            .size(10.0).color(DIM));
-    });
-    ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
-        .size(11.0).color(TEXT));
-    let keys=["beast","ultra","super","great","poke"];
-    let mut chosen=[
-        cfg.priorities.first().cloned().unwrap_or_default(),
-        cfg.priorities.get(1).cloned().unwrap_or_default()
-    ];
-    ui.horizontal_wrapped(|ui|{
-        for slot in 0..2 {
-            ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
-            egui::ComboBox::from_id_salt(("cap-choice",index,slot))
-                .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
-                    ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
-                    for key in keys {
-                        ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
-                    }
-                });
-        }
-    });
-    cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
-    ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
-    ui.horizontal_wrapped(|ui|{
-        for key in keys {
-            ui.vertical(|ui|{
-                ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
-                ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
-                    .range(0..=1_000_000));
-            });
-        }
-    });
-    ui.separator();
+    let profile = app.games[index].profile;
+    let mut draft = native.capture_settings();
+    let previous = draft.clone();
+    {
+        let cfg = &mut draft;
+        ui.add_enabled_ui(!app.capture_save_busy[index], |ui| {
     let restock_status=native.snapshot().native_restock;
     egui::Frame::new().fill(PANEL).corner_radius(8.0)
         .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
@@ -4656,9 +4672,6 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                 restock_status.ordered,restock_status.confirmed
             )).size(10.0).color(DIM));
         });
-        ui.label(RichText::new(
-            "Choose one ball, one potion and one revive. Tap a choice to select it; choose Off to disable a category."
-        ).size(10.0).color(MUTED));
         let game_catalog=native.hunt_snapshot();
         let catalog=app.inventory_catalog.as_deref();
         let selected_stock=|kind:&str,id:u64| -> Option<u64> {
@@ -4746,8 +4759,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             }
         });
         ui.add_space(10.0);
-        ui.label(RichText::new("Restock when stock is at or below a threshold; fill up to target")
-            .size(10.0).color(MUTED));
+        ui.label(RichText::new("Restock at ≤ / Fill to").size(10.0).color(DIM));
         capture_restock_threshold(ui,tr("Balls"),&mut cfg.ball_at,&mut cfg.ball_to,
             selected_stock("ball",cfg.ball_id));
         capture_restock_threshold(ui,tr("Potions"),&mut cfg.potion_at,&mut cfg.potion_to,
@@ -4761,11 +4773,83 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         if let Some(error)=restock_status.last_error.as_deref() {
             ui.label(RichText::new(error).size(10.0).color(WARN));
         }
-        ui.label(RichText::new(
-            "Saved IDs are preserved when the shop catalog is missing. Reference-only prices are verified by a single-item purchase before bulk restocking."
-        ).size(9.0).color(DIM));
     });
 
+        });
+    }
+    if let Some(error) = app.capture_save_error[index].as_deref() {
+        ui.label(RichText::new(error).size(10.0).color(WARN));
+    }
+    if app.capture_save_busy[index] {
+        ui.label(RichText::new(tr("Saving encrypted preferences..."))
+            .size(10.0).color(DIM));
+    }
+    if draft != previous && !app.capture_save_busy[index] {
+        if let Err(error) = draft.validate() {
+            app.capture_save_error[index] = Some(error);
+        } else {
+            app.capture_save_error[index] = None;
+            app.capture_save_busy[index] = true;
+            let tx = app.capture_save_tx.clone();
+            std::thread::spawn(move || {
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(||
+                        crate::native_auth::set_capture_settings(profile, &draft)))
+                    .unwrap_or_else(|_| Err("Encrypted restock save panicked".into()));
+                let _ = tx.send(CaptureSavedEvent { index, config: draft, result });
+            });
+        }
+    }
+}
+
+fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+    let profile=app.games[index].profile;
+    let Some(native)=app.games[index].native.as_ref() else {return};
+    if app.capture_drafts[index].is_none() {
+        app.capture_drafts[index]=Some(native.capture_settings());
+    }
+    let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
+    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Throw interval").size(10.0).color(MUTED));
+        ui.add(egui::DragValue::new(&mut cfg.interval_ms)
+            .range(100..=3000).speed(10.0).suffix(" ms"));
+        ui.label(RichText::new("100 ms matches Auto Catch+; unanswered throws retry after 1 s")
+            .size(10.0).color(DIM));
+    });
+    ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
+        .size(11.0).color(TEXT));
+    let keys=["beast","ultra","super","great","poke"];
+    let mut chosen=[
+        cfg.priorities.first().cloned().unwrap_or_default(),
+        cfg.priorities.get(1).cloned().unwrap_or_default()
+    ];
+    ui.horizontal_wrapped(|ui|{
+        for slot in 0..2 {
+            ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
+            egui::ComboBox::from_id_salt(("cap-choice",index,slot))
+                .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
+                    ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
+                    for key in keys {
+                        ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
+                    }
+                });
+        }
+    });
+    cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
+    ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
+    ui.horizontal_wrapped(|ui|{
+        for key in keys {
+            ui.vertical(|ui|{
+                ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
+                ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
+                    .range(0..=1_000_000));
+            });
+        }
+    });
+    ui.separator();
+    ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
+        .size(10.0).color(DIM));
     if let Some(error)=app.capture_save_error[index].as_deref(){
         ui.colored_label(BAD,error);
     }
