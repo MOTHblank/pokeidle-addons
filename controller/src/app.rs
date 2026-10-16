@@ -603,9 +603,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Show details" => "Ver detalhes",
         "Hide details" => "Ocultar detalhes",
         "Details for" => "Detalhes de",
-        "Current hunt" => "Caça atual",
-        "Active Pokémon" => "Pokémon ativo",
-        "Trainer XP" => "XP do treinador",
         "EXP/hour" => "EXP/h",
         "Next level" => "Próximo nível",
         "Estimated from recent gains; actual progress may vary" => "Estimativa com base no ganho recente de EXP; o tempo real pode variar",
@@ -715,7 +712,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "1 sec" => "1 s",
         "Map intelligence + observed XP/hour" => "Inteligência do mapa + XP/h observado",
         "Region" => "Região",
-        "All regions" => "Todas as regiões",
         "Min" => "Mín.",
         "Max" => "Máx.",
         "Availability" => "Disponibilidade",
@@ -723,7 +719,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Unlocked" => "Liberadas",
         "Locked" => "Bloqueadas",
         "Type" => "Tipo",
-        "All types" => "Todos os tipos",
         "Weak to" => "Fraco contra",
         "Any weakness" => "Qualquer fraqueza",
         "Match all selected" => "Exigir todos os selecionados",
@@ -737,7 +732,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Level" => "Nível",
         "Wait" => "Aguarde",
         "Go" => "Ir",
-        "Gold" => "Ouro",
         "Gems" => "Gemas",
         "listings" => "ofertas",
         "seller" => "vendedor",
@@ -819,8 +813,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Purchase command accepted" => "Comando de compra aceito",
         "Purchase pending" => "Compra pendente",
         "References" => "Referências",
-        "items" => "itens",
-        "units" => "unidades",
         "total" => "total",
         "Coin" => "Moeda",
         "Gem" => "Gema",
@@ -838,7 +830,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Seller:" => "Vendedor:",
         "retained" => "retido",
         "available" => "disponível",
-        "Pending" => "Pendente",
         "Balance" => "Saldo",
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
@@ -891,7 +882,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Backoff" => "Repetindo em breve",
         "Gold reserve protected" => "Reserva de ouro protegida",
         "Needs settings" => "Precisa configurar",
-        "Reconnecting" => "Reconectando",
         "Rechecking last order" => "Conferindo última compra",
         "ordered" => "pedidos",
         "confirmed" => "confirmados",
@@ -1819,7 +1809,7 @@ impl ControllerApp {
                     }
                     self.capture_drafts[event.index]=None;
                     self.capture_save_error[event.index]=None;
-                    self.set_status("Native capture settings saved".into(),false);
+                    self.set_status("Native capture settings saved",false);
                 }
                 Err(error) => {
                     self.capture_save_error[event.index]=Some(error.clone());
@@ -2621,7 +2611,7 @@ impl ControllerApp {
                     false
                 }
             }
-        } else if let Some(pid) = slot.orphaned_pid {
+        } else if slot.orphaned_pid.is_some() {
             // Stop was explicitly clicked; never terminate a recovered process
             // automatically when the controller itself exits.
             let result = Config::for_profile(profile)
