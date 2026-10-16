@@ -1625,6 +1625,7 @@ pub struct ControllerApp {
     automation_account: usize,
     automation_drafts: [AutomationDraft;4],
     market_drafts: [Option<crate::native_market::MarketRules>;4],
+    market_snatch_drafts: [crate::native_market::SnatchTarget;4],
     market_imports: [String;4],
     market_notices: [String;4],
     history_rows_limit: usize,
@@ -1750,6 +1751,9 @@ impl ControllerApp {
             automation_account: 0,
             automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
             market_drafts: std::array::from_fn(|_|None),
+            market_snatch_drafts: std::array::from_fn(|_|crate::native_market::SnatchTarget{
+                kind:"item".into(),currency:"gold".into(),..Default::default()
+            }),
             market_imports: std::array::from_fn(|_|String::new()),
             market_notices: std::array::from_fn(|_|String::new()),
             history_rows_limit: 100,

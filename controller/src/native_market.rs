@@ -69,6 +69,41 @@ impl BuyRule {
         (self.kind != "pokemon_shiny" || self.currency == "orb")
     }
 }
+
+/* Manual Snatches are explicit price-ceiling authorizations for one listing.
+   No remembered browser quote is trusted after native reconnect: exact
+   market.anuncio verification supplies the listing and unlock timestamp. */
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnatchTarget {
+    pub id: u64, pub kind: String, pub currency: String,
+    pub item_id: u64, pub max_price: u64, pub expires_at: u64,
+}
+impl SnatchTarget {
+    pub fn arm(&mut self) {
+        // Expiry will extend to 30m after the discovered hold release.
+        self.expires_at=clock_ms().saturating_add(30*60*1000);
+    }
+    fn valid(&self)->bool {
+        self.id>0 && matches!(self.kind.as_str(),"item"|"pokemon") &&
+        matches!(self.currency.as_str(),"gold"|"orb") &&
+        self.max_price>0 && (self.kind=="pokemon" || self.item_id>0) &&
+        self.expires_at>0
+    }
+}
+#[derive(Clone,Debug,Default)]
+pub struct SnatchRow {
+    pub id:u64, pub kind:String, pub currency:String, pub item_id:u64,
+    pub price:u64, pub quantity:u64, pub release_at:u64,
+    pub attempts:u64, pub manual:bool, pub phase:String,
+}
+#[derive(Clone)]
+struct SnatchEntry {
+    offer:Offer, rule_id:Option<String>, attempts:u64,
+    retry_at:Option<Instant>, last_verified:Option<Instant>,
+    needs_verify:bool, release_at:u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MarketRules {
@@ -85,13 +120,14 @@ pub struct MarketRules {
     pub max_purchases_session: u64,
     pub max_quantity_session: u64,
     pub rules: Vec<BuyRule>,
+    pub snatch_targets: Vec<SnatchTarget>,
 }
 impl Default for MarketRules {
     fn default() -> Self {
         Self { enabled: false, paused: false, gold_reserve: 0, gem_reserve: 0,
             max_gold_per_buy: 0, max_gems_per_buy: 0, max_gold_session: 0,
             max_gems_session: 0, max_gold_day: 0, max_gems_day: 0,
-            max_purchases_session: 0, max_quantity_session: 0, rules: vec![] }
+            max_purchases_session: 0, max_quantity_session: 0, rules: vec![], snatch_targets:vec![] }
     }
 }
 impl MarketRules {
@@ -106,6 +142,13 @@ impl MarketRules {
     }
     pub fn validate(&self) -> Result<(), String> {
         if self.rules.len() > 64 { return Err("Maximum 64 market rules".into()); }
+        if self.snatch_targets.len()>40 {return Err("Maximum 40 Snatch targets".into())}
+        let mut snatch_ids=HashSet::new();
+        for target in &self.snatch_targets {
+            if !target.valid() || !snatch_ids.insert(target.id) {
+                return Err(format!("Invalid or duplicated Snatch listing #{}",target.id));
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         for r in &self.rules {
             if !r.valid() || !ids.insert(&r.id) {
@@ -169,6 +212,8 @@ pub struct MarketStatus {
     pub enabled: bool, pub pending: Option<String>, pub sent: u64,
     pub confirmed: u64, pub unknown: u64, pub last: String, pub error: Option<String>,
     pub last_scan: Option<Instant>,
+    pub snatches:Vec<SnatchRow>, pub held_offers:Vec<SnatchRow>,
+    pub snatch_sent:u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Order {
@@ -246,6 +291,9 @@ pub struct MarketBuyer {
     last_scan: HashMap<String,Instant>, urgent_details: HashSet<String>,
     scan_sequence: u64, last_buy: Option<Instant>,
     blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>, failed_closed: bool,
+    snatch:HashMap<u64,SnatchEntry>, snatch_closed:HashMap<u64,String>,
+    snatch_verifying:HashMap<u64,Instant>, snatch_last_verify:HashMap<u64,Instant>,
+    snatch_last_send:HashMap<u64,Instant>,
 }
 impl MarketBuyer {
     pub fn new(profile: GameProfile) -> Self {
@@ -269,7 +317,10 @@ impl MarketBuyer {
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
             summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
             urgent_details:HashSet::new(),scan_sequence:0,
-            last_buy:None,blocked:HashMap::new(),backoff_until:None,failed_closed:error.is_some() }
+            last_buy:None,blocked:HashMap::new(),backoff_until:None,failed_closed:error.is_some(),
+            snatch:HashMap::new(),snatch_closed:HashMap::new(),
+            snatch_verifying:HashMap::new(),snatch_last_verify:HashMap::new(),
+            snatch_last_send:HashMap::new() }
     }
     pub fn on_disconnect(&mut self) {
         let old=std::mem::take(&mut self.pending);
@@ -281,6 +332,10 @@ impl MarketBuyer {
         self.persist();
         self.pending.clear(); self.pending_scan=None; self.offers.clear();
         self.urgent_details.clear();
+        self.snatch.clear();self.snatch_closed.clear();self.snatch_verifying.clear();
+        self.snatch_last_verify.clear();self.snatch_last_send.clear();
+        self.status.snatches.clear();
+        self.status.held_offers.clear();
         self.summary.clear(); self.nick.clear(); self.balances=[None,None];
         self.status.pending=None;
     }
@@ -340,6 +395,7 @@ impl MarketBuyer {
         self.status.last=format!("{} #{} · {} × {} {}",
             if success {"Confirmed"} else {"Refused"},id,o.quantity,o.spend,o.currency);
         if success {self.status.confirmed=self.status.confirmed.saturating_add(1);}
+        self.snatch_reconcile(id,success,now);
         // Item listings can be partially filled. Retry maximum available
         // quantity immediately after a short cooldown, unlike the 30-second
         // native block. Unique Pokémon must never be purchased twice.
@@ -383,12 +439,13 @@ impl MarketBuyer {
             self.blocked.insert(id,now+if item {
                 Duration::from_millis(400)
             } else {Duration::from_secs(1800)});
+            self.snatch_reconcile(id,false,now);
             changed=true;
         }
         if changed {self.persist();}
         self.update_pending();
     }
-    pub fn ingest(&mut self, text: &str, now: Instant) {
+    pub fn ingest(&mut self, text: &str, now: Instant, cfg:&MarketRules) {
         let Ok(frame)=serde_json::from_str::<Value>(text) else{return};
         let t=frame.get("t").and_then(Value::as_str).unwrap_or("");
         if t=="welcome" { self.on_disconnect(); }
@@ -402,6 +459,10 @@ impl MarketBuyer {
                     self.server_offset_ms=clock_ms() as i64-server as i64;
                 }
             }
+        }
+        if t=="market" && frame.get("aba").and_then(Value::as_str)==Some("anuncio") {
+            self.snatch_exact_response(&frame,cfg,now);
+            return;
         }
         if t=="batalha" {
             if let Some(events)=frame.get("ev").and_then(Value::as_array) {
@@ -511,6 +572,21 @@ impl MarketBuyer {
             },
             _=>false
         };
+        if matched {
+            // Strictly scoped, authenticated list replies are the only
+            // automatic Snatch discovery inputs. Held offers are retained
+            // independently of the normal 60-second quote cache.
+            let observed=match &scan {
+                Scan::Item(item,currency)=>self.offers.iter()
+                    .filter(|o|o.kind=="item"&&o.item_id==*item&&o.currency==*currency)
+                    .cloned().collect::<Vec<_>>(),
+                Scan::Pokemon(currency,_)=>self.offers.iter()
+                    .filter(|o|o.kind=="pokemon"&&o.currency==*currency)
+                    .cloned().collect::<Vec<_>>(),
+                _=>vec![],
+            };
+            for offer in observed {self.snatch_record(offer,cfg,now);}
+        }
         if !matched {self.pending_scan=Some((scan,requested_at));}
         else {
             if let Scan::Item(id,currency)=&scan {
@@ -541,10 +617,20 @@ impl MarketBuyer {
         out
     }
     fn budget(&self, cfg:&MarketRules, rule:&BuyRule, offer:&Offer) -> u64 {
+        self.budget_for(cfg,rule,offer,false)
+    }
+    fn budget_for(&self,cfg:&MarketRules,rule:&BuyRule,offer:&Offer,
+        competitive:bool)->u64 {
         let currency=offer.currency.as_str();
         let i=if currency=="orb"{1}else{0};
-        let in_flight=self.pending.iter().filter_map(|n|self.journal.orders.get(*n))
-            .filter(|o|o.currency==currency).fold(0u64,|n,o|n.saturating_add(o.spend));
+        // Ordinary purchases reserve every outstanding attempt. In Snatch
+        // only competitive retries of the exact same listing reuse its
+        // reservation; different listings reserve independently. All sends
+        // remain in the journal for the configured spending caps.
+        let in_flight=self.pending.iter().filter_map(|i|self.journal.orders.get(*i))
+            .filter(|o|o.currency==currency &&
+                !(competitive && o.listing_id==offer.id))
+            .fold(0u64,|total,o|total.saturating_add(o.spend));
         // Reserve pending spend against the last balance snapshot to prevent
         // a five-order burst from committing more than the account can pay.
         let available=self.balances[i].unwrap_or(0)
@@ -582,6 +668,7 @@ impl MarketBuyer {
         if self.failed_closed || !self.status.enabled || self.nick.is_empty() ||
             self.backoff_until.is_some_and(|until|now<until) ||
             self.balances.iter().any(Option::is_none) || !cfg.rules.iter().any(|r|r.enabled) {return None}
+        if self.snatch_critical(cfg) {return None}
         let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
         // Watch can dispatch five buys without awaiting unrelated receipts;
         // normal rule sends have a 120 ms spacing, not a seven-second stall.
@@ -597,26 +684,9 @@ impl MarketBuyer {
                     x.listing_id==o.id && x.status!="refused"))
                 .min_by_key(|o|(o.price,o.id)).cloned();
             let Some(offer)=selected else {continue};
-            let qty=self.budget(cfg,rule,&offer);
-            if qty==0 {continue}
-            let Some(spend)=offer.price.checked_mul(qty) else {continue};
-            self.compact();
-            if self.journal.orders.len()>=20_000 {
-                self.failed_closed=true;self.status.error=Some("Market journal is full".into());return None
+            if let Some(payload)=self.buy_quote(cfg,rule,&offer,now,false) {
+                return Some(payload);
             }
-            let order=Order{listing_id:offer.id,rule_id:rule.id.clone(),currency:offer.currency.clone(),
-                kind:offer.kind.clone(),quantity:qty,spend,day:today(),session:self.session,
-                status:"submitted".into(),sent_ms:clock_ms()};
-            self.journal.orders.push(order);
-            if !self.persist() {return None}
-            self.pending.push_back(self.journal.orders.len()-1);
-            self.blocked.insert(offer.id,now+Duration::from_millis(400));
-            self.status.sent+=1;
-            self.last_buy=Some(now);
-            self.update_pending();
-            self.status.last=format!("Rule {}: sent {}x listing #{}",rule.id,qty,offer.id);
-            return Some(json!({"t":"market.comprar","id":offer.id,"qtd":qty,
-                "preco":offer.price,"moeda":offer.currency}));
         }
         }
         if self.pending_scan.as_ref().is_some_and(|(_,at)|at.elapsed()<Duration::from_secs(7)){return None}
@@ -692,6 +762,353 @@ impl MarketBuyer {
         self.last_scan.insert(key,now);self.pending_scan=Some((scan,now));
         Some(payload)
     }
+
+    /// Shared purchase journal and global caps: Snatch is never a competing
+    /// WebSocket and never bypasses explicit account budgets / price ceilings.
+    fn buy_quote(&mut self, cfg:&MarketRules, rule:&BuyRule,
+        offer:&Offer, now:Instant, snatching:bool)->Option<Value> {
+        let qty=self.budget_for(cfg,rule,offer,snatching);
+        if qty==0 {return None}
+        let spend=offer.price.checked_mul(qty)?;
+        self.compact();
+        if self.journal.orders.len()>=20_000 {
+            self.failed_closed=true;
+            self.status.error=Some("Market journal is full".into());
+            return None;
+        }
+        self.journal.orders.push(Order {
+            listing_id:offer.id, rule_id:rule.id.clone(),
+            currency:offer.currency.clone(),kind:offer.kind.clone(),
+            quantity:qty,spend,day:today(),session:self.session,
+            status:"submitted".into(),sent_ms:clock_ms()
+        });
+        // Normal rules persist each order. Snatch builds a burst and commits
+        // its complete journal once, before the native worker sends any
+        // packet; this avoids eight full JSON rewrites in the 4s lottery.
+        if !snatching && !self.persist(){return None}
+        self.pending.push_back(self.journal.orders.len()-1);
+        self.status.sent=self.status.sent.saturating_add(1);
+        self.last_buy=Some(now);
+        if snatching {
+            self.status.snatch_sent=self.status.snatch_sent.saturating_add(1);
+            self.snatch_last_send.insert(offer.id,now);
+            if let Some(s)=self.snatch.get_mut(&offer.id) {
+                s.attempts=s.attempts.saturating_add(1);
+                s.retry_at=Some(now+Duration::from_millis(150));
+            }
+            self.status.last=format!("Snatch #{} · {} units at {} {}",
+                offer.id,qty,offer.price,offer.currency);
+        } else {
+            self.blocked.insert(offer.id,now+Duration::from_millis(400));
+            self.status.last=format!("Rule {}: sent {}x listing #{}",rule.id,qty,offer.id);
+        }
+        self.update_pending();
+        Some(json!({"t":"market.comprar","id":offer.id,
+            "qtd":qty,"preco":offer.price,"moeda":offer.currency}))
+    }
+    fn snatch_rule<'a>(&self,cfg:&'a MarketRules,offer:&Offer,server_ms:u64)
+        ->Option<&'a BuyRule> {
+        cfg.rules.iter().find(|r|r.enabled&&r.buy_max>0&&
+            r.currency==offer.currency &&
+            // A held listing matches at its release timestamp; ordinary
+            // buying still rejects it until the actual server clock reaches it.
+            // The authenticated pre-unlock quote is intentionally retained
+            // for the four-second lottery, even when older than 30 seconds.
+            { let mut retained=offer.clone(); retained.at=Instant::now();
+              retained.matches(r,&self.nick,server_ms.max(offer.held_until)) })
+    }
+    fn snatch_record(&mut self,offer:Offer,cfg:&MarketRules,now:Instant) {
+        if !matches!(offer.kind.as_str(),"item"|"pokemon") ||
+            offer.seller.eq_ignore_ascii_case(&self.nick) ||
+            self.snatch_closed.contains_key(&offer.id) {return}
+        let manual=cfg.snatch_targets.iter().find(|t|t.id==offer.id &&
+            t.kind==offer.kind && t.currency==offer.currency &&
+            (t.kind!="item"||t.item_id==offer.item_id) &&
+            offer.price<=t.max_price);
+        let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
+        let rule=self.snatch_rule(cfg,&offer,server_ms);
+        if manual.is_none() && !(offer.held_until>server_ms && rule.is_some()) &&
+            !self.snatch.contains_key(&offer.id) {return}
+        if let Some(t)=cfg.snatch_targets.iter().find(|t|t.id==offer.id) {
+            if manual.is_none() {
+                self.snatch_closed.insert(offer.id,"Quote exceeds authorized Snatch price or identity".into());
+                self.snatch.remove(&offer.id);
+                return;
+            }
+            if t.expires_at.max(offer.held_until.saturating_add(30*60_000))<clock_ms() {
+                return;
+            }
+        }
+        let id=offer.id;
+        if !self.snatch.contains_key(&id) && self.snatch.len()>=40 {
+            // Match Moth Watch's bounded observation set. Never displace a
+            // player-armed target for incidental rule-based discovery.
+            let evict=self.snatch.keys().copied().find(|other|
+                !cfg.snatch_targets.iter().any(|t|t.id==*other));
+            if let Some(evict)=evict {self.snatch.remove(&evict);}
+            else {return}
+        }
+        let old=self.snatch.remove(&id);
+        if let Some(previous)=old.as_ref() {
+            if previous.offer.at>offer.at {
+                self.snatch.insert(id,previous.clone());
+                return;
+            }
+        }
+        let release_at=if offer.held_until>0 {offer.held_until}
+            else {old.as_ref().map(|o|o.release_at).unwrap_or(0)};
+        self.snatch.insert(id,SnatchEntry {
+            offer,rule_id:rule.map(|r|r.id.clone())
+                .or_else(||old.as_ref().and_then(|v|v.rule_id.clone())),
+            attempts:old.as_ref().map(|v|v.attempts).unwrap_or(0),
+            retry_at:old.as_ref().and_then(|v|v.retry_at),
+            last_verified:old.as_ref().and_then(|v|v.last_verified),
+            needs_verify:old.as_ref().is_some_and(|v|v.needs_verify),
+            release_at,
+        });
+        // No optimistic verification based on an ordinary summary.
+        let _=now;
+    }
+    fn snatch_reconcile(&mut self,id:u64,success:bool,now:Instant) {
+        if let Some(entry)=self.snatch.get_mut(&id) {
+            if success && entry.offer.kind=="pokemon" {
+                self.snatch.remove(&id);
+                self.snatch_closed.insert(id,"Purchased".into());
+            } else {
+                entry.needs_verify=true;
+                entry.retry_at=Some(now+Duration::from_millis(150));
+            }
+        }
+    }
+    fn snatch_exact_response(&mut self,frame:&Value,cfg:&MarketRules,now:Instant) {
+        let Some(id)=number(frame,"id") else{return};
+        if self.snatch_verifying.remove(&id).is_none(){return}
+        let manual=cfg.snatch_targets.iter().find(|t|t.id==id);
+        let previous=self.snatch.get(&id);
+        let Some(raw)=frame.get("anuncio").filter(|v|v.is_object()) else {
+            self.snatch.remove(&id);
+            self.snatch_closed.insert(id,"Listing sold, closed or missing".into());
+            return;
+        };
+        let kind=if raw.get("ficha").is_some() {"pokemon"}
+            else {raw.get("tipo").and_then(Value::as_str)
+                .or_else(||manual.map(|t|t.kind.as_str()))
+                .or_else(||previous.map(|e|e.offer.kind.as_str()))
+                .unwrap_or("")};
+        let currency=raw.get("moeda").and_then(Value::as_str)
+            .or_else(||manual.map(|t|t.currency.as_str()))
+            .or_else(||previous.map(|e|e.offer.currency.as_str()))
+            .unwrap_or("");
+        let item_id=number(raw,"itemId")
+            .or_else(||manual.map(|t|t.item_id))
+            .or_else(||previous.map(|e|e.offer.item_id)).unwrap_or(0);
+        let offer=Offer::from_listing(raw,kind,item_id,currency,now);
+        if let Some(offer)=offer.filter(|o|o.id==id) {
+            let manual_matches=manual.is_none_or(|t|
+                t.kind==offer.kind && t.currency==offer.currency &&
+                (t.kind!="item"||t.item_id==offer.item_id) &&
+                offer.price<=t.max_price);
+            if manual_matches && !self.nick.is_empty() &&
+                !offer.seller.eq_ignore_ascii_case(&self.nick) {
+                self.snatch_record(offer,cfg,now);
+                if let Some(entry)=self.snatch.get_mut(&id) {
+                    entry.last_verified=Some(now);
+                    entry.needs_verify=false;
+                }
+                return;
+            }
+        }
+        self.snatch.remove(&id);
+        self.snatch_closed.insert(id,"Listing invalid, changed or not available".into());
+    }
+    fn snatch_sync(&mut self,cfg:&MarketRules,now:Instant) {
+        let now_ms=clock_ms();
+        let server_ms=(now_ms as i64-self.server_offset_ms).max(0) as u64;
+        let manual=cfg.snatch_targets.iter().map(|t|t.id).collect::<HashSet<_>>();
+        self.snatch.retain(|id,e|{
+            let selected=cfg.snatch_targets.iter().find(|t|t.id==*id);
+            selected.is_some_and(|t|t.expires_at.max(e.release_at.saturating_add(1_800_000))>now_ms) ||
+                (e.rule_id.as_deref().is_some_and(|r|cfg.rules.iter().any(|rule|
+                    rule.id==r && rule.enabled && rule.buy_max>=e.offer.price &&
+                    rule.currency==e.offer.currency &&
+                    (rule.kind!="item" || rule.item_id==e.offer.item_id))) &&
+                    e.release_at.saturating_add(1_800_000)>server_ms)
+        });
+        self.snatch_closed.retain(|id,_|manual.contains(id));
+        let active=self.snatch.keys().copied().chain(manual.iter().copied())
+            .collect::<HashSet<_>>();
+        self.snatch_last_send.retain(|id,_|active.contains(id));
+        self.snatch_last_verify.retain(|id,_|active.contains(id));
+        // Held rule matches are recorded even if no explicit player target exists.
+        for offer in self.offers.iter().filter(|o|o.held_until>server_ms).cloned()
+            .collect::<Vec<_>>() {
+            self.snatch_record(offer,cfg,now);
+        }
+        let mut rows=Vec::new();
+        for t in &cfg.snatch_targets {
+            let entry=self.snatch.get(&t.id);
+            let phase=if t.expires_at<now_ms &&
+                entry.is_none_or(|e|e.release_at.saturating_add(1_800_000)<now_ms) {
+                    "Expired · cancel or re-arm".into()
+                } else if let Some(reason)=self.snatch_closed.get(&t.id){reason.clone()}
+                else if let Some(e)=entry {
+                    if e.release_at>server_ms {format!("Held · {}s to unlock",
+                        (e.release_at-server_ms).div_ceil(1000))}
+                    else if e.release_at>0 && server_ms<e.release_at+4000 {"Snatch burst".into()}
+                    else if e.needs_verify || e.last_verified.is_none_or(|at|
+                        now.saturating_duration_since(at)>Duration::from_secs(15)) {
+                        "Checking exact listing".into()
+                    }
+                    else {"Competing · verified quote".into()}
+                } else {"Recovering exact listing".into()};
+            rows.push(SnatchRow {id:t.id,kind:t.kind.clone(),currency:t.currency.clone(),
+                item_id:t.item_id,
+                price:entry.map(|e|e.offer.price).unwrap_or(t.max_price),
+                quantity:entry.map(|e|e.offer.qty).unwrap_or(0),
+                release_at:entry.map(|e|e.release_at).unwrap_or(0),
+                attempts:entry.map(|e|e.attempts).unwrap_or(0),
+                manual:true,phase});
+        }
+        for (id,e) in &self.snatch {
+            if manual.contains(id){continue}
+            rows.push(SnatchRow{id:*id,kind:e.offer.kind.clone(),
+                currency:e.offer.currency.clone(),item_id:e.offer.item_id,price:e.offer.price,
+                quantity:e.offer.qty,release_at:e.release_at,attempts:e.attempts,
+                manual:false,phase:if e.release_at>server_ms {
+                    format!("Held · {}s to unlock",(e.release_at-server_ms).div_ceil(1000))
+                } else if e.release_at>0 && server_ms<e.release_at+4000 {
+                    "Snatch burst".into()
+                } else {"Rule-triggered Snatch".into()}});
+        }
+        rows.sort_by_key(|r|(if r.release_at==0 {u64::MAX}else{r.release_at},r.id));
+        rows.truncate(80);
+        self.status.snatches=rows;
+        // Offer discovery is a read-only UI feed. Merely displaying a quote
+        // must never authorize Snatch; the player must explicitly arm it or
+        // an enabled rule must match it.
+        let mut seen=HashSet::new();
+        let mut held=self.offers.iter().filter(|o|
+            o.held_until>server_ms && o.price>0 && o.qty>0 &&
+            !o.seller.eq_ignore_ascii_case(&self.nick) && seen.insert(o.id))
+            .map(|o|SnatchRow {
+                id:o.id,kind:o.kind.clone(),currency:o.currency.clone(),
+                item_id:o.item_id,price:o.price,quantity:o.qty,
+                release_at:o.held_until,attempts:0,manual:false,
+                phase:format!("Unlocks in {}s",
+                    (o.held_until-server_ms).div_ceil(1000))
+            }).collect::<Vec<_>>();
+        held.sort_by_key(|r|(r.release_at,r.id));
+        held.truncate(40);
+        self.status.held_offers=held;
+    }
+    pub fn snatch_critical(&self,cfg:&MarketRules)->bool {
+        if !cfg.enabled || cfg.paused {return false}
+        let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
+        self.snatch.values().any(|e|e.release_at>0 &&
+            e.release_at<=server_ms.saturating_add(2_000) &&
+            server_ms<e.release_at.saturating_add(4_000))
+    }
+    /// One worker iteration can dispatch up to eight eligible offers during
+    /// the critical window. First attempts across listings precede retries.
+    /// Verification requests are independent of the background market scanner.
+    pub fn snatch_actions(&mut self,cfg:&MarketRules,now:Instant)->Vec<Value> {
+        self.snatch_sync(cfg,now);
+        self.snatch_verifying.retain(|_,sent|now.saturating_duration_since(*sent)<Duration::from_secs(4));
+        if self.failed_closed || !cfg.enabled || cfg.paused ||
+            self.nick.is_empty() || self.balances.iter().any(Option::is_none) ||
+            self.backoff_until.is_some_and(|until|now<until) {return Vec::new()}
+        let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
+        let mut ordered=self.snatch.keys().copied().collect::<Vec<_>>();
+        ordered.sort_by_key(|id|{
+            let e=&self.snatch[id];
+            (e.attempts,e.release_at,*id)
+        });
+        let mut out=Vec::new();
+        for id in &ordered {
+            if out.len()>=8 {break}
+            let Some(entry)=self.snatch.get(id).cloned() else {continue};
+            if entry.release_at>server_ms || self.snatch_closed.contains_key(id){continue}
+            if entry.retry_at.is_some_and(|at|now<at) ||
+                self.snatch_last_send.get(id).is_some_and(|at|
+                    now.saturating_duration_since(*at)<Duration::from_millis(150)) {continue}
+            let burst=entry.release_at>0 && server_ms<entry.release_at.saturating_add(4_000);
+            // Held quote remains usable for the release lottery; after the
+            // four-second window require fresh exact market.anuncio evidence.
+            if !burst && (entry.needs_verify ||
+                entry.last_verified.is_none_or(|at|
+                    now.saturating_duration_since(at)>Duration::from_secs(15))) {continue}
+            let manual=cfg.snatch_targets.iter().find(|t|t.id==*id &&
+                t.kind==entry.offer.kind && t.currency==entry.offer.currency &&
+                t.max_price>=entry.offer.price &&
+                (t.kind!="item"||t.item_id==entry.offer.item_id));
+            let rule=if manual.is_none() {
+                self.snatch_rule(cfg,&entry.offer,server_ms).cloned()
+            } else {None};
+            let synthetic=manual.map(|m|BuyRule {
+                id:format!("snatch-manual-{}",m.id), kind:if m.kind=="pokemon" {
+                    "pokemon_any".into()
+                } else {"item".into()},
+                item_id:m.item_id,currency:m.currency.clone(),enabled:true,
+                buy_max:m.max_price,..Default::default()
+            });
+            let selected=rule.as_ref().or(synthetic.as_ref());
+            if let Some(rule)=selected {
+                if let Some(buy)=self.buy_quote(cfg,rule,&entry.offer,now,true) {
+                    out.push(buy);
+                }
+            }
+        }
+        // Recover manually armed unknown IDs; verify 45s before unlock, and
+        // probe exact listing status every 1.5s when no authoritative quote.
+        for target in &cfg.snatch_targets {
+            if target.expires_at<clock_ms() &&
+                self.snatch.get(&target.id).is_none_or(|e|
+                    e.release_at.saturating_add(1_800_000)<clock_ms()) {continue}
+            if out.len()>=8 || self.snatch_verifying.len()>=8 {break}
+            if self.snatch_closed.contains_key(&target.id){continue}
+            let entry=self.snatch.get(&target.id);
+            let due=entry.is_none_or(|e| {
+                let warm=e.release_at==0 || e.release_at<=server_ms.saturating_add(45_000);
+                let before_burst=e.release_at>server_ms;
+                warm && (e.needs_verify ||
+                    (before_burst && e.last_verified.is_none_or(|at|
+                        now.saturating_duration_since(at)>Duration::from_secs(15))) ||
+                    (!before_burst && e.release_at.saturating_add(4_000)<=server_ms &&
+                        e.last_verified.is_none_or(|at|
+                            now.saturating_duration_since(at)>Duration::from_secs(15))))
+            });
+            if !due || self.snatch_verifying.contains_key(&target.id) ||
+                self.snatch_last_verify.get(&target.id).is_some_and(|at|
+                    now.saturating_duration_since(*at)<Duration::from_millis(1500)) {continue}
+            self.snatch_verifying.insert(target.id,now);
+            self.snatch_last_verify.insert(target.id,now);
+            out.push(json!({"t":"market.anuncio","id":target.id}));
+        }
+        // Also revalidate rule-owned held listings near unlock or after the
+        // release burst. Never force exact lookups on every background scan.
+        for id in ordered {
+            if out.len()>=8 || self.snatch_verifying.len()>=8 {break}
+            if self.snatch_verifying.contains_key(&id) ||
+                self.snatch_closed.contains_key(&id) {continue}
+            let Some(e)=self.snatch.get(&id) else {continue};
+            let warm=e.release_at>server_ms &&
+                e.release_at<=server_ms.saturating_add(45_000);
+            let late=e.release_at<=server_ms && e.release_at.saturating_add(4_000)<=server_ms;
+            if !(warm || late) ||
+                (!e.needs_verify && e.last_verified.is_some_and(|at|
+                    now.saturating_duration_since(at)<Duration::from_secs(15))) ||
+                self.snatch_last_verify.get(&id).is_some_and(|at|
+                    now.saturating_duration_since(*at)<Duration::from_millis(1500)) {continue}
+            self.snatch_verifying.insert(id,now);
+            self.snatch_last_verify.insert(id,now);
+            out.push(json!({"t":"market.anuncio","id":id}));
+        }
+        // Batched durability precedes all network writes; if disk persistence
+        // fails, issue none of the prepared buys (including exact lookups).
+        if out.iter().any(|packet|packet.get("t").and_then(Value::as_str)==Some("market.comprar")) &&
+            !self.persist() {return Vec::new()}
+        out
+    }
     pub fn send_failed(&mut self) {
         // The purchase was journaled first. A broken socket cannot prove it
         // failed, so every in-flight attempt becomes unknown exposure.
@@ -702,6 +1119,77 @@ impl MarketBuyer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn native_snatch_requires_explicit_listing_identity_and_price() {
+        let mut t=SnatchTarget {kind:"item".into(),currency:"gold".into(),
+            id:317,item_id:42,max_price:120,..Default::default()};
+        assert!(!t.valid());
+        t.arm();
+        assert!(t.valid());
+        let mut cfg=MarketRules {snatch_targets:vec![t.clone()],..Default::default()};
+        assert!(cfg.validate().is_ok());
+        cfg.snatch_targets.push(t.clone());
+        assert!(cfg.validate().is_err());
+        cfg.snatch_targets.pop();
+        cfg.snatch_targets[0].max_price=0;
+        assert!(cfg.validate().is_err());
+    }
+    #[test] fn held_rule_listing_is_prepared_before_unlock_and_survives_cache_age() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game1);
+        buyer.nick="Mine".into();
+        let now=Instant::now();
+        let release=clock_ms()+120_000;
+        let offer=Offer::from_listing(&json!({"id":341,"preco":35,"qtd":4,
+            "vendedor":"Other","compravelEm":release,"estado":"aberto",
+            "tipo":"item","itemId":42,"moeda":"gold"}),"item",42,"gold",now).unwrap();
+        let cfg=MarketRules {enabled:true,rules:vec![BuyRule {
+            id:"auto".into(),kind:"item".into(),item_id:42,
+            currency:"gold".into(),buy_max:45,enabled:true,..Default::default()
+        }],..Default::default()};
+        buyer.snatch_record(offer.clone(),&cfg,now);
+        assert!(buyer.snatch.contains_key(&341));
+        // Rule matching for release does not silently expire the verified
+        // pre-unlock lot when its regular background cache is older than 30s.
+        let mut earlier=offer;
+        earlier.at=now-Duration::from_secs(70);
+        assert!(buyer.snatch_rule(&cfg,&earlier,release).is_some());
+    }
+    #[test] fn exact_listing_lookup_rejects_closed_and_changed_quotes() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game1);
+        buyer.nick="mine".into();
+        let mut t=SnatchTarget{id:291,kind:"item".into(),currency:"gold".into(),
+            item_id:42,max_price:100,..Default::default()};
+        t.arm();
+        let cfg=MarketRules{enabled:true,snatch_targets:vec![t],..Default::default()};
+        let now=Instant::now();
+        buyer.snatch_verifying.insert(291,now);
+        buyer.snatch_exact_response(&json!({"t":"market","aba":"anuncio","id":291,
+            "anuncio":{"id":291,"itemId":42,"tipo":"item","moeda":"gold",
+                "estado":"aberto","qtd":5,"preco":99,"vendedor":"seller"}}),&cfg,now);
+        assert!(buyer.snatch.get(&291).is_some());
+        assert!(buyer.snatch.get(&291).unwrap().last_verified.is_some());
+        buyer.snatch_verifying.insert(291,now);
+        buyer.snatch_exact_response(&json!({"t":"market","aba":"anuncio","id":291,
+            "anuncio":{"id":291,"itemId":42,"tipo":"item","moeda":"gold",
+                "estado":"aberto","qtd":5,"preco":101,"vendedor":"seller"}}),&cfg,now);
+        assert!(!buyer.snatch.contains_key(&291));
+        assert!(buyer.snatch_closed.contains_key(&291));
+        buyer.snatch_verifying.insert(292,now);
+        buyer.snatch_exact_response(&json!({"t":"market","aba":"anuncio","id":292,
+            "anuncio":null}),&cfg,now);
+        assert!(buyer.snatch_closed.contains_key(&292));
+    }
+    #[test] fn manual_unknown_listing_is_looked_up_before_buying() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.nick="me".into(); buyer.balances=[Some(5000),Some(100)];
+        let mut target=SnatchTarget{id:991,kind:"item".into(),currency:"gold".into(),
+            item_id:42,max_price:100,..Default::default()};
+        target.arm();
+        let cfg=MarketRules{enabled:true,snatch_targets:vec![target],..Default::default()};
+        let actions=buyer.snatch_actions(&cfg,Instant::now());
+        assert_eq!(actions.len(),1);
+        assert_eq!(actions[0],json!({"t":"market.anuncio","id":991}));
+        assert!(buyer.snatch_verifying.contains_key(&991));
+    }
     #[test] fn imported_watch_rules_are_disarmed_globally() {
         let rules=MarketRules::import_watch(r#"{"fixedRulesEnabled":true,"fixedItemRules":[{"itemId":42,"buyMax":100,"currency":"gold","buyEnabled":true}],"pokemonBuyRules":[{"kind":"shiny","buyMax":2,"currency":"gold"}]}"#).unwrap();
         assert!(!rules.enabled);assert_eq!(rules.rules.len(),1);assert!(rules.rules[0].enabled);
