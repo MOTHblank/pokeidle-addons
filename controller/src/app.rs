@@ -644,12 +644,11 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "ERROR" => "ERRO",
         "LANGUAGE" => "IDIOMA",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
-        "Try native WS" => "Testar WS nativo",
+        "Native game + Twitch IRC · browserless" => "Jogo + Twitch IRC nativos · sem navegador",
+        "Authenticating in Firefox · automatic native game + Twitch handoff" =>
+            "Autenticando no Firefox · transferência nativa do jogo + Twitch automática",
         "Reading native handshake…" => "Lendo handshake nativo…",
-        "Native WS experiment · no browser userscripts" => "WS nativo experimental · userscripts inativos",
-        "EXPERIMENT: closes Firefox, loses Auto Catch/Twitch/userscripts; recovers Firefox if the initial Rust handshake fails." =>
-            "EXPERIMENTO: fecha Firefox, desativa Auto Catch/Twitch/userscripts; volta ao Firefox se o handshake Rust inicial falhar.",
-        "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
+         "enabled isolated Firefox profiles" => "perfis isolados do Firefox habilitados",
         _ => en,
     }
 }
@@ -713,6 +712,14 @@ impl GameSlot {
             health.state = if state.phase == "Online" { "Running".into() }
                 else { state.phase.clone() };
             health.activity = format!("Native background · {} kills observed", state.battle_kills);
+            health.bridge_connected = state.phase == "Online";
+            health.bridge_snapshot_ok = state.phase == "Online";
+            health.stream_watching = state.twitch_watching.clone();
+            health.stream_bonus_pct = state.twitch_bonus_pct;
+            health.stream_scan_twitch_channels = Some(state.twitch_live.len() as u32);
+            health.stream_bonus = if state.twitch_bonus_pct > 0.0 {
+                format!("+{}% XP", state.twitch_bonus_pct)
+            } else { String::new() };
             health.game_ready = state.phase == "Online";
             health.logged_in = state.phase == "Online";
             health.hunt = state.hunt_slug.unwrap_or_default();
@@ -1149,6 +1156,7 @@ pub struct ControllerApp {
     native_handoff_tx: Sender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
     native_handoff_busy: [bool; 4],
+    native_handoff_last_attempt: [Option<Instant>; 4],
     games: [GameSlot; 4],
     show_accounts: bool,
     accounts: [AccountConfig; 4],
@@ -1206,6 +1214,7 @@ impl ControllerApp {
             native_handoff_tx,
             native_handoff_rx,
             native_handoff_busy: [false; 4],
+            native_handoff_last_attempt: [None; 4],
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
@@ -1366,7 +1375,7 @@ impl ControllerApp {
                         Ok(native) => {
                             self.games[event.index].native = Some(native);
                             self.set_status(format!(
-                                "{}: experimental native WebSocket connecting (Firefox closed)",
+                                "{}: native game + Twitch IRC starting in Rust (Firefox closed)",
                                 self.account_name(profile)), false);
                         }
                         Err(error) => {
@@ -1379,7 +1388,10 @@ impl ControllerApp {
         }
         let mut recover = Vec::new();
         for slot in &mut self.games {
-            if slot.native.as_ref().is_some_and(|session| session.snapshot().phase == "Failed") {
+            if slot.native.as_ref().is_some_and(|session|
+                session.snapshot().phase == "Failed" ||
+                session.twitch_snapshot().phase == "Failed"
+            ) {
                 if let Some(session) = slot.native.take() { session.stop(); }
                 recover.push((slot.profile, slot.headless));
             }
@@ -1482,6 +1494,24 @@ impl ControllerApp {
                 !result.ok,
             );
         }
+        // Native is the ONLY normal runtime on this experiment branch.
+        // Firefox starts solely to restore authenticated game+IRC handshakes
+        // and is automatically retired once both are captured.
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if !self.accounts[index].enabled || self.native_handoff_busy[index] ||
+               self.games[index].native.is_some() || self.games[index].monitor.is_none() {
+                continue;
+            }
+            let health = self.games[index].health();
+            if !(health.telemetry_is_fresh() && health.logged_in &&
+                 health.bridge_connected && health.stream_scan_status == "ok") {
+                continue;
+            }
+            if self.native_handoff_last_attempt[index]
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(25)) { continue; }
+            self.start_native_handoff(profile);
+        }
     }
 
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
@@ -1570,7 +1600,8 @@ impl ControllerApp {
             return;
         }
         self.native_handoff_busy[index] = true;
-        self.set_status(format!("{}: reading authenticated WebSocket from existing BiDi session",
+        self.native_handoff_last_attempt[index] = Some(Instant::now());
+        self.set_status(format!("{}: transferring game + Twitch IRC authentication to Rust",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
         let result = std::thread::Builder::new()
@@ -2622,22 +2653,22 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
                 if let Some(native) = app.games[index].native.as_ref() {
                     let stats = native.snapshot();
-                    ui.label(RichText::new(tr("Native WS experiment · no browser userscripts"))
-                        .size(10.0).color(WARN));
+                    let twitch = native.twitch_snapshot();
+                    ui.label(RichText::new(tr("Native game + Twitch IRC · browserless"))
+                        .size(10.0).color(GOOD));
                     ui.label(RichText::new(format!(
-                        "{} · {} frames · {} kills · {} captures",
+                        "Game {} · {} frames · {} kills · {} captures",
                         stats.phase, stats.frames, stats.battle_kills, stats.captures
+                    )).size(10.0).color(DIM));
+                    ui.label(RichText::new(format!(
+                        "Twitch IRC {} · {}/{} channels joined",
+                        twitch.phase, twitch.joined, twitch.desired
                     )).size(10.0).color(DIM));
                 }
                 if running && app.games[index].native.is_none()
-                    && app.games[index].monitor.is_some()
-                    && !app.native_handoff_busy[index] {
-                    ui.add_space(6.0);
-                    if ui.small_button(tr("Try native WS")).on_hover_text(
-                        tr("EXPERIMENT: closes Firefox, loses Auto Catch/Twitch/userscripts; recovers Firefox if the initial Rust handshake fails.")
-                    ).clicked() {
-                        app.start_native_handoff(profile);
-                    }
+                    && app.games[index].monitor.is_some() {
+                    ui.label(RichText::new(tr("Authenticating in Firefox · automatic native game + Twitch handoff"))
+                        .size(10.0).color(WARN));
                 }
                 if app.native_handoff_busy[index] {
                     ui.label(tr("Reading native handshake…"));
