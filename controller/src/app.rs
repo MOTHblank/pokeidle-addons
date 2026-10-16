@@ -306,6 +306,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "ID" => "ID",
         "Buy at" => "Comprar ao chegar a",
         "Fill to" => "Repor até",
+        "Select game ball" => "Selecionar bola do jogo",
+        "Select potion" => "Selecionar poção",
+        "Select revive" => "Selecionar revive",
         "Revives" => "Revives",
         "ID 0 disables that category; unknown shop prices cannot be spent." =>
             "ID 0 desativa a categoria; compras exigem preço conhecido pelo servidor.",
@@ -4191,8 +4194,44 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
     });
     capture_stock_input(ui,tr("Balls"),&mut cfg.ball_id,&mut cfg.ball_at,&mut cfg.ball_to);
+    let game_catalog=native.hunt_snapshot();
+    if !game_catalog.ball_names.is_empty() {
+        ui.horizontal_wrapped(|ui|{
+            ui.label(RichText::new(tr("Select game ball")).size(10.0).color(DIM));
+            let selected=game_catalog.ball_names.get(&cfg.ball_id).cloned()
+                .unwrap_or_else(||format!("Ball #{}",cfg.ball_id));
+            egui::ComboBox::from_id_salt(("cap-restock-ball",index))
+                .selected_text(selected).show_ui(ui,|ui|{
+                    ui.selectable_value(&mut cfg.ball_id,0,tr("Disabled"));
+                    for (id,name) in game_catalog.ball_names.iter() {
+                        ui.selectable_value(&mut cfg.ball_id,*id,
+                            format!("{name} · #{id}"));
+                    }
+                });
+        });
+    }
     capture_stock_input(ui,tr("Potions"),&mut cfg.potion_id,&mut cfg.potion_at,&mut cfg.potion_to);
     capture_stock_input(ui,tr("Revives"),&mut cfg.revive_id,&mut cfg.revive_at,&mut cfg.revive_to);
+    if let Some(catalog)=app.inventory_catalog.as_deref() {
+        ui.horizontal_wrapped(|ui|{
+            for (label,selection,needle) in [
+                (tr("Select potion"),&mut cfg.potion_id,"potion"),
+                (tr("Select revive"),&mut cfg.revive_id,"revive")
+            ] {
+                ui.label(RichText::new(label).size(10.0).color(DIM));
+                egui::ComboBox::from_id_salt(("cap-restock-item",index,needle))
+                    .selected_text(catalog.name(*selection)).show_ui(ui,|ui|{
+                        ui.selectable_value(selection,0,tr("Disabled"));
+                        for (id,meta) in catalog.items.iter() {
+                            let label=meta.name.to_lowercase();
+                            if label.contains(needle) || meta.category.to_lowercase().contains(needle) {
+                                ui.selectable_value(selection,*id,format!("{} · #{id}",meta.name));
+                            }
+                        }
+                    });
+            }
+        });
+    }
     ui.label(RichText::new(tr("ID 0 disables that category; unknown shop prices cannot be spent."))
         .size(10.0).color(MUTED));
     if let Some(error)=app.capture_save_error[index].as_deref(){
