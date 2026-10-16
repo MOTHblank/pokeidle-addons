@@ -165,6 +165,9 @@ impl TwitchSession {
     pub fn snapshot(&self) -> TwitchSnapshot {
         self.state.lock().map(|state| state.clone()).unwrap_or_default()
     }
+    pub fn desired_handle(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.desired)
+    }
     pub fn stop(&self) { self.stop.store(true, Ordering::Relaxed); }
 }
 impl Drop for TwitchSession {
