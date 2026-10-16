@@ -326,6 +326,20 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Offline" => "Desconectado",
         "Options" => "Opções",
         "Automation" => "Automação",
+        "Stale" => "Dados antigos",
+        "Explore Pokémon" => "Explorar Pokémon",
+        "Hunt rankings" => "Ranking de hunts",
+        "Capture · Outland · Economy" => "Captura · Outland · Economia",
+        "Session & rewards" => "Sessão e recompensas",
+        "Compare accounts" => "Comparar contas",
+        "← Back to explorer" => "← Voltar à exploração",
+        "Account settings" => "Configurações da conta",
+        "Waiting for data" => "Aguardando dados",
+        "Capture preferences and live statistics" => "Preferências e estatísticas de captura",
+        "Server settings and restock status" => "Opções do jogo e status da reposição",
+        "Recovery & selling" => "Recuperação e venda",
+        "Pokémon protection" => "Proteção de Pokémon",
+        "Automatic buying rules and Snatch" => "Regras de compra e Snatch",
         "Game & restock" => "Jogo e reposição",
         "Market" => "Mercado",
         "Launch enabled" => "Iniciar habilitadas",
@@ -3024,6 +3038,7 @@ fn draw_account_switcher(
         .corner_radius(8.0)
         .inner_margin(Margin::symmetric(9, 7))
         .show(ui, |ui| {
+            let button_width = if ui.available_width() < 780.0 { 112.0 } else { 128.0 };
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("ACCOUNT")).size(10.0).strong().color(DIM));
                 if include_all {
@@ -3041,10 +3056,15 @@ fn draw_account_switcher(
                     let profile = slot.profile;
                     let (state, color) = if let Some(native) = slot.native.as_ref() {
                         let snapshot = native.snapshot();
-                        if snapshot.phase == "Online" {
-                            (tr("Online"), GOOD)
-                        } else {
-                            (tr("Reconnecting"), WARN)
+                        match snapshot.phase.as_str() {
+                            "Online" if snapshot.last_received
+                                .is_some_and(|at| at.elapsed() <= Duration::from_secs(90)) =>
+                                (tr("Online"), GOOD),
+                            "Online" => (tr("Stale"), WARN),
+                            "NeedsLogin" => (tr("Sign-in required"), WARN),
+                            "Reconnecting" => (tr("Reconnecting"), WARN),
+                            "Offline" => (tr("Offline"), DIM),
+                            _ => (tr("Waiting for data"), WARN),
                         }
                     } else if app.cached_native_busy[index] || app.native_verifying[index]
                         || app.native_handoff_busy[index] || slot.handoff_closing {
@@ -3058,9 +3078,9 @@ fn draw_account_switcher(
                     };
                     let selected_here = selected == Some(index);
                     let name = compact_text(&app.accounts[index].name, 15);
-                    let text = format!("{} {}\n{}", if color == GOOD { "●" } else { "○" },
+                    let text = format!("{} {}\n{}", if color == GOOD { "●" } else if color == WARN { "◐" } else { "○" },
                         name, state);
-                    let response = ui.add_sized([128.0, 37.0],
+                    let response = ui.add_sized([button_width, 40.0],
                         egui::Button::new(RichText::new(text).size(10.0)
                             .color(if selected_here { TEXT } else { MUTED }))
                             .fill(if selected_here {
@@ -3068,7 +3088,10 @@ fn draw_account_switcher(
                             } else {
                                 PANEL_ALT
                             })
-                            .stroke(Stroke::new(1.0, if selected_here { ACCENT } else { BORDER }))
+                            .stroke(Stroke::new(1.0, if selected_here { ACCENT }
+                                else if color == GOOD { GOOD.linear_multiply(0.45) }
+                                else if color == WARN { WARN.linear_multiply(0.45) }
+                                else { BORDER }))
                             .corner_radius(6.0));
                     if response.on_hover_text(format!("{} · {}", profile.label(), state)).clicked() {
                         next = Some(index);
@@ -3081,17 +3104,19 @@ fn draw_account_switcher(
 
 /// Performance preferences persist independently of accounts and profiles.
 fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    // Settings must remain reachable at the minimum supported window height.
-    // Bound text width so explanatory copy never becomes a full-screen line.
     egui::ScrollArea::vertical()
         .id_salt("options-page")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let width = ui.available_width().min(720.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(width, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| {
+                egui::vec2(width, 0.0), Layout::top_down(Align::Min),
+                |ui| draw_options_contents(app, ui),
+            );
+        });
+}
+
+fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr("Performance and updates"))
         .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);
@@ -3149,10 +3174,6 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
-
-                },
-            );
-        });
 }
 
 #[derive(Clone, Copy)]
@@ -4386,6 +4407,20 @@ mod history_ui_tests {
 
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
+/// Consistent selected/unselected workspace navigation used by Automation
+/// and Hunt Atlas. Tooltips explain controls without inflating the toolbar.
+fn workspace_tab_button(
+    ui: &mut egui::Ui, label: &str, selected: bool, hint: &str,
+) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(tr(label)).size(12.0)
+            .strong().color(if selected { TEXT } else { MUTED }))
+            .fill(if selected { ACCENT.linear_multiply(0.20) } else { PANEL })
+            .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
+            .corner_radius(7.0),
+    ).on_hover_text(tr(hint))
+}
+
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Keep section navigation above the only vertical scroll region. Market
     // rules can be very long; they should never push Catch controls offscreen.
@@ -4395,14 +4430,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             (AutomationSection::Game, "Game & restock", "Server settings and restock status"),
             (AutomationSection::Market, "Market", "Automatic buying rules and Snatch"),
         ] {
-            let selected = app.automation_section == section;
-            if ui.add(
-                egui::Button::new(RichText::new(tr(label)).size(12.0)
-                    .strong().color(if selected { TEXT } else { MUTED }))
-                    .fill(if selected { ACCENT.linear_multiply(0.20) } else { PANEL })
-                    .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
-                    .corner_radius(7.0),
-            ).on_hover_text(tr(hint)).clicked() {
+            if workspace_tab_button(ui, label,
+                app.automation_section == section, hint).clicked() {
                 app.automation_section = section;
             }
         }
@@ -4474,25 +4503,34 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 "Changes only take effect after PokéIdle confirms them."
             )).size(10.0).color(DIM));
             ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                for (key, label) in [
+            let groups: [(&str, &[(&str, &str)]); 2] = [
+                ("Recovery & selling", &[
                     ("autoPotion", "Auto Potion"),
                     ("autoRevive", "Auto Revive"),
                     ("autoVendaLoot", "Auto Sell"),
+                    ("autoVoltarHunt", "Return to Hunt"),
+                ]),
+                ("Pokémon protection", &[
                     ("autoLockShiny", "Lock Shiny"),
                     ("autoLockNota9", "Lock Grade 9"),
                     ("autoLockP5", "Lock Potency 5"),
-                    ("autoVoltarHunt", "Return to Hunt")
-                ] {
-                    if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
-                        let mut enabled=current;
-                        if ui.add_enabled(can_edit,
-                            egui::Checkbox::new(&mut enabled,label)).changed() {
-                            commands.push((key.into(),serde_json::json!(enabled)));
+                ]),
+            ];
+            for (heading, fields) in groups {
+                ui.label(RichText::new(tr(heading)).size(11.0).strong().color(MUTED));
+                ui.horizontal_wrapped(|ui| {
+                    for (key, label) in fields {
+                        if let Some(current)=automation.get(*key).and_then(serde_json::Value::as_bool) {
+                            let mut enabled=current;
+                            if ui.add_enabled(can_edit,
+                                egui::Checkbox::new(&mut enabled,tr(label))).changed() {
+                                commands.push(((*key).into(),serde_json::json!(enabled)));
+                            }
                         }
                     }
-                }
-            });
+                });
+                ui.add_space(5.0);
+            }
             ui.add_space(10.0);
             let draft=&mut app.automation_drafts[index];
             ui.horizontal_wrapped(|ui| {
@@ -4549,8 +4587,10 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             for rule in &restock.rules {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(format!(
-                        "{} #{}",rule.name,rule.id)).size(11.0).strong().color(TEXT));
+                    let below_target=rule.current.is_some_and(|stock|stock<rule.low);
+                    ui.label(RichText::new(&rule.name).size(11.0).strong()
+                        .color(if below_target{WARN}else{TEXT}))
+                        .on_hover_text(format!("Item #{}",rule.id));
                     ui.label(RichText::new(format!(
                         "{} {} / {} · {} {}",
                         rule.current.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
@@ -6524,7 +6564,7 @@ fn configure_style(ctx: &egui::Context) {
             (TextStyle::Heading, FontId::proportional(22.0)),
             (TextStyle::Body, FontId::proportional(13.0)),
             (TextStyle::Button, FontId::proportional(12.0)),
-            (TextStyle::Small, FontId::proportional(10.0)),
+            (TextStyle::Small, FontId::proportional(11.0)),
             (TextStyle::Monospace, FontId::monospace(11.0)),
         ]
         .into();
