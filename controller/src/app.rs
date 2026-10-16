@@ -1616,7 +1616,9 @@ pub struct ControllerApp {
     hunt_subtab: HuntSubtab,
     hunt_page: usize,
     hunt_action_error: [Option<String>;4],
-    hunt_estimate_cache: hunt_panel::EstimateCache,
+    hunt_estimate_cache: [hunt_panel::EstimateCache;4],
+    atlas_filters: [hunt_panel::AtlasFilters;4],
+    atlas_page: [usize;4],
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
@@ -1743,10 +1745,12 @@ impl ControllerApp {
             hunt_region: String::new(),
             hunt_type: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
-            hunt_subtab: HuntSubtab::Recommendations,
+            hunt_subtab: HuntSubtab::Explorer,
             hunt_page: 0,
             hunt_action_error: std::array::from_fn(|_|None),
-            hunt_estimate_cache: hunt_panel::EstimateCache::default(),
+            hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
+            atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
+            atlas_page: [0;4],
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
@@ -1856,6 +1860,9 @@ impl ControllerApp {
             self.pokemon_type.clear();
         }
         self.hunt_account = index;
+        if self.panel_tab==PanelTab::Hunts && self.hunt_subtab==HuntSubtab::Compare {
+            self.hunt_subtab=HuntSubtab::Explorer;
+        }
         self.automation_account = index;
         self.pokemon_account = index;
         self.history_account = index;
