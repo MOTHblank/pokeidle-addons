@@ -409,7 +409,7 @@ fn session_loop(credentials: Credentials,
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
                 hunt_intel.ingest(&welcome, Instant::now());
-                if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
+                if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
                 update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
@@ -469,7 +469,7 @@ fn session_loop(credentials: Credentials,
                         }
                     }
                     if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
-                        if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
+                        if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                         last_hunt_publish = Instant::now();
                     }
                     update(&snapshot, |s| {
@@ -511,7 +511,7 @@ fn session_loop(credentials: Credentials,
                     while command_rx.try_recv().is_ok() {}
                     restock.on_disconnect(Instant::now());
                     hunt_intel.on_disconnect();
-                    if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
+                    if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {
                         s.phase = "Reconnecting".into();
                         s.native_restock = restock.status.clone();
