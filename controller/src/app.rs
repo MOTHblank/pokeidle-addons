@@ -1150,6 +1150,13 @@ fn make_tray_icon() -> Result<tray_icon::Icon, String> {
 struct NativeHandoffEvent {
     index: usize,
     result: Result<serde_json::Value, String>,
+    cache_warning: Option<String>,
+}
+
+struct CachedNativeEvent {
+    index: usize,
+    headless: bool,
+    result: Result<Option<serde_json::Value>, String>,
 }
 
 pub struct ControllerApp {
@@ -1157,6 +1164,10 @@ pub struct ControllerApp {
     native_handoff_rx: Receiver<NativeHandoffEvent>,
     native_handoff_busy: [bool; 4],
     native_handoff_last_attempt: [Option<Instant>; 4],
+    cached_native_tx: Sender<CachedNativeEvent>,
+    cached_native_rx: Receiver<CachedNativeEvent>,
+    cached_native_busy: [bool; 4],
+    require_browser_login: [bool; 4],
     games: [GameSlot; 4],
     show_accounts: bool,
     accounts: [AccountConfig; 4],
@@ -1198,6 +1209,7 @@ impl ControllerApp {
         let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
         let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
+        let (cached_native_tx, cached_native_rx) = mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1215,6 +1227,10 @@ impl ControllerApp {
             native_handoff_rx,
             native_handoff_busy: [false; 4],
             native_handoff_last_attempt: [None; 4],
+            cached_native_tx,
+            cached_native_rx,
+            cached_native_busy: [false; 4],
+            require_browser_login: [false; 4],
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
@@ -1346,9 +1362,53 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        // Try the protected native credential vault BEFORE constructing any
+        // Firefox process. OS keyring requests run off the UI thread.
+        while let Ok(event) = self.cached_native_rx.try_recv() {
+            if !self.cached_native_busy[event.index] { continue; }
+            self.cached_native_busy[event.index] = false;
+            let profile = GameProfile::from_index(event.index).expect("known slot");
+            if self.games[event.index].is_running() { continue; }
+            if self.require_browser_login[event.index] {
+                self.launch_firefox_bootstrap(profile, event.headless);
+                continue;
+            }
+            match event.result {
+                Ok(Some(saved)) => match NativeSession::start(saved) {
+                    Ok(session) => {
+                        self.games[event.index].native = Some(session);
+                        self.set_status(format!(
+                            "{}: starting native game + Twitch IRC from protected credentials (no Firefox)",
+                            self.account_name(profile)), false);
+                    }
+                    Err(error) => {
+                        self.require_browser_login[event.index] = true;
+                        self.set_status(format!(
+                            "{} native credentials could not start: {error}; authenticating in Firefox",
+                            self.account_name(profile)), true);
+                        self.launch_firefox_bootstrap(profile, event.headless);
+                    }
+                },
+                Ok(None) => {
+                    self.require_browser_login[event.index] = true;
+                    self.set_status(format!(
+                        "{}: first-time native authentication needed",
+                        self.account_name(profile)), false);
+                    self.launch_firefox_bootstrap(profile, event.headless);
+                }
+                Err(error) => {
+                    self.require_browser_login[event.index] = true;
+                    self.set_status(format!(
+                        "{} secure native credentials unavailable: {error}",
+                        self.account_name(profile)), true);
+                    self.launch_firefox_bootstrap(profile, event.headless);
+                }
+            }
+        }
         // Finish BiDi capture on the UI thread. The authenticated bootstrap
         // is never logged or written to a file.
         while let Ok(event) = self.native_handoff_rx.try_recv() {
+            if !self.native_handoff_busy[event.index] { continue; }
             self.native_handoff_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
             match event.result {
@@ -1374,13 +1434,18 @@ impl ControllerApp {
                     match NativeSession::start(bootstrap) {
                         Ok(native) => {
                             self.games[event.index].native = Some(native);
+                            self.require_browser_login[event.index] = false;
+                            let cache_note = event.cache_warning
+                                .map(|warning| format!(" · secure cache not saved: {warning}"))
+                                .unwrap_or_default();
                             self.set_status(format!(
-                                "{}: native game + Twitch IRC starting in Rust (Firefox closed)",
+                                "{}: native game + Twitch IRC starting in Rust (Firefox closed){cache_note}",
                                 self.account_name(profile)), false);
                         }
                         Err(error) => {
-                            self.set_status(format!("Native handoff failed: {error}; reopening Firefox"), true);
-                            self.launch_one_mode(profile, self.games[event.index].headless);
+                            self.require_browser_login[event.index] = true;
+                            self.set_status(format!("Native handoff failed: {error}; returning to Firefox login"), true);
+                            self.launch_firefox_bootstrap(profile, self.games[event.index].headless);
                         }
                     }
                 }
@@ -1389,17 +1454,19 @@ impl ControllerApp {
         let mut recover = Vec::new();
         for slot in &mut self.games {
             if slot.native.as_ref().is_some_and(|session|
-                session.snapshot().phase == "Failed" ||
-                session.twitch_snapshot().phase == "Failed"
+                session.snapshot().phase == "NeedsLogin" ||
+                session.twitch_snapshot().phase == "NeedsLogin"
             ) {
                 if let Some(session) = slot.native.take() { session.stop(); }
                 recover.push((slot.profile, slot.headless));
             }
         }
         for (profile, headless) in recover {
+            self.require_browser_login[profile.index()] = true;
             self.set_status(format!(
-                "{} native WebSocket failed; returning to Firefox", self.account_name(profile)), true);
-            self.launch_one_mode(profile, headless);
+                "{} native authentication expired; opening Firefox for renewal",
+                self.account_name(profile)), true);
+            self.launch_firefox_bootstrap(profile, headless);
         }
         // Drain worker results on the UI thread. Never block egui on GitHub,
         // curl, or Firefox installer tabs.
@@ -1608,7 +1675,18 @@ impl ControllerApp {
             .name(format!("moth-handoff-{}", profile.name()))
             .spawn(move || {
                 let result = monitor.native_bootstrap(Duration::from_secs(18));
-                let _ = tx.send(NativeHandoffEvent { index, result });
+                // Keep browser auth in memory, but cache *valid* credentials
+                // under the OS user account for future entirely native starts.
+                // Secret Service / DPAPI I/O stays outside the egui thread.
+                let mut cache_warning = None;
+                if let Ok(value) = &result {
+                    if crate::native_background::validate_bootstrap(value).is_ok() {
+                        if let Err(error) = crate::native_auth::save(profile, value) {
+                            cache_warning = Some(error);
+                        }
+                    }
+                }
+                let _ = tx.send(NativeHandoffEvent { index, result, cache_warning });
             });
         if let Err(error) = result {
             self.native_handoff_busy[index] = false;
@@ -1622,13 +1700,37 @@ impl ControllerApp {
 
     fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
-        let account_name = self.account_name(profile);
-        self.refresh_processes();
-
-        if self.games[index].is_running() {
-            self.set_status(format!("{} is already running.", account_name), false);
+        if self.games[index].is_running() || self.cached_native_busy[index] ||
+            self.native_handoff_busy[index] {
             return;
         }
+        self.games[index].headless = headless;
+        if self.require_browser_login[index] {
+            self.launch_firefox_bootstrap(profile, headless);
+            return;
+        }
+        self.cached_native_busy[index] = true;
+        let tx = self.cached_native_tx.clone();
+        let started = std::thread::Builder::new()
+            .name(format!("moth-cache-{}", profile.name()))
+            .spawn(move || {
+                let result = crate::native_auth::load(profile);
+                let _ = tx.send(CachedNativeEvent { index, headless, result });
+            });
+        if let Err(error) = started {
+            self.cached_native_busy[index] = false;
+            self.require_browser_login[index] = true;
+            self.set_status(format!("Protected native cache could not start: {error}"), true);
+            self.launch_firefox_bootstrap(profile, headless);
+        }
+    }
+
+    /// Authentication-only browser fallback. Never call as the ordinary
+    /// Launch path while reusable native game + Twitch credentials exist.
+    fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
+        let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
+        if self.games[index].is_running() { return; }
 
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
@@ -1758,6 +1860,10 @@ impl ControllerApp {
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
+        // Cancel in-flight cache lookups and browser handoffs. Results from
+        // canceled workers are ignored even if a Stop is pressed mid-login.
+        self.cached_native_busy[index] = false;
+        self.native_handoff_busy[index] = false;
         let slot = &mut self.games[index];
         if let Some(native) = slot.native.take() {
             native.stop();
@@ -1837,7 +1943,7 @@ impl ControllerApp {
         // Keep any launch error visible rather than overwriting it with a
         // success-shaped summary when a profile is already in use.
         if !self.status_error {
-            self.set_status("Launch enabled requested · monitoring will update as Firefox becomes ready", false);
+            self.set_status("Launch enabled requested · native game and Twitch starting; Firefox only if login needed", false);
         }
     }
 
@@ -1849,7 +1955,7 @@ impl ControllerApp {
             }
         }
         if all_stopped {
-            self.set_status("All Firefox instances closed.", false);
+            self.set_status("All native game/Twitch sessions and Firefox authentication windows stopped.", false);
         } else {
             self.set_status("Some Firefox instances could not be stopped; check the log.", true);
         }
