@@ -3736,7 +3736,33 @@ fn request_hunt_forecasts(app: &mut ControllerApp, account: usize, view: &HuntVi
 
 #[cfg(test)]
 mod hunt_atlas_ui_tests {
-    use super::{select_hunt_rate, HuntRateOrigin};
+    use super::{
+        select_hunt_rate, hunt_forecast_key, hunt_model_needs_refresh,
+        HuntForecastBatch, HuntRateOrigin,
+    };
+    use crate::native_hunts::HuntView;
+    use crate::native_atlas::Reference;
+    use std::{collections::BTreeMap, sync::Arc, time::{Duration, Instant}};
+    #[test]
+    fn forecast_cache_does_not_cross_accounts_and_refreshes_after_ten_seconds() {
+        let view=HuntView::default();
+        let guide=Arc::new(Reference::default());
+        let key=hunt_forecast_key(0,&view,&guide);
+        let ready=HuntForecastBatch {
+            key:key.clone(),completed:Instant::now(),
+            values:Arc::new(BTreeMap::new())
+        };
+        assert!(!hunt_model_needs_refresh(Some(&ready),None,&key));
+        let other=hunt_forecast_key(1,&view,&guide);
+        assert!(hunt_model_needs_refresh(Some(&ready),None,&other));
+        let expired=HuntForecastBatch {
+            key:key.clone(),completed:Instant::now()-Duration::from_secs(11),
+            values:Arc::new(BTreeMap::new())
+        };
+        assert!(hunt_model_needs_refresh(Some(&expired),None,&key));
+        let pending=(key.clone(),Instant::now());
+        assert!(!hunt_model_needs_refresh(Some(&expired),Some(&pending),&key));
+    }
     #[test]
     fn rate_sources_do_not_fabricate_zero_or_mix_channels() {
         assert_eq!(select_hunt_rate(None, None, None), (None, HuntRateOrigin::Missing));
