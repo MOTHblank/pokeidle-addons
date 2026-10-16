@@ -101,6 +101,7 @@ impl HistoryDay {
 }
 #[derive(Clone,Debug,Default)]
 pub struct HistorySnapshot {
+    pub owner: String,
     pub days: Vec<HistoryDay>,
     /// Never pruned: lifetime gameplay totals survive daily detail retention.
     pub lifetime: HistoryDay,
@@ -137,7 +138,7 @@ impl HistorySnapshot {
                 for day in &days { total.accumulate(day); }
                 total
             });
-        Ok(Self{days,lifetime,..Default::default()})
+        Ok(Self{owner:nick.to_owned(),days,lifetime,..Default::default()})
     }
     fn retain_recent(&mut self, now_day:u64) {
         self.days.retain(|day|
@@ -195,6 +196,52 @@ fn write_atomic(path:&PathBuf,content:&str)->Result<(),String>{
     fs::write(&tmp,content).map_err(|error|format!("History staging: {error}"))?;
     fs::rename(&tmp,path).map_err(|error|format!("History save: {error}"))
 }
+/// Read-only history for stopped accounts. Never starts a game socket,
+/// Firefox or Twitch. If the profile was reused, show its latest saved
+/// identity rather than mixing unrelated accounts' totals.
+pub fn load_offline(profile:GameProfile)->HistorySnapshot {
+    let mut fallback=HistorySnapshot::default();
+    let folder=match data_root() {
+        Ok(root)=>root.join("History"),
+        Err(error)=>{fallback.load_error=Some(error);return fallback;}
+    };
+    let Ok(entries)=fs::read_dir(folder) else{return fallback};
+    let prefix=format!("{}-",profile.name());
+    let mut files=entries.filter_map(Result::ok)
+        .filter(|entry|{
+            let name=entry.file_name();
+            let Some(name)=name.to_str() else{return false};
+            name.starts_with(&prefix) && name.ends_with(".json")
+        })
+        .filter_map(|entry|{
+            let meta=entry.metadata().ok()?;
+            if meta.len()>8*1024*1024 {return None;}
+            let modified=meta.modified().ok()?;
+            Some((modified,entry.path()))
+        }).collect::<Vec<_>>();
+    files.sort_by(|a,b|b.0.cmp(&a.0));
+    let Some((_,path))=files.first() else{return fallback};
+    let raw=match fs::read_to_string(path) {
+        Ok(raw)=>raw,
+        Err(error)=>{
+            fallback.load_error=Some(format!("Saved history read: {error}"));
+            return fallback;
+        }
+    };
+    let parsed=serde_json::from_str::<Value>(&raw)
+        .map_err(|_|"Saved history JSON malformed".to_owned())
+        .and_then(|json|{
+            let Some(nick)=json.get("nick").and_then(Value::as_str) else {
+                return Err("Saved history has no account identity".into())
+            };
+            HistorySnapshot::from_value(&json,nick)
+        });
+    match parsed {
+        Ok(mut snapshot)=>{snapshot.retain_recent(unix_day());snapshot},
+        Err(error)=>{fallback.load_error=Some(error);fallback}
+    }
+}
+
 pub struct HistoryRecorder {
     pub shared: Arc<Mutex<HistorySnapshot>>,
     snapshot: HistorySnapshot,
@@ -226,6 +273,7 @@ impl HistoryRecorder {
             },
             Err(error)=>{snapshot.load_error=Some(error);None}
         };
+        snapshot.owner=nick.clone();
         snapshot.retain_recent(unix_day());
         let shared=Arc::new(Mutex::new(snapshot.clone()));
         let (writer_tx,writer_rx)=mpsc::channel::<(PathBuf,String)>();
