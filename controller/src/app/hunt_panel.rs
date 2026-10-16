@@ -706,16 +706,18 @@ fn account_is_live(session:&NativeSession)->bool {
 /// toggles Hunt Atlas's account-comparison mode; no duplicate account strip.
 fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Hunt Atlas · hunts and Pokémon")
+        ui.label(RichText::new("Hunt Atlas")
+            .size(12.0).strong().color(TEXT));
+        ui.label(RichText::new("Explore, compare and model your hunts")
             .size(11.0).color(MUTED));
         if app.hunt_subtab==HuntSubtab::Compare {
-            if ui.small_button("← Back to explorer").clicked(){
+            if workspace_tab_button(ui,"← Back to explorer",false,
+                "Return to the selected account's hunts").clicked(){
                 app.hunt_subtab=HuntSubtab::Explorer;
             }
-            ui.label(RichText::new(
-                "Select any account in the shared switcher above to inspect it."
-            ).size(10.0).color(DIM));
-        }else if ui.small_button("◫ Compare all accounts").clicked(){
+        }else if workspace_tab_button(ui,"Compare accounts",false,
+            "Compare live battle measurements and modeled hunts across all four accounts")
+            .clicked(){
             app.hunt_subtab=HuntSubtab::Compare;
         }
     });
@@ -760,7 +762,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ui.colored_label(if *live{GOOD}else{WARN},
                                 if *live{"● Live"}else{"○ Offline / stale"});
                             if ui.small_button("Open Atlas →").clicked(){
-                                app.hunt_account=*index;
+                                app.select_workspace_account(*index);
                                 app.hunt_subtab=HuntSubtab::Explorer;
                             }
                         });
@@ -1286,8 +1288,28 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 
     let index=app.hunt_account;
     let Some(native)=app.games[index].native.as_ref() else {
-        ui.label(RichText::new("This account is offline. Start it to see available hunts.")
-            .color(WARN));
+        egui::Frame::new().fill(PANEL)
+            .stroke(Stroke::new(1.0,BORDER))
+            .corner_radius(9.0).inner_margin(egui::Margin::same(14))
+            .show(ui,|ui|{
+                ui.label(RichText::new("Hunt data unavailable")
+                    .size(15.0).strong().color(TEXT));
+                ui.label(RichText::new(
+                    "Start this account to load unlocked hunts, battle measurements and Pokémon."
+                ).size(11.0).color(MUTED));
+                ui.horizontal_wrapped(|ui|{
+                    if app.accounts[index].enabled {
+                        if ui.button("Start account").clicked(){
+                            app.launch_one(app.games[index].profile);
+                        }
+                    } else if ui.button("Enable account").clicked(){
+                        app.panel_tab=PanelTab::Accounts;
+                    }
+                    if ui.small_button("Account settings").clicked(){
+                        app.panel_tab=PanelTab::Accounts;
+                    }
+                });
+            });
         return;
     };
     let status=native.snapshot();
@@ -1340,13 +1362,17 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     }
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui|{
-        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Explorer,
-            "Explore Pokémon");
-        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Recommendations,
-            "Hunt rankings");
-        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Current,"Current hunt");
-        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Models,"Capture · Outland · Economy");
-        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Session,"Session & rewards");
+        for (tab,label,hint) in [
+            (HuntSubtab::Explorer, "Explore Pokémon", "Find species, destinations and rankings"),
+            (HuntSubtab::Recommendations, "Hunt rankings", "Compare your unlocked hunts"),
+            (HuntSubtab::Current, "Current hunt", "Live team, battles and bonuses"),
+            (HuntSubtab::Models, "Capture · Outland · Economy", "Model capture, rare drops and market value"),
+            (HuntSubtab::Session, "Session & rewards", "Review kills, captures and earned items"),
+        ] {
+            if workspace_tab_button(ui,label,app.hunt_subtab==tab,hint).clicked() {
+                app.hunt_subtab=tab;
+            }
+        }
     });
     ui.separator();
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
