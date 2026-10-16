@@ -1480,8 +1480,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             }
                         }
                         if ui.small_button("Open persistent history").clicked(){
-                            app.history_account=index;
-                            app.panel_tab=PanelTab::History;
+                            // The only History UI is now within Dashboard details.
+                            app.selected_details=Some(index);
+                            app.dashboard_show_history=true;
+                            app.history_rows_limit=100;
+                            app.panel_tab=PanelTab::Overview;
                         }
                     });
                     ui.add_space(10.0);
