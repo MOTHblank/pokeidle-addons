@@ -76,12 +76,9 @@ def candidates(path: str, allow_external: bool = False) -> list[str]:
 
 
 def image_extension(raw: bytes) -> str | None:
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+    # Only embed PNG images: the native application uses a PNG-only decoder.
+    if raw.startswith(bytes.fromhex("89504e470d0a1a0a")):
         return "png"
-    if raw[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif"
-    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
-        return "webp"
     return None
 
 
