@@ -29,6 +29,8 @@ pub struct NativeSnapshot {
     pub orbs: Option<u64>,
     pub hunt_slug: Option<String>,
     pub frames: u64,
+    pub battle_kills: u64,
+    pub captures: u64,
     pub error: Option<String>,
 }
 impl Default for NativeSnapshot {
@@ -36,7 +38,7 @@ impl Default for NativeSnapshot {
         Self {
             phase: "Connecting".into(), last_received: None,
             trainer_level: None, trainer_xp: None, gold: None, orbs: None,
-            hunt_slug: None, frames: 0, error: None,
+            hunt_slug: None, frames: 0, battle_kills: 0, captures: 0, error: None,
         }
     }
 }
@@ -207,6 +209,18 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str) {
     update(snapshot, |status| {
         status.frames = status.frames.saturating_add(1);
         status.last_received = Some(Instant::now());
+        if payload.get("t").and_then(Value::as_str) == Some("batalha") {
+            if let Some(events) = payload.get("ev").and_then(Value::as_array) {
+                for event in events {
+                    match event.get("k").and_then(Value::as_str) {
+                        Some("morte") => status.battle_kills = status.battle_kills.saturating_add(1),
+                        Some("bola") if event.get("sucesso").and_then(Value::as_bool) == Some(true) =>
+                            status.captures = status.captures.saturating_add(1),
+                        _ => {}
+                    }
+                }
+            }
+        }
         if let Some(state) = state {
             if let Some(level) = state.get("level").and_then(Value::as_u64) {
                 status.trainer_level = u32::try_from(level).ok();
@@ -301,6 +315,15 @@ mod tests {
         assert!(websocket_authority("wss://pokeidle.io.evil.test/ws").is_err());
         assert!(websocket_authority("wss://someone@pokeidle.io/ws").is_err());
         assert!(websocket_authority("wss://ws.pokeidle.io/ws").is_ok());
+    }
+    #[test]
+    fn records_battle_events_without_requiring_browser_dom() {
+        let status = Arc::new(Mutex::new(NativeSnapshot::default()));
+        observe(&status, r#"{"t":"batalha","ev":[{"k":"morte"},{"k":"bola","sucesso":true}]}"#);
+        let observed = status.lock().unwrap().clone();
+        assert_eq!(observed.battle_kills, 1);
+        assert_eq!(observed.captures, 1);
+        assert_eq!(observed.frames, 1);
     }
     #[test]
     fn cookie_scoping_and_hello_validation() {
