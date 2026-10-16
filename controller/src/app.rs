@@ -560,7 +560,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Firefox" => "Firefox",
         "Monitor" => "Monitor",
         "Poll" => "Consulta",
-        "HEADLESS" => "OCULTO",
+        "HIDDEN" => "OCULTO",
         "EXISTING" => "EXISTENTE",
         "VISIBLE" => "VISÍVEL",
         "MIXED" => "MISTO",
@@ -2483,11 +2483,11 @@ impl ControllerApp {
         let index = profile.index();
         if self.native_handoff_busy[index] { return; }
         let Some(monitor) = self.games[index].monitor.clone() else {
-            self.set_status("Start a Firefox game session before testing native handoff", true);
+            self.set_status("Open Firefox and sign in to PokéIdle first", true);
             return;
         };
         if !self.games[index].health().logged_in {
-            self.set_status("Log into PokéIdle before testing native handoff", true);
+            self.set_status("Sign in to PokéIdle before continuing", true);
             return;
         }
         self.native_handoff_busy[index] = true;
@@ -3441,7 +3441,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let mode = if active.is_empty() {
                         tr("STOPPED")
                     } else if active.iter().all(|game| game.headless) {
-                        tr("HEADLESS")
+                        tr("HIDDEN")
                     } else if active.iter().all(|game| !game.headless) {
                         tr("VISIBLE")
                     } else {
