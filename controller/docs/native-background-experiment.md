@@ -9,7 +9,7 @@ This experiment independently implements a native, TLS-protected game WebSocket 
 1. Check out this experimental branch locally. Build from the source with `cd controller && cargo run`. A first build without `--locked` refreshes `Cargo.lock` to include the TLS crates introduced by the experiment. Rust is not available in the current review environment, so this branch has **not been compiler- or live-session-validated**.
 2. In the test account's isolated Firefox profile, install the **experimental** Controller Bridge 1.3.14 manually using Violentmonkey:
    [Controller Bridge experimental installer](https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/controller-bridge.user.js).
-   Don't replace other users' production Bridge installations, or expect the public `master` update URL to deliver this experimental version.
+   Don't replace other users' production Bridge installations. In this branch, both `@updateURL` and `@downloadURL` are isolated to the experimental branch, so the public `master` channel is unaffected.
 3. Start that account's Firefox through Moth Controller, authenticate normally, then **reload the game tab** so the bridge observes the opening WebSocket `hello`.
 4. Once the account is connected, click **Testar WS nativo / Try native WS** on that account's dashboard card.
 
