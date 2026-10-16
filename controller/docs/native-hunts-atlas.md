@@ -1,7 +1,7 @@
 # Native Hunts / Hunt Atlas — experimental architecture
 
 **Branch:** `experiment/native-background-sessions`  
-**Preview:** `0.1.7-native.12`
+**Preview:** `0.1.7-native.13`
 
 The **Panel → Hunts · Atlas** tab is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
 
@@ -46,3 +46,15 @@ cargo build --release
 Verify: `Panel → Hunts · Atlas` loads the account's hunts immediately after authenticated `welcome`; the guide data enriches species names when reachable; real XP/h becomes available after enough continuous play; switching to another hunt is acknowledged; returning from Firefox recovery or changing Pokémon resets stale measurements; native Twitch and capture remain online.
 
 The code was committed without a local Rust compiler or authenticated game session. GitHub Actions are not a substitute for confirming the live rates and actual hunt-switch behavior on your account. In particular, **do not treat speculative guide forecasts as measured earnings**.
+
+## Native Inventory and Auto Catch settings (native.13)
+
+**Panel → Inventory** shows each account's actual server-reported `estado.balls` and `estado.items` inventory, with an **All accounts** aggregate, name/ID search and category filtering. Pokéball names come from the authenticated `welcome.catalogoBolas`; other names and types come from the public `https://pokeidle.io/assets/items.json`, fetched only when the Inventory tab or Auto Catch editor is opened. No browser or userscript is required, and unknown IDs remain visible without fabricated labels.
+
+**Items acquired** is explicitly separate from stock. The server's `batalha.ev[k=morte].drops` `ganho` (falling back to `qtd`) drives a native per-session tally. Purchases and initial inventory are **never counted as drops**. Manager-style session data also includes kills, captures, XP trainer and Pokémon tracked separately, combat gold, auto-sale gold, ball usage and shinies. Session counters remain intact when switching hunts and reconnecting within the same controller process. The **Hunts · Atlas** current-hunt details include session duration, current wild encounter, live current-hunt information, acquired drops and a confirmable session reset.
+
+**Account details → Automation → Configure native Auto Catch** is now a real Rust-side settings editor: on/off, up to two ball priorities, per-ball reserves, independent restock on/off, gold reserve and ball/potion/revive IDs with buy-at and refill-to thresholds. IDs may be selected from the game's authoritative ball catalog or the optional public item catalog. Edits are validated and saved to the existing encrypted per-account OS credential vault, **then** applied live to the Rust worker without restarting or reopening Firefox. A configuration change preserves unconfirmed restock purchases; resetting a pending order could duplicate buying. The worker now actually enforces per-ball reserves rather than merely displaying them. It does not automate Master Balls.
+
+**Limitations:** only item drops explicitly present in battle events are counted; the session ledger is in memory and begins with the native controller runtime (it does not import past Manager sessions or history from the game). Catalog names are unavailable if the public endpoint is offline, but quantities and item IDs remain correct. The native Auto Catch settings cover capture priority/reserve/restock, not all advanced legacy userscript behavior. The server still controls real purchase availability and prices. The changes have unit tests but have **not** been compiled/live-tested in the editing environment.
+
+Validation: run `cargo test`, then `cargo build --release`. Confirm that selecting Auto Catch preferences while connected changes captured ball choice/reserves, that restocking respects threshold and gold reserve without repeating pending orders, that an inventory purchase changes current stock but does **not** increase acquired drops, and that `morte.drops` events appear in the acquired ledger. Verify all four profiles can coexist natively with Firefox closed.
