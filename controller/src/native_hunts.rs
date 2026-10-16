@@ -838,7 +838,7 @@ mod tests {
                 "xpTreinador":100,"xpPokemon":20}]}"#,now+Duration::from_secs(35+5*i));
         }
         assert_eq!(intel.view.measurements.kills,6);
-        assert_eq!(intel.view.measurements.pokemon_xp_h,120.0*3600.0/25.0);
+        assert_eq!(intel.view.measurements.pokemon_xp_h,120.0*3600.0/29.0);
     }
     #[test]
     fn bonus_expiration_is_recomputed_when_server_clock_moves(){
