@@ -605,6 +605,155 @@ fn atlas_species_rows<'a>(
     rows
 }
 
+
+fn account_is_live(session:&NativeSession)->bool {
+    let status=session.snapshot();
+    status.phase=="Online" && status.last_received
+        .is_some_and(|at|at.elapsed()<=Duration::from_secs(90))
+}
+
+/// One click to switch accounts, with live/offline feedback, rather than a
+/// buried selector. Compare remains available even if the selected slot stops.
+fn draw_atlas_account_strip(app:&mut ControllerApp,ui:&mut egui::Ui){
+    ui.label(RichText::new("ACCOUNT WORKSPACES")
+        .size(10.0).strong().color(DIM));
+    ui.horizontal_wrapped(|ui|{
+        let width=((ui.available_width()-40.0)/5.0).clamp(116.0,230.0);
+        for index in 0..app.games.len() {
+            let name=app.account_name(app.games[index].profile);
+            let (status,hunt)=if let Some(native)=app.games[index].native.as_ref(){
+                let state=native.snapshot();
+                let view=native.hunt_snapshot();
+                (if account_is_live(native){"● Live".to_owned()}
+                    else{format!("◌ {}",state.phase)},
+                    view.hunts.iter().find(|h|Some(h.slug.as_str())==view.hunt_slug.as_deref())
+                        .map(|h|h.name.clone()).or(view.hunt_slug).unwrap_or_else(||"No hunt".into()))
+            }else{("○ Offline".into(),"Start native session".into())};
+            let selected=app.hunt_account==index && app.hunt_subtab!=HuntSubtab::Compare;
+            let label=format!("{}\n{} · {}",name,status,compact_text(&hunt,21));
+            if ui.add(egui::Button::new(RichText::new(label).size(10.5))
+                .fill(if selected{ACCENT.linear_multiply(0.2)}else{PANEL})
+                .stroke(Stroke::new(1.0,if selected{ACCENT}else{BORDER}))
+                .min_size(egui::vec2(width,49.0)))
+                .on_hover_text(format!("{name} — {hunt}"))
+                .clicked(){
+                    app.hunt_account=index;
+                    if app.hunt_subtab==HuntSubtab::Compare {
+                        app.hunt_subtab=HuntSubtab::Explorer;
+                    }
+                }
+        }
+        let compared=app.hunt_subtab==HuntSubtab::Compare;
+        if ui.add(egui::Button::new(RichText::new("◫ Compare\nall accounts").size(10.5))
+            .fill(if compared{ACCENT.linear_multiply(0.2)}else{PANEL})
+            .stroke(Stroke::new(1.0,if compared{ACCENT}else{BORDER}))
+            .min_size(egui::vec2(width,49.0))).clicked(){
+                app.hunt_subtab=HuntSubtab::Compare;
+        }
+    });
+    ui.add_space(6.0);
+}
+
+fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
+    ui.label(RichText::new("Account comparison")
+        .size(16.0).strong().color(TEXT));
+    ui.label(RichText::new(
+        "Current measured results and best modeled unlocked hunts, side by side. Unknown and stale values remain unavailable."
+    ).size(11.0).color(MUTED));
+    let mut views=Vec::new();
+    for index in 0..app.games.len(){
+        let profile=app.games[index].profile;
+        let name=app.account_name(profile);
+        if let Some(native)=app.games[index].native.as_ref(){
+            let view=native.hunt_snapshot();
+            let live=account_is_live(native);
+            app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),live);
+            views.push((index,name,view,live));
+        }else{
+            views.push((index,name,HuntView::default(),false));
+        }
+    }
+    let max_xp=views.iter().filter_map(|(_,_,view,live)|
+        if *live && view.measurements.valid_trainer{
+            Some(view.measurements.trainer_xp_h.max(0.0))
+        }else{None}).fold(0.0_f64,f64::max);
+    ui.add_space(8.0);
+    ui.columns(if ui.available_width()>860.0 {2}else{1},|columns|{
+        let count=columns.len();
+        for (index,name,view,live) in &views {
+            let ui=&mut columns[*index%count];
+            ui.push_id(("atlas-compare",index),|ui|{
+                egui::Frame::new().fill(PANEL)
+                    .stroke(Stroke::new(1.0,if *live{ACCENT}else{BORDER}))
+                    .corner_radius(10.0).inner_margin(egui::Margin::same(13))
+                    .show(ui,|ui|{
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label(RichText::new(name).strong().size(14.0).color(TEXT));
+                            ui.colored_label(if *live{GOOD}else{WARN},
+                                if *live{"● Live"}else{"○ Offline / stale"});
+                            if ui.small_button("Open Atlas →").clicked(){
+                                app.hunt_account=*index;
+                                app.hunt_subtab=HuntSubtab::Explorer;
+                            }
+                        });
+                        let current=view.hunts.iter().find(|h|
+                            view.hunt_slug.as_deref()==Some(h.slug.as_str()));
+                        ui.label(RichText::new(format!("Hunt: {} · Lead: {}",
+                            current.map(|h|h.name.as_str())
+                                .or(view.hunt_slug.as_deref()).unwrap_or("—"),
+                            view.active_pokemon.as_ref().map(|p|p.name.as_str()).unwrap_or("—")
+                        )).size(11.0).color(MUTED));
+                        ui.horizontal_wrapped(|ui|{
+                            let m=&view.measurements;
+                            draw_rate(ui,"Trainer XP/h",
+                                if *live&&m.valid_trainer{Some(m.trainer_xp_h)}else{None},
+                                RateSource::Measured);
+                            ui.add_space(9.0);
+                            draw_rate(ui,"Pokémon XP/h",
+                                if *live&&m.valid_pokemon{Some(m.pokemon_xp_h)}else{None},
+                                RateSource::Measured);
+                            ui.add_space(9.0);
+                            draw_rate(ui,"Net gold/h",
+                                if *live&&m.valid_gold{Some(m.gold_net_h)}else{None},
+                                RateSource::Measured);
+                        });
+                        if max_xp>0.0 && *live && view.measurements.valid_trainer {
+                            ui.add(egui::ProgressBar::new(
+                                (view.measurements.trainer_xp_h/max_xp).clamp(0.0,1.0) as f32
+                            ).text("Relative measured trainer XP/h"));
+                        }
+                        ui.add_space(7.0);
+                        ui.label(RichText::new("TOP MODELED UNLOCKED HUNTS")
+                            .size(10.0).strong().color(DIM));
+                        let mut estimates=view.hunts.iter().filter_map(|h|{
+                            app.hunt_estimate_cache[*index].get(&h.slug)
+                                .map(|f|(h,f.trainer_xp_h,f.calibrated))
+                        }).collect::<Vec<_>>();
+                        estimates.sort_by(|a,b|b.1.total_cmp(&a.1));
+                        for (rank,(hunt,score,calibrated)) in estimates.iter().take(3).enumerate(){
+                            ui.horizontal_wrapped(|ui|{
+                                ui.label(RichText::new(format!(
+                                    "{}. {} · {} trainer XP/h",
+                                    rank+1,hunt.name,format_hunt_amount(*score)
+                                )).size(11.0).color(TEXT));
+                                ui.label(RichText::new(if *calibrated{"calibrated"}
+                                    else{"experimental"}).size(9.0).color(WARN));
+                            });
+                        }
+                        if estimates.is_empty(){
+                            ui.label(RichText::new(if *live &&
+                                app.hunt_estimate_cache[*index].is_pending(){
+                                "Calculating modeled rankings..."
+                            }else{"No validated combat forecast available."})
+                                .size(10.0).color(MUTED));
+                        }
+                    });
+                ui.add_space(10.0);
+            });
+        }
+    });
+}
+
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
     // opened; game socket, Twitch and normal dashboard stay extremely light.
