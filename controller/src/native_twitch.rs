@@ -149,10 +149,6 @@ pub struct TwitchSession {
     stop: Arc<AtomicBool>,
 }
 impl TwitchSession {
-    pub fn start(browser_bootstrap: &serde_json::Value) -> Result<Self, String> {
-        let identity = IrcIdentity::from_browser(browser_bootstrap)?;
-        Self::spawn(identity, None)
-    }
     /// Server welcome is mandatory before we close the authentication
     /// browser. Used by handoff and protected-cache cold starts.
     pub fn start_verified(browser_bootstrap: &serde_json::Value) -> Result<Self, String> {
