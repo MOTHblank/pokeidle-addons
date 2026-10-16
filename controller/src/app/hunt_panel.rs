@@ -1094,7 +1094,7 @@ fn draw_atlas_explorer(
     });
     const PAGE:usize=18;
     let pages=rows.len().div_ceil(PAGE).max(1);
-    *page=*page.min(pages-1);
+    *page=(*page).min(pages-1);
     ui.horizontal_wrapped(|ui|{
         if ui.add_enabled(*page>0,
             egui::Button::new("← Previous")).clicked(){*page-=1}
