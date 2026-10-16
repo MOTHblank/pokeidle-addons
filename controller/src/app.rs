@@ -6211,462 +6211,188 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
 }
 
 
-/// Only classify a script as missing if the monitored game explicitly reports
-/// it missing. Unmonitored/headless-loading accounts cannot be called broken.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AddonCondition {
-    Current,
-    Outdated,
-    NotDetected,
-    Unverified,
-}
-
-fn addon_label(file: &str) -> &str {
-    match file {
-        "autocatch.user.js" => "Auto Catch+",
-        "controller-bridge.user.js" => "Controller Bridge",
-        "hunt-atlas.user.js" => "Hunt Atlas",
-        "market-bot.user.js" => "Moth Watch",
-        "performance.user.js" => "Performance+",
-        "stream-auto-open.user.js" => "Stream Scanner",
-        "twitch-low-resource.user.js" => "Twitch Low Resource",
-        _ => file,
-    }
-}
-
-fn addon_condition(
-    health: &Health,
-    running: bool,
-    latest: &update::AddonVersionStatus,
-    file: &str,
-) -> AddonCondition {
-    if !running || !health.telemetry_is_fresh() || !latest.checked {
-        return AddonCondition::Unverified;
-    }
-    if let Some(installed) = health.addon_versions.get(file) {
-        if latest.versions.get(file).is_some_and(|v| update::is_newer_version(v, installed)) {
-            AddonCondition::Outdated
-        } else {
-            AddonCondition::Current
-        }
-    } else if health.addon_missing.iter().any(|name| name == addon_label(file)) {
-        // The script reported a marker but its runtime check failed.
-        AddonCondition::NotDetected
-    } else {
-        // Missing markers do not prove a missing mandatory installation:
-        // users can choose which published userscripts to enable.
-        AddonCondition::Unverified
-    }
-}
-
+/// Show all four account slots at once; a card never switches or stops another
+/// account. All indicators come from the current game and Twitch connection.
 fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    if app
-        .account_setup_checked_at
-        .map(|checked| checked.elapsed() >= Duration::from_secs(30))
-        .unwrap_or(true)
+    if app.account_setup_checked_at
+        .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(15))
     {
         app.refresh_account_setup();
     }
 
-    // Accounts is a normal full-width workspace, not an egui floating window.
-    // Keep a local content layout and the existing per-account scroll area.
-    ui.vertical(|ui| {
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(tr("Account Manager"))
-                        .font(FontId::proportional(22.0))
-                        .strong()
-                        .color(TEXT),
-                );
-                ui.label(
-                    RichText::new(tr("Manage up to four accounts. Firefox is only needed to sign in."))
-                        .size(11.0)
-                        .color(MUTED),
-                );
-            });
+    ui.label(RichText::new(tr("Account Manager"))
+        .font(FontId::proportional(22.0)).strong().color(TEXT));
+    ui.label(RichText::new(tr("Manage up to four accounts. Firefox is only needed to sign in."))
+        .size(11.0).color(MUTED));
+    ui.add_space(12.0);
 
-            ui.add_space(8.0);
-            let selected = Some(app.hunt_account);
-            if let Some(index) = draw_account_switcher(app, ui, selected, false) {
-                if index != app.hunt_account {
-                    app.select_workspace_account(index);
+    let gap = 12.0;
+    egui::ScrollArea::vertical().id_salt("account_manager_four_cards")
+        .auto_shrink([false, true]).show(ui, |ui| {
+        let columns = if ui.available_width() >= 690.0 { 2 } else { 1 };
+        let width = if columns == 2 {
+            (ui.available_width() - gap) / 2.0
+        } else { ui.available_width() };
+        for row in GameProfile::ALL.chunks(columns) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for &profile in row {
+                    ui.allocate_ui_with_layout(egui::vec2(width, 0.0),
+                        Layout::top_down(Align::Min), |ui| {
+                        draw_account_manager_card(app, ui, profile, width);
+                    });
                 }
-            }
-            ui.add_space(8.0);
+            });
+            ui.add_space(12.0);
+        }
+    });
+}
 
-            // Edit one account at a time. Previously four complete setup and
-            // addon managers stacked vertically, causing very long blank gaps
-            // and making switching between accounts tedious.
-            egui::ScrollArea::vertical()
-                .id_salt(("account_manager_list",app.hunt_account))
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for profile in GameProfile::ALL {
-                        if profile.index() != app.hunt_account { continue; }
-                        let index = profile.index();
-                        let enabled = app.accounts[index].enabled;
-                        let setup = app.account_setup[index].clone();
-                        let health = app.games[index].health();
-                        let running = app.games[index].is_running();
+fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
+    profile: GameProfile, width: f32)
+{
+    let index = profile.index();
+    let enabled = app.accounts[index].enabled;
+    let setup = app.account_setup[index].clone();
+    let health = app.games[index].health();
+    let running = app.games[index].is_running();
+    let game_phase = app.games[index].native.as_ref().map(|session| session.snapshot().phase);
+    let twitch_phase = app.games[index].native.as_ref().map(|session| session.twitch_snapshot());
+    let game_online = game_phase.as_deref() == Some("Online")
+        || (running && health.telemetry_is_fresh() && health.logged_in);
+    let twitch_online = twitch_phase.as_ref().is_some_and(|state| state.phase == "Online");
+    let connecting = app.native_verifying[index] || app.native_handoff_busy[index]
+        || app.cached_native_busy[index] || app.games[index].handoff_closing;
 
-                        let mut changed = false;
-
-                        egui::Frame::new()
-                            .fill(PANEL_ALT)
-                            .stroke(Stroke::new(1.0, BORDER))
-                            .corner_radius(10.0)
-                            .inner_margin(14.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(profile.label())
-                                            .size(15.0)
-                                            .strong()
-                                            .color(TEXT),
-                                    );
-                                    ui.add_space(10.0);
-
-                                    let checkbox_glyph = if enabled { "✓" } else { "" };
-                                    let checkbox = egui::Button::new(
-                                        RichText::new(checkbox_glyph)
-                                            .size(13.0)
-                                            .strong()
-                                            .color(if enabled { TEXT } else { DIM }),
-                                    )
-                                    .fill(if enabled {
-                                        ACCENT.linear_multiply(0.22)
-                                    } else {
-                                        PANEL
-                                    })
-                                    .stroke(Stroke::new(
-                                        1.0,
-                                        if enabled { ACCENT } else { BORDER },
-                                    ))
-                                    .corner_radius(5.0);
-
-                                    if ui.add_sized([28.0, 28.0], checkbox).clicked() {
-                                        app.accounts[index].enabled = !enabled;
-                                        changed = true;
-                                    }
-
-                                    ui.label(
-                                        RichText::new(tr("Enable account"))
-                                            .size(10.0)
-                                            .color(TEXT),
-                                    );
-
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{}: {}",
-                                                tr("Firefox profile"),
-                                                profile.name()
-                                            ))
-                                            .size(9.0)
-                                            .color(DIM),
-                                        );
-                                    });
-                                });
-
-                                ui.add_space(8.0);
-
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(tr("Account name"))
-                                            .size(10.0)
-                                            .strong()
-                                            .color(DIM),
-                                    );
-                                    let response = ui.add_sized(
-                                        [(ui.available_width() - 130.0).clamp(145.0, 360.0), 30.0],
-                                        egui::TextEdit::singleline(&mut app.accounts[index].name)
-                                            .hint_text(profile.label()),
-                                    );
-                                    // Editing is local until Enter/focus loss. Avoid a disk
-                                    // write and destructive whitespace trimming per keystroke.
-                                    if response.changed() {
-                                        app.account_names_dirty[index] = true;
-                                    }
-                                    if response.lost_focus() && app.account_names_dirty[index] {
-                                        changed = true;
-                                    }
-
-                                    if app.accounts[index].name.trim().is_empty() {
-                                        ui.colored_label(WARN, tr("Name cannot be empty"));
-                                    }
-                                });
-
-                                ui.add_space(8.0);
-                                ui.horizontal_wrapped(|ui| {
-                                    if let Some(native) = app.games[index].native.as_ref() {
-                                        let game = native.snapshot();
-                                        let twitch = native.twitch_snapshot();
-                                        status_chip(ui, "Game", &game.phase, game.phase == "Online");
-                                        status_chip(ui, "Twitch",
-                                            &format!("{} {}/{}", twitch.phase, twitch.joined, twitch.desired),
-                                            twitch.phase == "Online");
-                                    } else {
-                                        let phase = if app.native_verifying[index] {
-                                            tr("Authenticating")
-                                        } else if app.cached_native_busy[index] || app.native_handoff_busy[index] {
-                                            tr("Starting")
-                                        } else if running {
-                                            tr("Firefox login")
-                                        } else {
-                                            tr("Stopped")
-                                        };
-                                        status_chip(ui, "Session", phase, false);
-                                    }
-                                    if running {
-                                        if ui.small_button(tr("Stop")).clicked() {
-                                            app.stop_one(profile);
-                                        }
-                                    } else if ui.small_button(tr("Start account")).clicked() {
-                                        app.launch_one(profile);
-                                    }
-                                    if ui.small_button(tr("Open in Firefox")).clicked() {
-                                        app.open_in_firefox(profile);
-                                    }
-                                });
-
-                                ui.add_space(8.0);
-                                ui.horizontal_wrapped(|ui| {
-                                    status_chip(ui, "Firefox profile",
-                                        if setup.profile_ready { tr("Ready") } else { tr("Not configured") },
-                                        setup.profile_ready);
-                                    let game_online = app.games[index].native.as_ref()
-                                        .is_some_and(|native| native.snapshot().phase == "Online")
-                                        || (running && health.telemetry_is_fresh() && health.logged_in);
-                                    status_chip(ui, "PokéIdle login",
-                                        if game_online { tr("Connected") }
-                                        else if running { tr("Waiting for login") }
-                                        else { tr("Not signed in") },
-                                        game_online);
-                                });
-
-                                if enabled && (!setup.setup_complete || app.show_setup_guide[index]) {
-                                    ui.add_space(9.0);
-                                    egui::Frame::new()
-                                        .fill(PANEL)
-                                        .corner_radius(7.0)
-                                        .inner_margin(10.0)
-                                        .show(ui, |ui| {
-                                            ui.horizontal(|ui| {
-                                                ui.label(RichText::new(tr("Account setup")).strong().color(TEXT));
-                                                if setup.setup_complete && ui.small_button(tr("Hide setup guide")).clicked() {
-                                                    app.show_setup_guide[index] = false;
-                                                }
-                                            });
-                                            ui.label(RichText::new(
-                                                tr("Select Start account. If Firefox opens, sign in to PokéIdle there. The account will connect automatically.")
-                                            ).size(10.0).color(MUTED));
-                                            ui.label(RichText::new(
-                                                tr("No browser extensions are required. Setup finishes automatically after you sign in.")
-                                            ).size(10.0).color(DIM));
-                                            if !running && app.games[index].native.is_none()
-                                                && ui.small_button(tr("Start account")).clicked()
-                                            {
-                                                app.launch_one(profile);
-                                            }
-                                        });
-                                } else if enabled && ui.small_button(tr("Show setup guide")).clicked() {
-                                    app.show_setup_guide[index] = true;
-                                }
-
-                                ui.add_space(8.0);
-                                if ui.small_button(if app.addon_manager_open[index] {
-                                    "Hide optional browser scripts"
-                                } else {
-                                    "Optional browser scripts (advanced)"
-                                }).clicked() {
-                                    let opened = !app.addon_manager_open[index];
-                                    app.addon_manager_open[index] = opened;
-                                    if opened {
-                                        app.refresh_account_setup();
-                                        app.request_addon_refresh();
-                                    }
-                                }
-
-                                if app.addon_manager_open[index] {
-                                    let remote_addons = app.addon_version_status.lock()
-                                        .map(|state| state.clone()).unwrap_or_default();
-                                    egui::Frame::new()
-                                        .fill(PANEL)
-                                        .stroke(Stroke::new(1.0, BORDER))
-                                        .corner_radius(8.0)
-                                        .inner_margin(12.0)
-                                        .show(ui, |ui| {
-                                            ui.label(RichText::new(
-                                                tr("These scripts are optional for playing in Firefox. Auto Catch, Restock, Twitch and Market work without them.")
-                                            ).size(10.0).color(MUTED));
-                                            ui.horizontal_wrapped(|ui| {
-                                                ui.label(RichText::new("Optional browser scripts (Premium)")
-                                                    .size(13.0).strong().color(TEXT));
-                                                if ui.add_enabled(!remote_addons.checking,
-                                                    egui::Button::new(tr("Check now"))).clicked()
-                                                {
-                                                    app.request_addon_refresh();
-                                                }
-                                                if remote_addons.checking {
-                                                    ui.spinner();
-                                                    ui.label(tr("Checking for updates…"));
-                                                }
-                                            });
-                                            if !setup.violentmonkey_installed {
-                                                ui.label("Violentmonkey is only needed for scripts you explicitly choose to run in Firefox.");
-                                                if ui.small_button(tr("Install Violentmonkey")).clicked() {
-                                                    app.profile_action(profile, ProfileAction::InstallViolentmonkey);
-                                                }
-                                            } else {
-                                                ui.label(RichText::new("Violentmonkey detected for this Firefox profile.")
-                                                    .size(10.0).color(DIM));
-                                            }
-                                            if let Some(error) = &setup.check_error {
-                                                ui.label(RichText::new(error.as_str()).size(9.0).color(WARN));
-                                            }
-                                            if !running || !health.telemetry_is_fresh() {
-                                                ui.label(RichText::new(tr("Script status is only available while playing in Firefox."))
-                                                    .size(10.0).color(DIM));
-                                            }
-                                            if !remote_addons.checked {
-                                                ui.label(RichText::new(tr(if remote_addons.error.is_some() {
-                                                    "GitHub version check unavailable"
-                                                } else if remote_addons.checking {
-                                                    "Checking GitHub versions…"
-                                                } else {
-                                                    "Use Check now to list optional scripts."
-                                                })).size(10.0).color(DIM));
-                                                if let Some(error) = &remote_addons.error {
-                                                    ui.label(RichText::new(error.as_str()).size(9.0).color(DIM));
-                                                }
-                                            } else {
-                                                if !app.addon_selection_initialized[index]
-                                                    && running && health.telemetry_is_fresh()
-                                                {
-                                                    for file in remote_addons.versions.keys() {
-                                                        if matches!(addon_condition(&health, running, &remote_addons, file),
-                                                            AddonCondition::Outdated)
-                                                        {
-                                                            app.addon_selection[index].insert(file.clone());
-                                                        }
-                                                    }
-                                                    app.addon_selection_initialized[index] = true;
-                                                }
-                                                for (file, latest) in &remote_addons.versions {
-                                                    let condition = addon_condition(&health, running, &remote_addons, file);
-                                                    let mut checked = app.addon_selection[index].contains(file);
-                                                    ui.horizontal_wrapped(|ui| {
-                                                        if ui.checkbox(&mut checked, "").changed() {
-                                                            if checked {
-                                                                app.addon_selection[index].insert(file.clone());
-                                                            } else {
-                                                                app.addon_selection[index].remove(file);
-                                                            }
-                                                        }
-                                                        ui.label(RichText::new(addon_label(file)).size(11.0).strong().color(TEXT));
-                                                        let (label, color) = match condition {
-                                                            AddonCondition::Current => (tr("Up to date"), GOOD),
-                                                            AddonCondition::Outdated => (tr("outdated"), WARN),
-                                                            AddonCondition::NotDetected => ("Not detected (optional)", DIM),
-                                                            AddonCondition::Unverified => {
-                                                                if running && health.telemetry_is_fresh() && remote_addons.checked {
-                                                                    (tr("Not installed or inactive"), DIM)
-                                                                } else {
-                                                                    (tr("Not checked yet"), DIM)
-                                                                }
-                                                            }
-                                                        };
-                                                        let versions = match health.addon_versions.get(file) {
-                                                            Some(installed) => format!("v{installed} → v{latest}"),
-                                                            None => format!("v{latest}"),
-                                                        };
-                                                        ui.label(RichText::new(versions).size(10.0).color(DIM));
-                                                        ui.label(RichText::new(label).size(10.0).color(color));
-                                                    });
-                                                }
-                                            }
-                                            ui.add_space(7.0);
-                                            ui.label(RichText::new(tr("Select only the affected scripts. Installers open in this Firefox profile; confirm installation in Violentmonkey."))
-                                                .size(9.0).color(DIM));
-                                            let installer_visible = !running || !app.games[index].headless;
-                                            if !installer_visible {
-                                                ui.colored_label(WARN, tr("Switch to visible Firefox before opening installers."));
-                                                if ui.button(tr("Restart visible")).clicked() {
-                                                    app.open_in_firefox(profile);
-                                                }
-                                            }
-                                            ui.horizontal_wrapped(|ui| {
-                                                let can_repair = setup.violentmonkey_installed && installer_visible
-                                                    && remote_addons.checked
-                                                    && !app.addon_selection[index].is_empty()
-                                                    && !app.addon_install_busy[index];
-                                                if ui.add_enabled(can_repair, egui::Button::new("Install / update selected")).clicked() {
-                                                    let selected: Vec<String> = app.addon_selection[index].iter().cloned().collect();
-                                                    app.start_addon_install(profile, Some(selected));
-                                                }
-                                            });
-                                            ui.label(RichText::new(tr("Opens installer links through Firefox; confirm installation in Violentmonkey."))
-                                                .size(9.0).color(DIM));
-                                            ui.label(RichText::new(tr("Reload the game only when you choose; an automatic reload could interrupt gameplay."))
-                                                .size(9.0).color(DIM));
-                                        });
-                                }
-
-                                ui.add_space(8.0);
-                                ui.collapsing("Login and profile tools", |ui| {
-                                    ui.label(RichText::new(
-                                        tr("Firefox is only needed to sign in or play in the browser. PokéIdle and Twitch can keep running after it closes.")
-                                    ).size(10.0).color(DIM));
-                                    ui.horizontal_wrapped(|ui| {
-                                        profile_button(ui, tr("Google sign-in"), || {
-                                            app.profile_action(profile, ProfileAction::GoogleSignIn)
-                                        });
-                                        profile_button(ui, tr("Twitch"), || {
-                                            app.profile_action(profile, ProfileAction::Twitch)
-                                        });
-                                        profile_button(ui, tr("Profile folder"), || {
-                                            app.profile_action(profile, ProfileAction::Folder)
-                                        });
-                                    });
-                                });
-                            });
-                        if app.addon_install_busy[index] {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(tr("Opening addon installers…"));
-                            });
-                        }
-                        if !app.addon_install_details[index].is_empty() {
-                            ui.collapsing(tr("Installer details"), |ui| {
-                                for message in &app.addon_install_details[index] {
-                                    ui.label(RichText::new(message).size(10.0).color(MUTED));
-                                }
-                            });
-                        }
-
-                        if changed {
-                            let trimmed = app.accounts[index].name.trim().to_owned();
-                            app.accounts[index].name = if trimmed.is_empty() {
-                                profile.label().to_owned()
-                            } else {
-                                trimmed
-                            };
-                            if app.save_account_config() {
-                                app.account_names_dirty[index] = false;
-                            }
-                        }
-
-                        ui.add_space(10.0);
-                    }
-
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(tr("Each slot is a separate Firefox profile. Disabling a slot removes it from the dashboard and from Launch enabled."))
-                            .size(10.0)
-                            .color(DIM),
-                    );
-                });
+    ui.set_width(width);
+    egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, if game_online && twitch_online { GOOD } else { BORDER }))
+        .corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(profile.label()).size(15.0).strong().color(TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let mut active = enabled;
+                if ui.checkbox(&mut active, tr("Enabled")).changed() {
+                    app.accounts[index].enabled = active;
+                    changed = true;
+                }
+            });
         });
+        ui.add_space(5.0);
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut app.accounts[index].name)
+                .hint_text(profile.label()).desired_width(ui.available_width())
+        );
+        if response.changed() { app.account_names_dirty[index] = true; }
+        if response.lost_focus() && app.account_names_dirty[index] { changed = true; }
+        ui.add_space(6.0);
+
+        let game_label = if game_online { tr("Connected") }
+            else if connecting { tr("Connecting") }
+            else if running { tr("Waiting for login") }
+            else { tr("Not signed in") };
+        let twitch_label = if twitch_online { tr("Connected") }
+            else if let Some(state) = twitch_phase.as_ref() {
+                if state.phase == "NeedsLogin" { tr("Sign-in required") }
+                else if state.phase == "Reconnecting" { tr("Reconnecting") }
+                else if connecting { tr("Connecting") }
+                else { tr(&state.phase) }
+            } else if running { tr("Waiting for Twitch sign-in") }
+            else { tr("Not verified") };
+        ui.horizontal_wrapped(|ui| {
+            status_chip(ui, "PokéIdle", game_label, game_online);
+            status_chip(ui, "Twitch", twitch_label, twitch_online);
+        });
+        if let Some(state) = twitch_phase.as_ref() {
+            if twitch_online {
+                ui.label(RichText::new(format!("{} / {} Twitch channels",
+                    state.joined, state.desired)).size(10.0).color(DIM));
+            }
+            if let Some(error) = &state.error {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+        }
+        if let Some(error) = app.native_error[index].as_deref() {
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
+        if let Some(error) = setup.check_error.as_deref() {
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
+
+        ui.add_space(7.0);
+        ui.horizontal_wrapped(|ui| {
+            if running {
+                if ui.small_button(tr("Stop")).clicked() { app.stop_one(profile); }
+            } else if ui.add_enabled(enabled,
+                egui::Button::new(tr("Start account"))).clicked()
+            {
+                app.launch_one(profile);
+            }
+            if ui.small_button(tr("Open in Firefox")).clicked() {
+                app.open_in_firefox(profile);
+            }
+        });
+
+        let show_guide = !setup.setup_complete || app.show_setup_guide[index];
+        ui.add_space(6.0);
+        if ui.small_button(if show_guide { tr("Hide setup guide") }
+            else { tr("Show setup guide") }).clicked()
+        {
+            app.show_setup_guide[index] = !show_guide;
+        }
+        if show_guide && enabled {
+            egui::Frame::new().fill(PANEL).corner_radius(6.0)
+                .inner_margin(10.0).show(ui, |ui| {
+                ui.label(RichText::new(tr("Sign-in checklist")).strong().color(TEXT));
+                status_chip(ui, "Firefox profile",
+                    if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
+                    setup.profile_ready);
+                status_chip(ui, "PokéIdle login", game_label, game_online);
+                status_chip(ui, "Twitch login", twitch_label, twitch_online);
+                if !game_online {
+                    ui.label(RichText::new(tr(
+                        "Start the account, then sign in to PokéIdle in the Firefox window."
+                    )).size(10.0).color(MUTED));
+                } else if !twitch_online {
+                    ui.label(RichText::new(tr(
+                        "PokéIdle is ready. Sign in to Twitch in the same Firefox profile; both connections are required to finish setup."
+                    )).size(10.0).color(MUTED));
+                } else {
+                    ui.label(RichText::new(tr(
+                        "Both logins are connected. Future starts can reuse your saved login."
+                    )).size(10.0).color(GOOD));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button(tr("Twitch sign-in")).clicked() {
+                        app.profile_action(profile, ProfileAction::Twitch);
+                    }
+                    if ui.small_button(tr("Google sign-in")).clicked() {
+                        app.profile_action(profile, ProfileAction::GoogleSignIn);
+                    }
+                });
+            });
+        }
+        ui.collapsing(tr("Login and profile tools"), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button(tr("Twitch")).clicked() {
+                    app.profile_action(profile, ProfileAction::Twitch);
+                }
+                if ui.small_button(tr("Profile folder")).clicked() {
+                    app.profile_action(profile, ProfileAction::Folder);
+                }
+            });
+        });
+        if changed {
+            let trimmed = app.accounts[index].name.trim();
+            app.accounts[index].name = if trimmed.is_empty() {
+                profile.label().to_owned()
+            } else { trimmed.to_owned() };
+            if app.save_account_config() {
+                app.account_names_dirty[index] = false;
+            }
+        }
+    });
 }
 
 fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
@@ -6679,18 +6405,6 @@ fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::
 }
 
 
-
-fn profile_button(ui: &mut egui::Ui, label: &str, mut action: impl FnMut()) {
-    if ui
-        .add_sized(
-            [124.0, 32.0],
-            egui::Button::new(RichText::new(label).size(11.0)),
-        )
-        .clicked()
-    {
-        action();
-    }
-}
 
 fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     // Loss of BiDi telemetry does not imply that the game or its userscripts stopped.
