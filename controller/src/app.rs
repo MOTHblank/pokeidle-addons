@@ -626,6 +626,13 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Stop" => "Parar",
         "Launch" => "Iniciar",
         "Start native" => "Iniciar nativo",
+        "Open in Firefox" => "Abrir no Firefox",
+        "Stop Firefox" => "Fechar Firefox",
+        "Firefox running" => "Firefox aberto",
+        "Use this account in visible Firefox instead of the native session." =>
+            "Usar esta conta no Firefox visível em vez da sessão nativa.",
+        "Firefox remains open until you stop this account." =>
+            "O Firefox permanece aberto até você parar esta conta.",
         "Stop login" => "Parar login",
         "COMPACT OVERVIEW" => "VISÃO COMPACTA",
         "Select an account to inspect its full statistics" => "Selecione uma conta para ver todas as estatísticas",
@@ -946,6 +953,8 @@ struct GameSlot {
     monitor: Option<MonitorHandle>,
     headless: bool,
     orphaned_pid: Option<u32>,
+    // User explicitly chose visible Firefox; never auto-handoff this browser.
+    browser_only: bool,
 }
 
 impl GameSlot {
@@ -958,6 +967,7 @@ impl GameSlot {
             monitor: None,
             headless: true,
             orphaned_pid: None,
+            browser_only: false,
         }
     }
 
@@ -2295,13 +2305,13 @@ impl ControllerApp {
                 !result.ok,
             );
         }
-        // Native is the ONLY normal runtime on this experiment branch.
-        // Firefox starts solely to restore authenticated game+IRC handshakes
-        // and is automatically retired once both are captured.
+        // Temporary Firefox authentication is auto-handed off to native.
+        // An explicitly opened interactive Firefox must stay open instead.
         for profile in GameProfile::ALL {
             let index = profile.index();
-            if !self.accounts[index].enabled || self.native_handoff_busy[index] ||
-               self.games[index].native.is_some() || self.native_verifying[index] ||
+            if !self.accounts[index].enabled || self.games[index].browser_only ||
+               self.native_handoff_busy[index] || self.games[index].native.is_some() ||
+               self.native_verifying[index] ||
                self.games[index].handoff_closing || self.games[index].monitor.is_none() {
                 continue;
             }
@@ -2443,6 +2453,7 @@ impl ControllerApp {
             return;
         }
         self.games[index].headless = headless;
+        self.games[index].browser_only = false;
         if self.require_browser_login[index] {
             self.launch_firefox_bootstrap(profile, headless);
             return;
@@ -2577,47 +2588,32 @@ impl ControllerApp {
         }
     }
 
-    fn set_browser_mode(&mut self, profile: GameProfile, headless: bool) {
+    /// Explicit interactive browser mode, separate from the temporary native
+    /// authentication bootstrap. Do not open two game sockets for one account.
+    fn open_in_firefox(&mut self, profile: GameProfile) {
         let index = Self::game_index(profile);
-        self.refresh_processes();
+        let account_name = self.account_name(profile);
 
-        if self.games[index].orphaned_pid.is_some() {
-            self.set_status(
-                format!("{}: Close the existing Firefox profile before switching modes.", self.account_name(profile)),
-                true,
-            );
+        // A handoff worker might already be closing the Firefox game tab or
+        // shutting down its process. Never race it with a new browser session.
+        if self.native_verifying[index] || self.games[index].handoff_closing {
+            self.set_status(format!(
+                "{account_name}: native handoff in progress; open Firefox after it finishes."
+            ), true);
             return;
         }
 
-        if !self.games[index].is_running() {
-            self.games[index].headless = headless;
-            self.launch_one_mode(profile, headless);
+        if self.games[index].browser_only && !self.games[index].headless &&
+            self.games[index].is_running() {
+            self.set_status(format!("{account_name}: Firefox is already open."), false);
             return;
         }
 
-        if self.games[index].headless == headless {
-            self.set_status(
-                format!(
-                    "{} is already running in {} mode.",
-                    self.account_name(profile),
-                    if headless { "headless" } else { "visible" }
-                ),
-                false,
-            );
-            return;
-        }
-
-        self.set_status(
-            format!(
-                "{}: switching Firefox to {} mode...",
-                self.account_name(profile),
-                if headless { "headless" } else { "visible" }
-            ),
-            false,
-        );
-        if self.stop_one(profile) {
-            self.launch_one_mode(profile, headless);
-        }
+        // Stop native game/IRC or an authentication-only Firefox first. In
+        // particular, don't run native and Firefox on the same game account.
+        if !self.stop_one(profile) { return; }
+        self.games[index].browser_only = true;
+        self.launch_firefox_bootstrap(profile, false);
     }
 
     fn repair_monitor(&mut self, profile: GameProfile) {
@@ -2851,10 +2847,9 @@ impl ControllerApp {
     }
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
-        // "Open Game" uses the controller-owned visible Firefox process so it
-        // remains interactive and is tracked by the dashboard's process monitor.
+        // "Open Game" uses persistent visible Firefox, not native cache startup.
         if let ProfileAction::Game = action {
-            self.set_browser_mode(profile, false);
+            self.open_in_firefox(profile);
             return;
         }
 
@@ -3833,11 +3828,11 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                // Match the global STOP ALL / LAUNCH ENABLED visual language,
-                // but retain exactly one action for this account.
+                // Native and Firefox are mutually exclusive launch options.
                 let action = tr(if !running { "Start native" }
-                    else if app.games[index].native.is_none() { "Stop login" }
-                    else { "Stop" });
+                    else if app.games[index].native.is_some() { "Stop" }
+                    else if app.games[index].browser_only { "Stop Firefox" }
+                    else { "Stop login" });
                 let (fill, stroke) = if running {
                     (BAD.linear_multiply(0.18), Stroke::new(1.0, BAD.linear_multiply(0.55)))
                 } else {
@@ -3860,8 +3855,19 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         app.launch_one(profile);
                     }
                 }
-                // Only a short status goes beside Stop. Diagnostics and
-                // game actions belong to the full-width account details.
+                if ui.add(
+                    egui::Button::new(
+                        RichText::new(tr("Open in Firefox").to_uppercase())
+                            .size(10.0).strong().color(TEXT),
+                    )
+                    .fill(PANEL_ALT)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .corner_radius(8.0),
+                ).on_hover_text(tr("Use this account in visible Firefox instead of the native session."))
+                .clicked() {
+                    app.open_in_firefox(profile);
+                }
+                // Keep diagnostics in the account details; show only a compact status.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(native) = app.games[index].native.as_ref() {
                         let game = native.snapshot();
@@ -3881,7 +3887,9 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                             twitch.phase, twitch.joined, twitch.desired
                         ));
                     } else if running {
-                        let stage = if app.native_verifying[index] {
+                        let stage = if app.games[index].browser_only {
+                            tr("Firefox running")
+                        } else if app.native_verifying[index] {
                             tr("Verifying native")
                         } else if app.native_handoff_busy[index] {
                             tr("Reading handshake")
@@ -3890,9 +3898,11 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         };
                         ui.add(egui::Label::new(
                             RichText::new(stage).size(10.0).color(WARN)
-                        ).truncate()).on_hover_text(tr(
+                        ).truncate()).on_hover_text(tr(if app.games[index].browser_only {
+                            "Firefox remains open until you stop this account."
+                        } else {
                             "Firefox is temporary; Rust takes over after game and Twitch authentication."
-                        ));
+                        }));
                     }
                 });
             });
@@ -6349,7 +6359,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                             if !installer_visible {
                                                 ui.colored_label(WARN, tr("Switch to visible Firefox before opening installers."));
                                                 if ui.button(tr("Restart visible")).clicked() {
-                                                    app.set_browser_mode(profile, false);
+                                                    app.open_in_firefox(profile);
                                                 }
                                             }
                                             ui.horizontal_wrapped(|ui| {
