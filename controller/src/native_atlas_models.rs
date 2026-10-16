@@ -75,9 +75,19 @@ pub fn at_least_one(p:f64,rolls:f64)->Option<f64>{
 }
 #[derive(Clone,Debug)]
 pub struct CaptureForecast {
-    pub chance:f64, pub accepted_h:f64, pub catches_h:f64,
-    pub shiny_seen_h:Option<f64>, pub shiny_caught_h:Option<f64>,
-    pub shiny_caught_24h:Option<f64>, pub balls_per_capture:f64,
+    pub chance:f64,
+    // Keep the complete, test-covered forecast data available for the
+    // detailed Atlas interface, even when its compact view omits these values.
+    #[allow(dead_code)]
+    pub accepted_h:f64,
+    pub catches_h:f64,
+    #[allow(dead_code)]
+    pub shiny_seen_h:Option<f64>,
+    pub shiny_caught_h:Option<f64>,
+    pub shiny_caught_24h:Option<f64>,
+    #[allow(dead_code)]
+    pub balls_per_capture:f64,
+    #[allow(dead_code)]
     pub accepted_is_ceiling:bool,
 }
 /// If accepted fraction is missing, 100% targetability is an optimistic CEILING,
