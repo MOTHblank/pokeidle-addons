@@ -41,6 +41,7 @@ for an unknown recommendation. Trainer and Pokémon XP streams remain separate.
 | Recommendations and ranking | Implemented with caveat | Three ranking criteria, numerical provenance, no fabricated zero |
 | Hunt filters and search | Implemented | Region, reference-derived type, hunt/name/area/species search |
 | Spawn composition | Implemented | Native server weights, optional guide species name/type |
+| Reference drop probabilities | Implemented, reference-only | Per-species guide item ID, chance, quantity and guide valuation, with no claim of observed odds |
 | Hunt switch | Implemented | Native game command; errors, pending confirmation, disabled if not live |
 | Session XP, gold, drops | Implemented | Server receipts, session reset and item counts |
 | Session ball tracking | Implemented | Ball counts and empirical per-ball success, not predicted capture odds |
