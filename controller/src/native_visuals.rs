@@ -30,9 +30,6 @@ pub struct VisualCache {
     attempted: BTreeSet<(Kind, u64)>,
     request: Sender<Request>,
     results: Receiver<Response>,
-    queued: usize,
-    finished: usize,
-    failed: usize,
 }
 
 fn cache_dir() -> PathBuf {
@@ -189,8 +186,7 @@ impl Default for VisualCache {
                     if output.send(Response { key: (job.kind, job.id), bytes }).is_err() { break; }
                 }
             }).ok();
-        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results,
-            queued: 0, finished: 0, failed: 0 }
+        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results }
     }
 }
 
@@ -210,12 +206,9 @@ impl VisualCache {
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(reply) = self.results.try_recv() {
-            self.finished += 1;
             if let Some(bytes) = reply.bytes {
                 self.put(ctx, reply.key, &bytes);
                 ctx.request_repaint();
-            } else {
-                self.failed += 1;
             }
         }
     }
@@ -234,9 +227,8 @@ impl VisualCache {
             }
             if !self.textures.contains_key(&key) {
                 let urls = image_urls(kind, id, icon_hint);
-                if !urls.is_empty() &&
-                    self.request.send(Request { kind, id, urls }).is_ok() {
-                    self.queued += 1;
+                if !urls.is_empty() {
+                    let _ = self.request.send(Request { kind, id, urls });
                 }
             }
         }
