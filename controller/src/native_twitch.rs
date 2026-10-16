@@ -62,7 +62,7 @@ impl IrcIdentity {
             return Err("Invalid Twitch username".into());
         }
         if !cap.starts_with("CAP REQ :") || cap.len() > 256 ||
-            !cap.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b' ' | b':' | b'/' | b'_' | b'-')) {
+            !cap.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b' ' | b':' | b'/' | b'_' | b'-' | b'.')) {
             return Err("Invalid Twitch IRC capabilities".into());
         }
         Ok(Self { nick: nick.into(), pass: pass.into(), cap: cap.into() })
@@ -302,6 +302,8 @@ mod tests {
             "nick":"NICK myusername", "pass":"PASS oauth:secret",
             "cap":"CAP REQ :twitch.tv/tags twitch.tv/commands"});
         assert!(validate(&sample).is_ok());
+        let native_capture = json!({"url":"wss://irc-ws.chat.twitch.tv:443","nick":"NICK myusername","pass":"PASS oauth:secret","cap":"CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership"});
+        assert!(validate(&native_capture).is_ok());
         assert!(validate(&json!({"url":"wss://evil.tld","nick":"NICK user","pass":"PASS oauth:secret"})).is_err());
         assert!(validate(&json!({"url":"wss://irc-ws.chat.twitch.tv:443","nick":"NICK user","pass":"PASS SCHMOOPIIE"})).is_err());
     }
