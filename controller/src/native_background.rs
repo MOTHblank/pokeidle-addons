@@ -783,7 +783,11 @@ mod tests {
     fn records_battle_events_without_requiring_browser_dom() {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
         let desired = Arc::new(Mutex::new(Vec::new()));
-        observe(&status, r#"{"t":"batalha","ev":[{"k":"morte"},{"k":"bola","sucesso":true}]}"#, &desired);
+        observe(&status, r#"{"t":"batalha","ev":[
+            {"k":"morte","quem":"selvagem"},
+            {"k":"morte","quem":"jogador"},
+            {"k":"bola","sucesso":true}
+        ]}"#, &desired);
         let observed = status.lock().unwrap().clone();
         assert_eq!(observed.battle_kills, 1);
         assert_eq!(observed.captures, 1);
