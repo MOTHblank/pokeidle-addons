@@ -106,7 +106,7 @@ fn snapshot_asset_url(game_url: &str) -> Option<String> {
     let path = game_url.strip_prefix("https://pokeidle.io/")?;
     if !upstream_available_paths().contains(path) { return None; }
     Some(format!(
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/master/{path}"
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/{path}"
     ))
 }
 
@@ -335,7 +335,7 @@ mod tests {
         let url = "https://pokeidle.io/assets/site/assets/ui/ball-poke.png";
         let mirror = snapshot_asset_url(url).unwrap();
         assert_eq!(mirror,
-            "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/master/assets/site/assets/ui/ball-poke.png");
+            "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/assets/site/assets/ui/ball-poke.png");
         assert!(snapshot_asset_url("https://pokeidle.io/assets/unknown.png").is_none());
         assert!(snapshot_asset_url("https://evil.example/pokemon.png").is_none());
         let ball = image_urls(Kind::Ball, 1, None);
