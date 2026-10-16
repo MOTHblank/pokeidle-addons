@@ -120,10 +120,48 @@ impl HistoryDay {
         }
     }
 }
+/// Model estimate captured when Hunt Atlas was actually open and authenticated.
+#[derive(Clone,Debug)]
+pub struct HistoryForecast {
+    pub day:u64,pub hour:u64,pub hunt:String,
+    pub trainer_xp_h:f64,pub pokemon_xp_h:f64,pub kills_h:f64,
+    pub calibrated:bool,
+}
+impl HistoryForecast {
+    pub fn now(hunt:&str,trainer_xp_h:f64,pokemon_xp_h:f64,
+        kills_h:f64,calibrated:bool)->Option<Self>{
+        if hunt.is_empty()||hunt.len()>128
+            ||[trainer_xp_h,pokemon_xp_h,kills_h].iter()
+                .any(|v|!v.is_finite()||*v<0.0){return None}
+        let hour=SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs()/3600;
+        Some(Self{day:hour/24,hour,hunt:hunt.into(),
+            trainer_xp_h,pokemon_xp_h,kills_h,calibrated})
+    }
+    fn to_value(&self)->Value{
+        json!({"day":self.day,"hour":self.hour,"hunt":self.hunt,
+            "trainerH":self.trainer_xp_h,"pokemonH":self.pokemon_xp_h,
+            "killsH":self.kills_h,"calibrated":self.calibrated})
+    }
+    fn from_value(raw:&Value)->Option<Self>{
+        let hunt=raw.get("hunt")?.as_str()?.to_owned();
+        if hunt.is_empty()||hunt.len()>128{return None}
+        let day=raw.get("day")?.as_u64()?;
+        let hour=raw.get("hour")?.as_u64()?;
+        if hour/24!=day{return None}
+        let trainer_xp_h=raw.get("trainerH")?.as_f64()?;
+        let pokemon_xp_h=raw.get("pokemonH")?.as_f64()?;
+        let kills_h=raw.get("killsH")?.as_f64()?;
+        if [trainer_xp_h,pokemon_xp_h,kills_h].iter()
+            .any(|n|!n.is_finite()||*n<0.0){return None}
+        Some(Self{day,hour,hunt,trainer_xp_h,pokemon_xp_h,kills_h,
+            calibrated:raw.get("calibrated").and_then(Value::as_bool).unwrap_or(false)})
+    }
+}
 #[derive(Clone,Debug,Default)]
 pub struct HistorySnapshot {
     pub owner: String,
     pub days: Vec<HistoryDay>,
+    pub forecasts:Vec<HistoryForecast>,
     /// Never pruned: lifetime gameplay totals survive daily detail retention.
     pub lifetime: HistoryDay,
     pub load_error: Option<String>,
@@ -133,7 +171,9 @@ impl HistorySnapshot {
     fn to_value(&self, nick: &str) -> Value {
         json!({"version":1,"nick":nick,
             "lifetime":self.lifetime.to_value(),
-            "days":self.days.iter().map(HistoryDay::to_value).collect::<Vec<_>>()})
+            "days":self.days.iter().map(HistoryDay::to_value).collect::<Vec<_>>(),
+            "forecasts":self.forecasts.iter().map(HistoryForecast::to_value)
+                .collect::<Vec<_>>()})
     }
     fn from_value(value: &Value, nick: &str) -> Result<Self,String> {
         if value.get("version").and_then(Value::as_u64)!=Some(1)
@@ -159,11 +199,17 @@ impl HistorySnapshot {
                 for day in &days { total.accumulate(day); }
                 total
             });
-        Ok(Self{owner:nick.to_owned(),days,lifetime,..Default::default()})
+        let forecasts=value.get("forecasts").and_then(Value::as_array)
+            .filter(|rows|rows.len()<=5000)
+            .map(|rows|rows.iter().filter_map(HistoryForecast::from_value)
+                .collect::<Vec<_>>()).unwrap_or_default();
+        Ok(Self{owner:nick.to_owned(),days,lifetime,forecasts,..Default::default()})
     }
     fn retain_recent(&mut self, now_day:u64) {
         self.days.retain(|day|
             day.day<=now_day && now_day.saturating_sub(day.day)<MAX_DAYS);
+        self.forecasts.retain(|item|item.day<=now_day &&
+            now_day.saturating_sub(item.day)<MAX_DAYS);
     }
     pub fn totals(&self) -> HistoryDay {
         self.lifetime.clone()
@@ -328,6 +374,20 @@ impl HistoryRecorder {
             last_publish:Instant::now(),last_flush:Instant::now(),
             writer:writer_tx,path}
     }
+    pub fn record_forecast(&mut self,model:HistoryForecast){
+        if model.day!=unix_day(){return}
+        if let Some(previous)=self.snapshot.forecasts.iter_mut()
+            .find(|row|row.hour==model.hour && row.hunt==model.hunt){
+            *previous=model;
+        }else{
+            self.snapshot.forecasts.push(model);
+        }
+        // Capturing only one model per hour/hunt prevents redraw-generated
+        // history inflation. The async history writer owns persistence.
+        self.snapshot.retain_recent(unix_day());
+        self.dirty=true;
+        self.needs_publish=true;
+    }
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else{return};
         let kind=frame.get("t").and_then(Value::as_str);
@@ -484,6 +544,21 @@ mod tests {
         assert_eq!(recovered.totals().captures,1);
         assert_eq!(recovered.totals().drops["Heart Stone"],2);
         assert!(HistorySnapshot::from_value(&serde_json::from_str::<Value>(&raw).unwrap(),"Other").is_err());
+    }
+    #[test]
+    fn archived_forecast_roundtrips_without_changing_legacy_history_version(){
+        let row=HistoryForecast{
+            day:123,hour:123*24,hunt:"route-a".into(),
+            trainer_xp_h:2000.0,pokemon_xp_h:900.0,
+            kills_h:120.0,calibrated:true,
+        };
+        let back=HistoryForecast::from_value(&row.to_value()).unwrap();
+        assert_eq!(back.trainer_xp_h,2000.0);
+        assert!(back.calibrated);
+        let mut history=HistorySnapshot::default();
+        history.forecasts.push(row);
+        let revived=HistorySnapshot::from_value(&history.to_value("player"),"player").unwrap();
+        assert_eq!(revived.forecasts.len(),1);
     }
     #[test]
     fn old_history_with_no_time_observations_does_not_claim_a_rate(){
