@@ -952,6 +952,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "PokéIdle is ready. Sign in to Twitch in the same Firefox profile; both connections are required to finish setup." => "PokéIdle está pronto. Entre na Twitch no mesmo perfil do Firefox; os dois logins são necessários.",
         "Both logins are connected. Future starts can reuse your saved login." => "Os dois logins estão conectados. As próximas sessões poderão usar o login salvo.",
         "Twitch sign-in" => "Entrar na Twitch",
+        "Automation is managed in the controller. Start this account to see its current settings." =>
+            "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
         _ => en,
     }
 }
@@ -5426,66 +5428,9 @@ fn draw_game_details(
             if app.games[index].native.is_some() {
                 draw_native_automation(app, ui, index);
             } else {
-                // A browser FPS cap does not establish that Performance+ is enabled.
-                let performance_active = health.telemetry_is_fresh()
-                    && health.performance_enabled == Some(true);
-                let performance_value = if !health.telemetry_is_fresh() {
-                    tr("Not checked yet").to_string()
-                } else {
-                    match health.performance_enabled {
-                        Some(false) => tr("Off").to_string(),
-                        Some(true) if health.performance_fps.is_empty() => tr("Active").to_string(),
-                        Some(true) => format!("{} FPS", health.performance_fps),
-                        None => tr("Not detected in game").to_string(),
-                    }
-                };
-
-                ui.horizontal_wrapped(|ui| {
-                    automation_badge(
-                        ui,
-                        tr("Auto Catch"),
-                        if !health.telemetry_is_fresh() { tr("Not checked") } else if !health.bridge_snapshot_ok { tr("Game data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
-                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
-                    );
-                    automation_badge(
-                        ui,
-                        tr("Restock"),
-                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok { tr("Not checked") } else if health.autocatch_restock.is_empty() { tr("Not reported") } else { tr(&health.autocatch_restock) },
-                        health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on && !health.autocatch_restock.is_empty() && !health.autocatch_restock.eq_ignore_ascii_case("off"),
-                    );
-                    automation_badge(
-                        ui,
-                        tr("Stream scanner"),
-                        if !health.telemetry_is_fresh() || !health.bridge_snapshot_ok {
-                            tr("Not checked")
-                        } else if health.stream_scan_status.is_empty() {
-                            tr("Waiting")
-                        } else {
-                            tr(&health.stream_scan_status)
-                        },
-                        health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok"),
-                    );
-                    if health.telemetry_is_fresh() && health.stream_scan_status.eq_ignore_ascii_case("ok") {
-                        if let Some(channels) = health.stream_scan_twitch_channels {
-                            let shared_tabs = health.tabs.iter()
-                                .filter(|tab| tab.kind == "Twitch" && tab.twitch_channels.is_some())
-                                .count();
-                            let (value, ready) = if channels == 0 {
-                                (tr("No live Twitch channels in last scan").to_string(), false)
-                            } else if shared_tabs == 0 {
-                                (format!("{} {} · {}", channels, tr("Twitch channels"), tr("shared chat tab not observed yet")), false)
-                            } else if shared_tabs == 1 {
-                                (format!("{} {} · 1 {}", channels, tr("Twitch channels"), tr("shared chat tab")), true)
-                            } else {
-                                (format!("{} {} · {} {}", channels, tr("Twitch channels"), shared_tabs, tr("shared chat tabs (refreshing)")), true)
-                            };
-                            automation_badge(ui, tr("Twitch chats"), &value, ready)
-                                .on_hover_text(tr("One chat tab can include many Twitch channels; a second tab may briefly appear during the five-minute refresh."));
-                        }
-                    }
-                    automation_badge(ui, tr("Performance+"), &performance_value, performance_active);
-                });
-
+                ui.label(RichText::new(tr(
+                    "Automation is managed in the controller. Start this account to see its current settings."
+                )).size(10.0).color(MUTED));
             }
 
             // Browser-only controls are irrelevant after successful native
@@ -5887,25 +5832,6 @@ fn draw_game_details(
                     }
                 });
 
-            if app.games[index].native.is_none() {
-                ui.add_space(12.0);
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} {}/{}",
-                                    tr("Optimized Twitch tabs"),
-                                    health.twitch_low_resource_ok,
-                                    health.twitch_tabs
-                                ))
-                                .size(10.0)
-                                .color(MUTED),
-                            ).on_hover_text(tr("This ratio counts Twitch browser tabs, not livestream channels."));
-                        }
-                    });
-                });
-            }
         });
 }
 
