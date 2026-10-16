@@ -316,7 +316,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     if let Some(error)=view.last_error.as_deref(){
         ui.label(RichText::new(format!("Hunt switch: {error}")).color(WARN));
     }
-    if let Some(error)=app.hunt_action_error[index].as_deref(){
+    if let Some(error)=app.hunt_action_error[index].clone(){
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(format!("Command: {error}")).color(BAD));
             if ui.small_button("Dismiss").clicked(){app.hunt_action_error[index]=None;}
@@ -684,6 +684,19 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     }
                     if ranked.is_empty(){ui.label("No hunts match the current filters.");}
                     ui.add_space(7.0);
+                    ui.collapsing("XP bonus assumptions",|ui|{
+                        let b=&hunts.bonuses;
+                        ui.label(format!(
+                            "Trainer event: +{:.1}% · Pokémon event: +{:.1}% · Guild: +{:.1}% · Twitch: +{:.1}%",
+                            b.trainer_event_pct,b.pokemon_event_pct,b.guild_pct,b.twitch_pct
+                        ));
+                        ui.label(format!(
+                            "VIP: {} · Guild boost: {}",
+                            if b.vip_active {"active"}else{"inactive or unknown"},
+                            if b.guild_boost_active {"active"}else{"inactive or unknown"}
+                        ));
+                        ui.label("Guide projections multiply the reported bonus factors. Same-pace scenarios do NOT assume these bonuses. Store boosts not present in native telemetry are not added.");
+                    });
                     ui.label(RichText::new("Gold forecasts are gross expected rewards, not measured net gold. Guide model uses approximate DPS and may significantly overestimate real combat throughput.")
                         .size(10.0).color(MUTED));
                 }
