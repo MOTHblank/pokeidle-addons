@@ -2058,7 +2058,7 @@ impl ControllerApp {
                                     crate::native_tls::ensure()?;
                                     attempted_game_close = true;
                                     monitor.close_game_for_handoff(Duration::from_secs(18))?;
-                                    NativeSession::start_verified(bootstrap)
+                                    NativeSession::start_verified(profile, bootstrap)
                                 })
                             ).unwrap_or_else(|_| {
                                 Err("Native verification thread panicked; see sanitized Rust panic log".to_owned())
@@ -2377,13 +2377,13 @@ impl ControllerApp {
                             if existing_firefox { return Ok(None); }
                             crate::native_auth::load(profile)
                                 .and_then(|saved| saved.map(|bootstrap| {
-                                    NativeSession::start_verified(bootstrap.clone())
+                                    NativeSession::start_verified(profile, bootstrap.clone())
                                         .or_else(|error| {
                                             if error.contains("AUTH_REQUIRED:") ||
                                                 error.contains("rejected the captured OAuth") {
                                                 Err(error)
                                             } else {
-                                                NativeSession::start(bootstrap)
+                                                NativeSession::start(profile, bootstrap)
                                             }
                                         })
                                 }).transpose())
