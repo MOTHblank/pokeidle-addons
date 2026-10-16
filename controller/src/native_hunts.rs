@@ -146,6 +146,7 @@ pub struct HuntIntel {
     battle_samples: VecDeque<BattleSample>,
     battle_trainer: u64,
     battle_pokemon: u64,
+    last_battle_at: Option<Instant>,
     session_kills: u64,
     session_start: Instant,
     recent_drops: VecDeque<(String,u64)>,
@@ -157,7 +158,7 @@ impl HuntIntel {
             view: HuntView::default(), pokemon: BTreeMap::new(),
             roster_dirty: false, active_id: None,
             samples: VecDeque::new(), battle_samples: VecDeque::new(),
-            battle_trainer: 0, battle_pokemon: 0, session_kills: 0,
+            battle_trainer: 0, battle_pokemon: 0, last_battle_at: None, session_kills: 0,
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
         }
@@ -166,9 +167,8 @@ impl HuntIntel {
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
-        self.view.measurements.last_battle_age_secs=self.battle_samples.iter()
-            .rev().find(|sample|sample.kills>0)
-            .map(|sample|sample.at.elapsed().as_secs());
+        self.view.measurements.last_battle_age_secs=self.last_battle_at
+            .map(|at|at.elapsed().as_secs());
         if self.view.measurements.last_battle_age_secs.is_some_and(|age|age>180) {
             // Keeping the previous 10-minute average on screen when combat has
             // stopped makes a stale prediction look like live measurement.
@@ -220,6 +220,7 @@ impl HuntIntel {
         self.battle_samples.clear();
         self.battle_trainer = 0;
         self.battle_pokemon = 0;
+        self.last_battle_at = None;
         self.view.measurements = HuntMeasurements::default();
         self.view.sample_quality = "Reconnecting; collecting fresh measurements".into();
     }
@@ -230,6 +231,7 @@ impl HuntIntel {
             self.battle_samples.clear();
             self.battle_trainer = 0;
             self.battle_pokemon = 0;
+            self.last_battle_at = None;
             self.battle_samples.push_back(BattleSample {
                 at: now, trainer: 0, pokemon: 0, kills: 0
             });
@@ -341,6 +343,7 @@ impl HuntIntel {
                 self.battle_samples.clear();
                 self.battle_trainer=0;
                 self.battle_pokemon=0;
+                self.last_battle_at=None;
                 self.battle_samples.push_back(BattleSample{
                     at:now,trainer:0,pokemon:0,kills:self.session_kills,
                 });
@@ -462,6 +465,7 @@ impl HuntIntel {
                             Some("centro") => { self.view.in_center = true; },
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {
                                 self.session_kills = self.session_kills.saturating_add(1);
+                                self.last_battle_at=Some(now);
                                 self.view.battle_kills = self.session_kills;
                                 let session=&mut self.view.session;
                                 session.kills=session.kills.saturating_add(1);
@@ -864,9 +868,7 @@ mod tests {
         assert!(intel.view.measurements.valid_trainer);
         // Explicitly simulate a snapshot after time has passed without new
         // receipts, independent of periodic server-state traffic.
-        if let Some(sample)=intel.battle_samples.back_mut(){
-            sample.at=Instant::now()-Duration::from_secs(181);
-        }
+        intel.last_battle_at=Some(Instant::now()-Duration::from_secs(181));
         let stats=intel.snapshot();
         assert!(!stats.measurements.valid_trainer);
         assert_eq!(stats.session.kills,6);
