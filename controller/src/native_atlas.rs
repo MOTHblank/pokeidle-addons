@@ -43,6 +43,9 @@ pub struct Reference {
     /// Public-guide destinations, INCLUDING locked ones. Never infer game
     /// unlocks from these; only the authenticated welcome.hunts may do that.
     pub hunts: Vec<HuntEntry>,
+    /// Public client-catalog derived capture rarity (not guide loot prices).
+    pub capture_rarities: BTreeMap<u64,f64>,
+    pub npc_sell_prices: BTreeMap<u64,f64>,
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -190,7 +193,62 @@ pub fn load() -> Result<Reference, String> {
     if bytes.len() as u64 > MAX_BYTES {return Err("Guide reference exceeded size limit".into())}
     let script=std::str::from_utf8(&bytes)
         .map_err(|_|"Guide reference is not UTF-8".to_owned())?;
-    parse(script)
+    let mut reference=parse(script)?;
+    // Only public static assets. Never send BiDi credentials or game cookies.
+    // Missing optional assets do NOT prevent Atlas from loading.
+    let assets=reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(7))
+        .redirect(reqwest::redirect::Policy::custom(|attempt|{
+            if attempt.previous().len()>1 ||
+                attempt.url().host_str()!=Some("pokeidle.io"){
+                attempt.stop()
+            }else{attempt.follow()}
+        }))
+        .build().map_err(|_|"Could not initialize static asset downloader")?;
+    for name in ["creatures.json","creatures-novos.json",
+        "creatures-outland-novos.json","creatures-audit-overrides.json"]{
+        let uri=format!("https://pokeidle.io/assets/{name}");
+        let Ok(response)=assets.get(&uri).send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            else{continue};
+        if response.content_length().is_some_and(|length|length>5_242_880){
+            continue;
+        }
+        let mut body=Vec::new();
+        if response.take(5_242_881).read_to_end(&mut body).is_err()
+            ||body.len()>5_242_880 {continue}
+        if let Ok(catalog)=serde_json::from_slice::<Value>(&body){
+            merge_creature_catalog(&mut reference,&catalog);
+        }
+    }
+    Ok(reference)
+}
+/// A creature's player-market listing must never become NPC/capture rarity.
+/// The identical merge order is used by the userscript (base, new, Outland,
+/// overrides); absent override fields preserve earlier valid values.
+pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
+    let rows=data.get("creatures").or_else(||data.get("overrides"))
+        .and_then(Value::as_array);
+    let Some(rows)=rows else{return};
+    for raw in rows.iter().take(30_000){
+        let Some(raw_id)=raw.get("pokeId").and_then(Value::as_u64)
+            else{continue};
+        let id=if (10501..10548).contains(&raw_id){raw_id-8500}
+            else{raw_id};
+        let level=raw.get("huntLevel").and_then(Value::as_u64)
+            .filter(|v|*v<=u32::MAX as u64).map(|v|v as u32);
+        let positive=|key:&str|raw.get(key).and_then(Value::as_f64)
+            .filter(|n|n.is_finite()&&*n>0.0);
+        let sell=positive("sellValue");
+        let npc=positive("priceNpc");
+        if let Some(price)=npc.or(sell) {
+            reference.npc_sell_prices.insert(id,price);
+        }
+        if let Some(rarity)=crate::native_atlas_models::catalog_rarity(level,sell,npc){
+            reference.capture_rarities.insert(id,rarity);
+        }
+    }
 }
 fn effect(chart:&Reference, attack:&str, target:&ReferenceSpecies) -> f64 {
     target.types.iter().map(|defend|chart.chart.get(attack)
@@ -306,6 +364,20 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_creature_capture_rarity_is_separate_from_market_and_guide_loot(){
+        let mut reference=Reference::default();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":25,"huntLevel":100,"sellValue":8000,"priceNpc":4000},
+                {"pokeId":10501,"huntLevel":300,"sellValue":4000000},
+                {"pokeId":1,"priceNpc":null}
+            ]}));
+        assert_eq!(reference.capture_rarities[&25],8000.0);
+        assert_eq!(reference.npc_sell_prices[&25],4000.0);
+        assert!(reference.capture_rarities.contains_key(&2001));
+        assert!(!reference.capture_rarities.contains_key(&1));
+    }
     #[test]
     fn parses_json_only_and_rejects_executable_script(){
         let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"GHOST":0.0}},"especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],"m":[]}],"hunts":[]};"#;
