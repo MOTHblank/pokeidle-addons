@@ -143,3 +143,64 @@ compiled or gameplay-verified.
 Tray state takes precedence over focus: disabling the unfocused-window option alone does not disable tray throttling. Both switches are persisted as non-secret UI preferences in `controller-options.json` beneath the existing Moth app data root, separate from browser profiles and encrypted native credentials. A failed write leaves the previous setting in effect, with the error in the status bar. No restart is required.
 
 These options affect only UI redraw and Firefox/BiDi polling, **not** authenticated native PokéIdle WebSocket communication, battle processing, Auto Catch, restock or Twitch IRC. Unfocused fast redraw may increase CPU use. This change was reviewed statically; a Rust compiler and authenticated game session were not available in the editing environment.
+
+## Native Automation sidebar, restock audit and information coverage (native.16)
+
+**Sidebar → Automation** is now a dedicated account-selectable workspace, not a
+section at the bottom of expanded Dashboard account details. It displays
+server-reported automation flags separately from native Auto Catch/restock,
+native capture settings, and per-rule restock diagnostics (actual stock,
+buy threshold, target, explicit price and source).
+
+**Restock code review:**
+- Native `shop.buy` uses the same wire shape as Manager and Auto Catch+
+  (`kind`, `id`, `qty`). Native confirmation remains based on matching
+  `batalha.ev[].k="compra"` and/or an authoritative inventory increase.
+- It now reads the initial `welcome` catalog **and subsequent top-level or
+  `estado` shop-catalog updates**. This matters when shop prices arrive after login.
+- When a configured healing-item ID is missing from the server's catalog,
+  it asynchronously fetches PokéIdle's own public `/assets/items.json` with
+  no tokens or cookies and uses **only explicitly positive prices** from
+  supported healing items. Server-provided prices always override public
+  metadata. An explicit server `compravel:false` blocks that ID even if
+  a public catalog has an older price.
+- Price source is visible. Missing prices do **not** authorize an invented
+  purchase. One order remains in flight per account; pending acknowledgements,
+  cooldowns, reconnect uncertainty and gold reserves remain enforced.
+- An explicitly different purchase name cannot acknowledge an order merely
+  because the amount and total match. Added regression tests for incremental
+  shop catalogs, public price and item classification, explicit server
+  buyability, conflicting purchase events and per-rule diagnostics.
+
+**Information received and retained (native):**
+- `welcome`/`estado`: in-game nickname, trainer progression and currencies,
+  current hunt, in-center/active Pokémon, roster and incremental Pokémon patches,
+  IVs, held items, quality, grade, shiny and sprite identifiers, balls/items,
+  automation flags, VIP and bonus information, active wild encounter;
+  unlocked hunt/spawn catalog; native item/ball shop metadata.
+- `campo.init`: most recently confirmed map, slug and timestamp (read-only).
+- `batalha`: hunt/center changes, wild deaths, trainer and Pokémon XP rewards,
+  combat gold, drops, throws/captures and shiny events.
+- Server-based snapshots are published on the game worker's one-second cadence
+  so UI rendering does not block the WebSocket or repeatedly copy the whole
+  roster. Current-hunt measurements are distinct from uncertain Atlas forecasts.
+
+**Important missing parity relative to pokeidle-manager-moth:**
+- `market`, `amigos` and `perfil` protocol families are not implemented as
+  native data domains or full views; advanced marketplace, friends and
+  profile workflows are not supported.
+- Full Manager React UI, sprite atlas, depot management, detailed Pokémon
+  interactions, combat controls, server automation editing and broad
+  marketplace commands are not ported.
+- Historical/session tracking survives in memory only for the current native
+  process, not as a durable historical database.
+- Hunt Atlas other-hunt predictions remain experimental. Some server
+  properties (e.g. nested `loja` and unrecognized event extensions) are
+  intentionally not guessed into a schema.
+
+**Verification boundary:** This is a source/protocol review and regression test
+addition, **not** proof of a real item purchase on an authenticated PokéIdle
+account. A live, priced item below threshold and its matching game purchase
+event, gold delta and stock reconciliation are still required to verify
+end-to-end restock. No local Rust toolchain or authenticated credentials are
+available here. Rebuild the native executable to receive Rust changes.
