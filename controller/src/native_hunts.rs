@@ -36,7 +36,10 @@ pub struct PokemonInfo {
     pub held_item_id: Option<u64>,
     pub power: Option<u64>,
     pub quality: Option<f64>,
+    pub grade: Option<f64>,
     pub potency: Option<u64>,
+    pub looktype: Option<u64>,
+    pub shiny_looktype: Option<u64>,
     pub shiny: bool,
     pub ivs: [Option<u64>; 6],
     pub types: Vec<String>,
@@ -233,7 +236,10 @@ impl HuntIntel {
         if let Some(n) = Self::num(value, "heldItemId") { existing.held_item_id = Some(n); }
         if let Some(n) = Self::num(value, "poder") { existing.power = Some(n); }
         if let Some(n) = value.get("quality").and_then(Value::as_f64) { existing.quality = Some(n); }
+        if let Some(n) = value.get("nota").and_then(Value::as_f64) { existing.grade = Some(n); }
         if let Some(n) = Self::num(value, "potencia") { existing.potency = Some(n); }
+        if let Some(n) = Self::num(value, "looktype") { existing.looktype = Some(n); }
+        if let Some(n) = Self::num(value, "lookShiny") { existing.shiny_looktype = Some(n); }
         if let Some(b) = value.get("shiny").and_then(Value::as_bool) { existing.shiny = b; }
         if let Some(types) = value.get("tipos").and_then(Value::as_array) {
             existing.types = types.iter().filter_map(Value::as_str).map(str::to_owned).collect();
