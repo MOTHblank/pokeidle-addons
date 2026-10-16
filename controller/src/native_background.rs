@@ -203,7 +203,16 @@ fn open_session(credentials: &Credentials) -> Result<(
                 .map_err(|_| "Invalid browser cookie header".to_owned())?);
     }
     let (mut socket, _) = client_tls(request, stream)
-        .map_err(|error| format!("Game TLS/WebSocket handshake failed: {error}"))?;
+        .map_err(|error| {
+            // Distinguish expired/invalid game authorization from transient
+            // TCP/DNS/TLS outages. Only authentication loss may open Firefox.
+            let response = error.to_string();
+            if response.contains("401") || response.contains("403") {
+                "AUTH_REQUIRED: PokéIdle refused native game authentication".to_owned()
+            } else {
+                format!("Game TLS/WebSocket handshake failed: {response}")
+            }
+        })?;
     socket.send(Message::Text(credentials.hello.clone().into()))
         .map_err(|error| format!("Could not send game hello: {error}"))?;
     let until = Instant::now() + WELCOME_TIMEOUT;
@@ -307,14 +316,12 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
 fn session_loop(credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     desired: Arc<Mutex<Vec<String>>>) {
-    let mut ever_connected = false;
-    let mut reconnect_failures = 0usize;
+    let mut rejected_welcomes = 0usize;
     while !stop.load(Ordering::Relaxed) {
         match open_session(&credentials) {
             Ok((mut socket, welcome)) => {
                 observe(&snapshot, &welcome, &desired);
-                ever_connected = true;
-                reconnect_failures = 0;
+                rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
                     s.error = None;
@@ -350,13 +357,22 @@ fn session_loop(credentials: Credentials,
                 }
             }
             Err(error) => {
-                reconnect_failures += 1;
-                let failed = !ever_connected || reconnect_failures >= 5;
+                let expired = error.starts_with("AUTH_REQUIRED:");
+                if error.contains("before welcome") ||
+                   error.contains("did not receive welcome") {
+                    rejected_welcomes += 1;
+                } else {
+                    rejected_welcomes = 0;
+                }
+                // Consecutive pre-welcome rejections after a valid handshake
+                // may indicate that the user's Firefox login must be renewed.
+                // Ordinary network failures NEVER launch Firefox.
+                let needs_login = expired || rejected_welcomes >= 5;
                 update(&snapshot, |s| {
-                    s.phase = if failed { "Failed" } else { "Reconnecting" }.into();
+                    s.phase = if needs_login { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
                 });
-                if failed { break; }
+                if needs_login { break; }
             }
         }
         for _ in 0..10 {
