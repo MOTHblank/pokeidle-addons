@@ -670,19 +670,34 @@ fn session_loop(credentials: Credentials,
                                     automation_writer.observe(auto);
                                 }
                                 if let Some((id,_))=pending_sale {
-                                    // Confirm only against a complete authoritative
-                                    // roster, never an incremental pkMud patch.
-                                    if let Some(full)=frame.get("estado")
+                                    // A full authoritative roster missing the ID
+                                    // confirms the sale. Manager also recognizes
+                                    // an explicit battle sale receipt; require
+                                    // either matching pokemonId or an exact
+                                    // matching Pokémon name to avoid treating
+                                    // unrelated automatic loot sales as success.
+                                    let full_missing=frame.get("estado")
                                         .and_then(|state|state.get("pokemons"))
-                                        .and_then(Value::as_array) {
-                                        if !full.iter().any(|p|p.get("id").and_then(Value::as_u64)==Some(id)) {
-                                            pending_sale=None;
-                                            update(&snapshot, |s| {
-                                                s.pending_pokemon_sale=None;
-                                                s.confirmed_pokemon_sales=s.confirmed_pokemon_sales.saturating_add(1);
-                                                s.pokemon_sale_error=None;
-                                            });
-                                        }
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|full| !full.iter().any(|p|
+                                            p.get("id").and_then(Value::as_u64)==Some(id)));
+                                    let name=hunt_intel.view.pokemon_roster.iter()
+                                        .find(|p|p.id==id).map(|p|p.name.as_str());
+                                    let sale_receipt=frame.get("ev").and_then(Value::as_array)
+                                        .is_some_and(|events|events.iter().any(|event|
+                                            event.get("k").and_then(Value::as_str)==Some("venda")
+                                            && (event.get("pokemonId").and_then(Value::as_u64)==Some(id)
+                                                || name.is_some_and(|name|
+                                                    event.get("nome").and_then(Value::as_str)==Some(name)))));
+                                    if full_missing || sale_receipt {
+                                        hunt_intel.confirm_pokemon_sale(id);
+                                        if let Ok(mut view)=hunts.lock() {*view=hunt_intel.snapshot();}
+                                        pending_sale=None;
+                                        update(&snapshot, |s| {
+                                            s.pending_pokemon_sale=None;
+                                            s.confirmed_pokemon_sales=s.confirmed_pokemon_sales.saturating_add(1);
+                                            s.pokemon_sale_error=None;
+                                        });
                                     }
                                 }
                             }
