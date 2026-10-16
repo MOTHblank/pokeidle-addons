@@ -11,6 +11,7 @@ mod native_background;
 mod native_gameplay;
 mod native_restock;
 mod native_twitch;
+mod native_tls;
 mod logging;
 mod update;
 
@@ -19,11 +20,9 @@ fn main() {
     // both ring and aws-lc-rs. Initialize ONE process-wide provider before
     // spawning cache, game, or Twitch TLS workers. No authentication is sent
     // if provider installation fails.
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        if rustls::crypto::ring::default_provider().install_default().is_err() {
-            eprintln!("Failed to initialize native TLS crypto provider");
-            return;
-        }
+    if let Err(error) = native_tls::ensure() {
+        eprintln!("Native TLS initialization failed: {error}");
+        return;
     }
     // Windows release builds do not have an attached console. Without a
     // persistent panic hook, one unexpected panic during authentication
