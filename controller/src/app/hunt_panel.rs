@@ -34,9 +34,9 @@ struct RankedHunt<'a> {
     source: RateSource,
 }
 
-/// At most one guide simulation for a stable account and hunt catalog per
-/// eight seconds, regardless of egui's paint frequency or table filter changes.
-/// Actual measured rates remain live and bypass this cache entirely.
+/// Account-keyed combat forecasts are calculated away from egui's paint
+/// path. Immutable snapshots and Arc guide data are cheap to hand to the
+/// worker; no blocking game/network I/O or combat loop executes in render.
 #[derive(Default)]
 pub(super) struct EstimateCache {
     account: Option<usize>,
@@ -46,40 +46,70 @@ pub(super) struct EstimateCache {
     hunt_slug: Option<String>,
     live: bool,
     refreshed: Option<Instant>,
+    pending: Option<std::sync::mpsc::Receiver<
+        std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>>,
     values: std::collections::BTreeMap<String,Option<native_atlas::Forecast>>,
 }
 impl EstimateCache {
     fn refresh(&mut self, account:usize,view:&HuntView,
-        reference:Option<&AtlasReference>,live:bool,
+        reference:Option<&Arc<AtlasReference>>,live:bool,
     ){
+        use std::sync::mpsc::TryRecvError;
+        // Publish only for this cache generation. Account/lead/catalog changes
+        // drop the receiver for the previous generation before accepting it.
+        let complete=self.pending.as_ref().map(|rx|rx.try_recv());
+        match complete {
+            Some(Ok(values))=>{
+                self.values=values;
+                self.refreshed=Some(Instant::now());
+                self.pending=None;
+            }
+            Some(Err(TryRecvError::Disconnected))=>{
+                self.pending=None;
+                self.refreshed=Some(Instant::now()); // Backoff on worker panic.
+            }
+            _=>{}
+        }
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
-        let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
+        let reference_ptr=reference.map_or(0,|r|Arc::as_ptr(r) as usize);
         let active_signature=view.active_pokemon.as_ref().map(|p|
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny));
-        if self.account==Some(account) && self.catalog_ptr==catalog_ptr
-            && self.reference_ptr==reference_ptr && self.live==live
-            && self.active_signature==active_signature && self.hunt_slug==view.hunt_slug
-            && self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(8))
-        {return;}
-        self.account=Some(account);
-        self.catalog_ptr=catalog_ptr;
-        self.reference_ptr=reference_ptr;
-        self.active_signature=active_signature;
-        self.live=live;
-        self.hunt_slug=view.hunt_slug.clone();
-        self.refreshed=Some(Instant::now());
-        self.values.clear();
-        if !live {return;}
-        if let Some(reference)=reference {
-            for hunt in view.hunts.iter() {
-                self.values.insert(hunt.slug.clone(),
-                    native_atlas::estimate(view,hunt,reference));
-            }
+        let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
+            || self.reference_ptr!=reference_ptr || self.live!=live
+            || self.active_signature!=active_signature || self.hunt_slug!=view.hunt_slug;
+        if changed {
+            self.account=Some(account);
+            self.catalog_ptr=catalog_ptr;
+            self.reference_ptr=reference_ptr;
+            self.active_signature=active_signature;
+            self.live=live;
+            self.hunt_slug=view.hunt_slug.clone();
+            self.refreshed=None;
+            self.pending=None; // Discard outdated asynchronous results.
+            self.values.clear();
         }
+        if !live || self.pending.is_some() ||
+            self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(8)) {
+            return;
+        }
+        let Some(reference)=reference else {return};
+        let guide=Arc::clone(reference);
+        let snapshot=view.clone();
+        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+        self.pending=Some(rx);
+        std::thread::spawn(move ||{
+            let mut values=std::collections::BTreeMap::new();
+            for hunt in snapshot.hunts.iter(){
+                values.insert(hunt.slug.clone(),
+                    native_atlas::estimate(&snapshot,hunt,&guide));
+            }
+            let _=tx.send(values);
+        });
     }
     fn get(&self,slug:&str)->Option<native_atlas::Forecast>{
         self.values.get(slug).cloned().flatten()
     }
+    fn is_pending(&self)->bool{self.pending.is_some()}
 }
 
 /// Preserve uncertainty: an absent forecast, invalid observation and unknown
@@ -379,6 +409,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             .color(WARN));
         return;
     }
+    app.hunt_estimate_cache.refresh(index,&view,app.hunt_reference.as_ref(),live);
     if let Some(error)=view.last_error.as_deref(){
         ui.label(RichText::new(format!("Hunt switch: {error}")).color(WARN));
     }
@@ -677,7 +708,6 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
-                    app.hunt_estimate_cache.refresh(index,hunts,reference,live);
                     let ranked=ranked_hunts(hunts,reference,app.hunt_ranking,live,
                         &app.hunt_query,&app.hunt_region,&app.hunt_type,
                         &app.hunt_estimate_cache);
