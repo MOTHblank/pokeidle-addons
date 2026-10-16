@@ -54,6 +54,8 @@ pub(super) struct AtlasFilters {
     ascending: bool,
     rare_item: String,
     filters_open: bool,
+    /// Per-account Explorer selection; stable across repaint and socket snapshots.
+    selected_species: Option<u64>,
 }
 impl Default for AtlasFilters {
     fn default()->Self {
@@ -63,7 +65,7 @@ impl Default for AtlasFilters {
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
             sort:AtlasSort::TrainerXp,ascending:false,
-            rare_item:String::new(),filters_open:false,
+            rare_item:String::new(),filters_open:false,selected_species:None,
         }
     }
 }
@@ -1317,6 +1319,52 @@ fn draw_atlas_species(
     });
 }
 
+/// Compact species selector used by the desktop master/detail Explorer.
+/// Visual cues express selection and model confidence without duplicating the
+/// expanded destination/drop sections in every row.
+fn draw_atlas_species_selector(
+    ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,
+    sort:AtlasSort,selected:bool,visuals:&mut VisualCache,
+)->bool{
+    let mut clicked=false;
+    egui::Frame::new()
+        .fill(if selected{ACCENT.linear_multiply(0.13)}else{PANEL})
+        .stroke(Stroke::new(1.0,if selected{ACCENT}else{BORDER}))
+        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(9,7))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui|{
+                if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,34.0){
+                    ui.label(RichText::new("◇").size(21.0).color(DIM));
+                }
+                ui.vertical(|ui|{
+                    if ui.selectable_label(selected,
+                        RichText::new(&row.name).strong().size(12.0))
+                        .on_hover_text("Show destinations, forecasts and drops")
+                        .clicked(){
+                        clicked=true;
+                    }
+                    ui.label(RichText::new(format!(
+                        "#{} · {} locations{}",
+                        row.id,row.destinations.len(),
+                        if row.owned{" · In depot"}else{""}
+                    )).size(10.0).color(MUTED));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                    ui.vertical(|ui|{
+                        ui.label(RichText::new(atlas_value_label(sort,row.best))
+                            .size(12.0).strong()
+                            .color(if row.best.is_some(){TEXT}else{DIM}));
+                        ui.label(RichText::new(atlas_sort_label(sort))
+                            .size(9.0).color(MUTED));
+                    });
+                });
+            });
+        });
+    ui.add_space(5.0);
+    clicked
+}
+
 fn draw_atlas_explorer(
     ui:&mut egui::Ui,view:&HuntView,
     native:&NativeSession,live:bool,index:usize,
@@ -1385,16 +1433,63 @@ fn draw_atlas_explorer(
             });
         return;
     }
-    let visible=atlas_pager(ui,page,rows.len(),12);
+    // At desktop widths the list remains short and scannable while a stable
+    // details pane exposes destinations, drop assumptions and hunt controls.
+    // On narrow windows a single column avoids cramped dual-scroll panels.
+    let desktop=ui.available_width()>=880.0;
+    let visible=atlas_pager(ui,page,rows.len(),if desktop{20}else{8});
     ui.add_space(7.0);
     let mut error=None;
-    for row in rows.iter().skip(visible.start)
-        .take(visible.end-visible.start) {
-        draw_atlas_species(ui,row,filters.sort,view,reference,native,live,
-            visuals,&mut error);
+    if desktop{
+        let slice=&rows[visible.clone()];
+        // A changed filter/page must not leave the detail pane showing an
+        // item outside the visible results or a stale account selection.
+        let selected=filters.selected_species
+            .filter(|id|slice.iter().any(|row|row.id==*id))
+            .unwrap_or(slice[0].id);
+        filters.selected_species=Some(selected);
+        let available_height=ui.available_height().max(290.0);
+        ui.columns(2,|cols|{
+            cols[0].label(RichText::new("POKÉMON")
+                .size(10.0).strong().color(DIM));
+            cols[1].label(RichText::new("SPECIES DETAILS")
+                .size(10.0).strong().color(DIM));
+            cols[0].add_space(5.0);
+            cols[1].add_space(5.0);
+            egui::ScrollArea::vertical()
+                .id_salt(("atlas-species-list",index))
+                .auto_shrink([false,false])
+                .max_height(available_height)
+                .show(&mut cols[0],|ui|{
+                    ui.set_min_width(ui.available_width());
+                    for row in slice{
+                        if draw_atlas_species_selector(ui,row,filters.sort,
+                            filters.selected_species==Some(row.id),visuals){
+                            filters.selected_species=Some(row.id);
+                        }
+                    }
+                });
+            egui::ScrollArea::vertical()
+                .id_salt(("atlas-species-details",index))
+                .auto_shrink([false,false])
+                .max_height(available_height)
+                .show(&mut cols[1],|ui|{
+                    ui.set_min_width(ui.available_width());
+                    if let Some(row)=slice.iter().find(|row|
+                        filters.selected_species==Some(row.id)){
+                        draw_atlas_species(ui,row,filters.sort,view,reference,
+                            native,live,visuals,&mut error);
+                    }
+                });
+        });
+    }else{
+        for row in rows.iter().skip(visible.start)
+            .take(visible.end-visible.start){
+            draw_atlas_species(ui,row,filters.sort,view,reference,native,live,
+                visuals,&mut error);
+        }
     }
     if let Some(error)=error {*command_error=Some(error);}
-
 }
 
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
