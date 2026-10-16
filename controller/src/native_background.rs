@@ -9,6 +9,7 @@ use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_hunts::{HuntIntel, HuntView};
 use crate::native_restock::{Restock, RestockStatus};
+use crate::native_automation::{AutomationWriter, AutomationStatus};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -39,6 +40,10 @@ pub struct NativeSnapshot {
     pub native_capture_queue: usize,
     pub native_throws: u64,
     pub native_restock: RestockStatus,
+    pub native_automation: AutomationStatus,
+    pub pending_pokemon_sale: Option<u64>,
+    pub confirmed_pokemon_sales: u64,
+    pub pokemon_sale_error: Option<String>,
     pub twitch_live: Vec<String>,
     pub twitch_watching: Vec<String>,
     pub twitch_bonus_pct: f32,
@@ -52,6 +57,9 @@ impl Default for NativeSnapshot {
             hunt_slug: None, frames: 0, battle_kills: 0, captures: 0, error: None,
             native_auto_catch: false, native_capture_queue: 0, native_throws: 0,
             native_restock: RestockStatus::default(),
+            native_automation: AutomationStatus::default(),
+            pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
+            pokemon_sale_error: None,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
         }
     }
@@ -225,6 +233,20 @@ impl NativeSession {
         }
         if !command.is_valid() {
             return Err("Invalid native game command".into());
+        }
+        if let GameCommand::SellPokemon(id) = &command {
+            let view=self.hunt_snapshot();
+            let pokemon=view.pokemon_roster.iter().find(|p|p.id==*id)
+                .ok_or_else(|| "Pokémon is not present in the authoritative roster".to_owned())?;
+            if view.active_pokemon.as_ref().is_some_and(|p|p.id==*id) {
+                return Err("Cannot sell the active Pokémon".into());
+            }
+            if pokemon.shiny {
+                return Err("Shiny Pokémon are protected against native selling".into());
+            }
+            if self.snapshot().pending_pokemon_sale.is_some() {
+                return Err("Wait for the previous Pokémon sale to be confirmed".into());
+            }
         }
         if self.snapshot().phase != "Online" {
             return Err("Native game is not authenticated".into());
@@ -432,6 +454,8 @@ fn session_loop(credentials: Credentials,
     hunts: Arc<Mutex<HuntView>>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
+    let mut automation_writer = AutomationWriter::new();
+    let mut pending_sale: Option<(u64, Instant)> = None;
     // Metadata is downloaded without cookies/credentials, and only if a
     // configured healing-item rule lacks a server shop price. Never block the
     // game WebSocket reader with HTTP requests.
@@ -456,7 +480,10 @@ fn session_loop(credentials: Credentials,
                 gameplay.configure(&last_config);
                 restock.configure(&last_config);
                 restock.publish_status();
-                update(&snapshot, |s| s.native_restock = restock.status.clone());
+                update(&snapshot, |s| {
+                    s.native_restock = restock.status.clone();
+                    s.native_automation = automation_writer.status.clone();
+                });
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
@@ -476,6 +503,26 @@ fn session_loop(credentials: Credentials,
                     // browser or replay unconfirmed writes after reconnect.
                     let mut send_failed = false;
                     while let Ok(command) = command_rx.try_recv() {
+                        if let GameCommand::SetAutomation {field,value} = command {
+                            if let Err(error) = automation_writer.queue(field,value) {
+                                crate::logging::warn(&format!(
+                                    "Native server automation update rejected: {error}"
+                                ));
+                            }
+                            continue;
+                        }
+                        if let GameCommand::SellPokemon(id) = &command {
+                            if pending_sale.is_some() {
+                                crate::logging::warn("Native Pokémon sale already awaiting confirmation");
+                                continue;
+                            }
+                            let current = hunt_intel.snapshot();
+                            if current.active_pokemon.as_ref().is_some_and(|p|p.id==*id)
+                                || !current.pokemon_roster.iter().any(|p|p.id==*id && !p.shiny) {
+                                crate::logging::warn("Native Pokémon sale rejected after refreshed server state");
+                                continue;
+                            }
+                        }
                         let payload = command.wire().to_string();
                         if let GameCommand::Hunt(slug) = &command {
                             if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
@@ -489,6 +536,31 @@ fn session_loop(credentials: Credentials,
                                 hunt_intel.command_failed("Hunt selection transport failed");
                             }
                             send_failed = true; break;
+                        }
+                        if let GameCommand::SellPokemon(id) = command {
+                            pending_sale = Some((id,Instant::now()));
+                            update(&snapshot, |s| {
+                                s.pending_pokemon_sale=Some(id);
+                                s.pokemon_sale_error=None;
+                            });
+                        }
+                    }
+                    if send_failed { break; }
+                    if pending_sale.as_ref().is_some_and(|(_,at)|
+                        at.elapsed()>Duration::from_secs(20)) {
+                        pending_sale=None;
+                        update(&snapshot, |s| {
+                            s.pending_pokemon_sale=None;
+                            s.pokemon_sale_error=Some("Pokémon sale not confirmed within 20 seconds".into());
+                        });
+                    }
+                    if let Some(fields) = automation_writer.next(
+                        hunt_intel.view.automation.as_ref(),Instant::now()) {
+                        if socket.send(Message::Text(
+                            GameCommand::AutoSet(fields).wire().to_string().into()
+                        )).is_err() {
+                            automation_writer.send_failed();
+                            send_failed=true;
                         }
                     }
                     if send_failed { break; }
@@ -561,10 +633,13 @@ fn session_loop(credentials: Credentials,
                     }
                     restock.publish_status();
                     update(&snapshot, |s| {
+                        s.native_automation = automation_writer.status.clone();
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
                         s.native_throws = gameplay.status.throws;
                         s.native_restock = restock.status.clone();
+                        s.native_automation = automation_writer.status.clone();
+                        s.pending_pokemon_sale=None;
                     });
                     if last_ping.elapsed() >= HEARTBEAT_INTERVAL {
                         if socket.send(Message::Ping(Vec::new().into())).is_err() { break; }
@@ -576,6 +651,28 @@ fn session_loop(credentials: Credentials,
                             let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
                             hunt_intel.ingest(text.as_ref(), Instant::now());
+                            if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
+                                if let Some(auto)=frame.get("estado")
+                                    .and_then(|state|state.get("automation")) {
+                                    automation_writer.observe(auto);
+                                }
+                                if let Some((id,_))=pending_sale {
+                                    // Confirm only against a complete authoritative
+                                    // roster, never an incremental pkMud patch.
+                                    if let Some(full)=frame.get("estado")
+                                        .and_then(|state|state.get("pokemons"))
+                                        .and_then(Value::as_array) {
+                                        if !full.iter().any(|p|p.get("id").and_then(Value::as_u64)==Some(id)) {
+                                            pending_sale=None;
+                                            update(&snapshot, |s| {
+                                                s.pending_pokemon_sale=None;
+                                                s.confirmed_pokemon_sales=s.confirmed_pokemon_sales.saturating_add(1);
+                                                s.pokemon_sale_error=None;
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                             if restock.status.confirmed > confirmed_before {
                                 crate::logging::info(&format!(
                                     "Native restock: confirmed and reconciled {}",
@@ -599,6 +696,8 @@ fn session_loop(credentials: Credentials,
                     while command_rx.try_recv().is_ok() {}
                     restock.on_disconnect(Instant::now());
                     restock.publish_status();
+                    automation_writer.on_disconnect();
+                    pending_sale=None;
                     hunt_intel.on_disconnect();
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {
