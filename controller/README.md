@@ -1,6 +1,6 @@
 # Moth Controller
 
-> **Experimental architecture branch:** [Native game + Twitch IRC guide](docs/native-background-experiment.md). Native game and IRC are the standard runtime here; Firefox only supplies authentication when necessary. Some browser-side automation still needs native replacements.
+> **Experimental architecture branch:** [Native game + Twitch IRC guide](docs/native-background-experiment.md) · [Native Hunts / Hunt Atlas](docs/native-hunts-atlas.md). Rust owns game, Twitch IRC, capture and hunt intelligence; Firefox is for authentication or recovery only. Some advanced marketplace/Atlas features still need native parity.
 
 Native Rust game and Twitch IRC controller for PokéIdle on **Windows and Linux**.
 
