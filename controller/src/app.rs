@@ -1571,6 +1571,9 @@ impl ControllerApp {
                         || error.contains("temporary Twitch")
                         || error.contains("hook installed")
                         || error.contains("login has not produced");
+                    if !is_bootstrap {
+                        self.native_error[event.index] = Some(error.clone());
+                    }
                     self.set_status(format!(
                         "{}: {}: {error}",
                         self.account_name(profile),
@@ -1589,6 +1592,7 @@ impl ControllerApp {
                     }
                     let validated = crate::native_background::validate_bootstrap(&bootstrap);
                     if let Err(error) = validated {
+                        self.native_error[event.index] = Some(error.clone());
                         self.set_status(format!("Native handoff rejected: {error}"), true);
                         continue;
                     }
@@ -1611,21 +1615,21 @@ impl ControllerApp {
                     let spawned = std::thread::Builder::new()
                         .name(format!("moth-native-handoff-{}", profile.name()))
                         .spawn(move || {
-                            let mut closed_game_tab = false;
+                            let mut attempted_game_close = false;
                             // A panic in TLS setup previously destroyed the
                             // sender without clearing native_verifying, leaving
                             // Firefox alive but its PokéIdle tab closed.
                             let result = std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(|| {
                                     crate::native_tls::ensure()?;
+                                    attempted_game_close = true;
                                     monitor.close_game_for_handoff(Duration::from_secs(18))?;
-                                    closed_game_tab = true;
                                     NativeSession::start_verified(bootstrap)
                                 })
                             ).unwrap_or_else(|_| {
                                 Err("Native verification thread panicked; see sanitized Rust panic log".to_owned())
                             });
-                            let result = match (result, closed_game_tab) {
+                            let result = match (result, attempted_game_close) {
                                 (Err(error), true) => {
                                     match monitor.restore_game_after_failed_handoff(
                                         Duration::from_secs(20)
