@@ -1,13 +1,11 @@
 # Moth Controller
 
-> **Experimental branch only:** [Native background transport prototype](docs/native-background-experiment.md). This opt-in test is not part of the public release. It is currently missing native replacements for browser userscripts.
+> **Experimental architecture branch:** [Native game + Twitch IRC guide](docs/native-background-experiment.md). Native game and IRC are the standard runtime here; Firefox only supplies authentication when necessary. Some browser-side automation still needs native replacements.
 
+Native Rust game and Twitch IRC controller for PokéIdle on **Windows and Linux**.
 
-Native Rust controller for PokéIdle using dedicated Firefox profiles on **Windows and Linux**.
-
-The graphical app manages up to four isolated game accounts. Each account uses one
-Firefox profile for PokéIdle, Twitch login, and its userscripts. There is no
-embedded WebView or separate browser engine.
+The graphical app manages up to four isolated native game/Twitch sessions.
+Firefox profiles are used for first login or expired authentication only, not for normal gameplay or chat.
 
 ## Running the app
 
