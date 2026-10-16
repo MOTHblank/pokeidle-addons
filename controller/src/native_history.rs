@@ -30,6 +30,8 @@ pub struct HistoryDay {
     pub timed_kills:u64,
     pub timed_trainer_xp:u64,
     pub timed_pokemon_xp:u64,
+    pub timed_trainer_receipts:u64,
+    pub timed_pokemon_receipts:u64,
     pub combat_gold: u64,
     pub auto_sale_gold: u64,
     pub balls_used: BTreeMap<u64,u64>,
@@ -46,6 +48,8 @@ impl HistoryDay {
             "timedKills":self.timed_kills,
             "timedTrainerXp":self.timed_trainer_xp,
             "timedPokemonXp":self.timed_pokemon_xp,
+            "timedTrainerReceipts":self.timed_trainer_receipts,
+            "timedPokemonReceipts":self.timed_pokemon_receipts,
             "combatGold":self.combat_gold,"autoSaleGold":self.auto_sale_gold,
             "ballsUsed":self.balls_used,"drops":self.drops
         })
@@ -68,6 +72,8 @@ impl HistoryDay {
             observed_seconds:n("observedSeconds"),
             timed_kills:n("timedKills"),
             timed_trainer_xp:n("timedTrainerXp"),timed_pokemon_xp:n("timedPokemonXp"),
+            timed_trainer_receipts:n("timedTrainerReceipts"),
+            timed_pokemon_receipts:n("timedPokemonReceipts"),
             combat_gold:n("combatGold"),auto_sale_gold:n("autoSaleGold"),
             balls_used,drops})
     }
@@ -179,6 +185,8 @@ impl HistoryDay {
                 (&mut total.timed_kills,day.timed_kills),
                 (&mut total.timed_trainer_xp,day.timed_trainer_xp),
                 (&mut total.timed_pokemon_xp,day.timed_pokemon_xp),
+                (&mut total.timed_trainer_receipts,day.timed_trainer_receipts),
+                (&mut total.timed_pokemon_receipts,day.timed_pokemon_receipts),
                 (&mut total.combat_gold,day.combat_gold),
                 (&mut total.auto_sale_gold,day.auto_sale_gold)
             ] {*dst=dst.saturating_add(src);}
@@ -378,9 +386,11 @@ impl HistoryRecorder {
                                 target.timed_kills=target.timed_kills.saturating_add(1);
                                 if let Some(v)=xp{
                                     target.timed_trainer_xp=target.timed_trainer_xp.saturating_add(v);
+                                    target.timed_trainer_receipts=target.timed_trainer_receipts.saturating_add(1);
                                 }
                                 if let Some(v)=pk{
                                     target.timed_pokemon_xp=target.timed_pokemon_xp.saturating_add(v);
+                                    target.timed_pokemon_receipts=target.timed_pokemon_receipts.saturating_add(1);
                                 }
                             }
                         }
@@ -489,6 +499,7 @@ mod tests {
         let row=HistoryDay{day:123,hunt:"route-a".into(),
             observed_seconds:3600,timed_kills:100,
             timed_trainer_xp:13000,timed_pokemon_xp:9000,
+            timed_trainer_receipts:100,timed_pokemon_receipts:100,
             ..Default::default()};
         let decoded=HistoryDay::from_value(&row.to_value()).unwrap();
         assert_eq!(decoded.observed_seconds,3600);
