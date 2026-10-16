@@ -151,6 +151,7 @@ pub struct NativeSession {
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
+    hunts: Arc<Mutex<HuntView>>,
 }
 impl NativeSession {
     pub fn start(bootstrap: Value) -> Result<Self, String> {
@@ -173,6 +174,9 @@ impl NativeSession {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
+        let hunt_intel = HuntIntel::new();
+        let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
+        let worker_hunts = Arc::clone(&hunts);
         let restock_enabled = Arc::new(AtomicBool::new(restock.status.enabled));
         let worker_restock_enabled = Arc::clone(&restock_enabled);
         let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
@@ -188,7 +192,7 @@ impl NativeSession {
                     session_loop(credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
-                        worker_restock_enabled);
+                        worker_restock_enabled, hunt_intel, worker_hunts);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -199,9 +203,15 @@ impl NativeSession {
                 }
             })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
-        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch, restock_enabled })
+        Ok(Self { snapshot, twitch, stop, command_tx, auto_catch, restock_enabled, hunts })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
+        if let GameCommand::Hunt(slug) = &command {
+            let current = self.hunt_snapshot();
+            if !current.catalog_ready || !current.hunts.iter().any(|hunt| hunt.slug == *slug) {
+                return Err("Requested hunt is not in the server-provided unlocked hunt list".into());
+            }
+        }
         if !command.is_valid() {
             return Err("Invalid native game command".into());
         }
@@ -210,6 +220,9 @@ impl NativeSession {
         }
         self.command_tx.try_send(command)
             .map_err(|_| "Native command queue full or session stopped".to_owned())
+    }
+    pub fn hunt_snapshot(&self) -> HuntView {
+        self.hunts.lock().map(|view| view.clone()).unwrap_or_default()
     }
     pub fn set_auto_catch(&self, enabled: bool) {
         self.auto_catch.store(enabled, Ordering::Relaxed);
@@ -383,7 +396,9 @@ fn session_loop(credentials: Credentials,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
-    restock_enabled: Arc<AtomicBool>) {
+    restock_enabled: Arc<AtomicBool>,
+    mut hunt_intel: HuntIntel,
+    hunts: Arc<Mutex<HuntView>>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     while !stop.load(Ordering::Relaxed) {
@@ -393,6 +408,9 @@ fn session_loop(credentials: Credentials,
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
+                hunt_intel.ingest(&welcome, Instant::now());
+                if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
+                let mut last_hunt_publish = Instant::now();
                 update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -414,8 +432,17 @@ fn session_loop(credentials: Credentials,
                     let mut send_failed = false;
                     while let Ok(command) = command_rx.try_recv() {
                         let payload = command.wire().to_string();
+                        if let GameCommand::Hunt(slug) = &command {
+                            if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
+                                crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
+                                continue;
+                            }
+                        }
                         if socket.send(Message::Text(payload.into())).is_err() {
                             gameplay.failed(&command, "native game command send failed");
+                            if matches!(command, GameCommand::Hunt(_)) {
+                                hunt_intel.command_failed("Hunt selection transport failed");
+                            }
                             send_failed = true; break;
                         }
                     }
@@ -441,6 +468,10 @@ fn session_loop(credentials: Credentials,
                             break;
                         }
                     }
+                    if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
+                        if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
+                        last_hunt_publish = Instant::now();
+                    }
                     update(&snapshot, |s| {
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
@@ -456,6 +487,7 @@ fn session_loop(credentials: Credentials,
                             gameplay.ingest(text.as_ref(), Instant::now());
                             let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
+                            hunt_intel.ingest(text.as_ref(), Instant::now());
                             if restock.status.confirmed > confirmed_before {
                                 crate::logging::info(&format!(
                                     "Native restock: confirmed and reconciled {}",
@@ -478,6 +510,8 @@ fn session_loop(credentials: Credentials,
                 if !stop.load(Ordering::Relaxed) {
                     while command_rx.try_recv().is_ok() {}
                     restock.on_disconnect(Instant::now());
+                    hunt_intel.on_disconnect();
+                    if let Ok(mut view) = hunts.lock() { *view = hunt_intel.view.clone(); }
                     update(&snapshot, |s| {
                         s.phase = "Reconnecting".into();
                         s.native_restock = restock.status.clone();
