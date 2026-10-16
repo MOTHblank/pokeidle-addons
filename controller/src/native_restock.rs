@@ -15,6 +15,17 @@ const RETRY_BACKOFF: Duration = Duration::from_secs(30);
 const ACK_STOCK_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, Default)]
+pub struct RestockRuleStatus {
+    pub kind: String,
+    pub id: u64,
+    pub name: String,
+    pub current: Option<u64>,
+    pub low: u64,
+    pub target: u64,
+    pub price: Option<u64>,
+    pub price_source: String,
+}
+#[derive(Clone, Debug, Default)]
 pub struct RestockStatus {
     pub enabled: bool,
     pub configured: bool,
@@ -24,6 +35,7 @@ pub struct RestockStatus {
     pub pending: bool,
     pub last_order: Option<String>,
     pub last_error: Option<String>,
+    pub rules: Vec<RestockRuleStatus>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +46,7 @@ struct Rule {
     target: u64,
 }
 #[derive(Clone, Debug)]
-struct ShopEntry { price: u64, name: String }
+struct ShopEntry { price: u64, name: String, source: &'static str }
 #[derive(Clone, Debug)]
 struct Order {
     kind: &'static str,
@@ -141,7 +153,7 @@ impl Restock {
             if kind == "item" && !(name.contains("potion") ||
                 name.contains("pocao") || name.contains("poção") ||
                 name.contains("revive")) { continue; }
-            self.prices.insert((kind, id), ShopEntry { price, name });
+            self.prices.insert((kind, id), ShopEntry { price, name, source: "Server" });
         }
     }
     /// A configured, low-stock potion/revive may require the game's public
@@ -165,8 +177,30 @@ impl Restock {
                 name.contains("reviver")) { continue; }
             let Some(price) = meta.price_gold.filter(|value|*value>0) else { continue; };
             self.prices.entry(("item",rule.id))
-                .or_insert(ShopEntry { price, name });
+                .or_insert(ShopEntry { price, name, source: "Public catalog" });
         }
+    }
+
+    pub fn rule_statuses(&self) -> Vec<RestockRuleStatus> {
+        self.rules.iter().map(|rule| {
+            let item = self.prices.get(&(rule.kind,rule.id));
+            RestockRuleStatus {
+                kind: rule.kind.into(),
+                id: rule.id,
+                name: item.map(|meta|meta.name.clone())
+                    .unwrap_or_else(||format!("{} #{}",rule.kind,rule.id)),
+                current: if self.known_stock[Self::idx(rule.kind)] {
+                    Some(self.stock.get(&(rule.kind,rule.id)).copied().unwrap_or(0))
+                } else {None},
+                low:rule.low,
+                target:rule.target,
+                price:item.map(|meta|meta.price),
+                price_source:item.map(|meta|meta.source).unwrap_or("Unknown").into(),
+            }
+        }).collect()
+    }
+    pub fn publish_status(&mut self) {
+        self.status.rules = self.rule_statuses();
     }
 
     pub fn on_disconnect(&mut self, now: Instant) {
@@ -534,6 +568,21 @@ mod tests {
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "nome":"Different Ball","qtd":9,"gasto":90}]}"#,now);
         assert!(!r.pending.as_ref().unwrap().ack);
+    }
+
+    #[test]
+    fn status_explains_stock_price_and_catalog_provenance() {
+        let now=Instant::now();
+        let mut r=configured();
+        welcome(&mut r,now);
+        r.publish_status();
+        let ball=r.status.rules.iter().find(|p|p.kind=="ball").unwrap();
+        assert_eq!(ball.current,Some(3));
+        assert_eq!(ball.low,5);
+        assert_eq!(ball.target,20);
+        assert_eq!(ball.price,Some(10));
+        assert_eq!(ball.price_source,"Server");
+        assert!(r.status.rules.iter().any(|p|p.kind=="item"&&p.price==Some(5)));
     }
     #[test]
     fn reconnect_discards_uncertain_purchase_and_requires_fresh_state() {
