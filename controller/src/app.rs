@@ -3613,17 +3613,8 @@ fn request_item_catalog(app:&mut ControllerApp) {
 fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
     request_item_catalog(app);
     ui.horizontal_wrapped(|ui|{
-        ui.label(tr("Accounts"));
-        let selected=app.inventory_account.map(|index|
-            app.account_name(app.games[index].profile)).unwrap_or_else(||tr("All accounts").into());
-        egui::ComboBox::from_id_salt("inventory-account").selected_text(selected)
-            .show_ui(ui,|ui|{
-                ui.selectable_value(&mut app.inventory_account,None,tr("All accounts"));
-                for index in 0..app.games.len(){
-                    let label=app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.inventory_account,Some(index),label);
-                }
-            });
+        ui.label(RichText::new(tr("Inventory and battle drops"))
+            .size(14.0).strong().color(TEXT));
         ui.add(egui::TextEdit::singleline(&mut app.inventory_query)
             .desired_width(240.0).hint_text(tr("Search items or drops")));
         egui::ComboBox::from_id_salt("inventory-category")
@@ -4074,20 +4065,8 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 /// local disk file and updated by the native game worker. Never reconstruct
 /// historical XP by adding Pokémon and trainer rewards together.
 fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Persistent battle history")).size(17.0)
-            .strong().color(TEXT));
-        egui::ComboBox::from_id_salt("history-account")
-            .selected_text(app.account_name(app.games[app.history_account].profile))
-            .show_ui(ui,|ui|{
-                for i in 0..app.games.len(){
-                    let name=app.account_name(app.games[i].profile);
-                    if ui.selectable_value(&mut app.history_account,i,name).changed() {
-                        app.history_rows_limit=100;
-                    }
-                }
-            });
-    });
+    ui.label(RichText::new(tr("Persistent battle history")).size(14.0)
+        .strong().color(TEXT));
     let index=app.history_account;
     let profile=app.games[index].profile;
     let history=if let Some(native)=app.games[index].native.as_ref() {
@@ -4235,18 +4214,8 @@ mod history_ui_tests {
 /// supported, server-authoritative individual sale. Never infer a success
 /// from pressing a button; only the following full roster can confirm it.
 fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Pokémon management")).size(17.0)
-            .strong().color(TEXT));
-        egui::ComboBox::from_id_salt("pokemon-account")
-            .selected_text(app.account_name(app.games[app.pokemon_account].profile))
-            .show_ui(ui, |ui| {
-                for i in 0..app.games.len() {
-                    let name=app.account_name(app.games[i].profile);
-                    ui.selectable_value(&mut app.pokemon_account,i,name);
-                }
-            });
-    });
+    ui.label(RichText::new(tr("Pokémon management")).size(14.0)
+        .strong().color(TEXT));
     let index=app.pokemon_account;
     let Some(native)=app.games[index].native.as_ref() else {
         ui.label(tr("Waiting for native account"));
@@ -4433,20 +4402,9 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
-        egui::ComboBox::from_id_salt("automation-account")
-            .selected_text(app.account_name(app.games[app.automation_account].profile))
-            .show_ui(ui, |ui| {
-                for index in 0..app.games.len() {
-                    let name = app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.automation_account, index, name);
-                }
-            });
-        ui.label(RichText::new(tr("Choose an account to inspect its automation and restock status."))
-            .size(10.0).color(MUTED));
-    });
-    ui.add_space(12.0);
+    ui.label(RichText::new(tr("Server settings · Native capture · Restock"))
+        .size(13.0).color(MUTED));
+    ui.add_space(6.0);
     let index = app.automation_account;
     let Some(native) = app.games[index].native.as_ref() else {
         ui.label(RichText::new(tr("Waiting for native account")).size(13.0).color(WARN));
@@ -6255,9 +6213,9 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(true)
         .default_width(820.0)
-        .default_height(620.0)
-        .min_width(480.0)
-        .min_height(380.0)
+        .default_height(540.0)
+        .min_width(540.0)
+        .min_height(350.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             egui::Frame::new()
@@ -6281,13 +6239,24 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 );
             });
 
-            ui.add_space(12.0);
+            ui.add_space(8.0);
+            let selected = Some(app.hunt_account);
+            if let Some(index) = draw_account_switcher(app, ui, selected, false) {
+                if index != app.hunt_account {
+                    app.select_workspace_account(index);
+                }
+            }
+            ui.add_space(8.0);
 
+            // Edit one account at a time. Previously four complete setup and
+            // addon managers stacked vertically, causing very long blank gaps
+            // and making switching between accounts tedious.
             egui::ScrollArea::vertical()
                 .id_salt("account_manager_list")
-                .auto_shrink([false, false])
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for profile in GameProfile::ALL {
+                        if profile.index() != app.hunt_account { continue; }
                         let index = profile.index();
                         let enabled = app.accounts[index].enabled;
                         let setup = app.account_setup[index].clone();
