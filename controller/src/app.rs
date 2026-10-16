@@ -670,6 +670,7 @@ const BAD: Color32 = Color32::from_rgb(235, 91, 91);
 struct GameSlot {
     profile: GameProfile,
     native: Option<NativeSession>,
+    handoff_closing: bool,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
@@ -681,6 +682,7 @@ impl GameSlot {
         Self {
             profile,
             native: None,
+            handoff_closing: false,
             child: None,
             monitor: None,
             headless: true,
@@ -689,7 +691,7 @@ impl GameSlot {
     }
 
     fn is_running(&mut self) -> bool {
-        if self.native.is_some() { return true; }
+        if self.native.is_some() || self.handoff_closing { return true; }
         if let Some(child) = self.child.as_mut() {
             // On an OS inspection error, conservatively keep ownership rather
             // than offer a duplicate launch into a potentially locked profile.
@@ -708,6 +710,11 @@ impl GameSlot {
     }
 
     fn health(&self) -> Health {
+        if self.handoff_closing {
+            let mut health = Health::default();
+            health.state = "Switching to native".into();
+            return health;
+        }
         if let Some(native) = self.native.as_ref() {
             let state = native.snapshot();
             let mut health = Health::default();
@@ -1161,11 +1168,25 @@ struct CachedNativeEvent {
     result: Result<Option<serde_json::Value>, String>,
 }
 
+/// The child process and monitor are owned exclusively by the shutdown worker.
+/// Returning them to the UI on error preserves ownership for retry/recovery.
+struct NativeBrowserClosedEvent {
+    index: usize,
+    bootstrap: serde_json::Value,
+    cache_warning: Option<String>,
+    child: Child,
+    monitor: Option<MonitorHandle>,
+    result: Result<(), String>,
+}
+
 pub struct ControllerApp {
     native_handoff_tx: Sender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
     native_handoff_busy: [bool; 4],
     native_handoff_last_attempt: [Option<Instant>; 4],
+    native_closed_tx: Sender<NativeBrowserClosedEvent>,
+    native_closed_rx: Receiver<NativeBrowserClosedEvent>,
+    native_close_cancelled: [bool; 4],
     cached_native_tx: Sender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
     cached_native_busy: [bool; 4],
@@ -1212,6 +1233,7 @@ impl ControllerApp {
         let (addon_install_tx, addon_install_rx) = mpsc::channel();
         let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
         let (cached_native_tx, cached_native_rx) = mpsc::channel();
+        let (native_closed_tx, native_closed_rx) = mpsc::channel();
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1229,6 +1251,9 @@ impl ControllerApp {
             native_handoff_rx,
             native_handoff_busy: [false; 4],
             native_handoff_last_attempt: [None; 4],
+            native_closed_tx,
+            native_closed_rx,
+            native_close_cancelled: [false; 4],
             cached_native_tx,
             cached_native_rx,
             cached_native_busy: [false; 4],
@@ -1364,6 +1389,56 @@ impl ControllerApp {
     }
 
     fn refresh_processes(&mut self) {
+        // Browser shutdown is asynchronous: the UI never blocks for BiDi
+        // browser.close, process reaping or a force-kill fallback.
+        while let Ok(event) = self.native_closed_rx.try_recv() {
+            let index = event.index;
+            let profile = GameProfile::from_index(index).expect("known slot");
+            self.games[index].handoff_closing = false;
+            let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
+            match event.result {
+                Ok(()) => {
+                    // Successful Firefox close must be logged before any
+                    // attempt to start native sockets, so a crash is localizable.
+                    logging::info(&format!(
+                        "{} Firefox exited after authenticated handoff",
+                        self.account_name(profile)));
+                    if cancelled {
+                        self.set_status(format!(
+                            "{} native handoff canceled by Stop", self.account_name(profile)), false);
+                        continue;
+                    }
+                    logging::info(&format!(
+                        "{} starting native game + Twitch IRC workers", self.account_name(profile)));
+                    match NativeSession::start(event.bootstrap) {
+                        Ok(native) => {
+                            self.games[index].native = Some(native);
+                            self.require_browser_login[index] = false;
+                            let cache_note = event.cache_warning
+                                .map(|warning| format!(" · secure cache unavailable: {warning}"))
+                                .unwrap_or_default();
+                            self.set_status(format!(
+                                "{} native game + Twitch IRC starting with Firefox closed{cache_note}",
+                                self.account_name(profile)), false);
+                        }
+                        Err(error) => {
+                            self.require_browser_login[index] = true;
+                            self.set_status(format!(
+                                "{} failed to start native workers: {error}; opening authentication Firefox",
+                                self.account_name(profile)), true);
+                            self.launch_firefox_bootstrap(profile, self.games[index].headless);
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.games[index].child = Some(event.child);
+                    self.games[index].monitor = event.monitor;
+                    self.set_status(format!(
+                        "{} could not close Firefox during native handoff: {error}",
+                        self.account_name(profile)), true);
+                }
+            }
+        }
         // Try the protected native credential vault BEFORE constructing any
         // Firefox process. OS keyring requests run off the UI thread.
         while let Ok(event) = self.cached_native_rx.try_recv() {
@@ -1441,24 +1516,33 @@ impl ControllerApp {
                         self.set_status(format!("Native handoff rejected: {error}"), true);
                         continue;
                     }
-                    if !self.stop_one(profile) { continue; }
-                    match NativeSession::start(bootstrap) {
-                        Ok(native) => {
-                            self.games[event.index].native = Some(native);
-                            self.require_browser_login[event.index] = false;
-                            let cache_note = event.cache_warning
-                                .map(|warning| format!(" · secure cache not saved: {warning}"))
-                                .unwrap_or_default();
-                            self.set_status(format!(
-                                "{}: native game + Twitch IRC starting in Rust (Firefox closed){cache_note}",
-                                self.account_name(profile)), false);
+                    if self.games[event.index].handoff_closing { continue; }
+                    let Some(mut child) = self.games[event.index].child.take() else {
+                        self.set_status(format!(
+                            "{}: cannot transfer a Firefox profile without a tracked process; use Stop to repair",
+                            self.account_name(profile)), true);
+                        continue;
+                    };
+                    let monitor = self.games[event.index].monitor.take();
+                    self.games[event.index].handoff_closing = true;
+                    self.native_close_cancelled[event.index] = false;
+                    let tx = self.native_closed_tx.clone();
+                    let index = event.index;
+                    logging::info(&format!(
+                        "{} validated native game + IRC handshakes; closing Firefox asynchronously",
+                        self.account_name(profile)));
+                    // The browser owns the active game socket until close. The
+                    // native sockets start only after the worker confirms exit.
+                    std::thread::spawn(move || {
+                        let result = firefox::stop_child(&mut child, monitor.as_ref());
+                        if result.is_ok() {
+                            if let Some(monitor) = monitor.as_ref() { monitor.stop(); }
                         }
-                        Err(error) => {
-                            self.require_browser_login[event.index] = true;
-                            self.set_status(format!("Native handoff failed: {error}; returning to Firefox login"), true);
-                            self.launch_firefox_bootstrap(profile, self.games[event.index].headless);
-                        }
-                    }
+                        let _ = tx.send(NativeBrowserClosedEvent {
+                            index, bootstrap, cache_warning: event.cache_warning,
+                            child, monitor, result
+                        });
+                    });
                 }
             }
         }
@@ -1871,6 +1955,14 @@ impl ControllerApp {
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
+        if self.games[index].handoff_closing {
+            // The dedicated shutdown worker already owns and is closing the
+            // Firefox process. Do not start native mode after explicit Stop.
+            self.native_close_cancelled[index] = true;
+            self.set_status(format!(
+                "{}: stopping pending native handoff", account_name), false);
+            return true;
+        }
         // Cancel in-flight cache lookups and browser handoffs. Results from
         // canceled workers are ignored even if a Stop is pressed mid-login.
         self.cached_native_busy[index] = false;
