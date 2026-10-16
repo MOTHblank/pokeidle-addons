@@ -12,6 +12,7 @@ use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
 use crate::config::GameProfile;
 use crate::native_restock::{Restock, RestockStatus};
 use crate::native_automation::{AutomationWriter, AutomationStatus};
+use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -43,6 +44,7 @@ pub struct NativeSnapshot {
     pub native_throws: u64,
     pub native_restock: RestockStatus,
     pub native_automation: AutomationStatus,
+    pub native_market: MarketStatus,
     pub pending_pokemon_sale: Option<u64>,
     pub confirmed_pokemon_sales: u64,
     pub pokemon_sale_error: Option<String>,
@@ -60,6 +62,7 @@ impl Default for NativeSnapshot {
             native_auto_catch: false, native_capture_queue: 0, native_throws: 0,
             native_restock: RestockStatus::default(),
             native_automation: AutomationStatus::default(),
+            native_market: MarketStatus::default(),
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
@@ -157,12 +160,14 @@ type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<Tcp
 
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
+    profile: GameProfile,
     twitch: TwitchSession,
     stop: Arc<AtomicBool>,
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
+    market_rules: Arc<Mutex<MarketRules>>,
     session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
     history: Arc<Mutex<HistorySnapshot>>,
@@ -189,6 +194,12 @@ impl NativeSession {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
+        let rules=MarketRules::load(profile).unwrap_or_else(|error| {
+            crate::logging::warn(&format!("Market rule settings unavailable; disabled: {error}"));
+            MarketRules::default()
+        });
+        let market_rules=Arc::new(Mutex::new(rules));
+        let worker_market_rules=Arc::clone(&market_rules);
         let capture_config=Arc::new(Mutex::new(CatchSettings::from_value(settings.as_ref())));
         let worker_capture_config=Arc::clone(&capture_config);
         let session_reset=Arc::new(AtomicBool::new(false));
@@ -214,11 +225,11 @@ impl NativeSession {
         thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    session_loop(credentials, Arc::clone(&worker_snapshot),
+                    session_loop(profile, credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
-                        worker_session_reset, hunt_intel, worker_hunts,
+                        worker_market_rules, worker_session_reset, hunt_intel, worker_hunts,
                         history_recorder,forecast_rx);
                 }));
                 if result.is_err() {
@@ -231,9 +242,18 @@ impl NativeSession {
             })
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
         Ok(Self {
-            snapshot, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, session_reset, hunts, history, forecast_tx
+            snapshot, profile, twitch, stop, command_tx, auto_catch, restock_enabled,
+            capture_config, market_rules, session_reset, hunts, history, forecast_tx
         })
+    }
+    pub fn market_rules(&self) -> MarketRules {
+        self.market_rules.lock().map(|v|v.clone()).unwrap_or_default()
+    }
+    pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
+        rules.save(self.profile)?;
+        let mut live=self.market_rules.lock().map_err(|_|"Market settings unavailable".to_owned())?;
+        *live=rules;
+        Ok(())
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
         if let GameCommand::Hunt(slug) = &command {
@@ -463,7 +483,7 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
     }
 }
 
-fn session_loop(credentials: Credentials,
+fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
     mut gameplay: Gameplay, mut restock: Restock,
@@ -471,6 +491,7 @@ fn session_loop(credentials: Credentials,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
+    market_rules: Arc<Mutex<MarketRules>>,
     session_reset: Arc<AtomicBool>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>,
@@ -479,6 +500,7 @@ fn session_loop(credentials: Credentials,
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
+    let mut market = MarketBuyer::new(profile);
     let mut pending_sale: Option<(u64, Instant)> = None;
     // Metadata is downloaded without cookies/credentials, and only if a
     // configured healing-item rule lacks a server shop price. Never block the
@@ -493,6 +515,7 @@ fn session_loop(credentials: Credentials,
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
+                market.ingest(&welcome, Instant::now());
                 if let Some(catalog) = item_metadata.as_ref() {
                     restock.merge_item_metadata(catalog);
                 }
@@ -508,6 +531,7 @@ fn session_loop(credentials: Credentials,
                 update(&snapshot, |s| {
                     s.native_restock = restock.status.clone();
                     s.native_automation = automation_writer.status.clone();
+                    s.native_market = market.status.clone();
                 });
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -633,6 +657,14 @@ fn session_loop(credentials: Credentials,
                             });
                         }
                     }
+                    // Rule buys share this authenticated game socket.
+                    let market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                    if let Some(payload)=market.next(&market_cfg,Instant::now()) {
+                        if socket.send(Message::Text(payload.to_string().into())).is_err() {
+                            market.send_failed();
+                            break;
+                        }
+                    }
                     if let Some(command) = gameplay.next_capture(Instant::now()) {
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
                             gameplay.failed(&command, "native auto capture send failed");
@@ -667,6 +699,7 @@ fn session_loop(credentials: Credentials,
                         s.native_capture_queue = gameplay.status.queue;
                         s.native_throws = gameplay.status.throws;
                         s.native_restock = restock.status.clone();
+                        s.native_market = market.status.clone();
                     });
                     if last_ping.elapsed() >= HEARTBEAT_INTERVAL {
                         if socket.send(Message::Ping(Vec::new().into())).is_err() { break; }
@@ -677,6 +710,7 @@ fn session_loop(credentials: Credentials,
                             gameplay.ingest(text.as_ref(), Instant::now());
                             let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
+                            market.ingest(text.as_ref(), Instant::now());
                             hunt_intel.ingest(text.as_ref(), Instant::now());
                             history_recorder.ingest(text.as_ref(),hunt_intel.view.hunt_slug.as_deref());
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
@@ -739,6 +773,7 @@ fn session_loop(credentials: Credentials,
                     while command_rx.try_recv().is_ok() {}
                     history_recorder.maybe_flush(true);
                     restock.on_disconnect(Instant::now());
+                    market.on_disconnect();
                     restock.publish_status();
                     automation_writer.on_disconnect();
                     pending_sale=None;
@@ -748,6 +783,7 @@ fn session_loop(credentials: Credentials,
                         s.phase = "Reconnecting".into();
                         s.native_restock = restock.status.clone();
                         s.native_automation = automation_writer.status.clone();
+                        s.native_market = market.status.clone();
                         s.pending_pokemon_sale=None;
                         s.pokemon_sale_error=Some("Connection lost before Pokémon sale confirmation".into());
                     });

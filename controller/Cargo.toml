@@ -1,6 +1,6 @@
 [package]
 name = "moth-controller"
-version = "0.1.7-native.25"
+version = "0.1.7-native.26"
 edition = "2024"
 description = "Native Windows and Linux controller for dedicated PokéIdle browser profiles"
 
@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "links", "x11", "wayland"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

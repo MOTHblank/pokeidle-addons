@@ -15,6 +15,7 @@ mod native_visuals;
 mod native_hunts;
 mod native_history;
 mod native_automation;
+mod native_market;
 mod native_atlas;
 mod native_atlas_models;
 mod native_restock;
