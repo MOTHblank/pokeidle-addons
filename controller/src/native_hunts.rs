@@ -281,11 +281,11 @@ impl HuntIntel {
             }
         }
         if let Some(boost) = state.get("guild").and_then(|g| Self::num(g, "boostAte")) {
-            let now_server = Self::num(state, "servidorAgora").unwrap_or(0);
+            let now_server = self.view.server_now.unwrap_or(0);
             self.view.bonuses.guild_boost_active = boost > now_server && now_server > 0;
         }
         if let Some(vip_until) = Self::num(state, "vipAte") {
-            let now_server = Self::num(state, "servidorAgora").unwrap_or(0);
+            let now_server = self.view.server_now.unwrap_or(0);
             self.view.bonuses.vip_active = vip_until > now_server && now_server > 0;
         }
         self.sample(now);
@@ -380,14 +380,20 @@ impl HuntIntel {
             Some((b - a) as f64 * scale)
         };
         let kills = last.kills.saturating_sub(first.kills);
+        // Net gold may be negative after potions, restock purchases or other
+        // spend; hiding decreases incorrectly shows "no data".
+        let net_gold = match (first.gold, last.gold) {
+            (Some(a),Some(b)) => Some((b as i128 - a as i128) as f64 * scale),
+            _ => None
+        };
         self.view.measurements = HuntMeasurements {
             seconds: sec, kills, kills_h: kills as f64 * scale,
             trainer_xp_h: rate(first.trainer, last.trainer).unwrap_or(0.0),
             pokemon_xp_h: rate(first.pokemon, last.pokemon).unwrap_or(0.0),
-            gold_net_h: rate(first.gold, last.gold).unwrap_or(0.0),
+            gold_net_h: net_gold.unwrap_or(0.0),
             valid_trainer: rate(first.trainer, last.trainer).is_some(),
             valid_pokemon: rate(first.pokemon, last.pokemon).is_some(),
-            valid_gold: rate(first.gold, last.gold).is_some(),
+            valid_gold: net_gold.is_some(),
             window_samples: self.samples.len(),
         };
         self.view.sample_quality = if kills < 5 {
@@ -480,6 +486,16 @@ mod tests {
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
         assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
         assert_eq!(intel.view.pokemon_roster.len(),1);
+    }
+    #[test]
+    fn measured_net_gold_includes_negative_spend() {
+        let mut model=HuntIntel::new();
+        let now=Instant::now();
+        model.ingest(r#"{"t":"welcome","hunts":[{"slug":"a","nome":"A"}],
+            "estado":{"huntSlug":"a","gold":1000}}"#,now);
+        model.ingest(r#"{"t":"estado","estado":{"gold":500}}"#,now+Duration::from_secs(60));
+        assert_eq!(model.view.measurements.gold_net_h,-30_000.0);
+        assert!(model.view.measurements.valid_gold);
     }
     #[test]
     fn unobserved_hunts_never_claim_actual_xp_per_hour() {
