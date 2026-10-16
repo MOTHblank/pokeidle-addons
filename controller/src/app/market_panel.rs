@@ -268,7 +268,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             }
         });
         if jump_to_snatch {
-            ui.scroll_to_rect(snatch_response.header_response.rect, Some(Align::TOP));
+            ui.scroll_to_rect(snatch_response.header_response.rect, Some(Align::Min));
         }
         ui.collapsing("Import existing Moth Watch rules",|ui|{
             ui.label(RichText::new(
