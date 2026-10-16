@@ -4671,13 +4671,35 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         }
                     });
                 }
+                let capture=&game.native_capture_status;
                 ui.label(RichText::new(format!(
-                    "{} {} · {} {}",
-                    game.native_capture_queue, tr("pending"),
-                    game.native_throws, tr("throws")
+                    "{} pending · {} sent · {} caught · {} failed · {} timed-out retries",
+                    game.native_capture_queue,capture.throws,capture.catches,
+                    capture.failures,capture.timeout_retries
                 )).size(10.0).color(DIM));
             });
 
+            if !game.native_capture_status.last_action.is_empty() {
+                ui.label(RichText::new(&game.native_capture_status.last_action)
+                    .size(10.0).color(MUTED));
+            }
+            if let Some(error)=game.native_capture_status.error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.collapsing("Auto Catch · ball statistics",|ui|{
+                let capture=&game.native_capture_status;
+                if capture.used_by_ball.is_empty() {
+                    ui.label(RichText::new("No native throws recorded in this session")
+                        .size(10.0).color(DIM));
+                }
+                for (id,used) in &capture.used_by_ball {
+                    let caught=capture.caught_by_ball.get(id).copied().unwrap_or(0);
+                    ui.label(format!("Ball #{id}: {used} sent · {caught} caught"));
+                }
+                ui.label(RichText::new(
+                    "Only attempts from native Auto Catch count here; unrelated manual/server captures remain in the dashboard totals."
+                ).size(10.0).color(DIM));
+            });
             ui.add_space(7.0);
             ui.separator();
             ui.add_space(6.0);
@@ -4826,6 +4848,13 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     }
     let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
     ui.checkbox(&mut cfg.enabled,tr("Enable native Auto Catch"));
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Throw interval").size(10.0).color(MUTED));
+        ui.add(egui::DragValue::new(&mut cfg.interval_ms)
+            .range(100..=3000).speed(10.0).suffix(" ms"));
+        ui.label(RichText::new("100 ms matches Auto Catch+; unanswered throws retry after 1 s")
+            .size(10.0).color(DIM));
+    });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
         .size(11.0).color(TEXT));
     let keys=["beast","ultra","super","great","poke"];
