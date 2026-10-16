@@ -4,10 +4,22 @@ The default application is a **native-first** PokéIdle and Twitch client with s
 
 ## Run / Build
 
-- Download a Windows or Linux binary from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest), or build with `cargo build --release`.
+- Download a Windows or Linux binary from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest), or build with `cargo build --release` from `controller/`.
 - Run `cargo test` and `cargo check` from `controller/`.
 - Firefox or Firefox Developer Edition is needed only for initial authentication, expired sessions and **Open in Firefox**. Set `MOTH_FIREFOX` to its path if not detected. Linux interactive browser sessions need X11 or Wayland, and GUI/system dependencies installed.
-- Use **Accounts** to register accounts, **Start native** to connect and **Open in Firefox** for an interactive session. Credentials are cached in the existing protected OS store.
+- Use **Accounts** to register accounts, **Start account** to connect and **Open in Firefox** for an interactive session. Credentials are cached in the existing protected OS store.
+
+### Windows release builds while Moth Controller is open
+
+If you build with `cargo build --release` while `target\\release\\moth-controller.exe` is still running, Windows can report `Access is denied (os error 5)` when Cargo tries to replace it. This is a Windows executable file lock, not a Rust compilation error.
+
+From PowerShell in the `controller` directory, use:
+
+```powershell
+.\\build-windows.ps1
+```
+
+The script first tries the normal release output. If that executable is locked, it builds to `target\\build-while-running\\release\\moth-controller.exe`, or a timestamped folder if that copy is also running. It prints the exact executable path and **never closes the current controller or disconnects running accounts**. To run the newly built version, close the old window and launch the new executable. Alternatively, exit Moth Controller before using plain `cargo build --release`. Do not force-kill an account just to free a build output.
 
 ## Native functionality
 
@@ -15,7 +27,7 @@ The Rust backend handles authenticated game sessions and Twitch IRC directly, Au
 
 ## Optional Firefox browser extensions
 
-**Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding. In **Accounts**, enable a slot and choose **Start native**; if necessary, authenticate in its temporary Firefox profile. The setup guide completes automatically after an authenticated session; there is no script-installation step. Connection state and login tools remain visible, while special Google/Twitch sign-in options are under **Login and profile tools**.
+**Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding. In **Accounts**, enable a slot and choose **Start account**; if necessary, authenticate in its temporary Firefox profile. The setup guide completes automatically after an authenticated session; there is no script-installation step. Connection state and login tools remain visible, while special Google/Twitch sign-in options are under **Login and profile tools**.
 
 For occasional Firefox scripts only, expand **Optional browser scripts (advanced)**. Legacy installers point to [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). Their versions are checked only when that optional panel is opened or its **Check now** button is pressed; missing scripts do not trigger dashboard warnings or get selected for installation automatically. Scripts must be chosen individually; there is no install-all action. If running optional browser Auto Catch, avoid simultaneously running native Auto Catch on the same account.
 
