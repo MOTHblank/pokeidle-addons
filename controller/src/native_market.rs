@@ -616,9 +616,6 @@ impl MarketBuyer {
         }
         out
     }
-    fn budget(&self, cfg:&MarketRules, rule:&BuyRule, offer:&Offer) -> u64 {
-        self.budget_for(cfg,rule,offer,false)
-    }
     fn budget_for(&self,cfg:&MarketRules,rule:&BuyRule,offer:&Offer,
         competitive:bool)->u64 {
         let currency=offer.currency.as_str();
