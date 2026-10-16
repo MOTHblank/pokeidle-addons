@@ -1517,9 +1517,7 @@ struct NativeBrowserClosedEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Inventory, Pokemon, Automation, History, Options }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PokemonSort { Level, Grade, Quality, Power, IvTotal, Type, Name }
+enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
 #[derive(Clone,Default)]
 struct AutomationDraft {
     initialized: bool,
@@ -1597,15 +1595,6 @@ pub struct ControllerApp {
     hunt_account: usize,
     automation_account: usize,
     automation_drafts: [AutomationDraft;4],
-    pokemon_account: usize,
-    pokemon_query: String,
-    pokemon_sort: PokemonSort,
-    pokemon_shiny_only: bool,
-    pokemon_min_iv: u64,
-    pokemon_type: String,
-    pokemon_selected: [Option<u64>;4],
-    pokemon_sale_confirm: [Option<u64>;4],
-    history_account: usize,
     history_rows_limit: usize,
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
@@ -1628,16 +1617,12 @@ pub struct ControllerApp {
     capture_save_error:[Option<String>;4],
     capture_save_tx:Sender<CaptureSavedEvent>,
     capture_save_rx:Receiver<CaptureSavedEvent>,
-    inventory_account:Option<usize>,
-    inventory_query:String,
-    inventory_category:String,
     session_reset_confirm:[bool;4],
     inventory_catalog:Option<Arc<ItemCatalog>>,
     inventory_catalog_error:Option<String>,
     inventory_catalog_busy:bool,
     inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
-    show_accounts: bool,
     accounts: [AccountConfig; 4],
     account_names_dirty: [bool; 4],
     status: String,
@@ -1728,15 +1713,6 @@ impl ControllerApp {
             hunt_account: 0,
             automation_account: 0,
             automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
-            pokemon_account: 0,
-            pokemon_query: String::new(),
-            pokemon_sort: PokemonSort::Level,
-            pokemon_shiny_only: false,
-            pokemon_min_iv: 0,
-            pokemon_type: String::new(),
-            pokemon_selected: [None;4],
-            pokemon_sale_confirm: [None;4],
-            history_account: 0,
             history_rows_limit: 100,
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
@@ -1759,16 +1735,12 @@ impl ControllerApp {
             capture_save_error:std::array::from_fn(|_|None),
             capture_save_tx,
             capture_save_rx,
-            inventory_account:Some(0),
-            inventory_query:String::new(),
-            inventory_category:String::new(),
             session_reset_confirm:[false;4],
             inventory_catalog:None,
             inventory_catalog_error:None,
             inventory_catalog_busy:false,
             inventory_catalog_tx,
             inventory_catalog_rx,
-            show_accounts: false,
             account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -1844,27 +1816,36 @@ impl ControllerApp {
         }
     }
 
-    /// Keep the same selected account across Hunt Atlas, inventory, Pokémon,
-    /// automation and history. A switch never starts or stops a session.
+    /// Switching accounts changes the workspace selection, not a live session.
     fn select_workspace_account(&mut self, index: usize) {
-        if index >= self.games.len() { return; }
-        if self.history_account != index {
-            self.history_rows_limit = 100;
-        }
-        // Type choices come from the current roster; another account may not
-        // have that type. Keep search and sorting, but avoid a stale empty view.
-        if self.pokemon_account != index {
-            self.pokemon_type.clear();
-        }
+        if index >= self.games.len() || index == self.hunt_account { return; }
+        self.save_dirty_account_names();
+        self.history_rows_limit = 100;
         self.hunt_account = index;
-        if self.panel_tab==PanelTab::Hunts && self.hunt_subtab==HuntSubtab::Compare {
-            self.hunt_subtab=HuntSubtab::Explorer;
+        if self.panel_tab == PanelTab::Hunts && self.hunt_subtab == HuntSubtab::Compare {
+            self.hunt_subtab = HuntSubtab::Explorer;
         }
         self.automation_account = index;
-        self.pokemon_account = index;
-        self.history_account = index;
-        self.inventory_account = Some(index);
         self.hunt_page = 0;
+    }
+
+    /// Account edits are buffered until focus is lost, the selected account
+    /// changes, or the user navigates away from Accounts.
+    fn save_dirty_account_names(&mut self) {
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if self.account_names_dirty[index] {
+                let name = self.accounts[index].name.trim();
+                self.accounts[index].name = if name.is_empty() {
+                    profile.label().to_owned()
+                } else {
+                    name.to_owned()
+                };
+                if self.save_account_config() {
+                    self.account_names_dirty[index] = false;
+                }
+            }
+        }
     }
 
     fn account_name(&self, profile: GameProfile) -> String {
@@ -3672,206 +3653,6 @@ fn draw_native_missing_panel(
         });
 }
 
-fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
-    request_item_catalog(app);
-    ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(tr("Inventory and battle drops"))
-            .size(14.0).strong().color(TEXT));
-        ui.add(egui::TextEdit::singleline(&mut app.inventory_query)
-            .desired_width(240.0).hint_text(tr("Search items or drops")));
-        egui::ComboBox::from_id_salt("inventory-category")
-            .selected_text(match app.inventory_category.as_str(){
-                "balls"=>tr("Balls"),"potions"=>tr("Potions"),
-                "stones"=>tr("Stones"),"other"=>tr("Other"),_=>tr("All items")
-            }).show_ui(ui,|ui|{
-                for (id,name) in [
-                    ("",tr("All items")),("balls",tr("Balls")),
-                    ("potions",tr("Potions")),("stones",tr("Stones")),
-                    ("other",tr("Other"))] {
-                    ui.selectable_value(&mut app.inventory_category,id.into(),name);
-                }
-            });
-    });
-    let mut views=Vec::new();
-    let mut unavailable=Vec::new();
-    for index in 0..app.games.len() {
-        if app.inventory_account.is_some_and(|selected| selected!=index){continue}
-        if let Some(native)=app.games[index].native.as_ref() {
-            views.push((app.account_name(app.games[index].profile),native.hunt_snapshot()));
-        } else if app.accounts[index].enabled || app.inventory_account==Some(index) {
-            unavailable.push(app.account_name(app.games[index].profile));
-        }
-    }
-    if views.is_empty(){
-        let selected=app.inventory_account;
-        draw_native_missing_panel(app,ui,selected,
-            tr("Inventory requires an authenticated native game session"));
-        return;
-    }
-    ui.label(RichText::new(format!("{} {}{}",
-        views.len(), tr("native inventories loaded"),
-        if unavailable.is_empty() { String::new() } else {
-            format!(" · {}: {}", tr("Unavailable"), unavailable.join(", "))
-        }
-    )).size(10.0).color(if unavailable.is_empty() { DIM } else { WARN }));
-    if app.inventory_catalog_busy {
-        ui.label(RichText::new(tr("Loading public item names..."))
-            .size(10.0).color(DIM));
-    } else if let Some(error)=app.inventory_catalog_error.clone() {
-        ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(format!("{}: {error}",tr("Item catalog unavailable")))
-                .size(10.0).color(WARN));
-            if ui.small_button(tr("Retry")).clicked() {app.inventory_catalog_error=None;}
-        });
-    }
-    let catalog=app.inventory_catalog.as_deref();
-    let mut amounts=std::collections::BTreeMap::<(bool,u64),(u64,String,String)>::new();
-    let mut acquired=std::collections::BTreeMap::<String,u64>::new();
-    let mut session_kills=0u64;
-    let mut session_catches=0u64;
-    for (_,view) in &views {
-        session_kills=session_kills.saturating_add(view.session.kills);
-        session_catches=session_catches.saturating_add(view.session.captures);
-        for (id,quantity) in view.balls.iter() {
-            if *quantity==0 {continue}
-            let name=view.ball_names.get(id).cloned()
-                .unwrap_or_else(||format!("Ball #{id}"));
-            let entry=amounts.entry((true,*id)).or_insert((0,name,"balls".into()));
-            entry.0=entry.0.saturating_add(*quantity);
-        }
-        for (id,quantity) in view.items.iter() {
-            if *quantity==0 {continue}
-            let name=catalog.map(|c|c.name(*id))
-                .unwrap_or_else(||format!("Item #{id}"));
-            let cat=catalog.and_then(|c|c.items.get(id))
-                .map(|meta|meta.category.to_lowercase()).unwrap_or_default();
-            let normalized=name.to_lowercase();
-            let category=if cat == "heal" || cat.contains("potion") || normalized.contains("potion") ||
-                normalized.contains("poção") { "potions" }
-                else if cat == "stone" || cat.contains("stone") || normalized.contains("stone") ||
-                    normalized.contains("pedra") { "stones" }
-                else { "other" };
-            let entry=amounts.entry((false,*id))
-                .or_insert((0,name,category.into()));
-            entry.0=entry.0.saturating_add(*quantity);
-        }
-        for (name,quantity) in &view.session.acquired {
-            let entry=acquired.entry(name.clone()).or_default();
-            *entry=entry.saturating_add(*quantity);
-        }
-    }
-    let query=app.inventory_query.trim().to_lowercase();
-    let mut rows=amounts.into_iter().filter(|((_,id),(_,name,category))|
-        (app.inventory_category.is_empty() || category==&app.inventory_category) &&
-        (query.is_empty() || name.to_lowercase().contains(&query) ||
-            id.to_string().contains(&query))).collect::<Vec<_>>();
-    rows.sort_by(|a,b|a.1.1.cmp(&b.1.1).then_with(||a.0.cmp(&b.0)));
-    let total_items=rows.iter().map(|row|row.1.0).sum::<u64>();
-    let mut drops=acquired.into_iter()
-        .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
-        .collect::<Vec<_>>();
-    drops.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
-    ui.add_space(6.0);
-    if ui.available_width()>=720.0 {
-        // Side-by-side stocks and drops use the available width instead of
-        // forcing users to scroll past a mostly empty stacked section.
-        ui.columns(2,|cols|{
-            draw_inventory_stock(&mut cols[0],&rows,total_items,
-                &query,&app.inventory_category);
-            draw_inventory_drops(&mut cols[1],&drops,session_kills,session_catches,&query);
-        });
-    } else {
-        draw_inventory_stock(ui,&rows,total_items,&query,&app.inventory_category);
-        ui.add_space(8.0);
-        draw_inventory_drops(ui,&drops,session_kills,session_catches,&query);
-    }
-}
-
-fn draw_inventory_stock(
-    ui:&mut egui::Ui,
-    rows:&[((bool,u64),(u64,String,String))],
-    total_items:u64,
-    query:&str,
-    category:&str,
-) {
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
-        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Current inventory"))
-                    .size(13.0).strong().color(TEXT));
-                ui.label(RichText::new(format!("{} {} · {} {}",rows.len(),
-                    tr("items"),total_items,tr("units"))).size(10.0).color(DIM));
-            });
-            ui.label(RichText::new(tr("Server-reported stock")).size(10.0).color(DIM));
-            if rows.is_empty() {
-                ui.label(RichText::new(if query.is_empty() && category.is_empty() {
-                    tr("No server-reported stock yet")
-                } else {
-                    tr("No items match these filters")
-                }).size(11.0).color(MUTED));
-                return;
-            }
-            egui::ScrollArea::vertical().id_salt("inventory-stock-grid")
-                .max_height(400.0).show(ui,|ui|{
-                    egui::Grid::new("inventory-stock-table").striped(true)
-                        .spacing([8.0,5.0]).show(ui,|ui|{
-                            for ((is_ball,id),(quantity,name,category)) in rows {
-                                ui.label(RichText::new(
-                                    compact_text(name,23)).size(11.0).color(TEXT))
-                                    .on_hover_text(name);
-                                ui.label(RichText::new(format!("#{id} · {}",tr(category)))
-                                    .size(9.0).color(if *is_ball { ACCENT } else { DIM }));
-                                ui.label(RichText::new(format!("×{quantity}"))
-                                    .size(11.0).strong().color(GOOD));
-                                ui.end_row();
-                            }
-                        });
-                });
-        });
-}
-
-fn draw_inventory_drops(
-    ui:&mut egui::Ui,
-    drops:&[(String,u64)],
-    session_kills:u64,
-    session_catches:u64,
-    query:&str,
-) {
-    egui::Frame::new().fill(PANEL).corner_radius(8.0)
-        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
-            ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new(tr("Session drops"))
-                    .size(13.0).strong().color(TEXT));
-                ui.label(RichText::new(format!("{} {} · {} {}",session_kills,
-                    tr("kills"),session_catches,tr("captures")))
-                    .size(10.0).color(DIM));
-            });
-            ui.label(RichText::new(tr("Battle-acquired only · excludes purchases"))
-                .size(10.0).color(DIM));
-            if drops.is_empty() {
-                ui.label(RichText::new(if query.is_empty() {
-                    tr("No battle drops recorded yet")
-                } else {
-                    tr("No acquired drops match this search")
-                }).size(11.0).color(MUTED));
-                return;
-            }
-            egui::ScrollArea::vertical().id_salt("inventory-drop-grid")
-                .max_height(400.0).show(ui,|ui|{
-                    egui::Grid::new("inventory-drop-table").striped(true)
-                        .spacing([8.0,5.0]).show(ui,|ui|{
-                            for (name,quantity) in drops {
-                                ui.label(RichText::new(compact_text(name,30))
-                                    .size(11.0).color(TEXT)).on_hover_text(name);
-                                ui.label(RichText::new(format!("+{quantity}"))
-                                    .size(11.0).strong().color(GOOD));
-                                ui.end_row();
-                            }
-                        });
-                });
-        });
-}
-
 fn format_hunt_amount(value: f64) -> String {
     if !value.is_finite() { return "—".into(); }
     let negative = if value < 0.0 { "-" } else { "" };
@@ -4323,219 +4104,6 @@ mod history_ui_tests {
         assert_eq!(history_day_label(0),"1970-01-01");
         assert_eq!(history_day_label(19782),"2024-02-29");
     }
-}
-
-/// Depot operations are read-only until a user explicitly confirms a
-/// supported, server-authoritative individual sale. Never infer a success
-/// from pressing a button; only the following full roster can confirm it.
-fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new(tr("Pokémon management")).size(14.0)
-        .strong().color(TEXT));
-    let index=app.pokemon_account;
-    let Some(native)=app.games[index].native.as_ref() else {
-        draw_native_missing_panel(app,ui,Some(index),
-            tr("Pokémon roster is unavailable until native login completes"));
-        return;
-    };
-    let view=native.hunt_snapshot();
-    let status=native.snapshot();
-    if status.phase != "Online" {
-        ui.label(RichText::new(format!("{}: {}", tr("Game connection"), status.phase))
-            .size(10.0).color(WARN));
-    }
-    ui.add_space(9.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(format!("{}: {}",tr("Pokémon on account"),view.pokemon_roster.len()));
-        ui.add(egui::TextEdit::singleline(&mut app.pokemon_query)
-            .hint_text(tr("Search Pokémon")).desired_width(190.0));
-        ui.checkbox(&mut app.pokemon_shiny_only,tr("Shiny only"));
-        ui.label(tr("Minimum total IV"));
-        ui.add(egui::DragValue::new(&mut app.pokemon_min_iv).range(0..=186));
-        let types=view.pokemon_roster.iter().flat_map(|pokemon|pokemon.types.iter().cloned())
-            .collect::<BTreeSet<_>>();
-        egui::ComboBox::from_id_salt("pokemon-type")
-            .selected_text(if app.pokemon_type.is_empty() {tr("All types")} else {&app.pokemon_type})
-            .show_ui(ui,|ui|{
-                ui.selectable_value(&mut app.pokemon_type,String::new(),tr("All types"));
-                for kind in types {
-                    ui.selectable_value(&mut app.pokemon_type,kind.clone(),kind);
-                }
-            });
-        ui.label(tr("Sort by"));
-        egui::ComboBox::from_id_salt("pokemon-sort")
-            .selected_text(match app.pokemon_sort {
-                PokemonSort::Level => "Level",
-                PokemonSort::Grade => tr("Grade"),
-                PokemonSort::Quality => tr("Quality"),
-                PokemonSort::Power => tr("Power"),
-                PokemonSort::IvTotal => tr("IV total"),
-                PokemonSort::Type => "Type",
-                PokemonSort::Name => "Name"
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Level,"Level");
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Grade,tr("Grade"));
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Quality,tr("Quality"));
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Power,tr("Power"));
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::IvTotal,tr("IV total"));
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Type,"Type");
-                ui.selectable_value(&mut app.pokemon_sort,PokemonSort::Name,"Name");
-            });
-        if ui.small_button(tr("Clear filters")).clicked() {
-            app.pokemon_query.clear();
-            app.pokemon_shiny_only=false;
-            app.pokemon_min_iv=0;
-            app.pokemon_type.clear();
-        }
-    });
-    ui.add_space(8.0);
-    let query=app.pokemon_query.trim().to_lowercase();
-    let mut filtered=view.pokemon_roster.iter()
-        .filter(|pokemon|
-            (!app.pokemon_shiny_only || pokemon.shiny) &&
-            (app.pokemon_type.is_empty() ||
-                pokemon.types.iter().any(|kind|kind==&app.pokemon_type)) &&
-            (app.pokemon_min_iv==0 || pokemon.ivs.iter()
-                .filter_map(|iv|*iv).sum::<u64>()>=app.pokemon_min_iv) &&
-            (query.is_empty() || pokemon.name.to_lowercase().contains(&query) ||
-                pokemon.id.to_string().contains(&query) ||
-                pokemon.species_id.is_some_and(|id|id.to_string().contains(&query))))
-        .collect::<Vec<_>>();
-    filtered.sort_by(|a,b|{
-        let cmp=match app.pokemon_sort {
-            PokemonSort::Level => b.level.cmp(&a.level),
-            PokemonSort::Grade => b.grade.unwrap_or(0.0)
-                .total_cmp(&a.grade.unwrap_or(0.0)),
-            PokemonSort::Quality => b.quality.unwrap_or(0.0)
-                .total_cmp(&a.quality.unwrap_or(0.0)),
-            PokemonSort::Power => b.power.unwrap_or(0).cmp(&a.power.unwrap_or(0)),
-            PokemonSort::IvTotal => b.ivs.iter().filter_map(|iv|*iv).sum::<u64>()
-                .cmp(&a.ivs.iter().filter_map(|iv|*iv).sum::<u64>()),
-            PokemonSort::Type => a.types.first().cmp(&b.types.first()),
-            PokemonSort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        };
-        cmp.then_with(||a.id.cmp(&b.id))
-    });
-    let selected_id=app.pokemon_selected[index]
-        .filter(|id|filtered.iter().any(|pokemon|pokemon.id==*id))
-        .or_else(||filtered.first().map(|pokemon|pokemon.id));
-    ui.label(RichText::new(format!("{} {} / {}", filtered.len(),
-        tr("Pokémon matching filters"), view.pokemon_roster.len()))
-        .size(10.0).color(MUTED));
-    ui.columns(2, |cols| {
-        cols[0].label(RichText::new(tr("Pokémon on account")).strong().color(TEXT));
-        egui::ScrollArea::vertical().id_salt(("pokemon-roster",index))
-            .max_height(450.0).show(&mut cols[0],|ui|{
-                if filtered.is_empty() {
-                    ui.label(if view.pokemon_roster.is_empty() {
-                        tr("No Pokémon roster received yet")
-                    } else {
-                        tr("No Pokémon match the current filters")
-                    });
-                }
-                if !filtered.is_empty() {
-                    egui::Grid::new(("pokemon-roster-grid",index))
-                        .striped(true).spacing([8.0,5.0]).show(ui,|ui|{
-                        for column in ["Pokémon","Lv","Grade","IV","Power"] {
-                            ui.label(RichText::new(tr(column)).size(10.0)
-                                .strong().color(DIM));
-                        }
-                        ui.end_row();
-                        for pokemon in &filtered {
-                            let active=view.active_pokemon.as_ref()
-                                .is_some_and(|current|current.id==pokemon.id);
-                            let name=format!("{}{}{}",if active {"▶ "} else {""},
-                                compact_text(&pokemon.name,17),
-                                if pokemon.shiny {" ✨"}else{""});
-                            if ui.selectable_label(selected_id==Some(pokemon.id),name)
-                                .on_hover_text(&pokemon.name).clicked() {
-                                app.pokemon_selected[index]=Some(pokemon.id);
-                                app.pokemon_sale_confirm[index]=None;
-                            }
-                            ui.label(pokemon.level.to_string());
-                            ui.label(pokemon.grade.map(|v|format!("{v:.1}"))
-                                .unwrap_or_else(||"—".into()));
-                            ui.label(pokemon.ivs.iter().filter_map(|iv|*iv)
-                                .sum::<u64>().to_string());
-                            ui.label(pokemon.power.map(format_number)
-                                .unwrap_or_else(||"—".into()));
-                            ui.end_row();
-                        }
-                    });
-                }
-            });
-        cols[1].label(RichText::new(tr("Selected Pokémon")).strong().color(TEXT));
-        if let Some(pokemon)=selected_id
-            .and_then(|id|view.pokemon_roster.iter().find(|p|p.id==id)) {
-            let active=view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
-            let detail=[
-                ("ID",format!("#{}",pokemon.id)),
-                ("Species",pokemon.species_id.map(|id|id.to_string()).unwrap_or_default()),
-                ("Level",pokemon.level.to_string()),
-                ("XP",pokemon.xp.map(format_number).unwrap_or_default()),
-                ("Next XP",pokemon.xp_next.map(format_number).unwrap_or_default()),
-                ("HP",match (pokemon.hp,pokemon.max_hp) {
-                    (Some(hp),Some(max))=>format!("{hp}/{max}"),
-                    _=>"—".into(),
-                }),
-                ("Grade",pokemon.grade.map(|v|format!("{v:.2}")).unwrap_or_default()),
-                ("Quality",pokemon.quality.map(|v|format!("{v:.2}")).unwrap_or_default()),
-                ("Power",pokemon.power.map(|v|v.to_string()).unwrap_or_default()),
-                ("Potency",pokemon.potency.map(|v|v.to_string()).unwrap_or_default()),
-                ("Held item",pokemon.held_item_id.map(|id|id.to_string()).unwrap_or_default()),
-                ("Types",pokemon.types.join(", ")),
-                ("IVs",pokemon.ivs.iter().map(|n|n.map(|v|v.to_string())
-                    .unwrap_or_else(||"—".into())).collect::<Vec<_>>().join(" / ")),
-                ("Shiny",pokemon.shiny.to_string()),
-                ("Looktype",pokemon.looktype.map(|id|id.to_string()).unwrap_or_default()),
-            ];
-            egui::ScrollArea::vertical().max_height(330.0)
-                .id_salt(("pokemon-details",index)).show(&mut cols[1],|ui|{
-                ui.label(RichText::new(&pokemon.name).size(14.0).strong().color(TEXT));
-                egui::Grid::new(("pokemon-details-grid",index))
-                    .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
-                        for (key,value) in detail {
-                            ui.label(RichText::new(key).size(10.0).color(DIM));
-                            ui.label(RichText::new(value).size(10.0).color(TEXT));
-                            ui.end_row();
-                        }
-                    });
-            });
-            cols[1].add_space(9.0);
-            if active || pokemon.shiny {
-                cols[1].label(RichText::new(tr("Cannot sell active or shiny Pokémon."))
-                    .size(10.0).color(WARN));
-            } else if status.pending_pokemon_sale.is_some() {
-                cols[1].label(RichText::new(format!("Sale pending for #{}",
-                    status.pending_pokemon_sale.unwrap_or_default())).color(WARN));
-            } else if app.pokemon_sale_confirm[index]==Some(pokemon.id) {
-                cols[1].horizontal(|ui|{
-                    if ui.button(tr("Confirm sale")).clicked() {
-                        match native.send_command(GameCommand::SellPokemon(pokemon.id)) {
-                            Ok(())=>app.pokemon_sale_confirm[index]=None,
-                            Err(error)=>{app.status=format!("Sale rejected: {error}");app.status_error=true;}
-                        }
-                    }
-                    if ui.small_button(tr("Cancel")).clicked() {
-                        app.pokemon_sale_confirm[index]=None;
-                    }
-                });
-                cols[1].label(RichText::new(
-                    tr("Authoritative server inventory determines whether the sale succeeded.")
-                ).size(10.0).color(DIM));
-            } else if status.phase=="Online" {
-                if cols[1].button(tr("Sell Pokémon")).clicked() {
-                    app.pokemon_sale_confirm[index]=Some(pokemon.id);
-                }
-            }
-            if let Some(error)=status.pokemon_sale_error.as_deref() {
-                cols[1].label(RichText::new(error).size(10.0).color(WARN));
-            }
-            cols[1].label(format!("Confirmed sales: {}",status.confirmed_pokemon_sales));
-        } else {
-            cols[1].label(tr("Inspect a Pokémon from the native roster."));
-        }
-    });
 }
 
 /// Dedicated native automation workspace. Keeps settings out of the
