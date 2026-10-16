@@ -436,7 +436,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No drops acquired in this session yet" => "Nenhum drop obtido nesta sessão",
         "Current hunt details" => "Detalhes da hunt atual",
         "spawn slots" => "slots de spawn",
-        "At Pokémon Center" => "No Centro Pokémon",
         "Switch pending" => "Mudança pendente",
         "Wild encounter" => "Selvagem",
         "Session" => "Sessão",
@@ -3416,7 +3415,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(12.0);
                     let gap = 12.0;
                     let available = ui.available_width();
-                    let columns = if available >= 720.0 { 2 } else { 1 };
+                    let columns = if available >= 800.0 { 2 } else { 1 };
                     let card_width = if columns == 2 {
                         (available - gap) / 2.0
                     } else { available };
@@ -3851,7 +3850,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
             }
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Native and Firefox are mutually exclusive launch options.
                 let action = tr(if !running { "Start account" }
                     else if app.games[index].native.is_some() { "Stop" }
@@ -6200,7 +6199,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let gap = 12.0;
     egui::ScrollArea::vertical().id_salt("account_manager_four_cards")
         .auto_shrink([false, true]).show(ui, |ui| {
-        let columns = if ui.available_width() >= 690.0 { 2 } else { 1 };
+        let columns = if ui.available_width() >= 820.0 { 2 } else { 1 };
         let width = if columns == 2 {
             (ui.available_width() - gap) / 2.0
         } else { ui.available_width() };
