@@ -28,6 +28,20 @@ public release. No downloaded binary images were added to this repository.
 
 Moth Controller has a reusable egui sprite renderer, currently used by the native **Auto Catch / Restock** picker. It supports ball, item, and Pokémon species IDs for reusing the same cache in other screens. The current simplified native navigation no longer exposes the old Inventory and Pokémon pages; those integrations can reuse this module when the pages return. It never requires a WebView.
 
+## Wiring the current pokeidle-upstream image snapshot
+
+The controller tracks the upstream game's **419 item ID → icon-path mappings** in `upstream-item-icons.json`. The new `upstream-available-images.json` records **87 image files confirmed in the upstream repository snapshot**, not guessed CDN paths. Moth Controller first tries the game-hosted image URL and then falls back to the exact corresponding public `pokeidle-upstream` image when it exists. Images load on demand into a per-user disk cache without blocking the interface.
+
+To bundle verified artwork once, clone or update `MOTHblank/pokeidle-upstream` locally next to this repository and run from the `pokeidle-addons` repository root:
+
+```sh
+python scripts/sync-native-visuals.py --upstream-dir ../pokeidle-upstream --local-only
+```
+
+This command uses the checked-in mappings and copies only PNG/GIF files that exist at verified snapshot paths. It produces `controller/assets/visual/manifest.json` and `controller/src/native_visual_assets.generated.rs`; after reviewing distribution rights, commit those together with `controller/assets/visual/*.{png,gif}`. To additionally ask the game CDN for icons absent from the repository snapshot, omit `--local-only`.
+
+The source archive's `image-index.json` presently has **zero mapped Pokémon sprites**, so Pokémon icons are not invented from names, looktypes, or unrelated IDs. Once a later upstream export contains verified species IDs and sprite URLs, pass its index to `--pokemon-index` or add an audited mapping.
+
 ## Developer: create the committed art cache once
 
 From the repository root, with Python 3.10+ and internet access:
@@ -75,7 +89,7 @@ These IDs are the **species IDs** reported by the game. We don't guess sprite UR
 
 This process has no access to game credentials and uses the public static image origin only. HTTPS is required; redirects, traversal and untrusted absolute URLs are rejected. Downloads and disk writes never block the egui render loop. Unknown sprites fall back to their item/species name and ID. An unavailable art server cannot block native gameplay or restocking.
 
-The current decoder intentionally supports PNG only, to keep the native binary and dependency graph lightweight. No sprite images are required to compile; when `manifest.json` is empty, images can still populate the runtime cache as they appear.
+The asset bundler accepts PNG and GIF for existing item/ball artwork (GIFs display their initial frame); Pokémon index entries must still be verified before import. The decoder supports PNG and GIF, to keep the native binary and dependency graph lightweight. No sprite images are required to compile; when `manifest.json` is empty, images can still populate the runtime cache as they appear.
 
 ## Maintenance
 
