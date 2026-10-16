@@ -754,6 +754,367 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
     });
 }
 
+
+fn atlas_filters_panel(
+    ui:&mut egui::Ui, f:&mut AtlasFilters, page:&mut usize,
+    view:&HuntView, reference:Option<&AtlasReference>, account:usize,
+){
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("HUNT ATLAS · SPECIES FINDER")
+            .size(15.0).strong().color(TEXT));
+        if ui.small_button(format!(
+            "{} filters ({})",
+            if f.filters_open{"Hide"}else{"Show"},f.active_count()
+        )).clicked(){f.filters_open=!f.filters_open}
+        if ui.small_button("Clear search filters").clicked(){
+            f.clear();*page=0;
+        }
+    });
+    ui.label(RichText::new(
+        "Search Pokémon across locations. Unlocked destinations are confirmed by the account's game catalog; locked locations come from the public guide."
+    ).size(10.0).color(MUTED));
+    if !f.filters_open {return}
+    ui.add_space(6.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.label("Search");
+                if ui.add(egui::TextEdit::singleline(&mut f.search)
+                    .hint_text("Pokémon, number, location or hunt")
+                    .desired_width(235.0)).changed(){*page=0}
+                ui.label("Level");
+                if ui.add(egui::DragValue::new(&mut f.min_level)
+                    .range(0..=25_000).speed(1.0)
+                    .prefix("From ")).changed(){*page=0}
+                if ui.add(egui::DragValue::new(&mut f.max_level)
+                    .range(0..=25_000).speed(1.0)
+                    .prefix("To ")).changed(){*page=0}
+                ui.label(RichText::new("0 means any level").size(9.0).color(DIM));
+            });
+            ui.horizontal_wrapped(|ui|{
+                ui.label("Location");
+                let mut areas=atlas_destinations(view,reference).iter()
+                    .map(|(hunt,_)|if hunt.area.is_empty(){hunt.region.as_str()}
+                         else{hunt.area.as_str()})
+                    .filter(|area|!area.is_empty()).collect::<Vec<_>>();
+                areas.sort_unstable();areas.dedup();
+                egui::ComboBox::from_id_salt(("atlas-place",account))
+                    .selected_text(if f.region.is_empty(){"All areas".to_owned()}
+                        else{f.region.clone()})
+                    .show_ui(ui,|ui|{
+                        if ui.selectable_value(&mut f.region,String::new(),"All areas")
+                            .changed(){*page=0}
+                        for area in areas {
+                            if ui.selectable_value(&mut f.region,area.to_owned(),area)
+                                .changed(){*page=0}
+                        }
+                    });
+                ui.label("Availability");
+                egui::ComboBox::from_id_salt(("atlas-access",account))
+                    .selected_text(match f.availability {
+                        AtlasAvailability::All=>"All (guide + server)",
+                        AtlasAvailability::Unlocked=>"Unlocked",
+                        AtlasAvailability::Locked=>"Guide-only / locked"
+                    }).show_ui(ui,|ui|{
+                        for (item,label) in [
+                            (AtlasAvailability::Unlocked,"Unlocked"),
+                            (AtlasAvailability::All,"All destinations"),
+                            (AtlasAvailability::Locked,"Guide-only / locked"),
+                        ]{
+                            if ui.selectable_value(&mut f.availability,item,label)
+                                .changed(){*page=0}
+                        }
+                    });
+                ui.label("Type");
+                let mut types=reference.map(|r|r.chart.keys()
+                    .map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
+                types.sort_unstable();
+                egui::ComboBox::from_id_salt(("atlas-type",account))
+                    .selected_text(if f.kind.is_empty(){"All types".to_owned()}
+                        else{f.kind.clone()})
+                    .show_ui(ui,|ui|{
+                        if ui.selectable_value(&mut f.kind,String::new(),"All types")
+                            .changed(){*page=0}
+                        for kind in types {
+                            if ui.selectable_value(&mut f.kind,kind.to_owned(),kind)
+                                .changed(){*page=0}
+                        }
+                    });
+            });
+            ui.horizontal_wrapped(|ui|{
+                ui.label("Depot");
+                egui::ComboBox::from_id_salt(("atlas-owned",account))
+                    .selected_text(match f.collection {
+                        AtlasCollection::All=>"All species",
+                        AtlasCollection::InDepot=>"In Pokémon depot",
+                        AtlasCollection::NotInDepot=>"Not in Pokémon depot",
+                    }).show_ui(ui,|ui|{
+                        for (item,label) in [
+                            (AtlasCollection::All,"All species"),
+                            (AtlasCollection::InDepot,"In Pokémon depot"),
+                            (AtlasCollection::NotInDepot,"Not in Pokémon depot"),
+                        ]{
+                            if ui.selectable_value(&mut f.collection,item,label)
+                                .changed(){*page=0}
+                        }
+                    });
+                ui.label(RichText::new(
+                    "Depot ownership is not a historical Pokédex capture record."
+                ).size(9.0).color(DIM));
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui|{
+                ui.label("Weak to");
+                if let Some(reference)=reference {
+                    let mut kinds=reference.chart.keys().map(String::as_str)
+                        .collect::<Vec<_>>();
+                    kinds.sort_unstable();
+                    for kind in kinds {
+                        let selected=f.weak_to.contains(kind);
+                        if ui.add(egui::Button::new(
+                            RichText::new(kind).size(9.0))
+                            .fill(if selected{ACCENT.linear_multiply(0.25)}else{PANEL})
+                            .stroke(Stroke::new(1.0,
+                                if selected{ACCENT}else{BORDER}))
+                        ).clicked(){
+                            if selected{f.weak_to.remove(kind);}
+                            else{f.weak_to.insert(kind.to_owned());}
+                            *page=0;
+                        }
+                    }
+                }else{
+                    ui.label(RichText::new("Guide type chart unavailable")
+                        .size(10.0).color(MUTED));
+                }
+            });
+            ui.horizontal_wrapped(|ui|{
+                if ui.checkbox(&mut f.weakness_match_all,
+                    "Match all selected weaknesses (otherwise any)").changed(){*page=0}
+                if ui.small_button("Clear weaknesses").clicked(){
+                    f.weak_to.clear();*page=0;
+                }
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui|{
+                ui.label("Rank by");
+                egui::ComboBox::from_id_salt(("atlas-objective",account))
+                    .selected_text(atlas_sort_label(f.sort))
+                    .show_ui(ui,|ui|{
+                        for item in [
+                            AtlasSort::TrainerXp,AtlasSort::PokemonXp,AtlasSort::Gold,
+                            AtlasSort::Rare,AtlasSort::Shiny,AtlasSort::Spawn,
+                            AtlasSort::Level,AtlasSort::Name,
+                        ]{
+                            if ui.selectable_value(&mut f.sort,item,
+                                atlas_sort_label(item)).changed(){*page=0}
+                        }
+                    });
+                if ui.small_button(if f.ascending{"↑ Ascending"}else{"↓ Descending"})
+                    .clicked(){f.ascending=!f.ascending;*page=0}
+                if f.sort==AtlasSort::Rare {
+                    ui.label("Item ID");
+                    egui::ComboBox::from_id_salt(("atlas-rare-id",account))
+                        .selected_text(format!("#{}",f.rare_item))
+                        .show_ui(ui,|ui|{
+                            for id in [70000,70011,70012,70013,70017] {
+                                if ui.selectable_value(&mut f.rare_item,id,
+                                    format!("Item #{id}")).changed(){*page=0}
+                            }
+                        });
+                }
+            });
+        });
+}
+
+fn draw_atlas_species(
+    ui:&mut egui::Ui, row:&AtlasSpeciesRow<'_>, sort:AtlasSort,
+    view:&HuntView, reference:Option<&AtlasReference>,
+    native:&NativeSession, live:bool, error:&mut Option<String>,
+){
+    ui.push_id(("atlas-species",row.id),|ui|{
+        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+            .stroke(Stroke::new(1.0,BORDER))
+            .inner_margin(egui::Margin::symmetric(13,10)).show(ui,|ui|{
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(RichText::new(&row.name).size(14.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!("#{}",row.id))
+                        .size(10.0).color(DIM));
+                    for kind in &row.types {
+                        ui.label(RichText::new(kind).size(9.0).color(ACCENT));
+                    }
+                    if row.owned {
+                        ui.label(RichText::new("In depot").size(9.0).color(GOOD));
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                        ui.vertical(|ui|{
+                            ui.label(RichText::new(atlas_value_label(sort,row.best))
+                                .strong().size(13.0).color(TEXT));
+                            ui.label(RichText::new(atlas_sort_label(sort))
+                                .size(9.0).color(DIM));
+                        });
+                    });
+                });
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(RichText::new(format!(
+                        "{} matching {}",
+                        row.destinations.len(),
+                        if row.destinations.len()==1{"destination"}else{"destinations"}
+                    )).size(10.0).color(MUTED));
+                    if let Some(best)=row.destinations.first(){
+                        ui.label(RichText::new(format!(
+                            "Best: {} · Lv {} · {:.1}% spawns · {}",
+                            best.hunt.name,best.hunt.level,best.share*100.0,
+                            if best.unlocked{"Unlocked"}else{"Guide-only"}
+                        )).size(10.0).color(MUTED));
+                    }
+                });
+                ui.collapsing("Destinations, drops & combat details",|ui|{
+                    for dest in row.destinations.iter().take(35) {
+                        ui.push_id(&dest.hunt.slug,|ui|{
+                            egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
+                                .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
+                                    ui.horizontal_wrapped(|ui|{
+                                        ui.label(RichText::new(format!(
+                                            "{} · Lv {} · {:.1}% spawn share",
+                                            dest.hunt.name,dest.hunt.level,dest.share*100.0
+                                        )).strong().size(11.0).color(TEXT));
+                                        if dest.unlocked {
+                                            ui.colored_label(GOOD,"Unlocked");
+                                        }else{
+                                            ui.colored_label(WARN,
+                                                "Guide-only · not server-unlocked");
+                                        }
+                                        let current=view.hunt_slug.as_deref()
+                                            ==Some(dest.hunt.slug.as_str());
+                                        if current {
+                                            ui.label(RichText::new("CURRENT").color(GOOD));
+                                        }else if view.pending_hunt_slug.as_deref()
+                                            ==Some(dest.hunt.slug.as_str()) {
+                                            ui.label(RichText::new("Pending").color(WARN));
+                                        }else if ui.add_enabled(live&&dest.unlocked,
+                                            egui::Button::new("Hunt")).clicked(){
+                                            match native.send_command(GameCommand::Hunt(
+                                                dest.hunt.slug.clone())){
+                                                Ok(())=>*error=None,
+                                                Err(e)=>*error=Some(e),
+                                            }
+                                        }
+                                    });
+                                    ui.horizontal_wrapped(|ui|{
+                                        if let Some(f)=dest.forecast.as_ref(){
+                                            ui.label(RichText::new(format!(
+                                                "Model: {} trainer XP/h · {} Pokémon XP/h · {} gross gold/h · {:.0} kills/h",
+                                                format_hunt_amount(f.trainer_xp_h),
+                                                format_hunt_amount(f.pokemon_xp_h),
+                                                format_hunt_amount(f.gold_h),f.kills_h
+                                            )).size(10.0).color(MUTED));
+                                            ui.label(RichText::new(
+                                                if f.calibrated{"Calibrated estimate"}else{"Experimental estimate"}
+                                            ).size(9.0).color(WARN));
+                                        }else {
+                                            ui.label(RichText::new("Combat prediction unavailable")
+                                                .size(10.0).color(MUTED));
+                                        }
+                                    });
+                                    if let Some(species)=reference.and_then(|r|r.species.get(&row.id)){
+                                        if !species.drops.is_empty(){
+                                            ui.collapsing("Reference drops",|ui|{
+                                                for drop in species.drops.iter().take(20) {
+                                                    ui.label(RichText::new(format!(
+                                                        "Item #{} · {:.3}% / eligible kill · {:.0}–{:.0} units",
+                                                        drop.item_id.map(|id|id.to_string())
+                                                            .unwrap_or_else(||"?".into()),
+                                                        drop.chance_pct,drop.minimum,drop.maximum
+                                                    )).size(10.0).color(MUTED));
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                        });
+                        ui.add_space(3.0);
+                    }
+                    if row.destinations.len()>35 {
+                        ui.label("Showing first 35 matching destinations.");
+                    }
+                });
+            });
+        ui.add_space(6.0);
+    });
+}
+
+fn draw_atlas_explorer(
+    app:&mut ControllerApp,ui:&mut egui::Ui,view:&HuntView,
+    native:&NativeSession,live:bool,index:usize,
+){
+    let reference=app.hunt_reference.as_deref();
+    atlas_filters_panel(ui,&mut app.atlas_filters[index],
+        &mut app.atlas_page[index],view,reference,index);
+    ui.add_space(9.0);
+    let filters=&app.atlas_filters[index];
+    let rows=atlas_species_rows(view,reference,
+        &app.hunt_estimate_cache[index],filters);
+    if filters.collection!=AtlasCollection::All && view.pokemon_count==0 {
+        ui.label(RichText::new(
+            "Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures."
+        ).size(10.0).color(WARN));
+    }
+    let unlocked_count=view.hunts.len();
+    let guide_count=reference.map_or(0,|r|r.hunts.len());
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new(format!(
+            "{} species · {} server-unlocked destinations · {} guide destinations",
+            rows.len(),unlocked_count,guide_count
+        )).strong().size(11.0).color(TEXT));
+        if app.hunt_estimate_cache[index].is_pending(){
+            ui.label(RichText::new("Calculating combat models...")
+                .size(10.0).color(WARN));
+        }
+    });
+    if matches!(filters.sort,AtlasSort::Shiny) {
+        ui.label(RichText::new(
+            "Shiny previews assume the userscript's base 1/24,000 wild encounters outside Outland; no capture chance or bonus is implied."
+        ).size(10.0).color(WARN));
+    }
+    if matches!(filters.sort,AtlasSort::Rare) {
+        ui.label(RichText::new(
+            "Rare-drop estimates require the selected item in the public guide and a valid modeled kill rate; no market valuation is assumed."
+        ).size(10.0).color(WARN));
+    }
+    if rows.is_empty(){
+        ui.label("No matching species. Try clearing some filters, or select another account.");
+        return;
+    }
+    ui.collapsing("Top 5 matching Pokémon",|ui|{
+        for (i,row) in rows.iter().take(5).enumerate() {
+            ui.label(RichText::new(format!(
+                "{}. {} · {} {}",
+                i+1,row.name,atlas_value_label(filters.sort,row.best),
+                atlas_sort_label(filters.sort)
+            )).size(11.0).color(TEXT));
+        }
+    });
+    const PAGE:usize=18;
+    let pages=rows.len().div_ceil(PAGE).max(1);
+    app.atlas_page[index]=app.atlas_page[index].min(pages-1);
+    ui.horizontal_wrapped(|ui|{
+        if ui.add_enabled(app.atlas_page[index]>0,
+            egui::Button::new("← Previous")).clicked(){app.atlas_page[index]-=1}
+        ui.label(format!("Page {} / {} · {} results",
+            app.atlas_page[index]+1,pages,rows.len()));
+        if ui.add_enabled(app.atlas_page[index]+1<pages,
+            egui::Button::new("Next →")).clicked(){app.atlas_page[index]+=1}
+    });
+    let mut error=None;
+    for row in rows.iter().skip(app.atlas_page[index]*PAGE).take(PAGE) {
+        draw_atlas_species(ui,row,filters.sort,view,reference,native,live,&mut error);
+    }
+    if let Some(error)=error {app.hunt_action_error[index]=Some(error);}
+    ui.label(RichText::new(
+        "Guide-only destinations are previews, never executable. Forecasts are experimental and may differ significantly from measured combat throughput."
+    ).size(10.0).color(MUTED));
+}
+
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
     // opened; game socket, Twitch and normal dashboard stay extremely light.
