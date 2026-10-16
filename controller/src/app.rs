@@ -2968,6 +2968,7 @@ impl eframe::App for ControllerApp {
                 // All other native workspaces share the same compact strip.
                 let active = match self.panel_tab {
                     PanelTab::Overview => Some(self.selected_details),
+                    PanelTab::Hunts if self.hunt_subtab == HuntSubtab::Compare => None,
                     PanelTab::Hunts => Some(Some(self.hunt_account)),
                     PanelTab::Automation => Some(Some(self.automation_account)),
                     _ => None,
