@@ -144,6 +144,31 @@ impl Restock {
             self.prices.insert((kind, id), ShopEntry { price, name });
         }
     }
+    /// A configured, low-stock potion/revive may require the game's public
+    /// item metadata when the welcome omits the purchasable-item list.
+    pub fn needs_item_metadata(&self) -> bool {
+        self.status.enabled && self.rules.iter().any(|rule|
+            rule.kind == "item" && !self.prices.contains_key(&(rule.kind, rule.id))
+        )
+    }
+
+    /// Accept only priced healing items from the game's own public catalog.
+    /// An unpriced or non-healing item is never treated as shop-buyable.
+    /// Authenticated server entries always take precedence over asset data.
+    pub fn merge_item_metadata(&mut self, catalog: &crate::native_items::ItemCatalog) {
+        for rule in &self.rules {
+            if rule.kind != "item" { continue; }
+            let Some(meta) = catalog.items.get(&rule.id) else { continue; };
+            let name = meta.name.trim().to_lowercase();
+            if !(name.contains("potion") || name.contains("poção") ||
+                name.contains("pocao") || name.contains("revive") ||
+                name.contains("reviver")) { continue; }
+            let Some(price) = meta.price_gold.filter(|value|*value>0) else { continue; };
+            self.prices.entry(("item",rule.id))
+                .or_insert(ShopEntry { price, name });
+        }
+    }
+
     pub fn on_disconnect(&mut self, now: Instant) {
         if self.pending.take().is_some() {
             // The server might have accepted a purchase immediately before
@@ -169,8 +194,15 @@ impl Restock {
             self.stock.clear();
             self.gold = None;
             self.known_stock = [false, false];
-            self.read_catalog("ball", frame.get("catalogoBolas"));
-            self.read_catalog("item", frame.get("itensCompraveis"));
+        }
+        // The live shop may be refreshed independently of welcome, including
+        // inside an estado delta. Reconcile those authoritative price updates
+        // without restarting the native socket.
+        self.read_catalog("ball", frame.get("catalogoBolas"));
+        self.read_catalog("item", frame.get("itensCompraveis"));
+        if let Some(state) = frame.get("estado") {
+            self.read_catalog("ball", state.get("catalogoBolas"));
+            self.read_catalog("item", state.get("itensCompraveis"));
         }
         // Match purchase results by ID, kind, name, or exact quantity+spend.
         // It is common for the server to omit ID or kind in purchase events.
@@ -201,7 +233,10 @@ impl Restock {
                         (Some(actual), Some(expected)) => actual == expected,
                         _ => false
                     };
-                    if id_matches || name_matches || (qty_matches && spent_matches) {
+                    let explicit_name_conflicts = event_name.as_deref()
+                        .is_some_and(|name| !order.name.is_empty() && name != order.name);
+                    if id_matches || name_matches ||
+                        (qty_matches && spent_matches && !explicit_name_conflicts) {
                         order.ack = true;
                         self.status.phase = "Confirming inventory".into();
                     }
@@ -454,6 +489,51 @@ mod tests {
         assert!(r.next(now+Duration::from_secs(1),true).is_none());
         cfg.restock_enabled=false;r.configure(&cfg);
         assert!(r.status.pending);
+    }
+
+    #[test]
+    fn accepts_authoritative_shop_catalog_refreshes_from_estado() {
+        let now = Instant::now();
+        let mut r = configured();
+        r.ingest(r#"{"t":"welcome","estado":{"gold":10000,
+            "balls":{"4":30},"items":{"200":0}}}"#,now);
+        assert!(r.next(now,true).is_none());
+        assert_eq!(r.status.phase,"Waiting for shop");
+        r.ingest(r#"{"t":"estado","estado":{"itensCompraveis":[
+            {"itemId":200,"nome":"Golden Potion","preco":5}]}}"#,now);
+        assert_eq!(r.next(now+Duration::from_secs(1),true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
+    }
+
+    #[test]
+    fn public_catalog_prices_only_explicit_healing_items() {
+        let mut r = configured();
+        let catalog = crate::native_items::parse(r#"{"items":[
+            {"id":200,"name":"Golden Potion","category":"heal","preco":8},
+            {"id":4,"name":"Ultra Ball","category":"balls","preco":15},
+            {"id":999,"name":"Heart Stone","category":"stone","preco":5}]}"#).unwrap();
+        assert!(r.needs_item_metadata());
+        r.merge_item_metadata(&catalog);
+        assert_eq!(r.prices.get(&("item",200)).unwrap().price,8);
+        assert!(!r.prices.contains_key(&("item",999)));
+        assert!(!r.prices.contains_key(&("ball",4)));
+        let no_price=crate::native_items::parse(r#"{"items":[
+            {"id":200,"name":"Golden Potion","category":"heal"}]}"#).unwrap();
+        let mut empty=configured();
+        empty.merge_item_metadata(&no_price);
+        assert!(!empty.prices.contains_key(&("item",200)));
+    }
+
+    #[test]
+    fn unrelated_purchase_cannot_acknowledge_same_cost_different_item() {
+        let now=Instant::now();
+        let mut r=configured();
+        welcome(&mut r,now);
+        r.next(now,true);
+        // Correct quantity/price but an explicitly different name.
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "nome":"Different Ball","qtd":9,"gasto":90}]}"#,now);
+        assert!(!r.pending.as_ref().unwrap().ack);
     }
     #[test]
     fn reconnect_discards_uncertain_purchase_and_requires_fresh_state() {
