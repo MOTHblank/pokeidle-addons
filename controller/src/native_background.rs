@@ -180,12 +180,6 @@ pub struct NativeSession {
     forecast_tx:mpsc::SyncSender<HistoryForecast>,
 }
 impl NativeSession {
-    pub fn start(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
-        let credentials = Credentials::parse(&bootstrap)?;
-        let twitch = TwitchSession::start(bootstrap.get("twitch")
-            .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(profile, credentials, twitch, None, bootstrap.get("autocatch").cloned())
-    }
     /// Establish *both* verified WebSockets before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
