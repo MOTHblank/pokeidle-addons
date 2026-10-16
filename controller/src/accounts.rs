@@ -8,7 +8,7 @@ pub const VIOLENTMONKEY_INSTALL: &str =
     "https://addons.mozilla.org/firefox/addon/violentmonkey/";
 
 const ADDONS_API: &str =
-    "https://api.github.com/repos/MOTHblank/pokeidle-addons/contents/addons?ref=master";
+    "https://api.github.com/repos/MOTHblank/pokeidle-addons/contents/addons?ref=experiment/native-background-sessions";
 
 /// Discover the active addon scripts directly from GitHub. No versions or
 /// addon filenames are pinned in the native binary.
@@ -61,7 +61,7 @@ fn parse_addon_files(value: &Value) -> Result<Vec<String>, String> {
 
 fn installer_url(file: &str, nonce: u128) -> String {
     format!(
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/{file}?moth_install={nonce}"
+        "https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/experiment/native-background-sessions/addons/{file}?moth_install={nonce}"
     )
 }
 
@@ -230,6 +230,7 @@ mod tests {
         assert_eq!(parse_addon_files(&listing).unwrap(), vec!["autocatch.user.js"]);
         let url = installer_url("autocatch.user.js", 123);
         assert!(url.ends_with("?moth_install=123"));
+        assert!(url.contains("/experiment/native-background-sessions/addons/"));
         assert!(!url.contains("?v="));
     }
     #[test]
