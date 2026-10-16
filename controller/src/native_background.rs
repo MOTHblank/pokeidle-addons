@@ -8,6 +8,8 @@ use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_hunts::{HuntIntel, HuntView};
+use crate::native_history::{HistoryRecorder, HistorySnapshot};
+use crate::config::GameProfile;
 use crate::native_restock::{Restock, RestockStatus};
 use crate::native_automation::{AutomationWriter, AutomationStatus};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -163,24 +165,25 @@ pub struct NativeSession {
     capture_config: Arc<Mutex<CatchSettings>>,
     session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
+    history: Arc<Mutex<HistorySnapshot>>,
 }
 impl NativeSession {
-    pub fn start(bootstrap: Value) -> Result<Self, String> {
+    pub fn start(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let twitch = TwitchSession::start(bootstrap.get("twitch")
             .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(credentials, twitch, None, bootstrap.get("autocatch").cloned())
+        Self::spawn(profile, credentials, twitch, None, bootstrap.get("autocatch").cloned())
     }
     /// Establish *both* verified WebSockets before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
-    pub fn start_verified(bootstrap: Value) -> Result<Self, String> {
+    pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
         let twitch = TwitchSession::start_verified(bootstrap.get("twitch")
             .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
+        Self::spawn(profile, credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
     }
-    fn spawn(credentials: Credentials, twitch: TwitchSession,
+    fn spawn(profile: GameProfile, credentials: Credentials, twitch: TwitchSession,
         initial: Option<(GameSocket, String)>, settings: Option<Value>) -> Result<Self, String> {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
@@ -190,6 +193,11 @@ impl NativeSession {
         let session_reset=Arc::new(AtomicBool::new(false));
         let worker_session_reset=Arc::clone(&session_reset);
         let hunt_intel = HuntIntel::new();
+        let nick = serde_json::from_str::<Value>(&credentials.hello).ok()
+            .and_then(|hello| hello.get("nick").and_then(Value::as_str).map(str::to_owned))
+            .filter(|name| !name.is_empty()).unwrap_or_else(||profile.name().to_owned());
+        let history_recorder = HistoryRecorder::new(profile, nick);
+        let history = Arc::clone(&history_recorder.shared);
         let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
         let worker_hunts = Arc::clone(&hunts);
         let restock_enabled = Arc::new(AtomicBool::new(restock.status.enabled));
@@ -208,7 +216,8 @@ impl NativeSession {
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
-                        worker_session_reset, hunt_intel, worker_hunts);
+                        worker_session_reset, hunt_intel, worker_hunts,
+                        history_recorder);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -221,7 +230,7 @@ impl NativeSession {
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
         Ok(Self {
             snapshot, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, session_reset, hunts
+            capture_config, session_reset, hunts, history
         })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
@@ -259,6 +268,9 @@ impl NativeSession {
     }
     pub fn hunt_snapshot(&self) -> HuntView {
         self.hunts.lock().map(|view| view.clone()).unwrap_or_default()
+    }
+    pub fn history_snapshot(&self) -> HistorySnapshot {
+        self.history.lock().map(|data|data.clone()).unwrap_or_default()
     }
     pub fn capture_settings(&self)->CatchSettings {
         self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
@@ -451,7 +463,8 @@ fn session_loop(credentials: Credentials,
     capture_config: Arc<Mutex<CatchSettings>>,
     session_reset: Arc<AtomicBool>,
     mut hunt_intel: HuntIntel,
-    hunts: Arc<Mutex<HuntView>>) {
+    hunts: Arc<Mutex<HuntView>>,
+    mut history_recorder: HistoryRecorder) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
@@ -627,6 +640,7 @@ fn session_loop(credentials: Credentials,
                             break;
                         }
                     }
+                    history_recorder.maybe_flush(false);
                     if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
                         if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                         last_hunt_publish = Instant::now();
@@ -651,6 +665,7 @@ fn session_loop(credentials: Credentials,
                             let confirmed_before = restock.status.confirmed;
                             restock.ingest(text.as_ref(), Instant::now());
                             hunt_intel.ingest(text.as_ref(), Instant::now());
+                            history_recorder.ingest(text.as_ref(),hunt_intel.view.hunt_slug.as_deref());
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
                                 if let Some(auto)=frame.get("estado")
                                     .and_then(|state|state.get("automation")) {
@@ -694,6 +709,7 @@ fn session_loop(credentials: Credentials,
                 }
                 if !stop.load(Ordering::Relaxed) {
                     while command_rx.try_recv().is_ok() {}
+                    history_recorder.maybe_flush(true);
                     restock.on_disconnect(Instant::now());
                     restock.publish_status();
                     automation_writer.on_disconnect();
