@@ -11,7 +11,6 @@ const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ReferenceSpecies {
-    pub id: u64,
     pub name: String,
     pub types: Vec<String>,
     pub base: Vec<f64>,
@@ -130,7 +129,7 @@ pub fn parse(script: &str) -> Result<Reference, String> {
             }
         }
         result.species.insert(id,ReferenceSpecies {
-            id,name:name.to_owned(),
+            name:name.to_owned(),
             types:types.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
             base,moves,drops
         });
@@ -403,8 +402,8 @@ mod tests {
             potency:Some(3),quality:Some(1.2),ivs:[Some(25);6],
             ..Default::default()
         });
-        let base = |id,name:&str| ReferenceSpecies {
-            id,name:name.into(),types:vec!["NORMAL".into()],
+        let base = |_id,name:&str| ReferenceSpecies {
+            name:name.into(),types:vec!["NORMAL".into()],
             base:vec![100.0;6],
             moves:vec![ReferenceMove{
                 move_type:"NORMAL".into(),special:false,
@@ -446,7 +445,7 @@ mod tests {
             [("NORMAL".into(),1.0)].into_iter().collect());
         for id in [1,2]{
             guide.species.insert(id,ReferenceSpecies {
-                id,name:format!("Pokemon {id}"),types:vec!["NORMAL".into()],
+                name:format!("Pokemon {id}"),types:vec!["NORMAL".into()],
                 base:vec![100.0;6],
                 moves:vec![ReferenceMove {
                     move_type:"NORMAL".into(),special:false,
