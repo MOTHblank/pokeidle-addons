@@ -668,7 +668,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Native restock setting; saved without Firefox" =>
             "Reposição nativa: ajuste salvo sem Firefox",
         "Stock OK" => "Estoque OK",
-        "Off" => "Desligado",
         "Waiting for inventory" => "Aguardando estoque",
         "Waiting for gold" => "Aguardando ouro",
         "Waiting for shop" => "Aguardando loja",
