@@ -21,6 +21,8 @@ pub struct ReferenceSpecies {
 #[derive(Clone, Debug)]
 pub struct ReferenceDrop {
     pub item_id: Option<u64>,
+    /// The public guide often identifies loot by a name, not by a numeric ID.
+    pub item_name: Option<String>,
     pub chance_pct: f64,
     pub minimum: f64,
     pub maximum: f64,
@@ -107,7 +109,11 @@ pub fn parse(script: &str) -> Result<Reference, String> {
                         && low>=0.0 && high>=low
                         && price.is_finite() && price>=0.0 {
                         drops.push(ReferenceDrop {
-                            item_id:v[0].as_u64(),
+                            item_id:v[0].as_u64().or_else(||
+                                v[0].as_str().and_then(|id|id.parse::<u64>().ok())),
+                            item_name:v[0].as_str()
+                                .filter(|name|!name.trim().is_empty())
+                                .map(str::to_owned),
                             chance_pct:chance,
                             minimum:low,maximum:high,guide_price:price,
                         });
@@ -337,6 +343,16 @@ mod tests {
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
+    }
+    #[test]
+    fn guide_loot_names_are_preserved_without_fabricating_item_ids(){
+        let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
+            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],
+            "l":[["Moon Stone",2.5,1,3,400]]}]};"#;
+        let guide=parse(script).unwrap();
+        assert_eq!(guide.species[&1].drops[0].item_name.as_deref(),
+            Some("Moon Stone"));
+        assert_eq!(guide.species[&1].drops[0].item_id,None);
     }
     #[test]
     fn guide_catalog_is_read_only_and_does_not_fake_unlocks(){
