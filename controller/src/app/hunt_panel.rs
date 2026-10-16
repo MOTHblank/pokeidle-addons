@@ -126,6 +126,7 @@ pub(super) struct EstimateCache {
     hunt_slug: Option<String>,
     live: bool,
     refreshed: Option<Instant>,
+    last_archived:Option<(String,Instant)>,
     pending: Option<std::sync::mpsc::Receiver<
         std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>>,
     values: std::collections::BTreeMap<String,Option<native_atlas::Forecast>>,
@@ -165,6 +166,7 @@ impl EstimateCache {
             self.live=live;
             self.hunt_slug=view.hunt_slug.clone();
             self.refreshed=None;
+            self.last_archived=None;
             self.pending=None; // Discard outdated asynchronous results.
             self.values.clear();
         }
@@ -196,6 +198,13 @@ impl EstimateCache {
         self.values.get(slug).cloned().flatten()
     }
     fn is_pending(&self)->bool{self.pending.is_some()}
+    fn archive_due(&self,slug:&str)->bool{
+        self.last_archived.as_ref().is_none_or(|(previous,at)|
+            previous!=slug || at.elapsed()>=Duration::from_secs(900))
+    }
+    fn archived(&mut self,slug:&str){
+        self.last_archived=Some((slug.to_owned(),Instant::now()));
+    }
 }
 
 /// Preserve uncertainty: an absent forecast, invalid observation and unknown
@@ -1304,6 +1313,19 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         return;
     }
     app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),live);
+    if live {
+        if let Some(slug)=view.hunt_slug.as_deref() {
+            let cache=&mut app.hunt_estimate_cache[index];
+            if cache.archive_due(slug) {
+                if let Some(model)=cache.get(slug){
+                    if native.archive_hunt_forecast(slug,model.trainer_xp_h,
+                        model.pokemon_xp_h,model.kills_h,model.calibrated) {
+                        cache.archived(slug);
+                    }
+                }
+            }
+        }
+    }
     if let Some(error)=view.last_error.as_deref(){
         ui.label(RichText::new(format!("Hunt switch: {error}")).color(WARN));
     }
