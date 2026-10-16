@@ -5,7 +5,7 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 mod generated {
@@ -30,9 +30,6 @@ pub struct VisualCache {
     attempted: BTreeSet<(Kind, u64)>,
     request: Sender<Request>,
     results: Receiver<Response>,
-    queued: usize,
-    finished: usize,
-    failed: usize,
 }
 
 fn cache_dir() -> PathBuf {
@@ -174,23 +171,36 @@ impl Default for VisualCache {
     fn default() -> Self {
         let (request, jobs) = mpsc::channel::<Request>();
         let (output, results) = mpsc::channel::<Response>();
-        std::thread::Builder::new()
-            .name("moth-visual-cache".into())
-            .spawn(move || {
-                let root = cache_dir();
-                let _ = std::fs::create_dir_all(&root);
-                let Ok(client) = reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(8))
-                    .connect_timeout(std::time::Duration::from_secs(3))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build() else { return; };
-                for job in jobs {
-                    let bytes = load_worker_image(&client, &root, &job);
-                    if output.send(Response { key: (job.kind, job.id), bytes }).is_err() { break; }
-                }
-            }).ok();
-        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results,
-            queued: 0, finished: 0, failed: 0 }
+        // Four small workers allow the selected balls, potions and revives
+        // to load concurrently. HTTP and decoding still stay off UI frames.
+        let jobs = Arc::new(Mutex::new(jobs));
+        for worker in 0..4 {
+            let jobs = Arc::clone(&jobs);
+            let output = output.clone();
+            std::thread::Builder::new()
+                .name(format!("moth-visual-{worker}"))
+                .spawn(move || {
+                    let root = cache_dir();
+                    let _ = std::fs::create_dir_all(&root);
+                    let Ok(client) = reqwest::blocking::Client::builder()
+                        .timeout(std::time::Duration::from_secs(8))
+                        .connect_timeout(std::time::Duration::from_secs(3))
+                        .redirect(reqwest::redirect::Policy::none())
+                        .build() else { return; };
+                    loop {
+                        let job = match jobs.lock() {
+                            Ok(receiver) => receiver.recv(),
+                            Err(_) => break,
+                        };
+                        let Ok(job) = job else { break };
+                        let bytes = load_worker_image(&client, &root, &job);
+                        if output.send(Response {
+                            key: (job.kind, job.id), bytes,
+                        }).is_err() { break; }
+                    }
+                }).ok();
+        }
+        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results }
     }
 }
 
@@ -210,50 +220,11 @@ impl VisualCache {
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(reply) = self.results.try_recv() {
-            self.finished += 1;
             if let Some(bytes) = reply.bytes {
                 self.put(ctx, reply.key, &bytes);
                 ctx.request_repaint();
-            } else {
-                self.failed += 1;
             }
         }
-    }
-
-    /// Queues known public Poké Ball and item artwork without touching
-    /// Pokémon paths, saved credentials, or game sessions. Cached images are
-    /// reused by the existing bounded background download worker.
-    pub fn download_game_icons(&mut self) -> usize {
-        let mut queued = 0;
-        let ids = [
-            (Kind::Ball, 1), (Kind::Ball, 2), (Kind::Ball, 3),
-            (Kind::Ball, 4), (Kind::Ball, 5),
-        ].into_iter().chain(
-            upstream_item_icons().keys().copied().map(|id| (Kind::Item, id))
-        ).chain([(Kind::Item, 70070)]);
-        for (kind, id) in ids {
-            let key = (kind, id);
-            if self.attempted.contains(&key) { continue; }
-            // Bundled assets are already available without an HTTP request;
-            // the next show() will decode those lazily.
-            if generated::bytes(kind.key(), id).is_some() { continue; }
-            let urls = image_urls(kind, id, None);
-            if urls.is_empty() { continue; }
-            if self.request.send(Request { kind, id, urls }).is_ok() {
-                self.attempted.insert(key);
-                self.queued += 1;
-                queued += 1;
-            }
-        }
-        queued
-    }
-
-    pub fn progress(&self) -> (usize, usize, usize, usize) {
-        (self.queued, self.finished, self.failed, self.textures.len())
-    }
-
-    pub fn known_icon_count() -> usize {
-        upstream_item_icons().len() + 5 + 1
     }
 
     /// Returns true if an icon was drawn. Always fall back to text if false.
@@ -270,9 +241,8 @@ impl VisualCache {
             }
             if !self.textures.contains_key(&key) {
                 let urls = image_urls(kind, id, icon_hint);
-                if !urls.is_empty() &&
-                    self.request.send(Request { kind, id, urls }).is_ok() {
-                    self.queued += 1;
+                if !urls.is_empty() {
+                    let _ = self.request.send(Request { kind, id, urls });
                 }
             }
         }
@@ -299,6 +269,8 @@ mod tests {
     fn known_asset_paths_are_versioned_explicitly() {
         assert!(asset_url(Kind::Ball, 1).is_some());
         assert!(asset_url(Kind::Item, 70070).is_some());
+        assert!(asset_url(Kind::Item, 205).is_some());
+        assert!(asset_url(Kind::Item, 206).is_some());
         assert!(asset_url(Kind::Pokemon, 1).is_none());
         assert!(upstream_item_icons().len() >= 400);
         assert_eq!(upstream_item_url(200).as_deref(),
