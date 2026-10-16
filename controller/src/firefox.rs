@@ -470,6 +470,30 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Shut down every Firefox process whose *command line* explicitly names
+/// one of Moth's dedicated profile directories. A previous controller crash
+/// can strand multiple Firefox parents under the same profile; stopping only
+/// the first PID leaves the profile locked on the next Launch.
+///
+/// Never use taskkill /IM firefox.exe or wildcard process termination: other
+/// unrelated Firefox profiles must remain untouched.
+pub fn stop_profile_processes(config: &Config) -> Result<(), String> {
+    const MAX_PROCESSES: usize = 24;
+    for _ in 0..MAX_PROCESSES {
+        let Some(pid) = find_profile_process(config)? else { return Ok(()); };
+        logging::info(&format!(
+            "{}: closing existing Firefox profile process PID {pid}",
+            config.profile.label()
+        ));
+        stop_existing(config, pid)?;
+    }
+    if find_profile_process(config)?.is_some() {
+        Err("Moth Firefox profile still has processes after repeated verified shutdown".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn wait_pid(pid: u32, timeout: Duration) -> bool {
     let until = Instant::now() + timeout;
     while process_alive(pid) {
