@@ -519,7 +519,7 @@ fn atlas_objective(
         AtlasSort::OutlandRare|AtlasSort::Market=>None,
         AtlasSort::Shiny=>forecast.and_then(|f|{
             // Only a hypothetical wild shiny encounter rate, NOT capture odds;
-            // the userscript excludes Outland from this wiki assumption.
+            // Outland uses a separate rule for this guide assumption.
             if hunt.area.eq_ignore_ascii_case("outland"){None}
             else{Some(f.kills_h*share/24000.0)}
         }),
@@ -562,7 +562,7 @@ fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
     }
 }
 
-/// Species are grouped across destinations, matching the userscript rather
+/// Species are grouped across destinations, matching the game guide rather
 /// than repeating one card per hunt. A guide-only hunt is NEVER executable.
 fn atlas_species_rows<'a>(
     view:&'a HuntView, reference:Option<&'a AtlasReference>, cache:&EstimateCache,
