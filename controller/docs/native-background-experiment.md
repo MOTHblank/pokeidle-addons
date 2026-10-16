@@ -167,6 +167,11 @@ buy threshold, target, explicit price and source).
 - Price source is visible. Missing prices do **not** authorize an invented
   purchase. One order remains in flight per account; pending acknowledgements,
   cooldowns, reconnect uncertainty and gold reserves remain enforced.
+- A matching server `compra` acknowledgement followed by a matching inventory
+  patch now completes the purchase **even when newly bought potions are
+  immediately consumed**, leaving flat or lower stock. An unrelated inventory
+  patch cannot complete a different item kind. This follows Manager's
+  event-plus-inventory reconciliation and removes false restock timeouts.
 - An explicitly different purchase name cannot acknowledge an order merely
   because the amount and total match. Added regression tests for incremental
   shop catalogs, public price and item classification, explicit server
