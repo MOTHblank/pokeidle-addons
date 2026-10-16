@@ -249,21 +249,23 @@ impl HuntIntel {
         if let Some(n) = Self::num(value, "xpProximo") { existing.xp_next = Some(n); }
         if let Some(n) = Self::num(value, "hp") { existing.hp = Some(n); }
         if let Some(n) = Self::num(value, "maxHp") { existing.max_hp = Some(n); }
-        if let Some(n) = Self::num(value, "heldItemId") { existing.held_item_id = Some(n); }
+        if let Some(raw) = value.get("heldItemId") {
+            existing.held_item_id = raw.as_u64();
+        }
         if let Some(n) = Self::num(value, "poder") { existing.power = Some(n); }
-        if let Some(n) = value.get("quality").and_then(Value::as_f64) { existing.quality = Some(n); }
-        if let Some(n) = value.get("nota").and_then(Value::as_f64) { existing.grade = Some(n); }
+        if let Some(raw) = value.get("quality") { existing.quality = raw.as_f64(); }
+        if let Some(raw) = value.get("nota") { existing.grade = raw.as_f64(); }
         if let Some(n) = Self::num(value, "potencia") { existing.potency = Some(n); }
-        if let Some(n) = Self::num(value, "looktype") { existing.looktype = Some(n); }
-        if let Some(n) = Self::num(value, "lookShiny") { existing.shiny_looktype = Some(n); }
+        if let Some(raw) = value.get("looktype") { existing.looktype = raw.as_u64(); }
+        if let Some(raw) = value.get("lookShiny") { existing.shiny_looktype = raw.as_u64(); }
         if let Some(b) = value.get("shiny").and_then(Value::as_bool) { existing.shiny = b; }
         if let Some(types) = value.get("tipos").and_then(Value::as_array) {
             existing.types = types.iter().filter_map(Value::as_str).map(str::to_owned).collect();
         }
         if let Some(ivs) = value.get("ivs") {
             for (i, field) in ["hp", "atk", "def", "spAtk", "spDef", "speed"].iter().enumerate() {
-                if let Some(n) = ivs.get(field).and_then(Value::as_u64) {
-                    existing.ivs[i] = Some(n);
+                if let Some(raw) = ivs.get(field) {
+                    existing.ivs[i] = raw.as_u64();
                 }
             }
         }
@@ -316,14 +318,15 @@ impl HuntIntel {
         }
         if let Some(xp) = Self::num(state, "xp") { self.view.trainer_xp = Some(xp); }
         if let Some(gold) = Self::num(state, "gold") { self.view.gold = Some(gold); }
-        if let Some(id) = Self::num(state, "activeId") {
-            if self.active_id != Some(id) {
-                // Two Pokémon can have unrelated total XP values; do not
-                // compare across a switch and inflate measured Pokémon XP/h.
+        if let Some(raw_id) = state.get("activeId") {
+            let new_id=raw_id.as_u64().filter(|id|*id>0);
+            if self.active_id != new_id {
+                // Switching or clearing active Pokémon invalidates observed
+                // Pokémon XP comparisons. An explicit null must clear it.
                 self.samples.clear();
                 self.view.measurements = HuntMeasurements::default();
             }
-            self.active_id = Some(id);
+            self.active_id=new_id;
         }
         if let Some(center) = state.get("noCentro").and_then(Value::as_bool) {
             self.view.in_center = center;
@@ -609,6 +612,20 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn nullable_pokemon_patches_remove_held_items_and_clear_active_id() {
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"welcome","estado":{"activeId":7,
+            "pokemons":[{"id":7,"nome":"Pidgeot","heldItemId":212,
+                "ivs":{"hp":31,"atk":20}}]}}"#,now);
+        m.ingest(r#"{"t":"estado","estado":{"activeId":null,
+            "pkMud":[{"id":7,"heldItemId":null,"ivs":{"hp":null}}]}}"#,now);
+        let roster=m.snapshot();
+        assert!(roster.active_pokemon.is_none());
+        assert_eq!(roster.pokemon_roster[0].held_item_id,None);
+        assert_eq!(roster.pokemon_roster[0].ivs[0],None);
+        assert_eq!(roster.pokemon_roster[0].ivs[1],Some(20));
+    }
     #[test]
     fn full_empty_roster_replaces_previous_nonempty_snapshot() {
         let now=Instant::now();let mut m=HuntIntel::new();
