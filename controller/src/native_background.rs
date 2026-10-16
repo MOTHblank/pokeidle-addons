@@ -380,6 +380,7 @@ fn session_loop(credentials: Credentials,
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
+                restock.ingest(&welcome, Instant::now());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
@@ -413,6 +414,12 @@ fn session_loop(credentials: Credentials,
                             break;
                         }
                     }
+                    if let Some(command) = restock.next(Instant::now(), gameplay.status.auto_catch) {
+                        if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
+                            restock.failed();
+                            break;
+                        }
+                    }
                     update(&snapshot, |s| {
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
@@ -425,6 +432,7 @@ fn session_loop(credentials: Credentials,
                     match socket.read() {
                         Ok(Message::Text(text)) => {
                             gameplay.ingest(text.as_ref(), Instant::now());
+                            restock.ingest(text.as_ref(), Instant::now());
                             observe(&snapshot, text.as_ref(), &desired);
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
