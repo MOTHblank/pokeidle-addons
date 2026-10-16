@@ -4113,7 +4113,7 @@ fn overview_combat_image(
         (SpriteKind::Pokemon, species_id),
     ].into_iter().find_map(|(kind, id)| {
         id.filter(|id| *id > 0)
-            .and_then(|id| app.visuals.texture_id(ui, kind, id, None))
+            .and_then(|id| app.visuals.pokemon_texture_id(ui, kind, id))
     });
     egui::Frame::new()
         .fill(PANEL_ALT)
