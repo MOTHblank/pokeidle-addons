@@ -8,6 +8,7 @@ mod firefox;
 mod monitor;
 mod native_auth;
 mod native_background;
+mod native_gameplay;
 mod native_twitch;
 mod logging;
 mod update;
