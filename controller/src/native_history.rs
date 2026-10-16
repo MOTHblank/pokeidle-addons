@@ -12,6 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_DAYS: u64 = 90;
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
+const FINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+type WriteTask = (PathBuf,String,Option<mpsc::Sender<()>>);
 #[derive(Clone, Debug, Default)]
 pub struct HistoryDay {
     pub day: u64,
@@ -250,7 +252,7 @@ pub struct HistoryRecorder {
     needs_publish:bool,
     last_publish:Instant,
     last_flush:Instant,
-    writer:mpsc::Sender<(PathBuf,String)>,
+    writer:mpsc::Sender<WriteTask>,
     path:Option<PathBuf>,
 }
 impl HistoryRecorder {
@@ -278,11 +280,11 @@ impl HistoryRecorder {
         snapshot.owner=nick.clone();
         snapshot.retain_recent(unix_day());
         let shared=Arc::new(Mutex::new(snapshot.clone()));
-        let (writer_tx,writer_rx)=mpsc::channel::<(PathBuf,String)>();
+        let (writer_tx,writer_rx)=mpsc::channel::<WriteTask>();
         let writer_shared=Arc::clone(&shared);
         thread::Builder::new().name("moth-native-history".into())
             .spawn(move ||{
-                while let Ok((path,raw))=writer_rx.recv(){
+                while let Ok((path,raw,ack))=writer_rx.recv(){
                     let result=write_atomic(&path,&raw);
                     if let Ok(mut snapshot)=writer_shared.lock() {
                         snapshot.save_error=result.as_ref().err().cloned();
@@ -290,6 +292,7 @@ impl HistoryRecorder {
                     if let Err(error)=result {
                         crate::logging::warn(&format!("Native history persistence: {error}"));
                     }
+                    if let Some(ack)=ack {let _=ack.send(());}
                 }
             }).ok();
         Self {shared,snapshot,nick,dirty:false,needs_publish:false,
@@ -338,11 +341,18 @@ impl HistoryRecorder {
             }
             self.last_publish=Instant::now();
         }
-        if !self.dirty || (!force && self.last_flush.elapsed()<SAVE_INTERVAL){return}
+        if !force && (!self.dirty || self.last_flush.elapsed()<SAVE_INTERVAL){return}
         if let Some(path)=self.path.as_ref(){
             let raw=self.snapshot.to_value(&self.nick).to_string();
-            if self.writer.send((path.clone(),raw)).is_ok(){
+            let (ack_tx,ack_rx)=mpsc::channel();
+            let ack=if force {Some(ack_tx)}else{None};
+            if self.writer.send((path.clone(),raw,ack)).is_ok(){
                 self.dirty=false;
+                if force && ack_rx.recv_timeout(FINAL_WRITE_TIMEOUT).is_err() {
+                    if let Ok(mut shared)=self.shared.lock() {
+                        shared.save_error=Some("History final write was not acknowledged".into());
+                    }
+                }
             } else if let Ok(mut shared)=self.shared.lock() {
                 shared.save_error=Some("History writer unavailable".into());
             }
