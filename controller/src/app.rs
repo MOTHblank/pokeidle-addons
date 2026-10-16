@@ -1201,6 +1201,7 @@ pub struct ControllerApp {
     native_verified_tx: Sender<NativeVerifiedEvent>,
     native_verified_rx: Receiver<NativeVerifiedEvent>,
     native_verifying: [bool; 4],
+    native_error: [Option<String>; 4],
     native_closed_tx: Sender<NativeBrowserClosedEvent>,
     native_closed_rx: Receiver<NativeBrowserClosedEvent>,
     native_close_cancelled: [bool; 4],
@@ -1277,6 +1278,7 @@ impl ControllerApp {
             native_verified_tx,
             native_verified_rx,
             native_verifying: [false; 4],
+            native_error: std::array::from_fn(|_| None),
             native_closed_tx,
             native_closed_rx,
             native_close_cancelled: [false; 4],
@@ -1425,8 +1427,9 @@ impl ControllerApp {
             let native = match event.result {
                 Ok(native) => native,
                 Err(error) => {
+                    self.native_error[index] = Some(error.clone());
                     self.set_status(format!(
-                        "{}: native authentication verification failed: {error}; Firefox retained",
+                        "{}: native verification failed: {error}; Firefox game restored or recovery reported",
                         self.account_name(profile)), true);
                     continue;
                 }
@@ -1477,6 +1480,7 @@ impl ControllerApp {
             let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
             match event.result {
                 Ok(()) => {
+                    self.native_error[index] = None;
                     // Successful Firefox close must be logged before any
                     // attempt to start native sockets, so a crash is localizable.
                     logging::info(&format!(
@@ -1597,28 +1601,59 @@ impl ControllerApp {
                         continue;
                     };
                     self.native_verifying[event.index] = true;
+                    self.native_error[event.index] = None;
                     let tx = self.native_verified_tx.clone();
                     let index = event.index;
                     let cache_warning = event.cache_warning;
                     logging::info(&format!(
                         "{} validating game+Twitch native transport before browser close",
                         self.account_name(profile)));
-                    std::thread::spawn(move || {
-                        let result = monitor
-                            .close_game_for_handoff(Duration::from_secs(18))
-                            .and_then(|_| NativeSession::start_verified(bootstrap));
-                        if result.is_err() {
-                            // A failed preflight must restore the browser game
-                            // tab, not leave the account stranded or force-stop
-                            // the entire authentication browser.
-                            let _ = monitor.send(serde_json::json!({
-                                "t":"browser.openTab", "url":"https://pokeidle.io/app"
-                            }));
-                        }
-                        let _ = tx.send(NativeVerifiedEvent {
-                            index, result, cache_warning
+                    let spawned = std::thread::Builder::new()
+                        .name(format!("moth-native-handoff-{}", profile.name()))
+                        .spawn(move || {
+                            let mut closed_game_tab = false;
+                            // A panic in TLS setup previously destroyed the
+                            // sender without clearing native_verifying, leaving
+                            // Firefox alive but its PokéIdle tab closed.
+                            let result = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(|| {
+                                    crate::native_tls::ensure()?;
+                                    monitor.close_game_for_handoff(Duration::from_secs(18))?;
+                                    closed_game_tab = true;
+                                    NativeSession::start_verified(bootstrap)
+                                })
+                            ).unwrap_or_else(|_| {
+                                Err("Native verification thread panicked; see sanitized Rust panic log".to_owned())
+                            });
+                            let result = match (result, closed_game_tab) {
+                                (Err(error), true) => {
+                                    match monitor.restore_game_after_failed_handoff(
+                                        Duration::from_secs(20)
+                                    ) {
+                                        Ok(()) => Err(format!("{error}; game tab reopened")),
+                                        Err(recovery) => {
+                                            crate::logging::error(&format!(
+                                                "Native verification recovery failed: {recovery}"
+                                            ));
+                                            Err(format!("{error}; game tab recovery failed: {recovery}"))
+                                        }
+                                    }
+                                }
+                                (other, _) => other,
+                            };
+                            let _ = tx.send(NativeVerifiedEvent {
+                                index, result, cache_warning
+                            });
                         });
-                    });
+                    if let Err(error) = spawned {
+                        self.native_verifying[index] = false;
+                        self.native_error[index] = Some(format!(
+                            "Could not spawn native verification worker: {error}"
+                        ));
+                        self.set_status(format!(
+                            "{}: could not begin native handoff verification: {error}",
+                            self.account_name(profile)), true);
+                    }
                 }
             }
         }
@@ -3031,11 +3066,18 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
                 if running && app.games[index].native.is_none()
                     && app.games[index].monitor.is_some() {
-                    ui.label(RichText::new(tr("Authenticating in Firefox · automatic native game + Twitch handoff"))
-                        .size(10.0).color(WARN));
+                    let stage = if app.native_verifying[index] {
+                        "Verifying Rust game + Twitch authentication"
+                    } else if app.native_handoff_busy[index] {
+                        "Capturing game + Twitch handshakes"
+                    } else {
+                        "Firefox authentication · automatic native handoff pending"
+                    };
+                    ui.label(RichText::new(stage).size(10.0).color(WARN));
                 }
-                if app.native_handoff_busy[index] {
-                    ui.label(tr("Reading native handshake…"));
+                if let Some(error) = app.native_error[index].as_ref() {
+                    ui.label(RichText::new(format!("Native handoff: {error}"))
+                        .size(10.0).color(BAD));
                 }
                 // Native-first branch has no competing browser restart
                 // control in the normal account dashboard.
