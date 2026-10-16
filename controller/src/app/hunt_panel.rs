@@ -989,10 +989,24 @@ fn draw_atlas_species(
                     )).size(10.0).color(MUTED));
                     if let Some(best)=row.destinations.first(){
                         ui.label(RichText::new(format!(
-                            "Best: {} · Lv {} · {:.1}% spawns · {}",
-                            best.hunt.name,best.hunt.level,best.share*100.0,
-                            if best.unlocked{"Unlocked"}else{"Guide-only"}
+                            "Best: {} · Lv {} · {:.1}% spawns",
+                            best.hunt.name,best.hunt.level,best.share*100.0
                         )).size(10.0).color(MUTED));
+                        let current=view.hunt_slug.as_deref()==Some(best.hunt.slug.as_str());
+                        let pending=view.pending_hunt_slug.as_deref()==Some(best.hunt.slug.as_str());
+                        if current {
+                            ui.colored_label(GOOD,"Current");
+                        }else if pending {
+                            ui.colored_label(WARN,"Switch pending");
+                        }else if !best.unlocked {
+                            ui.colored_label(WARN,"Guide-only / locked");
+                        }else if ui.add_enabled(live,
+                            egui::Button::new("Hunt best →")).clicked(){
+                            match native.send_command(GameCommand::Hunt(best.hunt.slug.clone())){
+                                Ok(())=>*error=None,
+                                Err(e)=>*error=Some(e),
+                            }
+                        }
                     }
                 });
                 ui.collapsing("Destinations, drops & combat details",|ui|{
@@ -1027,28 +1041,34 @@ fn draw_atlas_species(
                                             }
                                         }
                                     });
-                                    ui.horizontal_wrapped(|ui|{
-                                        if let Some(f)=dest.forecast.as_ref(){
-                                            ui.label(RichText::new(format!(
-                                                "Model: {} trainer XP/h · {} Pokémon XP/h · {} gross gold/h · {:.0} kills/h",
-                                                format_hunt_amount(f.trainer_xp_h),
-                                                format_hunt_amount(f.pokemon_xp_h),
-                                                format_hunt_amount(f.gold_h),f.kills_h
-                                            )).size(10.0).color(MUTED));
-                                            ui.label(RichText::new(
-                                                if f.calibrated{"Calibrated estimate"}else{"Experimental estimate"}
-                                            ).size(9.0).color(WARN));
-                                            ui.label(RichText::new(format!(
-                                                "Combat gold {} + expected guide NPC drops {} / h · {:.0}% species coverage",
-                                                format_hunt_amount(f.combat_gold_h),
-                                                format_hunt_amount(f.npc_loot_gold_h),
-                                                f.coverage*100.0
-                                            )).size(10.0).color(MUTED));
-                                        }else {
-                                            ui.label(RichText::new("Combat prediction unavailable")
-                                                .size(10.0).color(MUTED));
-                                        }
-                                    });
+                                    if let Some(f)=dest.forecast.as_ref(){
+                                        ui.horizontal_wrapped(|ui|{
+                                            for (label,value) in [
+                                                ("Trainer XP/h",f.trainer_xp_h),
+                                                ("Pokémon XP/h",f.pokemon_xp_h),
+                                                ("Gross gold/h",f.gold_h),
+                                                ("Kills/h",f.kills_h),
+                                            ]{
+                                                ui.vertical(|ui|{
+                                                    ui.label(RichText::new(label)
+                                                        .size(9.0).color(DIM));
+                                                    ui.label(RichText::new(format_hunt_amount(value))
+                                                        .size(11.0).strong().color(TEXT));
+                                                });
+                                                ui.add_space(13.0);
+                                            }
+                                        });
+                                        ui.label(RichText::new(format!(
+                                            "{} · combat gold {} / h · NPC loot {} / h · {:.0}% modeled species",
+                                            if f.calibrated{"Calibrated estimate"}else{"Experimental estimate"},
+                                            format_hunt_amount(f.combat_gold_h),
+                                            format_hunt_amount(f.npc_loot_gold_h),
+                                            f.coverage*100.0
+                                        )).size(10.0).color(MUTED));
+                                    }else {
+                                        ui.label(RichText::new("Combat prediction unavailable")
+                                            .size(10.0).color(MUTED));
+                                    }
                                     if let Some(species)=reference.and_then(|r|r.species.get(&row.id)){
                                         if !species.drops.is_empty(){
                                             ui.collapsing("Reference drops",|ui|{
