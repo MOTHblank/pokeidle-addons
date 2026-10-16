@@ -23,15 +23,20 @@ metadata as `DiuleJR/pokeidle-manager` (reference: GPL-3.0-only
 - Wild opponents expose `speciesId`. On first use, the native cache resolves
   those IDs using `creatures.json`, `creatures-novos.json`,
   `creatures-outland-novos.json`, and `creatures-sprites-lab.json`.
-- Both sprites first try the game's verified `marker-atlas.json` slot and
-  associated image. If absent, the per-looktype `outfits-index.json` manifest
-  selects the original game sprite sheet and animation frame.
-- All metadata and sheets are downloaded **lazily**, off the UI thread,
-  and cached on the player's disk. Cropped PNG textures are reused in egui;
-  unneeded atlas sheets are not embedded in the executable.
-- If no sprite is available, the cards retain the Pokémon name, level, combat
-  state, and their small placeholder symbols. No third-party sprite hosts or
-  guessed filenames are used.
+- Both sprites prefer the real outfit frames from the game's
+  `outfits-index.json` and per-looktype manifests. Up to twelve verified
+  animation rectangles are cropped from the cached sheet on a background
+  worker; the native cards advance them at 250 ms only while the window has
+  focus. If the outfit has no usable frames, the game's verified
+  `marker-atlas.json` slot provides a static icon.
+- All metadata and sheets are downloaded **lazily** on background workers,
+  and cached on the player's disk. Decoded frame textures are reused by egui;
+  the app doesn't bundle game sprite sheets. Previously cached static images
+  remain usable if the remote asset service fails.
+- Failed requests can be retried after a two-minute cooldown instead of
+  showing permanent missing-art placeholders until an application restart.
+  If no sprite is available, cards retain Pokémon names, levels, combat
+  state and their small placeholder symbols. No guessed URLs are used.
 
 This ports sprite *resolution* and cropping behavior, not third-party game
 artwork. The game is the only runtime art origin and redistribution of art
