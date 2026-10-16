@@ -112,7 +112,10 @@ fn ranked_hunts<'a>(
             match ranking {
                 HuntRanking::TrainerXp if m.valid_trainer => Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon => Some(m.pokemon_xp_h),
-                HuntRanking::Gold if m.valid_gold => Some(m.gold_net_h),
+                // Current-wallet *net* gold includes purchases/restocks,
+                // whereas the guide projects *gross* kill/drop rewards.
+                // Never mix these different quantities in one sortable column.
+                HuntRanking::Gold => None,
                 _ => None,
             }
         } else { None }.filter(|n| n.is_finite());
@@ -802,6 +805,23 @@ mod tests {
         view.bonuses.vip_known=true;
         assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
         assert!(!bonuses_complete(&view,HuntRanking::PokemonXp));
+    }
+
+    #[test]
+    fn gold_ranking_never_compares_net_wallet_spend_to_gross_rewards(){
+        let mut view=HuntView::default();
+        view.hunt_slug=Some("a".into());
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"a".into(),name:"A".into(),level:100,..Default::default()
+        }]);
+        view.measurements.valid_gold=true;
+        view.measurements.gold_net_h=-50_000.0;
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true);
+        let rows=ranked_hunts(&view,None,HuntRanking::Gold,true,"","","",&cache);
+        assert_eq!(rows.len(),1);
+        assert!(rows[0].value.is_none());
+        assert_eq!(rows[0].source,RateSource::Unavailable);
     }
 
 }
