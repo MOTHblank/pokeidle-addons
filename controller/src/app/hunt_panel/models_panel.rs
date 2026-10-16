@@ -54,11 +54,10 @@ pub(super) fn draw_retrospective(
     if rows.is_empty(){
         ui.label("No retained observations for this hunt.");return
     }
-    // Historical model snapshots do not exist in older files. Compare
-    // *current* model with recorded actual rates, never imply retroactive
-    // point-in-time predictions.
+    // Older history has no model checkpoints. Compare current models and
+    // archived snapshots only when the actual fields really exist.
     let latest_day=rows.iter().map(|d|d.day).max().unwrap_or(0);
-    ui.label(RichText::new("Model is the CURRENT estimate, not an archived forecast. Timed receipts start with this native version; older history totals have no valid rate denominator.")
+    ui.label(RichText::new("The summary uses the CURRENT model. Archived checkpoints below preserve point-in-time predictions when Hunt Atlas was open. Old history without observed durations remains unavailable.")
         .size(10.0).color(WARN));
     egui::Grid::new(("atlas-history",slug)).striped(true)
         .spacing([15.0,6.0]).show(ui,|ui|{
@@ -92,6 +91,43 @@ pub(super) fn draw_retrospective(
                 ui.end_row();
             }
         });
+    let mut archived=history.forecasts.iter().filter(|entry|entry.hunt==slug)
+        .collect::<Vec<_>>();
+    archived.sort_by_key(|record|std::cmp::Reverse(record.hour));
+    ui.collapsing(format!("Archived prediction checkpoints ({})",archived.len()),|ui|{
+        if archived.is_empty(){
+            ui.label("No point-in-time forecasts were captured yet. Open Hunt Atlas during an authenticated session to collect checkpoints.");
+        }else{
+            ui.label(RichText::new("Checkpoints are saved when this panel is open, no more than once per 15 minutes. Same-day observations may cover different hours and are not exact paired combat sessions.")
+                .size(10.0).color(MUTED));
+            egui::ScrollArea::vertical().id_salt(("atlas-archived",slug))
+                .max_height(240.0).show(ui,|ui|{
+                    egui::Grid::new(("atlas-archived-grid",slug))
+                        .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
+                            ui.strong("Day · hour");ui.strong("Archived trainer/h");
+                            ui.strong("Same-day measured/h");ui.strong("Forecast / measured");
+                            ui.end_row();
+                            for sample in archived.iter().take(30){
+                                let observed=rows.iter().find(|row|row.day==sample.day)
+                                    .and_then(|row|if row.timed_kills>0
+                                        && row.timed_trainer_receipts==row.timed_kills{
+                                            models::retrospective_rate(
+                                                row.timed_trainer_xp,row.observed_seconds)
+                                        }else{None});
+                                let residual=observed.filter(|n|*n>0.0)
+                                    .map(|n|sample.trainer_xp_h/n);
+                                ui.label(format!("{} · {:02}:00 UTC",sample.day,
+                                    sample.hour%24));
+                                ui.label(value(Some(sample.trainer_xp_h)));
+                                ui.label(value(observed));
+                                ui.label(residual.map(|n|format!("{n:.2}×"))
+                                    .unwrap_or_else(||"—".into()));
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
+    });
     let mut latest=rows.iter().filter(|r|r.observed_seconds>=60).collect::<Vec<_>>();
     latest.sort_by_key(|row|std::cmp::Reverse(row.day));
     ui.collapsing(format!("Daily time-attributed measurements ({})",latest.len()),|ui|{
