@@ -61,17 +61,20 @@ pub struct Restock {
 impl Restock {
     pub fn new(settings: Option<&Value>) -> Self {
         let config = settings.and_then(|v| v.get("restock"));
-        let num = |field: &str| config.and_then(|v| v.get(field))
-            .and_then(Value::as_u64).unwrap_or(0);
+        // The userscript merged these defaults when reading its legacy v4
+        // settings; older saved JSON may contain only an "enabled" flag.
+        // Import the same preferences without requiring that userscript.
+        let num = |field: &str, fallback: u64| config.and_then(|v| v.get(field))
+            .and_then(Value::as_u64).unwrap_or(fallback);
         let mut rules = Vec::new();
-        for (kind, id_field, low_field, target_field) in [
-            ("ball", "selectedBallId", "ballAt", "ballTo"),
-            ("item", "selectedPotionId", "potionAt", "potionTo"),
-            ("item", "selectedReviveId", "reviveAt", "reviveTo"),
+        for (kind, id_field, low_field, target_field, default_id, default_low, default_to) in [
+            ("ball", "selectedBallId", "ballAt", "ballTo", 1, 50, 500),
+            ("item", "selectedPotionId", "potionAt", "potionTo", 200, 10, 50),
+            ("item", "selectedReviveId", "reviveAt", "reviveTo", 0, 1, 5),
         ] {
-            let id = num(id_field);
-            let low = num(low_field);
-            let target = num(target_field);
+            let id = num(id_field, default_id);
+            let low = num(low_field, default_low);
+            let target = num(target_field, default_to);
             if id > 0 && target > low && target <= 1_000_000 {
                 rules.push(Rule { kind, id, low, target });
             }
@@ -87,7 +90,7 @@ impl Restock {
                 } else { "Waiting for inventory" }.into(),
                 ..Default::default()
             },
-            rules, reserve: num("goldReserve"),
+            rules, reserve: num("goldReserve", 0),
             prices: BTreeMap::new(), stock: BTreeMap::new(),
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
@@ -177,8 +180,13 @@ impl Restock {
                     let name_matches = event_name.as_deref() == Some(order.name.as_str())
                         && !order.name.is_empty();
                     let qty_matches = event.get("qtd").and_then(Value::as_u64) == Some(order.qty);
-                    let spent_matches = event.get("gasto").and_then(Value::as_u64)
-                        == order.qty.checked_mul(order.price);
+                    let spent_matches = match (
+                        event.get("gasto").and_then(Value::as_u64),
+                        order.qty.checked_mul(order.price)
+                    ) {
+                        (Some(actual), Some(expected)) => actual == expected,
+                        _ => false
+                    };
                     if id_matches || name_matches || (qty_matches && spent_matches) {
                         order.ack = true;
                         self.status.phase = "Confirming inventory".into();
@@ -366,6 +374,19 @@ mod tests {
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":1}}}"#, now);
         assert_eq!(r.next(now, true).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+    }
+    #[test]
+    fn migration_imports_legacy_default_thresholds_without_a_userscript() {
+        let r = Restock::new(Some(&json!({
+            "enabled": true, "restock": { "enabled": true }
+        })));
+        assert!(r.status.enabled);
+        assert!(r.status.configured);
+        assert_eq!(r.rules.len(), 2);
+        assert_eq!(r.rules[0].id, 1);
+        assert_eq!(r.rules[0].low, 50);
+        assert_eq!(r.rules[0].target, 500);
+        assert_eq!(r.rules[1].id, 200);
     }
     #[test]
     fn no_spend_below_gold_reserve_or_when_disabled() {
