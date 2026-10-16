@@ -12,6 +12,8 @@ mod native_gameplay;
 mod native_capture_config;
 mod native_items;
 mod native_hunts;
+mod native_history;
+mod native_automation;
 mod native_atlas;
 mod native_restock;
 mod native_twitch;
