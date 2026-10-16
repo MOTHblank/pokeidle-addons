@@ -1,7 +1,7 @@
 use crate::kick::KickStream;
 use crate::logging;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
@@ -286,6 +286,9 @@ pub struct MonitorHandle {
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
+    game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 }
 
@@ -296,6 +299,12 @@ impl MonitorHandle {
         let commands = Arc::new(Mutex::new(CommandMailbox::default()));
         let close_request = Arc::new(Mutex::new(None));
         let close_worker = Arc::clone(&close_request);
+        let bootstrap_request = Arc::new(Mutex::new(None));
+        let bootstrap_worker = Arc::clone(&bootstrap_request);
+        let game_close_request = Arc::new(Mutex::new(None));
+        let game_close_worker = Arc::clone(&game_close_request);
+        let game_restore_request = Arc::new(Mutex::new(None));
+        let game_restore_worker = Arc::clone(&game_restore_request);
         let pace = Arc::new(AtomicU8::new(MonitorPace::Compact as u8));
         let pace_worker = Arc::clone(&pace);
         let shared = Arc::clone(&health);
@@ -303,10 +312,10 @@ impl MonitorHandle {
         let command_queue = Arc::clone(&commands);
 
         thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, pace_worker);
+            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker, bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
         });
 
-        Self { health, stop, commands, close_request, pace }
+        Self { health, stop, commands, close_request, bootstrap_request, game_close_request, game_restore_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -354,9 +363,87 @@ impl MonitorHandle {
             .map_err(|error| format!("BiDi browser.close did not respond: {error}"))?
     }
 
+    /// Request a verified game WebSocket hello and Firefox's cookie jar through
+    /// the *existing* BiDi session. Nothing is written to disk or to logs.
+    /// The caller must keep this result in memory and hand it to a trusted local
+    /// native session; cookie values and hello may contain session credentials.
+    pub fn native_bootstrap(&self, timeout: Duration) -> Result<Value, String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox monitor has stopped".to_owned());
+        }
+        let (reply, received) = mpsc::channel();
+        let mut pending = self.bootstrap_request.lock()
+            .map_err(|_| "native bootstrap mailbox is unavailable".to_owned())?;
+        if pending.is_some() {
+            return Err("native bootstrap already pending".to_owned());
+        }
+        *pending = Some(reply);
+        drop(pending);
+        received.recv_timeout(timeout)
+            .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
+    }
+
+    /// Close only the game tab; Firefox/Twitch remain alive until Rust has
+    /// received the server's authenticated welcome on its own connection.
+    pub fn close_game_for_handoff(&self, timeout: Duration) -> Result<(), String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox BiDi monitor is no longer available".into());
+        }
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = self.game_close_request.lock()
+            .map_err(|_| "Game tab close mailbox unavailable".to_owned())?;
+        if pending.is_some() { return Err("Game tab handoff already pending".into()); }
+        *pending = Some(sender);
+        drop(pending);
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => {
+                // A late BiDi close must never unexpectedly close a newly
+                // restored game tab after verification has already failed.
+                if let Ok(mut pending) = self.game_close_request.lock() {
+                    pending.take();
+                }
+                Err("Timed out waiting for game tab shutdown".into())
+            }
+        }
+    }
+
+    /// Recover the actual game tab with a confirmed BiDi result after native
+    /// verification fails. A queued openTab command is not enough: it returns
+    /// only a queue ID and could silently fail after this worker exits.
+    pub fn restore_game_after_failed_handoff(&self, timeout: Duration) -> Result<(), String> {
+        if self.stop.load(Ordering::Relaxed) {
+            return Err("Firefox BiDi monitor stopped before game tab recovery".into());
+        }
+        let (sender, receiver) = mpsc::channel();
+        let mut pending = self.game_restore_request.lock()
+            .map_err(|_| "Game tab recovery mailbox unavailable".to_owned())?;
+        if pending.is_some() { return Err("Game tab recovery is already pending".into()); }
+        *pending = Some(sender);
+        drop(pending);
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => {
+                if let Ok(mut pending) = self.game_restore_request.lock() {
+                    pending.take();
+                }
+                Err("Timed out waiting for Firefox game tab recovery".into())
+            }
+        }
+    }
+
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Ok(mut pending) = self.close_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.bootstrap_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.game_close_request.lock() {
+            pending.take();
+        }
+        if let Ok(mut pending) = self.game_restore_request.lock() {
             pending.take();
         }
         if let Ok(mut mailbox) = self.commands.lock() {
@@ -411,6 +498,9 @@ struct BrowserSession {
     game_context: Option<String>,
     /// Top-level context id+URL fingerprint from the last full tab inspection.
     tab_signature: Vec<(String, String)>,
+    native_capture_installed: bool,
+    native_reloaded: BTreeSet<String>,
+    native_twitch_auth_opened: bool,
 }
 
 #[derive(Default)]
@@ -558,6 +648,9 @@ fn monitor_loop(
     stop: Arc<AtomicBool>,
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
+    game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
+    game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
 ) {
     let mut session: Option<BrowserSession> = None;
@@ -640,7 +733,77 @@ fn monitor_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
+        // One-shot handoff requests must use the monitor's existing BiDi
+        // connection. Firefox permits only one active session per profile.
+        let bootstrap_reply = bootstrap_request.lock().ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(reply) = bootstrap_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi session is not connected".to_owned()
+            ).and_then(read_native_bootstrap);
+            // Do not log bootstrap content: it may contain authentication secrets.
+            let _ = reply.send(result);
+        }
+        let game_reply = game_close_request.lock().ok().and_then(|mut pending| pending.take());
+        if let Some(reply) = game_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi is not connected for game handoff".to_owned()
+            ).and_then(|browser| {
+                let context = browser.game_context.as_ref()
+                    .ok_or_else(|| "No authenticated PokéIdle game context".to_owned())?.clone();
+                let id = browser.next_id;
+                browser.next_id += 1;
+                send_and_wait(&mut browser.socket, id, json!({
+                    "id": id, "method": "browsingContext.close",
+                    "params": { "context": context, "promptUnload": false }
+                }))?;
+                browser.game_context = None;
+                logging::info(&format!(
+                    "BiDi closed only game tab on port {port}; verifying native welcome"));
+                Ok(())
+            });
+            let _ = reply.send(result);
+        }
+                let restore_reply = game_restore_request.lock().ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(reply) = restore_reply {
+            let result = session.as_mut().ok_or_else(||
+                "Firefox BiDi session is no longer connected for recovery".to_owned()
+            ).and_then(|browser| {
+                // The BiDi close may have succeeded even when its response
+                // timed out, leaving a stale cached context ID. Inspect the
+                // actual tab tree before deciding whether recovery is needed.
+                let tree_id = browser.next_id;
+                browser.next_id += 1;
+                let tree = send_and_wait(&mut browser.socket, tree_id, json!({
+                    "id": tree_id, "method": "browsingContext.getTree",
+                    "params": { "maxDepth": 1 }
+                }))?;
+                let mut contexts = Vec::new();
+                if let Some(items) = tree.get("result")
+                    .and_then(|v| v.get("contexts")).and_then(Value::as_array) {
+                    for item in items { collect_contexts(item, &mut contexts, 0); }
+                }
+                let existing = contexts.iter().find(|ctx|
+                    ctx.url.starts_with("https://pokeidle.io/app")
+                );
+                if let Some(ctx) = existing {
+                    browser.game_context = Some(ctx.id.clone());
+                    logging::info(&format!(
+                        "PokéIdle game tab already present after native failure on port {port}"
+                    ));
+                } else {
+                    browser.game_context = None;
+                    open_custom_tab(browser, "https://pokeidle.io/app")?;
+                    logging::info(&format!(
+                        "Restored PokéIdle game tab after failed native handoff on port {port}"
+                    ));
+                }
+                Ok(())
+            });
+            let _ = reply.send(result);
+        }
+                let reply = close_request.lock().ok().and_then(|mut pending| pending.take());
         if let Some(reply) = reply {
             let result = match session.as_mut() {
                 Some(browser_session) => {
@@ -834,6 +997,9 @@ fn monitor_loop(
         for _ in 0..(wait.as_millis() / 500) {
             if stop.load(Ordering::Relaxed)
                 || close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || bootstrap_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || game_close_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
+                || game_restore_request.lock().map(|pending| pending.is_some()).unwrap_or(false)
                 || pace.load(Ordering::Relaxed) != active_pace as u8
                 || (session.is_some() && commands.lock()
                     .map(|queue| !queue.pending.is_empty()).unwrap_or(false))
@@ -850,6 +1016,144 @@ fn monitor_loop(
 #[derive(Clone, Copy)]
 struct Heartbeat {
     logged_in: bool,
+}
+
+/// Capture the authenticated Twitch popout IRC socket from the same Firefox
+/// BiDi session before closing Firefox. Twitch authentication is independent
+/// of the game's cookies; the page's userscript observes PASS/NICK directly.
+/// Failure to capture is not interpreted as a valid unauthenticated session.
+fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
+    let tree_id = session.next_id;
+    session.next_id += 1;
+    let tree = send_and_wait(&mut session.socket, tree_id, json!({
+        "id": tree_id,
+        "method": "browsingContext.getTree",
+        "params": { "maxDepth": 1 }
+    }))?;
+    let mut contexts = Vec::new();
+    if let Some(nodes) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
+        for node in nodes { collect_contexts(node, &mut contexts, 0); }
+    }
+    let mut saw_popout = false;
+    let mut reload_candidate = None;
+    for context in contexts.iter().filter(|candidate| {
+        candidate.url.starts_with("https://www.twitch.tv/popout/")
+            && candidate.url.contains("/chat")
+    }) {
+        saw_popout = true;
+        let id = session.next_id;
+        session.next_id += 1;
+        let result = send_and_wait(&mut session.socket, id, json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.twitch?.() || window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
+                "target": { "context": context.id },
+                "awaitPromise": false
+            }
+        }))?;
+        let Some(raw) = result.get("result").and_then(|v| v.get("result"))
+            .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
+        let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
+        if !bootstrap.is_null() { return Ok(bootstrap); }
+        if !session.native_reloaded.contains(&context.id) {
+            reload_candidate = Some(context.id.clone());
+        }
+    }
+    if let Some(context_id) = reload_candidate {
+        return reload_native_context_once(session, &context_id);
+    }
+    if saw_popout {
+        Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
+    } else {
+        // All profiles can authenticate Twitch without a userscript update.
+        // A single temporary Twitch chat is opened only if none exists.
+        // The BiDi preload observes its authenticated PASS/NICK handshake.
+        if session.native_twitch_auth_opened {
+            return Err("Twitch login has not produced an authenticated IRC connection yet".into());
+        }
+        session.native_twitch_auth_opened = true;
+        let id = session.next_id;
+        session.next_id += 1;
+        let created = send_and_wait(&mut session.socket, id, json!({
+            "id": id, "method": "browsingContext.create",
+            "params": { "type": "tab" }
+        }))?;
+        let context = created.get("result").and_then(|v| v.get("context"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Firefox did not create a temporary Twitch login tab".to_owned())?;
+        let id = session.next_id;
+        session.next_id += 1;
+        send_and_wait(&mut session.socket, id, json!({
+            "id": id, "method": "browsingContext.navigate",
+            "params": {
+                "context": context,
+                "url": "https://www.twitch.tv/popout/twitch/chat?moth-generation=native-auth",
+                "wait": "none"
+            }
+        }))?;
+        Err("Opening one temporary Twitch authentication chat; Rust will take over after login".into())
+    }
+}
+
+/// Capture only the bridge-confirmed socket's initial hello. The storage
+/// command returns HttpOnly cookies (page JavaScript cannot access those).
+/// All sensitive results stay inside this in-process handoff.
+fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
+    let context = session.game_context.clone()
+        .ok_or_else(|| "game context has not been discovered yet".to_owned())?;
+    let id = session.next_id;
+    session.next_id += 1;
+    let frame = send_and_wait(
+        &mut session.socket, id,
+        json!({
+            "id": id, "method": "script.evaluate",
+            "params": {
+                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.game?.() || window.__mothControllerBridgeV1?.sessionBootstrap?.() || null)",
+                "target": { "context": context },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+    let raw = frame.get("result")
+        .and_then(|value| value.get("result"))
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Bridge did not provide a native handoff snapshot".to_owned())?;
+    let bootstrap: Value = serde_json::from_str(raw)
+        .map_err(|_| "Bridge returned invalid handoff metadata".to_owned())?;
+    if bootstrap.is_null() {
+        return reload_native_context_once(session, &context);
+    }
+    let cookie_id = session.next_id;
+    session.next_id += 1;
+    let cookies = send_and_wait(&mut session.socket, cookie_id, json!({
+        "id": cookie_id,
+        "method": "storage.getCookies",
+        "params": { "partition": { "type": "context", "context": context } }
+    }))?;
+    let entries = cookies.get("result")
+        .and_then(|result| result.get("cookies"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
+    let twitch = read_twitch_bootstrap(session)?;
+    // Migrate existing Auto Catch preferences without changing them. The
+    // native engine must not silently enable ball spending when the browser
+    // addon was disabled. Only settings, never authentication data.
+    let settings_id = session.next_id;
+    session.next_id += 1;
+    let settings_response = send_and_wait(&mut session.socket, settings_id, json!({
+        "id": settings_id, "method": "script.evaluate",
+        "params": {
+            "expression": "JSON.stringify((() => { try { return JSON.parse(localStorage.getItem('moth-pokeidle-autocatch-v4') || '{}'); } catch (_) { return {}; } })())",
+            "target": { "context": context }, "awaitPromise": false
+        }
+    }));
+    let autocatch = settings_response.ok()
+        .and_then(|frame| frame.get("result")?.get("result")?.get("value")?
+            .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
+    Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
+        "twitch": twitch, "autocatch": autocatch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
@@ -902,6 +1206,83 @@ fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
     }
 }
 
+// BiDi-owned instrumentation makes native auth work for every Firefox profile,
+// even if that profile still has production versions of our userscripts.
+// Loaded by Firefox before the document scripts on its *next* navigation.
+// Never exposes tokens in DOM attributes, logs, localStorage or GM storage.
+const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
+    try {
+        if (!/(^|\.)pokeidle\.io$|(^|\.)twitch\.tv$/.test(location.hostname)) return;
+        if (window.__mothNativeCaptureV1) return;
+        const Ws = window.WebSocket;
+        if (!Ws || !Ws.prototype || typeof Ws.prototype.send !== 'function') return;
+        const send = Ws.prototype.send;
+        const hellos = new WeakMap();
+        const auths = new WeakMap();
+        let gameSocket = null;
+        let twitchSocket = null;
+        Object.defineProperty(window, '__mothNativeCaptureV1', {
+            configurable: false, value: Object.freeze({
+                game() {
+                    const socket = window.__mothControllerBridgeV1?.socket?.() || gameSocket;
+                    const hello = socket && hellos.get(socket);
+                    return socket?.readyState === Ws.OPEN && hello
+                        ? { url: socket.url, hello } : null;
+                },
+                twitch() {
+                    const socket = twitchSocket;
+                    const auth = socket && auths.get(socket);
+                    return socket?.readyState === Ws.OPEN && auth?.pass && auth?.nick
+                        ? { url: socket.url, ...auth } : null;
+                }
+            })
+        });
+        Ws.prototype.send = function(data) {
+            try {
+                if (typeof data === 'string' && data.length < 32768) {
+                    const host = new URL(this.url).hostname.toLowerCase();
+                    if (host === 'pokeidle.io' || host.endsWith('.pokeidle.io')) {
+                        const payload = JSON.parse(data);
+                        if (payload?.t === 'hello') {
+                            hellos.set(this, data);
+                            gameSocket = this;
+                        }
+                    } else if (host === 'irc-ws.chat.twitch.tv') {
+                        const auth = auths.get(this) || { pass: '', nick: '', cap: '' };
+                        for (const line of data.split(/\r\n|\r|\n/)) {
+                            if (/^PASS\s+oauth:[a-z0-9_-]+$/i.test(line))
+                                auth.pass = line.trim();
+                            if (/^NICK\s+[a-z0-9_]+$/i.test(line))
+                                auth.nick = line.trim();
+                            if (/^CAP\s+REQ\s+:[a-z0-9.\/\s_-]+$/i.test(line))
+                                auth.cap = line.trim();
+                        }
+                        auths.set(this, auth);
+                        twitchSocket = this;
+                    }
+                }
+            } catch (_) {}
+            return Reflect.apply(send, this, arguments);
+        };
+    } catch (_) {}
+}"#;
+
+fn reload_native_context_once(session: &mut BrowserSession, id: &str) -> Result<Value, String> {
+    if !session.native_capture_installed {
+        return Err("BiDi could not install native authentication instrumentation".to_owned());
+    }
+    if !session.native_reloaded.insert(id.to_owned()) {
+        return Err("Waiting for authenticated WebSocket after one native instrumentation reload".to_owned());
+    }
+    let command_id = session.next_id;
+    session.next_id += 1;
+    send_and_wait(&mut session.socket, command_id, json!({
+        "id": command_id, "method": "browsingContext.reload",
+        "params": { "context": id, "wait": "none" }
+    }))?;
+    Err("Native authentication hook installed; reloaded this tab once to capture its WebSocket".into())
+}
+
 fn open_session(port: u16) -> Result<BrowserSession, String> {
     // tungstenite::connect performs the WebSocket handshake *before* callers
     // can set I/O timeouts. A stalled Firefox listener could otherwise park
@@ -941,11 +1322,25 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         return Err(error);
     }
 
+    // Install before the next game/Twitch navigation. This runs in the page
+    // realm and observes the actual outgoing handshake, independent of the
+    // per-profile Violentmonkey extension version.
+    let native_capture_installed = send_and_wait(&mut socket, 2, json!({
+        "id": 2,
+        "method": "script.addPreloadScript",
+        "params": { "functionDeclaration": NATIVE_CAPTURE_PRELOAD }
+    })).is_ok();
+    if !native_capture_installed {
+        logging::warn("Firefox BiDi native authentication preload unavailable; bridge fallback required");
+    }
     Ok(BrowserSession {
         socket,
-        next_id: 2,
+        next_id: 3,
         game_context: None,
         tab_signature: Vec::new(),
+        native_capture_installed,
+        native_reloaded: BTreeSet::new(),
+        native_twitch_auth_opened: false,
     })
 }
 

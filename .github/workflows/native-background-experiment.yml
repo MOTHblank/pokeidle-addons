@@ -1,0 +1,58 @@
+name: Validate native Moth Controller
+
+on:
+  push:
+    branches:
+      - master
+      - experiment/native-background-sessions
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-prototype:
+    name: Native WS experiment / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: controller -> target
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev libgtk-3-dev libudev-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
+            libxinerama-dev libxkbcommon-dev libwayland-dev \
+            libgl1-mesa-dev libegl1-mesa-dev
+      - name: Test native controller
+        working-directory: controller
+        run: cargo test
+      - name: Check native controller
+        working-directory: controller
+        run: cargo check
+      - name: Build native controller
+        working-directory: controller
+        run: cargo build --release
+      - name: Upload Windows preview (branch only)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moth-native-preview-windows
+          path: controller/target/release/moth-controller.exe
+          if-no-files-found: error
+      - name: Upload Linux preview (branch only)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moth-native-preview-linux
+          path: controller/target/release/moth-controller
+          if-no-files-found: error
