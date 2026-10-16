@@ -4109,72 +4109,97 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(format!("{}: {} · {}: {}",tr("shinies seen"),totals.shiny_seen,
             tr("shinies caught"),totals.shiny_captured));
     });
-    // The chart uses only retained daily entries, never adds trainer XP to
-    // Pokémon XP, and costs at most fourteen bars per repaint.
+    // Only show days containing activity. Rendering fourteen empty progress
+    // bars made history look like an enormous blank table for new accounts.
     if let Some(last_day)=history.days.iter().map(|entry|entry.day).max() {
         let mut points=[(0u64,0u64,0u64);14];
         for (index,point) in points.iter_mut().enumerate() {
             point.0=last_day.saturating_sub((13-index) as u64);
         }
         for entry in &history.days {
-            if entry.day<=last_day {
-                let age=last_day-entry.day;
-                if age<14 {
-                    let point=&mut points[13-age as usize];
-                    point.1=point.1.saturating_add(entry.kills);
-                    point.2=point.2.saturating_add(entry.captures);
-                }
+            let age=last_day.saturating_sub(entry.day);
+            if entry.day<=last_day && age<14 {
+                let point=&mut points[13-age as usize];
+                point.1=point.1.saturating_add(entry.kills);
+                point.2=point.2.saturating_add(entry.captures);
             }
         }
-        let max_kills=points.iter().map(|(_,kills,_)|*kills).max().unwrap_or(0).max(1);
-        ui.add_space(10.0);
-        egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
-            .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-                ui.label(RichText::new(tr("Recent daily activity · kills / captures"))
-                    .size(13.0).strong().color(TEXT));
-                for (day,kills,captures) in points {
-                    ui.horizontal(|ui|{
-                        ui.add_sized([88.0,16.0],egui::Label::new(
-                            RichText::new(history_day_label(day)).size(10.0).color(DIM)));
-                        let width=ui.available_width().max(80.0);
-                        ui.add(egui::ProgressBar::new(kills as f32/max_kills as f32)
-                            .desired_width(width).text(format!("{kills} / {captures}")));
-                    });
-                }
-            });
+        let active=points.iter().filter(|(_,kills,captures)|
+            *kills>0 || *captures>0).collect::<Vec<_>>();
+        if !active.is_empty() {
+            let max_kills=active.iter().map(|(_,kills,_)|*kills)
+                .max().unwrap_or(0).max(1);
+            ui.add_space(6.0);
+            egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
+                .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+                    ui.label(RichText::new(tr("Recent active days · kills / captures"))
+                        .size(12.0).strong().color(TEXT));
+                    for (day,kills,captures) in active.into_iter().rev().take(7) {
+                        ui.horizontal(|ui|{
+                            ui.add_sized([83.0,16.0],egui::Label::new(
+                                RichText::new(history_day_label(*day)).size(10.0).color(DIM)));
+                            ui.add(egui::ProgressBar::new(*kills as f32/max_kills as f32)
+                                .desired_width(ui.available_width().clamp(100.0,350.0))
+                                .text(format!("{kills} / {captures}")));
+                        });
+                    }
+                });
+        }
     }
-    ui.add_space(10.0);
-    ui.label(RichText::new(tr("Daily hunts")).size(13.0).strong().color(TEXT));
+    ui.add_space(8.0);
     let mut entries=history.days.iter().collect::<Vec<_>>();
     entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
     let total_entries=entries.len();
     let displayed_entries=total_entries.min(app.history_rows_limit);
-    ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
-        total_entries, tr("recorded hunt-days")))
-        .size(10.0).color(DIM));
-    egui::ScrollArea::vertical().id_salt("history-daily")
-        .max_height(310.0).show(ui,|ui|{
-            if entries.is_empty(){ui.label(tr("No recorded battles yet"));}
-            for day in entries.into_iter().take(displayed_entries) {
-                egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(10,6)).show(ui,|ui|{
-                    ui.label(RichText::new(format!("{} · {}",history_day_label(day.day),day.hunt))
-                        .size(11.0).strong().color(TEXT));
-                    ui.label(RichText::new(format!(
-                        "{} {} · {} {} · Trainer {} · Pokémon {} · Gold +{} (+{} sale)",
-                        day.kills,tr("kills"),day.captures,tr("captures"),
-                        format_number(day.trainer_xp),format_number(day.pokemon_xp),
-                        format_number(day.combat_gold),format_number(day.auto_sale_gold),
-                    )).size(10.0).color(DIM));
-                    if !day.drops.is_empty() {
-                        ui.collapsing(format!("{} ({})",tr("Drops acquired"),day.drops.len()),|ui|{
-                            for (name,qty) in &day.drops {
-                                ui.label(format!("{} ×{}",name,qty));
-                            }
-                        });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Hunt activity")).size(13.0).strong().color(TEXT));
+        ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
+            total_entries, tr("recorded hunt-days"))).size(10.0).color(DIM));
+    });
+    egui::Frame::new().fill(PANEL).corner_radius(8.0)
+        .inner_margin(egui::Margin::same(8)).show(ui,|ui|{
+            egui::ScrollArea::vertical().id_salt(("history-rows",index))
+                .max_height(360.0).show(ui,|ui|{
+                    if entries.is_empty() {
+                        ui.label(tr("No recorded battles yet"));
+                    } else {
+                        egui::Grid::new(("history-grid",index))
+                            .striped(true).spacing([12.0,6.0])
+                            .show(ui,|ui|{
+                                for heading in ["Date","Hunt","Kills","Caught",
+                                    "Trainer XP","Pokémon XP","Gold","Drops"] {
+                                    ui.label(RichText::new(tr(heading))
+                                        .size(10.0).strong().color(MUTED));
+                                }
+                                ui.end_row();
+                                for day in entries.into_iter().take(displayed_entries) {
+                                    ui.label(RichText::new(history_day_label(day.day)).size(10.0));
+                                    ui.label(RichText::new(compact_text(&day.hunt,25)).size(10.0))
+                                        .on_hover_text(&day.hunt);
+                                    ui.label(format_number(day.kills));
+                                    ui.label(format_number(day.captures));
+                                    ui.label(format_number(day.trainer_xp));
+                                    ui.label(format_number(day.pokemon_xp));
+                                    ui.label(format_number(day.combat_gold.saturating_add(day.auto_sale_gold)))
+                                        .on_hover_text(format!("Combat: {} · Auto-sale: {}",
+                                            format_number(day.combat_gold),
+                                            format_number(day.auto_sale_gold)));
+                                    let drop_text=if day.drops.is_empty() {
+                                        "—".to_owned()
+                                    } else {
+                                        format!("{}",day.drops.len())
+                                    };
+                                    let drops=day.drops.iter()
+                                        .map(|(name,qty)|format!("{name} ×{qty}"))
+                                        .collect::<Vec<_>>().join("\n");
+                                    ui.label(drop_text).on_hover_text(if drops.is_empty() {
+                                        tr("No drops recorded").to_owned()
+                                    } else {drops});
+                                    ui.end_row();
+                                }
+                            });
                     }
                 });
-            }
         });
     if displayed_entries<total_entries {
         if ui.small_button(tr("Show 100 more hunt-days")).clicked() {
