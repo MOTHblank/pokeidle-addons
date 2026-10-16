@@ -337,6 +337,11 @@ impl HuntIntel {
         }
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
+        // Switch hunt before applying its opponent. On a welcome, the same
+        // state already includes the new wild encounter; do not clear it after.
+        if let Some(slug) = state.get("huntSlug").and_then(Value::as_str) {
+            self.adopt_hunt(slug, now);
+        }
         if let Some(raw)=state.get("tierOutland")
             .or_else(||state.get("outlandTier"))
             .or_else(||state.get("outland_tier")) {
@@ -427,10 +432,6 @@ impl HuntIntel {
         }
         if let Some(center) = state.get("noCentro").and_then(Value::as_bool) {
             self.view.in_center = center;
-        }
-        if let Some(slug) = state.get("huntSlug").and_then(Value::as_str) {
-            // The authenticated welcome is authoritative on a new session.
-            self.adopt_hunt(slug, now);
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
             self.view.roster_ready = true;
@@ -728,6 +729,7 @@ impl HuntIntel {
             valid_gold: net_gold.is_some(),
             window_samples: self.samples.len(),
             last_battle_age_secs: self.view.measurements.last_battle_age_secs,
+            combat_event_age_secs: self.view.measurements.combat_event_age_secs,
         };
         self.view.sample_quality = if kills < 5 {
             "Early estimate · fewer than five battles recorded".into()
