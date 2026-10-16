@@ -4742,6 +4742,33 @@ fn capture_ball_name(k:&str)->&'static str {
 // IDs are the game protocol IDs. Public metadata
 // only enriches captions; absent metadata never switches a saved selection.
 // Compact, icon-only Auto Catch+ choice. Names and stock remain in tooltips.
+// Every variant must occupy the same fixed-sized cell: a centered/justified
+// fallback label used to stretch the "Off" cell across an entire column,
+// hiding the real ball/potion icons on the next wrapped row.
+const RESTOCK_ICON_SIZE: f32 = 23.0;
+const RESTOCK_ICON_PADDING: i8 = 4;
+
+fn restock_selector_columns(available_width: f32) -> usize {
+    // Each full picker needs roughly 240 px for its six or seven icon cells.
+    // Overview account cards are often only 350–500 px wide, so use stacked
+    // full-width groups there instead of three unusably narrow columns.
+    if available_width >= 780.0 { 3 } else { 1 }
+}
+
+#[cfg(test)]
+mod restock_picker_layout_tests {
+    use super::restock_selector_columns;
+    #[test]
+    fn full_width_groups_on_account_cards_and_three_columns_on_wide_panels() {
+        for width in [230.0, 350.0, 480.0, 779.0] {
+            assert_eq!(restock_selector_columns(width), 1);
+        }
+        for width in [780.0, 900.0, 1200.0] {
+            assert_eq!(restock_selector_columns(width), 3);
+        }
+    }
+}
+
 fn capture_restock_chip(
     ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
     selected:&mut u64, id:u64, name:&str, icon:&str,
@@ -4752,14 +4779,18 @@ fn capture_restock_chip(
         .fill(if active { ACCENT.linear_multiply(0.25) } else { PANEL_ALT })
         .stroke(Stroke::new(if active {1.5} else {1.0},
             if active {ACCENT} else {BORDER}))
-        .corner_radius(5.0).inner_margin(Margin::same(4))
+        .corner_radius(5.0)
+        .inner_margin(Margin::same(RESTOCK_ICON_PADDING))
         .show(ui,|ui|{
-            ui.set_min_size(egui::vec2(23.0,23.0));
-            ui.centered_and_justified(|ui|{
-                if !visuals.show(ui,kind,id,icon_hint,23.0) {
-                    ui.label(RichText::new(icon).size(15.0));
-                }
-            });
+            // Both the texture and the fallback use exactly the same space.
+            // Do not use centered_and_justified here: that layout consumes
+            // the parent's remaining width instead of the icon's width.
+            if !visuals.show(ui,kind,id,icon_hint,RESTOCK_ICON_SIZE) {
+                ui.add_sized(
+                    [RESTOCK_ICON_SIZE, RESTOCK_ICON_SIZE],
+                    egui::Label::new(RichText::new(icon).size(15.0)),
+                );
+            }
         }).response.interact(egui::Sense::click());
     let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
     let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
@@ -4827,7 +4858,10 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                 .and_then(|rule|rule.price)
         };
         ui.add_space(5.0);
-        ui.columns(3, |cols| {
+        let columns = restock_selector_columns(ui.available_width());
+        ui.columns(columns, |cols| {
+        let potion_col = if columns == 3 { 1 } else { 0 };
+        let revive_col = if columns == 3 { 2 } else { 0 };
         cols[0].label(RichText::new(tr("Balls")).strong().size(11.0).color(TEXT));
         cols[0].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Ball,
@@ -4846,7 +4880,8 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     &mut cfg.ball_id,id,&format!("Saved ball #{id}"),"●",None,None,None);
             }
         });
-        cols[1].label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
+        if columns == 1 { cols[0].add_space(8.0); }
+        cols[potion_col].label(RichText::new(tr("Potions")).strong().size(11.0).color(TEXT));
         // Match Auto Catch+: Small, Ultimate and Golden Potion. Preserve
         // any existing selection even if the downloaded catalog is old.
         let mut potion_choices=vec![
@@ -4872,7 +4907,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                 .unwrap_or_else(||format!("Saved potion #{}",cfg.potion_id));
             potion_choices.push((cfg.potion_id,name));
         }
-        cols[1].horizontal_wrapped(|ui|{
+        cols[potion_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
                 &mut cfg.potion_id,0,"Off","—",None,None,None);
             for (id,name) in potion_choices {
@@ -4885,7 +4920,8 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     price,selected_stock("item",id));
             }
         });
-        cols[2].label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
+        if columns == 1 { cols[0].add_space(8.0); }
+        cols[revive_col].label(RichText::new(tr("Revives")).strong().size(11.0).color(TEXT));
         let mut revive_choices=vec![
             (205_u64,String::from("Revive")),
             (206_u64,String::from("Max Revive"))
@@ -4901,7 +4937,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         if cfg.revive_id>0 && !revive_choices.iter().any(|(id,_)|*id==cfg.revive_id) {
             revive_choices.push((cfg.revive_id,format!("Saved revive #{}",cfg.revive_id)));
         }
-        cols[2].horizontal_wrapped(|ui|{
+        cols[revive_col].horizontal_wrapped(|ui|{
             capture_restock_chip(ui,&mut app.visuals,SpriteKind::Item,
                 &mut cfg.revive_id,0,"Off","—",None,None,None);
             for (id,name) in revive_choices {
