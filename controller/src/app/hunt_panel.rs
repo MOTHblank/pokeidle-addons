@@ -523,6 +523,10 @@ fn atlas_species_rows<'a>(
     view:&'a HuntView, reference:Option<&'a AtlasReference>, cache:&EstimateCache,
     filters:&AtlasFilters,
 )->Vec<AtlasSpeciesRow<'a>> {
+    // The absence of a complete roster is not proof that a species is missing.
+    if filters.collection!=AtlasCollection::All && !view.roster_ready {
+        return Vec::new();
+    }
     let query=filters.search.trim().to_lowercase();
     let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
         .filter_map(|mon|mon.species_id).collect();
@@ -1082,7 +1086,7 @@ fn draw_atlas_explorer(
     atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
     let rows=atlas_species_rows(view,reference,cache,filters);
-    if filters.collection!=AtlasCollection::All && view.pokemon_count==0 {
+    if filters.collection!=AtlasCollection::All && !view.roster_ready {
         ui.label(RichText::new(
             "Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures."
         ).size(10.0).color(WARN));
@@ -1736,6 +1740,7 @@ mod tests {
         view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
             species_id:Some(1),id:15,..Default::default()
         }]);
+        view.roster_ready=true;
         let cache=EstimateCache::default();
         let mut filters=AtlasFilters::default();
         filters.collection=AtlasCollection::InDepot;
