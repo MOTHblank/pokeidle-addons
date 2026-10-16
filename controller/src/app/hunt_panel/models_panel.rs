@@ -104,8 +104,8 @@ pub(super) fn draw_retrospective(
                 .max_height(240.0).show(ui,|ui|{
                     egui::Grid::new(("atlas-archived-grid",slug))
                         .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
-                            ui.strong("Day · hour");ui.strong("Archived trainer/h");
-                            ui.strong("Same-day measured/h");ui.strong("Forecast / measured");
+                            ui.strong("Day · hour");ui.strong("Archived trainer / Pokémon XP/h");
+                            ui.strong("Same-day trainer/h");ui.strong("Forecast / measured");
                             ui.end_row();
                             for sample in archived.iter().take(30){
                                 let observed=rows.iter().find(|row|row.day==sample.day)
@@ -118,7 +118,9 @@ pub(super) fn draw_retrospective(
                                     .map(|n|sample.trainer_xp_h/n);
                                 ui.label(format!("{} · {:02}:00 UTC",sample.day,
                                     sample.hour%24));
-                                ui.label(value(Some(sample.trainer_xp_h)));
+                                ui.label(format!("{} / {} · {:.0} kills/h",
+                                    value(Some(sample.trainer_xp_h)),
+                                    value(Some(sample.pokemon_xp_h)),sample.kills_h));
                                 ui.label(value(observed));
                                 ui.label(residual.map(|n|format!("{n:.2}×"))
                                     .unwrap_or_else(||"—".into()));
@@ -365,7 +367,8 @@ pub(super) fn draw_atlas_models(
             ui.horizontal_wrapped(|ui|{
                 ui.label(RichText::new(item.name).size(11.0).strong().color(TEXT));
                 ui.label(format!("{:.6}%/kill · {:.5} units/h · 24h chance {:.2}% · crafting {:.1}h",
-                    item.per_kill*100.0,item.units_h,item.chance_24h*100.0,item.craft_hours));
+                    item.per_kill*100.0,item.units_h,item.chance_24h*100.0,item.craft_hours))
+                    .on_hover_text(format!("Mean hours to next drop: {:.1}",item.mean_hours));
             });
         }
     }else{
