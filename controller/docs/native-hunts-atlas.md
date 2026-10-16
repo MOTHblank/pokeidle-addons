@@ -1,7 +1,7 @@
 # Native Hunts / Hunt Atlas — experimental architecture
 
 **Branch:** `experiment/native-background-sessions`  
-**Preview:** `0.1.7-native.13`
+**Preview:** `0.1.7-native.14`
 
 The **Panel → Hunts · Atlas** tab is a Rust-native integration of Pokeidle Manager's account-protocol design and the original Hunt Atlas's hunt discovery and combat-estimation goals. It does **not** execute Pokeidle Manager's GPL source or require either Violentmonkey addon after login. The stable main branch is unaffected.
 
@@ -58,3 +58,23 @@ The code was committed without a local Rust compiler or authenticated game sessi
 **Limitations:** only item drops explicitly present in battle events are counted; the session ledger is in memory and begins with the native controller runtime (it does not import past Manager sessions or history from the game). Catalog names are unavailable if the public endpoint is offline, but quantities and item IDs remain correct. The native Auto Catch settings cover capture priority/reserve/restock, not all advanced legacy userscript behavior. The server still controls real purchase availability and prices. The changes have unit tests but have **not** been compiled/live-tested in the editing environment.
 
 Validation: run `cargo test`, then `cargo build --release`. Confirm that selecting Auto Catch preferences while connected changes captured ball choice/reserves, that restocking respects threshold and gold reserve without repeating pending orders, that an inventory purchase changes current stock but does **not** increase acquired drops, and that `morte.drops` events appear in the acquired ledger. Verify all four profiles can coexist natively with Firefox closed.
+
+
+## Native dashboard data parity in native.14
+
+The account detail drawer now reads one immutable native snapshot per render and
+displays active trainer/Pokémon, live currencies, hunt session counters, measured
+trainer and Pokémon XP separately, net gold, Pokémon roster with HP and quality,
+ball stock and native automation. The compact overview uses that same native
+state instead of treating Firefox Bridge data as mandatory. Hunt Atlas and
+Inventory remain dedicated tabs reachable from the account drawer.
+
+XP/h now also derives from *server-confirmed wild-death reward receipts* over
+the rolling ten-minute window. Missing periodic `estado` messages no longer
+leave battle-based trainer/Pokémon XP blank. A 20-second minimum is enforced,
+and the rate resets on hunt switch or disconnect. Net gold/h still requires
+actual currency snapshots; it is never fabricated from gross battle earnings.
+
+These are native egui improvements, **not a complete React/Tauri Manager
+interface port**. No live authenticated game regression test or Rust compiler
+was available in the editing environment.
