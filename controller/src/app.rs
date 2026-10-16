@@ -3216,8 +3216,12 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
                 .unwrap_or_else(||format!("Item #{id}"));
             let cat=catalog.and_then(|c|c.items.get(id))
                 .map(|meta|meta.category.to_lowercase()).unwrap_or_default();
-            let category=if cat.contains("potion"){"potions"}
-                else if cat.contains("stone"){"stones"}else{"other"};
+            let normalized=name.to_lowercase();
+            let category=if cat.contains("potion") || normalized.contains("potion") ||
+                normalized.contains("poção") { "potions" }
+                else if cat.contains("stone") || normalized.contains("stone") ||
+                    normalized.contains("pedra") { "stones" }
+                else { "other" };
             let entry=amounts.entry((false,*id))
                 .or_insert((0,name,category.into()));
             entry.0=entry.0.saturating_add(*quantity);
@@ -4249,7 +4253,10 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                 app.capture_save_busy[index]=true;
                 let tx=app.capture_save_tx.clone();
                 std::thread::spawn(move || {
-                    let result=crate::native_auth::set_capture_settings(profile,&to_save);
+                    let result=std::panic::catch_unwind(
+                        std::panic::AssertUnwindSafe(||
+                            crate::native_auth::set_capture_settings(profile,&to_save))
+                    ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                     let _=tx.send(CaptureSavedEvent{index,config:to_save,result});
                 });
             }
