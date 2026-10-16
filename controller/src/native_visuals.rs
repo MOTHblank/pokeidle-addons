@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc::{self, Receiver, Sender};
 
+mod pokemon_art;
+
 mod generated {
     include!("native_visual_assets.generated.rs");
 }
@@ -15,10 +17,10 @@ const MAX_IMAGE_BYTES: u64 = 1_048_576;
 const MAX_EDGE: u32 = 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Kind { Ball, Item, Pokemon }
+pub enum Kind { Ball, Item, Pokemon, PokemonLooktype }
 impl Kind {
     fn key(self) -> &'static str {
-        match self { Self::Ball => "ball", Self::Item => "item", Self::Pokemon => "pokemon" }
+        match self { Self::Ball => "ball", Self::Item => "item", Self::Pokemon => "pokemon", Self::PokemonLooktype => "pokemon-looktype" }
     }
 }
 
@@ -227,7 +229,11 @@ impl Default for VisualCache {
                             Err(_) => break,
                         };
                         let Ok(job) = job else { break };
-                        let bytes = load_worker_image(&client, &root, &job);
+                        let bytes = match job.kind {
+                            Kind::Pokemon | Kind::PokemonLooktype =>
+                                pokemon_art::load(&client, &root, job.kind, job.id),
+                            _ => load_worker_image(&client, &root, &job),
+                        };
                         if output.send(Response {
                             key: (job.kind, job.id), bytes,
                         }).is_err() { break; }
@@ -275,7 +281,7 @@ impl VisualCache {
             }
             if !self.textures.contains_key(&key) {
                 let urls = image_urls(kind, id, icon_hint);
-                if !urls.is_empty() {
+                if !urls.is_empty() || matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) {
                     let _ = self.request.send(Request { kind, id, urls });
                 }
             }
@@ -284,8 +290,8 @@ impl VisualCache {
     }
 
     /// Returns true if an icon was drawn. Always fall back to text if false.
-    /// Unknown Pokémon can be added through the generated sprite manifest;
-    /// no guessed Pokémon CDN paths are constructed here.
+    /// Pokémon textures are resolved from verified game looktypes and sprite
+    /// atlases on the worker, never by guessing an image URL from species ID.
     pub fn show(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
                 icon_hint: Option<&str>, size: f32) -> bool {
         if let Some(texture) = self.texture_id(ui, kind, id, icon_hint) {
