@@ -153,6 +153,7 @@ pub struct NativeSession {
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
+    session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
 }
 impl NativeSession {
@@ -178,6 +179,8 @@ impl NativeSession {
         let restock = Restock::new(settings.as_ref());
         let capture_config=Arc::new(Mutex::new(CatchSettings::from_value(settings.as_ref())));
         let worker_capture_config=Arc::clone(&capture_config);
+        let session_reset=Arc::new(AtomicBool::new(false));
+        let worker_session_reset=Arc::clone(&session_reset);
         let hunt_intel = HuntIntel::new();
         let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
         let worker_hunts = Arc::clone(&hunts);
@@ -197,7 +200,7 @@ impl NativeSession {
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
-                        hunt_intel, worker_hunts);
+                        worker_session_reset, hunt_intel, worker_hunts);
                 }));
                 if result.is_err() {
                     update(&worker_snapshot, |state| {
@@ -210,7 +213,7 @@ impl NativeSession {
             .map_err(|error| format!("Could not spawn native session: {error}"))?;
         Ok(Self {
             snapshot, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, hunts
+            capture_config, session_reset, hunts
         })
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
@@ -228,6 +231,9 @@ impl NativeSession {
         }
         self.command_tx.try_send(command)
             .map_err(|_| "Native command queue full or session stopped".to_owned())
+    }
+    pub fn reset_hunt_session(&self) {
+        self.session_reset.store(true,Ordering::Relaxed);
     }
     pub fn hunt_snapshot(&self) -> HuntView {
         self.hunts.lock().map(|view| view.clone()).unwrap_or_default()
@@ -420,6 +426,7 @@ fn session_loop(credentials: Credentials,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
+    session_reset: Arc<AtomicBool>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>) {
     let mut rejected_welcomes = 0usize;
@@ -436,6 +443,8 @@ fn session_loop(credentials: Credentials,
                 let mut last_hunt_publish = Instant::now();
                 let mut last_config = capture_config.lock().map(|v|v.clone())
                     .unwrap_or_default();
+                gameplay.configure(&last_config);
+                restock.configure(&last_config);
                 update(&snapshot, |s| s.native_restock = restock.status.clone());
                 rejected_welcomes = 0;
                 update(&snapshot, |s| {
@@ -472,6 +481,9 @@ fn session_loop(credentials: Credentials,
                         }
                     }
                     if send_failed { break; }
+                    if session_reset.swap(false,Ordering::Relaxed) {
+                        hunt_intel.reset_session(Instant::now());
+                    }
                     if let Ok(cfg) = capture_config.lock() {
                         if *cfg != last_config {
                             gameplay.configure(&cfg);
