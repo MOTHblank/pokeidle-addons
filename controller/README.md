@@ -17,7 +17,7 @@ The Rust backend handles authenticated game sessions and Twitch IRC directly, Au
 
 **Violentmonkey and all userscripts are optional.** Nothing must be installed to complete native onboarding, and script detection is not part of native game authentication. The Accounts page can optionally open installers for legacy scripts that now live in [pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium). The controller checks their published versions only as an auxiliary diagnostic when that panel is used. If running optional browser Auto Catch, avoid simultaneously running native Auto Catch on the same account.
 
-The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall any previous user scripts from Premium to change their update feed. Moth Watch, Hunt Atlas browser mode, and advanced browser-only market workflows remain separate optional features.
+The old `pokeidle-addons/master/addons/` installer URLs are retired; reinstall any previous user scripts from Premium to change their update feed. Moth Watch's native rule buyer now includes an account-local Snatch queue, automatic held-listing observation, exact listing verification and high-priority release bursts; the browser-only full market browser and historical valuations remain optional features.
 
 For configuration and protocol details of the **native Moth Watch rule buyer**, see [market rule buying](docs/native-market-rule-buying.md). It is off by default and can import existing Moth Watch rule JSON. The native Automation page also surfaces any observed mission fields read-only until their write/acknowledgement protocol has been verified.
 
