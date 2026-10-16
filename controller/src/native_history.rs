@@ -517,7 +517,7 @@ mod tests {
         let snapshot=HistorySnapshot::default();
         let mut history=HistoryRecorder{
             shared:Arc::new(Mutex::new(snapshot.clone())),snapshot,
-            nick:"Test".into(),last_hunt:None,dirty:false,needs_publish:false,
+            nick:"Test".into(),last_hunt:None,last_kill:None,dirty:false,needs_publish:false,
             last_publish:Instant::now(),last_flush:Instant::now(),
             writer,path:None
         };
