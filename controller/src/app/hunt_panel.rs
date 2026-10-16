@@ -1355,7 +1355,28 @@ fn draw_atlas_explorer(
         ).size(10.0).color(WARN));
     }
     if rows.is_empty(){
-        ui.label("No matching species with available model inputs. Check filters and assumptions; missing outcomes are never ranked as zero.");
+        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+            .stroke(Stroke::new(1.0,BORDER))
+            .inner_margin(egui::Margin::same(14)).show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new("No matching Pokémon")
+                    .size(13.0).strong().color(TEXT));
+                let message=if filters.collection!=AtlasCollection::All
+                    && !view.roster_ready{
+                    "Waiting for the full Pokémon depot before ownership can be filtered."
+                }else if cache.is_pending(){
+                    "Combat estimates are updating; rankings will refresh as inputs arrive."
+                }else if reference.is_none(){
+                    "The guide reference is not available yet. Species names and model coverage may be incomplete."
+                }else{
+                    "Try a wider level range, different availability or fewer filters. Unknown model values are never treated as zero."
+                };
+                ui.label(RichText::new(message).size(11.0).color(MUTED));
+                if filters.active_count()>0 &&
+                    ui.small_button("Reset explorer filters").clicked(){
+                    filters.clear();*page=0;
+                }
+            });
         return;
     }
     let visible=atlas_pager(ui,page,rows.len(),12);
@@ -1971,7 +1992,23 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             hunts,reference,live,native,&mut app.hunt_action_error[index]);
                         ui.add_space(5.0);
                     }
-                    if ranked.is_empty(){ui.label("No hunts match the current filters.");}
+                    if ranked.is_empty(){
+                        egui::Frame::new().fill(PANEL).corner_radius(9.0)
+                            .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+                                ui.set_min_width(ui.available_width());
+                                ui.label(RichText::new("No matching hunts")
+                                    .size(13.0).strong().color(TEXT));
+                                ui.label(RichText::new(
+                                    "Widen the search or clear the region and type filters."
+                                ).size(11.0).color(MUTED));
+                                if ui.small_button("Clear ranking filters").clicked(){
+                                    app.hunt_query.clear();
+                                    app.hunt_region.clear();
+                                    app.hunt_type.clear();
+                                    app.hunt_page=0;
+                                }
+                            });
+                    }
                     ui.add_space(7.0);
                     ui.collapsing("XP bonus assumptions",|ui|{
                         let b=&hunts.bonuses;
