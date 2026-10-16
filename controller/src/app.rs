@@ -5,6 +5,7 @@ use crate::kick::KickStream;
 use crate::logging;
 use crate::native_background::NativeSession;
 use crate::native_gameplay::GameCommand;
+use crate::native_hunts::{self, HuntView};
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -245,6 +246,44 @@ fn tr<'a>(en: &'a str) -> &'a str {
     match en {
         "Idle warning: no EXP or Pokéballs used in 5 minutes" => "Aviso de inatividade: sem EXP ou Pokébolas usadas por 5 minutos",
         "Overview" => "Visão geral",
+        "Hunts · Atlas" => "Hunts · Atlas",
+        "Hunt Atlas" => "Hunt Atlas",
+        "Account" => "Conta",
+        "Native server catalog · no userscripts" => "Catálogo nativo do servidor · sem userscripts",
+        "Start the account to load its available hunts." => "Inicie a conta para carregar as hunts disponíveis.",
+        "The native game socket supplies the hunt catalog and active Pokémon after server authentication." => "O socket Rust recebe hunts e Pokémon diretamente do servidor.",
+        "Waiting for authenticated game hunt catalog..." => "Aguardando catálogo de hunts do servidor...",
+        "Active Pokémon" => "Pokémon ativo",
+        "Waiting for active Pokémon state" => "Aguardando dados do Pokémon ativo",
+        "Bonuses considered" => "Bônus considerados",
+        "Current hunt" => "Hunt atual",
+        "available hunts" => "hunts disponíveis",
+        "observed kills" => "abates observados",
+        "Measured during current hunt" => "Medido durante a hunt atual",
+        "Trainer XP/h" => "XP treinador/h",
+        "Pokémon XP/h" => "XP Pokémon/h",
+        "Net gold/h" => "Ouro líquido/h",
+        "Kills/h" => "Abates/h",
+        "kills in window" => "abates na janela",
+        "Available hunts · Hunt Atlas" => "Hunts disponíveis · Hunt Atlas",
+        "Trainer XP" => "XP treinador",
+        "Pokémon XP" => "XP Pokémon",
+        "Gold" => "Ouro",
+        "Search hunt, region or species ID" => "Buscar hunt, região ou ID da espécie",
+        "All regions" => "Todas as regiões",
+        "Clear filters" => "Limpar filtros",
+        "matching hunts" => "hunts encontradas",
+        "Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance." =>
+            "Outras hunts usam o ritmo atual como cenário, não como previsão de combate.",
+        "Conditional XP/gold per hour if the CURRENT observed kill rate were maintained." =>
+            "XP/ouro por hora apenas se o ritmo atual de abates fosse mantido.",
+        "species" => "espécies",
+        "No species weights reported" => "Sem pesos de spawn informados",
+        "CURRENT" => "ATUAL",
+        "Pending" => "Pendente",
+        "Hunt" => "Caçar",
+        "Showing first 200 hunts; refine search or region." => "Mostrando até 200 hunts; refine a busca.",
+
         "PokéIdle controller" => "Controlador do PokéIdle",
         "STOP ALL" => "PARAR TUDO",
         "LAUNCH BOTH" => "INICIAR AMBOS",
@@ -1230,6 +1269,11 @@ struct NativeBrowserClosedEvent {
     result: Result<(), String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanelTab { Overview, Hunts }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HuntRanking { TrainerXp, PokemonXp, Gold }
+
 pub struct ControllerApp {
     native_handoff_tx: Sender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
@@ -1247,6 +1291,11 @@ pub struct ControllerApp {
     cached_native_busy: [bool; 4],
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
+    panel_tab: PanelTab,
+    hunt_account: usize,
+    hunt_query: String,
+    hunt_region: String,
+    hunt_ranking: HuntRanking,
     show_accounts: bool,
     accounts: [AccountConfig; 4],
     status: String,
@@ -1326,6 +1375,11 @@ impl ControllerApp {
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
+            panel_tab: PanelTab::Overview,
+            hunt_account: 0,
+            hunt_query: String::new(),
+            hunt_region: String::new(),
+            hunt_ranking: HuntRanking::TrainerXp,
             show_accounts: false,
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -2442,7 +2496,10 @@ impl eframe::App for ControllerApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(tr("Overview"))
+                        RichText::new(tr(match self.panel_tab {
+                            PanelTab::Overview => "Overview",
+                            PanelTab::Hunts => "Hunt Atlas",
+                        }))
                             .font(FontId::proportional(26.0))
                             .strong()
                             .color(TEXT),
@@ -2555,7 +2612,15 @@ impl eframe::App for ControllerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
             .show(ui, |ui| {
-                draw_instance_section(self, ui);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.panel_tab, PanelTab::Overview, tr("Overview"));
+                    ui.selectable_value(&mut self.panel_tab, PanelTab::Hunts, tr("Hunts · Atlas"));
+                });
+                ui.add_space(11.0);
+                match self.panel_tab {
+                    PanelTab::Overview => draw_instance_section(self, ui),
+                    PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
+                }
             });
 
         if self.show_accounts {
@@ -2605,6 +2670,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             section_label(ui, tr("WORKSPACE"));
 
             if sidebar_button(ui, tr("▦  Dashboard"), true).clicked() {
+                app.panel_tab = PanelTab::Overview;
                 app.set_status(tr("Dashboard · live health polling enabled").to_string(), false);
             }
 
@@ -2874,6 +2940,254 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.collapsing(tr("Technical details"), |ui| {
                 draw_runtime_section(app, ui);
             });
+        });
+}
+
+
+fn format_hunt_amount(value: f64) -> String {
+    if !value.is_finite() { return "—".into(); }
+    let negative = if value < 0.0 { "-" } else { "" };
+    let num = value.abs();
+    if num >= 1_000_000_000.0 { format!("{negative}{:.2}B", num / 1_000_000_000.0) }
+    else if num >= 1_000_000.0 { format!("{negative}{:.2}M", num / 1_000_000.0) }
+    else if num >= 1_000.0 { format!("{negative}{:.1}K", num / 1_000.0) }
+    else { format!("{negative}{num:.0}") }
+}
+
+/// Manager-like Where to Hunt presentation, merged with server-only Atlas
+/// filters and separately labeled real samples vs current-pace scenarios.
+fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
+        egui::ComboBox::from_id_salt("hunt-account")
+            .selected_text(app.account_name(app.games[app.hunt_account].profile))
+            .show_ui(ui, |ui| {
+                for index in 0..app.games.len() {
+                    let name = app.account_name(app.games[index].profile);
+                    ui.selectable_value(&mut app.hunt_account, index, name);
+                }
+            });
+        ui.add_space(8.0);
+        ui.label(RichText::new(tr("Native server catalog · no userscripts"))
+            .size(10.0).color(MUTED));
+    });
+    ui.add_space(10.0);
+    let index = app.hunt_account;
+    let Some(native) = app.games[index].native.as_ref() else {
+        ui.add_space(20.0);
+        ui.label(RichText::new(tr("Start the account to load its available hunts."))
+            .size(13.0).color(WARN));
+        ui.label(tr("The native game socket supplies the hunt catalog and active Pokémon after server authentication."));
+        return;
+    };
+    let hunts: HuntView = native.hunt_snapshot();
+    if !hunts.catalog_ready {
+        ui.label(RichText::new(tr("Waiting for authenticated game hunt catalog..."))
+            .size(12.0).color(WARN));
+        return;
+    }
+
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(tr("Active Pokémon")).size(10.0).color(DIM));
+                    if let Some(p) = hunts.active_pokemon.as_ref() {
+                        ui.label(RichText::new(format!("{} · Lv. {}", p.name, p.level))
+                            .size(16.0).strong().color(TEXT));
+                        ui.label(RichText::new(format!(
+                            "P{} · Q {:.3} · {} · {} Pokémon",
+                            p.potency.unwrap_or(0), p.quality.unwrap_or(0.0),
+                            if p.shiny { "Shiny" } else { "Normal" },
+                            hunts.pokemon_count
+                        )).size(10.0).color(DIM));
+                        let labels = ["HP", "ATK", "DEF", "SpA", "SpD", "SPD"];
+                        let stats = labels.iter().enumerate()
+                            .map(|(i,k)| format!("{} {}", k,
+                                p.ivs[i].map(|v|v.to_string()).unwrap_or_else(|| "—".into())))
+                            .collect::<Vec<_>>().join(" · ");
+                        ui.label(RichText::new(stats).size(10.0).color(MUTED));
+                    } else {
+                        ui.label(tr("Waiting for active Pokémon state"));
+                    }
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(tr("Bonuses considered")).size(10.0).color(DIM));
+                    let b = &hunts.bonuses;
+                    ui.label(format!("Twitch +{:.0}% · Guild +{:.0}%",
+                        b.twitch_pct, b.guild_pct));
+                    ui.label(format!("Event: Trainer +{:.0}% · Pokémon +{:.0}%",
+                        b.trainer_event_pct, b.pokemon_event_pct));
+                    ui.label(RichText::new(format!(
+                        "VIP: {} · Guild boost: {}",
+                        if b.vip_active { "on" } else { "off/unknown" },
+                        if b.guild_boost_active { "on" } else { "off/unknown" },
+                    )).size(10.0).color(DIM));
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(tr("Current hunt")).size(10.0).color(DIM));
+                    let title = hunts.hunts.iter().find(|h|Some(h.slug.as_str()) == hunts.hunt_slug.as_deref())
+                        .map(|h|h.name.as_str()).or(hunts.hunt_slug.as_deref()).unwrap_or("—");
+                    ui.label(RichText::new(title).size(14.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!(
+                        "{} {} · {} {}",
+                        hunts.hunts.len(), tr("available hunts"),
+                        hunts.battle_kills, tr("observed kills")
+                    )).size(10.0).color(DIM));
+                });
+            });
+        });
+    ui.add_space(10.0);
+    let m = &hunts.measurements;
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(13)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Measured during current hunt"))
+                .size(12.0).strong().color(TEXT));
+            ui.horizontal_wrapped(|ui| {
+                for (label, amount, valid) in [
+                    (tr("Trainer XP/h"), m.trainer_xp_h, m.valid_trainer),
+                    (tr("Pokémon XP/h"), m.pokemon_xp_h, m.valid_pokemon),
+                    (tr("Net gold/h"), m.gold_net_h, m.valid_gold),
+                    (tr("Kills/h"), m.kills_h, m.seconds >= 20.0),
+                ] {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(label).size(10.0).color(DIM));
+                        ui.label(RichText::new(if valid {
+                            format_hunt_amount(amount)
+                        } else { "—".into() }).size(15.0).strong()
+                            .color(if valid { GOOD } else { MUTED }));
+                    });
+                    ui.add_space(13.0);
+                }
+            });
+            ui.label(RichText::new(format!(
+                "{} · {:.0}s · {} {}",
+                hunts.sample_quality, m.seconds, m.kills, tr("kills in window")
+            )).size(10.0).color(MUTED));
+        });
+    ui.add_space(12.0);
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Available hunts · Hunt Atlas"))
+            .size(14.0).strong().color(TEXT));
+        ui.add_space(8.0);
+        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::TrainerXp, tr("Trainer XP"));
+        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::PokemonXp, tr("Pokémon XP"));
+        ui.selectable_value(&mut app.hunt_ranking, HuntRanking::Gold, tr("Gold"));
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
+            .hint_text(tr("Search hunt, region or species ID"))
+            .desired_width(245.0));
+        let mut regions = hunts.hunts.iter().map(|h| h.region.as_str())
+            .filter(|r| !r.is_empty()).collect::<Vec<_>>();
+        regions.sort_unstable();
+        regions.dedup();
+        egui::ComboBox::from_id_salt("hunt-region")
+            .selected_text(if app.hunt_region.is_empty() {
+                tr("All regions") } else { &app.hunt_region })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.hunt_region, String::new(), tr("All regions"));
+                for region in regions {
+                    ui.selectable_value(&mut app.hunt_region, region.to_owned(), region);
+                }
+            });
+        if ui.small_button(tr("Clear filters")).clicked() {
+            app.hunt_region.clear(); app.hunt_query.clear();
+        }
+    });
+    let query = app.hunt_query.trim().to_lowercase();
+    let mut rows: Vec<_> = hunts.hunts.iter().filter(|h| {
+        (app.hunt_region.is_empty() || h.region == app.hunt_region) &&
+        (query.is_empty() || h.name.to_lowercase().contains(&query) ||
+            h.region.to_lowercase().contains(&query) ||
+            h.area.to_lowercase().contains(&query) ||
+            h.slug.to_lowercase().contains(&query) ||
+            h.species.iter().any(|sp| sp.id.to_string().contains(&query)))
+    }).collect();
+    // Baseline XP/kill is authoritative, but actual kills/hour for another
+    // hunt is unknown; show only a scenario at the observed CURRENT pace.
+    let kills_per_hour = if m.seconds >= 20.0 && m.kills >= 5 {
+        m.kills_h
+    } else { 0.0 };
+    let bonuses = &hunts.bonuses;
+    let trainer_factor = 1.0 +
+        (bonuses.trainer_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
+    let pokemon_factor = 1.0 +
+        (bonuses.pokemon_event_pct + bonuses.guild_pct + bonuses.twitch_pct).max(0.0) / 100.0;
+    let potential = |h: &native_hunts::HuntEntry| {
+        let (xp, gold) = native_hunts::atlas_pace_scenario(h,kills_per_hour)
+            .unwrap_or((0.0,0.0));
+        match app.hunt_ranking {
+            HuntRanking::TrainerXp => xp * trainer_factor,
+            HuntRanking::PokemonXp => xp * pokemon_factor,
+            HuntRanking::Gold => gold,
+        }
+    };
+    rows.sort_by(|a,b| potential(b).total_cmp(&potential(a))
+        .then_with(|| a.level.cmp(&b.level))
+        .then_with(|| a.name.cmp(&b.name)));
+    ui.label(RichText::new(format!(
+        "{} {} · {}",
+        rows.len(), tr("matching hunts"),
+        tr("Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance.")
+    )).size(10.0).color(WARN));
+    ui.add_space(7.0);
+
+    egui::ScrollArea::vertical().id_salt("atlas-hunt-results")
+        .max_height(ui.available_height().max(240.0)).show(ui, |ui| {
+            for (index, h) in rows.iter().take(200).enumerate() {
+                let current = hunts.hunt_slug.as_deref() == Some(h.slug.as_str());
+                let pending = hunts.pending_hunt_slug.as_deref() == Some(h.slug.as_str());
+                egui::Frame::new().fill(if current { ACCENT.linear_multiply(0.10) } else { PANEL })
+                    .stroke(Stroke::new(1.0, if current { ACCENT } else { BORDER }))
+                    .corner_radius(7.0).inner_margin(egui::Margin::symmetric(11, 9))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(format!("{:02}",index+1))
+                                .color(MUTED).size(10.0));
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&h.name).strong().size(12.0).color(TEXT));
+                                ui.label(RichText::new(format!(
+                                    "{} · {} · Lv. {}",
+                                    h.area, h.region, h.level
+                                )).size(10.0).color(DIM));
+                            });
+                            let species = h.species.iter()
+                                .map(|sp|format!("#{} {:.0}%",sp.id,
+                                    if h.species.iter().map(|p|p.weight).sum::<f64>() > 0.0 {
+                                        sp.weight*100.0/h.species.iter().map(|p|p.weight).sum::<f64>()
+                                    }else{0.0}))
+                                .collect::<Vec<_>>().join(" · ");
+                            ui.label(RichText::new(format!("{} {}",h.species.len(),tr("species")))
+                                .size(10.0).color(DIM)).on_hover_text(
+                                    if species.is_empty() { tr("No species weights reported").to_owned() } else {species}
+                                );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if current {
+                                    ui.label(RichText::new(tr("CURRENT")).color(GOOD));
+                                } else if pending {
+                                    ui.label(RichText::new(tr("Pending")).color(WARN));
+                                } else if ui.small_button(tr("Hunt")).clicked() {
+                                    if let Err(error) = native.send_command(GameCommand::Hunt(h.slug.clone())) {
+                                        crate::logging::warn(&format!("Hunt Atlas command rejected: {error}"));
+                                    }
+                                }
+                                ui.label(RichText::new(if kills_per_hour > 0.0 {
+                                    format_hunt_amount(potential(h))
+                                } else { "—".into() })
+                                    .strong().color(if current { GOOD } else { TEXT }))
+                                    .on_hover_text(tr("Conditional XP/gold per hour if the CURRENT observed kill rate were maintained."));
+                            });
+                        });
+                    });
+                ui.add_space(5.0);
+            }
+            if rows.len() > 200 {
+                ui.label(tr("Showing first 200 hunts; refine search or region."));
+            }
         });
 }
 
