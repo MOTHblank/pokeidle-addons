@@ -4418,9 +4418,15 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             }
             ui.horizontal_wrapped(|ui| {
                 let bonus = &view.bonuses;
-                ui.label(format!("Twitch +{:.0}% · Guild +{:.0}% · Event trainer +{:.0}% / Pokémon +{:.0}%",
-                    bonus.twitch_pct, bonus.guild_pct, bonus.trainer_event_pct,
-                    bonus.pokemon_event_pct));
+                for (label, percent) in [
+                    ("Twitch", bonus.twitch_pct),
+                    ("Guild", bonus.guild_pct),
+                    ("Event trainer", bonus.trainer_event_pct),
+                    ("Event Pokémon", bonus.pokemon_event_pct),
+                ] {
+                    ui.label(RichText::new(format!("{label} +{percent:.0}%"))
+                        .size(10.0).color(DIM));
+                }
                 if bonus.vip_active { ui.label(RichText::new("VIP").color(GOOD)); }
                 if bonus.guild_boost_active { ui.label(RichText::new("Guild boost").color(GOOD)); }
             });
@@ -4431,13 +4437,15 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("HUNT SESSION")).size(12.0)
                     .strong().color(TEXT));
-                ui.label(RichText::new(format!("{} {} · {} {} · {} {} · {:02}:{:02}:{:02}",
-                    view.session.kills, tr("kills"),
-                    view.session.captures, tr("captures"),
-                    view.session.shiny_captured, tr("shinies caught"),
-                    view.session.duration_secs/3600,
-                    (view.session.duration_secs/60)%60,view.session.duration_secs%60,
-                )).size(10.0).color(MUTED));
+                for text in [
+                    format!("{} {}",view.session.kills,tr("kills")),
+                    format!("{} {}",view.session.captures,tr("captures")),
+                    format!("{} {}",view.session.shiny_captured,tr("shinies caught")),
+                    format!("{:02}:{:02}:{:02}",view.session.duration_secs/3600,
+                        (view.session.duration_secs/60)%60,view.session.duration_secs%60),
+                ] {
+                    ui.label(RichText::new(text).size(10.0).color(MUTED));
+                }
                 if ui.small_button(tr("Open Hunt Atlas")).clicked() {
                     app.hunt_account = index;
                     app.panel_tab = PanelTab::Hunts;
