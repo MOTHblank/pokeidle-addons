@@ -951,6 +951,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch sign-in" => "Entrar na Twitch",
         "Automation is managed in the controller. Start this account to see its current settings." =>
             "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
+        "Download game icons" => "Baixar ícones do jogo",
+        "Download public PokéIdle item and Poké Ball icons to your computer. Downloaded icons will appear in the app." => "Baixe ícones públicos de itens e Pokébolas do PokéIdle. Os ícones baixados aparecerão no aplicativo.",
+        "Pokémon portraits are not included because the upstream sprite index has no verified images yet." => "As imagens dos Pokémon ainda não estão disponíveis porque o índice de sprites não contém imagens verificadas.",
         _ => en,
     }
 }
@@ -3151,6 +3154,28 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.separator();
             ui.label(RichText::new(tr(
                 "PokéIdle and Twitch keep running normally. These options only change how often the window and Firefox update."
+            )).size(10.0).color(DIM));
+        });
+
+    ui.add_space(12.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Game icons")).size(13.0).strong().color(TEXT));
+            ui.label(RichText::new(tr(
+                "Download public PokéIdle item and Poké Ball icons to your computer. Downloaded icons will appear in the app."
+            )).size(10.0).color(MUTED));
+            ui.add_space(6.0);
+            if ui.button(tr("Download game icons")).clicked() {
+                let queued = app.visuals.download_game_icons();
+                app.set_status(format!("{queued} game icons queued for download."), false);
+            }
+            let (queued, finished, failed, loaded) = app.visuals.progress();
+            ui.label(RichText::new(format!(
+                "{loaded} icons loaded · {finished}/{queued} checked · {failed} unavailable · {} known",
+                VisualCache::known_icon_count(),
+            )).size(10.0).color(DIM));
+            ui.label(RichText::new(tr(
+                "Pokémon portraits are not included because the upstream sprite index has no verified images yet."
             )).size(10.0).color(DIM));
         });
 
