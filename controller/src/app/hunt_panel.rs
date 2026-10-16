@@ -25,7 +25,7 @@ pub(super) struct AtlasFilters {
     weakness_match_all: bool,
     sort: AtlasSort,
     ascending: bool,
-    rare_item: u64,
+    rare_item: String,
     filters_open: bool,
 }
 impl Default for AtlasFilters {
@@ -35,7 +35,8 @@ impl Default for AtlasFilters {
             min_level:0,max_level:0,availability:AtlasAvailability::Unlocked,
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
-            sort:AtlasSort::TrainerXp,ascending:false,rare_item:70000,filters_open:true,
+            sort:AtlasSort::TrainerXp,ascending:false,
+            rare_item:String::new(),filters_open:true,
         }
     }
 }
@@ -468,7 +469,7 @@ fn atlas_effectiveness(
 fn atlas_objective(
     sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
     hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
-    rare_item:u64
+    rare_item:&str
 )->Option<f64> {
     match sort {
         AtlasSort::Name=>None,
@@ -485,7 +486,10 @@ fn atlas_objective(
         }),
         AtlasSort::Rare=>forecast.and_then(|f|species.and_then(|p|{
             let relevant:Vec<_>=p.drops.iter().filter(|drop|
-                drop.item_id==Some(rare_item)).collect();
+                rare_item.is_empty() || drop.item_name.as_deref()
+                    .is_some_and(|name|name.eq_ignore_ascii_case(rare_item))
+                    || drop.item_id.is_some_and(|id|id.to_string()==rare_item)
+            ).collect();
             if relevant.is_empty(){return None}
             Some(f.kills_h*share*relevant.iter().map(|drop|
                 drop.chance_pct/100.0*(drop.minimum+drop.maximum)/2.0).sum::<f64>())
@@ -497,7 +501,7 @@ fn atlas_sort_label(sort:AtlasSort)->&'static str {
         AtlasSort::TrainerXp=>"Trainer XP/h",
         AtlasSort::PokemonXp=>"Pokémon XP/h",
         AtlasSort::Gold=>"Gross gold/h",
-        AtlasSort::Rare=>"Selected guide drop units/h",
+        AtlasSort::Rare=>"Guide item units/h",
         AtlasSort::Shiny=>"Shiny encounter/h (conditional)",
         AtlasSort::Spawn=>"Spawn weight",
         AtlasSort::Level=>"Hunt level",
@@ -563,7 +567,7 @@ fn atlas_species_rows<'a>(
             let share=spawn.weight.max(0.0)/sum;
             let forecast=cache.get(&hunt.slug);
             let objective=atlas_objective(filters.sort,forecast.as_ref(),hunt,
-                share,meta,filters.rare_item);
+                share,meta,&filters.rare_item);
             grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
@@ -912,13 +916,29 @@ fn atlas_filters_panel(
                 if ui.small_button(if f.ascending{"↑ Ascending"}else{"↓ Descending"})
                     .clicked(){f.ascending=!f.ascending;*page=0}
                 if f.sort==AtlasSort::Rare {
-                    ui.label("Item ID");
-                    egui::ComboBox::from_id_salt(("atlas-rare-id",account))
-                        .selected_text(format!("#{}",f.rare_item))
+                    ui.label("Guide item");
+                    let mut items=std::collections::BTreeSet::new();
+                    if let Some(reference)=reference {
+                        for species in reference.species.values(){
+                            for drop in &species.drops{
+                                if let Some(name)=drop.item_name.as_deref(){
+                                    items.insert(name.to_owned());
+                                }else if let Some(id)=drop.item_id{
+                                    items.insert(id.to_string());
+                                }
+                            }
+                        }
+                    }
+                    egui::ComboBox::from_id_salt(("atlas-drop-name",account))
+                        .selected_text(if f.rare_item.is_empty(){
+                            "All guide drops".to_owned()
+                        }else{f.rare_item.clone()})
                         .show_ui(ui,|ui|{
-                            for id in [70000,70011,70012,70013,70017] {
-                                if ui.selectable_value(&mut f.rare_item,id,
-                                    format!("Item #{id}")).changed(){*page=0}
+                            if ui.selectable_value(&mut f.rare_item,
+                                String::new(),"All guide drops").changed(){*page=0}
+                            for name in items.iter().take(250){
+                                if ui.selectable_value(&mut f.rare_item,
+                                    name.clone(),name.as_str()).changed(){*page=0}
                             }
                         });
                 }
@@ -1021,9 +1041,10 @@ fn draw_atlas_species(
                                             ui.collapsing("Reference drops",|ui|{
                                                 for drop in species.drops.iter().take(20) {
                                                     ui.label(RichText::new(format!(
-                                                        "Item #{} · {:.3}% / eligible kill · {:.0}–{:.0} units",
-                                                        drop.item_id.map(|id|id.to_string())
-                                                            .unwrap_or_else(||"?".into()),
+                                                        "{} · {:.3}% / eligible kill · {:.0}–{:.0} units",
+                                                        drop.item_name.clone()
+                                                            .or_else(||drop.item_id.map(|id|format!("Item #{id}")))
+                                                            .unwrap_or_else(||"Unknown item".into()),
                                                         drop.chance_pct,drop.minimum,drop.maximum
                                                     )).size(10.0).color(MUTED));
                                                 }
@@ -1076,7 +1097,7 @@ fn draw_atlas_explorer(
     }
     if matches!(filters.sort,AtlasSort::Rare) {
         ui.label(RichText::new(
-            "Rare-drop estimates require the selected item in the public guide and a valid modeled kill rate; no market valuation is assumed."
+            "Guide item-yield estimates use per-kill loot chances, quantities and modeled kill rates; they are not confirmed rare drops, prices or market proceeds."
         ).size(10.0).color(WARN));
     }
     if rows.is_empty(){
