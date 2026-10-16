@@ -936,13 +936,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No browser extensions are required. Setup finishes automatically after you sign in." => "Não é necessário instalar extensões no navegador. A configuração termina automaticamente depois do login.",
         "These scripts are optional for playing in Firefox. Auto Catch, Restock, Twitch and Market work without them." => "Estes scripts são opcionais para jogar no Firefox. Captura automática, reposição, Twitch e mercado funcionam sem eles.",
         "Firefox is only needed to sign in or play in the browser. PokéIdle and Twitch can keep running after it closes." => "O Firefox só é necessário para entrar ou jogar no navegador. PokéIdle e Twitch podem continuar funcionando depois que ele fecha.",
-        "No mission settings are available yet. This section does not make changes to your missions." => "As configurações de missão ainda não estão disponíveis. Esta seção não altera suas missões.",
-        "Mission settings can be viewed here but cannot be changed yet." => "Você pode consultar as configurações de missão aqui, mas ainda não pode alterá-las.",
         "No Auto Catch attempts recorded yet" => "Nenhuma tentativa de captura automática registrada ainda",
         "These numbers show Auto Catch only. Manual catches are included in the dashboard totals." => "Estes números mostram apenas a captura automática. As capturas manuais entram nos totais do painel.",
         "Auto Catch settings saved" => "Configurações de captura automática salvas",
         "Loading game automation settings" => "Carregando configurações de automação do jogo",
-        "Game icons" => "Ícones do jogo",
         "Sign-in checklist" => "Verificação de login",
         "Twitch login" => "Login da Twitch",
         "Sign-in required" => "Login necessário",
@@ -954,9 +951,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch sign-in" => "Entrar na Twitch",
         "Automation is managed in the controller. Start this account to see its current settings." =>
             "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
-        "Download game icons" => "Baixar ícones do jogo",
-        "Download public PokéIdle item and Poké Ball icons to your computer. Downloaded icons will appear in the app." => "Baixe ícones públicos de itens e Pokébolas do PokéIdle. Os ícones baixados aparecerão no aplicativo.",
-        "Pokémon portraits are not included because the upstream sprite index has no verified images yet." => "As imagens dos Pokémon ainda não estão disponíveis porque o índice de sprites não contém imagens verificadas.",
         _ => en,
     }
 }
@@ -4709,6 +4703,9 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         // any existing selection even if the downloaded catalog is old.
         let mut potion_choices=vec![
             (200_u64,String::from("Small Potion")),
+            (201_u64,String::from("Great Potion")),
+            (202_u64,String::from("Ultra Potion")),
+            (203_u64,String::from("Hyper Potion")),
             (204_u64,String::from("Ultimate Potion")),
             (70070_u64,String::from("Golden Potion"))
         ];
