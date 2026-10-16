@@ -21,7 +21,7 @@ impl Kind {
     }
 }
 
-struct Request { kind: Kind, id: u64, url: String }
+struct Request { kind: Kind, id: u64, urls: Vec<String> }
 struct Response { key: (Kind, u64), bytes: Option<Vec<u8>> }
 
 pub struct VisualCache {
@@ -99,18 +99,24 @@ fn load_worker_image(client: &reqwest::blocking::Client, root: &std::path::Path,
         if valid_image(&bytes) { return Some(bytes); }
         let _ = std::fs::remove_file(&path);
     }
-    let response = client.get(&request.url).send().ok()?.error_for_status().ok()?;
-    if response.content_length().is_some_and(|n| n > MAX_IMAGE_BYTES) { return None; }
-    let mut bytes = Vec::new();
-    response.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    if !valid_image(&bytes) { return None; }
-    // Atomic-ish write: no UI observes these files; a failed write only means
-    // the next launch may have to retrieve the artwork again.
-    let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, &bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
+    for url in &request.urls {
+        let Ok(response) = client.get(url).send().and_then(|r|r.error_for_status())
+            else { continue };
+        if response.content_length().is_some_and(|n| n > MAX_IMAGE_BYTES) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if response.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).is_err() ||
+            !valid_image(&bytes) { continue; }
+        // A failure to write the cache must never hide a successfully
+        // downloaded texture from this session.
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+        return Some(bytes);
     }
-    Some(bytes)
+    None
 }
 
 impl Default for VisualCache {
@@ -172,10 +178,26 @@ impl VisualCache {
                 if valid_image(bytes) { self.put(ui.ctx(), key, bytes); }
             }
             if !self.textures.contains_key(&key) {
-                let url = icon_hint.and_then(trusted_url)
-                    .or_else(||asset_url(kind, id).and_then(trusted_url));
-                if let Some(url) = url {
-                    let _ = self.request.send(Request { kind, id, url });
+                let mut urls = Vec::<String>::new();
+                for candidate in [icon_hint, asset_url(kind, id)] {
+                    let Some(source) = candidate.and_then(trusted_url) else {continue};
+                    if !urls.contains(&source) { urls.push(source.clone()); }
+                    // Some game builds serve items.json paths under
+                    // /assets/site. Probe both, but only on the same trusted
+                    // public game host and only from the background worker.
+                    const SHORT: &str = "https://pokeidle.io/assets/markitems/";
+                    const LONG: &str = "https://pokeidle.io/assets/site/assets/markitems/";
+                    let alternative = if source.starts_with(SHORT) {
+                        Some(source.replacen(SHORT,LONG,1))
+                    } else if source.starts_with(LONG) {
+                        Some(source.replacen(LONG,SHORT,1))
+                    } else { None };
+                    if let Some(alternative) = alternative {
+                        if !urls.contains(&alternative) { urls.push(alternative); }
+                    }
+                }
+                if !urls.is_empty() {
+                    let _ = self.request.send(Request { kind, id, urls });
                 }
             }
         }
