@@ -648,6 +648,23 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "LANGUAGE" => "IDIOMA",
         "▶  Launch enabled" => "▶  Iniciar habilitadas",
         "Native game + Twitch IRC · browserless" => "Jogo + Twitch IRC nativos · sem navegador",
+        "Native" => "Nativo",
+        "Native error" => "Erro nativo",
+        "Verifying native" => "Verificando Rust",
+        "Reading handshake" => "Lendo sessão",
+        "Firefox login" => "Login Firefox",
+        "Firefox is temporary; Rust takes over after game and Twitch authentication." =>
+            "O Firefox é temporário; o Rust assume após autenticar jogo e Twitch.",
+        "Game actions" => "Ações do jogo",
+        "Pokémon Center" => "Centro Pokémon",
+        "Return to hunt" => "Voltar à caça",
+        "Enable" => "Ativar",
+        "Disable" => "Desativar",
+        "Change native Auto Catch for this account" =>
+            "Alterar a captura automática nativa desta conta",
+        "pending" => "pendentes",
+        "throws" => "bolas",
+        "Direct IRC" => "IRC direto",
         "Authenticating in Firefox · automatic native game + Twitch handoff" =>
             "Autenticando no Firefox · transferência nativa do jogo + Twitch automática",
         "Reading native handshake…" => "Lendo handshake nativo…",
