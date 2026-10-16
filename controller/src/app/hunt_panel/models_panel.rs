@@ -15,7 +15,7 @@ fn selected_hunt<'a>(view:&'a HuntView,guide:Option<&'a AtlasReference>,
     hunts.iter().find(|(h,_)|Some(h.slug.as_str())==requested)
         .copied().or_else(||hunts.into_iter().next())
 }
-fn item_units_per_h(hunt:&native_hunts::HuntEntry,
+pub(super) fn item_units_per_h(hunt:&native_hunts::HuntEntry,
     reference:&AtlasReference,name:&str,kills_h:f64,drop_factor:f64)->Option<f64>{
     if name.is_empty()||!kills_h.is_finite()||kills_h<0.0{return None}
     let total=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
@@ -266,8 +266,25 @@ pub(super) fn draw_atlas_models(
     ui.label(RichText::new("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds.")
         .size(10.0).color(MUTED));
     ui.add_space(6.0);
-    ui.label(RichText::new("Outland 1–8 and rare item probabilities")
-        .size(13.0).strong().color(TEXT));
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("Outland 1–8 and rare item probabilities")
+            .size(13.0).strong().color(TEXT));
+        ui.label("Ranking target");
+        egui::ComboBox::from_id_salt("atlas-rare-target")
+            .selected_text(match scenario.rare_target{
+                70000=>"Bronze Boss Token",70011=>"Key Fragment",
+                70012=>"Shiny Stone Fragment",70013=>"Bicycle Fragment",
+                70017=>"Shiny Egg Fragment",_=>"Unknown",
+            }).show_ui(ui,|ui|{
+                for (id,name) in [
+                    (70000,"Bronze Boss Token"),(70011,"Key Fragment"),
+                    (70012,"Shiny Stone Fragment"),(70013,"Bicycle Fragment"),
+                    (70017,"Shiny Egg Fragment"),
+                ]{
+                    ui.selectable_value(&mut scenario.rare_target,id,name);
+                }
+            });
+    });
     if let Some(speed)=kills {
         let rare=models::rare_scenarios(outland,hunt.level,scenario.tier,
             view.trainer_level,speed,&scenario.modifiers);
