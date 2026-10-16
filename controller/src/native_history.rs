@@ -195,13 +195,17 @@ impl HistoryRecorder {
         let mut snapshot=HistorySnapshot::default();
         let path=match path {
             Ok(path)=>{
-                if let Ok(raw)=fs::read_to_string(&path) {
-                    match serde_json::from_str::<Value>(&raw)
-                        .map_err(|_|"History JSON malformed".to_owned())
-                        .and_then(|value|HistorySnapshot::from_value(&value,&nick)){
-                        Ok(data)=>snapshot=data,
-                        Err(error)=>snapshot.load_error=Some(error)
+                match fs::read_to_string(&path) {
+                    Ok(raw)=>{
+                        match serde_json::from_str::<Value>(&raw)
+                            .map_err(|_|"History JSON malformed".to_owned())
+                            .and_then(|value|HistorySnapshot::from_value(&value,&nick)){
+                            Ok(data)=>snapshot=data,
+                            Err(error)=>snapshot.load_error=Some(error)
+                        }
                     }
+                    Err(error) if error.kind()==std::io::ErrorKind::NotFound => {}
+                    Err(error)=>snapshot.load_error=Some(format!("History read: {error}"))
                 }
                 Some(path)
             },
@@ -210,10 +214,15 @@ impl HistoryRecorder {
         snapshot.retain_recent(unix_day());
         let shared=Arc::new(Mutex::new(snapshot.clone()));
         let (writer_tx,writer_rx)=mpsc::channel::<(PathBuf,String)>();
+        let writer_shared=Arc::clone(&shared);
         thread::Builder::new().name("moth-native-history".into())
             .spawn(move ||{
                 while let Ok((path,raw))=writer_rx.recv(){
-                    if let Err(error)=write_atomic(&path,&raw) {
+                    let result=write_atomic(&path,&raw);
+                    if let Ok(mut snapshot)=writer_shared.lock() {
+                        snapshot.save_error=result.as_ref().err().cloned();
+                    }
+                    if let Err(error)=result {
                         crate::logging::warn(&format!("Native history persistence: {error}"));
                     }
                 }
@@ -249,7 +258,11 @@ impl HistoryRecorder {
         if !self.dirty || (!force && self.last_flush.elapsed()<SAVE_INTERVAL){return}
         if let Some(path)=self.path.as_ref(){
             let raw=self.snapshot.to_value(&self.nick).to_string();
-            if self.writer.send((path.clone(),raw)).is_ok(){self.dirty=false;}
+            if self.writer.send((path.clone(),raw)).is_ok(){
+                self.dirty=false;
+            } else if let Ok(mut shared)=self.shared.lock() {
+                shared.save_error=Some("History writer unavailable".into());
+            }
         }
         self.last_flush=Instant::now();
     }
