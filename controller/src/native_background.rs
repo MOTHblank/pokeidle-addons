@@ -6,6 +6,7 @@
 use serde_json::Value;
 use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
+use crate::native_hunts::{HuntIntel, HuntView};
 use crate::native_restock::{Restock, RestockStatus};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
