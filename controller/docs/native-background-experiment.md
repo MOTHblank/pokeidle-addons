@@ -1,7 +1,7 @@
 # Native-first Moth Controller — four-account game + Twitch IRC
 
 **Branch:** [experiment/native-background-sessions](https://github.com/MOTHblank/pokeidle-addons/tree/experiment/native-background-sessions)  
-**Preview controller:** `0.1.7-native.5`
+**Preview controller:** `0.1.7-native.7`
 
 This experimental branch is **not an opt-in Firefox mode**. The standard runtime is one native Rust PokéIdle WebSocket **plus** one native Rust Twitch IRC connection per account. Firefox is an authentication helper and must close once both handshakes are captured.
 
@@ -57,3 +57,19 @@ The handoff now closes/reaps Firefox on a **separate worker per account** rather
 If a worker panics, its status becomes **Failed** while the controller should remain open. If a future crash still abruptly ends the log without `Rust panic`, investigate OS-level process termination, native-library faults, or an external restart instead of assuming the WebSocket protocol was rejected. No cookies, OAuth tokens or handshake payloads are written to logs.
 
 Test with one account first and only then all four. Native transport **still does not implement the browser-only gameplay addons**, so authenticated WebSockets are not proof of complete automated farming.
+
+## Manager-style native runtime migration (native.7)
+
+This revision uses the public [DiuleJR/pokeidle-manager](https://github.com/DiuleJR/pokeidle-manager) implementation as an **architectural reference**. The code in this branch was authored for Moth; it is not a verbatim copy of Manager's GPL-3.0-only modules. Any future direct reuse of Manager source requires a distribution/license review.
+
+**Single game socket owner.** Firefox/BiDi closes only the game's browsing context, while keeping the authenticated Twitch page and Firefox process alive. On another thread Rust opens the game WebSocket and IRC, and requires a real PokéIdle `welcome` and IRC `001`. If either cannot authenticate, Moth queues reopening `https://pokeidle.io/app` in the original browser. Only once both native servers have confirmed login does it shut down the complete Firefox profile. Closing the browser occurs outside the UI thread. This prevents the prior close-before-confirm race.
+
+**Native game command transport.** The Rust game WebSocket worker is now the sole sender of client protocol frames in native mode. It has a bounded per-account queue, validates known command shapes, drops unconfirmed pending commands on disconnect and reconnects with fresh welcome/state. The first native controls include center navigation, return to the last confirmed hunt, and native Auto Catch on/off.
+
+**Native Auto Catch.** During initial Firefox authentication, Moth imports `moth-pokeidle-autocatch-v4` localStorage settings and caches them with the protected native credentials. Disabled capture stays disabled. When capture is enabled, confirmed wild deaths create per-slot corpse entries; the native processor selects available balls from the server-provided catalog and inventory, sends `ball.throw`, respects the cooldown and a bounded corpse lifetime, and reconciles server `bola` results. Unknown ball IDs and Master Balls are not silently spent. This is a new protocol implementation and must be live-verified against the established userscript before being considered equivalent.
+
+**Native restock.** When Auto Catch's saved restock configuration is enabled, the native game worker observes authoritative shop catalogs, gold and inventory. It applies the configured ball, potion and revive thresholds and target quantities, honors the gold reserve and maximum purchase quantity, sends one `shop.buy` at a time, and waits for purchase and inventory confirmation before starting another order. Missing server prices prevent buying; an acknowledged purchase cannot be repeated while its inventory update is outstanding.
+
+**Still outside scope of this migration:** fully porting the on-page interfaces and marketplace actions of Moth Watch, Snatch and Hunt Atlas; in-browser Pokémon inspection UIs; every advanced Auto Catch targeting detail. Do not assume those scripts keep running after Firefox closes. The underlying server-side battle automation continues when connected, but battle/XP must be confirmed in a live session.
+
+No Rust compiler or authenticated PokéIdle profile was available in this editing environment. Although protocol/unit tests were committed, **neither Windows compilation nor live four-account native gameplay has been independently verified here**. The test workflow builds the experimental branch and is not a reason to delay branch commits. Do not merge into production until the native implementation demonstrably replaces Firefox for your required actions.
