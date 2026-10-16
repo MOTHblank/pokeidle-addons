@@ -910,6 +910,7 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         for node in nodes { collect_contexts(node, &mut contexts, 0); }
     }
     let mut saw_popout = false;
+    let mut reload_candidate = None;
     for context in contexts.iter().filter(|candidate| {
         candidate.url.starts_with("https://www.twitch.tv/popout/")
             && candidate.url.contains("/chat")
@@ -931,10 +932,15 @@ fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
             .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
         let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
         if !bootstrap.is_null() { return Ok(bootstrap); }
-        return reload_native_context_once(session, &context.id);
+        if !session.native_reloaded.contains(&context.id) {
+            reload_candidate = Some(context.id.clone());
+        }
+    }
+    if let Some(context_id) = reload_candidate {
+        return reload_native_context_once(session, &context_id);
     }
     if saw_popout {
-        Err("Twitch IRC authentication pending; trying again".to_owned())
+        Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
     } else {
         Err("No managed authenticated Twitch chat popout yet; waiting for stream scanner or Twitch sign-in".to_owned())
     }
