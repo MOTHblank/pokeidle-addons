@@ -118,8 +118,8 @@ pub fn open_login(profile: GameProfile, url: &str, service: &str) -> Result<Stri
     Ok(format!("{service} opened in {}.", profile.label()))
 }
 
-/// Opens installers for all addons on first setup, or only explicitly selected
-/// scripts when repairing a profile. Opening a tab does not imply installation.
+/// Opens only explicitly chosen optional browser-script installers.
+/// Native onboarding never calls this. Opening a tab does not install a script.
 pub fn open_addons(
     profile: GameProfile,
     requested: Option<&[String]>,
