@@ -16,7 +16,7 @@ use crate::monitor::{
 use crate::update::{self, SharedUpdateStatus};
 use serde_json::json;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -1558,6 +1558,44 @@ mod automation_ui_tests {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
+/// A single asynchronously calculated, account-scoped model generation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HuntForecastKey {
+    account: usize,
+    guide_identity: usize,
+    catalog_identity: usize,
+    active_pokemon: Option<(u64, u32)>,
+    hunt_slug: Option<String>,
+}
+
+fn hunt_forecast_key(account: usize, view: &HuntView, guide: &Arc<AtlasReference>) -> HuntForecastKey {
+    HuntForecastKey {
+        account,
+        guide_identity: Arc::as_ptr(guide) as usize,
+        catalog_identity: Arc::as_ptr(&view.hunts) as usize,
+        active_pokemon: view.active_pokemon.as_ref().map(|p| (p.id, p.level)),
+        hunt_slug: view.hunt_slug.clone(),
+    }
+}
+
+struct HuntForecastBatch {
+    key: HuntForecastKey,
+    completed: Instant,
+    values: Arc<BTreeMap<String, native_atlas::Forecast>>,
+}
+
+fn hunt_model_needs_refresh(
+    ready: Option<&HuntForecastBatch>,
+    pending: Option<&(HuntForecastKey, Instant)>,
+    key: &HuntForecastKey,
+) -> bool {
+    let fresh = ready.is_some_and(|r| r.key == *key
+        && r.completed.elapsed() < Duration::from_secs(10));
+    let in_flight = pending.is_some_and(|(k, at)| k == key
+        && at.elapsed() < Duration::from_secs(25));
+    !fresh && !in_flight
+}
+
 struct CaptureSavedEvent {
     index:usize,
     config:CatchSettings,
@@ -1604,6 +1642,11 @@ pub struct ControllerApp {
     hunt_reference_busy: bool,
     hunt_reference_tx: Sender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
+    hunt_forecast_tx: Sender<(HuntForecastKey, BTreeMap<String, native_atlas::Forecast>)>,
+    hunt_forecast_rx: Receiver<(HuntForecastKey, BTreeMap<String, native_atlas::Forecast>)>,
+    hunt_forecast_pending: Option<(HuntForecastKey, Instant)>,
+    hunt_forecast_ready: Option<HuntForecastBatch>,
+    hunt_page: usize,
     capture_drafts:[Option<CatchSettings>;4],
     capture_save_busy:[bool;4],
     capture_save_error:[Option<String>;4],
@@ -1667,6 +1710,7 @@ impl ControllerApp {
         let (native_closed_tx, native_closed_rx) = mpsc::channel();
         let (native_verified_tx, native_verified_rx) = mpsc::channel();
         let (hunt_reference_tx, hunt_reference_rx) = mpsc::channel();
+        let (hunt_forecast_tx, hunt_forecast_rx) = mpsc::channel();
         let (capture_save_tx,capture_save_rx)=mpsc::channel();
         let (inventory_catalog_tx,inventory_catalog_rx)=mpsc::channel();
 
@@ -1727,6 +1771,11 @@ impl ControllerApp {
             hunt_reference_busy: false,
             hunt_reference_tx,
             hunt_reference_rx,
+            hunt_forecast_tx,
+            hunt_forecast_rx,
+            hunt_forecast_pending: None,
+            hunt_forecast_ready: None,
+            hunt_page: 0,
             capture_drafts:std::array::from_fn(|_|None),
             capture_save_busy:[false;4],
             capture_save_error:std::array::from_fn(|_|None),
@@ -1913,6 +1962,15 @@ impl ControllerApp {
                 }
             }
         }
+        while let Ok((key, values)) = self.hunt_forecast_rx.try_recv() {
+            // A slow background job must never replace a newer account/model.
+            if self.hunt_forecast_pending.as_ref().is_some_and(|(pending, _)| *pending == key) {
+                self.hunt_forecast_ready = Some(HuntForecastBatch {
+                    key, completed: Instant::now(), values: Arc::new(values)
+                });
+                self.hunt_forecast_pending = None;
+            }
+        }
         while let Ok(loaded) = self.hunt_reference_rx.try_recv() {
             self.hunt_reference_busy = false;
             match loaded {
@@ -1922,6 +1980,8 @@ impl ControllerApp {
                         reference.species.len()
                     ));
                     self.hunt_reference = Some(Arc::new(reference));
+                    self.hunt_forecast_ready = None;
+                    self.hunt_forecast_pending = None;
                     self.hunt_reference_error = None;
                 }
                 Err(error) => {
@@ -3160,9 +3220,12 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, &format!("⌖  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
-                app.panel_tab = PanelTab::Hunts;
-            }
+            // Hunt Atlas is a Dashboard child, not a peer of Dashboard.
+            ui.indent("dashboard-hunt-atlas", |ui| {
+                if sidebar_button(ui, &format!("⌖  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
+                    app.panel_tab = PanelTab::Hunts;
+                }
+            });
 
             if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
                 app.show_accounts = true;
