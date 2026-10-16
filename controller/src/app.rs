@@ -4385,6 +4385,29 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                                     .size(10.0).color(DIM));
                                             }
                                         });
+                                        if let Some(meta) = meta {
+                                            if !meta.drops.is_empty() {
+                                                ui.push_id(spawn.id, |ui| {
+                                                    ui.collapsing(
+                                                        format!("{} possible drops", meta.drops.len()), |ui| {
+                                                        for drop in &meta.drops {
+                                                            let label = drop.item_id
+                                                                .and_then(|id|app.inventory_catalog.as_ref()
+                                                                    .and_then(|catalog|catalog.items.get(&id))
+                                                                    .map(|item|item.name.clone()))
+                                                                .or_else(||drop.item_id.map(|id|format!("Item #{id}")))
+                                                                .unwrap_or_else(||"Unidentified item".into());
+                                                            ui.label(RichText::new(format!(
+                                                                "{} · {:.3}% per kill · {:.0}–{:.0} units · {} reference gold / unit",
+                                                                label,drop.chance_pct,
+                                                                drop.min_quantity,drop.max_quantity,
+                                                                format_hunt_amount(drop.unit_value)
+                                                            )).size(10.0).color(MUTED));
+                                                        }
+                                                    });
+                                                });
+                                            }
+                                        }
                                     }
                                     if h.species.len()>100 {
                                         ui.label("Showing 100 species; filter the catalog for a narrower hunt.");
