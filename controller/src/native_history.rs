@@ -228,17 +228,17 @@ impl HistoryRecorder {
         let day=unix_day();
         let hunt=hunt.unwrap_or("unknown");
         let slug=if hunt.len()<=128 {hunt}else{"unknown"};
-        let index=self.snapshot.days.iter().position(|row|
+        let mut index=self.snapshot.days.iter().position(|row|
             row.day==day && row.hunt==slug);
         for event in events {
-            let index=match index {
-                Some(index)=>index,
-                None=>{
-                    self.snapshot.days.push(HistoryDay{day,hunt:slug.into(),..Default::default()});
-                    self.snapshot.days.len()-1
-                }
-            };
-            if self.snapshot.days[index].from_event(event) {self.dirty=true;}
+            // Only recognized gameplay events allocate history rows.
+            if !matches!(event.get("k").and_then(Value::as_str),
+                Some("morte"|"bola"|"fugiu")) { continue; }
+            let slot=*index.get_or_insert_with(||{
+                self.snapshot.days.push(HistoryDay{day,hunt:slug.into(),..Default::default()});
+                self.snapshot.days.len()-1
+            });
+            if self.snapshot.days[slot].from_event(event) {self.dirty=true;}
         }
         if self.dirty{
             self.snapshot.retain_recent(day);
