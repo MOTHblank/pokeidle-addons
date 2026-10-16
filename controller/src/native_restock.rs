@@ -540,7 +540,8 @@ mod tests {
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":123,"qtd":9,"gasto":90}]}"#, now);
         assert!(!r.pending.as_ref().unwrap().ack);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,"qtd":9,"gasto":90}]}"#, now);
-        assert!(r.pending.as_ref().unwrap().ack);
+        assert_eq!(r.status.confirmed, 1);
+        assert!(!r.status.pending);
         assert!(r.next(now + Duration::from_secs(2), true).is_none());
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":12},"gold":100}}"#, now);
         assert_eq!(r.status.confirmed, 1);
@@ -598,15 +599,17 @@ mod tests {
             json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
     }
     #[test]
-    fn unrelated_item_state_does_not_complete_matching_ball_purchase() {
+    fn unrelated_item_state_does_not_release_ball_purchase_receipt_wait() {
         let now=Instant::now();let mut r=configured();
         welcome(&mut r,now);
         r.next(now,true);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,
             "qtd":9,"gasto":90}]}"#,now);
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":50}}}"#,now);
-        assert!(r.status.pending);
-        assert_eq!(r.status.confirmed,0);
+        assert!(!r.status.pending);
+        assert_eq!(r.status.confirmed,1);
+        assert!(r.next(now+Duration::from_secs(3),true).is_none());
+        assert_eq!(r.status.phase,"Waiting for updated inventory");
     }
 
     #[test]
