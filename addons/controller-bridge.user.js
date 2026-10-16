@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Moth Controller Bridge
 // @namespace    moth.pokeidle
-// @version      1.3.13
+// @version      1.3.14
 // @description  Lightweight protocol bridge for the native Moth controller.
 // @match        https://pokeidle.io/app*
 // @updateURL    https://raw.githubusercontent.com/MOTHblank/pokeidle-addons/master/addons/controller-bridge.user.js
@@ -16,7 +16,7 @@
 
     // Report only this script's version to the native monitor (no account data).
     const reportMothAddonVersion = () => {
-        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.13');
+        document.documentElement?.setAttribute('data-moth-addon-version-controller-bridge', '1.3.14');
     };
     reportMothAddonVersion();
     if (document.readyState === 'loading') {
@@ -27,7 +27,7 @@
     const existingBridge = page.__mothControllerBridgeV1;
     if (
         existingBridge &&
-        Number(existingBridge.version) >= 13 &&
+        Number(existingBridge.version) >= 14 &&
         typeof existingBridge.snapshot === 'function' &&
         typeof existingBridge.gameSnapshot === 'function'
         && typeof existingBridge.streamStateSnapshot === 'function' &&
@@ -39,6 +39,9 @@
 
     let socket = null;
     let gameSocket = null;
+    // Browser-only, memory-only handshake metadata for the opt-in native session test.
+    // Never persist, log, or export this to the DOM or localStorage.
+    const helloBySocket = new WeakMap();
     let state = null;
     let statePokemon = new Map();
     let marketCatalogReady = false;
@@ -228,6 +231,18 @@
          */
         const NativeWebSocket = page.WebSocket;
         if (typeof NativeWebSocket !== 'function') return false;
+        const nativeSend = NativeWebSocket.prototype.send;
+        NativeWebSocket.prototype.send = function (data) {
+            try {
+                if (typeof data === 'string' && data.length < 32768) {
+                    const payload = JSON.parse(data);
+                    if (payload?.t === 'hello' && typeof this.url === 'string') {
+                        helloBySocket.set(this, data);
+                    }
+                }
+            } catch { /* Protocol observation must never affect gameplay. */ }
+            return Reflect.apply(nativeSend, this, arguments);
+        };
 
         let WrappedWebSocket;
         try {
@@ -509,7 +524,14 @@
     }
 
     page.__mothControllerBridgeV1 = {
-        version: 13,
+        version: 14,
+        sessionBootstrap() {
+            // Only expose the server-confirmed game socket, not unrelated sockets.
+            const ws = gameSocket;
+            const hello = ws && helloBySocket.get(ws);
+            return ws && ws.readyState === NativeWebSocket.OPEN && hello
+                ? { url: ws.url, hello } : null;
+        },
         marketCatalogSnapshot() {
             return {
                 ready: marketCatalogReady,
