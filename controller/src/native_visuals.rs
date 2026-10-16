@@ -25,11 +25,11 @@ impl Kind {
 }
 
 struct Request { kind: Kind, id: u64, urls: Vec<String> }
-struct Response { key: (Kind, u64), bytes: Option<Vec<u8>> }
+struct Response { key: (Kind, u64), frames: Option<Vec<Vec<u8>>> }
 
 pub struct VisualCache {
-    textures: BTreeMap<(Kind, u64), TextureHandle>,
-    attempted: BTreeSet<(Kind, u64)>,
+    textures: BTreeMap<(Kind, u64), Vec<TextureHandle>>,
+    attempted: BTreeMap<(Kind, u64), std::time::Instant>,
     request: Sender<Request>,
     results: Receiver<Response>,
 }
@@ -229,64 +229,97 @@ impl Default for VisualCache {
                             Err(_) => break,
                         };
                         let Ok(job) = job else { break };
-                        let bytes = match job.kind {
+                        let frames = match job.kind {
                             Kind::Pokemon | Kind::PokemonLooktype =>
                                 pokemon_art::load(&client, &root, job.kind, job.id),
-                            _ => load_worker_image(&client, &root, &job),
+                            _ => load_worker_image(&client, &root, &job)
+                                .map(|bytes| vec![bytes]),
                         };
                         if output.send(Response {
-                            key: (job.kind, job.id), bytes,
+                            key: (job.kind, job.id), frames,
                         }).is_err() { break; }
                     }
                 }).ok();
         }
-        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results }
+        Self { textures: BTreeMap::new(), attempted: BTreeMap::new(), request, results }
     }
 }
 
 impl VisualCache {
-    fn put(&mut self, ctx: &egui::Context, key: (Kind, u64), bytes: &[u8]) {
-        let Ok(img) = image::load_from_memory(bytes) else { return };
-        if img.width() == 0 || img.height() == 0 ||
-            img.width() > MAX_EDGE || img.height() > MAX_EDGE { return; }
-        let rgba = img.into_rgba8();
-        let pixels = ColorImage::from_rgba_unmultiplied(
-            [rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-        let handle = ctx.load_texture(
-            format!("native-visual-{}-{}", key.0.key(), key.1),
-            pixels, TextureOptions::NEAREST);
-        self.textures.insert(key, handle);
+    fn put(&mut self, ctx: &egui::Context, key: (Kind, u64), frames: &[Vec<u8>]) {
+        let mut textures = Vec::with_capacity(frames.len().min(12));
+        for (frame, bytes) in frames.iter().take(12).enumerate() {
+            let Ok(img) = image::load_from_memory(bytes) else { continue };
+            if img.width() == 0 || img.height() == 0 ||
+                img.width() > MAX_EDGE || img.height() > MAX_EDGE { continue; }
+            let rgba = img.into_rgba8();
+            let pixels = ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+            textures.push(ctx.load_texture(
+                format!("native-visual-{}-{}-{frame}", key.0.key(), key.1),
+                pixels, TextureOptions::NEAREST));
+        }
+        if !textures.is_empty() { self.textures.insert(key, textures); }
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(reply) = self.results.try_recv() {
-            if let Some(bytes) = reply.bytes {
-                self.put(ctx, reply.key, &bytes);
+            if let Some(frames) = reply.frames {
+                self.put(ctx, reply.key, &frames);
                 ctx.request_repaint();
             }
         }
     }
 
-    /// Ensure the icon is requested once, returning the texture when ready.
-    /// Buttons use the texture ID directly so the image and click share
-    /// exactly one egui widget instead of overlapping Frame/Label responses.
-    pub fn texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
-                      icon_hint: Option<&str>) -> Option<egui::TextureId> {
-        if id == 0 { return None; }
+    fn ensure(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
+              icon_hint: Option<&str>) {
+        if id == 0 { return; }
         let key = (kind, id);
-        if !self.attempted.contains(&key) {
-            self.attempted.insert(key);
-            if let Some(bytes) = generated::bytes(kind.key(), id) {
-                if valid_image(bytes) { self.put(ui.ctx(), key, bytes); }
-            }
-            if !self.textures.contains_key(&key) {
-                let urls = image_urls(kind, id, icon_hint);
-                if !urls.is_empty() || matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) {
-                    let _ = self.request.send(Request { kind, id, urls });
+        // Network failures must not create permanent missing sprites.
+        // Attempts are throttled, including failures while the game CDN is
+        // unavailable. The same bound applies to all icon families.
+        let now = std::time::Instant::now();
+        if self.textures.contains_key(&key) ||
+            self.attempted.get(&key).is_some_and(|at|
+                now.saturating_duration_since(*at) < std::time::Duration::from_secs(120)) {
+            return;
+        }
+        self.attempted.insert(key, now);
+        if let Some(bytes) = generated::bytes(kind.key(), id) {
+            if valid_image(bytes) { self.put(ui.ctx(), key, &[bytes.to_vec()]); }
+        }
+        if !self.textures.contains_key(&key) {
+            let urls = image_urls(kind, id, icon_hint);
+            if !urls.is_empty() || matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) {
+                if self.request.send(Request { kind, id, urls }).is_err() {
+                    self.attempted.remove(&key);
                 }
             }
         }
-        self.textures.get(&key).map(|texture| texture.id())
+    }
+
+    /// The simple texture API stays static for settings, balls and items.
+    pub fn texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
+                      icon_hint: Option<&str>) -> Option<egui::TextureId> {
+        self.ensure(ui, kind, id, icon_hint);
+        self.textures.get(&(kind, id))
+            .and_then(|frames| frames.first().map(TextureHandle::id))
+    }
+
+    /// Animation runs only when a Pokémon is actually painted by a focused
+    /// window. The four-frame-per-second repaint is independent of game
+    /// polling, and an atlas marker or offline fallback remains static.
+    pub fn pokemon_texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64)
+        -> Option<egui::TextureId>
+    {
+        if !matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) { return None; }
+        self.ensure(ui, kind, id, None);
+        let frames = self.textures.get(&(kind, id))?;
+        let frame = if frames.len() > 1 && ui.input(|input| input.focused) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            ui.input(|input| (input.time.max(0.0) * 4.0) as usize) % frames.len()
+        } else { 0 };
+        frames.get(frame).map(TextureHandle::id)
     }
 
     /// Returns true if an icon was drawn. Always fall back to text if false.
