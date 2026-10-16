@@ -14,7 +14,7 @@ Moth Controller manages up to **four PokéIdle accounts** with separate sign-ins
 
 ## Game icons
 
-Under **Options**, choose **Download game icons** to fetch known Poké Ball and item images into your local cache. Additional artwork, especially Pokémon species sprites, requires a maintained mapping of game image sources. The cache manifest is currently empty; see [asset documentation](controller/assets/visual/README.md).
+Moth Controller uses a lightweight on-demand visual cache: supported game icons are fetched when needed and reused locally. There is no manual download button. The game asset paths are maintained in the upstream snapshot; see [asset documentation](controller/assets/visual/README.md).
 
 ## Build
 
