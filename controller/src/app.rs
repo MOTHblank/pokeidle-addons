@@ -205,12 +205,7 @@ fn localize_status(message: String) -> String {
     let mut value = message;
     for (en, pt) in [
         ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
-        ("addon installers, but some failed:
-", "instaladores de addons, mas alguns falharam:
-"),
-        ("Use \"Install Violentmonkey\" first.", "Use \"Instalar Violentmonkey\" primeiro."),
         ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe."),
-        ("Violentmonkey is not installed and active in ", "O Violentmonkey não está instalado e ativo em "),
         ("invalid page probe: ", "sondagem de página inválida: "),
         ("invalid controller bridge snapshot: ", "snapshot inválido da ponte do controlador: "),
         ("invalid BiDi JSON: ", "JSON BiDi inválido: "),
@@ -224,7 +219,6 @@ fn localize_status(message: String) -> String {
         ("Twitch opened in ", "Twitch aberto em "),
         ("KICK opened in ", "KICK aberto em "),
         ("Opened KICK login in uncontrolled normal Firefox · close it after authentication", "Login do KICK aberto no Firefox normal sem controle · feche-o após autenticar"),
-        ("Violentmonkey installer opened in ", "Instalador do Violentmonkey aberto em "),
         ("could not read Firefox extensions registry: ", "não foi possível ler o registro de extensões do Firefox: "),
         ("invalid Firefox extensions registry: ", "registro de extensões do Firefox inválido: "),
         ("could not create profile directory: ", "não foi possível criar a pasta do perfil: "),
@@ -282,9 +276,6 @@ fn localize_status(message: String) -> String {
         ("started · ", "iniciado · "),
         (": installer opened", ": instalador aberto"),
         ("installer opened", "instalador aberto"),
-        ("could not list addons from GitHub: ", "não foi possível listar addons no GitHub: "),
-        ("GitHub addon list unavailable", "lista de addons do GitHub indisponível"),
-        ("could not start addon installer", "não foi possível iniciar o instalador de addons"),
     ] {
         value = value.replace(en, pt);
     }
@@ -580,25 +571,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Game updates are temporarily unavailable. Firefox may still be running." => "As atualizações do jogo estão temporariamente indisponíveis. O Firefox pode continuar aberto.",
         "The displayed metrics are from the last successful reading." => "Os dados exibidos são da última leitura bem-sucedida.",
         "Installer already running" => "O instalador já está em execução",
-        "Checking addons on GitHub…" => "Consultando addons no GitHub…",
-        "Opening addon installers…" => "Abrindo instaladores de addons…",
         "Installer details" => "Detalhes da instalação",
-        "Addon versions" => "Versões dos addons",
-        "Manage Addons" => "Gerenciar addons",
-        "Manage addons" => "Gerenciar addons",
         "Check now" => "Verificar agora",
         "Checking for updates…" => "Verificando atualizações…",
-        "Checking GitHub addon versions…" => "Verificando versões dos addons no GitHub…",
         "Update check requested" => "Verificação de atualizações solicitada",
-        "Could not request addon update check" => "Não foi possível solicitar a verificação de addons",
         "Repair selected" => "Reparar selecionados",
         "Install all (first setup)" => "Instalar todos (primeira configuração)",
         "Choose the scripts to reinstall." => "Selecione os scripts que deseja reinstalar.",
-        "No addons selected" => "Nenhum addon selecionado",
         "Switch to visible Firefox before opening installers." => "Mude para o Firefox visível antes de abrir os instaladores.",
-        "Select only the affected scripts. Installers open in this Firefox profile; confirm installation in Violentmonkey." => "Selecione somente os scripts afetados. Os instaladores abrem neste perfil do Firefox; confirme a instalação no Violentmonkey.",
         "This only opens installers, it does not confirm installation." => "Esta ação apenas abre instaladores, não confirma a instalação.",
-        "Opens installer links through Firefox; confirm installation in Violentmonkey." => "Abre os links de instalação pelo Firefox; confirme a instalação no Violentmonkey.",
         "Running" => "Em execução",
         "Not detected in game" => "Não detectado no jogo",
         "Not installed or inactive" => "Não instalado ou inativo",
@@ -607,23 +588,16 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Not checked yet" => "Ainda não verificado",
         "Up to date" => "Atualizado",
         "Setup needed" => "Configuração necessária",
-        "addons need attention" => "addons precisam de atenção",
-        "addon needs attention" => "addon precisa de atenção",
         "Initial setup" => "Configuração inicial",
         "Complete these steps once for this profile." => "Conclua estas etapas uma vez para este perfil.",
         "Firefox profile created" => "Perfil do Firefox criado",
-        "Violentmonkey installed" => "Violentmonkey instalado",
         "Game signed in" => "Jogo conectado",
         "Scripts detected" => "Scripts detectados",
         "Finish setup" => "Concluir configuração",
-        "You can finish with only the addons you want. Unverified steps are not automatically considered complete." => "Você pode concluir apenas com os addons que deseja. Etapas não verificadas não são consideradas concluídas automaticamente.",
         "Show setup guide" => "Mostrar guia de configuração",
         "Hide setup guide" => "Ocultar guia de configuração",
         "Setup completed" => "Configuração concluída",
         "Could not save setup progress" => "Não foi possível salvar o progresso da configuração",
-        "Install Violentmonkey before completing setup." => "Instale o Violentmonkey antes de concluir a configuração.",
-        "Script status is only available while playing in Firefox." => "O status dos addons exige que o jogo esteja em execução e monitorado.",
-        "Open Account Manager to resolve addon problems" => "Abra o Gerenciador de contas para resolver problemas dos addons",
         "Reload the game only when you choose; an automatic reload could interrupt gameplay." => "Recarregue o jogo somente quando desejar; uma recarga automática poderia interromper a partida.",
         "Updates" => "Atualizações",
         "outdated" => "desatualizados",
@@ -633,8 +607,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Checking GitHub versions…" => "Consultando versões no GitHub…",
         "GitHub version check unavailable" => "Verificação de versões no GitHub indisponível",
         "Launch an account to inspect running script versions." => "Inicie uma conta para verificar as versões dos scripts em execução.",
-        "Violentmonkey handles automatic updates. Reload the game after it installs a new version." => "O Violentmonkey realiza atualizações automáticas. Recarregue o jogo após instalar uma nova versão.",
-        "Older addons do not report their version; allow Violentmonkey to update them." => "Addons antigos não informam a versão; permita que o Violentmonkey os atualize.",
         "Recent events" => "Eventos recentes",
         "No events yet" => "Nenhum evento ainda",
         "running" => "em execução",
@@ -759,7 +731,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "XP BONUS SOURCES" => "FONTES DE BÔNUS DE XP",
         "No active XP bonus detected" => "Nenhum bônus de XP ativo detectado",
         "DATA" => "DADOS",
-        "ADDONS" => "ADDONS",
         "Missing:" => "Ausentes:",
         "Runtime" => "Execução",
         "Controller-side diagnostics" => "Diagnóstico do controlador",
@@ -802,9 +773,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Close" => "Fechar",
         "Open Game" => "Abrir jogo",
         "Google sign-in" => "Login do Google",
-        "Addons" => "Addons",
-        "Install Violentmonkey" => "Instalar Violentmonkey",
-        "Violentmonkey" => "Violentmonkey",
         "Installed" => "Instalado",
         "Not installed" => "Não instalado",
         "Not configured" => "Não configurado",
@@ -865,7 +833,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "TYPE ?" => "TIPO ?",
         "model" => "modelo",
         "ignored" => "ignorada",
-        "Userscript engine" => "Motor de userscripts",
         "Connected" => "Conectado",
         "Disconnected" => "Desconectado",
         "Items" => "Itens",
@@ -895,8 +862,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
         "Twitch uses this Firefox profile for its session. All actions target this account." => "A Twitch usa este perfil do Firefox para sua sessão. Todas as ações usam esta conta.",
-        "addon installers" => "instaladores de addons",
-        "addon installers opened" => "instaladores de addons abertos",
         "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe." => "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe.",
         "Live state for enabled isolated Firefox profiles" => "Estado atual dos perfis isolados do Firefox habilitados",
         "Recent bot activity" => "Atividade recente do bot",
@@ -974,6 +939,19 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "These numbers show Auto Catch only. Manual catches are included in the dashboard totals." => "Estes números mostram apenas a captura automática. As capturas manuais entram nos totais do painel.",
         "Auto Catch settings saved" => "Configurações de captura automática salvas",
         "Loading game automation settings" => "Carregando configurações de automação do jogo",
+        "Game icons" => "Ícones do jogo",
+        "Download available game item and Poké Ball icons to this computer. Pokémon artwork will be added when its image sources are linked." => "Baixe os ícones disponíveis de itens e Pokébolas. As imagens dos Pokémon serão adicionadas quando as fontes forem configuradas.",
+        "Download game icons" => "Baixar ícones do jogo",
+        "icons loaded this session" => "ícones carregados nesta sessão",
+        "Sign-in checklist" => "Verificação de login",
+        "Twitch login" => "Login da Twitch",
+        "Sign-in required" => "Login necessário",
+        "Waiting for Twitch sign-in" => "Aguardando login na Twitch",
+        "Not verified" => "Não verificado",
+        "Start the account, then sign in to PokéIdle in the Firefox window." => "Inicie a conta e entre no PokéIdle pela janela do Firefox.",
+        "PokéIdle is ready. Sign in to Twitch in the same Firefox profile; both connections are required to finish setup." => "PokéIdle está pronto. Entre na Twitch no mesmo perfil do Firefox; os dois logins são necessários.",
+        "Both logins are connected. Future starts can reuse your saved login." => "Os dois logins estão conectados. As próximas sessões poderão usar o login salvo.",
+        "Twitch sign-in" => "Entrar na Twitch",
         _ => en,
     }
 }
@@ -3180,6 +3158,22 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             )).size(10.0).color(DIM));
         });
 
+    ui.add_space(12.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Game icons")).size(13.0).strong().color(TEXT));
+            ui.label(RichText::new(tr(
+                "Download available game item and Poké Ball icons to this computer. Pokémon artwork will be added when its image sources are linked."
+            )).size(10.0).color(MUTED));
+            if ui.button(tr("Download game icons")).clicked() {
+                let queued = app.visuals.download_known_icons();
+                app.set_status(format!("{queued} icon downloads queued. Icons are saved locally as they arrive."), false);
+            }
+            ui.label(RichText::new(format!("{} {}",
+                app.visuals.loaded_count(), tr("icons loaded this session")))
+                .size(10.0).color(DIM));
+        });
+
     if next != app.ui_options {
         // The change is applied only after a successful disk write. If the
         // options directory is unavailable, keep the previous live setting.
@@ -3740,7 +3734,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
         false
     } else { app.idle_warning_for(index, &health) };
     // Only authentication/setup issues belong on the dashboard.
-    // Optional Firefox scripts must never create account warnings.
+    // Only actual account sign-in problems appear here.
     let needs_setup = !app.account_setup[index].setup_complete
         && app.games[index].native.is_none();
     let fresh = running && health.telemetry_is_fresh();
@@ -4682,7 +4676,7 @@ fn capture_ball_name(k:&str)->&'static str {
         "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
 }
 // Auto Catch+ restock picker: compact selectable items instead of raw IDs.
-// IDs are the server protocol IDs, shared with the userscript. Public metadata
+// IDs are the game protocol IDs. Public metadata
 // only enriches captions; absent metadata never switches a saved selection.
 fn capture_restock_chip(
     ui:&mut egui::Ui, visuals:&mut VisualCache, kind:SpriteKind,
@@ -5300,10 +5294,6 @@ fn draw_game_details(
             let atlas = &health.hunt_atlas;
             let matches_hunt = atlas.get("huntSlug").and_then(|v| v.as_str())
                 .is_some_and(|slug| !slug.is_empty() && slug == health.hunt_slug);
-            if !matches_hunt && health.addon_versions.contains_key("hunt-atlas.user.js") {
-                ui.label(RichText::new(tr("HuntAtlas metrics unavailable — update HuntAtlas and Controller Bridge, then refresh the game."))
-                    .size(10.0).color(MUTED));
-            }
             if matches_hunt {
                 let rate = |key: &str| -> String {
                     atlas.get(key).and_then(|v| v.as_f64())
@@ -5447,7 +5437,7 @@ fn draw_game_details(
                     automation_badge(
                         ui,
                         tr("Auto Catch"),
-                        if !health.telemetry_is_fresh() { tr("Not checked") } else if health.addon_missing.iter().any(|name| name == "Auto Catch+") { tr("Not detected in game") } else if !health.bridge_snapshot_ok { tr("Game data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
+                        if !health.telemetry_is_fresh() { tr("Not checked") } else if !health.bridge_snapshot_ok { tr("Game data unavailable") } else if health.autocatch_on { tr("Active") } else { tr("Off") },
                         health.telemetry_is_fresh() && health.bridge_snapshot_ok && health.autocatch_on,
                     );
                     automation_badge(
@@ -5892,35 +5882,6 @@ fn draw_game_details(
 
             if app.games[index].native.is_none() {
                 ui.add_space(12.0);
-
-                ui.horizontal(|ui| {
-                    // Unverified addon counts must not look like a live warning or success.
-                    let addon_color = if !health.telemetry_is_fresh() {
-                        DIM
-                    } else if health.addon_ok == health.addon_total {
-                        GOOD
-                    } else {
-                        WARN
-                    };
-
-                    ui.label(
-                        RichText::new(if health.telemetry_is_fresh() { format!("{} {}/{}", tr("ADDONS"), health.addon_ok, health.addon_total) } else { format!("{} —/—", tr("ADDONS")) })
-                            .size(10.0)
-                            .strong()
-                            .color(addon_color),
-                    );
-
-                    if health.telemetry_is_fresh() && !health.addon_missing.is_empty() {
-                        ui.add_space(8.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{} {}", tr("Missing:"), health.addon_missing.join(" · ")))
-                                    .size(10.0)
-                                    .color(WARN),
-                            )
-                            .truncate(),
-                        );
-                    }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if health.telemetry_is_fresh() && health.twitch_tabs > 0 {
@@ -6407,7 +6368,7 @@ fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::
 
 
 fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
-    // Loss of BiDi telemetry does not imply that the game or its userscripts stopped.
+    // Loss of browser monitoring does not imply that the game stopped.
     // Keep the state accessible without a constantly growing, alarm-colored warning.
     let no_readings = running
         && health.last_heartbeat_at.is_some()
