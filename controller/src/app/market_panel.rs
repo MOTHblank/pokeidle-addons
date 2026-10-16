@@ -36,6 +36,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         ui.label(RichText::new(
             "Native authenticated game socket · no Violentmonkey · independent of Auto Catch. Buying stays off until enabled and saved."
         ).size(10.0).color(DIM));
+        ui.label(RichText::new("Fast buying: 5 simultaneous attempts · up to 3 per item listing · 120 ms dispatch · 400 ms item retries · maximum affordable lot")
+            .size(10.0).color(MUTED));
         if let Some(status)=&live_status {
             if let Some(p)=&status.pending {ui.label(RichText::new(format!("Awaiting receipt: {p}")).size(10.0).color(WARN));}
             if !status.last.is_empty() {ui.label(RichText::new(&status.last).size(10.0).color(MUTED));}

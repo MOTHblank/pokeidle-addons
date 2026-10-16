@@ -4,7 +4,7 @@
 use crate::config::{self, GameProfile};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn clock_ms() -> u64 {
@@ -177,7 +177,14 @@ struct Order {
     sent_ms: u64,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct Journal { orders: Vec<Order> }
+#[serde(default)]
+struct ArchivedExposure {
+    session: u64, day: u64, currency: String, rule_id: String,
+    spend: u64, count: u64, quantity: u64,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Journal { orders: Vec<Order>, archived: Vec<ArchivedExposure> }
 #[derive(Clone)]
 struct Offer {
     id: u64, kind: String, item_id: u64, currency: String, price: u64, qty: u64,
@@ -189,6 +196,14 @@ impl Offer {
         let id = number(v, "id")?;
         let price = number(v, "preco")?;
         let qty = number(v, "qtd").unwrap_or(if kind == "pokemon" { 1 } else { 0 });
+        // PokeIdle Manager checks explicit listing scope and state before
+        // dispatch. Do not require optional aliases that Watch also accepts,
+        // but reject a reply explicitly contradicting its market.item scope.
+        if v.get("tipo").and_then(Value::as_str).is_some_and(|s|s!=kind) ||
+           v.get("moeda").and_then(Value::as_str).is_some_and(|s|s!=currency) ||
+           v.get("itemId").and_then(Value::as_u64).is_some_and(|id|id!=item_id) ||
+           v.get("estado").and_then(Value::as_str).is_some_and(|s|
+               !s.is_empty() && !s.eq_ignore_ascii_case("aberto")) { return None; }
         let seller = v.get("vendedor").and_then(Value::as_str)?.trim();
         if id == 0 || price == 0 || qty == 0 || seller.is_empty() { return None; }
         let ficha = v.get("ficha");
@@ -224,8 +239,12 @@ pub struct MarketBuyer {
     profile: GameProfile, session: u64, journal: Journal,
     pub status: MarketStatus, nick: String, balances: [Option<u64>;2],
     server_offset_ms: i64, offers: Vec<Offer>, summary: BTreeMap<u64,[u64;2]>,
-    pending: Option<usize>, pending_scan: Option<(Scan,Instant)>,
-    last_scan: HashMap<String,Instant>, last_buy: Option<Instant>,
+    // Up to five in-flight orders per account and three per item listing, as
+    // with Moth Watch. Independent receipts can be resolved without serial
+    // acknowledgement stalls. All attempts are journaled before dispatch.
+    pending: VecDeque<usize>, pending_scan: Option<(Scan,Instant)>,
+    last_scan: HashMap<String,Instant>, urgent_details: HashSet<String>,
+    scan_sequence: u64, last_buy: Option<Instant>,
     blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>, failed_closed: bool,
 }
 impl MarketBuyer {
@@ -240,13 +259,28 @@ impl MarketBuyer {
         // Remove history that cannot contribute to today's caps on startup.
         // We never truncate a live pending order's vector index mid-session.
         journal.orders.retain(|o| o.day.saturating_add(1)>=today());
+        journal.archived.retain(|o| o.day.saturating_add(1)>=today());
+        // A crash can interrupt dispatch after journaling but before a receipt.
+        // Such entries remain exposure, never an assumed confirmation.
+        for o in &mut journal.orders {
+            if o.status=="submitted" {o.status="unknown".into();}
+        }
         Self { profile, session: clock_ms(), journal, status: MarketStatus {error:error.clone(),..Default::default()},
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
-            summary:BTreeMap::new(),pending:None,pending_scan:None,last_scan:HashMap::new(),
+            summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
+            urgent_details:HashSet::new(),scan_sequence:0,
             last_buy:None,blocked:HashMap::new(),backoff_until:None,failed_closed:error.is_some() }
     }
     pub fn on_disconnect(&mut self) {
-        self.pending = None; self.pending_scan=None; self.offers.clear();
+        let old=std::mem::take(&mut self.pending);
+        for idx in old {
+            if let Some(o)=self.journal.orders.get_mut(idx) {
+                if o.status=="submitted" {o.status="unknown".into();}
+            }
+        }
+        self.persist();
+        self.pending.clear(); self.pending_scan=None; self.offers.clear();
+        self.urgent_details.clear();
         self.summary.clear(); self.nick.clear(); self.balances=[None,None];
         self.status.pending=None;
     }
@@ -258,17 +292,101 @@ impl MarketBuyer {
             Err(e) => { self.failed_closed=true; self.status.error=Some(e); false }
         }
     }
-    fn settle(&mut self, success: bool) {
-        if let Some(idx) = self.pending.take() {
-            if let Some(o)=self.journal.orders.get_mut(idx) {
-                o.status=if success {"confirmed"} else {"refused"}.into();
-                self.status.last=format!("{} #{} · {} × {} {}",
-                    if success {"Confirmed"} else {"Refused"},o.listing_id,o.quantity,o.spend,o.currency);
-                if success {self.status.confirmed+=1;}
-                self.persist();
+    fn compact(&mut self) {
+        // Mirror Watch's rolling journal: retain pending/current attempts,
+        // archive older outcomes instead of stopping automated purchases.
+        if self.journal.orders.len()<2400 {return}
+        let threshold=self.journal.orders.len().saturating_sub(1400);
+        let in_flight=self.pending.iter().copied().collect::<HashSet<_>>();
+        let mut new_pending=VecDeque::new();
+        let mut retained=Vec::new();
+        for (idx,o) in std::mem::take(&mut self.journal.orders).into_iter().enumerate() {
+            let keep=idx>=threshold || in_flight.contains(&idx) ||
+                ((o.status=="unknown" || o.status=="submitted") &&
+                    clock_ms().saturating_sub(o.sent_ms)<60_000);
+            if keep {
+                if in_flight.contains(&idx){new_pending.push_back(retained.len());}
+                retained.push(o);
+            } else if o.status!="refused" {
+                let key=(o.session,o.day,o.currency.as_str(),o.rule_id.as_str());
+                if let Some(a)=self.journal.archived.iter_mut().find(|a|
+                    (a.session,a.day,a.currency.as_str(),a.rule_id.as_str())==key) {
+                    a.spend=a.spend.saturating_add(o.spend);
+                    a.count=a.count.saturating_add(1);
+                    a.quantity=a.quantity.saturating_add(o.quantity);
+                } else {
+                    self.journal.archived.push(ArchivedExposure {
+                        session:o.session,day:o.day,currency:o.currency,
+                        rule_id:o.rule_id,spend:o.spend,count:1,quantity:o.quantity,
+                    });
+                }
             }
         }
-        self.status.pending=None;
+        self.journal.orders=retained;
+        self.pending=new_pending;
+        self.update_pending();
+    }
+    fn update_pending(&mut self) {
+        self.status.pending=if self.pending.is_empty() {None} else {
+            Some(format!("{} market order(s) awaiting receipt",self.pending.len()))
+        };
+    }
+    fn settle_index(&mut self, idx:usize, success:bool, now:Instant) {
+        self.pending.retain(|v| *v!=idx);
+        let Some(o)=self.journal.orders.get_mut(idx) else {self.update_pending();return};
+        let id=o.listing_id;
+        let is_item=o.kind=="item";
+        o.status=if success {"confirmed"} else {"refused"}.into();
+        self.status.last=format!("{} #{} · {} × {} {}",
+            if success {"Confirmed"} else {"Refused"},id,o.quantity,o.spend,o.currency);
+        if success {self.status.confirmed=self.status.confirmed.saturating_add(1);}
+        // Item listings can be partially filled. Retry maximum available
+        // quantity immediately after a short cooldown, unlike the 30-second
+        // native block. Unique Pokémon must never be purchased twice.
+        let gap=if success {
+            if is_item {Duration::from_millis(400)} else {Duration::from_secs(1800)}
+        } else {Duration::from_secs(5)};
+        self.blocked.insert(id,now+gap);
+        if success && is_item {
+            // Moth Watch refreshes the exact offer after a confirmed buy.
+            // The server may have partially filled the lot, so replace the
+            // cached quote before authorizing its next maximum-qty order.
+            for o in self.offers.iter().filter(|offer|offer.id==id) {
+                let key=format!("item:{}:{}",o.item_id,o.currency);
+                self.last_scan.remove(&key);
+                self.urgent_details.insert(key);
+            }
+            self.offers.retain(|offer|offer.id!=id);
+        }
+        self.persist();
+        self.update_pending();
+    }
+    fn expire_pending(&mut self,now:Instant){
+        let old=std::mem::take(&mut self.pending);
+        let mut changed=false;
+        for idx in old {
+            let Some(o)=self.journal.orders.get(idx) else {continue};
+            if clock_ms().saturating_sub(o.sent_ms)<5_000 {
+                self.pending.push_back(idx);continue;
+            }
+            let id=o.listing_id;
+            let item=o.kind=="item";
+            if let Some(record)=self.journal.orders.get_mut(idx) {
+                record.status="unknown".into();
+            }
+            self.status.unknown=self.status.unknown.saturating_add(1);
+            self.status.error=Some(format!(
+                "Outcome unverified for listing #{id}; quoted spend remains reserved"
+            ));
+            // Moth Watch retries item rules on fresh verified quotes even
+            // after timeouts; unique Pokémon remain withheld until reconciled.
+            self.blocked.insert(id,now+if item {
+                Duration::from_millis(400)
+            } else {Duration::from_secs(1800)});
+            changed=true;
+        }
+        if changed {self.persist();}
+        self.update_pending();
     }
     pub fn ingest(&mut self, text: &str, now: Instant) {
         let Ok(frame)=serde_json::from_str::<Value>(text) else{return};
@@ -289,22 +407,62 @@ impl MarketBuyer {
             if let Some(events)=frame.get("ev").and_then(Value::as_array) {
                 for event in events {
                     if event.get("k").and_then(Value::as_str)!=Some("marketComprado"){continue}
-                    let ids=["listingId","anuncioId","vendaId"].iter()
+                    let mut ids=["listingId","anuncioId","vendaId"].iter()
                         .filter_map(|k|number(event,k)).collect::<Vec<_>>();
-                    let ids_present=!ids.is_empty() || event.get("anuncio").is_some() || event.get("listing").is_some();
-                    let id=self.pending.and_then(|n|self.journal.orders.get(n)).map(|o|o.listing_id);
-                    if ids.contains(&id.unwrap_or(0)) ||
-                        (!ids_present && id.is_some() && !self.journal.orders.iter().any(|o|
-                            o.status=="unknown" && clock_ms().saturating_sub(o.sent_ms)<30_000)) {
-                        self.settle(true);
+                    for nested in ["anuncio","listing"] {
+                        if let Some(id)=event.get(nested).and_then(|v|number(v,"id")){ids.push(id);}
                     }
+                    if !ids.is_empty() {
+                        if let Some(idx)=self.pending.iter().copied().find(|i|
+                            self.journal.orders.get(*i).is_some_and(|o|ids.contains(&o.listing_id))) {
+                            self.settle_index(idx,true,now);
+                        }
+                        continue;
+                    }
+                    // An explicitly supplied but unparseable listing identity
+                    // is not permission to credit an unrelated order.
+                    if ["listingId","anuncioId","vendaId","anuncio","listing"].iter()
+                        .any(|k|event.get(*k).is_some()){continue}
+                    // Moth Watch accepts idless marketComprado only when a
+                    // single listing can own it. PokeIdle Manager also uses
+                    // confirmed currency/total to disambiguate some receipts.
+                    let receipt_currency=event.get("moeda").and_then(Value::as_str);
+                    let receipt_total=number(event,"total");
+                    let recent_unknown=self.journal.orders.iter().any(|o|
+                        o.status=="unknown" &&
+                        clock_ms().saturating_sub(o.sent_ms)<30_000 &&
+                        receipt_currency.is_none_or(|c|c==o.currency) &&
+                        receipt_total.is_none_or(|v|v==o.spend));
+                    if recent_unknown {continue}
+                    let ids=self.pending.iter().filter_map(|i|
+                        self.journal.orders.get(*i).map(|o|o.listing_id))
+                        .collect::<HashSet<_>>();
+                    let idx=if ids.len()==1 {
+                        self.pending.front().copied().filter(|i|
+                            self.journal.orders.get(*i).is_some_and(|o|
+                                receipt_currency.is_none_or(|currency|currency==o.currency) &&
+                                receipt_total.is_none_or(|total|total>0 && total<=o.spend)))
+                    } else if let (Some(currency),Some(total))=(receipt_currency,receipt_total) {
+                        let matching=self.pending.iter().copied().filter(|i|
+                            self.journal.orders.get(*i).is_some_and(|o|
+                                o.currency==currency && o.spend==total)).collect::<Vec<_>>();
+                        if matching.len()==1 {matching.first().copied()} else {None}
+                    } else {None};
+                    if let Some(i)=idx {self.settle_index(i,true,now);}
                 }
             }
         }
         if t=="erro" {
-            let id=["listingId","anuncioId","vendaId"].iter().find_map(|k|number(&frame,k));
-            if id.is_some() && id==self.pending.and_then(|i|self.journal.orders.get(i))
-                    .map(|o|o.listing_id) { self.settle(false); }
+            let id=["listingId","anuncioId","vendaId"].iter()
+                .find_map(|k|number(&frame,k))
+                .or_else(||frame.get("anuncio").and_then(|v|number(v,"id")))
+                .or_else(||frame.get("listing").and_then(|v|number(v,"id")));
+            if let Some(id)=id {
+                if let Some(idx)=self.pending.iter().copied().find(|i|
+                    self.journal.orders.get(*i).is_some_and(|o|o.listing_id==id)) {
+                    self.settle_index(idx,false,now);
+                }
+            }
             let message=["msg","message","chave"].iter().filter_map(|k|frame.get(k).and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
             if message.to_lowercase().contains("rate limit") || message.to_lowercase().contains("muitas mensagens") {
                 self.status.error=Some("Market request rate-limited; backing off".into());
@@ -312,14 +470,16 @@ impl MarketBuyer {
             }
         }
         if t!="market" {return}
-        let Some((scan,_))=self.pending_scan.take() else{return};
+        let Some((scan,requested_at))=self.pending_scan.take() else{return};
         let matched=match (&scan,frame.get("aba").and_then(Value::as_str)) {
             (Scan::Summary,Some("itens"))=>{
                 if let Some(rows)=frame.get("resumo").and_then(Value::as_object) {
                     self.summary.clear();
                     for (id,row) in rows {
                         if let Ok(id)=id.parse::<u64>() {
-                            if id>0 && row.get("anuncios").and_then(Value::as_u64).unwrap_or(0)>0 {
+                            let advertised=row.get("anuncios").is_some_and(|v|
+                                v.as_u64().is_some_and(|n|n>0) || v.as_bool()==Some(true));
+                            if id>0 && advertised {
                                 self.summary.insert(id,[number(row,"minGold").unwrap_or(0),number(row,"minOrb").unwrap_or(0)]);
                             }
                         }
@@ -351,12 +511,13 @@ impl MarketBuyer {
             },
             _=>false
         };
-        if !matched {
-            // Spontaneous market frames are not evidence that our request finished,
-            // and must never renew its original timeout.
-            self.pending_scan=Some((scan,self.last_scan.values().copied().max().unwrap_or(now)));
+        if !matched {self.pending_scan=Some((scan,requested_at));}
+        else {
+            if let Scan::Item(id,currency)=&scan {
+                self.urgent_details.remove(&format!("item:{id}:{currency}"));
+            }
+            self.status.last_scan=Some(now);
         }
-        else {self.status.last_scan=Some(now);}
     }
     fn used(&self, currency: Option<&str>, rule_id: Option<&str>, period: &str) -> (u64,u64,u64) {
         let mut out=(0u64,0u64,0u64);
@@ -368,12 +529,27 @@ impl MarketBuyer {
             out.1=out.1.saturating_add(1);
             out.2=out.2.saturating_add(o.quantity);
         }
+        for a in &self.journal.archived {
+            if currency.is_some_and(|c|a.currency!=c) ||
+                rule_id.is_some_and(|r|a.rule_id!=r) ||
+                (period=="day"&&a.day!=today()) ||
+                (period=="session"&&a.session!=self.session) {continue}
+            out.0=out.0.saturating_add(a.spend);
+            out.1=out.1.saturating_add(a.count);
+            out.2=out.2.saturating_add(a.quantity);
+        }
         out
     }
     fn budget(&self, cfg:&MarketRules, rule:&BuyRule, offer:&Offer) -> u64 {
         let currency=offer.currency.as_str();
         let i=if currency=="orb"{1}else{0};
-        let available=self.balances[i].unwrap_or(0).saturating_sub(if i==0{cfg.gold_reserve}else{cfg.gem_reserve});
+        let in_flight=self.pending.iter().filter_map(|n|self.journal.orders.get(*n))
+            .filter(|o|o.currency==currency).fold(0u64,|n,o|n.saturating_add(o.spend));
+        // Reserve pending spend against the last balance snapshot to prevent
+        // a five-order burst from committing more than the account can pay.
+        let available=self.balances[i].unwrap_or(0)
+            .saturating_sub(if i==0{cfg.gold_reserve}else{cfg.gem_reserve})
+            .saturating_sub(in_flight);
         let mut max=available;
         let spend_session=self.used(Some(currency),None,"session").0;
         let spend_day=self.used(Some(currency),None,"day").0;
@@ -393,55 +569,55 @@ impl MarketBuyer {
         let mut qty=max/offer.price;
         if cfg.max_quantity_session>0 {qty=qty.min(cfg.max_quantity_session.saturating_sub(total_session.2));}
         if rule.max_quantity_session>0 {qty=qty.min(rule.max_quantity_session.saturating_sub(rule_session.2));}
-        qty.min(offer.qty).min(if offer.kind=="pokemon"{1}else{5000})
+        // Community Market listings have no verified 5,000-unit maximum.
+        // Unlike NPC shop.buy, request the full affordable listing quantity.
+        if offer.kind=="pokemon" {qty.min(1)} else {qty.min(offer.qty)}
     }
     pub fn next(&mut self,cfg:&MarketRules,now:Instant) -> Option<Value> {
         self.status.enabled=cfg.enabled&&!cfg.paused;
         self.offers.retain(|offer|offer.at.elapsed()<Duration::from_secs(60));
         self.blocked.retain(|_,at|at.elapsed()<Duration::from_secs(3600));
+        // Pausing buying never freezes the receipt/timeout state machine.
+        self.expire_pending(now);
         if self.failed_closed || !self.status.enabled || self.nick.is_empty() ||
             self.backoff_until.is_some_and(|until|now<until) ||
             self.balances.iter().any(Option::is_none) || !cfg.rules.iter().any(|r|r.enabled) {return None}
-        if let Some(i)=self.pending {
-            if self.journal.orders.get(i).is_some_and(|o|clock_ms().saturating_sub(o.sent_ms)>7_000) {
-                if let Some(o)=self.journal.orders.get_mut(i) {
-                    o.status="unknown".into();
-                    self.status.unknown+=1;
-                    self.status.error=Some(format!("Unverified market order #{}; reserved its quoted spend",o.listing_id));
-                }
-                self.pending=None;self.status.pending=None;
-                self.persist();
-            } else {return None;}
-        }
-        if self.last_buy.is_some_and(|at|at.elapsed()<Duration::from_millis(400)){return None}
         let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
+        // Watch can dispatch five buys without awaiting unrelated receipts;
+        // normal rule sends have a 120 ms spacing, not a seven-second stall.
+        if self.pending.len()<5 &&
+            self.last_buy.is_none_or(|at|now.saturating_duration_since(at)>=Duration::from_millis(120)) {
         for rule in cfg.rules.iter().filter(|r|r.enabled&&r.buy_max>0) {
             let selected=self.offers.iter()
                 .filter(|o|o.currency==rule.currency&&o.matches(rule,&self.nick,server_ms))
-                .filter(|o|!self.blocked.get(&o.id).is_some_and(|at|at.elapsed()<Duration::from_secs(30)))
-                .filter(|o|!self.journal.orders.iter().any(|x|x.listing_id==o.id &&
-                    (x.status=="unknown" || (o.kind=="pokemon" && x.status=="confirmed"))))
+                .filter(|o|!self.blocked.get(&o.id).is_some_and(|until|now<*until))
+                .filter(|o|self.pending.iter().filter(|i|self.journal.orders.get(**i)
+                    .is_some_and(|x|x.listing_id==o.id)).count()<if o.kind=="item"{3}else{1})
+                .filter(|o|o.kind=="item" || !self.journal.orders.iter().any(|x|
+                    x.listing_id==o.id && x.status!="refused"))
                 .min_by_key(|o|(o.price,o.id)).cloned();
             let Some(offer)=selected else {continue};
             let qty=self.budget(cfg,rule,&offer);
             if qty==0 {continue}
             let Some(spend)=offer.price.checked_mul(qty) else {continue};
+            self.compact();
             if self.journal.orders.len()>=20_000 {
                 self.failed_closed=true;self.status.error=Some("Market journal is full".into());return None
             }
             let order=Order{listing_id:offer.id,rule_id:rule.id.clone(),currency:offer.currency.clone(),
                 kind:offer.kind.clone(),quantity:qty,spend,day:today(),session:self.session,
-                status:"unknown".into(),sent_ms:clock_ms()};
+                status:"submitted".into(),sent_ms:clock_ms()};
             self.journal.orders.push(order);
             if !self.persist() {return None}
-            self.pending=Some(self.journal.orders.len()-1);
-            self.blocked.insert(offer.id,now);
+            self.pending.push_back(self.journal.orders.len()-1);
+            self.blocked.insert(offer.id,now+Duration::from_millis(400));
             self.status.sent+=1;
             self.last_buy=Some(now);
-            self.status.pending=Some(format!("#{} · {} × {} {}",offer.id,qty,offer.price,offer.currency));
+            self.update_pending();
             self.status.last=format!("Rule {}: sent {}x listing #{}",rule.id,qty,offer.id);
             return Some(json!({"t":"market.comprar","id":offer.id,"qtd":qty,
                 "preco":offer.price,"moeda":offer.currency}));
+        }
         }
         if self.pending_scan.as_ref().is_some_and(|(_,at)|at.elapsed()<Duration::from_secs(7)){return None}
         self.pending_scan=None;
@@ -470,7 +646,7 @@ impl MarketBuyer {
             }
         }
         nominated.sort_unstable();
-        for (_,id,currency) in nominated.into_iter().take(24) {
+        for (_,id,currency) in nominated {
             let key=format!("item:{id}:{currency}");
             if !targets.iter().any(|(k,_,_)|k==&key) {
                 targets.push((key,Scan::Item(id,currency.into()),
@@ -491,17 +667,36 @@ impl MarketBuyer {
                 }
             }
         }
+        let fixed=cfg.rules.iter().filter(|r|r.enabled&&r.kind=="item")
+            .map(|r|format!("item:{}:{}",r.item_id,r.currency))
+            .collect::<HashSet<_>>();
+        // Watch gives explicitly configured item rules priority over the
+        // rotating broad-item pool. Avoid a huge any-item shortlist starving
+        // the user's fixed rules, Pokémon scans and post-buy quote refreshes.
+        let slot=self.scan_sequence%6;
         let (key,scan,payload)=targets.into_iter()
-            .filter(|(key,_,_)|self.last_scan.get(key).is_none_or(|at|
-                at.elapsed()>=Duration::from_secs(if key=="summary"{15}else{25})))
-            .min_by_key(|(key,_,_)|self.last_scan.get(key).copied())?;
+            .filter(|(key,_,_)|self.urgent_details.contains(key) ||
+                self.last_scan.get(key).is_none_or(|at|
+                    at.elapsed()>=Duration::from_secs(if key=="summary"{15}else{25})))
+            .min_by_key(|(key,_,_)| {
+                let tier=if self.urgent_details.contains(key) {0}
+                    else if (slot<=2 && fixed.contains(key)) ||
+                            (slot==3 && key=="summary") ||
+                            (slot==4 && key.starts_with("pokemon:")) ||
+                            (slot==5 && !fixed.contains(key) &&
+                                key!="summary" && !key.starts_with("pokemon:")) {1}
+                    else {2};
+                (tier,self.last_scan.get(key).copied())
+            })?;
+        self.scan_sequence=self.scan_sequence.wrapping_add(1);
         self.last_scan.insert(key,now);self.pending_scan=Some((scan,now));
         Some(payload)
     }
     pub fn send_failed(&mut self) {
-        // Fail closed: dispatch state is unverified after a broken socket.
-        self.status.error=Some("Market dispatch failed; order outcome unknown".into());
+        // The purchase was journaled first. A broken socket cannot prove it
+        // failed, so every in-flight attempt becomes unknown exposure.
         self.on_disconnect();
+        self.status.error=Some("Market dispatch failed; order outcome unknown".into());
     }
 }
 #[cfg(test)]
@@ -517,6 +712,59 @@ mod tests {
         buyer.offers.push(Offer::from_listing(&json!({"id":9,"preco":20,"qtd":80,"vendedor":"Other"}),"item",42,"gold",Instant::now()).unwrap());
         let cfg=MarketRules{enabled:true,gold_reserve:100,rules:vec![BuyRule{id:"a".into(),kind:"item".into(),item_id:42,enabled:true,buy_max:25,..BuyRule::default()}],..MarketRules::default()};
         assert_eq!(buyer.budget(&cfg,&cfg.rules[0],&buyer.offers[0]),45);
+    }
+    #[test] fn scope_conflicts_and_closed_listings_are_not_buyable() {
+        let now=Instant::now();
+        let base=json!({"id":5,"tipo":"item","itemId":42,"moeda":"gold",
+            "estado":"aberto","preco":20,"qtd":5,"vendedor":"seller"});
+        assert!(Offer::from_listing(&base,"item",42,"gold",now).is_some());
+        for (field,value) in [
+            ("tipo",json!("pokemon")),("itemId",json!(99)),
+            ("moeda",json!("orb")),("estado",json!("vendido"))] {
+            let mut wrong=base.clone();
+            wrong[field]=value;
+            assert!(Offer::from_listing(&wrong,"item",42,"gold",now).is_none());
+        }
+        // Older Moth Watch listing payloads omit some aliases; preserve them.
+        let minimal=json!({"id":7,"preco":20,"qtd":5,"vendedor":"seller"});
+        assert!(Offer::from_listing(&minimal,"item",42,"gold",now).is_some());
+    }
+    #[test] fn pending_spend_is_reserved_before_next_aggressive_buy() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.failed_closed=false;
+        buyer.balances=[Some(1000),Some(0)];
+        let now=Instant::now();
+        let offer=Offer::from_listing(&json!({"id":17,"preco":10,"qtd":500,
+            "vendedor":"seller"}),"item",42,"gold",now).unwrap();
+        let rule=BuyRule{id:"test".into(),kind:"item".into(),item_id:42,
+            buy_max:11,enabled:true,..Default::default()};
+        let cfg=MarketRules{enabled:true,rules:vec![rule.clone()],..Default::default()};
+        assert_eq!(buyer.budget(&cfg,&rule,&offer),100);
+        buyer.journal.orders.push(Order{listing_id:17,rule_id:"test".into(),
+            currency:"gold".into(),kind:"item".into(),quantity:60,spend:600,
+            day:today(),session:buyer.session,status:"submitted".into(),
+            sent_ms:clock_ms()});
+        buyer.pending.push_back(0);
+        assert_eq!(buyer.budget(&cfg,&rule,&offer),40);
+    }
+    #[test] fn journal_compaction_keeps_spend_limits_and_live_indices() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.journal=Journal::default();
+        let now=clock_ms();
+        for id in 0..2500 {
+            buyer.journal.orders.push(Order {
+                listing_id:id+1,rule_id:"r".into(),currency:"gold".into(),
+                kind:"item".into(),quantity:2,spend:40,day:today(),session:buyer.session,
+                status:if id==100 {"submitted"} else {"confirmed"}.into(),
+                sent_ms:now,
+            });
+        }
+        buyer.pending.push_back(100);
+        buyer.compact();
+        assert!(buyer.journal.orders.len()<2400);
+        assert_eq!(buyer.pending.len(),1);
+        assert_eq!(buyer.journal.orders[*buyer.pending.front().unwrap()].listing_id,101);
+        assert_eq!(buyer.used(Some("gold"),Some("r"),"session"),(100_000,2500,5000));
     }
     #[test] fn missing_metadata_or_own_listing_not_buyable() {
         let now=Instant::now();
