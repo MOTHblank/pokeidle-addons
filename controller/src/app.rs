@@ -297,6 +297,22 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Overview" => "Visão geral",
         "Options" => "Opções",
         "Automation" => "Automação",
+        "History" => "Histórico",
+        "Pokémon management" => "Gerenciamento de Pokémon",
+        "Pokémon on account" => "Pokémon na conta",
+        "Shiny only" => "Apenas shiny",
+        "Sort by" => "Ordenar por",
+        "Grade" => "Nota",
+        "Power" => "Poder",
+        "Search Pokémon" => "Buscar Pokémon",
+        "Inspect a Pokémon from the native roster." => "Inspecione um Pokémon da lista nativa.",
+        "Selected Pokémon" => "Pokémon selecionado",
+        "Sell Pokémon" => "Vender Pokémon",
+        "Confirm sale" => "Confirmar venda",
+        "Cannot sell active or shiny Pokémon." => "Não é possível vender Pokémon ativo ou shiny.",
+        "Authoritative server inventory determines whether the sale succeeded." =>
+            "O estoque confirmado pelo servidor determina se a venda foi concluída.",
+        "Waiting for Pokémon roster" => "Aguardando lista de Pokémon",
         "Open Automation" => "Abrir automação",
         "Server automation" => "Automação do servidor",
         "In-game nickname" => "Apelido no jogo",
@@ -1472,7 +1488,9 @@ struct NativeBrowserClosedEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Inventory, Automation, Options }
+enum PanelTab { Overview, Hunts, Inventory, Pokemon, Automation, History, Options }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PokemonSort { Level, Grade, Power, Name }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
@@ -1502,6 +1520,13 @@ pub struct ControllerApp {
     ui_options: UiOptions,
     hunt_account: usize,
     automation_account: usize,
+    pokemon_account: usize,
+    pokemon_query: String,
+    pokemon_sort: PokemonSort,
+    pokemon_shiny_only: bool,
+    pokemon_selected: [Option<u64>;4],
+    pokemon_sale_confirm: [Option<u64>;4],
+    history_account: usize,
     hunt_query: String,
     hunt_region: String,
     hunt_type: String,
@@ -1614,6 +1639,13 @@ impl ControllerApp {
             }),
             hunt_account: 0,
             automation_account: 0,
+            pokemon_account: 0,
+            pokemon_query: String::new(),
+            pokemon_sort: PokemonSort::Level,
+            pokemon_shiny_only: false,
+            pokemon_selected: [None;4],
+            pokemon_sale_confirm: [None;4],
+            history_account: 0,
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_type: String::new(),
@@ -2806,7 +2838,7 @@ impl eframe::App for ControllerApp {
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
-            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory | PanelTab::Automation)
+            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory | PanelTab::Pokemon | PanelTab::Automation | PanelTab::History)
                 || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
@@ -2825,7 +2857,9 @@ impl eframe::App for ControllerApp {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
                             PanelTab::Inventory => "Inventory",
+                            PanelTab::Pokemon => "Pokémon",
                             PanelTab::Automation => "Automation",
+                            PanelTab::History => "History",
                             PanelTab::Options => "Options",
                         }))
                             .font(FontId::proportional(26.0))
@@ -2946,7 +2980,9 @@ impl eframe::App for ControllerApp {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
                     PanelTab::Inventory => draw_inventory_panel(self, ui),
+                    PanelTab::Pokemon => draw_pokemon_panel(self, ui),
                     PanelTab::Automation => draw_automation_panel(self, ui),
+                    PanelTab::History => draw_history_panel(self, ui),
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
@@ -3064,8 +3100,16 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Inventory;
             }
 
+            if sidebar_button(ui, &format!("♢  {}", tr("Pokémon")), app.panel_tab == PanelTab::Pokemon).clicked() {
+                app.panel_tab = PanelTab::Pokemon;
+            }
+
             if sidebar_button(ui, &format!("⚡  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
                 app.panel_tab = PanelTab::Automation;
+            }
+
+            if sidebar_button(ui, &format!("◷  {}", tr("History")), app.panel_tab == PanelTab::History).clicked() {
+                app.panel_tab = PanelTab::History;
             }
 
             if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
