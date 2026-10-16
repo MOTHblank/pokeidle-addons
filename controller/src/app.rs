@@ -302,7 +302,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Past 90 UTC days · saved locally per account every 5 seconds; no raw protocol or credentials." =>
             "Últimos 90 dias UTC · salvo localmente a cada 5 segundos, sem protocolo bruto ou credenciais.",
         "Recorded totals" => "Totais registrados",
+        "Reload saved history" => "Recarregar histórico salvo",
         "Daily hunts" => "Hunts por dia",
+        "Lifetime totals" => "Totais de todos os tempos",
         "No recorded battles yet" => "Nenhuma batalha registrada",
         "Start this account to load its saved history." =>
             "Inicie esta conta para carregar seu histórico salvo.",
@@ -1586,6 +1588,7 @@ pub struct ControllerApp {
     pokemon_selected: [Option<u64>;4],
     pokemon_sale_confirm: [Option<u64>;4],
     history_account: usize,
+    offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
     hunt_region: String,
     hunt_type: String,
@@ -1706,6 +1709,7 @@ impl ControllerApp {
             pokemon_selected: [None;4],
             pokemon_sale_confirm: [None;4],
             history_account: 0,
+            offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_type: String::new(),
@@ -4351,11 +4355,21 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
     });
     let index=app.history_account;
-    let Some(native)=app.games[index].native.as_ref() else {
-        ui.label(tr("Start this account to load its saved history."));
-        return;
+    let history=if let Some(native)=app.games[index].native.as_ref() {
+        app.offline_histories[index]=None;
+        native.history_snapshot()
+    } else {
+        if ui.small_button(tr("Reload saved history")).clicked() {
+            app.offline_histories[index]=None;
+        }
+        app.offline_histories[index]
+            .get_or_insert_with(||crate::native_history::load_offline(
+                app.games[index].profile)).clone()
     };
-    let history=native.history_snapshot();
+    if !history.owner.is_empty() {
+        ui.label(RichText::new(format!("{}: {}",tr("Account"),history.owner))
+            .size(11.0).color(MUTED));
+    }
     let totals=history.totals();
     ui.add_space(8.0);
     ui.label(RichText::new(tr(
@@ -4370,7 +4384,7 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(9.0);
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-        ui.label(RichText::new(tr("Recorded totals")).size(13.0).strong().color(TEXT));
+        ui.label(RichText::new(tr("Lifetime totals")).size(13.0).strong().color(TEXT));
         ui.columns(3,|cols|{
             detail_stat_line(&mut cols[0],tr("kills"),&format_number(totals.kills));
             detail_stat_line(&mut cols[0],tr("captures"),&format_number(totals.captures));
