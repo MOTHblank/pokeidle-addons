@@ -38,3 +38,20 @@ jobs:
       - name: Check experimental controller
         working-directory: controller
         run: cargo check
+      - name: Build native-first preview executable
+        working-directory: controller
+        run: cargo build --release
+      - name: Upload Windows preview (branch only)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moth-native-preview-windows
+          path: controller/target/release/moth-controller.exe
+          if-no-files-found: error
+      - name: Upload Linux preview (branch only)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moth-native-preview-linux
+          path: controller/target/release/moth-controller
+          if-no-files-found: error
