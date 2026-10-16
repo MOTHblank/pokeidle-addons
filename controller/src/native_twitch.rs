@@ -86,13 +86,13 @@ fn normalize_channels(channels: Vec<String>) -> Vec<String> {
 fn write_irc(socket: &mut tungstenite::WebSocket<
     tungstenite::stream::MaybeTlsStream<TcpStream>>, message: &str) -> Result<(), String> {
     socket.send(Message::Text(format!("{message}\r\n").into()))
-        .map_err(|_| "Twitch IRC socket write failed".to_owned())
+        .map_err(|_| "Could not send data to Twitch".to_owned())
 }
 fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
     tungstenite::stream::MaybeTlsStream<TcpStream>>, String> {
     crate::native_tls::ensure()?;
     let addrs = (IRC_HOST, 443).to_socket_addrs()
-        .map_err(|_| "Could not resolve Twitch IRC".to_owned())?;
+        .map_err(|_| "Could not find Twitch. Check your internet connection.".to_owned())?;
     let mut tcp = None;
     for address in addrs {
         if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_secs(7)) {
@@ -100,17 +100,17 @@ fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
             break;
         }
     }
-    let stream = tcp.ok_or_else(|| "Could not reach Twitch IRC".to_owned())?;
+    let stream = tcp.ok_or_else(|| "Could not connect to Twitch. Check your internet connection.".to_owned())?;
     stream.set_read_timeout(Some(IO_TIMEOUT))
-        .map_err(|_| "Twitch IRC socket timeout setup failed".to_owned())?;
+        .map_err(|_| "Could not set up the Twitch connection".to_owned())?;
     stream.set_write_timeout(Some(IO_TIMEOUT))
-        .map_err(|_| "Twitch IRC write timeout setup failed".to_owned())?;
+        .map_err(|_| "Could not set up Twitch messages".to_owned())?;
     let mut request = IRC_URL.into_client_request()
         .map_err(|_| "Invalid Twitch IRC URL".to_owned())?;
     request.headers_mut().insert(header::ORIGIN,
         header::HeaderValue::from_static("https://www.twitch.tv"));
     let (mut socket, _) = client_tls(request, stream)
-        .map_err(|_| "Twitch IRC TLS/WebSocket handshake failed".to_owned())?;
+        .map_err(|_| "Secure connection to Twitch failed".to_owned())?;
     write_irc(&mut socket, &identity.cap)?;
     write_irc(&mut socket, &identity.pass)?;
     write_irc(&mut socket, &identity.nick)?;
@@ -130,15 +130,15 @@ fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
                     }
                 }
             }
-            Ok(Message::Close(_)) => return Err("Twitch closed IRC during authentication".into()),
+            Ok(Message::Close(_)) => return Err("Twitch closed the connection during sign-in".into()),
             Err(tungstenite::Error::Io(ref error))
                 if matches!(error.kind(),
                     std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
-            Err(_) => return Err("Twitch IRC authentication connection lost".into()),
+            Err(_) => return Err("Twitch disconnected during sign-in".into()),
             _ => {}
         }
     }
-    Err("Timed out waiting for Twitch IRC authenticated welcome".into())
+    Err("Twitch sign-in timed out".into())
 }
 
 type IrcSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
@@ -176,13 +176,13 @@ impl TwitchSession {
                 if result.is_err() {
                     if let Ok(mut state) = worker_state.lock() {
                         state.phase = "Failed".into();
-                        state.error = Some("Native IRC worker panicked; inspect sanitized controller log".into());
+                        state.error = Some("Twitch connection stopped unexpectedly. See the controller log.".into());
                         state.joined = 0;
                     }
                     worker_stop.store(true, Ordering::Relaxed);
                 }
             })
-            .map_err(|_| "Could not spawn native Twitch IRC worker".to_owned())?;
+            .map_err(|_| "Could not start the Twitch connection".to_owned())?;
         Ok(Self { state, desired, stop })
     }
     pub fn set_desired(&self, channels: Vec<String>) {
@@ -286,7 +286,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                         s.phase = if auth_rejected { "NeedsLogin" } else { "Reconnecting" }.into();
                         s.joined = 0;
                         if auth_rejected {
-                            s.error = Some("Twitch rejected cached IRC authorization".into());
+                            s.error = Some("Your Twitch login expired. Sign in again.".into());
                         }
                     }
                     if auth_rejected { break; }
