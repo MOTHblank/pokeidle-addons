@@ -45,10 +45,10 @@ impl AutomationWriter {
     }
     pub fn queue(&mut self, field: String, value: Value) -> Result<(), String> {
         if !Self::valid(&field, &value) {
-            return Err("Unsupported server automation setting or invalid value".into());
+            return Err("This automation setting is not supported or the value is invalid".into());
         }
         if self.queue.len() >= MAX_QUEUE {
-            return Err("Native automation queue is full".into());
+            return Err("Too many automation changes are pending. Try again shortly.".into());
         }
         // Subsequent adjustments of the same control are last-write-wins
         // until they are sent. Never cancel an already transmitted frame.
