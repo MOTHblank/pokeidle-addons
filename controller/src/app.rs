@@ -1840,6 +1840,21 @@ impl ControllerApp {
         }
     }
 
+    /// Keep the same selected account across Hunt Atlas, inventory, Pokémon,
+    /// automation and history. A switch never starts or stops a session.
+    fn select_workspace_account(&mut self, index: usize) {
+        if index >= self.games.len() { return; }
+        if self.history_account != index {
+            self.history_rows_limit = 100;
+        }
+        self.hunt_account = index;
+        self.automation_account = index;
+        self.pokemon_account = index;
+        self.history_account = index;
+        self.inventory_account = Some(index);
+        self.hunt_page = 0;
+    }
+
     fn account_name(&self, profile: GameProfile) -> String {
         self.accounts[profile.index()].name.clone()
     }
@@ -3064,10 +3079,30 @@ impl eframe::App for ControllerApp {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 10)))
             .show(ui, |ui| {
-                // Workspace navigation lives in the sidebar; not in a second
-                // row of tabs competing with the main content.
+                // One consistent, directly clickable account switcher across
+                // data pages. Disabled and offline accounts remain inspectable.
+                let active = match self.panel_tab {
+                    PanelTab::Hunts => Some(Some(self.hunt_account)),
+                    PanelTab::Inventory => Some(self.inventory_account),
+                    PanelTab::Pokemon => Some(Some(self.pokemon_account)),
+                    PanelTab::Automation => Some(Some(self.automation_account)),
+                    PanelTab::History => Some(Some(self.history_account)),
+                    _ => None,
+                };
+                if let Some(selected) = active {
+                    let next = draw_account_switcher(self, ui, selected,
+                        self.panel_tab == PanelTab::Inventory);
+                    if next != selected {
+                        if let Some(index) = next {
+                            self.select_workspace_account(index);
+                        } else {
+                            self.inventory_account = None;
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
@@ -3086,6 +3121,77 @@ impl eframe::App for ControllerApp {
         // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
     }
+}
+
+/// Same compact account navigation is reused by every native data page and
+/// the account manager. Clicking one account changes the workspace selection,
+/// not the running game. Status always reflects the real native session.
+fn draw_account_switcher(
+    app: &ControllerApp,
+    ui: &mut egui::Ui,
+    selected: Option<usize>,
+    include_all: bool,
+) -> Option<usize> {
+    let mut next = selected;
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("ACCOUNT")).size(10.0).strong().color(DIM));
+                if include_all {
+                    let is_all = selected.is_none();
+                    if ui.add_sized([105.0, 34.0],
+                        egui::Button::new(RichText::new(tr("All accounts")).size(11.0))
+                            .fill(if is_all { ACCENT.linear_multiply(0.20) } else { PANEL_ALT })
+                            .stroke(Stroke::new(1.0, if is_all { ACCENT } else { BORDER }))
+                            .corner_radius(6.0)).clicked() {
+                        next = None;
+                    }
+                }
+                for index in 0..app.games.len() {
+                    let slot = &app.games[index];
+                    let profile = slot.profile;
+                    let (state, color) = if let Some(native) = slot.native.as_ref() {
+                        let snapshot = native.snapshot();
+                        if snapshot.phase == "Online" {
+                            (tr("Online"), GOOD)
+                        } else {
+                            (tr("Reconnecting"), WARN)
+                        }
+                    } else if app.cached_native_busy[index] || app.native_verifying[index]
+                        || app.native_handoff_busy[index] || slot.handoff_closing {
+                        (tr("Starting"), WARN)
+                    } else if slot.child.is_some() || slot.orphaned_pid.is_some() {
+                        (tr("Firefox"), WARN)
+                    } else if !app.accounts[index].enabled {
+                        (tr("Disabled"), DIM)
+                    } else {
+                        (tr("Offline"), DIM)
+                    };
+                    let selected_here = selected == Some(index);
+                    let name = compact_text(&app.accounts[index].name, 15);
+                    let text = format!("{} {}\n{}", if color == GOOD { "●" } else { "○" },
+                        name, state);
+                    let response = ui.add_sized([128.0, 37.0],
+                        egui::Button::new(RichText::new(text).size(10.0)
+                            .color(if selected_here { TEXT } else { MUTED }))
+                            .fill(if selected_here {
+                                ACCENT.linear_multiply(0.20)
+                            } else {
+                                PANEL_ALT
+                            })
+                            .stroke(Stroke::new(1.0, if selected_here { ACCENT } else { BORDER }))
+                            .corner_radius(6.0));
+                    if response.on_hover_text(format!("{} · {}", profile.label(), state)).clicked() {
+                        next = Some(index);
+                    }
+                }
+            });
+        });
+    next
 }
 
 /// Performance preferences persist independently of accounts and profiles.
@@ -3192,7 +3298,7 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Hunts;
             }
 
-            if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
+            if sidebar_button(ui, tr("◫  Accounts"), app.show_accounts).clicked() {
                 app.show_accounts = true;
             }
 
@@ -3752,6 +3858,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     let label = tr(if expanded { "Hide details" } else { "Show details" });
                     if ui.small_button(label).clicked() {
                         app.selected_details = if expanded { None } else { Some(index) };
+                        if !expanded { app.select_workspace_account(index); }
                     }
                 });
             });
