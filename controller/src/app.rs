@@ -2622,12 +2622,20 @@ impl ControllerApp {
         // never interrupt a running game automatically on telemetry failure.
         let index = Self::game_index(profile);
         let headless = self.games[index].headless;
+        let browser_only = self.games[index].browser_only;
         logging::warn(&format!(
             "{} repairing an exhausted BiDi session by user-requested Firefox restart",
             self.account_name(profile)
         ));
         if self.stop_one(profile) {
-            self.launch_one_mode(profile, headless);
+            if browser_only {
+                // A manual Firefox launch must remain a manual Firefox launch
+                // even after an explicit monitor repair/restart.
+                self.games[index].browser_only = true;
+                self.launch_firefox_bootstrap(profile, false);
+            } else {
+                self.launch_one_mode(profile, headless);
+            }
         }
     }
 
