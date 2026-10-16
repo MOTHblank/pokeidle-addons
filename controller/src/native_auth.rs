@@ -40,6 +40,19 @@ pub fn clear(profile: GameProfile) -> Result<(), String> {
     platform::clear(profile)
 }
 
+/// Native Auto Catch retains each profile's existing user preference across
+/// controller restarts. This is an encrypted vault rewrite, never plaintext.
+pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
+    let Some(mut saved) = load(profile)? else {
+        return Err("Native credential cache is unavailable".into());
+    };
+    if !saved.get("autocatch").is_some_and(Value::is_object) {
+        saved["autocatch"] = serde_json::json!({});
+    }
+    saved["autocatch"]["enabled"] = Value::Bool(enabled);
+    save(profile, &saved)
+}
+
 #[cfg(windows)]
 mod platform {
     use super::*;
