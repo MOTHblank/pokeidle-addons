@@ -1,5 +1,5 @@
 use crate::accounts;
-use crate::config::{AccountConfig, Config, GameProfile};
+use crate::config::{AccountConfig, Config, GameProfile, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
@@ -43,6 +43,20 @@ fn controller_is_background(hidden_in_tray: bool, focused: Option<bool>) -> bool
     hidden_in_tray || focused == Some(false)
 }
 
+/// Tray state has precedence over focus. The two toggles are independent:
+/// disabling blur throttling need not disable the tray resource-saving mode.
+fn reduce_updates_for_window(
+    hidden_in_tray: bool,
+    focused: Option<bool>,
+    options: UiOptions,
+) -> bool {
+    if hidden_in_tray {
+        options.reduce_updates_in_tray
+    } else {
+        options.reduce_updates_unfocused && controller_is_background(false, focused)
+    }
+}
+
 fn monitor_pace_for_slot(
     expanded: Option<usize>,
     index: usize,
@@ -76,7 +90,8 @@ fn monitor_repair_available(
 #[cfg(test)]
 mod adaptive_monitor_ui_tests {
     use super::{
-        controller_is_background, monitor_pace_for_slot, monitor_repair_available, MonitorPace,
+        controller_is_background, monitor_pace_for_slot, monitor_repair_available,
+        reduce_updates_for_window, MonitorPace, UiOptions,
     };
 
     #[test]
@@ -87,6 +102,38 @@ mod adaptive_monitor_ui_tests {
         assert!(controller_is_background(true, Some(true))); // tray override
         assert!(controller_is_background(true, Some(false)));
         assert!(controller_is_background(true, None));
+    }
+
+    #[test]
+    fn background_update_switches_are_independent_and_default_to_old_behavior() {
+        let default = UiOptions::default();
+        assert!(reduce_updates_for_window(false, Some(false), default));
+        assert!(reduce_updates_for_window(true, Some(true), default));
+        assert!(!reduce_updates_for_window(false, Some(true), default));
+
+        let normal_unfocused = UiOptions {
+            reduce_updates_unfocused: false,
+            reduce_updates_in_tray: true,
+        };
+        assert!(!reduce_updates_for_window(false, Some(false), normal_unfocused));
+        assert!(reduce_updates_for_window(true, Some(false), normal_unfocused));
+
+        let full_speed_tray = UiOptions {
+            reduce_updates_unfocused: true,
+            reduce_updates_in_tray: false,
+        };
+        assert!(reduce_updates_for_window(false, Some(false), full_speed_tray));
+        assert!(!reduce_updates_for_window(true, Some(false), full_speed_tray));
+
+        let full_speed_everywhere = UiOptions {
+            reduce_updates_unfocused: false,
+            reduce_updates_in_tray: false,
+        };
+        for hidden in [true, false] {
+            for focused in [Some(true), Some(false), None] {
+                assert!(!reduce_updates_for_window(hidden, focused, full_speed_everywhere));
+            }
+        }
     }
 
     #[test]
@@ -1393,7 +1440,7 @@ struct NativeBrowserClosedEvent {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Inventory }
+enum PanelTab { Overview, Hunts, Inventory, Options }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
@@ -1420,6 +1467,7 @@ pub struct ControllerApp {
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
     panel_tab: PanelTab,
+    ui_options: UiOptions,
     hunt_account: usize,
     hunt_query: String,
     hunt_region: String,
@@ -1527,6 +1575,10 @@ impl ControllerApp {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
             panel_tab: PanelTab::Overview,
+            ui_options: Config::load_ui_options().unwrap_or_else(|error| {
+                logging::warn(&format!("controller options load failed: {error}"));
+                UiOptions::default()
+            }),
             hunt_account: 0,
             hunt_query: String::new(),
             hunt_region: String::new(),
@@ -1597,10 +1649,20 @@ impl ControllerApp {
     }
 
     fn controller_in_background(&self, ctx: &egui::Context) -> bool {
-        // A visible but unfocused window should be just as inexpensive as
-        // one hidden in the tray. Focus changes arrive as native UI events.
+        // Keep native background transport untouched; only UI repaint and
+        // Firefox/BiDi monitoring pace respond to these preferences.
         let focused = ctx.input(|input| input.viewport().focused);
-        controller_is_background(self.hidden_in_tray(), focused)
+        reduce_updates_for_window(self.hidden_in_tray(), focused, self.ui_options)
+    }
+
+    fn save_ui_options(&mut self, updated: UiOptions) {
+        match Config::save_ui_options(&updated) {
+            Ok(()) => {
+                self.ui_options = updated;
+                self.set_status(tr("Controller options saved").to_owned(), false);
+            }
+            Err(error) => self.set_status(error, true),
+        }
     }
 
     fn sync_monitor_paces(&self, background: bool) {
@@ -2710,7 +2772,8 @@ impl eframe::App for ControllerApp {
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
-            && (self.selected_details.is_some() || self.panel_tab != PanelTab::Overview);
+            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Inventory)
+                || (self.panel_tab == PanelTab::Overview && self.selected_details.is_some()));
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
             else if native_detail { Duration::from_secs(1) }
@@ -2728,6 +2791,7 @@ impl eframe::App for ControllerApp {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
                             PanelTab::Inventory => "Inventory",
+                            PanelTab::Options => "Options",
                         }))
                             .font(FontId::proportional(26.0))
                             .strong()
@@ -2841,27 +2905,75 @@ impl eframe::App for ControllerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(24, 16)))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.panel_tab, PanelTab::Overview, tr("Overview"));
-                    ui.selectable_value(&mut self.panel_tab, PanelTab::Hunts, tr("Hunts · Atlas"));
-                    ui.selectable_value(&mut self.panel_tab, PanelTab::Inventory, tr("Inventory"));
-                });
-                ui.add_space(11.0);
+                // Workspace navigation lives in the sidebar; not in a second
+                // row of tabs competing with the main content.
                 match self.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => draw_hunt_atlas_panel(self, ui),
                     PanelTab::Inventory => draw_inventory_panel(self, ui),
+                    PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
 
         if self.show_accounts {
             draw_accounts_window(self, ui.ctx());
         }
-        // Apply after widgets so Show/Hide Details and tray hiding change
-        // polling in the same frame. Alt-tab also switches every account to
-        // the cheaper background pace; refocusing restores the open panel.
+        // Apply the persisted preference immediately to all Firefox monitors.
+        // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
     }
+}
+
+/// Performance preferences persist independently of accounts and profiles.
+fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.label(RichText::new(tr("Performance and updates"))
+        .size(17.0).strong().color(TEXT));
+    ui.add_space(5.0);
+    ui.label(RichText::new(tr("Choose when the controller reduces its display and browser-monitor refresh rate."))
+        .size(11.0).color(MUTED));
+    ui.add_space(12.0);
+
+    let mut next = app.ui_options;
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Background refresh"))
+                .size(13.0).strong().color(TEXT));
+            ui.add_space(8.0);
+
+            ui.checkbox(
+                &mut next.reduce_updates_unfocused,
+                tr("Reduce updates when the window is not focused"),
+            );
+            ui.label(RichText::new(tr(
+                "On: 30-second UI refresh and lower Firefox monitoring frequency when you switch apps. Off: normal foreground refresh continues."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.checkbox(
+                &mut next.reduce_updates_in_tray,
+                tr("Reduce updates when minimized to the system tray"),
+            );
+            ui.label(RichText::new(tr(
+                "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden."
+            )).size(10.0).color(MUTED));
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.label(RichText::new(tr(
+                "Native PokéIdle and Twitch sessions continue at full speed regardless of these options. Only UI redraw and Firefox/BiDi monitoring are affected."
+            )).size(10.0).color(DIM));
+        });
+
+    if next != app.ui_options {
+        // The change is applied only after a successful disk write. If the
+        // options directory is unavailable, keep the previous live setting.
+        app.save_ui_options(next);
+        ui.ctx().request_repaint();
+    }
+
+    ui.add_space(12.0);
+    ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
+        .size(11.0).color(DIM));
 }
 
 #[derive(Clone, Copy)]
@@ -2900,17 +3012,28 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             section_label(ui, tr("WORKSPACE"));
 
-            if sidebar_button(ui, tr("▦  Dashboard"), true).clicked() {
+            if sidebar_button(ui, tr("▦  Dashboard"), app.panel_tab == PanelTab::Overview).clicked() {
                 app.panel_tab = PanelTab::Overview;
-                app.set_status(tr("Dashboard · live health polling enabled").to_string(), false);
+            }
+
+            if sidebar_button(ui, tr("⌖  Hunt Atlas"), app.panel_tab == PanelTab::Hunts).clicked() {
+                app.panel_tab = PanelTab::Hunts;
             }
 
             if sidebar_button(ui, tr("◫  Accounts"), false).clicked() {
                 app.show_accounts = true;
             }
 
+            if sidebar_button(ui, tr("▤  Inventory"), app.panel_tab == PanelTab::Inventory).clicked() {
+                app.panel_tab = PanelTab::Inventory;
+            }
+
             if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
                 app.open_logs();
+            }
+
+            if sidebar_button(ui, tr("⚙  Options"), app.panel_tab == PanelTab::Options).clicked() {
+                app.panel_tab = PanelTab::Options;
             }
 
             ui.add_space(18.0);
