@@ -40,17 +40,42 @@ pub fn clear(profile: GameProfile) -> Result<(), String> {
     platform::clear(profile)
 }
 
-/// Native Auto Catch retains each profile's existing user preference across
-/// controller restarts. This is an encrypted vault rewrite, never plaintext.
-pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
+// UI events may toggle Auto Catch and native Restock in rapid succession.
+// Serialize the read-modify-encrypt-write cycle so one toggle never silently
+// overwrites the other; no credentials are exposed outside OS vault storage.
+static PREFERENCE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn set_native_preference(profile: GameProfile, path: &[&str], enabled: bool)
+    -> Result<(), String> {
+    let _guard = PREFERENCE_WRITE.lock()
+        .map_err(|_| "Native settings writer unavailable".to_owned())?;
     let Some(mut saved) = load(profile)? else {
         return Err("Native credential cache is unavailable".into());
     };
     if !saved.get("autocatch").is_some_and(Value::is_object) {
         saved["autocatch"] = serde_json::json!({});
     }
-    saved["autocatch"]["enabled"] = Value::Bool(enabled);
+    let mut target = &mut saved["autocatch"];
+    for key in path.iter().take(path.len().saturating_sub(1)) {
+        if !target.get(*key).is_some_and(Value::is_object) {
+            target[*key] = serde_json::json!({});
+        }
+        target = &mut target[*key];
+    }
+    let Some(key) = path.last() else {
+        return Err("Invalid native settings field".into());
+    };
+    target[*key] = Value::Bool(enabled);
     save(profile, &saved)
+}
+
+/// Native Auto Catch remains functional and configurable without the addon.
+pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
+    set_native_preference(profile, &["enabled"], enabled)
+}
+/// Native Restock is configured on the Rust side and persists without Firefox.
+pub fn set_restock_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
+    set_native_preference(profile, &["restock", "enabled"], enabled)
 }
 
 #[cfg(windows)]
