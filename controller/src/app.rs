@@ -877,7 +877,47 @@ impl GameSlot {
             let mut health = Health::default();
             health.state = if state.phase == "Online" { "Running".into() }
                 else { state.phase.clone() };
-            health.activity = format!("Native background · {} kills observed", state.battle_kills);
+            // Project the same authoritative native account domains used by
+            // Hunts / Inventory. A Firefox Bridge snapshot is not required.
+            let view = native.hunt_snapshot();
+            health.activity = if view.in_center { "Center".into() }
+                else if view.hunt_slug.is_some() { "Hunting".into() }
+                else { "Native background".into() };
+            health.active_pokemon = view.active_pokemon.as_ref()
+                .map(|pokemon| pokemon.name.clone()).unwrap_or_default();
+            health.pokemon_level = view.active_pokemon.as_ref()
+                .map(|pokemon| pokemon.level.to_string()).unwrap_or_default();
+            health.pokemon_xp = view.active_pokemon.as_ref()
+                .and_then(|pokemon| pokemon.xp).map(|xp| xp.to_string())
+                .unwrap_or_default();
+            health.fallen_count = view.pokemon_roster.iter()
+                .filter(|pokemon| pokemon.hp == Some(0)).count()
+                .min(u32::MAX as usize) as u32;
+            health.ball_stock = view.balls.iter().map(|(id, qty)| {
+                format!("{}: {}", view.ball_names.get(id)
+                    .map(String::as_str).unwrap_or("Ball"), qty)
+            }).collect();
+            health.autocatch_rate = format!("{} throws · {} captures",
+                state.native_throws, state.captures);
+            health.autocatch_restock = state.native_restock.phase.clone();
+            health.xp_bonuses = vec![
+                format!("Twitch +{:.0}%", view.bonuses.twitch_pct),
+                format!("Guild +{:.0}%", view.bonuses.guild_pct),
+                format!("Trainer event +{:.0}%", view.bonuses.trainer_event_pct),
+                format!("Pokémon event +{:.0}%", view.bonuses.pokemon_event_pct),
+            ];
+            // Existing widgets consume hunt_atlas, but never claim a
+            // speculative rate is a measured one.
+            health.hunt_atlas = json!({
+                "huntSlug": view.hunt_slug,
+                "xpH": if view.measurements.valid_trainer {
+                    Some(view.measurements.trainer_xp_h)
+                } else { None },
+                "coinsH": if view.measurements.valid_gold {
+                    Some(view.measurements.gold_net_h)
+                } else { None },
+                "xpMeasured": view.measurements.valid_trainer,
+            });
             health.bridge_connected = state.phase == "Online";
             health.bridge_snapshot_ok = state.phase == "Online";
             health.autocatch_on = state.native_auto_catch;
@@ -891,13 +931,16 @@ impl GameSlot {
             } else { String::new() };
             health.game_ready = state.phase == "Online";
             health.logged_in = state.phase == "Online";
-            health.hunt = state.hunt_slug.unwrap_or_default();
-            health.hunt_slug = health.hunt.clone();
-            health.player_level = state.trainer_level.unwrap_or_default();
-            health.player_total_xp = state.trainer_xp;
-            health.player_xp = state.trainer_xp.map(|xp| xp.to_string()).unwrap_or_default();
-            health.gold = state.gold.unwrap_or_default();
-            health.orbs = state.orbs.unwrap_or_default();
+            health.hunt_slug = view.hunt_slug.clone().or(state.hunt_slug.clone()).unwrap_or_default();
+            health.hunt = view.hunts.iter()
+                .find(|hunt| hunt.slug == health.hunt_slug)
+                .map(|hunt| hunt.name.clone())
+                .unwrap_or_else(|| health.hunt_slug.clone());
+            health.player_level = view.trainer_level.or(state.trainer_level).unwrap_or_default();
+            health.player_total_xp = view.trainer_xp.or(state.trainer_xp);
+            health.player_xp = health.player_total_xp.map(|xp| xp.to_string()).unwrap_or_default();
+            health.gold = view.gold.or(state.gold).unwrap_or_default();
+            health.orbs = view.orbs.or(state.orbs).unwrap_or_default();
             health.last_successful_probe_at = state.last_received;
             health.last_heartbeat_at = state.last_received;
             health.last_error = state.error;
@@ -2940,6 +2983,9 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let active: Vec<_> = app.games.iter()
                         .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
                         .collect();
+                    let native_online = app.games.iter().filter(|game|
+                        game.native.as_ref().is_some_and(|native|
+                            native.snapshot().phase == "Online")).count();
                     let mode = if active.is_empty() {
                         tr("STOPPED")
                     } else if active.iter().all(|game| game.headless) {
@@ -2952,8 +2998,13 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let connected = active.iter()
                         .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                         .count();
+                    runtime_row(ui, "Native game", &format!("{native_online}/4 online"),
+                        if native_online>0 {GOOD} else {MUTED});
                     runtime_row(ui, "Firefox", mode, if active.is_empty() { MUTED } else { GOOD });
-                    runtime_row(ui, "Monitor", &format!("{connected}/{} {}", active.len(), tr("Connected")), if connected == active.len() && !active.is_empty() { GOOD } else { MUTED });
+                    if !active.is_empty() {
+                        runtime_row(ui, "BiDi login", &format!("{connected}/{} {}", active.len(), tr("Connected")),
+                            if connected == active.len() { GOOD } else { MUTED });
+                    }
                 });
 
             ui.add_space(12.0);
@@ -4284,6 +4335,179 @@ fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
     ).on_hover_text(value);
 }
 
+
+fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    // Take one read-only snapshot for the entire render. All network parsing
+    // and commands remain on the game worker, never the egui render thread.
+    let (status, view, twitch) = {
+        let native = app.games[index].native.as_ref().expect("native details require a session");
+        (native.snapshot(), native.hunt_snapshot(), native.twitch_snapshot())
+    };
+    let phase_online = status.phase == "Online";
+    let hunt_name = view.hunts.iter()
+        .find(|hunt| Some(hunt.slug.as_str()) == view.hunt_slug.as_deref())
+        .map(|hunt| hunt.name.as_str())
+        .or(view.hunt_slug.as_deref()).unwrap_or("—");
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("NATIVE ACCOUNT")).size(12.0)
+                    .strong().color(TEXT));
+                automation_badge(ui, "Game socket", &status.phase, phase_online);
+                automation_badge(ui, "Twitch IRC", &twitch.phase,
+                    twitch.phase == "Online");
+                if let Some(last) = status.last_received {
+                    ui.label(RichText::new(format!("{}s since last game frame",
+                        last.elapsed().as_secs())).size(10.0).color(MUTED));
+                }
+            });
+            if !phase_online {
+                ui.colored_label(WARN, tr("Live game state is not confirmed; values below may be stale."));
+            }
+            if let Some(error) = status.error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.add_space(9.0);
+            ui.columns(3, |cols| {
+                detail_stat_line(&mut cols[0], tr("Hunt"),
+                    if view.in_center { tr("Pokémon Center") } else { hunt_name });
+                detail_stat_line(&mut cols[0], tr("Trainer level"),
+                    &view.trainer_level.map(|n| n.to_string()).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[0], tr("Trainer XP"),
+                    &view.trainer_xp.map(format_number).unwrap_or_else(|| "—".into()));
+
+                detail_stat_line(&mut cols[1], tr("Active Pokémon"),
+                    view.active_pokemon.as_ref().map(|p| p.name.as_str()).unwrap_or("—"));
+                detail_stat_line(&mut cols[1], tr("Pokémon level"),
+                    &view.active_pokemon.as_ref().map(|p|p.level.to_string())
+                        .unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[1], tr("Pokémon XP"),
+                    &view.active_pokemon.as_ref().and_then(|p|p.xp)
+                        .map(format_number).unwrap_or_else(|| "—".into()));
+
+                detail_stat_line(&mut cols[2], tr("Gold"),
+                    &view.gold.map(format_number).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[2], tr("Orbs"),
+                    &view.orbs.map(format_number).unwrap_or_else(|| "—".into()));
+                detail_stat_line(&mut cols[2], tr("Diamonds"),
+                    &view.diamonds.map(format_number).unwrap_or_else(|| "—".into()));
+            });
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("HUNT SESSION")).size(12.0)
+                    .strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {} · {} {} · {} {}",
+                    view.session.kills, tr("kills"),
+                    view.session.captures, tr("captures"),
+                    view.session.shiny_captured, tr("shinies caught")
+                )).size(10.0).color(MUTED));
+                if ui.small_button(tr("Open Hunt Atlas")).clicked() {
+                    app.hunt_account = index;
+                    app.panel_tab = PanelTab::Hunts;
+                }
+            });
+            ui.columns(3, |cols| {
+                let m = &view.measurements;
+                detail_stat_line(&mut cols[0], tr("Trainer XP/h"),
+                    &if m.valid_trainer { format_hunt_amount(m.trainer_xp_h) } else { "—".into() });
+                detail_stat_line(&mut cols[1], tr("Pokémon XP/h"),
+                    &if m.valid_pokemon { format_hunt_amount(m.pokemon_xp_h) } else { "—".into() });
+                detail_stat_line(&mut cols[2], tr("Net gold/h"),
+                    &if m.valid_gold { format_hunt_amount(m.gold_net_h) } else { "—".into() });
+            });
+            ui.label(RichText::new(format!("{} · {}s · {} kills/h",
+                view.sample_quality, view.measurements.seconds.round() as u64,
+                format_hunt_amount(view.measurements.kills_h)))
+                .size(10.0).color(MUTED));
+            ui.columns(2, |cols| {
+                detail_stat_line(&mut cols[0], tr("Trainer XP earned"),
+                    &format_number(view.session.trainer_xp));
+                detail_stat_line(&mut cols[0], tr("Pokémon XP earned"),
+                    &format_number(view.session.pokemon_xp));
+                detail_stat_line(&mut cols[1], tr("Combat gold"),
+                    &format_number(view.session.combat_gold));
+                detail_stat_line(&mut cols[1], tr("Auto-sale gold"),
+                    &format_number(view.session.auto_sale_gold));
+            });
+            if !view.session.recent_drops.is_empty() {
+                ui.collapsing(format!("{} ({})",tr("Recent drops"),
+                    view.session.recent_drops.len()), |ui| {
+                    for (name,qty) in view.session.recent_drops.iter().take(15) {
+                        ui.label(format!("{} ×{}", name, qty));
+                    }
+                });
+            }
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("POKÉMON DEPOT")).size(12.0)
+                    .strong().color(TEXT));
+                ui.label(RichText::new(format!("{} {}",view.pokemon_roster.len(),
+                    tr("Pokémon"))).size(10.0).color(MUTED));
+                ui.label(RichText::new(format!("{} / {}",
+                    view.pokemon_roster.iter().filter(|p|p.hp==Some(0)).count(),
+                    tr("fallen"))).size(10.0).color(MUTED));
+            });
+            if view.pokemon_roster.is_empty() {
+                ui.label(RichText::new(tr("Waiting for native Pokémon roster"))
+                    .size(11.0).color(DIM));
+            } else {
+                egui::ScrollArea::vertical().id_salt(("native-roster",index))
+                    .max_height(185.0).show(ui, |ui| {
+                    for pokemon in view.pokemon_roster.iter() {
+                        ui.horizontal_wrapped(|ui| {
+                            let active = view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
+                            let name = format!("{}{} · Lv {}{}",
+                                if active {"▶ "} else {""},pokemon.name,pokemon.level,
+                                if pokemon.shiny {" ✨"} else {""});
+                            ui.label(RichText::new(name).size(11.0)
+                                .color(if active { GOOD } else { TEXT }));
+                            ui.label(RichText::new(format!(
+                                "HP {} / {} · Q {} · P{}",
+                                pokemon.hp.map(|n|n.to_string()).unwrap_or_else(|| "—".into()),
+                                pokemon.max_hp.map(|n|n.to_string()).unwrap_or_else(|| "—".into()),
+                                pokemon.quality.map(|n|format!("{n:.2}")).unwrap_or_else(|| "—".into()),
+                                pokemon.potency.unwrap_or_default()
+                            )).size(10.0).color(DIM));
+                        });
+                        ui.separator();
+                    }
+                });
+            }
+        });
+    ui.add_space(9.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            let item_count = view.items.values().filter(|n|**n>0).count();
+            let ball_count = view.balls.values().filter(|n|**n>0).count();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("INVENTORY")).size(12.0)
+                    .strong().color(TEXT));
+                ui.label(format!("{} {} · {} {}",item_count,tr("items"),
+                    ball_count,tr("ball types")));
+                if ui.small_button(tr("Open inventory")).clicked() {
+                    app.inventory_account = Some(index);
+                    app.panel_tab = PanelTab::Inventory;
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (id,qty) in view.balls.iter().filter(|(_,qty)|**qty>0) {
+                    ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                        .map(String::as_str).unwrap_or("Ball"),qty))
+                        .size(10.0).color(TEXT));
+                }
+            });
+        });
+    ui.add_space(9.0);
+    ui.label(RichText::new(tr("NATIVE AUTOMATION")).size(12.0).strong().color(TEXT));
+    draw_native_automation(app, ui, index);
+}
+
 fn draw_game_details(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
@@ -4291,6 +4515,10 @@ fn draw_game_details(
     width: f32,
 ) {
     ui.set_width(width);
+    if app.games[index].native.is_some() {
+        draw_native_manager_details(app, ui, index);
+        return;
+    }
 
     let profile = app.games[index].profile;
     let account_name = app.account_name(profile);
