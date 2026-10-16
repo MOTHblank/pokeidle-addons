@@ -271,6 +271,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Gold" => "Ouro",
         "Search hunt, region or species ID" => "Buscar hunt, região ou ID da espécie",
         "All regions" => "Todas as regiões",
+        "All types" => "Todos os tipos",
         "Clear filters" => "Limpar filtros",
         "matching hunts" => "hunts encontradas",
         "Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance." =>
@@ -1307,6 +1308,7 @@ pub struct ControllerApp {
     hunt_account: usize,
     hunt_query: String,
     hunt_region: String,
+    hunt_type: String,
     hunt_ranking: HuntRanking,
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
@@ -1397,6 +1399,7 @@ impl ControllerApp {
             hunt_account: 0,
             hunt_query: String::new(),
             hunt_region: String::new(),
+            hunt_type: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
             hunt_reference: None,
             hunt_reference_error: None,
@@ -3167,14 +3170,34 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.selectable_value(&mut app.hunt_region, region.to_owned(), region);
                 }
             });
+        if let Some(reference) = app.hunt_reference.as_deref() {
+            let mut types = reference.species.values()
+                .flat_map(|sp| sp.types.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            types.sort_unstable();
+            types.dedup();
+            egui::ComboBox::from_id_salt("hunt-species-type")
+                .selected_text(if app.hunt_type.is_empty() {
+                    tr("All types").to_owned()
+                } else { app.hunt_type.clone() })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut app.hunt_type, String::new(), tr("All types"));
+                    for kind in types {
+                        ui.selectable_value(&mut app.hunt_type, kind.to_owned(), kind);
+                    }
+                });
+        }
         if ui.small_button(tr("Clear filters")).clicked() {
-            app.hunt_region.clear(); app.hunt_query.clear();
+            app.hunt_region.clear(); app.hunt_query.clear(); app.hunt_type.clear();
         }
     });
     let query = app.hunt_query.trim().to_lowercase();
     let reference = app.hunt_reference.as_deref();
     let mut rows: Vec<_> = hunts.hunts.iter().filter(|h| {
         (app.hunt_region.is_empty() || h.region == app.hunt_region) &&
+        (app.hunt_type.is_empty() || h.species.iter().any(|sp|
+            reference.and_then(|r| r.species.get(&sp.id)).is_some_and(|meta|
+                meta.types.iter().any(|kind|kind==&app.hunt_type)))) &&
         (query.is_empty() || h.name.to_lowercase().contains(&query) ||
             h.region.to_lowercase().contains(&query) ||
             h.area.to_lowercase().contains(&query) ||
@@ -3281,7 +3304,7 @@ fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     }
                                 }
                                 ui.vertical(|ui| {
-                                    let show_value = forecast.is_some() || kills_per_hour > 0.0;
+                                    let show_value = *measured || forecast.is_some() || kills_per_hour > 0.0;
                                     ui.label(RichText::new(if show_value {
                                         format_hunt_amount(*value)
                                     } else { "—".into() })
