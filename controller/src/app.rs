@@ -1244,6 +1244,11 @@ impl ControllerApp {
         configure_style(&cc.egui_ctx);
 
         logging::init();
+        logging::info(&format!(
+            "Moth native controller v{} · verified TLS provider initialized: {}",
+            env!("CARGO_PKG_VERSION"),
+            rustls::crypto::CryptoProvider::get_default().is_some()
+        ));
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
         let (addon_version_status, addon_refresh_tx) = update::start_addon_version_check();
