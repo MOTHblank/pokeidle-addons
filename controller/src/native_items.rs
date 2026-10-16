@@ -4,7 +4,13 @@ use std::{collections::BTreeMap,io::Read,time::Duration};
 const URL:&str="https://pokeidle.io/assets/items.json";
 const LIMIT:u64=2*1024*1024;
 #[derive(Clone,Debug)]
-pub struct ItemMeta {pub name:String,pub category:String}
+pub struct ItemMeta {
+    pub name: String,
+    pub category: String,
+    /// Only an explicitly positive price from PokéIdle's public catalog.
+    /// Unknown price must never be synthesized for a shop.buy.
+    pub price_gold: Option<u64>,
+}
 #[derive(Clone,Debug,Default)]
 pub struct ItemCatalog {pub items:BTreeMap<u64,ItemMeta>}
 impl ItemCatalog {
@@ -24,7 +30,10 @@ pub fn parse(source:&str)->Result<ItemCatalog,String> {
         if name.trim().is_empty() {continue}
         let category=item.get("category").and_then(Value::as_str)
             .unwrap_or("other").to_owned();
-        items.insert(id,ItemMeta{name:name.to_owned(),category});
+        let price_gold = item.get("preco").or_else(||item.get("npcPrice"))
+            .or_else(||item.get("priceGold"))
+            .and_then(Value::as_u64).filter(|price|*price>0);
+        items.insert(id,ItemMeta{name:name.to_owned(),category,price_gold});
     }
     if items.is_empty(){return Err("Public item catalog is empty".into());}
     Ok(ItemCatalog{items})
@@ -53,7 +62,12 @@ mod tests {
         let catalog=parse(r#"{"items":[{"id":7,"name":"Heart Stone","category":"stones"},
             {"id":200,"name":"Potion","category":"potions"}]}"#).unwrap();
         assert_eq!(catalog.name(7),"Heart Stone");
+        assert_eq!(catalog.items.get(&7).unwrap().price_gold,None);
         assert_eq!(catalog.name(8),"Item #8");
         assert!(parse(r#"{"items":[]}"#).is_err());
+        let priced=parse(r#"{"items":[{"id":200,"name":"Potion",
+            "category":"heal","preco":40},{"id":201,"name":"Potion without price"}]}"#).unwrap();
+        assert_eq!(priced.items[&200].price_gold,Some(40));
+        assert_eq!(priced.items[&201].price_gold,None);
     }
 }
