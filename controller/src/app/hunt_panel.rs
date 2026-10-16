@@ -42,9 +42,9 @@ pub(super) struct EstimateCache {
     account: Option<usize>,
     catalog_ptr: usize,
     reference_ptr: usize,
-    active_id: Option<u64>,
-    active_level: u32,
+    active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
     hunt_slug: Option<String>,
+    live: bool,
     refreshed: Option<Instant>,
     values: std::collections::BTreeMap<String,Option<native_atlas::Forecast>>,
 }
@@ -54,18 +54,18 @@ impl EstimateCache {
     ){
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
-        let active_id=view.active_pokemon.as_ref().map(|p|p.id);
-        let active_level=view.active_pokemon.as_ref().map_or(0,|p|p.level);
+        let active_signature=view.active_pokemon.as_ref().map(|p|
+            (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny));
         if self.account==Some(account) && self.catalog_ptr==catalog_ptr
-            && self.reference_ptr==reference_ptr && self.active_id==active_id
-            && self.active_level==active_level && self.hunt_slug==view.hunt_slug
+            && self.reference_ptr==reference_ptr && self.live==live
+            && self.active_signature==active_signature && self.hunt_slug==view.hunt_slug
             && self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(8))
         {return;}
         self.account=Some(account);
         self.catalog_ptr=catalog_ptr;
         self.reference_ptr=reference_ptr;
-        self.active_id=active_id;
-        self.active_level=active_level;
+        self.active_signature=active_signature;
+        self.live=live;
         self.hunt_slug=view.hunt_slug.clone();
         self.refreshed=Some(Instant::now());
         self.values.clear();
