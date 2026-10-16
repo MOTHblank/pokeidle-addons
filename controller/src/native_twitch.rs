@@ -140,6 +140,8 @@ fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
     Err("Timed out waiting for Twitch IRC authenticated welcome".into())
 }
 
+type IrcSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
 pub struct TwitchSession {
     state: Arc<Mutex<TwitchSnapshot>>,
     desired: Arc<Mutex<Vec<String>>>,
@@ -148,6 +150,16 @@ pub struct TwitchSession {
 impl TwitchSession {
     pub fn start(browser_bootstrap: &serde_json::Value) -> Result<Self, String> {
         let identity = IrcIdentity::from_browser(browser_bootstrap)?;
+        Self::spawn(identity, None)
+    }
+    /// Server welcome is mandatory before we close the authentication
+    /// browser. Used by handoff and protected-cache cold starts.
+    pub fn start_verified(browser_bootstrap: &serde_json::Value) -> Result<Self, String> {
+        let identity = IrcIdentity::from_browser(browser_bootstrap)?;
+        let socket = connect(&identity)?;
+        Self::spawn(identity, Some(socket))
+    }
+    fn spawn(identity: IrcIdentity, first_socket: Option<IrcSocket>) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(TwitchSnapshot::default()));
         let desired = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -158,7 +170,7 @@ impl TwitchSession {
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run(identity, Arc::clone(&worker_state), worker_desired,
-                        Arc::clone(&worker_stop));
+                        Arc::clone(&worker_stop), first_socket);
                 }));
                 if result.is_err() {
                     if let Ok(mut state) = worker_state.lock() {
@@ -191,9 +203,11 @@ impl Drop for TwitchSession {
 }
 
 fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
-       desired: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>) {
+       desired: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>,
+       first_socket: Option<IrcSocket>) {
+    let mut first_socket = first_socket;
     while !stop.load(Ordering::Relaxed) {
-        match connect(&identity) {
+        match first_socket.take().map(Ok).unwrap_or_else(|| connect(&identity)) {
             Ok(mut socket) => {
                 crate::logging::info("Native Twitch IRC received authenticated welcome");
                 if let Ok(mut s) = state.lock() {
