@@ -432,6 +432,12 @@ fn session_loop(credentials: Credentials,
     hunts: Arc<Mutex<HuntView>>) {
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
+    // Metadata is downloaded without cookies/credentials, and only if a
+    // configured healing-item rule lacks a server shop price. Never block the
+    // game WebSocket reader with HTTP requests.
+    let (metadata_tx, metadata_rx) = mpsc::channel();
+    let mut item_metadata: Option<crate::native_items::ItemCatalog> = None;
+    let mut last_metadata_attempt: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
         match first_session.take().map(Ok).unwrap_or_else(|| open_session(&credentials)) {
             Ok((mut socket, welcome)) => {
@@ -439,6 +445,9 @@ fn session_loop(credentials: Credentials,
                 observe(&snapshot, &welcome, &desired);
                 gameplay.ingest(&welcome, Instant::now());
                 restock.ingest(&welcome, Instant::now());
+                if let Some(catalog) = item_metadata.as_ref() {
+                    restock.merge_item_metadata(catalog);
+                }
                 hunt_intel.ingest(&welcome, Instant::now());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
@@ -494,6 +503,38 @@ fn session_loop(credentials: Credentials,
                     }
                     gameplay.status.auto_catch = auto_catch.load(Ordering::Relaxed);
                     restock.set_enabled(restock_enabled.load(Ordering::Relaxed));
+                    while let Ok(result) = metadata_rx.try_recv() {
+                        match result {
+                            Ok(catalog) => {
+                                crate::logging::info(&format!(
+                                    "Native restock: public metadata available for {} item IDs",
+                                    catalog.items.len()
+                                ));
+                                restock.merge_item_metadata(&catalog);
+                                item_metadata = Some(catalog);
+                            }
+                            Err(error) => crate::logging::warn(&format!(
+                                "Native restock: optional public item catalog unavailable: {error}"
+                            )),
+                        }
+                    }
+                    if restock.needs_item_metadata() {
+                        if let Some(catalog) = item_metadata.as_ref() {
+                            restock.merge_item_metadata(catalog);
+                        } else if last_metadata_attempt.is_none_or(|at|
+                            at.elapsed() >= Duration::from_secs(300)) {
+                            last_metadata_attempt = Some(Instant::now());
+                            let sender = metadata_tx.clone();
+                            thread::spawn(move || {
+                                let result = std::panic::catch_unwind(
+                                    crate::native_items::load
+                                ).unwrap_or_else(|_|Err(
+                                    "Public item metadata loader panicked".into()
+                                ));
+                                let _ = sender.send(result);
+                            });
+                        }
+                    }
                     if let Some(command) = gameplay.next_capture(Instant::now()) {
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
                             gameplay.failed(&command, "native auto capture send failed");
