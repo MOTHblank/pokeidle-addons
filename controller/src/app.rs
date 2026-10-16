@@ -4,6 +4,7 @@ use crate::firefox;
 use crate::kick::KickStream;
 use crate::logging;
 use crate::native_background::NativeSession;
+use crate::native_gameplay::GameCommand;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL,
@@ -723,6 +724,9 @@ impl GameSlot {
             health.activity = format!("Native background · {} kills observed", state.battle_kills);
             health.bridge_connected = state.phase == "Online";
             health.bridge_snapshot_ok = state.phase == "Online";
+            health.autocatch_on = state.native_auto_catch;
+            health.autocatch_balls_used = state.native_throws.min(u32::MAX as u64) as u32;
+            health.autocatch_captures = state.captures.min(u32::MAX as u64) as u32;
             health.stream_watching = state.twitch_watching.clone();
             health.stream_bonus_pct = state.twitch_bonus_pct;
             health.stream_scan_twitch_channels = Some(state.twitch_live.len() as u32);
@@ -2951,6 +2955,39 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                         "Twitch IRC {} · {}/{} channels joined",
                         twitch.phase, twitch.joined, twitch.desired
                     )).size(10.0).color(DIM));
+                    ui.label(RichText::new(format!(
+                        "Native Auto Catch {} · {} pending · {} throws",
+                        if stats.native_auto_catch { "ON" } else { "OFF" },
+                        stats.native_capture_queue, stats.native_throws
+                    )).size(10.0).color(if stats.native_auto_catch { GOOD } else { DIM }));
+                    ui.horizontal(|ui| {
+                        if ui.small_button(if stats.native_auto_catch {
+                            "Disable native Auto Catch"
+                        } else { "Enable native Auto Catch" }).clicked() {
+                            let enabled = !stats.native_auto_catch;
+                            native.set_auto_catch(enabled);
+                            let profile = app.games[index].profile;
+                            std::thread::spawn(move || {
+                                let _ = crate::native_auth::set_catch_enabled(profile, enabled);
+                            });
+                        }
+                        if stats.phase == "Online" {
+                            if ui.small_button("Pokémon Center").clicked() {
+                                if let Err(error) = native.send_command(GameCommand::Center) {
+                                    crate::logging::warn(&format!(
+                                        "Native center command rejected: {error}"));
+                                }
+                            }
+                            if let Some(slug) = stats.hunt_slug.as_ref() {
+                                if ui.small_button("Return to hunt").clicked() {
+                                    if let Err(error) = native.send_command(GameCommand::Hunt(slug.clone())) {
+                                        crate::logging::warn(&format!(
+                                            "Native hunt command rejected: {error}"));
+                                    }
+                                }
+                            }
+                        }
+                    });
                 }
                 if running && app.games[index].native.is_none()
                     && app.games[index].monitor.is_some() {
