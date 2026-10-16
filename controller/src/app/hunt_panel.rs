@@ -1189,8 +1189,14 @@ fn draw_atlas_explorer(
             "Guide item-yield estimates use per-kill loot chances, quantities and modeled kill rates; they are not confirmed rare drops, prices or market proceeds."
         ).size(10.0).color(WARN));
     }
+    if matches!(filters.sort,AtlasSort::Capture|AtlasSort::ShinyCaught|
+        AtlasSort::OutlandRare|AtlasSort::Market){
+        ui.label(RichText::new(
+            "These are conditional model rankings. Configure the ball, Outland tier, item quote and hypothetical bonuses in Capture · Outland · Economy."
+        ).size(10.0).color(WARN));
+    }
     if rows.is_empty(){
-        ui.label("No matching species. Try clearing some filters, or select another account.");
+        ui.label("No matching species with available model inputs. Check filters and assumptions; missing outcomes are never ranked as zero.");
         return;
     }
     ui.collapsing("Top 5 matching Pokémon",|ui|{
