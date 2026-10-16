@@ -940,9 +940,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Auto Catch settings saved" => "Configurações de captura automática salvas",
         "Loading game automation settings" => "Carregando configurações de automação do jogo",
         "Game icons" => "Ícones do jogo",
-        "Download available game item and Poké Ball icons to this computer. Pokémon artwork will be added when its image sources are linked." => "Baixe os ícones disponíveis de itens e Pokébolas. As imagens dos Pokémon serão adicionadas quando as fontes forem configuradas.",
-        "Download game icons" => "Baixar ícones do jogo",
-        "icons loaded this session" => "ícones carregados nesta sessão",
         "Sign-in checklist" => "Verificação de login",
         "Twitch login" => "Login da Twitch",
         "Sign-in required" => "Login necessário",
@@ -2125,12 +2122,15 @@ impl ControllerApp {
             let profile = GameProfile::from_index(event.index).expect("known slot");
             match event.result {
                 Err(error) => {
-                    let is_bootstrap = error.contains("reloaded")
-                        || error.contains("waiting") || error.contains("pending")
-                        || error.contains("temporary Twitch")
-                        || error.contains("hook installed")
-                        || error.contains("login has not produced");
-                    if !is_bootstrap {
+                    let pending = error.to_ascii_lowercase();
+                    let is_bootstrap = pending.contains("reloaded")
+                        || pending.contains("waiting") || pending.contains("pending")
+                        || pending.contains("temporary twitch")
+                        || pending.contains("hook installed")
+                        || pending.contains("login has not produced");
+                    if is_bootstrap {
+                        self.native_error[event.index] = None;
+                    } else {
                         self.native_error[event.index] = Some(error.clone());
                     }
                     self.set_status(format!(
@@ -2155,9 +2155,9 @@ impl ControllerApp {
                         self.set_status(format!("Could not connect to the game: {error}"), true);
                         continue;
                     }
-                    // Stage 1: close game TAB and prove Rust is authenticated,
-                    // leaving Firefox alive for recovery. Stage 2, above, closes
-                    // Firefox only after both native servers welcomed us.
+                    // First prove Rust is authenticated while Firefox's live game
+                    // WebSocket still exists, matching pokeidle-manager-moth.
+                    // Only then close the game tab and finally Firefox.
                     if self.games[event.index].handoff_closing ||
                         self.native_verifying[event.index] { continue; }
                     let Some(monitor) = self.games[event.index].monitor.clone() else {
@@ -2175,15 +2175,16 @@ impl ControllerApp {
                         .name(format!("moth-native-handoff-{}", profile.name()))
                         .spawn(move || {
                             let mut attempted_game_close = false;
-                            // A panic in TLS setup previously destroyed the
-                            // sender without clearing native_verifying, leaving
-                            // Firefox alive but its PokéIdle tab closed.
+                            // A successful native welcome must precede the game
+                            // tab close. Closing Firefox's original socket first
+                            // could invalidate the just-captured hello/token.
                             let result = std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(|| {
                                     crate::native_tls::ensure()?;
+                                    let native = NativeSession::start_verified(profile, bootstrap)?;
                                     attempted_game_close = true;
                                     monitor.close_game_for_handoff(Duration::from_secs(18))?;
-                                    NativeSession::start_verified(profile, bootstrap)
+                                    Ok(native)
                                 })
                             ).unwrap_or_else(|_| {
                                 Err("Login check failed unexpectedly. See the controller log.".to_owned())
@@ -2316,7 +2317,10 @@ impl ControllerApp {
                 continue;
             }
             let health = self.games[index].health();
-            if !(health.telemetry_is_fresh() && health.game_ready && health.logged_in) {
+            // BiDi's captured game hello, not a DOM telemetry sample, is the
+            // authentication signal. The reference manager also observes the
+            // hello while the login page is still transitioning.
+            if health.state != "Running" {
                 continue;
             }
             if self.native_handoff_last_attempt[index]
@@ -2363,10 +2367,6 @@ impl ControllerApp {
             self.set_status("Open Firefox and sign in to PokéIdle first", true);
             return;
         };
-        if !self.games[index].health().logged_in {
-            self.set_status("Sign in to PokéIdle before continuing", true);
-            return;
-        }
         self.native_handoff_busy[index] = true;
         self.native_handoff_last_attempt[index] = Some(Instant::now());
         logging::info(&format!(
@@ -2434,15 +2434,10 @@ impl ControllerApp {
                             if existing_firefox { return Ok(None); }
                             crate::native_auth::load(profile)
                                 .and_then(|saved| saved.map(|bootstrap| {
-                                    NativeSession::start_verified(profile, bootstrap.clone())
-                                        .or_else(|error| {
-                                            if error.contains("AUTH_REQUIRED:") ||
-                                                error.contains("rejected the captured OAuth") {
-                                                Err(error)
-                                            } else {
-                                                NativeSession::start(profile, bootstrap)
-                                            }
-                                        })
+                                    // Never project a cached, unverified connection as
+                                    // started. A failed welcome needs a fresh Firefox
+                                    // authentication, not infinite background retries.
+                                    NativeSession::start_verified(profile, bootstrap)
                                 }).transpose())
                         })
                     })
@@ -3160,20 +3155,6 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
 
     ui.add_space(12.0);
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
-            ui.label(RichText::new(tr("Game icons")).size(13.0).strong().color(TEXT));
-            ui.label(RichText::new(tr(
-                "Download available game item and Poké Ball icons to this computer. Pokémon artwork will be added when its image sources are linked."
-            )).size(10.0).color(MUTED));
-            if ui.button(tr("Download game icons")).clicked() {
-                let queued = app.visuals.download_known_icons();
-                app.set_status(format!("{queued} icon downloads queued. Icons are saved locally as they arrive."), false);
-            }
-            ui.label(RichText::new(format!("{} {}",
-                app.visuals.loaded_count(), tr("icons loaded this session")))
-                .size(10.0).color(DIM));
-        });
 
     if next != app.ui_options {
         // The change is applied only after a successful disk write. If the
@@ -6340,7 +6321,7 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
             .strong()
             .color(color),
     );
-    if no_readings || session_blocked {
+    if no_readings || session_blocked || health.last_error.is_some() {
         response.on_hover_ui(|ui| {
             if session_blocked {
                 ui.label(tr("Firefox isn't responding for this account. Restart Firefox to reconnect."));
