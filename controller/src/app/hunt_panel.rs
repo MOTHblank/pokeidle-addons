@@ -1128,20 +1128,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             let _ = tx.send(result);
         });
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tr("Account")).size(11.0).color(DIM));
-        egui::ComboBox::from_id_salt("hunt-account")
-            .selected_text(app.account_name(app.games[app.hunt_account].profile))
-            .show_ui(ui, |ui| {
-                for index in 0..app.games.len() {
-                    let name = app.account_name(app.games[index].profile);
-                    ui.selectable_value(&mut app.hunt_account, index, name);
-                }
+    draw_atlas_account_strip(app,ui);
+    if app.hunt_subtab==HuntSubtab::Compare {
+        egui::ScrollArea::vertical()
+            .id_salt("hunt-atlas-all-accounts")
+            .auto_shrink([false,false]).show(ui,|ui|{
+                draw_atlas_compare(app,ui);
             });
-        ui.add_space(8.0);
-        ui.label(RichText::new(tr("Native server catalog · no userscripts"))
-            .size(10.0).color(MUTED));
-    });
+        return;
+    }
     ui.add_space(4.0);
     if app.hunt_reference_busy {
         ui.label(RichText::new(tr("Loading species and move reference..."))
@@ -1194,7 +1189,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             .color(WARN));
         return;
     }
-    app.hunt_estimate_cache.refresh(index,&view,app.hunt_reference.as_ref(),live);
+    app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),live);
     if let Some(error)=view.last_error.as_deref(){
         ui.label(RichText::new(format!("Hunt switch: {error}")).color(WARN));
     }
@@ -1206,8 +1201,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     }
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui|{
+        ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Explorer,
+            "Explore Pokémon");
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Recommendations,
-            "Recommendations");
+            "Hunt rankings");
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Current,"Current hunt");
         ui.selectable_value(&mut app.hunt_subtab,HuntSubtab::Session,"Session & rewards");
     });
@@ -1215,6 +1212,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
         .auto_shrink([false,false]).show(ui,|ui|{
             match app.hunt_subtab {
+                HuntSubtab::Explorer => {
+                    draw_atlas_explorer(app,ui,&view,native,live,index);
+                }
+                HuntSubtab::Compare => {}
                 HuntSubtab::Current => {
                     ui.label(RichText::new("Current Pokémon, combat measurements and bonuses")
                         .size(12.0).color(MUTED));
@@ -1339,7 +1340,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             ui.label(RichText::new("Current hunt · experimental forecast")
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
-                .and_then(|slug|app.hunt_estimate_cache.get(slug)) {
+                .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
                         ("Trainer XP/h",forecast.trainer_xp_h),
@@ -1375,7 +1376,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     "These trainer/Pokémon streams must not be added together. Modeled gross gold excludes spending."
                 ).size(10.0).color(MUTED));
             } else {
-                ui.label(RichText::new(if app.hunt_estimate_cache.is_pending(){
+                ui.label(RichText::new(if app.hunt_estimate_cache[index].is_pending(){
                     "Forecast computing on background worker."
                 }else{
                     "Unavailable: reference species or active Pokémon combat data is incomplete."
@@ -1579,7 +1580,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     let reference=app.hunt_reference.as_deref();
                     let ranked=ranked_hunts(hunts,reference,app.hunt_ranking,live,
                         &app.hunt_query,&app.hunt_region,&app.hunt_type,
-                        &app.hunt_estimate_cache);
+                        &app.hunt_estimate_cache[index]);
                     ui.label(RichText::new(format!(
                         "{} matching hunts · measured = this hunt only · guide estimates are uncertain · scenarios are not combat predictions",
                         ranked.len()
