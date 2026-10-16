@@ -1,7 +1,7 @@
 //! Read-only Hunt Atlas reference: fetched only when Hunts tab opens.
 //! Never execute public JavaScript or send credentials to the reference host.
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
-use crate::native_hunts::{HuntEntry, HuntView, PokemonInfo, base_xp, base_gold};
+use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, base_gold};
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
@@ -38,6 +38,9 @@ pub struct ReferenceMove {
 pub struct Reference {
     pub species: BTreeMap<u64, ReferenceSpecies>,
     pub chart: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Public-guide destinations, INCLUDING locked ones. Never infer game
+    /// unlocks from these; only the authenticated welcome.hunts may do that.
+    pub hunts: Vec<HuntEntry>,
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -117,6 +120,36 @@ pub fn parse(script: &str) -> Result<Reference, String> {
             types:types.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
             base,moves,drops
         });
+    }
+    if let Some(hunts)=value.get("hunts").and_then(Value::as_array) {
+        let mut dedup=std::collections::BTreeSet::new();
+        for raw in hunts.iter().take(10_000) {
+            let (Some(slug),Some(name),Some(level))=(
+                raw.get("s").and_then(Value::as_str),
+                raw.get("n").and_then(Value::as_str),
+                raw.get("nv").and_then(Value::as_u64)
+            ) else {continue};
+            if slug.is_empty() || slug.len()>128 || !slug.bytes()
+                .all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')
+                || name.is_empty() || name.len()>160
+                || level==0 || level>u32::MAX as u64 || !dedup.insert(slug.to_owned())
+            {continue}
+            let species=raw.get("e").and_then(Value::as_array)
+                .map(|list|list.iter().filter_map(|row|{
+                    let pair=row.as_array().filter(|a|a.len()>=2)?;
+                    let id=pair[0].as_u64()?;
+                    let weight=pair[1].as_f64()?;
+                    if id==0 || !weight.is_finite() || weight<=0.0 {return None}
+                    Some(HuntSpecies{id,weight})
+                }).collect::<Vec<_>>()).unwrap_or_default();
+            if species.is_empty(){continue}
+            result.hunts.push(HuntEntry {
+                slug:slug.to_owned(),name:name.to_owned(),
+                area:raw.get("a").and_then(Value::as_str).unwrap_or("").to_owned(),
+                region:String::new(),level:level as u32,
+                species,total_spawns:0,looktype:None,
+            });
+        }
     }
     if result.species.is_empty() || result.chart.is_empty() {
         return Err("Incomplete public hunt reference".into());
@@ -304,6 +337,21 @@ mod tests {
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
+    }
+    #[test]
+    fn guide_catalog_is_read_only_and_does_not_fake_unlocks(){
+        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
+            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[10,10,10,10,10,10]}],
+            "hunts":[{"s":"forest-1","n":"Forest","a":"Kanto","nv":70,
+                "e":[[1,75],[2,25]]},
+                {"s":"bad slug","n":"Invalid","nv":30,"e":[[1,100]]}]};"#;
+        let guide=parse(text).unwrap();
+        assert_eq!(guide.hunts.len(),1);
+        assert_eq!(guide.hunts[0].slug,"forest-1");
+        assert_eq!(guide.hunts[0].species[0].weight,75.0);
+        // Being in the public guide says nothing about authenticated access.
+        let view=HuntView::default();
+        assert!(!view.hunts.iter().any(|hunt|hunt.slug=="forest-1"));
     }
     #[test]
     fn xp_calculation_keeps_separate_channels(){
