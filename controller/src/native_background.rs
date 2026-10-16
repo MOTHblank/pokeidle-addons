@@ -153,8 +153,10 @@ fn update(snapshot: &Arc<Mutex<NativeSnapshot>>, f: impl FnOnce(&mut NativeSnaps
     if let Ok(mut status) = snapshot.lock() { f(&mut status); }
 }
 
-fn open_session(credentials: &Credentials) -> Result<tungstenite::WebSocket<
-    tungstenite::stream::MaybeTlsStream<TcpStream>>, String> {
+fn open_session(credentials: &Credentials) -> Result<(
+    tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
+    String,
+), String> {
     let mut addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not resolve PokéIdle WebSocket".to_owned())?;
     let address = addrs.next().ok_or_else(|| "No WebSocket addresses".to_owned())?;
@@ -184,9 +186,9 @@ fn open_session(credentials: &Credentials) -> Result<tungstenite::WebSocket<
                 if serde_json::from_str::<Value>(text.as_ref()).ok()
                     .and_then(|v| v.get("t").and_then(Value::as_str).map(str::to_owned))
                     .as_deref() == Some("welcome") {
-                    // Receiving welcome confirms authentication. Initial values
-                    // arrive here; the subsequent state stream may be sparse.
-                    return Ok(socket);
+                    // Receiving welcome confirms authentication. Keep the full
+                    // initial state for the native read-only account dashboard.
+                    return Ok((socket, text.to_string()));
                 }
             }
             Ok(Message::Close(_)) => return Err("Server closed the native session before welcome".into()),
@@ -231,7 +233,8 @@ fn session_loop(credentials: Credentials,
     let mut reconnect_failures = 0usize;
     while !stop.load(Ordering::Relaxed) {
         match open_session(&credentials) {
-            Ok(mut socket) => {
+            Ok((mut socket, welcome)) => {
+                observe(&snapshot, &welcome);
                 ever_connected = true;
                 reconnect_failures = 0;
                 update(&snapshot, |s| {
