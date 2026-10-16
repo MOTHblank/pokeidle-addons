@@ -1761,6 +1761,7 @@ impl ControllerApp {
                     logging::info(&format!(
                         "{} starting native game + Twitch IRC workers", self.account_name(profile)));
                     self.games[index].native = Some(event.native);
+                    self.capture_drafts[index]=None;
                     self.require_browser_login[index] = false;
                     let cache_note = event.cache_warning
                         .map(|warning| format!(" · secure cache unavailable: {warning}"))
@@ -1774,6 +1775,7 @@ impl ControllerApp {
                     // tab was closed. Retain native ownership and the remaining
                     // Firefox handle for a later explicit cleanup attempt.
                     self.games[index].native = Some(event.native);
+                    self.capture_drafts[index]=None;
                     self.games[index].child = event.child;
                     self.games[index].orphaned_pid = event.orphaned_pid;
                     self.games[index].monitor = event.monitor;
@@ -1805,6 +1807,7 @@ impl ControllerApp {
             match event.result {
                 Ok(Some(session)) => {
                     self.games[event.index].native = Some(session);
+                    self.capture_drafts[event.index]=None;
                     self.set_status(format!(
                         "{}: native game + Twitch IRC started from protected credentials (no Firefox)",
                         self.account_name(profile)), false);
@@ -4191,6 +4194,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     if let Some(error)=app.capture_save_error[index].as_deref(){
         ui.colored_label(BAD,error);
     }
+    let mut discard_edits=false;
     ui.horizontal(|ui|{
         if ui.add_enabled(!app.capture_save_busy[index],
             egui::Button::new(tr("Save settings"))).clicked() {
@@ -4208,10 +4212,13 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             }
         }
         if ui.small_button(tr("Discard")).clicked() {
-            app.capture_drafts[index]=Some(native.capture_settings());
-            app.capture_save_error[index]=None;
+            discard_edits=true;
         }
     });
+    if discard_edits {
+        app.capture_drafts[index]=Some(native.capture_settings());
+        app.capture_save_error[index]=None;
+    }
     if app.capture_save_busy[index] {
         ui.label(RichText::new(tr("Saving encrypted preferences..."))
             .size(10.0).color(MUTED));
