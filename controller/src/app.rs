@@ -1606,6 +1606,7 @@ pub struct ControllerApp {
     pokemon_selected: [Option<u64>;4],
     pokemon_sale_confirm: [Option<u64>;4],
     history_account: usize,
+    history_rows_limit: usize,
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
     hunt_region: String,
@@ -1734,6 +1735,7 @@ impl ControllerApp {
             pokemon_selected: [None;4],
             pokemon_sale_confirm: [None;4],
             history_account: 0,
+            history_rows_limit: 100,
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
             hunt_region: String::new(),
@@ -2030,6 +2032,7 @@ impl ControllerApp {
                         "{} starting native game + Twitch IRC workers", self.account_name(profile)));
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
                     self.require_browser_login[index] = false;
                     let cache_note = event.cache_warning
                         .map(|warning| format!(" · secure cache unavailable: {warning}"))
@@ -2044,6 +2047,7 @@ impl ControllerApp {
                     // Firefox handle for a later explicit cleanup attempt.
                     self.games[index].native = Some(event.native);
                     self.capture_drafts[index]=None;
+                    self.automation_drafts[index]=AutomationDraft::default();
                     self.games[index].child = event.child;
                     self.games[index].orphaned_pid = event.orphaned_pid;
                     self.games[index].monitor = event.monitor;
@@ -2076,6 +2080,7 @@ impl ControllerApp {
                 Ok(Some(session)) => {
                     self.games[event.index].native = Some(session);
                     self.capture_drafts[event.index]=None;
+                    self.automation_drafts[event.index]=AutomationDraft::default();
                     self.set_status(format!(
                         "{}: native game + Twitch IRC started from protected credentials (no Firefox)",
                         self.account_name(profile)), false);
@@ -3131,6 +3136,14 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
 
     ui.add_space(12.0);
+    let slowed=app.controller_in_background(ui.ctx());
+    ui.label(RichText::new(format!("{}: {}",
+        tr("Current refresh mode"),
+        tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
+        .size(11.0).color(if slowed { WARN } else { GOOD }));
+    if ui.small_button(tr("Restore default performance settings")).clicked() {
+        app.save_ui_options(UiOptions::default());
+    }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
 }
@@ -3962,7 +3975,9 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .show_ui(ui,|ui|{
                 for i in 0..app.games.len(){
                     let name=app.account_name(app.games[i].profile);
-                    ui.selectable_value(&mut app.history_account,i,name);
+                    if ui.selectable_value(&mut app.history_account,i,name).changed() {
+                        app.history_rows_limit=100;
+                    }
                 }
             });
     });
@@ -4008,14 +4023,53 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(format!("{}: {} · {}: {}",tr("shinies seen"),totals.shiny_seen,
             tr("shinies caught"),totals.shiny_captured));
     });
+    // The chart uses only retained daily entries, never adds trainer XP to
+    // Pokémon XP, and costs at most fourteen bars per repaint.
+    if let Some(last_day)=history.days.iter().map(|entry|entry.day).max() {
+        let mut points=[(0u64,0u64,0u64);14];
+        for (index,point) in points.iter_mut().enumerate() {
+            point.0=last_day.saturating_sub((13-index) as u64);
+        }
+        for entry in &history.days {
+            if entry.day<=last_day {
+                let age=last_day-entry.day;
+                if age<14 {
+                    let point=&mut points[13-age as usize];
+                    point.1=point.1.saturating_add(entry.kills);
+                    point.2=point.2.saturating_add(entry.captures);
+                }
+            }
+        }
+        let max_kills=points.iter().map(|(_,kills,_)|*kills).max().unwrap_or(0).max(1);
+        ui.add_space(10.0);
+        egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+            .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+                ui.label(RichText::new(tr("Recent daily activity · kills / captures"))
+                    .size(13.0).strong().color(TEXT));
+                for (day,kills,captures) in points {
+                    ui.horizontal(|ui|{
+                        ui.add_sized([88.0,16.0],egui::Label::new(
+                            RichText::new(history_day_label(day)).size(10.0).color(DIM)));
+                        let width=ui.available_width().max(80.0);
+                        ui.add(egui::ProgressBar::new(kills as f32/max_kills as f32)
+                            .desired_width(width).text(format!("{kills} / {captures}")));
+                    });
+                }
+            });
+    }
     ui.add_space(10.0);
     ui.label(RichText::new(tr("Daily hunts")).size(13.0).strong().color(TEXT));
     let mut entries=history.days.iter().collect::<Vec<_>>();
     entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
+    let total_entries=entries.len();
+    let displayed_entries=total_entries.min(app.history_rows_limit);
+    ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
+        total_entries, tr("recorded hunt-days")))
+        .size(10.0).color(DIM));
     egui::ScrollArea::vertical().id_salt("history-daily")
         .max_height(310.0).show(ui,|ui|{
             if entries.is_empty(){ui.label(tr("No recorded battles yet"));}
-            for day in entries {
+            for day in entries.into_iter().take(displayed_entries) {
                 egui::Frame::new().fill(PANEL_ALT).corner_radius(6.0)
                     .inner_margin(egui::Margin::symmetric(10,6)).show(ui,|ui|{
                     ui.label(RichText::new(format!("{} · {}",history_day_label(day.day),day.hunt))
@@ -4036,6 +4090,11 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
             }
         });
+    if displayed_entries<total_entries {
+        if ui.small_button(tr("Show 100 more hunt-days")).clicked() {
+            app.history_rows_limit=app.history_rows_limit.saturating_add(100);
+        }
+    }
     ui.add_space(7.0);
     ui.label(RichText::new(tr(
         "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively."
