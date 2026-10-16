@@ -9,6 +9,8 @@ const BALLS: [&str; 5] = ["beast", "ultra", "super", "great", "poke"];
 pub struct CatchSettings {
     pub enabled: bool,
     pub priorities: Vec<String>,
+    /// Milliseconds between sends, matching Auto Catch+ intervalMs.
+    pub interval_ms: u64,
     pub reserves: BTreeMap<String,u64>,
     pub restock_enabled: bool,
     pub gold_reserve: u64,
@@ -25,7 +27,7 @@ pub struct CatchSettings {
 impl Default for CatchSettings {
     fn default() -> Self {
         Self {
-            enabled:false, priorities:vec!["beast".into(),"ultra".into()],
+            enabled:false, priorities:vec!["beast".into(),"ultra".into()], interval_ms:100,
             reserves:BALLS.iter().map(|key|(key.to_string(),0)).collect(),
             restock_enabled:false,gold_reserve:0,
             ball_id:1,potion_id:200,revive_id:0,
@@ -39,6 +41,7 @@ impl CatchSettings {
         let mut cfg=Self::default();
         let Some(v)=value else {return cfg};
         cfg.enabled=v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+        cfg.interval_ms=v.get("intervalMs").and_then(Value::as_u64).unwrap_or(100).clamp(100,3000);
         if let Some(list)=v.get("ballPriority").and_then(Value::as_array) {
             cfg.priorities=list.iter().filter_map(Value::as_str)
                 .map(str::to_lowercase).filter(|p|BALLS.contains(&p.as_str()))
@@ -70,6 +73,9 @@ impl CatchSettings {
         cfg
     }
     pub fn validate(&self)->Result<(),String> {
+        if !(100..=3000).contains(&self.interval_ms) {
+            return Err("Auto Catch interval must be 100–3000 ms".into());
+        }
         if self.priorities.len()>2 || self.priorities.iter().any(|p|!BALLS.contains(&p.as_str())) ||
             (self.priorities.len()==2 && self.priorities[0]==self.priorities[1]) {
             return Err("Choose at most two different supported balls; Master Balls are not automated".into());
@@ -103,6 +109,7 @@ impl CatchSettings {
         json!({
             "enabled":self.enabled,
             "ballPriority":self.priorities,
+            "intervalMs":self.interval_ms,
             "reserve":reserve,
             "restock":{
                 "enabled":self.restock_enabled,
@@ -130,6 +137,20 @@ mod tests {
         assert_eq!(cfg.potion_id,200);
         cfg.validate().unwrap();
         assert_eq!(CatchSettings::from_value(Some(&cfg.as_value())),cfg);
+    }
+    #[test]
+    fn interval_round_trip_and_bounds() {
+        let config=CatchSettings::from_value(Some(&json!({
+            "enabled":true,"intervalMs":150,"ballPriority":["ultra"]
+        })));
+        assert_eq!(config.interval_ms,150);
+        assert_eq!(config.as_value()["intervalMs"],150);
+        let mut invalid=config.clone();
+        invalid.interval_ms=0;
+        assert!(invalid.validate().is_err());
+        invalid.interval_ms=3001;
+        assert!(invalid.validate().is_err());
+        assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,100);
     }
     #[test]
     fn no_master_ball_and_invalid_restock_targets() {
