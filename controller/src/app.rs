@@ -2105,13 +2105,16 @@ impl ControllerApp {
             logging::info(&format!(
                 "stopping {} Firefox PID {}", account_name, child.id()
             ));
-            match firefox::stop_child(&mut child, slot.monitor.as_ref()) {
+            let closed = firefox::stop_child(&mut child, slot.monitor.as_ref())
+                .and_then(|_| Config::for_profile(profile))
+                .and_then(|config| firefox::stop_profile_processes(&config));
+            match closed {
                 Ok(()) => {
                     if let Some(monitor) = slot.monitor.take() {
                         monitor.stop();
                     }
                     slot.orphaned_pid = None;
-                    self.set_status(format!("{} Firefox closed.", account_name), false);
+                    self.set_status(format!("{} Firefox profile completely closed.", account_name), false);
                     true
                 }
                 Err(error) => {
