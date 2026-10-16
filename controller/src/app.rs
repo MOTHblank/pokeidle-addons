@@ -3475,6 +3475,9 @@ fn draw_game_details(
 
             }
 
+            // Browser-only controls are irrelevant after successful native
+            // takeover. The runtime and saved session now own game + IRC.
+            if app.games[index].native.is_none() {
             ui.add_space(12.0);
             ui.label(
                 RichText::new(tr("KICK MULTISTREAM"))
@@ -3734,6 +3737,8 @@ fn draw_game_details(
                     }
                 });
 
+            }
+
             ui.add_space(12.0);
             ui.label(
                 RichText::new(tr("STREAMS & BONUS"))
@@ -3869,6 +3874,7 @@ fn draw_game_details(
                     }
                 });
 
+            if app.games[index].native.is_none() {
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
@@ -3915,6 +3921,7 @@ fn draw_game_details(
                     }
                 });
             });
+            }
         });
 }
 
@@ -4086,7 +4093,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
-                runtime_chip(ui, tr("Stream chat"), "Native IRC; browser only during login", MUTED);
+                runtime_chip(ui, tr("Stream chat"), tr("Direct IRC"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
