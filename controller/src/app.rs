@@ -326,6 +326,14 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Offline" => "Desconectado",
         "Options" => "Opções",
         "Automation" => "Automação",
+        "Game & restock" => "Jogo e reposição",
+        "Market" => "Mercado",
+        "Launch enabled" => "Iniciar habilitadas",
+        "Stop all" => "Parar todas",
+        "To tray" => "Para bandeja",
+        "Configure automation" => "Configurar automação",
+        "Open restock on Overview" => "Abrir reposição na Visão geral",
+        "Start this account to configure Auto Catch" => "Inicie esta conta para configurar a captura automática",
         "History" => "Histórico",
         "Battle history" => "Histórico de batalhas",
         "Up to 90 days of battle history, saved locally for each account." =>
@@ -428,7 +436,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No drops acquired in this session yet" => "Nenhum drop obtido nesta sessão",
         "Current hunt details" => "Detalhes da hunt atual",
         "spawn slots" => "slots de spawn",
-        "At Pokémon Center" => "No Centro Pokémon",
         "Switch pending" => "Mudança pendente",
         "Wild encounter" => "Selvagem",
         "Session" => "Sessão",
@@ -1542,6 +1549,11 @@ struct NativeBrowserClosedEvent {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
+
+/// Account-local automation workspaces. Keep the selected section while
+/// switching accounts; the scroll position is isolated per account/section.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutomationSection { Capture, Game, Market }
 #[derive(Clone,Default)]
 struct AutomationDraft {
     initialized: bool,
@@ -1586,6 +1598,7 @@ pub struct ControllerApp {
     ui_options: UiOptions,
     hunt_account: usize,
     automation_account: usize,
+    automation_section: AutomationSection,
     automation_drafts: [AutomationDraft;4],
     market_drafts: [Option<crate::native_market::MarketRules>;4],
     market_snatch_drafts: [crate::native_market::SnatchTarget;4],
@@ -1703,6 +1716,7 @@ impl ControllerApp {
             }),
             hunt_account: 0,
             automation_account: 0,
+            automation_section: AutomationSection::Capture,
             automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
             market_drafts: std::array::from_fn(|_|None),
             market_snatch_drafts: std::array::from_fn(|_|crate::native_market::SnatchTarget{
@@ -2857,8 +2871,11 @@ impl eframe::App for ControllerApp {
         draw_sidebar(self, ui);
 
         egui::Panel::top("header")
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(24, 18)))
+            .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(20, 13)))
             .show(ui, |ui| {
+                // On smaller windows give actions their own row instead of
+                // allowing right-aligned buttons to overlap the page title.
+                let compact = ui.available_width() < 780.0;
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(tr(match self.panel_tab {
@@ -2868,92 +2885,23 @@ impl eframe::App for ControllerApp {
                             PanelTab::Automation => "Automation",
                             PanelTab::Options => "Options",
                         }))
-                            .font(FontId::proportional(26.0))
+                            .font(FontId::proportional(23.0))
                             .strong()
                             .color(TEXT),
                     );
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new(tr("PokéIdle controller"))
-                            .font(FontId::proportional(14.0))
-                            .color(MUTED),
-                    );
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(tr("STOP ALL"))
-                                        .size(12.0)
-                                        .strong()
-                                        .color(TEXT),
-                                )
-                                .fill(BAD.linear_multiply(0.18))
-                                .stroke(Stroke::new(1.0, BAD.linear_multiply(0.55)))
-                                .corner_radius(8.0),
-                            )
-                            .clicked()
-                        {
-                            self.stop_all();
-                        }
-
-                        ui.add_space(8.0);
-
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new(tr("LAUNCH ENABLED"))
-                                        .size(12.0)
-                                        .strong()
-                                        .color(TEXT),
-                                )
-                                .fill(ACCENT.linear_multiply(0.8))
-                                .stroke(Stroke::new(1.0, ACCENT))
-                                .corner_radius(8.0),
-                            )
-                            .clicked()
-                        {
-                            self.launch_enabled();
-                        }
-
-                        #[cfg(windows)]
-                        {
-                            ui.add_space(8.0);
-
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new(tr("MINIMIZE TO TRAY"))
-                                        .size(12.0)
-                                        .strong()
-                                        .color(TEXT),
-                                )
-                                .fill(PANEL)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0),
-                            )
-                            .on_hover_text(tr("Hide this window in the system tray; click the tray icon to restore it"))
-                            .clicked()
-                        {
-                            #[cfg(windows)]
-                            {
-                                if self.tray.is_some() {
-                                    self.tray_hidden.store(true, Ordering::Relaxed);
-                                    ui.ctx().send_viewport_cmd(
-                                        egui::ViewportCommand::Visible(false),
-                                    );
-                                    logging::info("controller window hidden to system tray");
-                                } else {
-                                    self.set_status(
-                                        tr("System tray is unavailable; the window cannot be hidden.").to_string(),
-                                        true,
-                                    );
-                                }
-                            }
-                        }
-                        }
-                    });
+                    if !compact {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(tr("PokéIdle controller"))
+                            .size(12.0).color(MUTED));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            draw_header_actions(self, ui);
+                        });
+                    }
                 });
+                if compact {
+                    ui.add_space(5.0);
+                    ui.horizontal_wrapped(|ui| draw_header_actions(self, ui));
+                }
             });
 
         egui::Panel::bottom("status")
@@ -3021,6 +2969,42 @@ impl eframe::App for ControllerApp {
         // Apply the persisted preference immediately to all Firefox monitors.
         // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
+    }
+}
+
+/// Shared compact toolbar for both single-row and wrapped headers.
+fn draw_header_actions(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    if ui.add(
+        egui::Button::new(RichText::new(tr("Launch enabled")).strong().size(11.0))
+            .fill(ACCENT.linear_multiply(0.8))
+            .stroke(Stroke::new(1.0, ACCENT))
+            .corner_radius(8.0),
+    ).on_hover_text(tr("Start all enabled accounts")).clicked() {
+        app.launch_enabled();
+    }
+    if ui.add(
+        egui::Button::new(RichText::new(tr("Stop all")).strong().size(11.0))
+            .fill(BAD.linear_multiply(0.14))
+            .stroke(Stroke::new(1.0, BAD.linear_multiply(0.55)))
+            .corner_radius(8.0),
+    ).on_hover_text(tr("Stop all running accounts")).clicked() {
+        app.stop_all();
+    }
+    #[cfg(windows)]
+    if ui.add(
+        egui::Button::new(RichText::new(tr("To tray")).size(11.0))
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(8.0),
+    ).on_hover_text(tr("Hide this window in the system tray; click the tray icon to restore it"))
+    .clicked() {
+        if app.tray.is_some() {
+            app.tray_hidden.store(true, Ordering::Relaxed);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            logging::info("controller window hidden to system tray");
+        } else {
+            app.set_status(tr("System tray is unavailable; the window cannot be hidden.").to_owned(), true);
+        }
     }
 }
 
@@ -3097,6 +3081,17 @@ fn draw_account_switcher(
 
 /// Performance preferences persist independently of accounts and profiles.
 fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    // Settings must remain reachable at the minimum supported window height.
+    // Bound text width so explanatory copy never becomes a full-screen line.
+    egui::ScrollArea::vertical()
+        .id_salt("options-page")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = ui.available_width().min(720.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
     ui.label(RichText::new(tr("Performance and updates"))
         .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);
@@ -3106,6 +3101,7 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     let mut next = app.ui_options;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .stroke(Stroke::new(1.0, BORDER))
         .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.label(RichText::new(tr("Background refresh"))
                 .size(13.0).strong().color(TEXT));
@@ -3153,6 +3149,10 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
+
+                },
+            );
+        });
 }
 
 #[derive(Clone, Copy)]
@@ -3189,42 +3189,33 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             section_label(ui, tr("WORKSPACE"));
 
-            if sidebar_button(ui, tr("▦  Dashboard"), app.panel_tab == PanelTab::Overview).clicked() {
+            if sidebar_button(ui, tr("Dashboard"), app.panel_tab == PanelTab::Overview).clicked() {
                 app.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, &format!("   ↳  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
+            if sidebar_button(ui, &format!("  ·  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
                 app.panel_tab = PanelTab::Hunts;
             }
 
-            if sidebar_button(ui, tr("◫  Accounts"), app.panel_tab == PanelTab::Accounts).clicked() {
+            if sidebar_button(ui, tr("Accounts"), app.panel_tab == PanelTab::Accounts).clicked() {
                 app.panel_tab = PanelTab::Accounts;
             }
 
-            if sidebar_button(ui, &format!("⚡  {}", tr("Automation")), app.panel_tab == PanelTab::Automation).clicked() {
+            if sidebar_button(ui, tr("Automation"), app.panel_tab == PanelTab::Automation).clicked() {
                 app.panel_tab = PanelTab::Automation;
             }
 
-            if sidebar_button(ui, tr("≡  Logs"), false).clicked() {
+            if sidebar_button(ui, tr("Logs"), false).clicked() {
                 app.open_logs();
             }
 
-            if sidebar_button(ui, &format!("⚙  {}", tr("Options")), app.panel_tab == PanelTab::Options).clicked() {
+            if sidebar_button(ui, tr("Options"), app.panel_tab == PanelTab::Options).clicked() {
                 app.panel_tab = PanelTab::Options;
             }
 
+            // Global start/stop actions are in the header; avoid a duplicate
+            // control set that crowds the persistent navigation.
             ui.add_space(18.0);
-            section_label(ui, tr("OPERATIONS"));
-
-            if sidebar_button(ui, tr("▶  Launch enabled"), false).clicked() {
-                app.launch_enabled();
-            }
-
-            if sidebar_button(ui, tr("■  Stop all"), false).clicked() {
-                app.stop_all();
-            }
-
-            ui.add_space(16.0);
             section_label(ui, tr("LANGUAGE"));
 
             ui.horizontal(|ui| {
@@ -3424,7 +3415,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(12.0);
                     let gap = 12.0;
                     let available = ui.available_width();
-                    let columns = if available >= 720.0 { 2 } else { 1 };
+                    let columns = if available >= 800.0 { 2 } else { 1 };
                     let card_width = if columns == 2 {
                         (available - gap) / 2.0
                     } else { available };
@@ -3859,7 +3850,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 }
             }
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Native and Firefox are mutually exclusive launch options.
                 let action = tr(if !running { "Start account" }
                     else if app.games[index].native.is_some() { "Stop" }
@@ -4396,12 +4387,31 @@ mod history_ui_tests {
 /// Dedicated native automation workspace. Keeps settings out of the
 /// scrollable dashboard and provides a stable per-account selection.
 fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    // One scroll region owns the entire page, including the tall rule editor.
-    // Scrolling only the final Auto Catch subsection made earlier controls
-    // unreachable on ordinary display sizes.
+    // Keep section navigation above the only vertical scroll region. Market
+    // rules can be very long; they should never push Catch controls offscreen.
+    ui.horizontal_wrapped(|ui| {
+        for (section, label, hint) in [
+            (AutomationSection::Capture, "Auto Catch", "Capture preferences and live statistics"),
+            (AutomationSection::Game, "Game & restock", "Server settings and restock status"),
+            (AutomationSection::Market, "Market", "Automatic buying rules and Snatch"),
+        ] {
+            let selected = app.automation_section == section;
+            if ui.add(
+                egui::Button::new(RichText::new(tr(label)).size(12.0)
+                    .strong().color(if selected { TEXT } else { MUTED }))
+                    .fill(if selected { ACCENT.linear_multiply(0.20) } else { PANEL })
+                    .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
+                    .corner_radius(7.0),
+            ).on_hover_text(tr(hint)).clicked() {
+                app.automation_section = section;
+            }
+        }
+    });
+    ui.add_space(7.0);
+    ui.separator();
     let index = app.automation_account;
     egui::ScrollArea::vertical()
-        .id_salt(("automation-page", index))
+        .id_salt(("automation-page", index, app.automation_section as u8))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -4410,12 +4420,23 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new(tr("Auto Catch · Restock · Market · Game settings"))
-        .size(13.0).color(MUTED));
-    ui.add_space(6.0);
     let index = app.automation_account;
-    market_panel::draw(app,ui,index);
-    ui.add_space(10.0);
+    match app.automation_section {
+        AutomationSection::Capture => {
+            if app.games[index].native.is_some() {
+                draw_native_automation(app, ui, index);
+            } else {
+                draw_native_missing_panel(app, ui, Some(index),
+                    tr("Start this account to configure Auto Catch"));
+            }
+        }
+        AutomationSection::Game => draw_game_automation_contents(app, ui),
+        AutomationSection::Market => market_panel::draw(app, ui, index),
+    }
+}
+
+fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    let index = app.automation_account;
     let Some(native) = app.games[index].native.as_ref() else {
         draw_native_missing_panel(app,ui,Some(index),
             tr("Start this account to manage game settings"));
@@ -4548,7 +4569,15 @@ fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
         });
     ui.add_space(10.0);
-    draw_native_automation(app, ui, index);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
+            .size(11.0).color(MUTED));
+        if ui.small_button(tr("Open restock on Overview")).clicked() {
+            app.restock_open[index] = true;
+            app.selected_details = None;
+            app.panel_tab = PanelTab::Overview;
+        }
+    });
 }
 
 fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
@@ -6170,7 +6199,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let gap = 12.0;
     egui::ScrollArea::vertical().id_salt("account_manager_four_cards")
         .auto_shrink([false, true]).show(ui, |ui| {
-        let columns = if ui.available_width() >= 690.0 { 2 } else { 1 };
+        let columns = if ui.available_width() >= 820.0 { 2 } else { 1 };
         let width = if columns == 2 {
             (ui.available_width() - gap) / 2.0
         } else { ui.available_width() };
@@ -6275,6 +6304,13 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             if ui.small_button(tr("Open in Firefox")).clicked() {
                 app.open_in_firefox(profile);
             }
+            if ui.small_button(tr("Configure automation"))
+                .on_hover_text(tr("Open Auto Catch settings for this account")).clicked()
+            {
+                app.select_workspace_account(index);
+                app.automation_section = AutomationSection::Capture;
+                app.panel_tab = PanelTab::Automation;
+            }
         });
 
         let show_guide = !setup.setup_complete || app.show_setup_guide[index];
@@ -6340,10 +6376,14 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
 }
 
 fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
-    let color = if good { GOOD } else { DIM };
+    let waiting = [
+        tr("Connecting"), tr("Reconnecting"), tr("Sign-in required"),
+        tr("Waiting for login"), tr("Waiting for Twitch sign-in"),
+    ].contains(&state);
+    let color = if good { GOOD } else if waiting { WARN } else { DIM };
     ui.label(
-        RichText::new(format!("{}: {}", tr(name), tr(state)))
-            .size(9.0)
+        RichText::new(format!("● {}: {}", tr(name), tr(state)))
+            .size(10.0)
             .color(color),
     )
 }
@@ -6445,7 +6485,7 @@ fn sidebar_button<'a>(ui: &mut egui::Ui, text: &'a str, selected: bool) -> egui:
     };
 
     ui.add_sized(
-        [174.0, 34.0],
+        [ui.available_width().max(80.0), 34.0],
         egui::Button::new(
             RichText::new(text)
                 .size(11.0)
@@ -6502,6 +6542,12 @@ fn configure_style(ctx: &egui::Context) {
         style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
         style.visuals.widgets.active.bg_fill = Color32::from_rgb(31, 36, 46);
         style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
+        style.visuals.widgets.hovered.bg_stroke =
+            Stroke::new(1.0, ACCENT.linear_multiply(0.40));
+        style.visuals.widgets.active.bg_stroke =
+            Stroke::new(1.0, ACCENT.linear_multiply(0.65));
+        style.visuals.selection.bg_fill = ACCENT.linear_multiply(0.30);
+        style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     });
 }
 
