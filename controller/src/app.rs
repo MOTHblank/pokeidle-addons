@@ -488,7 +488,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Gold" => "Ouro",
         "Search hunt, region or species ID" => "Buscar hunt, região ou ID da espécie",
         "All regions" => "Todas as regiões",
-        "All types" => "Todos os tipos",
         "Clear filters" => "Limpar filtros",
         "matching hunts" => "hunts encontradas",
         "Other-hunt rates are scenarios at CURRENT observed kill speed, not predictions of combat performance." =>
@@ -5040,16 +5039,6 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     }
 }
 
-fn overview_value(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
-    ui.add(
-        egui::Label::new(
-            RichText::new(compact_text(value, 35)).size(11.0).strong().color(TEXT)
-        ).truncate(),
-    ).on_hover_text(value);
-}
-
-
 fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     // Take one read-only snapshot for the entire render. All network parsing
     // and commands remain on the game worker, never the egui render thread.
@@ -6072,21 +6061,6 @@ fn detail_stat_line(ui: &mut egui::Ui, label: &str, value: &str) {
     });
 }
 
-// Compact key/value rows keep stats aligned in narrow two-column game cards.
-// Full untruncated values remain available on hover.
-fn stat_line(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(compact_text(value, 25)).size(11.0).strong().color(TEXT)
-                ).truncate()
-            ).on_hover_text(value);
-        });
-    });
-}
-
 fn resource_chip(ui: &mut egui::Ui, text: &str) {
     egui::Frame::new()
         .fill(PANEL)
@@ -6440,7 +6414,7 @@ fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
                         let mut changed = false;
 
-                        let card = egui::Frame::new()
+                        egui::Frame::new()
                             .fill(PANEL_ALT)
                             .stroke(Stroke::new(1.0, BORDER))
                             .corner_radius(10.0)
