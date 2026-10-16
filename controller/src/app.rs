@@ -2942,6 +2942,7 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        self.visuals.poll(ui.ctx());
         if self.account_setup_checked_at
             .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
             .unwrap_or(true)
@@ -4885,7 +4886,8 @@ fn capture_restock_chip(
         }).response.interact(egui::Sense::click());
     let price_hint=price.map(|p|format!(" · {p} gold")).unwrap_or_default();
     let stock_hint=stock.map(|n|format!(" · {n} in bag")).unwrap_or_default();
-    if response.on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
+    if response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{name} · ID {id}{price_hint}{stock_hint}")).clicked() {
         *selected=id;
     }
 }
