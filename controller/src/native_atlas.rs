@@ -196,7 +196,7 @@ fn raw_kills(hunt:&HuntEntry, mon:&PokemonInfo, meta:&ReferenceSpecies,
     let max_kills=3600.0/if hunt.level<20{4.2}else{3.2};
     Some(((3600.0/sec).min(max_kills),loot/coverage,coverage))
 }
-fn bonus(view:&HuntView, trainer:bool)->f64 {
+pub fn xp_multiplier(view:&HuntView, trainer:bool)->f64 {
     let b=&view.bonuses;
     // Same multiplicative structure as the community calculator, but mark
     // it partial when VIP/boost timing is not known from server clock.
@@ -228,8 +228,8 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         .min(3600.0/if hunt.level<20{4.2}else{3.2});
     Some(Forecast {
         kills_h,
-        trainer_xp_h:base_xp(hunt.level)*kills_h*bonus(view,true),
-        pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
+        trainer_xp_h:base_xp(hunt.level)*kills_h*xp_multiplier(view,true),
+        pokemon_xp_h:base_xp(hunt.level)*kills_h*xp_multiplier(view,false),
         gold_h:(base_gold(hunt.level)+loot)*kills_h,
         seconds_per_kill:if kills_h>0.0{3600.0/kills_h}else{0.0},
         coverage,
@@ -291,7 +291,7 @@ mod tests {
         let mut view=HuntView::default();
         view.bonuses.trainer_event_pct=100.0;
         view.bonuses.pokemon_event_pct=0.0;
-        assert_eq!(bonus(&view,true),2.0);
-        assert_eq!(bonus(&view,false),1.0);
+        assert_eq!(xp_multiplier(&view,true),2.0);
+        assert_eq!(xp_multiplier(&view,false),1.0);
     }
 }
