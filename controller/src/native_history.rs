@@ -102,12 +102,15 @@ impl HistoryDay {
 #[derive(Clone,Debug,Default)]
 pub struct HistorySnapshot {
     pub days: Vec<HistoryDay>,
+    /// Never pruned: lifetime gameplay totals survive daily detail retention.
+    pub lifetime: HistoryDay,
     pub load_error: Option<String>,
     pub save_error: Option<String>,
 }
 impl HistorySnapshot {
     fn to_value(&self, nick: &str) -> Value {
         json!({"version":1,"nick":nick,
+            "lifetime":self.lifetime.to_value(),
             "days":self.days.iter().map(HistoryDay::to_value).collect::<Vec<_>>()})
     }
     fn from_value(value: &Value, nick: &str) -> Result<Self,String> {
@@ -127,15 +130,28 @@ impl HistorySnapshot {
             if day.hunt.len()>128 {return Err("History hunt label too long".into());}
             records.insert((day.day,day.hunt.clone()),day);
         }
-        Ok(Self{days:records.into_values().collect(),..Default::default()})
+        let days: Vec<HistoryDay>=records.into_values().collect();
+        let lifetime=value.get("lifetime").and_then(HistoryDay::from_value)
+            .unwrap_or_else(||{
+                let mut total=HistoryDay::default();
+                for day in &days { total.accumulate(day); }
+                total
+            });
+        Ok(Self{days,lifetime,..Default::default()})
     }
     fn retain_recent(&mut self, now_day:u64) {
         self.days.retain(|day|
             day.day<=now_day && now_day.saturating_sub(day.day)<MAX_DAYS);
     }
     pub fn totals(&self) -> HistoryDay {
-        let mut total=HistoryDay::default();
-        for day in &self.days {
+        self.lifetime.clone()
+    }
+}
+impl HistoryDay {
+    fn accumulate(&mut self,other:&HistoryDay) {
+        let total=self;
+        let day=other;
+        {
             for (dst,src) in [
                 (&mut total.kills,day.kills),
                 (&mut total.captures,day.captures),
@@ -155,7 +171,6 @@ impl HistorySnapshot {
                 *value=value.saturating_add(*qty);
             }
         }
-        total
     }
 }
 fn unix_day() -> u64 {
@@ -247,7 +262,12 @@ impl HistoryRecorder {
                 self.snapshot.days.push(HistoryDay{day,hunt:slug.into(),..Default::default()});
                 self.snapshot.days.len()-1
             });
-            if self.snapshot.days[slot].from_event(event) {self.dirty=true;}
+            if self.snapshot.days[slot].from_event(event) {
+                // The same server receipt contributes exactly once to
+                // lifetime statistics and its daily hunt breakdown.
+                self.snapshot.lifetime.from_event(event);
+                self.dirty=true;
+            }
         }
         if self.dirty{
             self.snapshot.retain_recent(day);
@@ -282,6 +302,7 @@ mod tests {
             "xpTreinador":10,"xpPokemon":20,"ouro":3,
             "drops":[{"nome":"Heart Stone","qtd":2}],"token":"secret"})));
         sample.from_event(&json!({"k":"bola","ballId":4,"sucesso":true,"shiny":true}));
+        snapshot.lifetime=sample.clone();
         snapshot.days.push(sample);
         let raw=snapshot.to_value("Trainer").to_string();
         assert!(!raw.contains("secret"));
@@ -291,6 +312,19 @@ mod tests {
         assert_eq!(recovered.totals().captures,1);
         assert_eq!(recovered.totals().drops["Heart Stone"],2);
         assert!(HistorySnapshot::from_value(&serde_json::from_str::<Value>(&raw).unwrap(),"Other").is_err());
+    }
+    #[test]
+    fn retained_lifetime_totals_outlive_daily_detail_pruning() {
+        let mut snapshot=HistorySnapshot::default();
+        snapshot.lifetime.kills=999;
+        snapshot.days.push(HistoryDay{day:10,hunt:"old".into(),kills:999,
+            ..Default::default()});
+        snapshot.retain_recent(200);
+        assert!(snapshot.days.is_empty());
+        assert_eq!(snapshot.totals().kills,999);
+        let raw=snapshot.to_value("Trainer");
+        let recovered=HistorySnapshot::from_value(&raw,"Trainer").unwrap();
+        assert_eq!(recovered.totals().kills,999);
     }
     #[test]
     fn retains_only_recent_history() {
