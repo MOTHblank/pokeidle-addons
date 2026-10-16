@@ -299,6 +299,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Automation" => "Automação",
         "Open Automation" => "Abrir automação",
         "Server automation" => "Automação do servidor",
+        "in stock" => "em estoque",
+        "No verified price" => "Preço não verificado",
+        "No valid restock rules configured" => "Nenhuma regra válida de reposição configurada",
         "Native controls are available after this account finishes authentication." =>
             "Os controles nativos ficam disponíveis após a autenticação desta conta.",
         "Choose an account to inspect its automation and restock status." =>
@@ -4291,6 +4294,27 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
             if let Some(error) = restock.last_error.as_deref() {
                 ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.add_space(8.0);
+            for rule in &restock.rules {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!(
+                        "{} #{}",rule.name,rule.id)).size(11.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!(
+                        "{} {} / {} · {} {}",
+                        rule.current.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
+                        tr("in stock"),rule.target,
+                        tr("buy at"),rule.low
+                    )).size(10.0).color(DIM));
+                    let price = rule.price.map(|n|format!("{} gold",format_number(n)))
+                        .unwrap_or_else(||tr("No verified price").into());
+                    ui.label(RichText::new(format!("{} · {}",price,rule.price_source))
+                        .size(10.0).color(if rule.price.is_some() { MUTED } else { WARN }));
+                });
+            }
+            if restock.enabled && restock.rules.is_empty() {
+                ui.label(RichText::new(tr("No valid restock rules configured"))
+                    .size(10.0).color(WARN));
             }
         });
     ui.add_space(10.0);
