@@ -337,6 +337,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for data" => "Aguardando dados",
         "Capture preferences and live statistics" => "Preferências e estatísticas de captura",
         "Server settings and restock status" => "Opções do jogo e status da reposição",
+        "Recovery & selling" => "Recuperação e venda",
+        "Pokémon protection" => "Proteção de Pokémon",
         "Automatic buying rules and Snatch" => "Regras de compra e Snatch",
         "Game & restock" => "Jogo e reposição",
         "Market" => "Mercado",
@@ -4501,25 +4503,34 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 "Changes only take effect after PokéIdle confirms them."
             )).size(10.0).color(DIM));
             ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                for (key, label) in [
+            let groups: [(&str, &[(&str, &str)]); 2] = [
+                ("Recovery & selling", &[
                     ("autoPotion", "Auto Potion"),
                     ("autoRevive", "Auto Revive"),
                     ("autoVendaLoot", "Auto Sell"),
+                    ("autoVoltarHunt", "Return to Hunt"),
+                ]),
+                ("Pokémon protection", &[
                     ("autoLockShiny", "Lock Shiny"),
                     ("autoLockNota9", "Lock Grade 9"),
                     ("autoLockP5", "Lock Potency 5"),
-                    ("autoVoltarHunt", "Return to Hunt")
-                ] {
-                    if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
-                        let mut enabled=current;
-                        if ui.add_enabled(can_edit,
-                            egui::Checkbox::new(&mut enabled,label)).changed() {
-                            commands.push((key.into(),serde_json::json!(enabled)));
+                ]),
+            ];
+            for (heading, fields) in groups {
+                ui.label(RichText::new(tr(heading)).size(11.0).strong().color(MUTED));
+                ui.horizontal_wrapped(|ui| {
+                    for (key, label) in fields {
+                        if let Some(current)=automation.get(*key).and_then(serde_json::Value::as_bool) {
+                            let mut enabled=current;
+                            if ui.add_enabled(can_edit,
+                                egui::Checkbox::new(&mut enabled,tr(label))).changed() {
+                                commands.push(((*key).into(),serde_json::json!(enabled)));
+                            }
                         }
                     }
-                }
-            });
+                });
+                ui.add_space(5.0);
+            }
             ui.add_space(10.0);
             let draft=&mut app.automation_drafts[index];
             ui.horizontal_wrapped(|ui| {
@@ -4576,8 +4587,10 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             for rule in &restock.rules {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(format!(
-                        "{} #{}",rule.name,rule.id)).size(11.0).strong().color(TEXT));
+                    let below_target=rule.current.is_some_and(|stock|stock<rule.low);
+                    ui.label(RichText::new(&rule.name).size(11.0).strong()
+                        .color(if below_target{WARN}else{TEXT}))
+                        .on_hover_text(format!("Item #{}",rule.id));
                     ui.label(RichText::new(format!(
                         "{} {} / {} · {} {}",
                         rule.current.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
