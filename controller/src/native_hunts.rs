@@ -336,6 +336,36 @@ impl HuntIntel {
             }
         }
     }
+    /// Merge full or partial server-confirmed wild state. A missing slot is
+    /// not equivalent to an absent encounter; a new slot must not inherit
+    /// the previous opponent's name/species.
+    fn parse_wild(value: &Value, previous: Option<&WildInfo>) -> Option<WildInfo> {
+        if !value.is_object() { return None; }
+        let given_slot = Self::num(value, "slot");
+        let same = previous.filter(|old|
+            given_slot.is_none_or(|slot| slot == old.slot));
+        let name = value.get("nome").or_else(|| value.get("name"))
+            .and_then(Value::as_str).map(str::trim)
+            .filter(|name| !name.is_empty()).map(str::to_owned)
+            .or_else(|| same.map(|old| old.name.clone()))
+            .unwrap_or_default();
+        let species_id = Self::num(value, "speciesId")
+            .or_else(|| Self::num(value, "pokeId"))
+            .or_else(|| same.and_then(|old| old.species_id));
+        if name.is_empty() && species_id.is_none() { return None; }
+        Some(WildInfo {
+            slot: given_slot.or_else(|| same.map(|old| old.slot)).unwrap_or(0),
+            name,
+            species_id,
+            level: Self::num(value, "level")
+                .or_else(|| same.map(|old| old.level as u64))
+                .unwrap_or(0).min(u32::MAX as u64) as u32,
+            hp: Self::num(value, "hp")
+                .or_else(|| same.map(|old| old.hp)).unwrap_or(0),
+            max_hp: Self::num(value, "maxHp")
+                .or_else(|| same.map(|old| old.max_hp)).unwrap_or(0),
+        })
+    }
     fn merge_state(&mut self, state: &Value, now: Instant) {
         // Switch hunt before applying its opponent. On a welcome, the same
         // state already includes the new wild encounter; do not clear it after.
@@ -382,24 +412,16 @@ impl HuntIntel {
             }
         }
         if let Some(wild) = state.get("selvagem") {
-            let previous_wild = self.view.wild.clone();
-            self.view.wild = if wild.is_null() { None } else {
-                wild.get("slot").and_then(Value::as_u64).map(|slot| WildInfo {
-                    slot,
-                    name: wild.get("nome").and_then(Value::as_str).unwrap_or("").into(),
-                    level: Self::num(wild,"level").unwrap_or(0).min(u32::MAX as u64) as u32,
-                    species_id: Self::num(wild,"speciesId"),
-                    hp: Self::num(wild,"hp").unwrap_or(0),
-                    max_hp: Self::num(wild,"maxHp").unwrap_or(0)
-                })
-            };
-            // A fresh spawn or HP change confirms combat even when an
-            // individual fight has not produced its first kill.
+            let previous = self.view.wild.clone();
+            self.view.wild = Self::parse_wild(wild, previous.as_ref());
+            // The first confirmed encounter also establishes combat activity.
             if self.view.wild.as_ref().is_some_and(|current| {
-                previous_wild.as_ref().is_some_and(|previous|
-                    previous.slot != current.slot ||
-                    previous.hp != current.hp ||
-                    previous.max_hp != current.max_hp)
+                previous.as_ref().is_none_or(|old|
+                    old.slot != current.slot ||
+                    old.species_id != current.species_id ||
+                    old.name != current.name ||
+                    old.hp != current.hp ||
+                    old.max_hp != current.max_hp)
             }) {
                 self.last_combat_at = Some(now);
             }
@@ -432,6 +454,7 @@ impl HuntIntel {
         }
         if let Some(center) = state.get("noCentro").and_then(Value::as_bool) {
             self.view.in_center = center;
+            if center { self.view.wild = None; }
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
             self.view.roster_ready = true;
@@ -566,6 +589,7 @@ impl HuntIntel {
                                 self.view.wild = None;
                             },
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {
+                                self.view.wild = None; // Await the next confirmed spawn.
                                 self.session_kills = self.session_kills.saturating_add(1);
                                 self.last_battle_at=Some(now);
                                 self.last_combat_at=Some(now);
@@ -764,7 +788,7 @@ mod tests {
         let mut intel = HuntIntel::new();
         let now = Instant::now();
         intel.ingest(r#"{"t":"estado","estado":{"selvagem":{"slot":1,"nome":"Scyther","level":100,"speciesId":123,"hp":90,"maxHp":100}}}"#,now);
-        assert_eq!(intel.snapshot().measurements.combat_event_age_secs,None);
+        assert!(intel.snapshot().measurements.combat_event_age_secs.is_some());
         intel.ingest(r#"{"t":"estado","estado":{"selvagem":{"slot":1,"nome":"Scyther","level":100,"speciesId":123,"hp":60,"maxHp":100}}}"#,now+Duration::from_secs(2));
         let snap = intel.snapshot();
         assert!(snap.measurements.combat_event_age_secs.is_some());
@@ -776,6 +800,58 @@ mod tests {
         let disconnected = intel.snapshot();
         assert_eq!(disconnected.measurements.combat_event_age_secs,None);
         assert!(disconnected.wild.is_none());
+    }
+
+    #[test]
+    fn wild_partial_updates_keep_enemy_visible_until_explicitly_cleared() {
+        let mut intel = HuntIntel::new();
+        let now = Instant::now();
+        intel.ingest(r#"{"t":"welcome","estado":{"selvagem":{
+            "nome":"Scyther","speciesId":123,"level":150,"hp":90,"maxHp":100}}}"#, now);
+        let first = intel.snapshot().wild.unwrap();
+        assert_eq!(first.name,"Scyther");
+        assert_eq!(first.slot,0);
+        assert_eq!(first.species_id,Some(123));
+        assert!(intel.snapshot().measurements.combat_event_age_secs.is_some());
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{"hp":60}}}"#,
+            now + Duration::from_secs(1));
+        let patched = intel.snapshot().wild.unwrap();
+        assert_eq!(patched.name,"Scyther");
+        assert_eq!(patched.species_id,Some(123));
+        assert_eq!(patched.level,150);
+        assert_eq!(patched.hp,60);
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#,
+            now + Duration::from_secs(2));
+        assert!(intel.snapshot().wild.is_none());
+    }
+
+    #[test]
+    fn a_new_unidentified_slot_must_not_be_called_the_old_enemy() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{
+            "slot":1,"nome":"Scyther","speciesId":123,"hp":100}}}"#,now);
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{
+            "slot":2,"hp":100}}}"#,now + Duration::from_secs(1));
+        assert!(intel.snapshot().wild.is_none());
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{
+            "slot":2,"nome":"Pinsir","speciesId":127,"hp":50}}}"#,
+            now + Duration::from_secs(2));
+        assert_eq!(intel.snapshot().wild.unwrap().name,"Pinsir");
+    }
+
+    #[test]
+    fn kill_and_center_clear_opponent() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        let spawn=r#"{"t":"estado","estado":{"selvagem":{
+            "slot":1,"nome":"Scyther","hp":100}}}"#;
+        intel.ingest(spawn,now);
+        intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem"}]}"#,now);
+        assert!(intel.snapshot().wild.is_none());
+        intel.ingest(spawn,now);
+        intel.ingest(r#"{"t":"estado","estado":{"noCentro":true}}"#,now);
+        assert!(intel.snapshot().wild.is_none());
     }
 
     #[test]
