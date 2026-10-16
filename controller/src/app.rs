@@ -1636,6 +1636,7 @@ pub struct ControllerApp {
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     show_accounts: bool,
     accounts: [AccountConfig; 4],
+    account_names_dirty: [bool; 4],
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
@@ -1762,6 +1763,7 @@ impl ControllerApp {
             inventory_catalog_tx,
             inventory_catalog_rx,
             show_accounts: false,
+            account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
@@ -3519,10 +3521,13 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             });
     });
     let mut views=Vec::new();
+    let mut unavailable=Vec::new();
     for index in 0..app.games.len() {
         if app.inventory_account.is_some_and(|selected| selected!=index){continue}
         if let Some(native)=app.games[index].native.as_ref() {
             views.push((app.account_name(app.games[index].profile),native.hunt_snapshot()));
+        } else if app.accounts[index].enabled || app.inventory_account==Some(index) {
+            unavailable.push(app.account_name(app.games[index].profile));
         }
     }
     if views.is_empty(){
@@ -3531,6 +3536,12 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
             .size(12.0).color(WARN));
         return;
     }
+    ui.label(RichText::new(format!("{} {}{}",
+        views.len(), tr("native inventories loaded"),
+        if unavailable.is_empty() { String::new() } else {
+            format!(" · {}: {}", tr("Unavailable"), unavailable.join(", "))
+        }
+    )).size(10.0).color(if unavailable.is_empty() { DIM } else { WARN }));
     if app.inventory_catalog_busy {
         ui.label(RichText::new(tr("Loading public item names..."))
             .size(10.0).color(DIM));
@@ -3611,7 +3622,13 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
                         });
                         ui.separator();
                     }
-                    if rows.is_empty(){ui.label(tr("No inventory items match the filters"));}
+                    if rows.is_empty(){
+                        ui.label(if query.is_empty() && app.inventory_category.is_empty() {
+                            tr("No server-reported stock for these accounts yet")
+                        } else {
+                            tr("No inventory items match the filters")
+                        });
+                    }
                 });
         });
     ui.add_space(10.0);
@@ -3631,6 +3648,7 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
                 .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
                 .collect::<Vec<_>>();
             names.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+            let no_matching_drops=names.is_empty();
             egui::ScrollArea::vertical().id_salt("inventory-session-drops")
                 .max_height(250.0).show(ui,|ui|{
                     for (name,quantity) in names {
@@ -3643,8 +3661,12 @@ fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
                         });
                         ui.separator();
                     }
-                    if views.iter().all(|(_,v)|v.session.acquired.is_empty()) {
-                        ui.label(tr("No drops acquired in this session yet"));
+                    if no_matching_drops {
+                        ui.label(if query.is_empty() {
+                            tr("No drops acquired in this session yet")
+                        } else {
+                            tr("No acquired drops match the search")
+                        });
                     }
                 });
         });
@@ -4066,6 +4088,10 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     };
     let view=native.hunt_snapshot();
     let status=native.snapshot();
+    if status.phase != "Online" {
+        ui.label(RichText::new(format!("{}: {}", tr("Game connection"), status.phase))
+            .size(10.0).color(WARN));
+    }
     ui.add_space(9.0);
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("{}: {}",tr("Pokémon on account"),view.pokemon_roster.len()));
@@ -4133,11 +4159,23 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         };
         cmp.then_with(||a.id.cmp(&b.id))
     });
+    let selected_id=app.pokemon_selected[index]
+        .filter(|id|filtered.iter().any(|pokemon|pokemon.id==*id))
+        .or_else(||filtered.first().map(|pokemon|pokemon.id));
+    ui.label(RichText::new(format!("{} {} / {}", filtered.len(),
+        tr("Pokémon matching filters"), view.pokemon_roster.len()))
+        .size(10.0).color(MUTED));
     ui.columns(2, |cols| {
         cols[0].label(RichText::new(tr("Pokémon on account")).strong().color(TEXT));
         egui::ScrollArea::vertical().id_salt(("pokemon-roster",index))
             .max_height(450.0).show(&mut cols[0],|ui|{
-                if filtered.is_empty() {ui.label(tr("Waiting for Pokémon roster"));}
+                if filtered.is_empty() {
+                    ui.label(if view.pokemon_roster.is_empty() {
+                        tr("No Pokémon roster received yet")
+                    } else {
+                        tr("No Pokémon match the current filters")
+                    });
+                }
                 for pokemon in &filtered {
                     let active=view.active_pokemon.as_ref()
                         .is_some_and(|current|current.id==pokemon.id);
@@ -4147,7 +4185,7 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         if pokemon.shiny {" ✨"}else{""},
                         pokemon.quality.map(|n|format!("{n:.2}"))
                             .unwrap_or_else(||"—".into()));
-                    if ui.selectable_label(app.pokemon_selected[index]==Some(pokemon.id),name)
+                    if ui.selectable_label(selected_id==Some(pokemon.id),name)
                         .clicked() {
                             app.pokemon_selected[index]=Some(pokemon.id);
                             app.pokemon_sale_confirm[index]=None;
@@ -4155,7 +4193,7 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
         cols[1].label(RichText::new(tr("Selected Pokémon")).strong().color(TEXT));
-        if let Some(pokemon)=app.pokemon_selected[index]
+        if let Some(pokemon)=selected_id
             .and_then(|id|view.pokemon_roster.iter().find(|p|p.id==id)) {
             let active=view.active_pokemon.as_ref().is_some_and(|p|p.id==pokemon.id);
             let detail=[
@@ -4164,7 +4202,10 @@ fn draw_pokemon_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ("Level",pokemon.level.to_string()),
                 ("XP",pokemon.xp.map(format_number).unwrap_or_default()),
                 ("Next XP",pokemon.xp_next.map(format_number).unwrap_or_default()),
-                ("HP",format!("{}/{}",pokemon.hp.unwrap_or(0),pokemon.max_hp.unwrap_or(0))),
+                ("HP",match (pokemon.hp,pokemon.max_hp) {
+                    (Some(hp),Some(max))=>format!("{hp}/{max}"),
+                    _=>"—".into(),
+                }),
                 ("Grade",pokemon.grade.map(|v|format!("{v:.2}")).unwrap_or_default()),
                 ("Quality",pokemon.quality.map(|v|format!("{v:.2}")).unwrap_or_default()),
                 ("Power",pokemon.power.map(|v|v.to_string()).unwrap_or_default()),
@@ -4254,6 +4295,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             app.automation_drafts[index]=AutomationDraft::from_server(automation);
         }
         let mut commands:Vec<(String,serde_json::Value)>=Vec::new();
+        let can_edit=snapshot.phase=="Online" &&
+            snapshot.native_automation.pending_field.is_none();
         egui::Frame::new().fill(PANEL).corner_radius(10.0)
             .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -4265,8 +4308,9 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(RichText::new(format!("{}: {field}",tr("Awaiting confirmation")))
                         .size(10.0).color(WARN));
                 }
-                ui.label(RichText::new(format!("{}: {}",
-                    tr("Confirmed"),snapshot.native_automation.confirmed))
+                ui.label(RichText::new(format!("{}: {} · {}: {}",
+                    tr("Confirmed"),snapshot.native_automation.confirmed,
+                    tr("Queued"),snapshot.native_automation.queued))
                     .size(10.0).color(DIM));
             });
             if let Some(error)=snapshot.native_automation.error.as_deref(){
@@ -4288,7 +4332,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ] {
                     if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
                         let mut enabled=current;
-                        if ui.checkbox(&mut enabled,label).changed() && snapshot.phase=="Online" {
+                        if ui.add_enabled(can_edit,
+                            egui::Checkbox::new(&mut enabled,label)).changed() {
                             commands.push((key.into(),serde_json::json!(enabled)));
                         }
                     }
@@ -4301,7 +4346,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(tr("Potion HP threshold (%)"));
                     ui.add(egui::DragValue::new(&mut draft.hp_limit)
                         .range(0.0..=100.0).speed(0.5));
-                    if ui.small_button(tr("Apply HP")).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply HP"))).clicked() {
                         commands.push(("hpLimiar".into(),serde_json::json!(draft.hp_limit)));
                     }
                 }
@@ -4309,7 +4354,7 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(tr("Minimum lock grade"));
                     ui.add(egui::DragValue::new(&mut draft.lock_grade)
                         .range(0.0..=10.0).speed(0.1));
-                    if ui.small_button(tr("Apply grade")).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply grade"))).clicked() {
                         commands.push(("autoLockNotaMin".into(),
                             serde_json::json!(draft.lock_grade)));
                     }
@@ -4325,7 +4370,8 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.label(label);
                     ui.add(egui::TextEdit::singleline(value)
                         .desired_width(210.0).hint_text("1, 2, 3"));
-                    if ui.small_button(format!("{} {label}",tr("Apply"))).clicked() {
+                    if ui.add_enabled(can_edit,egui::Button::new(
+                        format!("{} {label}",tr("Apply")))).clicked() {
                         match parse_automation_ids(value) {
                             Ok(ids)=>commands.push((key.into(),serde_json::json!(ids))),
                             Err(error)=>{app.status=error;app.status_error=true;}
@@ -6155,7 +6201,14 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                         egui::TextEdit::singleline(&mut app.accounts[index].name)
                                             .hint_text(profile.label()),
                                     );
-                                    changed |= response.changed();
+                                    // Editing is local until Enter/focus loss. Avoid a disk
+                                    // write and destructive whitespace trimming per keystroke.
+                                    if response.changed() {
+                                        app.account_names_dirty[index] = true;
+                                    }
+                                    if response.lost_focus() && app.account_names_dirty[index] {
+                                        changed = true;
+                                    }
 
                                     if app.accounts[index].name.trim().is_empty() {
                                         ui.colored_label(WARN, tr("Name cannot be empty"));
@@ -6163,7 +6216,39 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                 });
 
                                 ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(native) = app.games[index].native.as_ref() {
+                                        let game = native.snapshot();
+                                        let twitch = native.twitch_snapshot();
+                                        status_chip(ui, "Game", &game.phase, game.phase == "Online");
+                                        status_chip(ui, "Twitch IRC",
+                                            &format!("{} {}/{}", twitch.phase, twitch.joined, twitch.desired),
+                                            twitch.phase == "Online");
+                                    } else {
+                                        let phase = if app.native_verifying[index] {
+                                            tr("Authenticating")
+                                        } else if app.cached_native_busy[index] || app.native_handoff_busy[index] {
+                                            tr("Starting")
+                                        } else if running {
+                                            tr("Firefox login")
+                                        } else {
+                                            tr("Stopped")
+                                        };
+                                        status_chip(ui, "Session", phase, false);
+                                    }
+                                    if running {
+                                        if ui.small_button(tr("Stop")).clicked() {
+                                            app.stop_one(profile);
+                                        }
+                                    } else if ui.small_button(tr("Start native")).clicked() {
+                                        app.launch_one(profile);
+                                    }
+                                    if ui.small_button(tr("Open in Firefox")).clicked() {
+                                        app.open_in_firefox(profile);
+                                    }
+                                });
 
+                                ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
                                     let profile_label = if setup.profile_ready {
                                         tr("Profile folder exists")
@@ -6445,13 +6530,15 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                         }
 
                         if changed {
-                            let trimmed = app.accounts[index].name.trim().to_string();
+                            let trimmed = app.accounts[index].name.trim().to_owned();
                             app.accounts[index].name = if trimmed.is_empty() {
-                                profile.label().to_string()
+                                profile.label().to_owned()
                             } else {
                                 trimmed
                             };
-                            app.save_account_config();
+                            if app.save_account_config() {
+                                app.account_names_dirty[index] = false;
+                            }
                         }
 
                         ui.add_space(10.0);
@@ -6466,6 +6553,24 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                 });
         });
 
+    // Closing the dialog must not silently discard an edit that still has
+    // keyboard focus. Persist the last name once, not on every text change.
+    if !open {
+        for profile in GameProfile::ALL {
+            let index = profile.index();
+            if app.account_names_dirty[index] {
+                let name = app.accounts[index].name.trim();
+                app.accounts[index].name = if name.is_empty() {
+                    profile.label().to_owned()
+                } else {
+                    name.to_owned()
+                };
+                if app.save_account_config() {
+                    app.account_names_dirty[index] = false;
+                }
+            }
+        }
+    }
     app.show_accounts = open;
 }
 
