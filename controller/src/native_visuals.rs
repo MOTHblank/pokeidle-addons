@@ -5,6 +5,7 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 mod generated {
@@ -29,6 +30,9 @@ pub struct VisualCache {
     attempted: BTreeSet<(Kind, u64)>,
     request: Sender<Request>,
     results: Receiver<Response>,
+    queued: usize,
+    finished: usize,
+    failed: usize,
 }
 
 fn cache_dir() -> PathBuf {
@@ -47,23 +51,70 @@ fn cache_dir() -> PathBuf {
     std::env::temp_dir().join("moth-controller-visual")
 }
 
-fn asset_url(kind: Kind, id: u64) -> Option<&'static str> {
-    match (kind, id) {
+// Checked-in copy of assets/items-icons.json from pokeidle-upstream. The
+// exported image-index.json contained zero image IDs, so this authoritative
+// game item ID -> public art path table supplies the item mappings instead.
+fn upstream_item_icons() -> &'static BTreeMap<u64, String> {
+    static ICONS: OnceLock<BTreeMap<u64, String>> = OnceLock::new();
+    ICONS.get_or_init(|| {
+        serde_json::from_str(include_str!("../assets/visual/upstream-item-icons.json"))
+            .unwrap_or_default()
+    })
+}
+
+fn upstream_item_url(id: u64) -> Option<String> {
+    let raw = upstream_item_icons().get(&id)?;
+    // Never use arbitrary item metadata as a request URL: only these public
+    // image directory roots from the upstream game snapshot are allowed.
+    if raw.is_empty() || raw.contains("..") || raw.contains('\\') ||
+        raw.contains('?') || raw.contains('#') ||
+        !raw.bytes().all(|byte| byte.is_ascii_alphanumeric() ||
+            matches!(byte, b'/' | b'.' | b'_' | b'-')) ||
+        !(raw.ends_with(".png") || raw.ends_with(".gif")) { return None; }
+    let url = if raw.starts_with("site/assets/") {
+        format!("/assets/{raw}")
+    } else if raw.starts_with("img/") {
+        format!("/{raw}")
+    } else {
+        return None;
+    };
+    trusted_url(&url)
+}
+
+fn asset_url(kind: Kind, id: u64) -> Option<String> {
+    let fixed = match (kind, id) {
         (Kind::Ball, 1) => Some("/assets/site/assets/ui/ball-poke.png"),
         (Kind::Ball, 2) => Some("/assets/site/assets/ui/ball-great.png"),
         (Kind::Ball, 3) => Some("/img/ball-super.png"),
         (Kind::Ball, 4) => Some("/assets/site/assets/ui/ball-ultra.png"),
         (Kind::Ball, 5) => Some("/img/ball-beast.png"),
-        (Kind::Item, 200) => Some("/assets/markitems/small_potion.png"),
-        (Kind::Item, 201) => Some("/assets/markitems/great_potion.png"),
-        (Kind::Item, 202) => Some("/assets/markitems/ultra_potion.png"),
-        (Kind::Item, 203) => Some("/assets/markitems/hyper_potion.png"),
-        (Kind::Item, 204) => Some("/assets/markitems/ultimate_potion.png"),
-        (Kind::Item, 205) => Some("/assets/markitems/revive.png"),
-        (Kind::Item, 206) => Some("/assets/markitems/max_revive.png"),
         (Kind::Item, 70070) => Some("/img/itens/golden-potion.png"),
         _ => None,
+    };
+    fixed.and_then(trusted_url).or_else(|| match kind {
+        Kind::Item => upstream_item_url(id),
+        _ => None,
+    })
+}
+
+fn image_urls(kind: Kind, id: u64, icon_hint: Option<&str>) -> Vec<String> {
+    let mut urls = Vec::new();
+    for candidate in [icon_hint.and_then(trusted_url), asset_url(kind, id)] {
+        let Some(source) = candidate else { continue; };
+        if !urls.contains(&source) { urls.push(source.clone()); }
+        // The game publishes some healing items from either location.
+        const SHORT: &str = "https://pokeidle.io/assets/markitems/";
+        const LONG: &str = "https://pokeidle.io/assets/site/assets/markitems/";
+        const alternative = if source.starts_with(SHORT) {
+            Some(source.replacen(SHORT, LONG, 1))
+        } else if source.starts_with(LONG) {
+            Some(source.replacen(LONG, SHORT, 1))
+        } else { None };
+        if let Some(alt) = alternative {
+            if !urls.contains(&alt) { urls.push(alt); }
+        }
     }
+    urls
 }
 
 // Reject arbitrary hosts, scheme-relative paths, traversal, and non-image URLs.
@@ -138,7 +189,8 @@ impl Default for VisualCache {
                     if output.send(Response { key: (job.kind, job.id), bytes }).is_err() { break; }
                 }
             }).ok();
-        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results }
+        Self { textures: BTreeMap::new(), attempted: BTreeSet::new(), request, results,
+            queued: 0, finished: 0, failed: 0 }
     }
 }
 
@@ -158,11 +210,50 @@ impl VisualCache {
 
     pub fn poll(&mut self, ctx: &egui::Context) {
         while let Ok(reply) = self.results.try_recv() {
+            self.finished += 1;
             if let Some(bytes) = reply.bytes {
                 self.put(ctx, reply.key, &bytes);
                 ctx.request_repaint();
+            } else {
+                self.failed += 1;
             }
         }
+    }
+
+    /// Queues known public Poké Ball and item artwork without touching
+    /// Pokémon paths, saved credentials, or game sessions. Cached images are
+    /// reused by the existing bounded background download worker.
+    pub fn download_game_icons(&mut self) -> usize {
+        let mut queued = 0;
+        let ids = [
+            (Kind::Ball, 1), (Kind::Ball, 2), (Kind::Ball, 3),
+            (Kind::Ball, 4), (Kind::Ball, 5),
+        ].into_iter().chain(
+            upstream_item_icons().keys().copied().map(|id| (Kind::Item, id))
+        ).chain([(Kind::Item, 70070)]);
+        for (kind, id) in ids {
+            let key = (kind, id);
+            if self.attempted.contains(&key) { continue; }
+            // Bundled assets are already available without an HTTP request;
+            // the next show() will decode those lazily.
+            if generated::bytes(kind.key(), id).is_some() { continue; }
+            let urls = image_urls(kind, id, None);
+            if urls.is_empty() { continue; }
+            if self.request.send(Request { kind, id, urls }).is_ok() {
+                self.attempted.insert(key);
+                self.queued += 1;
+                queued += 1;
+            }
+        }
+        queued
+    }
+
+    pub fn progress(&self) -> (usize, usize, usize, usize) {
+        (self.queued, self.finished, self.failed, self.textures.len())
+    }
+
+    pub fn known_icon_count() -> usize {
+        upstream_item_icons().len() + 5 + 1
     }
 
     /// Returns true if an icon was drawn. Always fall back to text if false.
@@ -178,26 +269,10 @@ impl VisualCache {
                 if valid_image(bytes) { self.put(ui.ctx(), key, bytes); }
             }
             if !self.textures.contains_key(&key) {
-                let mut urls = Vec::<String>::new();
-                for candidate in [icon_hint, asset_url(kind, id)] {
-                    let Some(source) = candidate.and_then(trusted_url) else {continue};
-                    if !urls.contains(&source) { urls.push(source.clone()); }
-                    // Some game builds serve items.json paths under
-                    // /assets/site. Probe both, but only on the same trusted
-                    // public game host and only from the background worker.
-                    const SHORT: &str = "https://pokeidle.io/assets/markitems/";
-                    const LONG: &str = "https://pokeidle.io/assets/site/assets/markitems/";
-                    let alternative = if source.starts_with(SHORT) {
-                        Some(source.replacen(SHORT,LONG,1))
-                    } else if source.starts_with(LONG) {
-                        Some(source.replacen(LONG,SHORT,1))
-                    } else { None };
-                    if let Some(alternative) = alternative {
-                        if !urls.contains(&alternative) { urls.push(alternative); }
-                    }
-                }
-                if !urls.is_empty() {
-                    let _ = self.request.send(Request { kind, id, urls });
+                let urls = image_urls(kind, id, icon_hint);
+                if !urls.is_empty() &&
+                    self.request.send(Request { kind, id, urls }).is_ok() {
+                    self.queued += 1;
                 }
             }
         }
@@ -225,5 +300,11 @@ mod tests {
         assert!(asset_url(Kind::Ball, 1).is_some());
         assert!(asset_url(Kind::Item, 70070).is_some());
         assert!(asset_url(Kind::Pokemon, 1).is_none());
+        assert!(upstream_item_icons().len() >= 400);
+        assert_eq!(upstream_item_url(200).as_deref(),
+            Some("https://pokeidle.io/assets/site/assets/markitems/small_potion.png"));
+        assert_eq!(upstream_item_url(66).as_deref(),
+            Some("https://pokeidle.io/assets/site/assets/items/heart_stone.gif"));
+        assert_eq!(upstream_item_url(100_000_000), None);
     }
 }
