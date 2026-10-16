@@ -414,6 +414,193 @@ fn draw_hunt_row(
         });
 }
 
+
+#[derive(Clone)]
+struct AtlasDestination<'a> {
+    hunt:&'a native_hunts::HuntEntry,
+    unlocked:bool,
+    share:f64,
+    forecast:Option<native_atlas::Forecast>,
+    objective:Option<f64>,
+}
+struct AtlasSpeciesRow<'a> {
+    id:u64,
+    name:String,
+    types:Vec<String>,
+    owned:bool,
+    destinations:Vec<AtlasDestination<'a>>,
+    best:Option<f64>,
+}
+
+fn atlas_destinations<'a>(
+    view:&'a HuntView, reference:Option<&'a AtlasReference>
+) -> Vec<(&'a native_hunts::HuntEntry,bool)> {
+    // Authentication, not trainer level, is authoritative for actual unlocks.
+    let mut seen=std::collections::BTreeSet::new();
+    let mut result=Vec::new();
+    for hunt in view.hunts.iter() {
+        if seen.insert(hunt.slug.as_str()) {
+            result.push((hunt,true));
+        }
+    }
+    if let Some(reference)=reference {
+        for hunt in &reference.hunts {
+            if seen.insert(hunt.slug.as_str()) {
+                result.push((hunt,false)); // public-guide preview only
+            }
+        }
+    }
+    result
+}
+
+fn atlas_effectiveness(
+    reference:&AtlasReference, types:&[String], attack:&str
+)->Option<f64> {
+    let row=reference.chart.get(attack)?;
+    if types.is_empty(){return None}
+    let mut product=1.0;
+    for defend in types {
+        product*=*row.get(defend)?;
+    }
+    Some(product)
+}
+
+fn atlas_objective(
+    sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
+    hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
+    rare_item:u64
+)->Option<f64> {
+    match sort {
+        AtlasSort::Name=>None,
+        AtlasSort::Level=>Some(hunt.level as f64),
+        AtlasSort::Spawn=>Some(share*100.0),
+        AtlasSort::TrainerXp=>forecast.map(|f|f.trainer_xp_h),
+        AtlasSort::PokemonXp=>forecast.map(|f|f.pokemon_xp_h),
+        AtlasSort::Gold=>forecast.map(|f|f.gold_h),
+        AtlasSort::Shiny=>forecast.and_then(|f|{
+            // Only a hypothetical wild shiny encounter rate, NOT capture odds;
+            // the userscript excludes Outland from this wiki assumption.
+            if hunt.area.eq_ignore_ascii_case("outland"){None}
+            else{Some(f.kills_h*share/24000.0)}
+        }),
+        AtlasSort::Rare=>forecast.and_then(|f|species.and_then(|p|{
+            let relevant:Vec<_>=p.drops.iter().filter(|drop|
+                drop.item_id==Some(rare_item)).collect();
+            if relevant.is_empty(){return None}
+            Some(f.kills_h*share*relevant.iter().map(|drop|
+                drop.chance_pct/100.0*(drop.minimum+drop.maximum)/2.0).sum::<f64>())
+        })),
+    }.filter(|v|v.is_finite() && *v>=0.0)
+}
+fn atlas_sort_label(sort:AtlasSort)->&'static str {
+    match sort {
+        AtlasSort::TrainerXp=>"Trainer XP/h",
+        AtlasSort::PokemonXp=>"Pokémon XP/h",
+        AtlasSort::Gold=>"Gross gold/h",
+        AtlasSort::Rare=>"Selected guide drop units/h",
+        AtlasSort::Shiny=>"Shiny encounter/h (conditional)",
+        AtlasSort::Spawn=>"Spawn weight",
+        AtlasSort::Level=>"Hunt level",
+        AtlasSort::Name=>"Species name",
+    }
+}
+fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
+    match (sort,value) {
+        (_,None)=>"—".into(),
+        (AtlasSort::Shiny|AtlasSort::Rare,Some(n))=>format!("{n:.4}"),
+        (AtlasSort::Spawn,Some(n))=>format!("{n:.1}%"),
+        (_,Some(n))=>format_hunt_amount(n),
+    }
+}
+
+/// Species are grouped across destinations, matching the userscript rather
+/// than repeating one card per hunt. A guide-only hunt is NEVER executable.
+fn atlas_species_rows<'a>(
+    view:&'a HuntView, reference:Option<&'a AtlasReference>, cache:&EstimateCache,
+    filters:&AtlasFilters,
+)->Vec<AtlasSpeciesRow<'a>> {
+    let query=filters.search.trim().to_lowercase();
+    let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
+        .filter_map(|mon|mon.species_id).collect();
+    let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow<'a>>::new();
+    for (hunt,unlocked) in atlas_destinations(view,reference) {
+        if filters.availability==AtlasAvailability::Unlocked && !unlocked
+            || filters.availability==AtlasAvailability::Locked && unlocked
+            || filters.min_level>0 && hunt.level<filters.min_level
+            || filters.max_level>0 && hunt.level>filters.max_level
+            || !filters.region.is_empty() &&
+               hunt.area!=filters.region && hunt.region!=filters.region
+        {continue}
+        let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
+        if sum<=0.0 {continue}
+        for spawn in &hunt.species {
+            if spawn.weight<=0.0 {continue}
+            let meta=reference.and_then(|r|r.species.get(&spawn.id));
+            let name=meta.map(|m|m.name.as_str()).unwrap_or("Unknown species");
+            let types=meta.map(|m|m.types.clone()).unwrap_or_default();
+            if !filters.kind.is_empty() && !types.iter().any(|t|t==&filters.kind){continue}
+            if !query.is_empty()
+                && !name.to_lowercase().contains(&query)
+                && !spawn.id.to_string().contains(&query)
+                && !hunt.name.to_lowercase().contains(&query)
+                && !hunt.area.to_lowercase().contains(&query)
+                && !hunt.slug.to_lowercase().contains(&query)
+            {continue}
+            if !filters.weak_to.is_empty() {
+                let Some(reference)=reference else{continue};
+                let matches=filters.weak_to.iter().map(|attack|
+                    atlas_effectiveness(reference,&types,attack).is_some_and(|n|n>1.0));
+                if if filters.weakness_match_all { !matches.clone().all(|x|x) }
+                    else { !matches.into_iter().any(|x|x) } {continue}
+            }
+            let owned=known_roster.contains(&spawn.id);
+            if filters.collection==AtlasCollection::InDepot && !owned ||
+               filters.collection==AtlasCollection::NotInDepot && owned {continue}
+            let share=spawn.weight.max(0.0)/sum;
+            let forecast=cache.get(&hunt.slug);
+            let objective=atlas_objective(filters.sort,forecast.as_ref(),hunt,
+                share,meta,filters.rare_item);
+            grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
+                id:spawn.id,name:name.to_owned(),types,owned,
+                destinations:Vec::new(),best:None,
+            }).destinations.push(AtlasDestination{
+                hunt,unlocked,share,forecast,objective,
+            });
+        }
+    }
+    let mut rows:Vec<_>=grouped.into_values().collect();
+    for row in &mut rows {
+        row.destinations.sort_by(|a,b|{
+            match (a.objective,b.objective) {
+                (Some(x),Some(y))=>y.total_cmp(&x),
+                (Some(_),None)=>std::cmp::Ordering::Less,
+                (None,Some(_))=>std::cmp::Ordering::Greater,
+                _=>std::cmp::Ordering::Equal,
+            }.then_with(||b.unlocked.cmp(&a.unlocked))
+             .then_with(||a.hunt.level.cmp(&b.hunt.level))
+             .then_with(||a.hunt.slug.cmp(&b.hunt.slug))
+        });
+        row.best=row.destinations.iter().filter_map(|d|d.objective)
+            .max_by(|a,b|a.total_cmp(b));
+    }
+    rows.sort_by(|a,b|{
+        let direction=if filters.ascending {1}else{-1};
+        let ordered=if filters.sort==AtlasSort::Name {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        } else {
+            match (a.best,b.best) {
+                (Some(x),Some(y))=>x.total_cmp(&y),
+                (Some(_),None)=>return std::cmp::Ordering::Less,
+                (None,Some(_))=>return std::cmp::Ordering::Greater,
+                _=>std::cmp::Ordering::Equal,
+            }
+        };
+        (if direction==1 {ordered}else{ordered.reverse()})
+            .then_with(||a.name.cmp(&b.name)).then_with(||a.id.cmp(&b.id))
+    });
+    rows
+}
+
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
     // opened; game socket, Twitch and normal dashboard stay extremely light.
