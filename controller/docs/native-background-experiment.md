@@ -209,3 +209,50 @@ account. A live, priced item below threshold and its matching game purchase
 event, gold delta and stock reconciliation are still required to verify
 end-to-end restock. No local Rust toolchain or authenticated credentials are
 available here. Rebuild the native executable to receive Rust changes.
+
+## Native automation, Pokémon depot and durable history (native.17)
+
+**Server automation is editable:** Sidebar → Automation exposes the server's
+acknowledged toggles (`autoPotion`, `autoRevive`, `autoVendaLoot`,
+`autoLockShiny`, `autoLockNota9`, `autoLockP5`, `autoVoltarHunt`), the
+`hpLimiar` and `autoLockNotaMin` thresholds, and ordered
+`potionIds`/`ballIds`/`reviveIds` selections. The game socket constructs
+each `auto.set` from the latest **server-acknowledged automation object**, so
+unknown fields remain intact. Mutations are queued one at a time; the UI shows
+pending/confirmed status, and unconfirmed mutations time out or are discarded
+on disconnect rather than replayed. The numeric/ID editor has an explicit
+server-value reload to prevent stale drafts.
+
+**Pokémon management:** Sidebar → Pokémon offers per-account roster search,
+type and shiny filters, minimum total IV filter, ordering by level, note,
+quality, power, IV total, type or name, and detailed Pokémon data (HP/XP,
+species, IVs, looks, grade, type, held item). Individual sale uses Manager's
+confirmed `shop.sellPokemon` protocol and requires a second explicit
+confirmation. The controller refuses active or shiny Pokémon, refuses unknown
+roster IDs, allows only one pending sale, and reconciles a matching server sale
+receipt or full roster update. Bulk sale is deliberately not exposed without
+an adequate review/confirmation interface. Nullable server Pokémon patches
+now clear old held item, IV and active selection data.
+
+**Persistent statistics:** Sidebar → History retains per-account lifetime
+counters plus up to **90 UTC days of daily/per-hunt detail**, including
+trainer XP and Pokémon XP as separate channels, kills, catches, shiny signals,
+gold earned in combat and auto-sales, ball usage, and battle drops. Historical
+data lives under the Moth app data `History` directory, keyed by account
+profile + authenticated nickname (no raw frames or tokens). A dedicated
+writer batches atomic file replacements every five seconds; final writes are
+acknowledged when reconnecting or stopping. The historical UI is also readable
+offline, with a manual refresh button. History begins with this version's
+server receipts and cannot reconstruct previously unsaved sessions.
+
+**Still not Manager's complete Pokémon management:** Activating/equipping
+Pokémon, visual sprite browsing, and advanced depot operations beyond confirmed
+individual sale are not implemented; no unverified game protocol command has
+been invented. Server automation remains controlled by authenticated game
+state; buttons do not optimistically claim successful changes.
+
+**Verification boundary:** Unit tests and static integration checks were added
+for automation serialization/confirmation, history encoding/retention,
+Pokémon patch clearing and sale reconciliation. The editing environment does
+not have Rust/Cargo or authenticated game accounts, so neither compilation nor
+live command confirmations were executed here.
