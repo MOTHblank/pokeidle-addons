@@ -326,6 +326,16 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for Pokémon roster" => "Aguardando lista de Pokémon",
         "Open Automation" => "Abrir automação",
         "Server automation" => "Automação do servidor",
+        "Reload server values" => "Recarregar valores do servidor",
+        "Awaiting confirmation" => "Aguardando confirmação",
+        "Confirmed" => "Confirmado",
+        "Changes are confirmed by the game server; unsent changes are not treated as active." =>
+            "Alterações devem ser confirmadas pelo servidor; valores enviados não são tratados como ativos.",
+        "Potion HP threshold (%)" => "Limiar de HP para poção (%)",
+        "Minimum lock grade" => "Nota mínima de bloqueio",
+        "Apply HP" => "Aplicar HP",
+        "Apply grade" => "Aplicar nota",
+        "Apply" => "Aplicar",
         "In-game nickname" => "Apelido no jogo",
         "Field map" => "Mapa de combate",
         "in stock" => "em estoque",
@@ -1492,6 +1502,53 @@ struct NativeBrowserClosedEvent {
 enum PanelTab { Overview, Hunts, Inventory, Pokemon, Automation, History, Options }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PokemonSort { Level, Grade, Power, Name }
+#[derive(Clone,Default)]
+struct AutomationDraft {
+    initialized: bool,
+    hp_limit: f64,
+    lock_grade: f64,
+    potion_ids: String,
+    ball_ids: String,
+    revive_ids: String,
+}
+impl AutomationDraft {
+    fn from_server(value:&serde_json::Value) -> Self {
+        let ids=|field:&str|value.get(field).and_then(serde_json::Value::as_array)
+            .map(|entries| entries.iter().filter_map(serde_json::Value::as_u64)
+                .map(|v|v.to_string()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        Self { initialized:true,
+            hp_limit:value.get("hpLimiar").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            lock_grade:value.get("autoLockNotaMin").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
+            potion_ids:ids("potionIds"),ball_ids:ids("ballIds"),revive_ids:ids("reviveIds") }
+    }
+}
+fn parse_automation_ids(text:&str)->Result<Vec<u64>,String>{
+    let trimmed=text.trim();
+    if trimmed.is_empty(){return Ok(Vec::new())}
+    let mut out=Vec::new();
+    for piece in trimmed.split(',') {
+        let id=piece.trim().parse::<u64>().map_err(|_|
+            "Use a comma-separated list of numeric item IDs".to_owned())?;
+        if id==0 || id>1_000_000 || out.contains(&id) || out.len()>=20 {
+            return Err("IDs must be unique, positive, and at most 20 values".into());
+        }
+        out.push(id);
+    }
+    Ok(out)
+}
+#[cfg(test)]
+mod automation_ui_tests {
+    use super::parse_automation_ids;
+    #[test]
+    fn item_ids_require_unique_valid_numbers() {
+        assert_eq!(parse_automation_ids("4, 5").unwrap(),vec![4,5]);
+        assert_eq!(parse_automation_ids("").unwrap(),Vec::<u64>::new());
+        assert!(parse_automation_ids("4,4").is_err());
+        assert!(parse_automation_ids("0").is_err());
+        assert!(parse_automation_ids("1,abc").is_err());
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
@@ -1521,6 +1578,7 @@ pub struct ControllerApp {
     ui_options: UiOptions,
     hunt_account: usize,
     automation_account: usize,
+    automation_drafts: [AutomationDraft;4],
     pokemon_account: usize,
     pokemon_query: String,
     pokemon_sort: PokemonSort,
@@ -1640,6 +1698,7 @@ impl ControllerApp {
             }),
             hunt_account: 0,
             automation_account: 0,
+            automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
             pokemon_account: 0,
             pokemon_query: String::new(),
             pokemon_sort: PokemonSort::Level,
@@ -4560,9 +4619,32 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let snapshot = native.snapshot();
     let view = native.hunt_snapshot();
     if let Some(automation) = view.automation.as_ref() {
+        if !app.automation_drafts[index].initialized {
+            app.automation_drafts[index]=AutomationDraft::from_server(automation);
+        }
+        let mut commands:Vec<(String,serde_json::Value)>=Vec::new();
         egui::Frame::new().fill(PANEL).corner_radius(10.0)
             .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-            ui.label(RichText::new(tr("Server automation")).size(13.0).strong().color(TEXT));
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(tr("Server automation")).size(13.0).strong().color(TEXT));
+                if ui.small_button(tr("Reload server values")).clicked() {
+                    app.automation_drafts[index]=AutomationDraft::from_server(automation);
+                }
+                if let Some(field)=snapshot.native_automation.pending_field.as_deref() {
+                    ui.label(RichText::new(format!("{}: {field}",tr("Awaiting confirmation")))
+                        .size(10.0).color(WARN));
+                }
+                ui.label(RichText::new(format!("{}: {}",
+                    tr("Confirmed"),snapshot.native_automation.confirmed))
+                    .size(10.0).color(DIM));
+            });
+            if let Some(error)=snapshot.native_automation.error.as_deref(){
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+            ui.label(RichText::new(tr(
+                "Changes are confirmed by the game server; unsent changes are not treated as active."
+            )).size(10.0).color(DIM));
+            ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 for (key, label) in [
                     ("autoPotion", "Auto Potion"),
@@ -4570,15 +4652,67 @@ fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ("autoVendaLoot", "Auto Sell"),
                     ("autoLockShiny", "Lock Shiny"),
                     ("autoLockNota9", "Lock Grade 9"),
+                    ("autoLockP5", "Lock Potency 5"),
                     ("autoVoltarHunt", "Return to Hunt")
                 ] {
-                    if let Some(enabled) = automation.get(key).and_then(|v|v.as_bool()) {
-                        automation_badge(ui, label, if enabled {"On"} else {"Off"}, enabled);
+                    if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
+                        let mut enabled=current;
+                        if ui.checkbox(&mut enabled,label).changed() && snapshot.phase=="Online" {
+                            commands.push((key.into(),serde_json::json!(enabled)));
+                        }
                     }
                 }
             });
+            ui.add_space(10.0);
+            let draft=&mut app.automation_drafts[index];
+            ui.horizontal_wrapped(|ui| {
+                if automation.get("hpLimiar").is_some() {
+                    ui.label(tr("Potion HP threshold (%)"));
+                    ui.add(egui::DragValue::new(&mut draft.hp_limit)
+                        .range(0.0..=100.0).speed(0.5));
+                    if ui.small_button(tr("Apply HP")).clicked() {
+                        commands.push(("hpLimiar".into(),serde_json::json!(draft.hp_limit)));
+                    }
+                }
+                if automation.get("autoLockNotaMin").is_some() {
+                    ui.label(tr("Minimum lock grade"));
+                    ui.add(egui::DragValue::new(&mut draft.lock_grade)
+                        .range(0.0..=10.0).speed(0.1));
+                    if ui.small_button(tr("Apply grade")).clicked() {
+                        commands.push(("autoLockNotaMin".into(),
+                            serde_json::json!(draft.lock_grade)));
+                    }
+                }
+            });
+            for (key,label,value) in [
+                ("potionIds","Potion IDs",&mut draft.potion_ids),
+                ("ballIds","Ball IDs",&mut draft.ball_ids),
+                ("reviveIds","Revive IDs",&mut draft.revive_ids)
+            ] {
+                if automation.get(key).is_none(){continue}
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(label);
+                    ui.add(egui::TextEdit::singleline(value)
+                        .desired_width(210.0).hint_text("1, 2, 3"));
+                    if ui.small_button(format!("{} {label}",tr("Apply"))).clicked() {
+                        match parse_automation_ids(value) {
+                            Ok(ids)=>commands.push((key.into(),serde_json::json!(ids))),
+                            Err(error)=>{app.status=error;app.status_error=true;}
+                        }
+                    }
+                });
+            }
         });
+        for (field,value) in commands {
+            if let Err(error)=native.send_command(GameCommand::SetAutomation {field,value}) {
+                app.status=format!("Server automation: {error}");
+                app.status_error=true;
+            }
+        }
         ui.add_space(10.0);
+    } else {
+        ui.label(RichText::new(tr("Waiting for server automation settings"))
+            .size(11.0).color(WARN));
     }
     let restock = &snapshot.native_restock;
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
