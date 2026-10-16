@@ -74,6 +74,8 @@ pub struct HuntMeasurements {
     pub valid_pokemon: bool,
     pub valid_gold: bool,
     pub window_samples: usize,
+    /// Age of the most recent server-confirmed kill, rather than a state poll.
+    pub last_battle_age_secs: Option<u64>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntSessionStats {
@@ -109,6 +111,7 @@ pub struct HuntView {
     pub items: Arc<BTreeMap<u64, u64>>,
     pub automation: Option<Value>,
     pub vip_until: Option<u64>,
+    pub guild_boost_until: Option<u64>,
     pub server_now: Option<u64>,
     pub center_free_at: Option<u64>,
     pub diamonds: Option<u64>,
@@ -163,6 +166,17 @@ impl HuntIntel {
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
+        self.view.measurements.last_battle_age_secs=self.battle_samples.iter()
+            .rev().find(|sample|sample.kills>0)
+            .map(|sample|sample.at.elapsed().as_secs());
+        if self.view.measurements.last_battle_age_secs.is_some_and(|age|age>180) {
+            // Keeping the previous 10-minute average on screen when combat has
+            // stopped makes a stale prediction look like live measurement.
+            self.view.measurements.valid_trainer=false;
+            self.view.measurements.valid_pokemon=false;
+            self.view.measurements.valid_gold=false;
+            self.view.sample_quality="No confirmed kill in three minutes; measured pace expired".into();
+        }
         if self.roster_dirty {
             self.view.pokemon_roster = Arc::new(self.pokemon.values().cloned().collect());
             self.roster_dirty = false;
@@ -324,6 +338,12 @@ impl HuntIntel {
                 // Switching or clearing active Pokémon invalidates observed
                 // Pokémon XP comparisons. An explicit null must clear it.
                 self.samples.clear();
+                self.battle_samples.clear();
+                self.battle_trainer=0;
+                self.battle_pokemon=0;
+                self.battle_samples.push_back(BattleSample{
+                    at:now,trainer:0,pokemon:0,kills:self.session_kills,
+                });
                 self.view.measurements = HuntMeasurements::default();
             }
             self.active_id=new_id;
@@ -364,14 +384,14 @@ impl HuntIntel {
                 self.view.bonuses.twitch_pct = n;
             }
         }
-        if let Some(boost) = state.get("guild").and_then(|g| Self::num(g, "boostAte")) {
-            let now_server = self.view.server_now.unwrap_or(0);
-            self.view.bonuses.guild_boost_active = boost > now_server && now_server > 0;
+        if let Some(raw)=state.get("guild").and_then(|g|g.get("boostAte")){
+            self.view.guild_boost_until=raw.as_u64();
         }
-        if let Some(vip_until) = Self::num(state, "vipAte") {
-            let now_server = self.view.server_now.unwrap_or(0);
-            self.view.bonuses.vip_active = vip_until > now_server && now_server > 0;
-        }
+        let server_now=self.view.server_now.unwrap_or(0);
+        self.view.bonuses.guild_boost_active=server_now>0 &&
+            self.view.guild_boost_until.is_some_and(|until|until>server_now);
+        self.view.bonuses.vip_active=server_now>0 &&
+            self.view.vip_until.is_some_and(|until|until>server_now);
         self.sample(now);
     }
     fn catalog(&mut self, list: &[Value]) {
@@ -583,6 +603,7 @@ impl HuntIntel {
             valid_pokemon: rate(first.pokemon, last.pokemon).is_some(),
             valid_gold: net_gold.is_some(),
             window_samples: self.samples.len(),
+            last_battle_age_secs: self.view.measurements.last_battle_age_secs,
         };
         self.view.sample_quality = if kills < 5 {
             "Low confidence · fewer than five observed kills".into()
@@ -799,4 +820,56 @@ mod tests {
         assert_eq!(atlas_pace_scenario(&h,0.0),None);
         assert_eq!(atlas_pace_scenario(&h,100.0).unwrap().0,600800.0);
     }
+    #[test]
+    fn active_pokemon_switch_reanchors_battle_receipts_without_counting_old_kills(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","hunts":[{"slug":"a","nome":"A"}],
+            "estado":{"huntSlug":"a","activeId":7,"pokemons":[{"id":7,"nome":"A"},{"id":8,"nome":"B"}]}}"#,now);
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+                "xpTreinador":100,"xpPokemon":50}]}"#,now+Duration::from_secs(5*(i+1)));
+        }
+        intel.ingest(r#"{"t":"estado","estado":{"activeId":8}}"#,now+Duration::from_secs(31));
+        assert!(!intel.view.measurements.valid_pokemon);
+        assert_eq!(intel.view.measurements.kills,0);
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+                "xpTreinador":100,"xpPokemon":20}]}"#,now+Duration::from_secs(35+5*i));
+        }
+        assert_eq!(intel.view.measurements.kills,6);
+        assert_eq!(intel.view.measurements.pokemon_xp_h,120.0*3600.0/25.0);
+    }
+    #[test]
+    fn bonus_expiration_is_recomputed_when_server_clock_moves(){
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","estado":{
+            "servidorAgora":100,"vipAte":120,"guild":{"boostAte":130}}}"#,now);
+        assert!(intel.view.bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        intel.ingest(r#"{"t":"estado","estado":{"servidorAgora":140}}"#,now);
+        assert!(!intel.view.bonuses.vip_active);
+        assert!(!intel.view.bonuses.guild_boost_active);
+    }
+    #[test]
+    fn idle_battle_measurements_expire_without_discarding_session_totals(){
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","hunts":[{"slug":"a"}],"estado":{"huntSlug":"a"}}"#,now);
+        for i in 0..6 {
+            intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+                "xpTreinador":100,"xpPokemon":50}]}"#,now+Duration::from_secs(5*(i+1)));
+        }
+        assert!(intel.view.measurements.valid_trainer);
+        // Explicitly simulate a snapshot after time has passed without new
+        // receipts, independent of periodic server-state traffic.
+        if let Some(sample)=intel.battle_samples.back_mut(){
+            sample.at=Instant::now()-Duration::from_secs(181);
+        }
+        let stats=intel.snapshot();
+        assert!(!stats.measurements.valid_trainer);
+        assert_eq!(stats.session.kills,6);
+    }
+
 }
