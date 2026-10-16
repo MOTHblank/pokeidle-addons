@@ -67,13 +67,21 @@ pub(super) fn draw_retrospective(
             for (days,title) in [(7,"7 days"),(30,"30 days"),(90,"90 days")]{
                 let matching=rows.iter().filter(|d|
                     d.day<=latest_day&&latest_day-d.day<days);
-                let (seconds,trainer,pokemon)=matching.fold((0u64,0u64,0u64),
-                    |(s,t,p),row|(
+                let (seconds,trainer,pokemon,kills,tr_receipts,pk_receipts)=
+                    matching.fold((0u64,0u64,0u64,0u64,0u64,0u64),
+                    |(s,t,p,k,tr,pk),row|(
                         s.saturating_add(row.observed_seconds),
                         t.saturating_add(row.timed_trainer_xp),
-                        p.saturating_add(row.timed_pokemon_xp)));
-                let train=models::retrospective_rate(trainer,seconds);
-                let poke=models::retrospective_rate(pokemon,seconds);
+                        p.saturating_add(row.timed_pokemon_xp),
+                        k.saturating_add(row.timed_kills),
+                        tr.saturating_add(row.timed_trainer_receipts),
+                        pk.saturating_add(row.timed_pokemon_receipts)));
+                let train=if kills>0&&tr_receipts==kills {
+                    models::retrospective_rate(trainer,seconds)
+                }else{None};
+                let poke=if kills>0&&pk_receipts==kills{
+                    models::retrospective_rate(pokemon,seconds)
+                }else{None};
                 ui.label(title);
                 ui.label(format!("{} / h",value(train)));
                 ui.label(format!("{} / h",value(poke)));
@@ -94,11 +102,17 @@ pub(super) fn draw_retrospective(
                         ui.label(format!("Day {} · {} kills · {}s observed",
                             d.day,d.timed_kills,d.observed_seconds));
                         ui.label(format!("Trainer {} / h",
-                            value(models::retrospective_rate(
-                                d.timed_trainer_xp,d.observed_seconds))));
+                            value(if d.timed_kills>0 &&
+                                d.timed_trainer_receipts==d.timed_kills{
+                                models::retrospective_rate(
+                                    d.timed_trainer_xp,d.observed_seconds)
+                            }else{None})));
                         ui.label(format!("Pokémon {} / h",
-                            value(models::retrospective_rate(
-                                d.timed_pokemon_xp,d.observed_seconds))));
+                            value(if d.timed_kills>0 &&
+                                d.timed_pokemon_receipts==d.timed_kills{
+                                models::retrospective_rate(
+                                    d.timed_pokemon_xp,d.observed_seconds)
+                            }else{None})));
                     });
                 }
             });
