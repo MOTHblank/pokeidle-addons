@@ -362,6 +362,49 @@ fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
     else {("No recent combat",WARN)}
 }
 
+fn draw_atlas_encounter(
+    ui:&mut egui::Ui,spawn:&native_hunts::HuntSpecies,
+    sum:f64,reference:Option<&AtlasReference>,
+){
+    let species=reference.and_then(|r|r.species.get(&spawn.id));
+    let name=species.map(|s|s.name.as_str()).unwrap_or("Unknown species");
+    let pct=if sum>0.0{Some(100.0*spawn.weight.max(0.0)/sum)}else{None};
+    ui.push_id(spawn.id,|ui|{
+        ui.horizontal_wrapped(|ui|{
+            ui.label(RichText::new(name).size(11.0).color(TEXT));
+            ui.label(RichText::new(format!(
+                "#{} · {}",spawn.id,
+                pct.map(|v|format!("{v:.1}% spawns"))
+                    .unwrap_or_else(||"weight unavailable".into())
+            )).size(10.0).color(MUTED));
+        });
+        if let Some(species)=species{
+            if !species.drops.is_empty(){
+                ui.collapsing(format!(
+                    "Guide item drops ({})",species.drops.len()
+                ),|ui|{
+                    for drop in species.drops.iter().take(12){
+                        ui.label(RichText::new(format!(
+                            "{} · {:.3}% per eligible kill · {:.0}–{:.0} units",
+                            drop.item_name.as_deref()
+                                .map(str::to_owned)
+                                .or_else(||drop.item_id.map(|id|format!("Item #{id}")))
+                                .unwrap_or_else(||"Unknown item".into()),
+                            drop.chance_pct,drop.minimum,drop.maximum
+                        )).size(10.0).color(MUTED));
+                    }
+                    if species.drops.len()>12{
+                        ui.label("Showing the first 12 reference drops.");
+                    }
+                    ui.label(RichText::new(
+                        "Reference probabilities are not confirmed drops or live prices."
+                    ).size(10.0).color(WARN));
+                });
+            }
+        }
+    });
+}
+
 fn draw_hunt_row(
     ui:&mut egui::Ui,result:&RankedHunt<'_>,rank:usize,
     ranking:HuntRanking,view:&HuntView,reference:Option<&AtlasReference>,
@@ -424,39 +467,18 @@ fn draw_hunt_row(
                         hunt.total_spawns,hunt.species.len()
                     )).size(10.0).color(MUTED));
                     let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
-                    for spawn in hunt.species.iter().take(60) {
-                        let species=reference.and_then(|r|r.species.get(&spawn.id));
-                        let name=species.map(|s|s.name.as_str()).unwrap_or("Unknown species");
-                        let pct=if sum>0.0 {Some(100.0*spawn.weight.max(0.0)/sum)}
-                            else {None};
-                        ui.label(RichText::new(format!(
-                            "{} · #{} · {}",
-                            name,spawn.id,pct.map(|v|format!("{v:.1}%"))
-                                .unwrap_or_else(||"weight unavailable".into())
-                        )).size(10.0).color(TEXT));
-                        if let Some(species)=species {
-                            if !species.drops.is_empty() {
-                                ui.push_id(spawn.id,|ui|{
-                                    ui.collapsing("Guide item-drop probabilities",|ui|{
-                                        for drop in species.drops.iter().take(12) {
-                                            let item=drop.item_id.map(|id|format!("#{id}"))
-                                                .unwrap_or_else(||"unknown item".into());
-                                            ui.label(format!(
-                                                "Item {} · {:.3}% per eligible kill · {:.0}–{:.0} units · guide value {:.0}/unit",
-                                                item,drop.chance_pct,drop.minimum,
-                                                drop.maximum,drop.guide_price
-                                            ));
-                                        }
-                                        if species.drops.len()>12 {
-                                            ui.label("Only the first 12 guide drops shown.");
-                                        }
-                                        ui.label(RichText::new(
-                                            "These probabilities and prices come from the game guide. They are not measured drop rates or current market prices."
-                                        ).size(10.0).color(MUTED));
-                                    });
-                                });
+                    for spawn in hunt.species.iter().take(8){
+                        draw_atlas_encounter(ui,spawn,sum,reference);
+                    }
+                    if hunt.species.len()>8{
+                        ui.collapsing(format!(
+                            "Show {} more Pokémon",
+                            hunt.species.len().saturating_sub(8).min(52)
+                        ),|ui|{
+                            for spawn in hunt.species.iter().skip(8).take(52){
+                                draw_atlas_encounter(ui,spawn,sum,reference);
                             }
-                        }
+                        });
                     }
                     if hunt.species.len()>60 {ui.label("Only the first 60 species shown.");}
                     match result.source {
