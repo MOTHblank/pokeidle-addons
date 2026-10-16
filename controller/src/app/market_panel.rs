@@ -345,13 +345,18 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
     for dest in 0..app.games.len() {
         if dest==source || !app.market_copy_targets[dest] { continue; }
         let profile=app.games[dest].profile;
-        // An invalid destination is not silently overwritten: a stale or
-        // invalid Snatch queue must be explicitly repaired first.
-        let existing=match MarketRules::load(profile) {
-            Ok(rules)=>rules,
-            Err(error)=>{
-                failures.push(format!("Account {}: cannot load: {error}",dest+1));
-                continue;
+        // Respect the destination's in-memory draft first: a newly armed
+        // Snatch listing may not have been saved yet. Its queue must survive
+        // copying the separate automatic buying strategy.
+        let existing=if let Some(draft)=app.market_drafts[dest].as_ref() {
+            draft.clone()
+        } else {
+            match MarketRules::load(profile) {
+                Ok(rules)=>rules,
+                Err(error)=>{
+                    failures.push(format!("Account {}: cannot load: {error}",dest+1));
+                    continue;
+                }
             }
         };
         let copied_rules=existing.copy_buying_from(
