@@ -108,6 +108,9 @@ impl Restock {
         self.set_enabled(config.restock_enabled);
     }
     pub fn set_enabled(&mut self, enabled: bool) {
+        // Called each native worker tick. A repeated value must not erase
+        // waiting/confirmed/backoff phase and mislead the UI.
+        if self.status.enabled == enabled { return; }
         self.status.enabled = enabled;
         self.status.phase = if !enabled { "Off" }
             else if !self.status.configured { "Needs settings" }
@@ -427,6 +430,15 @@ mod tests {
         r.set_enabled(true);
         r.ingest(r#"{"t":"estado","estado":{"gold":105}}"#, now);
         assert!(r.next(now, true).is_none());
+    }
+    #[test]
+    fn unchanged_enabled_flag_does_not_erase_purchase_state() {
+        let now=Instant::now();
+        let mut r=configured();welcome(&mut r,now);
+        r.next(now,true);
+        assert_eq!(r.status.phase,"Waiting for purchase");
+        r.set_enabled(true);
+        assert_eq!(r.status.phase,"Waiting for purchase");
     }
     #[test]
     fn reconfiguration_preserves_inflight_purchase() {
