@@ -61,6 +61,12 @@ pub struct HuntBonuses {
     pub twitch_pct: f64,
     pub guild_boost_active: bool,
     pub vip_active: bool,
+    pub trainer_event_known: bool,
+    pub pokemon_event_known: bool,
+    pub guild_known: bool,
+    pub twitch_known: bool,
+    pub guild_boost_known: bool,
+    pub vip_known: bool,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntMeasurements {
@@ -295,7 +301,10 @@ impl HuntIntel {
         if let Some(value) = Self::num(state, "orbs") { self.view.orbs = Some(value); }
         if let Some(value) = Self::num(state, "servidorAgora") { self.view.server_now = Some(value); }
         if let Some(value) = Self::num(state, "centroLivreEm") { self.view.center_free_at = Some(value); }
-        if let Some(value) = Self::num(state, "vipAte") { self.view.vip_until = Some(value); }
+        if let Some(value)=state.get("vipAte") {
+            self.view.vip_until=value.as_u64();
+            self.view.bonuses.vip_known=true;
+        }
         if let Some(data) = state.get("automation") {
             if data.is_object() {
                 let mut merged = self.view.automation.take()
@@ -373,22 +382,27 @@ impl HuntIntel {
         if let Some(event) = state.get("evento") {
             if let Some(n) = event.get("xpTreinadorPct").and_then(Value::as_f64) {
                 self.view.bonuses.trainer_event_pct = n;
+                self.view.bonuses.trainer_event_known = true;
             }
             if let Some(n) = event.get("xpPokemonPct").and_then(Value::as_f64) {
                 self.view.bonuses.pokemon_event_pct = n;
+                self.view.bonuses.pokemon_event_known = true;
             }
         }
         if let Some(n) = state.get("guildBonusPct").and_then(Value::as_f64) {
             self.view.bonuses.guild_pct = n;
+            self.view.bonuses.guild_known = true;
         }
         if let Some(twitch) = state.get("twitch") {
             if let Some(n) = twitch.get("pctAtual").or_else(|| twitch.get("pct"))
                 .and_then(Value::as_f64) {
                 self.view.bonuses.twitch_pct = n;
+                self.view.bonuses.twitch_known = true;
             }
         }
         if let Some(raw)=state.get("guild").and_then(|g|g.get("boostAte")){
             self.view.guild_boost_until=raw.as_u64();
+            self.view.bonuses.guild_boost_known=true;
         }
         let server_now=self.view.server_now.unwrap_or(0);
         self.view.bonuses.guild_boost_active=server_now>0 &&
@@ -872,6 +886,21 @@ mod tests {
         let stats=intel.snapshot();
         assert!(!stats.measurements.valid_trainer);
         assert_eq!(stats.session.kills,6);
+    }
+
+    #[test]
+    fn missing_bonus_fields_are_unknown_rather_than_reported_zero(){
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","estado":{"level":10}}"#,now);
+        assert!(!intel.view.bonuses.twitch_known);
+        assert!(!intel.view.bonuses.vip_known);
+        intel.ingest(r#"{"t":"estado","estado":{"twitch":{"pct":0},
+            "servidorAgora":100,"vipAte":null}}"#,now);
+        assert!(intel.view.bonuses.twitch_known);
+        assert_eq!(intel.view.bonuses.twitch_pct,0.0);
+        assert!(intel.view.bonuses.vip_known);
+        assert!(!intel.view.bonuses.vip_active);
     }
 
 }
