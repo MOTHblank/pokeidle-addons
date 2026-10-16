@@ -951,6 +951,9 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch sign-in" => "Entrar na Twitch",
         "Automation is managed in the controller. Start this account to see its current settings." =>
             "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
+        "Download game icons" => "Baixar ícones do jogo",
+        "Download public PokéIdle item and Poké Ball icons to your computer. Downloaded icons will appear in the app." => "Baixe ícones públicos de itens e Pokébolas do PokéIdle. Os ícones baixados aparecerão no aplicativo.",
+        "Pokémon portraits are not included because the upstream sprite index has no verified images yet." => "As imagens dos Pokémon ainda não estão disponíveis porque o índice de sprites não contém imagens verificadas.",
         _ => en,
     }
 }
@@ -3154,6 +3157,28 @@ fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             )).size(10.0).color(DIM));
         });
 
+    ui.add_space(12.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Game icons")).size(13.0).strong().color(TEXT));
+            ui.label(RichText::new(tr(
+                "Download public PokéIdle item and Poké Ball icons to your computer. Downloaded icons will appear in the app."
+            )).size(10.0).color(MUTED));
+            ui.add_space(6.0);
+            if ui.button(tr("Download game icons")).clicked() {
+                let queued = app.visuals.download_game_icons();
+                app.set_status(format!("{queued} game icons queued for download."), false);
+            }
+            let (queued, finished, failed, loaded) = app.visuals.progress();
+            ui.label(RichText::new(format!(
+                "{loaded} icons loaded · {finished}/{queued} checked · {failed} unavailable · {} known",
+                VisualCache::known_icon_count(),
+            )).size(10.0).color(DIM));
+            ui.label(RichText::new(tr(
+                "Pokémon portraits are not included because the upstream sprite index has no verified images yet."
+            )).size(10.0).color(DIM));
+        });
+
     if next != app.ui_options {
         // The change is applied only after a successful disk write. If the
         // options directory is unavailable, keep the previous live setting.
@@ -5055,9 +5080,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(tr("Balls used")).size(10.0).color(DIM));
                     for (id,quantity) in &view.session.balls_used {
-                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
-                            .map(String::as_str).unwrap_or("Ball"),quantity))
-                            .size(10.0).color(TEXT));
+                        ui.horizontal(|ui| {
+                            app.visuals.show(ui, SpriteKind::Ball, *id, None, 16.0);
+                            ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                                .map(String::as_str).unwrap_or("Ball"),quantity))
+                                .size(10.0).color(TEXT));
+                        });
                     }
                 });
             }
@@ -5145,9 +5173,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             });
             ui.horizontal_wrapped(|ui| {
                 for (id,qty) in view.balls.iter().filter(|(_,qty)|**qty>0) {
-                    ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
-                        .map(String::as_str).unwrap_or("Ball"),qty))
-                        .size(10.0).color(TEXT));
+                    ui.horizontal(|ui| {
+                        app.visuals.show(ui, SpriteKind::Ball, *id, None, 20.0);
+                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                            .map(String::as_str).unwrap_or("Ball"),qty))
+                            .size(10.0).color(TEXT));
+                    });
                 }
             });
             let mut items = view.items.iter().filter(|(_,qty)| **qty>0)
@@ -5157,8 +5188,13 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 for (id,qty) in items.into_iter().take(10) {
                     let name = item_catalog.as_deref().map(|catalog|catalog.name(*id))
                         .unwrap_or_else(||format!("Item #{id}"));
-                    ui.label(RichText::new(format!("{name} ×{qty}"))
-                        .size(10.0).color(DIM));
+                    let hint = item_catalog.as_deref().and_then(|catalog|
+                        catalog.items.get(id).and_then(|item|item.icon.as_deref()));
+                    ui.horizontal(|ui| {
+                        app.visuals.show(ui, SpriteKind::Item, *id, hint, 20.0);
+                        ui.label(RichText::new(format!("{name} ×{qty}"))
+                            .size(10.0).color(DIM));
+                    });
                 }
             });
         });
