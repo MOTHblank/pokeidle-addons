@@ -3061,6 +3061,174 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 
+/// Current game inventory (server quantities) and separately battle-acquired
+/// drops. Shop purchases are never labeled as loot.
+fn draw_inventory_panel(app:&mut ControllerApp,ui:&mut egui::Ui) {
+    if app.inventory_catalog.is_none() && app.inventory_catalog_error.is_none() &&
+        !app.inventory_catalog_busy {
+        app.inventory_catalog_busy=true;
+        let tx=app.inventory_catalog_tx.clone();
+        std::thread::spawn(move || {
+            let result=std::panic::catch_unwind(native_items::load)
+                .unwrap_or_else(|_|Err("Item catalog loader panicked".into()));
+            let _=tx.send(result);
+        });
+    }
+    ui.horizontal_wrapped(|ui|{
+        ui.label(tr("Accounts"));
+        let selected=app.inventory_account.map(|index|
+            app.account_name(app.games[index].profile)).unwrap_or_else(||tr("All accounts").into());
+        egui::ComboBox::from_id_salt("inventory-account").selected_text(selected)
+            .show_ui(ui,|ui|{
+                ui.selectable_value(&mut app.inventory_account,None,tr("All accounts"));
+                for index in 0..app.games.len(){
+                    let label=app.account_name(app.games[index].profile);
+                    ui.selectable_value(&mut app.inventory_account,Some(index),label);
+                }
+            });
+        ui.add(egui::TextEdit::singleline(&mut app.inventory_query)
+            .desired_width(240.0).hint_text(tr("Search items or drops")));
+        egui::ComboBox::from_id_salt("inventory-category")
+            .selected_text(match app.inventory_category.as_str(){
+                "balls"=>tr("Balls"),"potions"=>tr("Potions"),
+                "stones"=>tr("Stones"),"other"=>tr("Other"),_=>tr("All items")
+            }).show_ui(ui,|ui|{
+                for (id,name) in [
+                    ("",tr("All items")),("balls",tr("Balls")),
+                    ("potions",tr("Potions")),("stones",tr("Stones")),
+                    ("other",tr("Other"))] {
+                    ui.selectable_value(&mut app.inventory_category,id.into(),name);
+                }
+            });
+    });
+    let mut views=Vec::new();
+    for index in 0..app.games.len() {
+        if app.inventory_account.is_some_and(|selected| selected!=index){continue}
+        if let Some(native)=app.games[index].native.as_ref() {
+            views.push((app.account_name(app.games[index].profile),native.hunt_snapshot()));
+        }
+    }
+    if views.is_empty(){
+        ui.add_space(20.0);
+        ui.label(RichText::new(tr("Launch an account to see its native inventory"))
+            .size(12.0).color(WARN));
+        return;
+    }
+    if app.inventory_catalog_busy {
+        ui.label(RichText::new(tr("Loading public item names..."))
+            .size(10.0).color(DIM));
+    } else if let Some(error)=app.inventory_catalog_error.clone() {
+        ui.horizontal_wrapped(|ui|{
+            ui.label(RichText::new(format!("{}: {error}",tr("Item catalog unavailable")))
+                .size(10.0).color(WARN));
+            if ui.small_button(tr("Retry")).clicked() {app.inventory_catalog_error=None;}
+        });
+    }
+    let catalog=app.inventory_catalog.as_deref();
+    let mut amounts=std::collections::BTreeMap::<(bool,u64),(u64,String,String)>::new();
+    let mut acquired=std::collections::BTreeMap::<String,u64>::new();
+    let mut session_kills=0u64;
+    let mut session_catches=0u64;
+    for (_,view) in &views {
+        session_kills=session_kills.saturating_add(view.session.kills);
+        session_catches=session_catches.saturating_add(view.session.captures);
+        for (id,quantity) in view.balls.iter() {
+            if *quantity==0 {continue}
+            let name=view.ball_names.get(id).cloned()
+                .unwrap_or_else(||format!("Ball #{id}"));
+            let entry=amounts.entry((true,*id)).or_insert((0,name,"balls".into()));
+            entry.0=entry.0.saturating_add(*quantity);
+        }
+        for (id,quantity) in view.items.iter() {
+            if *quantity==0 {continue}
+            let name=catalog.map(|c|c.name(*id))
+                .unwrap_or_else(||format!("Item #{id}"));
+            let cat=catalog.and_then(|c|c.items.get(id))
+                .map(|meta|meta.category.to_lowercase()).unwrap_or_default();
+            let category=if cat.contains("potion"){"potions"}
+                else if cat.contains("stone"){"stones"}else{"other"};
+            let entry=amounts.entry((false,*id))
+                .or_insert((0,name,category.into()));
+            entry.0=entry.0.saturating_add(*quantity);
+        }
+        for (name,quantity) in &view.session.acquired {
+            let entry=acquired.entry(name.clone()).or_default();
+            *entry=entry.saturating_add(*quantity);
+        }
+    }
+    let query=app.inventory_query.trim().to_lowercase();
+    let mut rows=amounts.into_iter().filter(|((_,id),(_,name,category))|
+        (app.inventory_category.is_empty() || category==&app.inventory_category) &&
+        (query.is_empty() || name.to_lowercase().contains(&query) ||
+            id.to_string().contains(&query))).collect::<Vec<_>>();
+    rows.sort_by(|a,b|a.1.1.cmp(&b.1.1).then_with(||a.0.cmp(&b.0)));
+    let total_items=rows.iter().map(|row|row.1.0).sum::<u64>();
+    ui.add_space(12.0);
+    egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(tr("Current inventory")).size(14.0).strong().color(TEXT));
+                ui.label(RichText::new(format!(
+                    "{} {} · {} {}",rows.len(),tr("items"),total_items,tr("units")
+                )).size(10.0).color(DIM));
+                ui.label(RichText::new(tr("Server-reported stock · not inferred purchases"))
+                    .size(10.0).color(MUTED));
+            });
+            egui::ScrollArea::vertical().id_salt("inventory-stock-list")
+                .max_height(290.0).show(ui,|ui|{
+                    for ((is_ball,id),(quantity,name,category)) in &rows {
+                        ui.horizontal(|ui|{
+                            ui.label(RichText::new(if *is_ball{"●"}else{"◆"})
+                                .size(10.0).color(if *is_ball { ACCENT } else { MUTED }));
+                            ui.label(RichText::new(name).size(11.0).color(TEXT));
+                            ui.label(RichText::new(format!("#{id} · {}",tr(category)))
+                                .size(9.0).color(DIM));
+                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                                ui.label(RichText::new(format!("×{quantity}"))
+                                    .size(12.0).strong().color(GOOD));
+                            });
+                        });
+                        ui.separator();
+                    }
+                    if rows.is_empty(){ui.label(tr("No inventory items match the filters"));}
+                });
+        });
+    ui.add_space(10.0);
+    egui::Frame::new().fill(PANEL).corner_radius(10.0)
+        .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(tr("Items acquired in session"))
+                    .size(14.0).strong().color(TEXT));
+                ui.label(RichText::new(format!(
+                    "{} {} · {} {}",session_kills,tr("kills"),session_catches,tr("captures")
+                )).size(10.0).color(DIM));
+            });
+            ui.label(RichText::new(tr(
+                "From wild battle drops only. Does not count shop purchases or starting inventory."
+            )).size(10.0).color(MUTED));
+            let mut names=acquired.into_iter()
+                .filter(|(name,_)|query.is_empty()||name.to_lowercase().contains(&query))
+                .collect::<Vec<_>>();
+            names.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+            egui::ScrollArea::vertical().id_salt("inventory-session-drops")
+                .max_height(250.0).show(ui,|ui|{
+                    for (name,quantity) in names {
+                        ui.horizontal(|ui|{
+                            ui.label(RichText::new(name).size(11.0).color(TEXT));
+                            ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                                ui.label(RichText::new(format!("+{quantity}"))
+                                    .size(12.0).color(GOOD).strong());
+                            });
+                        });
+                        ui.separator();
+                    }
+                    if views.iter().all(|(_,v)|v.session.acquired.is_empty()) {
+                        ui.label(tr("No drops acquired in this session yet"));
+                    }
+                });
+        });
+}
+
 fn format_hunt_amount(value: f64) -> String {
     if !value.is_finite() { return "—".into(); }
     let negative = if value < 0.0 { "-" } else { "" };
