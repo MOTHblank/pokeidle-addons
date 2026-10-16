@@ -1591,6 +1591,7 @@ pub struct ControllerApp {
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
     panel_tab: PanelTab,
+    dashboard_show_history: bool,
     ui_options: UiOptions,
     hunt_account: usize,
     automation_account: usize,
@@ -1706,6 +1707,7 @@ impl ControllerApp {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
             panel_tab: PanelTab::Overview,
+            dashboard_show_history: false,
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()
@@ -1821,6 +1823,7 @@ impl ControllerApp {
         if index >= self.games.len() || index == self.hunt_account { return; }
         self.save_dirty_account_names();
         self.history_rows_limit = 100;
+        self.dashboard_show_history = false;
         self.hunt_account = index;
         if self.panel_tab == PanelTab::Hunts && self.hunt_subtab == HuntSubtab::Compare {
             self.hunt_subtab = HuntSubtab::Explorer;
@@ -3508,7 +3511,7 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 .filter(|index| app.accounts[*index].enabled)
                 .collect();
 
-            if profiles.is_empty() {
+            if profiles.is_empty() && app.selected_details.is_none() {
                 ui.label(
                     RichText::new(tr("No accounts enabled. Open Account Manager to add or enable one."))
                         .size(12.0)
@@ -3545,12 +3548,19 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 // The workspace chip selection also opens this detailed view.
                 if let Some(index) = app.selected_details {
                     ui.add_space(9.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!(
                             "{} {}",
                             tr("Details for"),
                             app.account_name(app.games[index].profile)
-                        )).size(16.0).strong().color(TEXT));
+                        )).size(15.0).strong().color(TEXT));
+                        ui.add_space(8.0);
+                        if ui.selectable_label(!app.dashboard_show_history, tr("Live details")).clicked() {
+                            app.dashboard_show_history = false;
+                        }
+                        if ui.selectable_label(app.dashboard_show_history, tr("History")).clicked() {
+                            app.dashboard_show_history = true;
+                        }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button(tr("Hide details")).clicked() {
                                 app.selected_details = None;
@@ -3559,20 +3569,16 @@ fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(8.0);
                     if app.selected_details == Some(index) {
-                        // Keep the expanded dashboard at a readable measure on wide windows.
                         let width = ui.available_width().min(820.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(width, 0.0),
                             Layout::top_down(Align::Min),
                             |ui| {
-                                draw_game_details(app, ui, index, width);
-                                ui.add_space(10.0);
-                                // History belongs to Dashboard > Show details;
-                                // keep local history available even while stopped.
-                                egui::CollapsingHeader::new(tr("Battle history"))
-                                    .id_salt(("dashboard-battle-history", index))
-                                    .default_open(true)
-                                    .show(ui, |ui| draw_history_panel(app, ui, index));
+                                if app.dashboard_show_history {
+                                    draw_history_panel(app, ui, index);
+                                } else {
+                                    draw_game_details(app, ui, index, width);
+                                }
                             },
                         );
                         ui.add_space(12.0);
