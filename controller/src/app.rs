@@ -3798,10 +3798,14 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             });
             ui.add_space(8.0);
 
+            // Present the actual lead versus the live wild Pokémon in both
+            // Summary and Session, rather than hiding combat in Session mode.
+            draw_overview_matchup(app, ui, &health, fresh, native_view.as_ref());
+            ui.add_space(6.0);
             if app.dashboard_session_view {
                 draw_overview_session(ui, native_view.as_ref().filter(|_| fresh));
             } else {
-                draw_overview_account_summary(app, ui, index, &health, fresh,
+                draw_overview_account_summary(app, ui, index, fresh,
                     xp_per_hour, native_view.as_ref());
             }
             draw_overview_restock(app, ui, index);
@@ -4108,13 +4112,12 @@ fn overview_combat_image(app: &mut ControllerApp, ui: &mut egui::Ui,
     }
 }
 
-fn draw_overview_account_summary(
+/// Matchup is always visible, even when the card's lower metrics show Session.
+fn draw_overview_matchup(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
-    index: usize,
     health: &Health,
     fresh: bool,
-    xp_per_hour: Option<f64>,
     view: Option<&HuntView>,
 ) {
     let pokemon = if fresh { view.and_then(|v|v.active_pokemon.as_ref()) } else { None };
@@ -4128,19 +4131,6 @@ fn draw_overview_account_summary(
         .unwrap_or_else(|| if fresh && !health.pokemon_level.is_empty() {
             health.pokemon_level.clone()
         } else { "—".into() });
-    let gold_h = view.filter(|_|fresh).and_then(|v|
-        v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
-    // The restock editor stages selections while the encrypted save runs.
-    // Use those staged IDs immediately so the icon and count always agree.
-    let restock_selection = app.restock_drafts[index].as_ref().cloned()
-        .or_else(|| app.games[index].native.as_ref().map(|n| n.capture_settings()))
-        .unwrap_or_default();
-    let balls = view.filter(|_| fresh).and_then(|v|
-        selected_restock_stock(v.balls.as_ref(), restock_selection.ball_id));
-    let potions = view.filter(|_| fresh).and_then(|v|
-        selected_restock_stock(v.items.as_ref(), restock_selection.potion_id));
-    let revives = view.filter(|_| fresh).and_then(|v|
-        selected_restock_stock(v.items.as_ref(), restock_selection.revive_id));
     let combat = overview_combat_state(view, fresh);
     ui.columns(2, |cols| {
         cols[0].label(RichText::new(tr("Your Pokémon"))
@@ -4156,15 +4146,17 @@ fn draw_overview_account_summary(
                     .size(9.0).color(DIM));
             });
         });
-        cols[1].with_layout(Layout::right_to_left(Align::Min), |ui| {
+        // Keep the opponent on the right without nesting an RTL horizontal
+        // layout inside another RTL layout (which clipped the enemy label).
+        cols[1].with_layout(Layout::top_down(Align::Max), |ui| {
             ui.label(RichText::new(tr("Opponent"))
                 .size(9.0).color(DIM));
-            ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 overview_combat_image(app,ui,
                     wild.and_then(|p|p.species_id),true);
                 ui.vertical(|ui| {
                     let name=wild.map(|w|w.name.as_str()).filter(|s|!s.is_empty())
-                        .unwrap_or("—");
+                        .unwrap_or(if fresh { "Between encounters" } else { "—" });
                     ui.add(egui::Label::new(RichText::new(compact_text(name,16))
                         .size(11.0).strong().color(TEXT))
                         .truncate()).on_hover_text(name);
@@ -4192,6 +4184,29 @@ fn draw_overview_account_summary(
         }
     });
     ui.add_space(5.0);
+}
+
+fn draw_overview_account_summary(
+    app: &mut ControllerApp,
+    ui: &mut egui::Ui,
+    index: usize,
+    fresh: bool,
+    xp_per_hour: Option<f64>,
+    view: Option<&HuntView>,
+) {
+    let gold_h = view.filter(|_|fresh).and_then(|v|
+        v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
+    // The restock editor stages selections while the encrypted save runs.
+    // Use those staged IDs immediately so the icon and count always agree.
+    let restock_selection = app.restock_drafts[index].as_ref().cloned()
+        .or_else(|| app.games[index].native.as_ref().map(|n| n.capture_settings()))
+        .unwrap_or_default();
+    let balls = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.balls.as_ref(), restock_selection.ball_id));
+    let potions = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.items.as_ref(), restock_selection.potion_id));
+    let revives = view.filter(|_| fresh).and_then(|v|
+        selected_restock_stock(v.items.as_ref(), restock_selection.revive_id));
     ui.columns(2, |cols| {
         overview_stat_tile(&mut cols[0],"XP/h",
             &if fresh {xp_per_hour.map(format_hunt_amount)
