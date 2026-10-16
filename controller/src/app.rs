@@ -4352,6 +4352,8 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
         (native.snapshot(), native.hunt_snapshot(), native.twitch_snapshot())
     };
     let phase_online = status.phase == "Online";
+    request_item_catalog(app);
+    let item_catalog = app.inventory_catalog.clone();
     let hunt_name = view.hunts.iter()
         .find(|hunt| Some(hunt.slug.as_str()) == view.hunt_slug.as_deref())
         .map(|hunt| hunt.name.as_str())
@@ -4400,6 +4402,25 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 detail_stat_line(&mut cols[2], tr("Diamonds"),
                     &view.diamonds.map(format_number).unwrap_or_else(|| "—".into()));
             });
+            if let Some(hunt) = view.hunts.iter().find(|hunt|
+                Some(hunt.slug.as_str()) == view.hunt_slug.as_deref()) {
+                ui.label(RichText::new(format!("{} · {} · Lv {} · {} spawn slots",
+                    hunt.area, hunt.region, hunt.level, hunt.total_spawns))
+                    .size(10.0).color(DIM));
+            }
+            if let Some(wild) = view.wild.as_ref() {
+                ui.label(RichText::new(format!("Wild: {} · Lv {} · HP {}/{}",
+                    wild.name, wild.level, wild.hp, wild.max_hp))
+                    .size(10.0).color(MUTED));
+            }
+            ui.horizontal_wrapped(|ui| {
+                let bonus = &view.bonuses;
+                ui.label(format!("Twitch +{:.0}% · Guild +{:.0}% · Event trainer +{:.0}% / Pokémon +{:.0}%",
+                    bonus.twitch_pct, bonus.guild_pct, bonus.trainer_event_pct,
+                    bonus.pokemon_event_pct));
+                if bonus.vip_active { ui.label(RichText::new("VIP").color(GOOD)); }
+                if bonus.guild_boost_active { ui.label(RichText::new("Guild boost").color(GOOD)); }
+            });
         });
     ui.add_space(9.0);
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
@@ -4407,10 +4428,12 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("HUNT SESSION")).size(12.0)
                     .strong().color(TEXT));
-                ui.label(RichText::new(format!("{} {} · {} {} · {} {}",
+                ui.label(RichText::new(format!("{} {} · {} {} · {} {} · {:02}:{:02}:{:02}",
                     view.session.kills, tr("kills"),
                     view.session.captures, tr("captures"),
-                    view.session.shiny_captured, tr("shinies caught")
+                    view.session.shiny_captured, tr("shinies caught"),
+                    view.session.duration_secs/3600,
+                    (view.session.duration_secs/60)%60,view.session.duration_secs%60,
                 )).size(10.0).color(MUTED));
                 if ui.small_button(tr("Open Hunt Atlas")).clicked() {
                     app.hunt_account = index;
@@ -4440,6 +4463,16 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 detail_stat_line(&mut cols[1], tr("Auto-sale gold"),
                     &format_number(view.session.auto_sale_gold));
             });
+            if !view.session.balls_used.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr("Balls used")).size(10.0).color(DIM));
+                    for (id,quantity) in &view.session.balls_used {
+                        ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
+                            .map(String::as_str).unwrap_or("Ball"),quantity))
+                            .size(10.0).color(TEXT));
+                    }
+                });
+            }
             if !view.session.recent_drops.is_empty() {
                 ui.collapsing(format!("{} ({})",tr("Recent drops"),
                     view.session.recent_drops.len()), |ui| {
@@ -4473,8 +4506,25 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                             let name = format!("{}{} · Lv {}{}",
                                 if active {"▶ "} else {""},pokemon.name,pokemon.level,
                                 if pokemon.shiny {" ✨"} else {""});
+                            let detail = format!(
+                                "ID #{} · Species #{} · XP {} · Next {}\nTypes: {} · Power: {} · Held item #{}\nIVs: {}",
+                                pokemon.id,
+                                pokemon.species_id.map(|id|id.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.xp.map(format_number).unwrap_or_else(|| "—".into()),
+                                pokemon.xp_next.map(format_number).unwrap_or_else(|| "—".into()),
+                                pokemon.types.join(", "),
+                                pokemon.power.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.held_item_id.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()),
+                                pokemon.ivs.iter().map(|value|value.map(|n|n.to_string())
+                                    .unwrap_or_else(|| "—".into()))
+                                    .collect::<Vec<_>>().join(" / "),
+                            );
                             ui.label(RichText::new(name).size(11.0)
-                                .color(if active { GOOD } else { TEXT }));
+                                .color(if active { GOOD } else { TEXT }))
+                                .on_hover_text(detail);
                             ui.label(RichText::new(format!(
                                 "HP {} / {} · Q {} · P{}",
                                 pokemon.hp.map(|n|n.to_string()).unwrap_or_else(|| "—".into()),
@@ -4508,6 +4558,17 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                     ui.label(RichText::new(format!("{} ×{}",view.ball_names.get(id)
                         .map(String::as_str).unwrap_or("Ball"),qty))
                         .size(10.0).color(TEXT));
+                }
+            });
+            let mut items = view.items.iter().filter(|(_,qty)| **qty>0)
+                .collect::<Vec<_>>();
+            items.sort_by(|a,b|b.1.cmp(a.1).then_with(||a.0.cmp(b.0)));
+            ui.horizontal_wrapped(|ui| {
+                for (id,qty) in items.into_iter().take(10) {
+                    let name = item_catalog.as_deref().map(|catalog|catalog.name(*id))
+                        .unwrap_or_else(||format!("Item #{id}"));
+                    ui.label(RichText::new(format!("{name} ×{qty}"))
+                        .size(10.0).color(DIM));
                 }
             });
         });
