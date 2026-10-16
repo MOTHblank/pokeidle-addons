@@ -3582,9 +3582,17 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let bidi_connected = app.games.iter()
                     .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                     .count();
+                let native_online = app.games.iter().filter(|game|
+                    game.native.as_ref().is_some_and(|native| native.snapshot().phase == "Online")
+                ).count();
+                let native_twitch_online = app.games.iter().filter(|game|
+                    game.native.as_ref().is_some_and(|native| native.twitch_snapshot().phase == "Online")
+                ).count();
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Headless"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
-                runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { WARN } else { GOOD });
+                runtime_chip(ui, "Native game", &format!("{native_online} online"), if native_online > 0 { GOOD } else { MUTED });
+                runtime_chip(ui, "Native Twitch IRC", &format!("{native_twitch_online} online"), if native_twitch_online > 0 { GOOD } else { MUTED });
                 runtime_chip(ui, tr("BiDi"), &bidi_state, if running == 0 { MUTED } else if bidi_connected == running { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
@@ -3596,7 +3604,7 @@ fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
-                runtime_chip(ui, tr("Stream chat"), tr("First scan 30s · 5 min"), MUTED);
+                runtime_chip(ui, tr("Stream chat"), "Native IRC; browser only during login", MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
@@ -3923,7 +3931,11 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     let twitch_open = health.telemetry_is_fresh() && health.tabs.iter().any(|tab| tab.kind == "Twitch");
                                     // This check only observes tab existence. It does not
                                     // authenticate Twitch, so never label a profile as logged in.
-                                    let twitch_label = if twitch_open {
+                                    let twitch_native = app.games[index].native.as_ref()
+                                        .is_some_and(|native| native.twitch_snapshot().phase == "Online");
+                                    let twitch_label = if twitch_native {
+                                        "Native IRC connected"
+                                    } else if twitch_open {
                                         tr("Tab open")
                                     } else if running && health.telemetry_is_fresh() {
                                         tr("No Twitch tab open")
@@ -3936,7 +3948,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
                                     if let Some(error) = &setup.check_error {
                                         vm_chip.on_hover_text(error.as_str());
                                     }
-                                    status_chip(ui, "Twitch", twitch_label, twitch_open);
+                                    status_chip(ui, "Twitch", twitch_label, twitch_open || twitch_native);
 
                                     if running && health.telemetry_is_fresh() {
                                         let script_status = status_chip(
@@ -4139,7 +4151,7 @@ fn draw_accounts_window(app: &mut ControllerApp, ctx: &egui::Context) {
 
                                 ui.label(
                                     RichText::new(
-                                        tr("Twitch uses this Firefox profile for its session. All actions target this account."),
+                                        "Firefox stores login sessions; Rust owns game + Twitch IRC after automatic handoff.",
                                     )
                                     .size(9.0)
                                     .color(DIM),
