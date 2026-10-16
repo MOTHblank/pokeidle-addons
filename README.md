@@ -1,35 +1,23 @@
 # Moth Controller — PokéIdle
 
-Native-first Rust controller for up to four PokéIdle accounts on Windows and Linux. The primary runtime uses native authenticated PokéIdle WebSocket sessions and Twitch IRC; **Firefox is used only when login/authentication needs it or when deliberately opened for interactive play**.
+Moth Controller manages up to **four PokéIdle accounts** with separate sign-ins. The desktop application handles PokéIdle and Twitch connections in the background. Firefox opens when you need to sign in or choose **Open in Firefox** for interactive play.
 
-**Não é necessário instalar Violentmonkey nem userscripts para usar as sessões nativas, Auto Catch ou restock.** Cada conta pode fazer login no Firefox uma vez e continuar no controlador sem manter abas abertas.
+**Downloads:** [Latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)
 
-**Downloads:** [latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)
+## Getting started
 
-## Getting started / Como começar
+1. Download Moth Controller for Windows or Linux.
+2. Open **Accounts**. All four account slots appear as cards; enable and name the ones you use.
+3. Click **Start account**. If a saved login is not available, a visible Firefox window opens.
+4. Sign in to **PokéIdle** and **Twitch** in that Firefox profile. Each card shows both connections separately. Once confirmed, Moth Controller can continue without keeping Firefox open.
+5. Visit **Automation** for Auto Catch, restocking, and market rules, or **Hunt Atlas** for hunt details and comparisons.
 
-1. Download Moth Controller from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest), on Windows or Linux.
-2. Add an account and select **Start native**. If authentication is missing or expired, the controller opens its isolated Firefox profile and captures a fresh session through Firefox BiDi.
-3. Sign in to PokéIdle (and Twitch if desired) in that profile. The controller hands off to native WebSocket/IRC sessions and closes temporary authentication Firefox when verification succeeds.
-4. Use **Open in Firefox** for an optional interactive browser session. Native Auto Catch, restocking, Hunt Atlas projections and history operate independently of userscripts.
+## Game icons
 
-For build and configuration details see [controller/README.md](controller/README.md). For native architecture, limitations and verification notes see [native session documentation](controller/docs/native-background-experiment.md). For optional cached item sprites see [native visual assets](controller/assets/visual/README.md).
+Under **Options**, choose **Download game icons** to fetch known Poké Ball and item images into your local cache. Additional artwork, especially Pokémon species sprites, requires a maintained mapping of game image sources. The cache manifest is currently empty; see [asset documentation](controller/assets/visual/README.md).
 
-## Occasional browser userscripts
+## Build
 
-All former public browser scripts, including the experimental native-branch Bridge and Twitch improvements, are maintained in **[pokeidle-addons-premium](https://github.com/MOTHblank/pokeidle-addons-premium)**. The optional catalog includes Auto Catch+, Controller Bridge, Hunt Atlas, Performance+, Live Stream Scanner and Twitch Low Resource, alongside Moth Watch and the upstream scraper.
+From `controller/`, run `cargo build --release`. Windows users whose existing executable is still running can run `.\build-windows.ps1` in PowerShell to build without overwriting that executable.
 
-These scripts are **not required** to run Moth Controller. If you still want browser scripts, install them from the Premium repository, one per intended feature, and avoid overlapping native and browser Auto Catch. Existing Violentmonkey installations pointing at the retired `pokeidle-addons/master/addons/*.user.js` URLs need to be reinstalled from Premium once to receive future updates.
-
-## Development
-
-```sh
-cd controller
-cargo test
-cargo check
-cargo build --release
-```
-
-The native UI is implemented in Rust using egui/eframe. No WebView, Tauri or userscript engine is needed. Automated builds for the controller are in `.github/workflows/`.
-
-Issues and feature requests: [GitHub Issues](https://github.com/MOTHblank/pokeidle-addons/issues).
+See [controller instructions](controller/README.md) and [GitHub Issues](https://github.com/MOTHblank/pokeidle-addons/issues).
