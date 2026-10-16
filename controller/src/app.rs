@@ -1763,6 +1763,9 @@ impl ControllerApp {
         }
         self.native_handoff_busy[index] = true;
         self.native_handoff_last_attempt[index] = Some(Instant::now());
+        logging::info(&format!(
+            "{} capturing native game + Twitch IRC session via Firefox BiDi",
+            self.account_name(profile)));
         self.set_status(format!("{}: transferring game + Twitch IRC authentication to Rust",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
