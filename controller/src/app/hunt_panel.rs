@@ -1393,9 +1393,21 @@ fn draw_atlas_explorer(
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     visuals:&mut VisualCache,command_error:&mut Option<String>,
-    viewport_height:f32,
 ){
-    atlas_filters_panel(ui,filters,page,view,reference,index);
+    // The Explorer is laid out directly in the finite-height CentralPanel.
+    // Only the expanded advanced filters scroll independently.
+    if filters.filters_open {
+        egui::ScrollArea::vertical()
+            .id_salt(("atlas-expanded-filters",index))
+            .max_height(218.0)
+            .auto_shrink([false,true])
+            .show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
+                atlas_filters_panel(ui,filters,page,view,reference,index);
+            });
+    }else{
+        atlas_filters_panel(ui,filters,page,view,reference,index);
+    }
     ui.add_space(9.0);
     let rows=atlas_species_rows(view,reference,cache,filters,scenario);
     if filters.collection!=AtlasCollection::All && !view.roster_ready {
@@ -1471,64 +1483,86 @@ fn draw_atlas_explorer(
             .filter(|id|slice.iter().any(|row|row.id==*id))
             .unwrap_or(slice[0].id);
         filters.selected_species=Some(selected);
-        let spacing=ui.spacing().item_spacing.x;
-        let list_width=(ui.available_width()*0.36).clamp(320.0,430.0);
-        let details_width=(ui.available_width()-list_width-spacing).max(400.0);
-        let pane_height=(viewport_height-155.0).clamp(220.0,860.0);
-        // 36/64 split: the list needs only a name and a ranking number;
-        // destinations, forecast metrics and drops require the extra width.
+        let pane_height=ui.available_height().max(160.0);
+        let gap=ui.spacing().item_spacing.x;
+        let total_width=ui.available_width();
+        let list_width=(total_width*0.36).clamp(290.0,430.0);
+        let details_width=(total_width-list_width-gap).max(0.0);
+
+        // Reserve an actual rectangle for each pane. max_height() on its own
+        // does NOT reserve viewport height: within a parent vertical
+        // ScrollArea its child can receive zero/indefinite available height,
+        // which previously clipped the twenty rows to a single row.
         ui.horizontal(|ui|{
-            ui.vertical(|ui|{
-                ui.set_width(list_width);
-                ui.label(RichText::new("POKÉMON")
-                    .size(10.0).strong().color(DIM));
-                ui.add_space(5.0);
-                egui::ScrollArea::vertical()
-                    .id_salt(("atlas-species-list",index))
-                    .auto_shrink([false,false])
-                    .max_height(pane_height)
-                    .show(ui,|ui|{
-                        ui.set_min_width(ui.available_width());
-                        for row in slice{
-                            if draw_atlas_species_selector(ui,row,filters.sort,
-                                filters.selected_species==Some(row.id),visuals){
-                                filters.selected_species=Some(row.id);
+            ui.allocate_ui_with_layout(
+                egui::vec2(list_width,pane_height),
+                Layout::top_down(Align::Min),
+                |ui|{
+                    ui.label(RichText::new("POKÉMON")
+                        .size(10.0).strong().color(DIM));
+                    ui.add_space(5.0);
+                    let list_height=ui.available_height().max(120.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt(("atlas-species-list",index))
+                        .max_height(list_height)
+                        .auto_shrink([false,false])
+                        .show(ui,|ui|{
+                            ui.set_min_width(ui.available_width());
+                            for row in slice{
+                                if draw_atlas_species_selector(
+                                    ui,row,filters.sort,
+                                    filters.selected_species==Some(row.id),visuals
+                                ){
+                                    filters.selected_species=Some(row.id);
+                                }
                             }
-                        }
-                    });
-            });
-            ui.vertical(|ui|{
-                ui.set_width(details_width);
-                ui.label(RichText::new("SPECIES DETAILS")
-                    .size(10.0).strong().color(DIM));
-                ui.add_space(5.0);
+                        });
+                }
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(details_width,pane_height),
+                Layout::top_down(Align::Min),
+                |ui|{
+                    ui.label(RichText::new("SPECIES DETAILS")
+                        .size(10.0).strong().color(DIM));
+                    ui.add_space(5.0);
+                    let details_height=ui.available_height().max(120.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt(("atlas-species-details",index,filters.selected_species))
+                        .max_height(details_height)
+                        .auto_shrink([false,false])
+                        .show(ui,|ui|{
+                            ui.set_min_width(ui.available_width());
+                            if let Some(row)=slice.iter().find(|row|
+                                filters.selected_species==Some(row.id)){
+                                draw_atlas_species(ui,row,filters.sort,view,reference,
+                                    native,live,visuals,&mut error);
+                            }
+                        });
+                }
+            );
+        });
+    }else{
+        let pane_height=ui.available_height().max(160.0);
+        let pane_width=ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(pane_width,pane_height),
+            Layout::top_down(Align::Min),
+            |ui|{
                 egui::ScrollArea::vertical()
-                    .id_salt(("atlas-species-details",index,filters.selected_species))
+                    .id_salt(("atlas-species-mobile",index))
+                    .max_height(ui.available_height().max(120.0))
                     .auto_shrink([false,false])
-                    .max_height(pane_height)
                     .show(ui,|ui|{
                         ui.set_min_width(ui.available_width());
-                        if let Some(row)=slice.iter().find(|row|
-                            filters.selected_species==Some(row.id)){
+                        for row in rows.iter().skip(visible.start)
+                            .take(visible.end-visible.start){
                             draw_atlas_species(ui,row,filters.sort,view,reference,
                                 native,live,visuals,&mut error);
                         }
                     });
-            });
-        });
-    }else{
-        egui::ScrollArea::vertical()
-            .id_salt(("atlas-species-mobile",index))
-            .auto_shrink([false,false])
-            .max_height((viewport_height-155.0).clamp(220.0,860.0))
-            .show(ui,|ui|{
-                ui.set_min_width(ui.available_width());
-                for row in rows.iter().skip(visible.start)
-                    .take(visible.end-visible.start){
-                    draw_atlas_species(ui,row,filters.sort,view,reference,
-                        native,live,visuals,&mut error);
-                }
-            });
+            }
+        );
     }
     if let Some(error)=error {*command_error=Some(error);}
 }
@@ -1664,23 +1698,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         app.hunt_subtab=HuntSubtab::Current;
     }
     ui.add_space(6.0);
-    // Capture the actual remaining viewport height BEFORE entering a
-    // ScrollArea (whose child has unbounded vertical space). The outer scroll
-    // handles expanded filters and short windows, while the bounded inner
-    // list/detail panes retain independent scroll positions.
+    // Explorer owns the remaining CentralPanel height. Do not wrap it in
+    // a full-page vertical ScrollArea: that makes available_height() inside
+    // its nested list/detail panes meaningless and leaves the view blank.
     if app.hunt_subtab==HuntSubtab::Explorer{
-        let viewport_height=ui.available_height().max(260.0);
-        egui::ScrollArea::vertical()
-            .id_salt(("hunt-atlas-explorer-workspace",index))
-            .auto_shrink([false,false])
-            .show(ui,|ui|{
-                ui.set_min_width(ui.available_width());
-                draw_atlas_explorer(ui,&view,native,live,index,
-                    app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
-                    &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
-                    &app.atlas_scenarios[index],&mut app.visuals,
-                    &mut app.hunt_action_error[index],viewport_height);
-            });
+        draw_atlas_explorer(ui,&view,native,live,index,
+            app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
+            &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
+            &app.atlas_scenarios[index],&mut app.visuals,
+            &mut app.hunt_action_error[index]);
         return;
     }
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
