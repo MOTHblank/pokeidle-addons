@@ -253,6 +253,21 @@ impl NativeSession {
         Ok(())
     }
     pub fn send_command(&self, command: GameCommand) -> Result<(), String> {
+        if let GameCommand::OutlandTier(tier)=&command{
+            let view=self.hunt_snapshot();
+            if view.outland_tier.is_none(){
+                return Err("Waiting for the server to report the current Outland tier".into());
+            }
+            if view.pending_outland_tier.is_some(){
+                return Err("An Outland tier change is already in progress".into());
+            }
+            if view.outland_tier==Some(*tier){
+                return Err("The requested Outland tier is already active".into());
+            }
+            if crate::native_atlas_models::unlocked_tier(*tier,view.trainer_level).is_none(){
+                return Err("The requested Outland tier is not unlocked at this trainer level".into());
+            }
+        }
         if let GameCommand::Hunt(slug) = &command {
             let current = self.hunt_snapshot();
             if !current.catalog_ready || !current.hunts.iter().any(|hunt| hunt.slug == *slug) {
@@ -593,10 +608,27 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 continue;
                             }
                         }
+                        if let GameCommand::OutlandTier(tier)=&command{
+                            // Revalidate against the latest server-derived level,
+                            // not an earlier UI snapshot or guessed game tier.
+                            if let Err(error)=hunt_intel.request_outland_tier(
+                                *tier,Instant::now()){
+                                crate::logging::warn(&format!(
+                                    "Native Outland tier request rejected: {error}"
+                                ));
+                                hunt_intel.view.outland_tier_error=Some(error);
+                                continue;
+                            }
+                        }
                         if socket.send(Message::Text(payload.into())).is_err() {
                             gameplay.failed(&command, "Could not send the action to PokéIdle");
                             if matches!(command, GameCommand::Hunt(_)) {
                                 hunt_intel.command_failed("Hunt selection transport failed");
+                            }
+                            if matches!(command, GameCommand::OutlandTier(_)){
+                                hunt_intel.outland_command_failed(
+                                    "Outland tier command could not be sent"
+                                );
                             }
                             send_failed = true; break;
                         }

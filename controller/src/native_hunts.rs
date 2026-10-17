@@ -135,6 +135,9 @@ pub struct HuntView {
     /// Catalog quotes are alternatives by currency, not additive costs.
     pub ball_quotes: Arc<BTreeMap<u64,BallQuote>>,
     pub outland_tier:Option<u8>,
+    /// Awaiting authoritative tierOutland from the game (not socket send).
+    pub pending_outland_tier:Option<u8>,
+    pub outland_tier_error:Option<String>,
     pub items: Arc<BTreeMap<u64, u64>>,
     pub automation: Option<Value>,
     pub vip_until: Option<u64>,
@@ -184,6 +187,7 @@ pub struct HuntIntel {
     session_start: Instant,
     recent_drops: VecDeque<(String,u64)>,
     pending_at: Option<Instant>,
+    pending_outland_at: Option<Instant>,
 }
 impl HuntIntel {
     pub fn new() -> Self {
@@ -196,11 +200,13 @@ impl HuntIntel {
             last_battle_at: None, last_combat_at: None, session_kills: 0,
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
+            pending_outland_at: None,
         }
     }
     /// Produce a cheap UI snapshot: roster data is cloned only on the
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
+        self.expire_outland_request(Instant::now());
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
         self.view.measurements.last_battle_age_secs=self.last_battle_at
             .map(|at|at.elapsed().as_secs());
@@ -224,6 +230,48 @@ impl HuntIntel {
         self.session_start=now;
         self.recent_drops.clear();
         self.view.session=HuntSessionStats::default();
+    }
+    /// Track an Outland selection only after validation, before socket write.
+    /// The UI never overwrites outland_tier optimistically: a matching server
+    /// state is the only confirmation that the setting took effect.
+    pub fn request_outland_tier(&mut self,tier:u8,now:Instant)->Result<(),String>{
+        if !(1..=8).contains(&tier){
+            return Err("Unknown Outland tier".into());
+        }
+        if self.view.outland_tier.is_none(){
+            return Err("Waiting for server-reported Outland tier".into());
+        }
+        let level=self.view.trainer_level
+            .ok_or("Trainer level not reported by the game")?;
+        if level<crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize]{
+            return Err(format!(
+                "Outland {tier} requires trainer level {}",
+                crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize]
+            ));
+        }
+        if self.view.pending_outland_tier.is_some(){
+            return Err("An Outland tier change is already awaiting confirmation".into());
+        }
+        if self.view.outland_tier==Some(tier){
+            return Err("Outland tier is already active".into());
+        }
+        self.view.pending_outland_tier=Some(tier);
+        self.pending_outland_at=Some(now);
+        self.view.outland_tier_error=None;
+        Ok(())
+    }
+    pub fn outland_command_failed(&mut self,message:&str){
+        self.view.pending_outland_tier=None;
+        self.pending_outland_at=None;
+        self.view.outland_tier_error=Some(message.into());
+    }
+    fn expire_outland_request(&mut self,now:Instant){
+        if self.pending_outland_at.is_some_and(|at|
+            now.saturating_duration_since(at)>Duration::from_secs(6)){
+            self.outland_command_failed(
+                "Outland tier change was not confirmed by the game. Retry."
+            );
+        }
     }
     pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
         if !self.view.catalog_ready || !self.view.hunts.iter().any(|h| h.slug == slug) {
@@ -251,6 +299,10 @@ impl HuntIntel {
         self.view.last_error = Some(error.to_owned());
     }
     pub fn on_disconnect(&mut self) {
+        self.view.pending_outland_tier=None;
+        self.pending_outland_at=None;
+        self.view.outland_tier=None;
+        self.view.outland_tier_error=None;
         self.view.pending_hunt_slug = None;
         self.pending_at = None;
         self.samples.clear();
@@ -384,6 +436,12 @@ impl HuntIntel {
             .or_else(||state.get("outland_tier")) {
             self.view.outland_tier=raw.as_u64()
                 .filter(|tier|(1..=8).contains(tier)).map(|tier|tier as u8);
+            if self.view.outland_tier.is_some() &&
+                self.view.pending_outland_tier==self.view.outland_tier{
+                self.view.pending_outland_tier=None;
+                self.pending_outland_at=None;
+                self.view.outland_tier_error=None;
+            }
         }
         if let Some(nick) = state.get("nick").and_then(Value::as_str)
             .map(str::trim).filter(|nick|!nick.is_empty()) {
@@ -687,6 +745,7 @@ impl HuntIntel {
         // Update battle-derived rates on every relevant server frame. Without
         // this, the old dashboard showed zero/blank XP until an estado arrived.
         self.refresh_battle_rates(now);
+        self.expire_outland_request(now);
         if self.pending_at.is_some_and(|at| now.saturating_duration_since(at) > Duration::from_secs(20)) {
             self.command_failed("Hunt switch not confirmed by game server");
         }
@@ -1195,6 +1254,43 @@ mod tests {
         assert!(!intel.view.bonuses.vip_active);
     }
 
+    #[test]
+    fn outland_tier_changes_only_on_server_confirmation(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","estado":{"level":500,
+            "tierOutland":1}}"#,now);
+        assert!(intel.request_outland_tier(3,now).is_err());
+        assert!(intel.request_outland_tier(2,now).is_ok());
+        let pending=intel.snapshot();
+        assert_eq!(pending.outland_tier,Some(1));
+        assert_eq!(pending.pending_outland_tier,Some(2));
+        assert!(intel.request_outland_tier(1,now).is_err());
+        // A state patch carrying an unrelated old tier is not an ack.
+        intel.ingest(r#"{"t":"estado","estado":{"tierOutland":1}}"#,now);
+        assert_eq!(intel.snapshot().pending_outland_tier,Some(2));
+        // The only confirmation is a server-reported matching tier.
+        intel.ingest(r#"{"t":"estado","estado":{"tierOutland":2}}"#,now);
+        assert_eq!(intel.snapshot().outland_tier,Some(2));
+        assert_eq!(intel.snapshot().pending_outland_tier,None);
+        assert_eq!(intel.snapshot().outland_tier_error,None);
+    }
+    #[test]
+    fn outland_tier_timeout_and_disconnect_discard_pending_request(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","estado":{"level":5000,
+            "tierOutland":2}}"#,now);
+        assert!(intel.request_outland_tier(5,now).is_ok());
+        intel.expire_outland_request(now+Duration::from_secs(7));
+        assert_eq!(intel.view.outland_tier,Some(2));
+        assert_eq!(intel.view.pending_outland_tier,None);
+        assert!(intel.view.outland_tier_error.is_some());
+        assert!(intel.request_outland_tier(5,now).is_ok());
+        intel.on_disconnect();
+        assert_eq!(intel.view.pending_outland_tier,None);
+        assert_eq!(intel.view.outland_tier,None);
+    }
     #[test]
     fn capture_catalog_preserves_currency_alternatives_and_outland_tier(){
         let now=Instant::now();
