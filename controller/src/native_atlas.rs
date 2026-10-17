@@ -107,29 +107,8 @@ pub fn parse(script: &str) -> Result<Reference, String> {
                 });
             }
         }
-        let mut drops=Vec::new();
-        if let Some(loot)=p.get("l").and_then(Value::as_array) {
-            for entry in loot {
-                let Some(v)=entry.as_array().filter(|v|v.len()>=5) else {continue};
-                if let (Some(chance),Some(low),Some(high),Some(price)) =
-                    (v[1].as_f64(),v[2].as_f64(),v[3].as_f64(),v[4].as_f64()) {
-                    if chance.is_finite() && (0.0..=100.0).contains(&chance)
-                        && low.is_finite() && high.is_finite()
-                        && low>=0.0 && high>=low
-                        && price.is_finite() && price>=0.0 {
-                        drops.push(ReferenceDrop {
-                            item_id:v[0].as_u64().or_else(||
-                                v[0].as_str().and_then(|id|id.parse::<u64>().ok())),
-                            item_name:v[0].as_str()
-                                .filter(|name|!name.trim().is_empty())
-                                .map(str::to_owned),
-                            chance_pct:chance,
-                            minimum:low,maximum:high,guide_price:price,
-                        });
-                    }
-                }
-            }
-        }
+        // Legacy guide NPC drops are no longer awarded by the game.
+        let drops=Vec::new();
         result.species.insert(id,ReferenceSpecies {
             name:name.to_owned(),
             types:types.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
@@ -374,6 +353,7 @@ mod tests {
             ]}));
         assert_eq!(reference.capture_rarities[&25],8000.0);
         assert_eq!(reference.npc_sell_prices[&25],4000.0);
+        assert_eq!(reference.catalog_sell_values[&25],8000.0);
         assert!(reference.capture_rarities.contains_key(&2001));
         assert!(!reference.capture_rarities.contains_key(&1));
     }
@@ -462,14 +442,12 @@ mod tests {
         assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
     }
     #[test]
-    fn guide_loot_names_are_preserved_without_fabricating_item_ids(){
+    fn obsolete_guide_npc_drops_are_not_loaded(){
         let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
             "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],
             "l":[["Moon Stone",2.5,1,3,400]]}]};"#;
         let guide=parse(script).unwrap();
-        assert_eq!(guide.species[&1].drops[0].item_name.as_deref(),
-            Some("Moon Stone"));
-        assert_eq!(guide.species[&1].drops[0].item_id,None);
+        assert!(guide.species[&1].drops.is_empty());
     }
     #[test]
     fn guide_catalog_is_read_only_and_does_not_fake_unlocks(){
