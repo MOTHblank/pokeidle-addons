@@ -1839,9 +1839,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .show(&mut cols[0],|ui|{
                                 ui.label(RichText::new("LEAD & HUNT").size(10.0)
                                     .strong().color(DIM));
-                                // This is a hunt-location card, not a live
-                                // wild encounter widget. Spawn artwork is
-                                // representative and does not change at each kill.
+                                // The hunt has one assigned Pokémon species.
+                                // Show that ID rather than the temporary wild
+                                // encounter; it remains stable across kills.
                                 let representative=if hunts.in_center {None}else{
                                     overview_hunt_art_species(hunts)
                                 };
@@ -1868,7 +1868,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         }
                                     });
                                     sides[1].vertical_centered(|ui|{
-                                        ui.label(RichText::new("HUNT LOCATION")
+                                        ui.label(RichText::new("HUNT SPECIES")
                                             .size(9.0).strong().color(DIM));
                                         if representative.is_some() || hunt_looktype.is_some() {
                                             overview_combat_image(&mut app.visuals,ui,
@@ -1885,7 +1885,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                             .size(13.0).strong().color(TEXT));
                                         if let Some(h)=current.filter(|_|!hunts.in_center){
                                             ui.label(RichText::new(format!(
-                                                "Lv {} · representative species",h.level
+                                                "Lv {} · hunt species",h.level
                                             )).size(10.0).color(MUTED));
                                         }else if hunts.in_center{
                                             ui.label(RichText::new("Not hunting")
