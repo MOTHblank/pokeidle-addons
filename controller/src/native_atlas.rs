@@ -45,6 +45,8 @@ pub struct Reference {
     /// Public client-catalog derived capture rarity (not guide loot prices).
     pub capture_rarities: BTreeMap<u64,f64>,
     pub npc_sell_prices: BTreeMap<u64,f64>,
+    /// Static catalog sellValue; not an observed player-to-player market average.
+    pub catalog_sell_values: BTreeMap<u64,f64>,
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -52,7 +54,7 @@ pub struct Forecast {
     pub trainer_xp_h: f64,
     pub pokemon_xp_h: f64,
     pub gold_h: f64,
-    /// Gross modeled combat gold is separate from expected NPC drop value.
+    /// Historical NPC field retained for compatibility; no NPC drops are modeled.
     pub combat_gold_h: f64,
     pub npc_loot_gold_h: f64,
     pub trainer_xp_per_kill: f64,
@@ -241,6 +243,7 @@ pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
             .filter(|n|n.is_finite()&&*n>0.0);
         let sell=positive("sellValue");
         let npc=positive("priceNpc");
+        if let Some(price)=sell {reference.catalog_sell_values.insert(id,price);}
         if let Some(price)=npc.or(sell) {
             reference.npc_sell_prices.insert(id,price);
         }
@@ -298,22 +301,19 @@ fn raw_kills(hunt:&HuntEntry, mon:&PokemonInfo, meta:&ReferenceSpecies,
              refdata:&Reference,stats:&[f64;6])->Option<(f64,f64,f64)> {
     let total=hunt.species.iter().map(|p|p.weight).sum::<f64>();
     if total<=0.0||hunt.level==0{return None}
-    let mut secs=0.0;let mut loot=0.0;let mut coverage=0.0;
+    let mut secs=0.0;let mut coverage=0.0;
     for spawn in &hunt.species {
         let Some(wild)=refdata.species.get(&spawn.id) else {continue};
         let hp=(((wild.base[0]+32.0)*hunt.level as f64/100.0)*60.0).max(24.0);
         let kill=(hp/dps(mon,meta,stats,wild,hunt.level,refdata).max(1.0)).max(0.9);
         let ratio=spawn.weight.max(0.0)/total;
         secs+=ratio*kill;
-        loot+=ratio*wild.drops.iter().map(|drop|
-            drop.chance_pct/100.0*(drop.minimum+drop.maximum)/2.0
-                *drop.guide_price).sum::<f64>();
         coverage+=ratio;
     }
     if coverage<0.6 {return None}
     let sec=(secs/coverage+2.8).max(0.9);
     let max_kills=3600.0/if hunt.level<20{4.2}else{3.2};
-    Some(((3600.0/sec).min(max_kills),loot/coverage,coverage))
+    Some(((3600.0/sec).min(max_kills),0.0,coverage))
 }
 fn bonus(view:&HuntView, trainer:bool)->f64 {
     let b=&view.bonuses;
@@ -329,7 +329,7 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
     let mon=view.active_pokemon.as_ref()?;
     let mon_meta=reference.species.get(&mon.species_id?)?;
     let stats=pokemon_stats(mon,mon_meta)?;
-    let (base_kills,loot,coverage)=raw_kills(hunt,mon,mon_meta,reference,&stats)?;
+    let (base_kills,_,coverage)=raw_kills(hunt,mon,mon_meta,reference,&stats)?;
     // The raw stat/move approximation is optimistic for many setups.
     // Calibrate against the current *observed* hunt's kills/h where possible;
     // never double-count Pokémon and trainer XP streams.
@@ -350,9 +350,9 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         kills_h,
         trainer_xp_h:base_xp(hunt.level)*kills_h*bonus(view,true),
         pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
-        gold_h:(base_gold(hunt.level)+loot)*kills_h,
+        gold_h:base_gold(hunt.level)*kills_h,
         combat_gold_h:base_gold(hunt.level)*kills_h,
-        npc_loot_gold_h:loot*kills_h,
+        npc_loot_gold_h:0.0,
         trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
         pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
         seconds_per_kill:if kills_h>0.0{3600.0/kills_h}else{0.0},
