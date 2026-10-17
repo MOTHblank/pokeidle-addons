@@ -4116,7 +4116,7 @@ fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
 // Looktypes are the game's visual IDs; species IDs require a separate
 // catalog lookup. Never treat an arbitrary species ID as a looktype.
 fn overview_combat_image(
-    app: &mut ControllerApp,
+    visuals: &mut VisualCache,
     ui: &mut egui::Ui,
     preferred_looktype: Option<u64>,
     regular_looktype: Option<u64>,
@@ -4129,7 +4129,7 @@ fn overview_combat_image(
         (SpriteKind::Pokemon, species_id),
     ].into_iter().find_map(|(kind, id)| {
         id.filter(|id| *id > 0)
-            .and_then(|id| app.visuals.pokemon_texture_id(ui, kind, id))
+            .and_then(|id| visuals.pokemon_texture_id(ui, kind, id))
     });
     egui::Frame::new()
         .fill(PANEL_ALT)
@@ -4174,7 +4174,7 @@ fn draw_overview_matchup(
         cols[0].label(RichText::new(tr("Your Pokémon"))
             .size(9.0).color(DIM));
         cols[0].horizontal(|ui| {
-            overview_combat_image(app, ui,
+            overview_combat_image(&mut app.visuals, ui,
                 pokemon.and_then(|p| if p.shiny { p.shiny_looktype } else { p.looktype }),
                 pokemon.and_then(|p| p.looktype),
                 pokemon.and_then(|p| p.species_id), false);
