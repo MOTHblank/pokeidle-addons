@@ -947,9 +947,9 @@ fn atlas_species_rows(
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
-        // Keep only display/navigation fields, never clone a full hunt's
-        // species list merely to preserve Explorer rankings across redraws.
-        let destination_label=Arc::new(AtlasHuntLabel::from_hunt(hunt));
+        // Only allocate a compact destination label if at least one species
+        // actually passes the current filters.
+        let mut destination_label:Option<Arc<AtlasHuntLabel>>=None;
         for spawn in &hunt.species {
             if spawn.weight<=0.0 {continue}
             let meta=reference.and_then(|r|r.species.get(&spawn.id));
@@ -1018,11 +1018,13 @@ fn atlas_species_rows(
                     })),
                 _=>base
             };
+            let label=destination_label.get_or_insert_with(||
+                Arc::new(AtlasHuntLabel::from_hunt(hunt)));
             grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
             }).destinations.push(AtlasDestination{
-                hunt:Arc::clone(&destination_label),unlocked,share,forecast,objective,
+                hunt:Arc::clone(label),unlocked,share,forecast,objective,
             });
         }
     }
