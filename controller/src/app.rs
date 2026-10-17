@@ -3005,6 +3005,17 @@ impl eframe::App for ControllerApp {
                 }
             });
 
+        // Only keep Explorer results for the account actually being viewed.
+        // Rankings can be rebuilt on demand; holding all four accounts'
+        // destination copies throughout Overview/Automation wastes RAM.
+        let active_explorer=if self.panel_tab==PanelTab::Hunts &&
+            self.hunt_subtab==HuntSubtab::Explorer {
+            Some(self.hunt_account)
+        } else {None};
+        for (index,results) in self.atlas_results.iter_mut().enumerate() {
+            if active_explorer!=Some(index) {results.release();}
+        }
+
         // If the user leaves Accounts while editing the name, persist it
         // without needing to close a dialog that no longer exists.
         if self.panel_tab != PanelTab::Accounts {
