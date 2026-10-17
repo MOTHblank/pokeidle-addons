@@ -1581,7 +1581,7 @@ fn draw_atlas_species(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
     filters:&AtlasFilters,native:&NativeSession,live:bool,
-    visuals:&mut VisualCache,error:&mut Option<String>,
+    error:&mut Option<String>,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -1590,9 +1590,9 @@ fn draw_atlas_species(
                 ui.set_min_width(ui.available_width());
                 let compact=ui.available_width()<490.0;
                 ui.horizontal(|ui|{
-                    if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,40.0){
-                        ui.label(RichText::new("◇").size(23.0).color(DIM));
-                    }
+                    ui.label(RichText::new(row.name.chars().take(2)
+                        .collect::<String>().to_uppercase())
+                        .size(16.0).strong().color(ACCENT));
                     ui.vertical(|ui|{
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(&row.name)
@@ -1747,11 +1747,11 @@ fn draw_atlas_species(
 /// Compact species selector used by the desktop master/detail Explorer.
 /// Visual cues express selection and model confidence without duplicating the
 /// expanded destination/drop sections in every row.
-/// Entire rows, not only tiny text labels, are clickable. Missing artwork uses
-/// a readable abbreviation instead of a glyph absent from the bundled font.
+/// Entire rows are clickable. Lightweight text initials replace sprites so
+/// Atlas never acquires Pokémon textures just for browsing.
 fn draw_atlas_species_selector(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,
-    sort:AtlasSort,selected:bool,visuals:&mut VisualCache,
+    sort:AtlasSort,selected:bool,
     reference:Option<&AtlasReference>,filters:&AtlasFilters,
 )->bool{
     let row_frame=egui::Frame::new()
@@ -1762,11 +1762,9 @@ fn draw_atlas_species_selector(
         .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui|{
-                if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,34.0){
-                    ui.label(RichText::new(row.name.chars().take(2)
-                        .collect::<String>().to_uppercase())
-                        .size(11.0).strong().color(ACCENT));
-                }
+                ui.label(RichText::new(row.name.chars().take(2)
+                    .collect::<String>().to_uppercase())
+                    .size(11.0).strong().color(ACCENT));
                 ui.vertical(|ui|{
                     ui.label(RichText::new(&row.name)
                         .strong().size(12.0).color(TEXT));
@@ -1805,7 +1803,7 @@ fn draw_atlas_explorer(
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     results:&mut ExplorerCache,
-    visuals:&mut VisualCache,command_error:&mut Option<String>,
+    command_error:&mut Option<String>,
 ){
     // The Explorer is laid out directly in the finite-height CentralPanel.
     // Only the expanded advanced filters scroll independently.
@@ -1936,7 +1934,7 @@ fn draw_atlas_explorer(
                             for row in slice{
                                 if draw_atlas_species_selector(
                                     ui,row,filters.sort,
-                                    filters.selected_species==Some(row.id),visuals,
+                                    filters.selected_species==Some(row.id),
                                     reference,filters
                                 ){
                                     filters.selected_species=Some(row.id);
@@ -1962,7 +1960,7 @@ fn draw_atlas_explorer(
                             if let Some(row)=slice.iter().find(|row|
                                 filters.selected_species==Some(row.id)){
                                 draw_atlas_species(ui,row,filters.sort,view,reference,
-                                    filters,native,live,visuals,&mut error);
+                                    filters,native,live,&mut error);
                             }
                         });
                 }
@@ -1984,7 +1982,7 @@ fn draw_atlas_explorer(
                         for row in rows.iter().skip(visible.start)
                             .take(visible.end-visible.start){
                             draw_atlas_species(ui,row,filters.sort,view,reference,
-                                filters,native,live,visuals,&mut error);
+                                filters,native,live,&mut error);
                         }
                     });
             }
@@ -2135,7 +2133,6 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
             &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
             &app.atlas_scenarios[index],&mut app.atlas_results[index],
-            &mut app.visuals,
             &mut app.hunt_action_error[index]);
         return;
     }
@@ -2178,23 +2175,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .show(&mut cols[0],|ui|{
                                 ui.label(RichText::new("LEAD & HUNT").size(10.0)
                                     .strong().color(DIM));
-                                // The hunt has one assigned Pokémon species.
-                                // Show that ID rather than the temporary wild
-                                // encounter; it remains stable across kills.
-                                let representative=if hunts.in_center {None}else{
-                                    overview_hunt_art_species(hunts)
-                                };
-                                let hunt_looktype=if hunts.in_center {None}else{
-                                    overview_hunt_art_looktype(hunts)
-                                };
                                 ui.columns(2,|sides|{
                                     sides[0].vertical_centered(|ui|{
                                         ui.label(RichText::new("YOUR POKÉMON")
                                             .size(9.0).strong().color(DIM));
                                         if let Some(p)=hunts.active_pokemon.as_ref(){
-                                            overview_combat_image(&mut app.visuals,ui,
-                                                if p.shiny{p.shiny_looktype}else{p.looktype},
-                                                p.looktype,p.species_id,false);
                                             ui.label(RichText::new(&p.name)
                                                 .size(13.0).strong().color(TEXT));
                                             ui.label(RichText::new(format!(
@@ -2209,10 +2194,6 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     sides[1].vertical_centered(|ui|{
                                         ui.label(RichText::new("HUNT SPECIES")
                                             .size(9.0).strong().color(DIM));
-                                        if representative.is_some() || hunt_looktype.is_some() {
-                                            overview_combat_image(&mut app.visuals,ui,
-                                                None,hunt_looktype,representative,true);
-                                        }
                                         let hunt_name=if hunts.in_center {
                                             tr("At Pokémon Center")
                                         } else {
