@@ -1,23 +1,29 @@
 # Moth Controller — PokéIdle
 
-Moth Controller manages up to **four PokéIdle accounts** with separate sign-ins. The desktop application handles PokéIdle and Twitch connections in the background. Firefox opens when you need to sign in or choose **Open in Firefox** for interactive play.
+A lightweight desktop companion for managing up to **four PokéIdle accounts**. Moth Controller keeps game and Twitch connections running natively in the background; Firefox is used for sign-in when needed and for optional interactive play.
 
-**Downloads:** [Latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)
+**[Download the latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)** · [Report an issue](https://github.com/MOTHblank/pokeidle-addons/issues)
+
+## Features
+
+- **Dashboard:** account overview, active hunts, Pokémon and opponent information, items, and session details.
+- **Hunt Atlas:** hunt comparisons, experience estimates, capture planning, and Outland tiers.
+- **Automation:** configure Auto Catch, item restocking, and market buying rules.
+- **Accounts:** manage four independent profiles and their PokéIdle and Twitch connection states.
+- **Game artwork:** item icons and Pokémon sprites load as needed and are cached locally. No separate asset download is required.
 
 ## Getting started
 
-1. Download Moth Controller for Windows or Linux.
-2. Open **Accounts**. All four account slots appear as cards; enable and name the ones you use.
-3. Click **Start account**. If a saved login is not available, a visible Firefox window opens.
-4. Sign in to **PokéIdle** and **Twitch** in that Firefox profile. Each card shows both connections separately. Once confirmed, Moth Controller can continue without keeping Firefox open.
-5. Visit **Automation** for Auto Catch, restocking, and market rules, or **Hunt Atlas** for hunt details and comparisons.
+Download and open Moth Controller, then set up your account profiles in **Accounts**. Sign in to PokéIdle and Twitch when prompted. Once connected, use **Dashboard** to monitor sessions, **Automation** to adjust behavior, and **Hunt Atlas** to explore hunts.
 
-## Game icons
+The native controller does **not** need Violentmonkey, userscripts, or a browser window left open during normal background operation. **Open in Firefox** remains available for interactive gameplay.
 
-Moth Controller uses a lightweight on-demand visual cache: supported game icons are fetched when needed and reused locally. There is no manual download button. The game asset paths are maintained in the upstream snapshot; see [asset documentation](controller/assets/visual/README.md).
+## Building from source
 
-## Build
+From the `controller/` directory:
 
-From `controller/`, run `cargo build --release`. Windows users whose existing executable is still running can run `.\build-windows.ps1` in PowerShell to build without overwriting that executable.
+```sh
+cargo build --release
+```
 
-See [controller instructions](controller/README.md) and [GitHub Issues](https://github.com/MOTHblank/pokeidle-addons/issues).
+See the [controller development notes](controller/README.md) and [visual asset documentation](controller/assets/visual/README.md) for implementation details.
