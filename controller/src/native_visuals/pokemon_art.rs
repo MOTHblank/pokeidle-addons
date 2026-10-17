@@ -96,6 +96,12 @@ fn merge_species(map: &mut BTreeMap<u64, u64>, document: &Value, key: &str) {
 
 fn species_looktype(client: &Client, root: &Path, species: u64) -> Option<u64> {
     if species == 0 { return None; }
+    // The checked-in upstream identity table covers every known PokéIdle
+    // species, including special 2xxx / 13xxx / 14xxx variants. Do not
+    // require live game manifests to determine those looktypes.
+    if let Some(looktype) = crate::native_hunts::game_species_looktype(species) {
+        return Some(looktype);
+    }
     static INDEX: OnceLock<Mutex<Option<BTreeMap<u64, u64>>>> = OnceLock::new();
     let mut index = INDEX.get_or_init(|| Mutex::new(None)).lock().ok()?;
     if index.is_none() {
@@ -221,7 +227,9 @@ fn outfit_sprites(client: &Client, root: &Path, looktype: u64) -> Option<Vec<Vec
 // cache. No sprite database or artwork is packaged in the application.
 fn static_sprite_url(kind: Kind, id: u64) -> Option<String> {
     let (species, shiny) = match kind {
-        Kind::Pokemon if (1..=1025).contains(&id) => (id, false),
+        // The game species ID is not the Pokédex ID (e.g. PokéIdle 2006 is
+        // Furious Scyther; its documented base looktype is 60123).
+        Kind::Pokemon => (crate::native_hunts::game_species_dex_sprite(id)?, false),
         // The upstream creatures-sprites-lab catalog documents these two
         // looktype families as 60000+dex and 70000+dex.
         Kind::PokemonLooktype if (60001..=61025).contains(&id) => (id - 60000, false),
@@ -302,6 +310,12 @@ mod tests {
             Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/25.png"));
         assert!(static_sprite_url(Kind::Pokemon, 0).is_none());
         assert!(static_sprite_url(Kind::Pokemon, 1026).is_none());
+        assert_eq!(static_sprite_url(Kind::Pokemon, 2006).as_deref(),
+            Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/123.png"));
+        assert_eq!(static_sprite_url(Kind::Pokemon, 14009).as_deref(),
+            Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/9.png"));
+        assert_eq!(static_sprite_url(Kind::Pokemon, 14448).as_deref(),
+            Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/448.png"));
         assert!(static_sprite_url(Kind::PokemonLooktype, 47861).is_none());
     }
 
