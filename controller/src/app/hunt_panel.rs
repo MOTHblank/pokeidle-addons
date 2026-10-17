@@ -1845,6 +1845,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 let representative=if hunts.in_center {None}else{
                                     overview_hunt_art_species(hunts)
                                 };
+                                let hunt_looktype=if hunts.in_center {None}else{
+                                    overview_hunt_art_looktype(hunts)
+                                };
                                 ui.columns(2,|sides|{
                                     sides[0].vertical_centered(|ui|{
                                         ui.label(RichText::new("YOUR POKÉMON")
@@ -1867,9 +1870,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     sides[1].vertical_centered(|ui|{
                                         ui.label(RichText::new("HUNT LOCATION")
                                             .size(9.0).strong().color(DIM));
-                                        if let Some(species)=representative{
+                                        if representative.is_some() || hunt_looktype.is_some() {
                                             overview_combat_image(&mut app.visuals,ui,
-                                                None,None,Some(species),true);
+                                                None,hunt_looktype,representative,true);
                                         }
                                         let hunt_name=if hunts.in_center {
                                             "At Pokémon Center"
