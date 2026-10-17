@@ -21,82 +21,82 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new("Automatic market buying · Moth Watch")
+            ui.label(RichText::new(tr("Automatic market buying · Moth Watch"))
                 .size(14.0).strong().color(TEXT));
             if let Some(status)=&live_status {
-                let state=if !status.enabled {"Off"} else if status.pending.is_some() {"Buying"} else {"Scanning"};
+                let state=if !status.enabled {tr("Off")} else if status.pending.is_some() {tr("Buying")} else {tr("Scanning")};
                 ui.label(RichText::new(state).size(10.0)
                     .color(if status.enabled{GOOD}else{DIM}));
-                ui.label(RichText::new(format!("{} attempts · {} purchases · {} awaiting confirmation",
-                    status.sent,status.confirmed,status.unknown)).size(10.0).color(MUTED));
+                ui.label(RichText::new(tr_dynamic(format!("{} attempts · {} purchases · {} awaiting confirmation",
+                    status.sent,status.confirmed,status.unknown))).size(10.0).color(MUTED));
             } else {
-                ui.label(RichText::new("Your saved rules will start when this account connects")
+                ui.label(RichText::new(tr("Your saved rules will start when this account connects"))
                     .size(10.0).color(DIM));
             }
         });
         ui.label(RichText::new(
-            "Automatically buy items or Pokémon that match your rules. Works without Firefox. Buying stays off until you enable it and save."
+            tr("Automatically buy items or Pokémon that match your rules. Works without Firefox. Buying stays off until you enable it and save.")
         ).size(10.0).color(DIM));
-        ui.label(RichText::new("Fast buying is enabled: checks several offers at once, retries quickly, and buys as many units as your rules and balance allow.")
+        ui.label(RichText::new(tr("Fast buying is enabled: checks several offers at once, retries quickly, and buys as many units as your rules and balance allow."))
             .size(10.0).color(MUTED));
         if let Some(status)=&live_status {
-            if let Some(p)=&status.pending {ui.label(RichText::new(format!("Waiting for purchase confirmation: {p}")).size(10.0).color(WARN));}
-            if !status.last.is_empty() {ui.label(RichText::new(&status.last).size(10.0).color(MUTED));}
-            if let Some(error)=&status.error {ui.label(RichText::new(error).size(10.0).color(WARN));}
+            if let Some(p)=&status.pending {ui.label(RichText::new(tr_dynamic(format!("Waiting for purchase confirmation: {p}"))).size(10.0).color(WARN));}
+            if !status.last.is_empty() {ui.label(RichText::new(tr_dynamic(status.last.clone())).size(10.0).color(MUTED));}
+            if let Some(error)=&status.error {ui.label(RichText::new(tr_dynamic(error.to_string())).size(10.0).color(WARN));}
         }
         if !app.market_notices[index].is_empty() {
-            ui.label(RichText::new(&app.market_notices[index]).size(10.0).color(WARN));
+            ui.label(RichText::new(tr_dynamic(app.market_notices[index].clone())).size(10.0).color(WARN));
         }
         draw_market_copy_controls(app,ui,index);
         let Some(cfg)=app.market_drafts[index].as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
-            ui.checkbox(&mut cfg.enabled,"Enable automatic buying")
-                .on_hover_text("Affects this account after saving");
-            ui.checkbox(&mut cfg.paused,"Pause purchases")
-                .on_hover_text("Pause buying without deleting rules");
-            if ui.button("Save changes")
-                .on_hover_text("Apply the current editor settings to this account").clicked(){
+            ui.checkbox(&mut cfg.enabled,tr("Enable automatic buying"))
+                .on_hover_text(tr("Affects this account after saving"));
+            ui.checkbox(&mut cfg.paused,tr("Pause purchases"))
+                .on_hover_text(tr("Pause buying without deleting rules"));
+            if ui.button(tr("Save changes"))
+                .on_hover_text(tr("Apply the current editor settings to this account")).clicked(){
                 save=true;
             }
-            if ui.small_button("↓ Snatch queue")
-                .on_hover_text("Jump to saved offers and pending listings").clicked(){
+            if ui.small_button(tr("↓ Snatch queue"))
+                .on_hover_text(tr("Jump to saved offers and pending listings")).clicked(){
                 jump_to_snatch=true;
             }
-            ui.label(RichText::new("Save to apply changes")
+            ui.label(RichText::new(tr("Save to apply changes"))
                 .size(10.0).color(DIM));
         });
         ui.separator();
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new("Balance reserves").strong().size(11.0).color(TEXT));
-            field(ui,"Gold",&mut cfg.gold_reserve);
-            field(ui,"Gems",&mut cfg.gem_reserve);
+            ui.label(RichText::new(tr("Balance reserves")).strong().size(11.0).color(TEXT));
+            field(ui,tr("Gold"),&mut cfg.gold_reserve);
+            field(ui,tr("Gems"),&mut cfg.gem_reserve);
         });
-        ui.collapsing("Global spending limits (0 = unlimited)",|ui|{
+        ui.collapsing(tr("Global spending limits (0 = unlimited)"),|ui|{
             ui.horizontal_wrapped(|ui|{
-                field(ui,"Gold / buy",&mut cfg.max_gold_per_buy);
-                field(ui,"Gems / buy",&mut cfg.max_gems_per_buy);
-                field(ui,"Gold / session",&mut cfg.max_gold_session);
-                field(ui,"Gems / session",&mut cfg.max_gems_session);
+                field(ui,tr("Gold / buy"),&mut cfg.max_gold_per_buy);
+                field(ui,tr("Gems / buy"),&mut cfg.max_gems_per_buy);
+                field(ui,tr("Gold / session"),&mut cfg.max_gold_session);
+                field(ui,tr("Gems / session"),&mut cfg.max_gems_session);
             });
             ui.horizontal_wrapped(|ui|{
-                field(ui,"Gold / UTC day",&mut cfg.max_gold_day);
-                field(ui,"Gems / UTC day",&mut cfg.max_gems_day);
-                field(ui,"Purchases / session",&mut cfg.max_purchases_session);
-                field(ui,"Units / session",&mut cfg.max_quantity_session);
+                field(ui,tr("Gold / UTC day"),&mut cfg.max_gold_day);
+                field(ui,tr("Gems / UTC day"),&mut cfg.max_gems_day);
+                field(ui,tr("Purchases / session"),&mut cfg.max_purchases_session);
+                field(ui,tr("Units / session"),&mut cfg.max_quantity_session);
             });
-            ui.label(RichText::new("Purchases awaiting confirmation still count toward your spending limits. Daily limits are kept after restarting the app.")
+            ui.label(RichText::new(tr("Purchases awaiting confirmation still count toward your spending limits. Daily limits are kept after restarting the app."))
                 .size(10.0).color(DIM));
         });
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(format!("Buying rules ({})",cfg.rules.len())).strong().color(TEXT));
-            if ui.small_button("+ Specific item").clicked() {new_rule(cfg,"item");}
-            if ui.small_button("+ Any item").clicked() {new_rule(cfg,"any_item");}
-            if ui.small_button("+ Pokémon").clicked() {new_rule(cfg,"pokemon_any");}
+            ui.label(RichText::new(tr_dynamic(format!("Buying rules ({})",cfg.rules.len()))).strong().color(TEXT));
+            if ui.small_button(tr("+ Specific item")).clicked() {new_rule(cfg,"item");}
+            if ui.small_button(tr("+ Any item")).clicked() {new_rule(cfg,"any_item");}
+            if ui.small_button(tr("+ Pokémon")).clicked() {new_rule(cfg,"pokemon_any");}
         });
         if cfg.rules.is_empty() {
-            ui.label(RichText::new("No buying rules. Add an item or Pokémon price ceiling, then save.")
+            ui.label(RichText::new(tr("No buying rules. Add an item or Pokémon price ceiling, then save."))
                 .size(10.0).color(DIM));
         }
         let mut remove=None;
@@ -107,18 +107,18 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 .inner_margin(egui::Margin::symmetric(10,7)).show(ui,|ui|{
                 ui.horizontal_wrapped(|ui|{
                     ui.checkbox(&mut rule.enabled,"")
-                        .on_hover_text("Include this rule when automatic buying is enabled");
+                        .on_hover_text(tr("Include this rule when automatic buying is enabled"));
                     let item=if rule.kind=="item" {format!(" #{}",rule.item_id)} else {String::new()};
                     ui.label(RichText::new(format!("{}{} · max {}/unit · {}",
                         kind_label(&rule.kind),item,rule.buy_max,
-                        if rule.currency=="orb"{"Gems"}else{"Gold"}))
+                        if rule.currency=="orb"{tr("Gems")}else{tr("Gold")}))
                         .size(11.0).strong().color(if rule.enabled{TEXT}else{MUTED}));
-                    if ui.small_button("Remove")
-                        .on_hover_text("Remove from the editor; save to apply").clicked(){
+                    if ui.small_button(tr("Remove"))
+                        .on_hover_text(tr("Remove from the editor; save to apply")).clicked(){
                         remove=Some(i);
                     }
                 });
-                egui::CollapsingHeader::new("Edit rule & limits")
+                egui::CollapsingHeader::new(tr("Edit rule & limits"))
                     .id_salt(("market-rule-editor",index,rule.id.as_str()))
                     .default_open(false)
                     .show(ui,|ui|{
@@ -127,28 +127,28 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 .selected_text(kind_label(&rule.kind))
                                 .show_ui(ui,|ui|{
                                     for (value,label) in [
-                                        ("item","Specific item"),("any_item","Any item"),
-                                        ("pokemon_any","Any Pokémon"),("pokemon_p5","P5 Pokémon"),
-                                        ("pokemon_shiny","Shiny Pokémon")] {
+                                        ("item",tr("Specific item")),("any_item",tr("Any item")),
+                                        ("pokemon_any",tr("Any Pokémon")),("pokemon_p5",tr("P5 Pokémon")),
+                                        ("pokemon_shiny",tr("Shiny Pokémon"))] {
                                         ui.selectable_value(&mut rule.kind,value.into(),label);
                                     }
                                 });
                             if rule.kind=="pokemon_shiny"{rule.currency="orb".into();}
                             egui::ComboBox::from_id_salt(("native-market-currency",index,i))
-                                .selected_text(if rule.currency=="orb"{"Gems"}else{"Gold"})
+                                .selected_text(if rule.currency=="orb"{tr("Gems")}else{tr("Gold")})
                                 .show_ui(ui,|ui|{
-                                    ui.selectable_value(&mut rule.currency,"gold".into(),"Gold");
-                                    ui.selectable_value(&mut rule.currency,"orb".into(),"Gems");
+                                    ui.selectable_value(&mut rule.currency,"gold".into(),tr("Gold"));
+                                    ui.selectable_value(&mut rule.currency,"orb".into(),tr("Gems"));
                                 });
-                            if rule.kind=="item"{field(ui,"Item ID",&mut rule.item_id);}
-                            field(ui,"Max unit price",&mut rule.buy_max);
+                            if rule.kind=="item"{field(ui,tr("Item ID"),&mut rule.item_id);}
+                            field(ui,tr("Max unit price"),&mut rule.buy_max);
                         });
-                        ui.collapsing("Per-rule limits (0 = unlimited)",|ui|{
+                        ui.collapsing(tr("Per-rule limits (0 = unlimited)"),|ui|{
                             ui.horizontal_wrapped(|ui|{
-                                field(ui,"Spend / session",&mut rule.max_spend_session);
-                                field(ui,"Spend / UTC day",&mut rule.max_spend_day);
-                                field(ui,"Purchases / session",&mut rule.max_purchases_session);
-                                field(ui,"Units / session",&mut rule.max_quantity_session);
+                                field(ui,tr("Spend / session"),&mut rule.max_spend_session);
+                                field(ui,tr("Spend / UTC day"),&mut rule.max_spend_day);
+                                field(ui,tr("Purchases / session"),&mut rule.max_purchases_session);
+                                field(ui,tr("Units / session"),&mut rule.max_quantity_session);
                             });
                         });
                     });
@@ -159,13 +159,13 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
 
         ui.add_space(8.0);
         ui.separator();
-        if ui.small_button("Show Snatch queue ↓")
-            .on_hover_text("Jump to your saved offers and new listings").clicked(){
+        if ui.small_button(tr("Show Snatch queue ↓"))
+            .on_hover_text(tr("Jump to your saved offers and new listings")).clicked(){
             jump_to_snatch=true;
         }
         ui.add_space(5.0);
         let snatch_response = egui::CollapsingHeader::new(
-            format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()))
+            tr_dynamic(format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len())))
             .id_salt(("market-snatch", index))
             .default_open(true)
             .show(ui,|ui|{
@@ -173,39 +173,39 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 "Snatch watches up to 40 offers and attempts to buy them immediately when they unlock. It checks shortly before release and retries rapidly during the four-second buying window. Your price and spending limits always apply. Enable automatic buying to use Snatch."
             ).size(10.0).color(MUTED));
             ui.label(RichText::new(
-                "Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify."
+                tr("Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify.")
             ).size(10.0).color(DIM));
             ui.horizontal_wrapped(|ui|{
                 let t=&mut app.market_snatch_drafts[index];
                 egui::ComboBox::from_id_salt(("snatch-kind",index))
-                    .selected_text(if t.kind=="pokemon"{"Pokémon"}else{"Item"})
+                    .selected_text(if t.kind=="pokemon"{"Pokémon"}else{tr("Item")})
                     .show_ui(ui,|ui|{
-                        ui.selectable_value(&mut t.kind,"item".into(),"Item");
+                        ui.selectable_value(&mut t.kind,"item".into(),tr("Item"));
                         ui.selectable_value(&mut t.kind,"pokemon".into(),"Pokémon");
                     });
                 egui::ComboBox::from_id_salt(("snatch-currency",index))
-                    .selected_text(if t.currency=="orb"{"Gems"}else{"Gold"})
+                    .selected_text(if t.currency=="orb"{tr("Gems")}else{tr("Gold")})
                     .show_ui(ui,|ui|{
-                        ui.selectable_value(&mut t.currency,"gold".into(),"Gold");
-                        ui.selectable_value(&mut t.currency,"orb".into(),"Gems");
+                        ui.selectable_value(&mut t.currency,"gold".into(),tr("Gold"));
+                        ui.selectable_value(&mut t.currency,"orb".into(),tr("Gems"));
                     });
-                field(ui,"Listing #",&mut t.id);
-                if t.kind=="item" {field(ui,"Item ID",&mut t.item_id);}
-                field(ui,"Max unit price",&mut t.max_price);
+                field(ui,tr("Listing #"),&mut t.id);
+                if t.kind=="item" {field(ui,tr("Item ID"),&mut t.item_id);}
+                field(ui,tr("Max unit price"),&mut t.max_price);
                 if ui.add_enabled(cfg.snatch_targets.len()<40,
-                    egui::Button::new("Add to Snatch")).clicked() {
+                    egui::Button::new(tr("Add to Snatch"))).clicked() {
                     let mut target=t.clone();
                     target.arm();
                     if target.id==0 || target.max_price==0 ||
                         (target.kind=="item" && target.item_id==0) {
                         app.market_notices[index]=
-                            "Enter a real listing ID, item ID (for items), and maximum price.".into();
+                            tr("Enter a real listing ID, item ID (for items), and maximum price.").into();
                     } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
                         app.market_notices[index]=
-                            "This offer is already in your Snatch list.".into();
+                            tr("This offer is already in your Snatch list.").into();
                     } else {
                         cfg.snatch_targets.push(target);
-                        app.market_notices[index]="Offer added to Snatch and saved for this account.".into();
+                        app.market_notices[index]=tr("Offer added to Snatch and saved for this account.").into();
                         save=true;
                     }
                 }
@@ -219,10 +219,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
                             "#{} · {} · {} · max {} / unit",
-                            t.id,if t.kind=="pokemon"{"Pokémon"}else{"Item"},
-                            if t.currency=="orb"{"Gems"}else{"Gold"},t.max_price
+                            t.id,if t.kind=="pokemon"{"Pokémon"}else{tr("Item")},
+                            if t.currency=="orb"{tr("Gems")}else{tr("Gold")},t.max_price
                         )).size(11.0).strong().color(TEXT));
-                        if ui.small_button("Remove from Snatch").clicked(){remove=Some(i);}
+                        if ui.small_button(tr("Remove from Snatch")).clicked(){remove=Some(i);}
                     });
                     if let Some(s)=seen {
                         ui.label(RichText::new(format!(
@@ -230,18 +230,18 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                             s.phase,s.attempts,s.quantity
                         )).size(10.0).color(if s.phase.contains("burst"){GOOD}else{MUTED}));
                     } else {
-                        ui.label(RichText::new("Saved · waiting for the account to connect and the offer to appear")
+                        ui.label(RichText::new(tr("Saved · waiting for the account to connect and the offer to appear"))
                             .size(10.0).color(DIM));
                     }
                 });
             }
             if let Some(i)=remove {
                 cfg.snatch_targets.remove(i);
-                app.market_notices[index]="Offer removed from Snatch.".into();
+                app.market_notices[index]=tr("Offer removed from Snatch.").into();
                 save=true;
             }
             if let Some(status)=live_status.as_ref() {
-                ui.label(RichText::new(format!("Snatch buy attempts: {}",status.snatch_sent))
+                ui.label(RichText::new(tr_dynamic(format!("Snatch buy attempts: {}",status.snatch_sent)))
                     .size(10.0).color(MUTED));
                 let automatic=status.snatches.iter().filter(|s|!s.manual)
                     .take(20).collect::<Vec<_>>();
@@ -249,10 +249,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     !cfg.snatch_targets.iter().any(|t|t.id==row.id))
                     .take(30).collect::<Vec<_>>();
                 if !discovery.is_empty() {
-                    ui.label(RichText::new("Offers waiting to become available")
+                    ui.label(RichText::new(tr("Offers waiting to become available"))
                         .strong().size(11.0).color(TEXT));
                     ui.label(RichText::new(
-                        "Choose an offer to add it to Snatch at its current unit price. No purchase happens until automatic buying is enabled."
+                        tr("Choose an offer to add it to Snatch at its current unit price. No purchase happens until automatic buying is enabled.")
                     ).size(10.0).color(DIM));
                     let mut arm_from_scan=None;
                     for row in discovery {
@@ -262,7 +262,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 row.id,row.kind,row.price,row.currency,row.quantity,row.phase
                             )).size(10.0).color(MUTED));
                             if ui.add_enabled(cfg.snatch_targets.len()<40,
-                                egui::Button::new("Snatch")).clicked() {
+                                egui::Button::new(tr("Snatch"))).clicked() {
                                 let mut target=crate::native_market::SnatchTarget {
                                     id:row.id,kind:row.kind.clone(),currency:row.currency.clone(),
                                     item_id:row.item_id,max_price:row.price,..Default::default()
@@ -276,13 +276,13 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         if !cfg.snatch_targets.iter().any(|t|t.id==target.id) &&
                             cfg.snatch_targets.len()<40 {
                             cfg.snatch_targets.push(target);
-                            app.market_notices[index]="Offer added to your Snatch list.".into();
+                            app.market_notices[index]=tr("Offer added to your Snatch list.").into();
                             save=true;
                         }
                     }
                 }
                 if !automatic.is_empty() {
-                    ui.label(RichText::new("Rule-triggered held listings").strong()
+                    ui.label(RichText::new(tr("Rule-triggered held listings")).strong()
                         .size(11.0).color(TEXT));
                     for row in automatic {
                         ui.label(RichText::new(format!(
@@ -296,32 +296,32 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         if jump_to_snatch {
             ui.scroll_to_rect(snatch_response.header_response.rect, Some(Align::Min));
         }
-        ui.collapsing("Import existing Moth Watch rules",|ui|{
+        ui.collapsing(tr("Import existing Moth Watch rules"),|ui|{
             ui.label(RichText::new(
                 "To import old Moth Watch rules, open Firefox developer tools and copy the result of localStorage.getItem('moth-pokeidle-market-bot-config-v1'). Paste it below. Imported rules stay disabled until you review and save them."
             ).size(10.0).color(DIM));
             ui.add(egui::TextEdit::multiline(&mut app.market_imports[index])
-                .hint_text("Paste Moth Watch JSON settings…")
+                .hint_text(tr("Paste Moth Watch JSON settings…"))
                 .desired_rows(3).desired_width(f32::INFINITY));
-            if ui.small_button("Import settings into editor").clicked() {
+            if ui.small_button(tr("Import settings into editor")).clicked() {
                 match MarketRules::import_watch(&app.market_imports[index]) {
                     Ok(imported)=>{
                         *cfg=imported;
-                        app.market_notices[index]="Rules imported. Review and save them to use automatic buying.".into();
+                        app.market_notices[index]=tr("Rules imported. Review and save them to use automatic buying.").into();
                     }
                     Err(error)=>app.market_notices[index]=format!("Import rejected: {error}"),
                 }
             }
         });
         ui.horizontal_wrapped(|ui|{
-            if ui.button("Save market rules").clicked(){save=true;}
-            if ui.small_button("Revert unsaved changes").clicked(){
+            if ui.button(tr("Save market rules")).clicked(){save=true;}
+            if ui.small_button(tr("Revert unsaved changes")).clicked(){
                 match MarketRules::load(profile) {
-                    Ok(saved)=>{*cfg=saved;app.market_notices[index]="Reloaded saved market rules.".into();}
+                    Ok(saved)=>{*cfg=saved;app.market_notices[index]=tr("Reloaded saved market rules.").into();}
                     Err(error)=>app.market_notices[index]=error,
                 }
             }
-            ui.label(RichText::new("Changes take effect only after Save.").size(10.0).color(DIM));
+            ui.label(RichText::new(tr("Changes take effect only after Save.")).size(10.0).color(DIM));
         });
     });
     if save {
@@ -331,7 +331,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             None=>cfg.save(profile),
         };
         match result {
-            Ok(())=>app.market_notices[index]="Market rules saved for this account.".into(),
+            Ok(())=>app.market_notices[index]=tr("Market rules saved for this account.").into(),
             Err(error)=>app.market_notices[index]=format!("Market settings NOT applied: {error}"),
         }
     }
@@ -340,19 +340,19 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
 /// Each destination retains its own Snatch listing queue, login and ledger.
 fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source: usize) {
     let mut apply = false;
-    ui.collapsing("Copy buying settings to other accounts", |ui| {
+    ui.collapsing(tr("Copy buying settings to other accounts"), |ui| {
         ui.label(RichText::new(
-            "Copy rules, price ceilings, reserves and spending limits. Existing buying settings on the selected accounts are replaced; their Snatch queues stay intact."
+            tr("Copy rules, price ceilings, reserves and spending limits. Existing buying settings on the selected accounts are replaced; their Snatch queues stay intact.")
         ).size(10.0).color(MUTED));
         ui.label(RichText::new(
-            "Copies the values currently in this editor, including unsaved changes."
+            tr("Copies the values currently in this editor, including unsaved changes.")
         ).size(10.0).color(DIM));
         ui.horizontal_wrapped(|ui| {
             for dest in 0..app.games.len() {
                 if dest == source { continue; }
                 let name = app.accounts[dest].name.trim();
                 let label = if name.is_empty() {
-                    format!("Account {}", dest+1)
+                    tr_dynamic(format!("Account {}", dest+1))
                 } else {
                     format!("{} · {}", dest+1, name)
                 };
@@ -360,14 +360,14 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
             }
         });
         ui.checkbox(&mut app.market_copy_activation,
-            "Also copy buying activation (may immediately start purchases)");
+            tr("Also copy buying activation (may immediately start purchases)"));
         ui.label(RichText::new(
-            "Default: buying remains OFF on destination accounts. Only select the option above to copy the source's enabled/paused state."
+            tr("Default: buying remains OFF on destination accounts. Only select the option above to copy the source's enabled/paused state.")
         ).size(10.0).color(DIM));
         let selected=(0..app.games.len()).any(|dest|
             dest!=source && app.market_copy_targets[dest]);
         if ui.add_enabled(selected,egui::Button::new(
-            "Overwrite buying settings on selected accounts")).clicked() {
+            tr("Overwrite buying settings on selected accounts"))).clicked() {
             apply=true;
         }
     });
@@ -416,7 +416,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
     }
     app.market_copy_activation=false;
     let success=if copied.is_empty() {
-        "No accounts updated".to_owned()
+        tr("No accounts updated").to_owned()
     } else {
         format!("Buying settings copied to account(s) {}",copied.join(", "))
     };
@@ -433,9 +433,9 @@ fn field(ui:&mut egui::Ui,label:&str,value:&mut u64){
 }
 fn kind_label(kind:&str)->&'static str {
     match kind {
-        "item"=>"Specific item","any_item"=>"Any item",
-        "pokemon_any"=>"Any Pokémon","pokemon_p5"=>"P5 Pokémon",
-        "pokemon_shiny"=>"Shiny Pokémon",_=>"Invalid rule"
+        "item"=>tr("Specific item"),"any_item"=>tr("Any item"),
+        "pokemon_any"=>tr("Any Pokémon"),"pokemon_p5"=>tr("P5 Pokémon"),
+        "pokemon_shiny"=>tr("Shiny Pokémon"),_=>tr("Invalid rule")
     }
 }
 fn new_rule(cfg:&mut MarketRules,kind:&str) {
