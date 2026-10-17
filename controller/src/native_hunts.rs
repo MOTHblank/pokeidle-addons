@@ -24,41 +24,67 @@ pub struct HuntEntry {
     pub looktype: Option<u64>,
     pub species: Vec<HuntSpecies>,
 }
-// When a public hunt payload omits spawn species, recognize the Pokémon
-// named by its server-confirmed hunt (e.g. "Outland Scyther Lv 150").
-// This tiny, checked-in index contains names, not artwork or HTTP requests.
+// PokéIdle has its own species identifiers (including alternate forms), and
+// they are not restricted to the National Pokédex range. This compact table
+// is copied from the game's upstream sprite patch catalog.
+#[derive(Default)]
+struct GameSpeciesArt {
+    looktypes: BTreeMap<u64, u64>,
+    names: Vec<(String, u64)>,
+}
+
+fn species_art_catalog() -> &'static GameSpeciesArt {
+    static CATALOG: OnceLock<GameSpeciesArt> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let mut catalog = GameSpeciesArt::default();
+        for line in include_str!("../assets/visual/pokedex-names.tsv").lines() {
+            if line.starts_with('#') { continue; }
+            let mut fields = line.splitn(3, '\t');
+            let (Some(id), Some(looktype), Some(name)) =
+                (fields.next(), fields.next(), fields.next()) else { continue };
+            let (Ok(id), Ok(looktype)) = (id.parse::<u64>(), looktype.parse::<u64>())
+                else { continue };
+            if id == 0 || looktype == 0 { continue; }
+            let normalized = normalized_species_name(name);
+            if normalized.is_empty() { continue; }
+            catalog.looktypes.insert(id, looktype);
+            catalog.names.push((format!(" {normalized} "), id));
+        }
+        catalog
+    })
+}
+
+pub fn game_species_looktype(id: u64) -> Option<u64> {
+    species_art_catalog().looktypes.get(&id).copied()
+}
+
+/// Normal and alternate PokéIdle species IDs can share the same sprite
+/// looktype. Only *after* this explicit mapping do we use a Pokédex CDN.
+pub fn game_species_dex_sprite(id: u64) -> Option<u64> {
+    let looktype = game_species_looktype(id)?;
+    (60001..=61025).contains(&looktype).then_some(looktype - 60000)
+}
+
 fn normalized_species_name(name: &str) -> String {
     name.chars().map(|ch| {
         if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' }
     }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// Name lookup is only a fallback if the game's confirmed hunt catalog did
+// not include its species ID. Resolve full form names before base names.
 fn species_id_from_hunt_name(name: &str) -> Option<u64> {
-    static NAMES: OnceLock<Vec<(String, u64)>> = OnceLock::new();
-    let names = NAMES.get_or_init(|| {
-        include_str!("../assets/visual/pokedex-names.tsv").lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let (id, name) = line.split_once('\t')?;
-                let id = id.parse::<u64>().ok()?;
-                let normalized = normalized_species_name(name);
-                (!normalized.is_empty() && (1..=1025).contains(&id))
-                    .then_some((format!(" {normalized} "), id))
-            }).collect()
-    });
     let normalized = format!(" {} ", normalized_species_name(name));
-    names.iter().filter(|(needle, _)| normalized.contains(needle))
+    species_art_catalog().names.iter()
+        .filter(|(needle, _)| normalized.contains(needle))
         .max_by_key(|(needle, _)| needle.len())
         .map(|(_, id)| *id)
 }
 
-/// Prefer actual server spawn weights; otherwise use the species explicitly
-/// named by this hunt. Neither depends on the live wild encounter slot.
+/// A hunt represents one species. Use the game's ID directly, rather than
+/// treating its spawn list as a weighted draw or reading the current enemy.
 pub fn representative_hunt_species(hunt: &HuntEntry) -> Option<u64> {
-    hunt.species.iter()
-        .filter(|species| (1..=1025).contains(&species.id))
-        .max_by(|a, b| a.weight.total_cmp(&b.weight)
-            .then_with(|| b.id.cmp(&a.id)))
+    hunt.species.iter().find(|species| species.id > 0)
         .map(|species| species.id)
         .or_else(|| species_id_from_hunt_name(&hunt.name))
         .or_else(|| species_id_from_hunt_name(&hunt.slug))
@@ -585,8 +611,7 @@ impl HuntIntel {
         if !self.view.in_center && self.view.hunt_slug.is_some()
             && self.view.hunt_art_species.is_none() {
             self.view.hunt_art_species = self.view.wild.as_ref()
-                .and_then(|wild| wild.species_id
-                    .filter(|id| (1..=1025).contains(id))
+                .and_then(|wild| wild.species_id.filter(|id| *id > 0)
                     .or_else(|| species_id_from_hunt_name(&wild.name)));
         }
         self.view.pokemon_count = self.pokemon.len();
@@ -946,12 +971,32 @@ mod tests {
             HuntSpecies { id: 127, weight: 10.0 },
             HuntSpecies { id: 25, weight: 90.0 },
         ];
-        assert_eq!(representative_hunt_species(&hunt), Some(25));
+        // Even if the fixture contains multiple species, the species ID
+        // supplied by the hunt is authoritative; weights do not pick artwork.
+        assert_eq!(representative_hunt_species(&hunt), Some(127));
+        hunt.species = vec![HuntSpecies { id: 2006, weight: 10.0 }];
+        assert_eq!(representative_hunt_species(&hunt), Some(2006));
         hunt.species = vec![HuntSpecies { id: 10501, weight: 10.0 }];
-        assert_eq!(representative_hunt_species(&hunt), Some(123));
+        assert_eq!(representative_hunt_species(&hunt), Some(10501));
         assert_eq!(species_id_from_hunt_name("Mewtwo Cave"), Some(150));
         assert_eq!(species_id_from_hunt_name("Scyther's Nest"), Some(123));
         assert_eq!(species_id_from_hunt_name("empty clearing"), None);
+    }
+
+    #[test]
+    fn upstream_game_species_ids_resolve_to_real_sprite_looktypes() {
+        // These are PokéIdle IDs, not National Pokédex IDs. Previously every
+        // species above #1025 was silently rejected.
+        assert_eq!(game_species_looktype(123), Some(60123));
+        assert_eq!(game_species_looktype(2006), Some(60123));
+        assert_eq!(game_species_dex_sprite(2006), Some(123));
+        assert_eq!(game_species_looktype(14009), Some(60009));
+        assert_eq!(game_species_dex_sprite(14009), Some(9));
+        assert_eq!(game_species_looktype(14448), Some(60448));
+        assert_eq!(game_species_dex_sprite(14448), Some(448));
+        assert_eq!(species_art_catalog().looktypes.len(), 944);
+        assert_eq!(game_species_looktype(0), None);
+        assert_eq!(species_id_from_hunt_name("Furious Scyther hunt"), Some(2006));
     }
 
     #[test]
