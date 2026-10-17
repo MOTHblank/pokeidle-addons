@@ -215,7 +215,7 @@ fn ranked_hunts<'a>(
         && m.seconds >= 20.0 && m.kills >= 5
         && m.kills_h.is_finite() && m.kills_h > 0.0 { Some(m.kills_h) } else { None };
     let mut ranked = view.hunts.iter().filter(|h| {
-        (region.is_empty() || h.region == region) &&
+        (region.is_empty() || h.region == region || h.area == region) &&
         (species_type.is_empty() || h.species.iter().any(|sp|
             reference.and_then(|r|r.species.get(&sp.id)).is_some_and(|meta|
                 meta.types.iter().any(|kind| kind == species_type)))) &&
@@ -284,9 +284,8 @@ fn ranked_hunts<'a>(
 
 fn rate_label(ranking: HuntRanking) -> &'static str {
     match ranking {
-        HuntRanking::TrainerXp => tr("Trainer XP/h"),
-        HuntRanking::PokemonXp => tr("Pokémon XP/h"),
-        HuntRanking::Gold => tr("Gold/h"),
+        HuntRanking::TrainerXp | HuntRanking::PokemonXp => tr("XP/h"),
+        HuntRanking::Gold => tr("Gross gold/h"),
     }
 }
 
@@ -2410,10 +2409,12 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(tr("Sort recommendations by")).size(12.0).strong());
+                        if app.hunt_ranking==HuntRanking::PokemonXp {
+                            app.hunt_ranking=HuntRanking::TrainerXp;
+                        }
                         for (ranking,label) in [
-                            (HuntRanking::TrainerXp,tr("Trainer XP")),
-                            (HuntRanking::PokemonXp,tr("Pokémon XP")),
-                            (HuntRanking::Gold,tr("Gold")),
+                            (HuntRanking::TrainerXp,tr("XP/h")),
+                            (HuntRanking::Gold,tr("Gross gold/h")),
                         ]{
                             if ui.selectable_value(&mut app.hunt_ranking,ranking,label)
                                 .changed(){
@@ -2426,19 +2427,17 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .hint_text(tr("Hunt, area, region or species")).desired_width(220.0)).changed(){
                             app.hunt_page=0;
                         }
-                        let mut regions=hunts.hunts.iter().map(|h|h.region.as_str())
-                            .filter(|r|!r.is_empty()).collect::<Vec<_>>();
-                        regions.sort_unstable();regions.dedup();
+                        let regions=atlas_locations(hunts,None);
                         egui::ComboBox::from_id_salt("hunt-region")
                             .selected_text(if app.hunt_region.is_empty(){
-                                "All regions".to_owned()
+                                tr("All areas").to_owned()
                             }else{app.hunt_region.clone()})
                             .show_ui(ui,|ui|{
                                 if ui.selectable_value(&mut app.hunt_region,
-                                    String::new(),"All regions").changed(){app.hunt_page=0;}
+                                    String::new(),tr("All areas")).changed(){app.hunt_page=0;}
                                 for region in regions{
                                     if ui.selectable_value(&mut app.hunt_region,
-                                        region.to_owned(),region).changed(){app.hunt_page=0;}
+                                        region.clone(),region.as_str()).changed(){app.hunt_page=0;}
                                 }
                             });
                         if let Some(reference)=app.hunt_reference.as_deref(){
