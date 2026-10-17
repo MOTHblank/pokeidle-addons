@@ -1344,28 +1344,28 @@ fn draw_atlas_species(
 /// Compact species selector used by the desktop master/detail Explorer.
 /// Visual cues express selection and model confidence without duplicating the
 /// expanded destination/drop sections in every row.
+/// Entire rows, not only tiny text labels, are clickable. Missing artwork uses
+/// a readable abbreviation instead of a glyph absent from the bundled font.
 fn draw_atlas_species_selector(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,
     sort:AtlasSort,selected:bool,visuals:&mut VisualCache,
 )->bool{
-    let mut clicked=false;
-    egui::Frame::new()
+    let row_frame=egui::Frame::new()
         .fill(if selected{ACCENT.linear_multiply(0.13)}else{PANEL})
         .stroke(Stroke::new(1.0,if selected{ACCENT}else{BORDER}))
-        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(9,7))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(9,7))
         .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui|{
                 if !visuals.show(ui,SpriteKind::Pokemon,row.id,None,34.0){
-                    ui.label(RichText::new("◇").size(21.0).color(DIM));
+                    ui.label(RichText::new(row.name.chars().take(2)
+                        .collect::<String>().to_uppercase())
+                        .size(11.0).strong().color(ACCENT));
                 }
                 ui.vertical(|ui|{
-                    if ui.selectable_label(selected,
-                        RichText::new(&row.name).strong().size(12.0))
-                        .on_hover_text("Show destinations, forecasts and drops")
-                        .clicked(){
-                        clicked=true;
-                    }
+                    ui.label(RichText::new(&row.name)
+                        .strong().size(12.0).color(TEXT));
                     ui.label(RichText::new(format!(
                         "#{} · {} locations{}",
                         row.id,row.destinations.len(),
@@ -1383,8 +1383,13 @@ fn draw_atlas_species_selector(
                 });
             });
         });
+    let selected=ui.interact(
+        row_frame.response.rect,
+        ui.id().with(("atlas-selector",row.id)),
+        egui::Sense::click()
+    ).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
     ui.add_space(5.0);
-    clicked
+    selected
 }
 
 fn draw_atlas_explorer(
