@@ -210,15 +210,25 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                 let mut joined = BTreeSet::new();
                 let mut next_join = Instant::now();
                 let mut auth_rejected = false;
+                let mut previous_desired: Vec<String> = Vec::new();
+                let mut targets: Vec<String> = Vec::new();
+                let mut target_set: BTreeSet<String> = BTreeSet::new();
                 loop {
                     if stop.load(Ordering::Relaxed) { let _ = socket.close(None); break; }
-                    let targets = desired.lock().map(|v| normalize_channels(v.clone()))
-                        .unwrap_or_default();
-                    let target_set: BTreeSet<_> = targets.iter().cloned().collect();
+                    // An unchanged server room list must not allocate a new
+                    // vector, normalize names, and rebuild a set on every read.
+                    let changed = desired.lock().ok().and_then(|current|
+                        if *current != previous_desired {Some(current.clone())}
+                        else {None});
+                    if let Some(next) = changed {
+                        previous_desired = next.clone();
+                        targets = normalize_channels(next);
+                        target_set = targets.iter().cloned().collect();
+                    }
                     // Leave removed channels, but keep every unchanged room
                     // connected; never rebuild the socket on live-list deltas.
-                    for previous in joined.clone() {
-                        if !target_set.contains(&previous) {
+                    for previous in joined.difference(&target_set).cloned().collect::<Vec<_>>() {
+                        {
                             if write_irc(&mut socket, &format!("PART #{previous}")).is_err() {
                                 joined.clear();
                                 break;
