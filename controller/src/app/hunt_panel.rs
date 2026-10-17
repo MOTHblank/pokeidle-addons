@@ -559,6 +559,215 @@ fn atlas_effectiveness(
     Some(product)
 }
 
+/// Return the combined game type-chart multiplier for an attack type against
+/// a single- or dual-type defender. The guide omits some neutral 1× entries;
+/// absent *entries* are neutral, but absent type definitions are unknown.
+fn atlas_type_multiplier(
+    reference:&AtlasReference,attack:&str,defenders:&[String]
+)->Option<f64>{
+    if defenders.is_empty(){return None}
+    let row=reference.chart.iter()
+        .find(|(kind,_)|kind.eq_ignore_ascii_case(attack))?.1;
+    let mut multiplier=1.0;
+    for defender in defenders {
+        if !reference.chart.keys().any(|kind|kind.eq_ignore_ascii_case(defender)){
+            return None;
+        }
+        let step=row.iter().find(|(kind,_)|
+            kind.eq_ignore_ascii_case(defender))
+            .map(|(_,value)|*value).unwrap_or(1.0);
+        if !step.is_finite() || step<0.0{return None}
+        multiplier*=step;
+    }
+    Some(multiplier)
+}
+
+/// Neutral does not mean missing: hide 1× results by default so advantages,
+/// immunities and weaknesses remain readable above the fold.
+fn atlas_multiplier_text(multiplier:f64)->String{
+    if multiplier==0.0{"0× IMMUNE".into()}
+    else if (multiplier-0.25).abs()<0.001{"0.25×".into()}
+    else if (multiplier-0.5).abs()<0.001{"0.5×".into()}
+    else if (multiplier-1.0).abs()<0.001{"1×".into()}
+    else if (multiplier-2.0).abs()<0.001{"2×".into()}
+    else if (multiplier-4.0).abs()<0.001{"4×".into()}
+    else{format!("{multiplier:.2}×")}
+}
+fn atlas_multiplier_color(multiplier:f64,incoming:bool)->Color32{
+    if (multiplier-1.0).abs()<0.001{MUTED}
+    else if (multiplier<1.0)==incoming{GOOD}
+    else{BAD}
+}
+fn atlas_type_chip(
+    ui:&mut egui::Ui,kind:&str,multiplier:f64,incoming:bool,
+){
+    let color=atlas_multiplier_color(multiplier,incoming);
+    egui::Frame::new()
+        .fill(color.linear_multiply(0.10))
+        .stroke(Stroke::new(1.0,color.linear_multiply(0.65)))
+        .corner_radius(6.0).inner_margin(egui::Margin::symmetric(7,4))
+        .show(ui,|ui|{
+            ui.label(RichText::new(format!(
+                "{kind}  {}",atlas_multiplier_text(multiplier)
+            )).size(10.0).strong().color(color));
+        });
+}
+
+/// Multipliers apply to an ATTACK TYPE, not a Pokémon's overall damage or
+/// ability to learn the move. STAB types are prioritized, but do not imply
+/// any particular move is selected or equipped.
+fn draw_atlas_type_direction(
+    ui:&mut egui::Ui,reference:&AtlasReference,
+    attacker_types:&[String],defender_types:&[String],incoming:bool,
+){
+    ui.label(RichText::new(if incoming{
+        "DAMAGE YOU TAKE"
+    }else{
+        "DAMAGE YOU DEAL"
+    }).size(11.0).strong().color(TEXT));
+    ui.label(RichText::new(if incoming{
+        "Enemy attack type → your Pokémon"
+    }else{
+        "Your attack type → opposing Pokémon"
+    }).size(10.0).color(MUTED));
+    ui.add_space(4.0);
+    if defender_types.is_empty(){
+        ui.label(RichText::new(
+            "Defending Pokémon's typing is unknown. No multiplier is assumed."
+        ).size(10.0).color(WARN));
+        return;
+    }
+    let mut possible=reference.chart.keys().filter_map(|kind|
+        atlas_type_multiplier(reference,kind,defender_types)
+            .map(|multiplier|(kind.as_str(),multiplier))
+    ).collect::<Vec<_>>();
+    if possible.is_empty(){
+        ui.label(RichText::new("Type chart is not available.")
+            .size(10.0).color(MUTED));
+        return;
+    }
+    // STAB is useful context, not evidence that those moves are equipped.
+    ui.label(RichText::new("Same-type attacks (if learned)")
+        .size(10.0).strong().color(DIM));
+    if attacker_types.is_empty(){
+        ui.label(RichText::new(
+            "Attacker's types unknown; all type-chart possibilities below."
+        ).size(10.0).color(MUTED));
+    }else{
+        ui.horizontal_wrapped(|ui|{
+            for kind in attacker_types{
+                if let Some(multiplier)=atlas_type_multiplier(
+                    reference,kind,defender_types){
+                    atlas_type_chip(ui,kind,multiplier,incoming);
+                }
+            }
+        });
+    }
+    ui.add_space(6.0);
+    possible.retain(|(kind,n)|
+        (n-1.0).abs()>=0.001 &&
+        !attacker_types.iter().any(|own|
+            own.eq_ignore_ascii_case(kind))
+    );
+    possible.sort_by(|(left_name,left),(right_name,right)|
+        right.total_cmp(left).then_with(||left_name.cmp(right_name))
+    );
+    // The direction changes which multipliers are favorable; the multiplier
+    // itself is ALWAYS an attack type hitting the defender, never reversed.
+    let (danger,safe)=if incoming{
+        ("EXTRA DAMAGE TAKEN · 2× / 4×",
+         "REDUCED / IMMUNE · 0.5× / 0.25× / 0×")
+    }else{
+        ("EXTRA DAMAGE DEALT · 2× / 4×",
+         "RESISTED / IMMUNE · 0.5× / 0.25× / 0×")
+    };
+    for (heading,high) in [(danger,true),(safe,false)]{
+        let matching=possible.iter()
+            .filter(|(_,n)|if high{*n>1.0}else{*n<1.0})
+            .collect::<Vec<_>>();
+        if !matching.is_empty(){
+            ui.label(RichText::new(heading)
+                .size(9.0).strong().color(DIM));
+            ui.horizontal_wrapped(|ui|{
+                for (kind,multiplier) in matching{
+                    atlas_type_chip(ui,kind,*multiplier,incoming);
+                }
+            });
+            ui.add_space(4.0);
+        }
+    }
+    if possible.is_empty(){
+        ui.label(RichText::new(
+            "No other non-neutral attack types."
+        ).size(10.0).color(MUTED));
+    }
+    let neutral=reference.chart.keys()
+        .filter_map(|kind|atlas_type_multiplier(reference,kind,defender_types)
+            .filter(|n|(n-1.0).abs()<0.001)
+            .map(|_|kind.as_str()))
+        .collect::<Vec<_>>();
+    if !neutral.is_empty(){
+        ui.collapsing(format!("Neutral move types (1× · {})",neutral.len()),|ui|{
+            ui.horizontal_wrapped(|ui|{
+                for kind in &neutral{atlas_type_chip(ui,kind,1.0,incoming);}
+            });
+        });
+    }
+}
+fn atlas_types_for_active(
+    view:&HuntView,reference:&AtlasReference
+)->Vec<String>{
+    let Some(pokemon)=view.active_pokemon.as_ref()else{return Vec::new()};
+    if !pokemon.types.is_empty(){return pokemon.types.clone()}
+    pokemon.species_id.and_then(|id|reference.species.get(&id))
+        .map(|species|species.types.clone()).unwrap_or_default()
+}
+fn draw_atlas_matchup(
+    ui:&mut egui::Ui,reference:Option<&AtlasReference>,
+    lead_types:&[String],target_types:&[String],
+    lead_name:&str,target_name:&str,target_context:&str,
+){
+    egui::Frame::new().fill(PANEL)
+        .stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(9.0).inner_margin(egui::Margin::symmetric(12,10))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new("TYPE ADVANTAGES & WEAKNESSES")
+                    .size(12.0).strong().color(TEXT));
+                ui.label(RichText::new(format!(
+                    "{lead_name}  ↔  {target_name}"
+                )).size(11.0).color(ACCENT));
+            });
+            ui.label(RichText::new(target_context)
+                .size(10.0).color(MUTED));
+            ui.add_space(6.0);
+            let Some(reference)=reference else{
+                ui.label(RichText::new(
+                    "Waiting for the game guide's type chart."
+                ).size(10.0).color(MUTED));
+                return;
+            };
+            if ui.available_width()>=750.0{
+                ui.columns(2,|cols|{
+                    draw_atlas_type_direction(&mut cols[0],reference,
+                        lead_types,target_types,false);
+                    draw_atlas_type_direction(&mut cols[1],reference,
+                        target_types,lead_types,true);
+                });
+            }else{
+                draw_atlas_type_direction(ui,reference,
+                    lead_types,target_types,false);
+                ui.separator();
+                draw_atlas_type_direction(ui,reference,
+                    target_types,lead_types,true);
+            }
+            ui.label(RichText::new(
+                "Type effectiveness only: results assume a move of the displayed attack type. Learned moves, stats, abilities and battle timing are not included. Dual-type effects multiply (0.25× to 4×)."
+            ).size(9.0).color(DIM));
+        });
+}
+
 fn atlas_objective(
     sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
     hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
@@ -1358,6 +1567,16 @@ fn draw_atlas_species(
                         }
                     });
                 }
+                ui.add_space(8.0);
+                let lead_types=reference
+                    .map(|guide|atlas_types_for_active(view,guide))
+                    .unwrap_or_default();
+                draw_atlas_matchup(ui,reference,&lead_types,&row.types,
+                    view.active_pokemon.as_ref().map(|p|p.name.as_str())
+                        .unwrap_or("Your Pokémon"),
+                    &row.name,
+                    "Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move.");
+                ui.add_space(7.0);
                 ui.push_id("destinations",|ui|{
                     egui::CollapsingHeader::new(format!(
                         "Destinations & forecasts ({})",row.destinations.len()
@@ -1957,6 +2176,38 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             });
                     });
                     ui.add_space(8.0);
+                    let guide=app.hunt_reference.as_deref();
+                    let lead_types=guide.map(|guide|
+                        atlas_types_for_active(hunts,guide))
+                        .unwrap_or_default();
+                    let wild_target=guide.and_then(|guide|
+                        hunts.wild.as_ref().and_then(|wild|
+                            wild.species_id.and_then(|id|
+                                guide.species.get(&id)
+                                    .map(|species|(species.name.as_str(),
+                                        species.types.as_slice(),
+                                        "Confirmed wild species. Move types shown are type-chart possibilities, not confirmed attacks.")))));
+                    let representative=guide.and_then(|guide|
+                        current.and_then(|hunt|hunt.species.iter()
+                            .filter(|species|species.weight>0.0)
+                            .max_by(|left,right|
+                                left.weight.total_cmp(&right.weight))
+                            .and_then(|spawn|guide.species.get(&spawn.id)
+                                .map(|species|(species.name.as_str(),
+                                    species.types.as_slice(),
+                                    "Most common species in this hunt (representative only; not necessarily the enemy being fought).")))));
+                    let target=wild_target.or_else(||{
+                        if hunts.wild.is_some(){None}else{representative}
+                    });
+                    let (target_name,target_types,note)=target.unwrap_or((
+                        "Unidentified opponent",&[][..],
+                        "Opponent typing is unavailable; no advantages or weaknesses are assumed."
+                    ));
+                    draw_atlas_matchup(ui,guide,&lead_types,target_types,
+                        hunts.active_pokemon.as_ref().map(|p|p.name.as_str())
+                            .unwrap_or("Your Pokémon"),
+                        target_name,note);
+                    ui.add_space(8.0);
     let m = &hunts.measurements;
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
         .inner_margin(egui::Margin::same(13)).show(ui, |ui| {
@@ -2346,6 +2597,63 @@ mod tests {
             ..Default::default()
         });
         guide
+    }
+    #[test]
+    fn type_matchups_respect_immunity_stacked_dual_types_and_neutral(){
+        let mut guide=AtlasReference::default();
+        for kind in ["FIRE","GRASS","ICE","WATER","ROCK","NORMAL","GHOST"]{
+            guide.chart.insert(kind.into(),Default::default());
+        }
+        guide.chart.get_mut("FIRE").unwrap().extend([
+            ("GRASS".into(),2.0),("ICE".into(),2.0),
+            ("WATER".into(),0.5),("ROCK".into(),0.5),
+        ]);
+        guide.chart.get_mut("NORMAL").unwrap()
+            .insert("GHOST".into(),0.0);
+        let hit=|attack:&str,types:&[&str]|{
+            atlas_type_multiplier(&guide,attack,
+                &types.iter().map(|v|v.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(hit("NORMAL",&["GHOST"]),Some(0.0));
+        assert_eq!(hit("FIRE",&["WATER"]),Some(0.5));
+        assert_eq!(hit("FIRE",&["WATER","ROCK"]),Some(0.25));
+        assert_eq!(hit("FIRE",&["GRASS"]),Some(2.0));
+        assert_eq!(hit("FIRE",&["GRASS","ICE"]),Some(4.0));
+        assert_eq!(hit("FIRE",&["NORMAL"]),Some(1.0));
+        assert_eq!(hit("fire",&["Grass","ICE"]),Some(4.0));
+        assert_eq!(hit("FIRE",&[]),None);
+        assert_eq!(hit("FIRE",&["NOT_IN_CHART"]),None);
+        assert_eq!(hit("UNKNOWN",&["ICE"]),None);
+    }
+    #[test]
+    fn matchup_colors_change_with_damage_direction(){
+        assert_eq!(atlas_multiplier_color(4.0,false),GOOD);
+        assert_eq!(atlas_multiplier_color(4.0,true),BAD);
+        assert_eq!(atlas_multiplier_color(0.0,false),BAD);
+        assert_eq!(atlas_multiplier_color(0.0,true),GOOD);
+        assert_eq!(atlas_multiplier_color(0.5,false),BAD);
+        assert_eq!(atlas_multiplier_color(0.5,true),GOOD);
+        assert_eq!(atlas_multiplier_text(0.0),"0× IMMUNE");
+        assert_eq!(atlas_multiplier_text(0.25),"0.25×");
+        assert_eq!(atlas_multiplier_text(0.5),"0.5×");
+        assert_eq!(atlas_multiplier_text(2.0),"2×");
+        assert_eq!(atlas_multiplier_text(4.0),"4×");
+    }
+    #[test]
+    fn live_party_types_take_precedence_over_guide_fallback(){
+        let mut guide=AtlasReference::default();
+        guide.species.insert(25,native_atlas::ReferenceSpecies{
+            name:"Pikachu".into(),types:vec!["ELECTRIC".into()],
+            base:vec![10.0;6],moves:vec![],drops:vec![]
+        });
+        let mut view=HuntView::default();
+        assert!(atlas_types_for_active(&view,&guide).is_empty());
+        view.active_pokemon=Some(native_hunts::PokemonInfo{
+            species_id:Some(25),..Default::default()
+        });
+        assert_eq!(atlas_types_for_active(&view,&guide),vec!["ELECTRIC"]);
+        view.active_pokemon.as_mut().unwrap().types=vec!["STEEL".into()];
+        assert_eq!(atlas_types_for_active(&view,&guide),vec!["STEEL"]);
     }
     #[test]
     fn species_action_uses_an_unlocked_destination_not_a_locked_best(){
