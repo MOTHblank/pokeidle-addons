@@ -784,8 +784,10 @@ fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
 fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
     let current=view.hunts.iter().find(|h|
         view.hunt_slug.as_deref()==Some(h.slug.as_str()));
-    let name=current.map(|h|h.name.as_str())
-        .or(view.hunt_slug.as_deref()).unwrap_or("No active hunt");
+    let name=if view.in_center{"At Pokémon Center"}else{
+        current.map(|h|h.name.as_str())
+            .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+    };
     let (activity,color)=atlas_combat_status(view,live);
     let mut open=false;
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -794,7 +796,9 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.vertical(|ui|{
-                    ui.label(RichText::new("CURRENT HUNT")
+                    ui.label(RichText::new(if !live {"LAST CONFIRMED HUNT"}
+                        else if view.in_center {"CURRENT LOCATION"}
+                        else {"CURRENT HUNT"})
                         .size(9.0).strong().color(DIM));
                     ui.add(egui::Label::new(RichText::new(name)
                         .size(13.0).strong().color(TEXT)).truncate())
@@ -858,6 +862,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ui.label(RichText::new(name).strong().size(14.0).color(TEXT));
                             ui.colored_label(if *live{GOOD}else{WARN},
                                 if *live{"● Live"}else{"○ Offline / stale"});
+                            let (activity,color)=atlas_combat_status(view,*live);
+                            ui.colored_label(color,format!("● {activity}"));
                             if ui.small_button("Open Atlas →").clicked(){
                                 app.select_workspace_account(*index);
                                 app.hunt_subtab=HuntSubtab::Explorer;
@@ -1765,7 +1771,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         ui.label(RichText::new("YOUR POKÉMON")
                                             .size(9.0).strong().color(DIM));
                                         if let Some(p)=hunts.active_pokemon.as_ref(){
-                                            overview_combat_image(app,ui,
+                                            overview_combat_image(&mut app.visuals,ui,
                                                 if p.shiny{p.shiny_looktype}else{p.looktype},
                                                 p.looktype,p.species_id,false);
                                             ui.label(RichText::new(&p.name)
@@ -1783,7 +1789,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         ui.label(RichText::new("HUNT LOCATION")
                                             .size(9.0).strong().color(DIM));
                                         if let Some(species)=representative{
-                                            overview_combat_image(app,ui,
+                                            overview_combat_image(&mut app.visuals,ui,
                                                 None,None,Some(species),true);
                                         }
                                         let hunt_name=if hunts.in_center {
