@@ -859,6 +859,8 @@ pub(super) struct ExplorerCache {
     roster_ready:bool,
     ball_quotes_ptr:usize,
     initialized:bool,
+    #[cfg(test)]
+    rebuilds:usize,
 }
 impl ExplorerCache {
     fn update(&mut self,view:&HuntView,reference:Option<&AtlasReference>,
@@ -888,6 +890,8 @@ impl ExplorerCache {
             self.roster_ready!=view.roster_ready ||
             self.ball_quotes_ptr!=ball_quotes_ptr;
         if changed {
+            #[cfg(test)]
+            {self.rebuilds+=1;}
             self.rows=atlas_species_rows(view,reference,estimates,filters,scenario);
             self.filters=Some(key_filters);
             self.scenario=Some(scenario.clone());
@@ -3009,6 +3013,23 @@ mod tests {
         assert!(!bonuses_complete(&view,HuntRanking::PokemonXp));
     }
 
+    #[test]
+    fn explorer_cache_skips_selection_only_redraws_but_not_new_filters() {
+        let view=HuntView::default();
+        let estimates=EstimateCache::default();
+        let scenario=AtlasScenario::default();
+        let mut filters=AtlasFilters::default();
+        let mut results=ExplorerCache::default();
+        assert!(results.update(&view,None,&estimates,&filters,&scenario).is_empty());
+        assert_eq!(results.rebuilds,1);
+        filters.selected_species=Some(25);
+        filters.filters_open=true;
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,1);
+        filters.min_level=80;
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,2);
+    }
     #[test]
     fn gold_ranking_never_compares_net_wallet_spend_to_gross_rewards(){
         let mut view=HuntView::default();
