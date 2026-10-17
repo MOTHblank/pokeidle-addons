@@ -605,15 +605,6 @@ impl HuntIntel {
         if let Some(patches) = state.get("pkMud").and_then(Value::as_array) {
             for p in patches { self.set_pokemon(p); }
         }
-        // The very first confirmed wild for a hunt is a stable art fallback
-        // when the server catalog and location name provide no species.
-        // Subsequent encounters never overwrite it.
-        if !self.view.in_center && self.view.hunt_slug.is_some()
-            && self.view.hunt_art_species.is_none() {
-            self.view.hunt_art_species = self.view.wild.as_ref()
-                .and_then(|wild| wild.species_id.filter(|id| *id > 0)
-                    .or_else(|| species_id_from_hunt_name(&wild.name)));
-        }
         self.view.pokemon_count = self.pokemon.len();
         self.view.active_pokemon = self.active_id.and_then(|id| self.pokemon.get(&id).cloned());
         if let Some(event) = state.get("evento") {
@@ -656,12 +647,14 @@ impl HuntIntel {
                 .filter(|s| !s.is_empty() && s.len() <= 128) else { continue };
             // Support full game entries and compact [species ID, weight]
             // entries; a partial catalog must not suppress hunt artwork.
-            let species = item.get("especies").or_else(|| item.get("e"))
+            let mut species = item.get("especies").or_else(|| item.get("e"))
                 .and_then(Value::as_array)
                 .map(|entries| entries.iter().filter_map(|entry| {
                     let (id, weight) = if let Some(pair) = entry.as_array() {
                         (pair.first()?.as_u64()?,
                          pair.get(1).and_then(Value::as_f64).unwrap_or(1.0))
+                    } else if let Some(id) = entry.as_u64() {
+                        (id, 1.0)
                     } else {
                         (entry.get("pokeId").or_else(|| entry.get("speciesId"))
                             .or_else(|| entry.get("id")).and_then(Value::as_u64)?,
@@ -671,7 +664,20 @@ impl HuntIntel {
                     };
                     (id > 0 && weight.is_finite())
                         .then_some(HuntSpecies { id, weight: weight.max(0.0) })
-                }).collect()).unwrap_or_default();
+                }).collect::<Vec<_>>()).unwrap_or_default();
+            // Some single-species hunts expose the ID directly rather than
+            // as an array. Retain that explicit ID instead of name guessing.
+            if species.is_empty() {
+                let id = item.get("pokeId").or_else(|| item.get("speciesId"))
+                    .or_else(|| item.get("especieId"))
+                    .or_else(|| item.get("especie")).and_then(Value::as_u64)
+                    .or_else(|| item.get("especie")
+                        .and_then(|entry| entry.get("pokeId"))
+                        .and_then(Value::as_u64));
+                if let Some(id) = id.filter(|id| *id > 0) {
+                    species.push(HuntSpecies { id, weight: 1.0 });
+                }
+            }
             hunts.push(HuntEntry {
                 slug: slug.to_owned(),
                 name: item.get("nome").or_else(||item.get("name"))
@@ -1000,32 +1006,33 @@ mod tests {
     }
 
     #[test]
-    fn wild_art_fallback_survives_encounters_but_resets_on_new_hunt() {
+    fn hunt_sprite_uses_single_server_species_without_an_encounter() {
         let mut intel = HuntIntel::new();
         let now = Instant::now();
         intel.ingest(r#"{"t":"welcome","hunts":[
-            {"slug":"forest","nome":"Forest Hunt"},
-            {"slug":"beach","nome":"Beach Hunt"}
-        ],"estado":{"huntSlug":"forest","selvagem":{
-            "speciesId":123,"nome":"Scyther","hp":30}}}"#, now);
-        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
-        intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
-        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+            {"slug":"forest","nome":"Forest Hunt","especies":[{"pokeId":2006}]},
+            {"slug":"beach","nome":"Beach Hunt","pokeId":14009}
+        ],"estado":{"huntSlug":"forest","selvagem":null}}"#, now);
+        // No wild spawn is required to identify the hunt's Pokémon.
+        assert_eq!(intel.snapshot().hunt_art_species, Some(2006));
         intel.ingest(r#"{"t":"estado","estado":{"selvagem":{
-            "speciesId":127,"nome":"Pinsir","hp":80}}}"#, now);
-        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+            "speciesId":123,"nome":"Scyther","hp":30}}}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(2006));
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(2006));
         intel.ingest(r#"{"t":"batalha","ev":[{"k":"hunt","slug":"beach"}]}"#, now);
-        assert_eq!(intel.snapshot().hunt_art_species, None);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(14009));
+        assert!(intel.snapshot().wild.is_none());
     }
 
     #[test]
     fn compact_species_catalog_supplies_sprite_id() {
         let mut intel = HuntIntel::new();
         intel.ingest(r#"{"t":"welcome","hunts":[
-            {"s":"forest","n":"Forest","nv":150,"e":[[123,60],[127,40]]}
+            {"s":"forest","n":"Forest","nv":150,"e":[[2006,1]]}
         ],"estado":{"huntSlug":"forest"}}"#, Instant::now());
-        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
-        assert_eq!(intel.snapshot().hunts[0].species.len(), 2);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(2006));
+        assert_eq!(intel.snapshot().hunts[0].species.len(), 1);
         assert_eq!(intel.snapshot().hunts[0].level, 150);
     }
 
