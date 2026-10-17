@@ -15,32 +15,6 @@ fn selected_hunt<'a>(view:&'a HuntView,guide:Option<&'a AtlasReference>,
     hunts.iter().find(|(h,_)|Some(h.slug.as_str())==requested)
         .copied().or_else(||hunts.into_iter().next())
 }
-pub(super) fn item_units_per_h(hunt:&native_hunts::HuntEntry,
-    reference:&AtlasReference,name:&str,kills_h:f64,drop_factor:f64)->Option<f64>{
-    if name.is_empty()||!kills_h.is_finite()||kills_h<0.0{return None}
-    let total=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
-    if total<=0.0{return None}
-    let mut found=false;
-    let mut units=0.0;
-    let mut covered=0.0;
-    for spawn in &hunt.species{
-        if spawn.weight<=0.0{continue}
-        let meta=reference.species.get(&spawn.id)?;
-        covered+=spawn.weight;
-        for drop in &meta.drops{
-            if drop.item_name.as_deref().is_some_and(|v|v.eq_ignore_ascii_case(name))
-                || drop.item_id.is_some_and(|id|id.to_string()==name){
-                found=true;
-                units+=spawn.weight/total
-                    *(drop.chance_pct/100.0*drop_factor).min(1.0)
-                    *(drop.minimum+drop.maximum)/2.0;
-            }
-        }
-    }
-    if !found||covered<total{return None}
-    Some(units*kills_h)
-}
-
 pub(super) fn draw_retrospective(
     ui:&mut egui::Ui,history:&HistorySnapshot,slug:Option<&str>,
     forecast:Option<&native_atlas::Forecast>
@@ -508,41 +482,13 @@ pub(super) fn draw_atlas_models(
         ui.label(RichText::new(tr("Outside Outland: Shiny Egg Fragment uses the upstream 30-threshold level ladder; 10 fragments per craft, 168h reference incubation."))
             .size(10.0).color(MUTED));
     }
+
+    // The game no longer awards NPC drops, and catalog prices do not
+    // represent player market sales. Show only modeled combat gold and
+    // explicit item costs instead of fabricating hourly market revenue.
     ui.add_space(8.0);
-    ui.label(RichText::new(tr("Market scenario"))
+    ui.label(RichText::new(tr("Gold and capture costs"))
         .size(13.0).strong().color(TEXT));
-    let mut possible=std::collections::BTreeSet::new();
-    if let Some(reference)=reference{
-        for sp in &hunt.species{
-            if let Some(meta)=reference.species.get(&sp.id){
-                for drop in &meta.drops{
-                    if let Some(name)=drop.item_name.as_ref(){
-                        possible.insert(name.clone());
-                    }else if let Some(id)=drop.item_id{possible.insert(id.to_string());}
-                }
-            }
-        }
-    }
-    ui.horizontal_wrapped(|ui|{
-        ui.label(tr("Sale item"));
-        egui::ComboBox::from_id_salt("atlas-market-item")
-            .selected_text(if scenario.market_item.is_empty(){tr("Select a guide drop").to_owned()}
-                else{scenario.market_item.clone()})
-            .show_ui(ui,|ui|{
-                ui.selectable_value(&mut scenario.market_item,String::new(),tr("No item"));
-                for name in possible.iter().take(150){
-                    ui.selectable_value(&mut scenario.market_item,name.clone(),name.as_str());
-                }
-            });
-        ui.label(tr("User-assumed market gold / unit"));
-        ui.add(egui::DragValue::new(&mut scenario.market_gold_per_unit)
-            .range(0.0..=1_000_000_000.0).speed(1.0));
-    });
-    let units=kills.and_then(|k|reference.and_then(|refdata|
-        item_units_per_h(hunt,refdata,&scenario.market_item,k,
-            scenario.modifiers.drop_factor())));
-    let market_value=units.and_then(|n|models::market_scenario(n,
-        scenario.market_gold_per_unit));
     let accepted_h=kills.map(|k|k*scenario.accepted_fraction_override.unwrap_or(1.0));
     let gold_cost=ball_quote.and_then(|q|q.gold_price)
         .filter(|price|*price>0.0 && ball_quote.and_then(|q|q.diamond_price)
@@ -555,65 +501,26 @@ pub(super) fn draw_atlas_models(
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .stroke(Stroke::new(1.0,BORDER))
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-            let metrics=[
-                (tr("Combat gold / h"),f.as_ref().map(|f|f.combat_gold_h)),
-                ("NPC loot gold / h",f.as_ref().map(|f|f.npc_loot_gold_h)),
-                (tr("Item units / h"),units),
-                (tr("Market proceeds / h"),market_value),
-                (tr("Ball gold cost / h"),gold_cost),
-                (tr("Ball diamonds / h"),diamond_cost),
-            ];
-            let columns=if ui.available_width()>=680.0{3}else{2};
-            ui.columns(columns,|cols|{
-                for (i,(label,num)) in metrics.iter().enumerate(){
-                    cols[i%columns].vertical(|ui|{
-                        ui.label(RichText::new(*label).size(10.0).color(DIM));
-                        ui.label(RichText::new(value(*num))
+            ui.horizontal_wrapped(|ui|{
+                for (label,num) in [
+                    (tr("Gross gold/h"),f.as_ref().map(|f|f.combat_gold_h)),
+                    (tr("Ball gold cost / h"),gold_cost),
+                    (tr("Ball diamonds / h"),diamond_cost),
+                ]{
+                    ui.vertical(|ui|{
+                        ui.label(RichText::new(label).size(10.0).color(DIM));
+                        ui.label(RichText::new(value(num))
                             .size(14.0).strong().color(TEXT));
-                        ui.add_space(6.0);
                     });
+                    ui.add_space(12.0);
                 }
             });
         });
-    let hypothetical_net=match (f.as_ref(),market_value,gold_cost){
-        (Some(f),Some(market),Some(cost))=>Some(f.combat_gold_h+market-cost),
-        _=>None,
-    };
-    ui.label(RichText::new(format!(
-        "Conditional gold balance (combat + USER-QUOTED market - known ball gold cost): {} / h",
-        value(hypothetical_net)
-    )).size(11.0).strong().color(if hypothetical_net.is_some(){GOOD}else{MUTED}));
-    ui.label(RichText::new(tr("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent."))
-        .size(10.0).color(WARN));
+    ui.label(RichText::new(tr("No NPC loot or player-market proceeds are included."))
+        .size(10.0).color(MUTED));
     ui.add_space(10.0);
     ui.collapsing(tr("History & forecast comparisons"),|ui|{
         draw_retrospective(ui,history,Some(&hunt.slug),f.as_ref());
     });
 }
 
-#[cfg(test)]
-mod tests{
-    use super::*;
-    #[test] fn market_units_require_full_species_reference_coverage(){
-        let hunt=native_hunts::HuntEntry{level:100,
-            species:vec![native_hunts::HuntSpecies{id:1,weight:60.0},
-                native_hunts::HuntSpecies{id:2,weight:40.0}],
-            ..Default::default()};
-        let mut guide=AtlasReference::default();
-        guide.species.insert(1,native_atlas::ReferenceSpecies{
-            name:"A".into(),types:vec![],base:vec![1.0;6],
-            moves:vec![],
-            drops:vec![native_atlas::ReferenceDrop{
-                item_id:None,item_name:Some("Stone".into()),
-                chance_pct:10.0,minimum:1.0,maximum:3.0,guide_price:10.0,
-            }],
-        });
-        assert_eq!(item_units_per_h(&hunt,&guide,"Stone",100.0,1.0),None);
-        guide.species.insert(2,native_atlas::ReferenceSpecies{
-            name:"B".into(),types:vec![],base:vec![1.0;6],
-            moves:vec![],drops:vec![],
-        });
-        let forecast=item_units_per_h(&hunt,&guide,"Stone",100.0,1.0).unwrap();
-        assert!((forecast-12.0).abs()<1e-10);
-    }
-}
