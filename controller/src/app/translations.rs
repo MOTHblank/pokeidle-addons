@@ -3,6 +3,15 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "attempts" => "tentativas",
+        "units available" => "unidades disponíveis",
+        "orb" => "Gemas",
+        "gold" => "Ouro",
+        "item" => "Item",
+        "pokemon" => "Pokémon",
+        "burst" => "compra rápida",
+        "pending" => "pendente",
+        "available" => "disponível",
         "calibrated" => "calibrada",
         "experimental" => "experimental",
         "filters" => "filtros",
