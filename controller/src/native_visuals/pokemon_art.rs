@@ -235,21 +235,29 @@ fn static_sprite_url(kind: Kind, id: u64) -> Option<String> {
 }
 
 fn static_sprite(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<Vec<u8>> {
-    let url = static_sprite_url(kind, id)?;
-    let response = client.get(url).send()
-        .and_then(|response| response.error_for_status()).ok()?;
-    if response.content_length().is_some_and(|length| length > super::MAX_IMAGE_BYTES) {
-        return None;
+    let primary = static_sprite_url(kind, id)?;
+    // A number of players can reach the game but not raw.githubusercontent.com.
+    // Use a second public mirror of the same PokeAPI sprite path before
+    // falling back to the game's looktype manifests.
+    let mirror = primary.replacen(
+        "https://raw.githubusercontent.com/PokeAPI/sprites/master/",
+        "https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/", 1);
+    for url in [primary, mirror] {
+        let Ok(response) = client.get(url).send()
+            .and_then(|response| response.error_for_status()) else { continue };
+        if response.content_length().is_some_and(|length|
+            length > super::MAX_IMAGE_BYTES) { continue; }
+        let mut bytes = Vec::new();
+        if response.take(super::MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).is_err()
+            || !valid_image(&bytes) { continue; }
+        let path = root.join(format!("{}-{id}.img", kind.key()));
+        let temporary = path.with_extension("tmp");
+        if std::fs::write(&temporary, &bytes).is_ok() {
+            let _ = std::fs::rename(&temporary, &path);
+        }
+        return Some(bytes);
     }
-    let mut bytes = Vec::new();
-    response.take(super::MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    if !valid_image(&bytes) { return None; }
-    let path = root.join(format!("{}-{id}.img", kind.key()));
-    let temporary = path.with_extension("tmp");
-    if std::fs::write(&temporary, &bytes).is_ok() {
-        let _ = std::fs::rename(&temporary, &path);
-    }
-    Some(bytes)
+    None
 }
 
 /// Use the first cached frame immediately. Prefer a small, guaranteed
