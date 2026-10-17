@@ -271,6 +271,8 @@ impl HuntIntel {
     fn adopt_hunt(&mut self, slug: &str, now: Instant) {
         if self.view.hunt_slug.as_deref() != Some(slug) {
             self.view.hunt_slug = Some(slug.to_owned());
+            // A confirmed new location supersedes the previous Center state.
+            self.view.in_center = false;
             self.samples.clear();
             self.battle_samples.clear();
             self.battle_trainer = 0;
@@ -308,7 +310,12 @@ impl HuntIntel {
         if let Some(name) = value.get("nome").or_else(|| value.get("name")).and_then(Value::as_str) {
             existing.name = name.to_owned();
         }
-        if let Some(n) = Self::num(value, "speciesId") { existing.species_id = Some(n); }
+        // Game roster frames may use pokeId while wild frames use speciesId.
+        // Both are Pokédex IDs; the owned id is an account-local instance ID.
+        if let Some(n) = Self::num(value, "speciesId")
+            .or_else(|| Self::num(value, "pokeId")) {
+            existing.species_id = Some(n);
+        }
         if let Some(n) = Self::num(value, "level") { existing.level = n.min(u32::MAX as u64) as u32; }
         if let Some(n) = Self::num(value, "xp") { existing.xp = Some(n); }
         if let Some(n) = Self::num(value, "xpNivel") { existing.xp_level = Some(n); }
@@ -564,6 +571,13 @@ impl HuntIntel {
                 }
                 if let Some(slug) = frame.get("slug").and_then(Value::as_str) {
                     self.view.field_slug = Some(slug.to_owned());
+                    // campo.init is a second server-confirmed location signal.
+                    // Accept it as the hunt only when it matches an unlocked
+                    // catalog slug; arbitrary maps are not necessarily hunts.
+                    if self.view.hunts.iter().any(|hunt| hunt.slug == slug) {
+                        self.adopt_hunt(slug, now);
+                        self.view.in_center = false;
+                    }
                 }
                 if let Some(timestamp) = Self::num(&frame, "ts") {
                     self.view.field_init_timestamp = Some(timestamp);
@@ -782,6 +796,35 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn location_init_recovers_a_confirmed_hunt_without_wild_encounters() {
+        let now = Instant::now();
+        let mut intel = HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","hunts":[
+            {"slug":"forest","nome":"Forest Hunt"},
+            {"slug":"beach","nome":"Beach Hunt"}
+        ],"estado":{"noCentro":true}}"#, now);
+        intel.ingest(r#"{"t":"campo.init","slug":"forest","mapa":"forest-map"}"#, now);
+        assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
+        assert!(!intel.snapshot().in_center);
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
+        assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
+        intel.ingest(r#"{"t":"campo.init","slug":"unknown-map"}"#, now);
+        assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
+    }
+
+    #[test]
+    fn pokemon_instance_id_and_pokedex_id_are_distinct() {
+        let mut intel = HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","estado":{"activeId":42,
+            "pokemons":[{"id":42,"pokeId":25,"nome":"Pikachu","looktype":60025}]}}"#,
+            Instant::now());
+        let active = intel.snapshot().active_pokemon.unwrap();
+        assert_eq!(active.id, 42);
+        assert_eq!(active.species_id, Some(25));
+        assert_eq!(active.looktype, Some(60025));
+    }
+
     #[test]
     fn opponent_health_and_battle_events_update_combat_activity_without_a_kill() {
         let mut intel = HuntIntel::new();
