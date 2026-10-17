@@ -1,8 +1,9 @@
-//! Shared, lazy native sprite renderer. Bundled art is preferred; unknown art
+//! Shared, lazy native sprite renderer. Item and ball artwork is bundled;
+//! unknown items and Pokémon retain the on-demand disk cache. Unknown art
 //! can be fetched once into a per-user disk cache on a dedicated worker.
 //! No image decoding, HTTP, or filesystem reads happen on ordinary UI frames.
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -80,35 +81,6 @@ fn upstream_item_url(id: u64) -> Option<String> {
     trusted_url(&url)
 }
 
-// The upstream snapshot contains actual file blobs for a small subset of the
-// 419 public item paths. Use its exact tree manifest for fallback URLs; never
-// construct arbitrary raw.githubusercontent.com paths from untrusted metadata.
-fn upstream_available_paths() -> &'static BTreeSet<String> {
-    static FILES: OnceLock<BTreeSet<String>> = OnceLock::new();
-    FILES.get_or_init(|| {
-        let manifest: serde_json::Value = serde_json::from_str(
-            include_str!("../assets/visual/upstream-available-images.json")
-        ).unwrap_or_default();
-        manifest.get("files").and_then(serde_json::Value::as_array)
-            .into_iter().flatten()
-            .filter_map(serde_json::Value::as_str)
-            .filter(|path| path.starts_with("assets/site/assets/") ||
-                path.starts_with("img/"))
-            .filter(|path| !path.contains("..") &&
-                !path.contains('\\') && !path.contains('?') && !path.contains('#') &&
-                (path.ends_with(".png") || path.ends_with(".gif")))
-            .map(str::to_owned).collect()
-    })
-}
-
-fn snapshot_asset_url(game_url: &str) -> Option<String> {
-    let path = game_url.strip_prefix("https://pokeidle.io/")?;
-    if !upstream_available_paths().contains(path) { return None; }
-    Some(format!(
-        "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/{path}"
-    ))
-}
-
 fn asset_url(kind: Kind, id: u64) -> Option<String> {
     let fixed = match (kind, id) {
         (Kind::Ball, 1) => Some("/assets/site/assets/ui/ball-poke.png"),
@@ -141,11 +113,7 @@ fn image_urls(kind: Kind, id: u64, icon_hint: Option<&str>) -> Vec<String> {
         if let Some(alt) = alternative {
             if !urls.contains(&alt) { urls.push(alt); }
         }
-        // Game CDN first; fall back to the exact file exported in upstream.
-        // This also covers broken/removed public URLs without guessing art.
-        if let Some(snapshot) = snapshot_asset_url(&source) {
-            if !urls.contains(&snapshot) { urls.push(snapshot); }
-        }
+
     }
     urls
 }
@@ -347,17 +315,28 @@ mod tests {
             "https://pokeidle.io/assets/a.png");
     }
     #[test]
-    fn only_verified_upstream_paths_have_mirror_fallbacks() {
-        assert!(upstream_available_paths().len() >= 80);
-        let url = "https://pokeidle.io/assets/site/assets/ui/ball-poke.png";
-        let mirror = snapshot_asset_url(url).unwrap();
-        assert_eq!(mirror,
-            "https://raw.githubusercontent.com/MOTHblank/pokeidle-upstream/264aac7169ed21c27faf7ca2ffc8eee4368e9bc3/assets/site/assets/ui/ball-poke.png");
-        assert!(snapshot_asset_url("https://pokeidle.io/assets/unknown.png").is_none());
-        assert!(snapshot_asset_url("https://evil.example/pokemon.png").is_none());
-        let ball = image_urls(Kind::Ball, 1, None);
-        assert_eq!(ball.first().map(String::as_str), Some(url));
-        assert_eq!(ball.last().map(String::as_str), Some(mirror.as_str()));
+    fn all_native_restock_choices_are_bundled_and_valid() {
+        for id in 1..=5 {
+            let bytes = generated::bytes("ball", id).expect("missing embedded Poké Ball");
+            assert!(valid_image(bytes), "invalid embedded Poké Ball {id}");
+        }
+        for id in [200, 201, 202, 203, 204, 205, 206, 70070] {
+            let bytes = generated::bytes("item", id).expect("missing embedded restock item");
+            assert!(valid_image(bytes), "invalid embedded restock image {id}");
+        }
+        assert!(generated::bytes("item", 66).is_some());
+        assert_eq!(generated::bytes("item", 59200), generated::bytes("item", 59247));
+        // Pokémon artwork remains dynamic and is never included in the item bundle.
+        assert!(generated::bytes("pokemon", 25).is_none());
+        assert!(generated::bytes("pokemon-looktype", 60025).is_none());
+    }
+    #[test]
+    fn item_fallback_is_public_game_only() {
+        let urls = image_urls(Kind::Ball, 1, None);
+        assert_eq!(urls.first().map(String::as_str),
+            Some("https://pokeidle.io/assets/site/assets/ui/ball-poke.png"));
+        assert!(urls.iter().all(|url| !url.contains("raw.githubusercontent.com")));
+        assert!(image_urls(Kind::Item, 999999, None).is_empty());
         assert!(image_urls(Kind::Pokemon, 999999, None).is_empty());
     }
     #[test]
