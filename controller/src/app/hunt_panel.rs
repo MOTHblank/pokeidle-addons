@@ -13,8 +13,6 @@ pub(super) struct AtlasScenario {
     ball:BallKind,
     tier:u8,
     modifiers:Modifiers,
-    market_item:String,
-    market_gold_per_unit:f64,
     rare_target:u64,
     accepted_fraction_override:Option<f64>,
     modifiers_open:bool,
@@ -22,8 +20,7 @@ pub(super) struct AtlasScenario {
 impl Default for AtlasScenario {
     fn default()->Self{
         Self{hunt_slug:String::new(),ball:BallKind::Ultra,tier:1,
-            modifiers:Modifiers::default(),market_item:String::new(),
-            market_gold_per_unit:0.0,rare_target:70000,
+            modifiers:Modifiers::default(),rare_target:70000,
             accepted_fraction_override:None,
             modifiers_open:false}
     }
@@ -35,8 +32,7 @@ enum AtlasAvailability { All, Unlocked, Locked }
 enum AtlasCollection { All, InDepot, NotInDepot }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AtlasSort {
-    TrainerXp, PokemonXp, Gold, NpcLoot, Capture, ShinyCaught,
-    OutlandRare, Market, Rare, Shiny, Spawn, Level, Name,
+    Xp, Gold, Capture, ShinyCaught, OutlandRare, SaleValue, Shiny, Level, Name,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,8 +48,6 @@ pub(super) struct AtlasFilters {
     weakness_match_all: bool,
     sort: AtlasSort,
     ascending: bool,
-    rare_item: String,
-    filters_open: bool,
     /// Per-account Explorer selection; stable across repaint and socket snapshots.
     selected_species: Option<u64>,
 }
@@ -61,11 +55,10 @@ impl Default for AtlasFilters {
     fn default()->Self {
         Self{
             search:String::new(),region:String::new(),kind:String::new(),
-            min_level:0,max_level:0,availability:AtlasAvailability::Unlocked,
+            min_level:0,max_level:0,availability:AtlasAvailability::All,
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
-            sort:AtlasSort::TrainerXp,ascending:false,
-            rare_item:String::new(),filters_open:false,selected_species:None,
+            sort:AtlasSort::Xp,ascending:false,selected_species:None,
         }
     }
 }
@@ -81,10 +74,9 @@ impl AtlasFilters {
         usize::from(!self.region.is_empty())+
         usize::from(!self.kind.is_empty())+
         usize::from(self.min_level>0)+usize::from(self.max_level>0)+
-        usize::from(self.availability!=AtlasAvailability::Unlocked)+
+        usize::from(self.availability!=AtlasAvailability::All)+
         usize::from(self.collection!=AtlasCollection::All)+
-        usize::from(!self.weak_to.is_empty())+
-        usize::from(self.sort==AtlasSort::Rare && !self.rare_item.is_empty())
+        usize::from(!self.weak_to.is_empty())
     }
 }
 
@@ -742,52 +734,34 @@ fn draw_atlas_matchup(
             }
         });
 }
+
 fn atlas_objective(
     sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
-    hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
-    rare_item:&str
-)->Option<f64> {
+    hunt:&native_hunts::HuntEntry, share:f64, sale_value:Option<f64>
+)->Option<f64>{
     match sort {
         AtlasSort::Name=>None,
         AtlasSort::Level=>Some(hunt.level as f64),
-        AtlasSort::Spawn=>Some(share*100.0),
-        AtlasSort::TrainerXp=>forecast.map(|f|f.trainer_xp_h),
-        AtlasSort::PokemonXp=>forecast.map(|f|f.pokemon_xp_h),
-        AtlasSort::Gold=>forecast.map(|f|f.gold_h),
-        AtlasSort::NpcLoot=>forecast.map(|f|f.npc_loot_gold_h),
-        AtlasSort::Capture|AtlasSort::ShinyCaught|
-        AtlasSort::OutlandRare|AtlasSort::Market=>None,
+        // Exactly one XP stream: never add trainer and Pokémon experience.
+        AtlasSort::Xp=>forecast.map(|f|f.trainer_xp_h),
+        AtlasSort::Gold=>forecast.map(|f|f.combat_gold_h),
+        AtlasSort::SaleValue=>sale_value,
+        AtlasSort::Capture|AtlasSort::ShinyCaught|AtlasSort::OutlandRare=>None,
         AtlasSort::Shiny=>forecast.and_then(|f|{
-            // Only a hypothetical wild shiny encounter rate, NOT capture odds;
-            // Outland uses a separate rule for this guide assumption.
             if hunt.area.eq_ignore_ascii_case("outland"){None}
             else{Some(f.kills_h*share/24000.0)}
         }),
-        AtlasSort::Rare=>forecast.and_then(|f|species.and_then(|p|{
-            let relevant:Vec<_>=p.drops.iter().filter(|drop|
-                rare_item.is_empty() || drop.item_name.as_deref()
-                    .is_some_and(|name|name.eq_ignore_ascii_case(rare_item))
-                    || drop.item_id.is_some_and(|id|id.to_string()==rare_item)
-            ).collect();
-            if relevant.is_empty(){return None}
-            Some(f.kills_h*share*relevant.iter().map(|drop|
-                drop.chance_pct/100.0*(drop.minimum+drop.maximum)/2.0).sum::<f64>())
-        })),
     }.filter(|v|v.is_finite() && *v>=0.0)
 }
 fn atlas_sort_label(sort:AtlasSort)->&'static str {
     match sort {
-        AtlasSort::TrainerXp=>tr("Trainer XP/h"),
-        AtlasSort::PokemonXp=>tr("Pokémon XP/h"),
+        AtlasSort::Xp=>tr("XP/h"),
         AtlasSort::Gold=>tr("Gross gold/h"),
-        AtlasSort::NpcLoot=>tr("Guide NPC loot gold/h"),
-        AtlasSort::Capture=>tr("Ultra/Beast captures/h"),
+        AtlasSort::Capture=>tr("Capture chance"),
         AtlasSort::ShinyCaught=>tr("Conditional shiny caught/h"),
         AtlasSort::OutlandRare=>tr("Outland rare units/h"),
-        AtlasSort::Market=>tr("Manual-price market gold/h"),
-        AtlasSort::Rare=>tr("Guide item units/h"),
+        AtlasSort::SaleValue=>tr("Catalog sale value"),
         AtlasSort::Shiny=>tr("Shiny encounter/h (conditional)"),
-        AtlasSort::Spawn=>tr("Spawn weight"),
         AtlasSort::Level=>tr("Hunt level"),
         AtlasSort::Name=>tr("Species name"),
     }
@@ -795,12 +769,12 @@ fn atlas_sort_label(sort:AtlasSort)->&'static str {
 fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
     match (sort,value) {
         (_,None)=>"—".into(),
-        (AtlasSort::Shiny|AtlasSort::Rare|AtlasSort::Capture|
-            AtlasSort::ShinyCaught|AtlasSort::OutlandRare,Some(n))=>format!("{n:.4}"),
-        (AtlasSort::Spawn,Some(n))=>format!("{n:.1}%"),
+        (AtlasSort::Capture,Some(n))=>format!("{:.2}%",n*100.0),
+        (AtlasSort::Shiny|AtlasSort::ShinyCaught|AtlasSort::OutlandRare,Some(n))=>format!("{n:.4}"),
         (_,Some(n))=>format_hunt_amount(n),
     }
 }
+
 
 /// Species are grouped across destinations, matching the game guide rather
 /// than repeating one card per hunt. A guide-only hunt is NEVER executable.
@@ -836,7 +810,6 @@ impl ExplorerCache {
     )->&[AtlasSpeciesRow] {
         let mut key_filters=filters.clone();
         key_filters.selected_species=None;
-        key_filters.filters_open=false;
         // Retaining the previous source Arc prevents pointer reuse from
         // hiding a genuine server roster/catalog update.
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
@@ -928,9 +901,19 @@ fn atlas_species_rows(
             let share=spawn.weight.max(0.0)/sum;
             let forecast=cache.get(&hunt.slug);
             let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,
-                share,meta,&filters.rare_item);
+                share,reference.and_then(|r|r.catalog_sell_values.get(&spawn.id)).copied());
+
             let objective=match filters.sort {
-                AtlasSort::Capture|AtlasSort::ShinyCaught=>forecast.as_ref()
+                AtlasSort::Capture=>reference.and_then(|r|
+                    r.capture_rarities.get(&spawn.id).copied())
+                    .and_then(|rarity|{
+                        let efficiency=view.ball_quotes.get(&scenario.ball.id())
+                            .and_then(|q|q.efficiency)
+                            .unwrap_or_else(||scenario.ball.wiki_efficiency());
+                        models::wiki_capture_chance(rarity,efficiency,0.0)
+                    })
+                    .map(|chance|(chance*scenario.modifiers.catch_factor()).min(1.0)),
+                AtlasSort::ShinyCaught=>forecast.as_ref()
                     .and_then(|f|reference.and_then(|r|
                         r.capture_rarities.get(&spawn.id).copied().and_then(|rarity|{
                             let efficiency=view.ball_quotes.get(&scenario.ball.id())
@@ -941,31 +924,17 @@ fn atlas_species_rows(
                                 hunt.area.eq_ignore_ascii_case("outland"),
                                 &scenario.modifiers)
                         })))
-                    .and_then(|estimate|if filters.sort==AtlasSort::Capture{
-                        Some(estimate.catches_h)
-                    }else{estimate.shiny_caught_h}),
+                    .and_then(|estimate|estimate.shiny_caught_h),
                 AtlasSort::OutlandRare=>forecast.as_ref().and_then(|f|
                     models::rare_scenarios(
                         hunt.area.eq_ignore_ascii_case("outland"),hunt.level,
                         scenario.tier,view.trainer_level,f.kills_h,&scenario.modifiers)
                         .into_iter().find(|r|r.id==scenario.rare_target)
                         .map(|r|r.units_h)),
-                AtlasSort::Market=>forecast.as_ref().and_then(|f|
-                    meta.and_then(|species|{
-                        let drops=species.drops.iter().filter(|drop|
-                            drop.item_name.as_deref().is_some_and(|name|
-                                name.eq_ignore_ascii_case(&scenario.market_item))
-                            || drop.item_id.is_some_and(|id|
-                                id.to_string()==scenario.market_item)).collect::<Vec<_>>();
-                        if drops.is_empty(){return None}
-                        let units=f.kills_h*share*drops.iter().map(|drop|
-                            (drop.chance_pct/100.0*
-                                scenario.modifiers.drop_factor()).min(1.0)
-                            *(drop.minimum+drop.maximum)/2.0).sum::<f64>();
-                        models::market_scenario(units,scenario.market_gold_per_unit)
-                    })),
                 _=>base
             };
+
+
             let label=destination_label.get_or_insert_with(||
                 Arc::new(AtlasHuntLabel::from_hunt(hunt)));
             grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
@@ -1262,204 +1231,178 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
 }
 
 
+
 fn atlas_filters_panel(
     ui:&mut egui::Ui, f:&mut AtlasFilters, page:&mut usize,
     view:&HuntView, reference:Option<&AtlasReference>, account:usize,
 ){
-    ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(tr("Pokémon explorer"))
-            .size(15.0).strong().color(TEXT));
-        if ui.small_button(format!(
-            "{} {} · {} {}",
-            if f.filters_open{tr("Hide")}else{tr("More")},tr("filters"),f.active_count(),tr("active filters")
-        )).clicked(){f.filters_open=!f.filters_open}
-        if f.active_count()>0 && ui.small_button(tr("Reset filters")).clicked(){
-            f.clear();*page=0;
-        }
-    });
-    ui.horizontal_wrapped(|ui|{
-        let search_width=(ui.available_width()*0.38).clamp(155.0,310.0);
-        if ui.add(egui::TextEdit::singleline(&mut f.search)
-            .hint_text(tr("Search Pokémon, hunt, area or #ID"))
-            .desired_width(search_width)).changed(){*page=0}
-        ui.label(tr("Rank"));
-        egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
-            .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
-                for item in [
-                    AtlasSort::TrainerXp,AtlasSort::PokemonXp,AtlasSort::Gold,
-                    AtlasSort::NpcLoot,AtlasSort::Capture,AtlasSort::ShinyCaught,
-                    AtlasSort::OutlandRare,AtlasSort::Market,
-                    AtlasSort::Rare,AtlasSort::Shiny,AtlasSort::Spawn,
-                    AtlasSort::Level,AtlasSort::Name
-                ]{
-                    if ui.selectable_value(&mut f.sort,item,
-                        atlas_sort_label(item)).changed(){
-                        f.ascending=matches!(item,AtlasSort::Name|AtlasSort::Level);
-                        *page=0;
-                    }
-                }
-            });
-        if ui.small_button(if f.ascending{"↑"}else{"↓"})
-            .on_hover_text(if f.ascending{tr("Ascending sort")}else{tr("Descending sort")})
-            .clicked(){
-            f.ascending=!f.ascending;*page=0;
-        }
-    });
-    if !f.filters_open {return}
-    ui.add_space(6.0);
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(8.0)
-        .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
+    egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(9.0).inner_margin(egui::Margin::same(10))
+        .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
-                ui.label(tr("Level"));
-                if ui.add(egui::DragValue::new(&mut f.min_level)
-                    .range(0..=25_000).speed(1.0)
-                    .prefix(tr("From "))).changed(){*page=0}
-                if ui.add(egui::DragValue::new(&mut f.max_level)
-                    .range(0..=25_000).speed(1.0)
-                    .prefix(tr("To "))).changed(){*page=0}
-                if f.min_level>0 && f.max_level>0 && f.min_level>f.max_level{
-                    ui.label(RichText::new(tr("Minimum exceeds maximum"))
-                        .size(10.0).color(WARN));
-                }else{
-                    ui.label(RichText::new(tr("0 = no limit")).size(9.0).color(DIM));
+                ui.label(RichText::new(tr("Filters & sorting"))
+                    .size(12.0).strong().color(TEXT));
+                if f.active_count()>0 && ui.small_button(tr("Reset filters")).clicked(){
+                    f.clear();*page=0;
                 }
             });
-            ui.horizontal_wrapped(|ui|{
-                ui.label(tr("Location"));
-                let mut areas=atlas_destinations(view,reference).into_iter()
-                    .map(|(hunt,_)|if hunt.area.is_empty(){hunt.region.as_str()}
-                         else{hunt.area.as_str()})
-                    .filter(|area|!area.is_empty()).collect::<Vec<_>>();
-                areas.sort_unstable();areas.dedup();
-                egui::ComboBox::from_id_salt(("atlas-place",account))
-                    .selected_text(if f.region.is_empty(){tr("All areas").to_owned()}
-                        else{f.region.clone()})
-                    .show_ui(ui,|ui|{
-                        if ui.selectable_value(&mut f.region,String::new(),tr("All areas"))
-                            .changed(){*page=0}
-                        for area in areas {
-                            if ui.selectable_value(&mut f.region,area.to_owned(),area)
-                                .changed(){*page=0}
-                        }
-                    });
-                ui.label(tr("Availability"));
-                egui::ComboBox::from_id_salt(("atlas-access",account))
-                    .selected_text(match f.availability {
-                        AtlasAvailability::All=>tr("All (guide + server)"),
-                        AtlasAvailability::Unlocked=>tr("Unlocked"),
-                        AtlasAvailability::Locked=>tr("Guide-only / locked")
-                    }).show_ui(ui,|ui|{
-                        for (item,label) in [
-                            (AtlasAvailability::Unlocked,tr("Unlocked")),
-                            (AtlasAvailability::All,tr("All destinations")),
-                            (AtlasAvailability::Locked,tr("Guide-only / locked")),
-                        ]{
-                            if ui.selectable_value(&mut f.availability,item,label)
-                                .changed(){*page=0}
-                        }
-                    });
-                ui.label(tr("Type"));
-                let mut types=reference.map(|r|r.chart.keys()
-                    .map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
-                types.sort_unstable();
-                egui::ComboBox::from_id_salt(("atlas-type",account))
-                    .selected_text(if f.kind.is_empty(){tr("All types").to_owned()}
-                        else{atlas_type_name(&f.kind).to_owned()})
-                    .show_ui(ui,|ui|{
-                        if ui.selectable_value(&mut f.kind,String::new(),tr("All types"))
-                            .changed(){*page=0}
-                        for kind in types {
-                            if ui.selectable_value(&mut f.kind,kind.to_owned(),atlas_type_name(kind))
-                                .changed(){*page=0}
-                        }
-                    });
-            });
-            ui.horizontal_wrapped(|ui|{
-                ui.label(tr("Depot"));
-                egui::ComboBox::from_id_salt(("atlas-owned",account))
-                    .selected_text(match f.collection {
-                        AtlasCollection::All=>tr("All species"),
-                        AtlasCollection::InDepot=>tr("In Pokémon depot"),
-                        AtlasCollection::NotInDepot=>tr("Not in Pokémon depot"),
-                    }).show_ui(ui,|ui|{
-                        for (item,label) in [
-                            (AtlasCollection::All,tr("All species")),
-                            (AtlasCollection::InDepot,tr("In Pokémon depot")),
-                            (AtlasCollection::NotInDepot,tr("Not in Pokémon depot")),
-                        ]{
-                            if ui.selectable_value(&mut f.collection,item,label)
-                                .changed(){*page=0}
-                        }
-                    });
-                ui.label(RichText::new(
-                    tr("Depot ownership is not a historical Pokédex capture record.")
-                ).size(9.0).color(DIM));
-            });
-            ui.separator();
-            ui.horizontal_wrapped(|ui|{
-                ui.label(tr("Weak to"));
-                if let Some(reference)=reference {
-                    let mut kinds=reference.chart.keys().map(String::as_str)
-                        .collect::<Vec<_>>();
-                    kinds.sort_unstable();
-                    for kind in kinds {
-                        let selected=f.weak_to.contains(kind);
-                        if ui.add(egui::Button::new(
-                            RichText::new(atlas_type_name(kind)).size(9.0))
-                            .fill(if selected{ACCENT.linear_multiply(0.25)}else{PANEL})
-                            .stroke(Stroke::new(1.0,
-                                if selected{ACCENT}else{BORDER}))
-                        ).clicked(){
-                            if selected{f.weak_to.remove(kind);}
-                            else{f.weak_to.insert(kind.to_owned());}
-                            *page=0;
-                        }
-                    }
-                }else{
-                    ui.label(RichText::new(tr("Guide type chart unavailable"))
-                        .size(10.0).color(MUTED));
-                }
-            });
-            ui.horizontal_wrapped(|ui|{
-                if ui.checkbox(&mut f.weakness_match_all,
-                    tr("Match all selected weaknesses (otherwise any)")).changed(){*page=0}
-                if ui.small_button(tr("Clear weaknesses")).clicked(){
-                    f.weak_to.clear();*page=0;
-                }
-            });
-            ui.separator();
-            ui.horizontal_wrapped(|ui|{
-                if f.sort==AtlasSort::Rare {
-                    ui.label(tr("Guide item"));
-                    let mut items=std::collections::BTreeSet::new();
-                    if let Some(reference)=reference {
-                        for species in reference.species.values(){
-                            for drop in &species.drops{
-                                if let Some(name)=drop.item_name.as_deref(){
-                                    items.insert(name.to_owned());
-                                }else if let Some(id)=drop.item_id{
-                                    items.insert(id.to_string());
+            // All filters remain available without an extra disclosure click.
+            egui::ScrollArea::vertical()
+                .id_salt(("atlas-filter-card",account))
+                .max_height(295.0)
+                .auto_shrink([false,true]).show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui|{
+                    let width=(ui.available_width()*0.37).clamp(150.0,320.0);
+                    if ui.add(egui::TextEdit::singleline(&mut f.search)
+                        .hint_text(tr("Search Pokémon, hunt, area or #ID"))
+                        .desired_width(width)).changed(){*page=0;}
+                    ui.label(tr("Rank"));
+                    egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
+                        .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
+                            for item in [
+                                AtlasSort::Xp,AtlasSort::Gold,AtlasSort::Capture,
+                                AtlasSort::SaleValue,AtlasSort::ShinyCaught,
+                                AtlasSort::OutlandRare,AtlasSort::Shiny,
+                                AtlasSort::Level,AtlasSort::Name
+                            ]{
+                                if ui.selectable_value(&mut f.sort,item,atlas_sort_label(item)).changed(){
+                                    f.ascending=matches!(item,AtlasSort::Name|AtlasSort::Level);
+                                    *page=0;
                                 }
                             }
+                        });
+                    if ui.small_button(if f.ascending{"↑"}else{"↓"})
+                        .on_hover_text(if f.ascending{tr("Ascending sort")}
+                            else{tr("Descending sort")}).clicked(){
+                        f.ascending=!f.ascending;*page=0;
+                    }
+                });
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(tr("Level"));
+                    if ui.add(egui::DragValue::new(&mut f.min_level)
+                        .range(0..=100_000).speed(1.0)
+                        .prefix(tr("From "))).changed(){*page=0;}
+                    if ui.add(egui::DragValue::new(&mut f.max_level)
+                        .range(0..=100_000).speed(1.0)
+                        .prefix(tr("To "))).changed(){*page=0;}
+                    if f.min_level>0 && f.max_level>0 && f.min_level>f.max_level {
+                        ui.colored_label(WARN,tr("Minimum exceeds maximum"));
+                    }
+                    ui.label(tr("Location"));
+                    // Include both names. Some server entries have area and region
+                    // simultaneously; choosing one previously hid entire areas.
+                    let mut places=std::collections::BTreeSet::new();
+                    for (hunt,_) in atlas_destinations(view,reference){
+                        for label in [&hunt.area,&hunt.region] {
+                            if !label.trim().is_empty(){places.insert(label.as_str());}
                         }
                     }
-                    egui::ComboBox::from_id_salt(("atlas-drop-name",account))
-                        .selected_text(if f.rare_item.is_empty(){
-                            tr("All guide drops").to_owned()
-                        }else{f.rare_item.clone()})
+                    egui::ComboBox::from_id_salt(("atlas-place",account))
+                        .selected_text(if f.region.is_empty(){tr("All areas").to_owned()}
+                            else{f.region.clone()})
                         .show_ui(ui,|ui|{
-                            if ui.selectable_value(&mut f.rare_item,
-                                String::new(),tr("All guide drops")).changed(){*page=0}
-                            for name in items.iter().take(250){
-                                if ui.selectable_value(&mut f.rare_item,
-                                    name.clone(),name.as_str()).changed(){*page=0}
+                            egui::ScrollArea::vertical()
+                                .id_salt(("atlas-place-options",account))
+                                .max_height(345.0)
+                                .show(ui,|ui|{
+                                    if ui.selectable_value(&mut f.region,String::new(),
+                                        tr("All areas")).changed(){*page=0;}
+                                    for place in places {
+                                        if ui.selectable_value(&mut f.region,
+                                            place.to_owned(),place).changed(){*page=0;}
+                                    }
+                                });
+                        });
+                });
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(tr("Availability"));
+                    egui::ComboBox::from_id_salt(("atlas-access",account))
+                        .selected_text(match f.availability{
+                            AtlasAvailability::All=>tr("All (guide + server)"),
+                            AtlasAvailability::Unlocked=>tr("Unlocked"),
+                            AtlasAvailability::Locked=>tr("Guide-only / locked"),
+                        }).show_ui(ui,|ui|{
+                            for (item,label) in [
+                                (AtlasAvailability::All,tr("All (guide + server)")),
+                                (AtlasAvailability::Unlocked,tr("Unlocked")),
+                                (AtlasAvailability::Locked,tr("Guide-only / locked")),
+                            ]{
+                                if ui.selectable_value(&mut f.availability,item,label).changed(){
+                                    *page=0;
+                                }
                             }
                         });
-                }
+                    ui.label(tr("Type"));
+                    let mut types=reference.map(|r|r.chart.keys()
+                        .map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
+                    types.sort_unstable();
+                    egui::ComboBox::from_id_salt(("atlas-type",account))
+                        .selected_text(if f.kind.is_empty(){tr("All types").to_owned()}
+                            else{atlas_type_name(&f.kind).to_owned()})
+                        .show_ui(ui,|ui|{
+                            if ui.selectable_value(&mut f.kind,String::new(),
+                                tr("All types")).changed(){*page=0;}
+                            for kind in types{
+                                if ui.selectable_value(&mut f.kind,kind.to_owned(),
+                                    atlas_type_name(kind)).changed(){*page=0;}
+                            }
+                        });
+                    ui.label(tr("Captured"));
+                    egui::ComboBox::from_id_salt(("atlas-owned",account))
+                        .selected_text(match f.collection{
+                            AtlasCollection::All=>tr("All"),
+                            AtlasCollection::InDepot=>tr("Captured"),
+                            AtlasCollection::NotInDepot=>tr("Not captured"),
+                        }).show_ui(ui,|ui|{
+                            for (item,label) in [
+                                (AtlasCollection::All,tr("All")),
+                                (AtlasCollection::InDepot,tr("Captured")),
+                                (AtlasCollection::NotInDepot,tr("Not captured")),
+                            ]{
+                                if ui.selectable_value(&mut f.collection,item,label).changed(){
+                                    *page=0;
+                                }
+                            }
+                        }).response.on_hover_text(tr("Capture filter uses currently owned Pokémon, not past captures."));
+                });
+                ui.horizontal_wrapped(|ui|{
+                    ui.label(tr("Weak to"));
+                    if let Some(reference)=reference {
+                        let mut kinds=reference.chart.keys().map(String::as_str)
+                            .collect::<Vec<_>>();
+                        kinds.sort_unstable();
+                        for kind in kinds {
+                            let selected=f.weak_to.contains(kind);
+                            if ui.add(egui::Button::new(
+                                RichText::new(atlas_type_name(kind)).size(9.0))
+                                .fill(if selected{ACCENT.linear_multiply(0.25)}else{PANEL_ALT})
+                                .stroke(Stroke::new(1.0,if selected{ACCENT}else{BORDER}))
+                            ).clicked(){
+                                if selected{f.weak_to.remove(kind);}
+                                else{f.weak_to.insert(kind.to_owned());}
+                                *page=0;
+                            }
+                        }
+                    }else{
+                        ui.label(RichText::new(tr("Guide type chart unavailable"))
+                            .size(10.0).color(MUTED));
+                    }
+                });
+                ui.horizontal_wrapped(|ui|{
+                    if ui.checkbox(&mut f.weakness_match_all,
+                        tr("Match all selected weaknesses (otherwise any)")).changed(){
+                        *page=0;
+                    }
+                    if !f.weak_to.is_empty() && ui.small_button(tr("Clear weaknesses")).clicked(){
+                        f.weak_to.clear();*page=0;
+                    }
+                });
             });
         });
 }
+
 
 fn atlas_first_unlocked(row:&AtlasSpeciesRow)->Option<&AtlasDestination>{
     row.destinations.iter().find(|destination|destination.unlocked)
@@ -1478,8 +1421,8 @@ fn draw_atlas_destination(
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.label(RichText::new(format!(
-                    "{} · Lv {} · {:.1}% {}",
-                    dest.hunt.name,dest.hunt.level,dest.share*100.0,tr("spawns")
+                    "{} · Lv {}",
+                    dest.hunt.name,dest.hunt.level
                 )).strong().size(11.0).color(TEXT));
                 if current{
                     ui.colored_label(GOOD,tr("● Current"));
@@ -1513,11 +1456,10 @@ fn draw_atlas_destination(
                     }
                 });
                 ui.label(RichText::new(format!(
-                    "{} · {:.0}% {} · {} {} / h · {} {} / h",
+                    "{} · {:.0}% {} · {} {} / h",
                     if f.calibrated{tr("Calibrated estimate")}else{tr("Early estimate")},
                     f.coverage*100.0,tr("species modeled"),tr("combat gold"),
-                    format_hunt_amount(f.combat_gold_h),tr("NPC loot"),
-                    format_hunt_amount(f.npc_loot_gold_h)
+                    format_hunt_amount(f.combat_gold_h)
                 )).size(10.0).color(MUTED));
             }else{
                 ui.label(RichText::new(tr("Combat forecast unavailable for this location"))
@@ -1546,7 +1488,8 @@ fn draw_atlas_species(
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(&row.name)
                                 .size(14.0).strong().color(TEXT));
-                            ui.label(RichText::new(format!("#{}",row.id))
+                            ui.label(RichText::new(format!("#{} · Lv {}",row.id,
+                                row.destinations.first().map(|d|d.hunt.level).unwrap_or(0)))
                                 .size(10.0).color(DIM));
                             if row.owned{
                                 ui.colored_label(GOOD,tr("● In depot"));
@@ -1559,6 +1502,11 @@ fn draw_atlas_species(
                             ui.label(RichText::new(format!(
                                 "{} {}",row.destinations.len(),tr("destinations")
                             )).size(10.0).color(MUTED));
+                            ui.label(RichText::new(format!("{}: {}",tr("Catalog sale value"),
+                                reference.and_then(|r|r.catalog_sell_values.get(&row.id))
+                                    .map(|v|format_hunt_amount(*v))
+                                    .unwrap_or_else(||"—".into())))
+                                .size(10.0).color(MUTED));
                         });
                     });
                     if !compact{
@@ -1586,8 +1534,8 @@ fn draw_atlas_species(
                     let available=atlas_first_unlocked(row);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(tr_dynamic(format!(
-                            "Top: {} · Lv {} · {:.1}% encounter share",
-                            best.hunt.name,best.hunt.level,best.share*100.0
+                            "Top: {} · Lv {}",
+                            best.hunt.name,best.hunt.level
                         ))).size(10.0).color(MUTED));
                         if !best.unlocked{
                             ui.colored_label(WARN,tr("Top result locked"));
@@ -1717,9 +1665,15 @@ fn draw_atlas_species_selector(
                 ui.vertical(|ui|{
                     ui.label(RichText::new(&row.name)
                         .strong().size(12.0).color(TEXT));
+                    ui.label(RichText::new(format!("{}: {}",tr("Catalog sale value"),
+                        reference.and_then(|r|r.catalog_sell_values.get(&row.id))
+                            .map(|v|format_hunt_amount(*v))
+                            .unwrap_or_else(||"—".into())))
+                        .size(9.0).color(MUTED));
                     ui.label(RichText::new(format!(
-                        "#{} · {} {}{}",
+                        "#{} · {} {} · Lv {}{}",
                         row.id,row.destinations.len(),tr("locations"),
+                        row.destinations.first().map(|d|d.hunt.level).unwrap_or(0),
                         if row.owned{tr(" · In depot")}else{""}
                     )).size(10.0).color(MUTED));
                 });
@@ -1754,20 +1708,7 @@ fn draw_atlas_explorer(
     results:&mut ExplorerCache,
     command_error:&mut Option<String>,
 ){
-    // The Explorer is laid out directly in the finite-height CentralPanel.
-    // Only the expanded advanced filters scroll independently.
-    if filters.filters_open {
-        egui::ScrollArea::vertical()
-            .id_salt(("atlas-expanded-filters",index))
-            .max_height(218.0)
-            .auto_shrink([false,true])
-            .show(ui,|ui|{
-                ui.set_min_width(ui.available_width());
-                atlas_filters_panel(ui,filters,page,view,reference,index);
-            });
-    }else{
-        atlas_filters_panel(ui,filters,page,view,reference,index);
-    }
+    atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
     let rows=results.update(view,reference,cache,filters,scenario);
     if !filters.weak_to.is_empty(){
@@ -1802,16 +1743,12 @@ fn draw_atlas_explorer(
             tr("Shiny estimates use a base rate of 1 in 24,000 wild encounters outside Outland. Capture chances and extra bonuses are not included.")
         ).size(10.0).color(WARN));
     }
-    if matches!(filters.sort,AtlasSort::Rare) {
-        ui.label(RichText::new(
-            tr("Guide item-yield estimates use per-kill loot chances, quantities and modeled kill rates; they are not confirmed rare drops, prices or market proceeds.")
-        ).size(10.0).color(WARN));
-    }
-    if matches!(filters.sort,AtlasSort::Capture|AtlasSort::ShinyCaught|
-        AtlasSort::OutlandRare|AtlasSort::Market){
-        ui.label(RichText::new(
-            tr("These are conditional model rankings. Configure the ball, Outland tier, item quote and hypothetical bonuses in Capture · Outland · Economy.")
-        ).size(10.0).color(WARN));
+    if filters.sort==AtlasSort::SaleValue {
+        ui.label(RichText::new(tr("Catalog reference, not an observed market sale average."))
+            .size(10.0).color(MUTED));
+    } else if matches!(filters.sort,AtlasSort::Capture|AtlasSort::ShinyCaught|AtlasSort::OutlandRare){
+        ui.label(RichText::new(tr("Conditional model; capture odds use the selected ball and modifiers."))
+            .size(10.0).color(MUTED));
     }
     if rows.is_empty(){
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -2313,11 +2250,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         tr("Trainer XP/kill"),format_hunt_amount(forecast.trainer_xp_per_kill),
                         tr("Pokémon XP/kill"),format_hunt_amount(forecast.pokemon_xp_per_kill)
                     ));
-                    ui.label(format!(
-                        "{} {} + {} {}",
-                        tr("Combat gold/h"),format_hunt_amount(forecast.combat_gold_h),
-                        tr("Expected NPC loot/h"),format_hunt_amount(forecast.npc_loot_gold_h)
-                    ));
+                    ui.label(format!("{} {}",
+                        tr("Combat gold/h"),format_hunt_amount(forecast.combat_gold_h)));
                 });
                 for (channel,observed,valid,estimate) in [
                     (tr("Trainer XP"),m.trainer_xp_h,m.valid_trainer,forecast.trainer_xp_h),
