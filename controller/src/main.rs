@@ -4,6 +4,7 @@ mod accounts;
 mod app;
 mod config;
 mod kick;
+mod native_kick;
 mod firefox;
 mod monitor;
 mod native_auth;
