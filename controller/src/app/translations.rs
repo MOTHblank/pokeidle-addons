@@ -3,6 +3,16 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Capture chance" => "Chance de captura",
+        "Catalog sale value" => "Valor de venda (catálogo)",
+        "Filters & sorting" => "Filtros e classificação",
+        "Captured" => "Capturado",
+        "Not captured" => "Não capturado",
+        "Capture filter uses currently owned Pokémon, not past captures." => "A identificação de capturado usa o depósito atual, não o histórico da Pokédex.",
+        "Catalog reference, not an observed market sale average." => "Valor de referência do catálogo, não média comprovada de vendas entre jogadores.",
+        "Conditional model; capture odds use the selected ball and modifiers." => "Estimativa condicional: a chance usa a bola e os modificadores selecionados.",
+        "Gold and capture costs" => "Ouro e custos de captura",
+        "No NPC loot or player-market proceeds are included." => "Sem drops de NPC nem receita hipotética do mercado.",
         "Immune: no damage from this attack type." => "Imune: nenhum dano causado por golpes deste tipo.",
         "weight unavailable" => "peso indisponível",
         "per eligible kill" => "por abate elegível",
