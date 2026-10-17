@@ -1,31 +1,31 @@
 # Moth Controller
 
-Moth Controller is the native desktop application for [PokéIdle Addons](../README.md). It manages up to four independently authenticated game profiles and native Twitch connections.
+O Moth Controller é o aplicativo nativo para desktop do [PokéIdle Addons](../README.md). Ele gerencia até quatro perfis do jogo com autenticações independentes e conexões nativas com a Twitch.
 
-**[Latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
+**[Baixar a versão mais recente](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
 
-## Using the app
+## Como usar
 
-Set up profiles in **Accounts**, signing in to PokéIdle and Twitch when the app requests it. The account cards show connection status and session controls. Firefox or Firefox Developer Edition is used for authentication when needed; use **Open in Firefox** whenever you want to play interactively.
+Configure os perfis em **Accounts (Contas)** e faça login no PokéIdle e na Twitch quando solicitado. Os cartões das contas mostram o estado das conexões e os controles das sessões. O Firefox ou o Firefox Developer Edition é utilizado para autenticação quando necessário. Use **Open in Firefox (Abrir no Firefox)** para jogar pelo navegador.
 
-Once authenticated, the game and Twitch connections operate in the background without requiring an open browser window. No userscript manager or browser add-on is required.
+Após a autenticação, as conexões com o jogo e com a Twitch funcionam em segundo plano, sem a necessidade de manter uma janela do navegador aberta. Não é necessário instalar gerenciadores de userscripts ou extensões de automação.
 
-The **Dashboard** displays account activity and details; **Hunt Atlas** compares hunts and capture outcomes; **Automation** contains Auto Catch, restocking, and market rules. Account-specific options are managed inside the app.
+O **Dashboard (Painel)** mostra a atividade e os detalhes das contas; o **Hunt Atlas** compara caçadas e resultados de capturas; e **Automation (Automações)** reúne as configurações de captura automática, reposição de itens e regras do mercado. As opções específicas de cada conta são configuradas no aplicativo.
 
-## Artwork
+## Imagens do jogo
 
-Item icons and Pokémon sprites are loaded lazily from supported public game assets and cached on disk. There is **no manual “Download game icons” step or button**. Missing images do not prevent the controller from functioning.
+Os ícones de itens e os sprites de Pokémon são carregados sob demanda a partir dos recursos públicos compatíveis do jogo e armazenados em cache no computador. **Não há etapa nem botão para baixar manualmente os ícones.** Se uma imagem estiver indisponível, o aplicativo continuará funcionando.
 
-See [native visual asset notes](assets/visual/README.md) for cache behavior and developer tooling.
+Consulte a [documentação dos recursos visuais nativos](assets/visual/README.md) para detalhes técnicos sobre o cache e as ferramentas de desenvolvimento.
 
-## Building
+## Compilação
 
-From this directory:
+Dentro do diretório `controller/`, execute:
 
 ```sh
 cargo build --release
 ```
 
-On Windows, if an older executable is still running, the optional `build-windows.ps1` script builds into a separate output directory instead of overwriting the active file.
+No Windows, se uma versão anterior do executável ainda estiver em execução, o script opcional `build-windows.ps1` compila o programa em outro diretório, sem sobrescrever o arquivo em uso.
 
-For development, use `cargo check` and `cargo test` from `controller/`. Do not commit credentials or authentication data.
+Durante o desenvolvimento, utilize `cargo check` e `cargo test` a partir de `controller/`. Não inclua credenciais nem dados de autenticação nos commits.
