@@ -3,7 +3,7 @@
 //! can be fetched once into a per-user disk cache on a dedicated worker.
 //! No image decoding, HTTP, or filesystem reads happen on ordinary UI frames.
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -20,7 +20,8 @@ const MAX_EDGE: u32 = 1024;
 // Resident dynamic sprites are optional; the original art remains on disk.
 // A 2M-pixel RGBA budget is ~8 MiB of CPU-side decoded pixel data, rather
 // than the previous 16M-pixel (~64 MiB) allowance.
-const MAX_POKEMON_TEXTURES: usize = 24;
+// Four overview cards show at most two Pokémon each.
+const MAX_POKEMON_TEXTURES: usize = 8;
 const MAX_POKEMON_TEXTURE_PIXELS: usize = 2 * 1024 * 1024;
 const MAX_POKEMON_TEXTURE_EDGE: u32 = 128;
 
@@ -53,6 +54,11 @@ pub struct VisualCache {
     use_sequence: u64,
     pokemon_pixels: usize,
     texture_pixels: BTreeMap<(Kind, u64), usize>,
+    // Track only the artwork actually displayed in the current UI frame.
+    // Requested candidates can outnumber visible sprites (shiny/looktype
+    // fallback), but are not allowed to remain resident indefinitely.
+    pokemon_requested: BTreeSet<(Kind, u64)>,
+    pokemon_visible: BTreeSet<(Kind, u64)>,
     request: Sender<Request>,
     results: Receiver<Response>,
 }
@@ -240,11 +246,38 @@ impl Default for VisualCache {
         }
         Self { textures: BTreeMap::new(), attempted: BTreeMap::new(),
             last_used: BTreeMap::new(), use_sequence: 0, pokemon_pixels: 0,
-            texture_pixels: BTreeMap::new(), request, results }
+            texture_pixels: BTreeMap::new(),
+            pokemon_requested: BTreeSet::new(), pokemon_visible: BTreeSet::new(),
+            request, results }
     }
 }
 
 impl VisualCache {
+    /// Called after poll() and before drawing the next UI frame.
+    pub fn begin_frame(&mut self) {
+        self.pokemon_requested.clear();
+        self.pokemon_visible.clear();
+    }
+
+    /// Keep only the Pokémon textures painted by the Overview in this frame.
+    /// This also drops all GPU sprite handles when switching to Hunt Atlas,
+    /// Automation or any other page. Bundled item/ball textures are unaffected.
+    pub fn end_frame(&mut self) {
+        let expired: Vec<_> = self.textures.keys().filter(|key|
+            matches!(key.0, Kind::Pokemon | Kind::PokemonLooktype)
+                && !self.pokemon_visible.contains(*key)
+        ).copied().collect();
+        for key in expired {
+            self.textures.remove(&key);
+            self.last_used.remove(&key);
+            self.pokemon_pixels=self.pokemon_pixels.saturating_sub(
+                self.texture_pixels.remove(&key).unwrap_or(0));
+            // A sprite needed again later can be loaded from the disk cache.
+            self.attempted.remove(&key);
+        }
+        self.trim_pokemon_textures();
+    }
+
     fn touch(&mut self, key: (Kind,u64)) {
         if !matches!(key.0, Kind::Pokemon | Kind::PokemonLooktype) { return; }
         self.use_sequence=self.use_sequence.wrapping_add(1);
@@ -298,7 +331,9 @@ impl VisualCache {
                     self.texture_pixels.insert(key,pixels).unwrap_or(0));
                 self.pokemon_pixels=self.pokemon_pixels.saturating_add(pixels);
                 self.touch(key);
-                self.trim_pokemon_textures();
+                // Only evict after all Overview cards have been painted:
+                // mid-frame eviction can invalidate an image already queued
+                // for display by egui.
             }
         }
     }
@@ -312,6 +347,13 @@ impl VisualCache {
                 now.saturating_duration_since(*at)<std::time::Duration::from_secs(120));
         }
         while let Ok(reply) = self.results.try_recv() {
+            if matches!(reply.key.0, Kind::Pokemon | Kind::PokemonLooktype)
+                && !self.pokemon_requested.contains(&reply.key) {
+                // The user switched accounts/pages while the sprite worker
+                // was reading disk or the CDN. Skip decode and GPU upload.
+                self.attempted.remove(&reply.key);
+                continue;
+            }
             if let Some(frames) = reply.frames {
                 self.put(ctx, reply.key, &frames);
                 ctx.request_repaint();
@@ -349,10 +391,17 @@ impl VisualCache {
     /// The simple texture API stays static for settings, balls and items.
     pub fn texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
                       icon_hint: Option<&str>) -> Option<egui::TextureId> {
+        if matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) {
+            self.pokemon_requested.insert((kind,id));
+        }
         self.ensure(ui, kind, id, icon_hint);
         if self.textures.contains_key(&(kind,id)) {self.touch((kind,id));}
-        self.textures.get(&(kind, id))
-            .and_then(|frames| frames.first().map(TextureHandle::id))
+        let texture=self.textures.get(&(kind, id))
+            .and_then(|frames| frames.first().map(TextureHandle::id));
+        if texture.is_some() && matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) {
+            self.pokemon_visible.insert((kind,id));
+        }
+        texture
     }
 
     /// Animation runs only when a Pokémon is actually painted by a focused
@@ -362,6 +411,7 @@ impl VisualCache {
         -> Option<egui::TextureId>
     {
         if !matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) { return None; }
+        self.pokemon_requested.insert((kind,id));
         self.ensure(ui, kind, id, None);
         if self.textures.contains_key(&(kind,id)) {self.touch((kind,id));}
         let frames = self.textures.get(&(kind, id))?;
@@ -369,7 +419,9 @@ impl VisualCache {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
             ui.input(|input| (input.time.max(0.0) * 4.0) as usize) % frames.len()
         } else { 0 };
-        frames.get(frame).map(TextureHandle::id)
+        let texture=frames.get(frame).map(TextureHandle::id);
+        if texture.is_some() {self.pokemon_visible.insert((kind,id));}
+        texture
     }
 
     /// Returns true if an icon was drawn. Always fall back to text if false.
@@ -387,6 +439,19 @@ impl VisualCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_eight_pokemon_textures_can_survive_a_frame() {
+        assert_eq!(MAX_POKEMON_TEXTURES,8);
+        let mut cache=VisualCache::default();
+        cache.pokemon_requested.insert((Kind::Pokemon,25));
+        cache.pokemon_visible.insert((Kind::Pokemon,25));
+        cache.begin_frame();
+        assert!(cache.pokemon_requested.is_empty());
+        assert!(cache.pokemon_visible.is_empty());
+        cache.end_frame();
+        assert_eq!(cache.pokemon_pixels,0);
+    }
+
     #[test]
     fn pokemon_textures_bound_decoded_pixels_without_distorting_aspect_ratio() {
         assert_eq!(pokemon_texture_size(512,256),(128,64));
