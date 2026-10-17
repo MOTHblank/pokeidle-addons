@@ -4106,9 +4106,8 @@ fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
     view.hunts.iter().find(|entry| entry.slug == slug)
 }
 fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
-    // Native hunt intelligence already retains the representative through
-    // selvagem:null frames. Use the catalogue/name fallback if the UI has an
-    // older snapshot that does not yet contain that remembered choice.
+    // Artwork follows the hunt's own species ID, never the current wild
+    // encounter. A live HuntView retains the selected ID across kills.
     view.hunt_art_species.or_else(|| {
         overview_hunt(view).and_then(native_hunts::representative_hunt_species)
     })
@@ -4306,30 +4305,25 @@ mod overview_combat_tests {
     }
 
     #[test]
-    fn overview_art_is_deterministic_per_hunt_not_current_wild() {
+    fn overview_art_is_the_hunt_species_not_the_current_wild() {
         let mut view = HuntView { hunt_slug: Some("field-a".into()),
             hunts: Arc::new(vec![
                 HuntEntry { slug: "field-a".into(), species: vec![
-                    HuntSpecies { id: 127, weight: 30.0 },
-                    HuntSpecies { id: 123, weight: 70.0 },
+                    HuntSpecies { id: 2006, weight: 1.0 },
                 ], ..Default::default() },
                 HuntEntry { slug: "field-b".into(), species: vec![
-                    HuntSpecies { id: 25, weight: 1.0 }
+                    HuntSpecies { id: 14009, weight: 1.0 }
                 ], ..Default::default() },
             ]), ..Default::default() };
-        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        assert_eq!(overview_hunt_art_species(&view), Some(2006));
         view.wild = Some(WildInfo { species_id: Some(127), ..Default::default() });
-        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        assert_eq!(overview_hunt_art_species(&view), Some(2006));
         view.wild = None;
-        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        assert_eq!(overview_hunt_art_species(&view), Some(2006));
         view.hunt_slug = Some("field-b".into());
-        assert_eq!(overview_hunt_art_species(&view), Some(25));
-        // Fallback can also be learned from the first real encounter and
-        // remains available even when no server spawn weights were sent.
-        view.hunt_art_species = Some(123);
-        assert_eq!(overview_hunt_art_species(&view), Some(123));
-        view.hunt_slug = Some("field-a".into());
-        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        assert_eq!(overview_hunt_art_species(&view), Some(14009));
+        view.hunt_art_species = Some(14009);
+        assert_eq!(overview_hunt_art_species(&view), Some(14009));
     }
 }
 
