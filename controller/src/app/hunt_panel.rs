@@ -351,15 +351,18 @@ fn atlas_pager(ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize)
     first..(first+per_page).min(count)
 }
 
-/// A visible encounter is not sufficient evidence of active combat.
-/// Only an actual recent combat event allows the Fighting state.
+/// The hunt comes from authoritative location state, not the transient
+/// wild slot. Combat receipts only refine activity; a missing encounter
+/// never means the player left the hunt.
 fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
-    if !live {("Offline / stale",WARN)}
-    else if view.in_center {("At Pokémon Center",WARN)}
-    else if view.wild.is_none() {("Waiting for encounter",MUTED)}
-    else if view.measurements.combat_event_age_secs
-        .is_some_and(|age|age<=45) {("Fighting",GOOD)}
-    else {("No recent combat",WARN)}
+    match overview_combat_state(Some(view),live) {
+        OverviewCombatState::Offline => ("Offline / stale",WARN),
+        OverviewCombatState::Center => ("At Pokémon Center",WARN),
+        OverviewCombatState::Waiting => ("No confirmed hunt",MUTED),
+        OverviewCombatState::Active => ("Hunt active",GOOD),
+        OverviewCombatState::Hunting => ("Hunting",GOOD),
+        OverviewCombatState::Stalled => ("In hunt · no recent activity",WARN),
+    }
 }
 
 fn draw_atlas_encounter(
@@ -764,7 +767,7 @@ fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
         for (tab,label,hint) in [
             (HuntSubtab::Explorer,"Explorer","Find Pokémon and their destinations"),
             (HuntSubtab::Recommendations,"Rankings","Compare unlocked hunt estimates"),
-            (HuntSubtab::Current,"Current hunt","Battle activity and measured gains"),
+            (HuntSubtab::Current,"Current hunt","Selected hunt, activity and measured gains"),
             (HuntSubtab::Models,"Models","Capture, Outland and economy scenarios"),
             (HuntSubtab::Session,"Session","Recorded battle rewards and history"),
             (HuntSubtab::Compare,"Compare","Compare all four accounts"),
@@ -781,8 +784,10 @@ fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
 fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
     let current=view.hunts.iter().find(|h|
         view.hunt_slug.as_deref()==Some(h.slug.as_str()));
-    let name=current.map(|h|h.name.as_str())
-        .or(view.hunt_slug.as_deref()).unwrap_or("No active hunt");
+    let name=if view.in_center{"At Pokémon Center"}else{
+        current.map(|h|h.name.as_str())
+            .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+    };
     let (activity,color)=atlas_combat_status(view,live);
     let mut open=false;
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -791,7 +796,9 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.vertical(|ui|{
-                    ui.label(RichText::new("CURRENT HUNT")
+                    ui.label(RichText::new(if !live {"LAST CONFIRMED HUNT"}
+                        else if view.in_center {"CURRENT LOCATION"}
+                        else {"CURRENT HUNT"})
                         .size(9.0).strong().color(DIM));
                     ui.add(egui::Label::new(RichText::new(name)
                         .size(13.0).strong().color(TEXT)).truncate())
@@ -809,7 +816,7 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
                         "Pokémon {} XP/h",format_hunt_amount(m.pokemon_xp_h)
                     )).size(11.0).color(GOOD));
                 }
-                if ui.small_button("View battle →").clicked(){open=true;}
+                if ui.small_button("View hunt →").clicked(){open=true;}
             });
         });
     open
@@ -855,6 +862,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ui.label(RichText::new(name).strong().size(14.0).color(TEXT));
                             ui.colored_label(if *live{GOOD}else{WARN},
                                 if *live{"● Live"}else{"○ Offline / stale"});
+                            let (activity,color)=atlas_combat_status(view,*live);
+                            ui.colored_label(color,format!("● {activity}"));
                             if ui.small_button("Open Atlas →").clicked(){
                                 app.select_workspace_account(*index);
                                 app.hunt_subtab=HuntSubtab::Explorer;
@@ -862,9 +871,12 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         });
                         let current=view.hunts.iter().find(|h|
                             view.hunt_slug.as_deref()==Some(h.slug.as_str()));
+                        let location=if view.in_center{"At Pokémon Center"}else{
+                            current.map(|h|h.name.as_str())
+                                .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                        };
                         ui.label(RichText::new(format!(
-                            "Hunt: {}",current.map(|h|h.name.as_str())
-                                .or(view.hunt_slug.as_deref()).unwrap_or("—")
+                            "Location: {location}"
                         )).size(11.0).color(TEXT));
                         ui.label(RichText::new(format!(
                             "Lead: {}",view.active_pokemon.as_ref()
@@ -1730,14 +1742,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     let hunts=&view;
                     let (activity,activity_color)=atlas_combat_status(hunts,live);
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new("Live battle")
+                        ui.label(RichText::new("Current hunt")
                             .size(15.0).strong().color(TEXT));
                         ui.colored_label(activity_color,format!("● {activity}"));
                     });
                     let current=hunts.hunts.iter().find(|h|
                         hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
-                    let title=current.map(|h|h.name.as_str())
-                        .or(hunts.hunt_slug.as_deref()).unwrap_or("Unknown hunt");
+                    let title=if hunts.in_center{"At Pokémon Center"}else{
+                        current.map(|h|h.name.as_str())
+                            .or(hunts.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                    };
                     ui.label(RichText::new(format!(
                         "{title} · {} unlocked hunts · {} recorded kills",
                         hunts.hunts.len(),hunts.battle_kills
@@ -1749,20 +1763,22 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .stroke(Stroke::new(1.0,BORDER))
                             .inner_margin(egui::Margin::same(12))
                             .show(&mut cols[0],|ui|{
-                                ui.label(RichText::new("MATCHUP").size(10.0)
+                                ui.label(RichText::new("LEAD & HUNT").size(10.0)
                                     .strong().color(DIM));
+                                // This is a hunt-location card, not a live
+                                // wild encounter widget. Spawn artwork is
+                                // representative and does not change at each kill.
+                                let representative=if hunts.in_center {None}else{
+                                    overview_hunt_art_species(hunts)
+                                };
                                 ui.columns(2,|sides|{
                                     sides[0].vertical_centered(|ui|{
                                         ui.label(RichText::new("YOUR POKÉMON")
                                             .size(9.0).strong().color(DIM));
                                         if let Some(p)=hunts.active_pokemon.as_ref(){
-                                            let shown=p.species_id.is_some_and(|id|
-                                                app.visuals.show(
-                                                    ui,SpriteKind::Pokemon,id,None,46.0));
-                                            if !shown{
-                                                ui.label(RichText::new("◇")
-                                                    .size(26.0).color(MUTED));
-                                            }
+                                            overview_combat_image(&mut app.visuals,ui,
+                                                if p.shiny{p.shiny_looktype}else{p.looktype},
+                                                p.looktype,p.species_id,false);
                                             ui.label(RichText::new(&p.name)
                                                 .size(13.0).strong().color(TEXT));
                                             ui.label(RichText::new(format!(
@@ -1775,36 +1791,31 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         }
                                     });
                                     sides[1].vertical_centered(|ui|{
-                                        ui.label(RichText::new("OPPONENT")
+                                        ui.label(RichText::new("HUNT LOCATION")
                                             .size(9.0).strong().color(DIM));
-                                        if let Some(wild)=hunts.wild.as_ref(){
-                                            let shown=wild.species_id.is_some_and(|id|
-                                                app.visuals.show(
-                                                    ui,SpriteKind::Pokemon,id,None,46.0));
-                                            if !shown{
-                                                ui.label(RichText::new("◇")
-                                                    .size(26.0).color(MUTED));
-                                            }
-                                            ui.label(RichText::new(&wild.name)
-                                                .size(13.0).strong().color(TEXT));
+                                        if let Some(species)=representative{
+                                            overview_combat_image(&mut app.visuals,ui,
+                                                None,None,Some(species),true);
+                                        }
+                                        let hunt_name=if hunts.in_center {
+                                            "At Pokémon Center"
+                                        } else {
+                                            current.map(|h|h.name.as_str())
+                                                .or(hunts.hunt_slug.as_deref())
+                                                .unwrap_or("No confirmed hunt")
+                                        };
+                                        ui.label(RichText::new(hunt_name)
+                                            .size(13.0).strong().color(TEXT));
+                                        if let Some(h)=current.filter(|_|!hunts.in_center){
                                             ui.label(RichText::new(format!(
-                                                "Lv {} · HP {}/{}",wild.level,
-                                                wild.hp,wild.max_hp
+                                                "Lv {} · representative species",h.level
                                             )).size(10.0).color(MUTED));
-                                        }else{
-                                            ui.label(RichText::new("No wild encounter")
-                                                .size(11.0).color(MUTED));
+                                        }else if hunts.in_center{
+                                            ui.label(RichText::new("Not hunting")
+                                                .size(10.0).color(MUTED));
                                         }
                                     });
                                 });
-                                if let Some(wild)=hunts.wild.as_ref(){
-                                    if wild.max_hp>0{
-                                        ui.add(egui::ProgressBar::new(
-                                            (wild.hp as f32/wild.max_hp as f32)
-                                                .clamp(0.0,1.0)
-                                        ).text("Wild HP"));
-                                    }
-                                }
                                 if let Some(p)=hunts.active_pokemon.as_ref(){
                                     ui.separator();
                                     ui.label(RichText::new(format!(
@@ -2289,16 +2300,20 @@ mod tests {
         assert!(atlas_first_unlocked(&row).is_none());
     }
     #[test]
-    fn live_battle_status_requires_recent_real_combat(){
+    fn hunt_status_uses_confirmed_location_not_wild_slot(){
         let mut view=HuntView::default();
         assert_eq!(atlas_combat_status(&view,false).0,"Offline / stale");
-        assert_eq!(atlas_combat_status(&view,true).0,"Waiting for encounter");
-        view.wild=Some(native_hunts::WildInfo::default());
-        assert_eq!(atlas_combat_status(&view,true).0,"No recent combat");
+        assert_eq!(atlas_combat_status(&view,true).0,"No confirmed hunt");
+        view.hunt_slug=Some("scyther-field".into());
+        assert_eq!(atlas_combat_status(&view,true).0,"Hunting");
         view.measurements.combat_event_age_secs=Some(10);
-        assert_eq!(atlas_combat_status(&view,true).0,"Fighting");
-        view.measurements.combat_event_age_secs=Some(60);
-        assert_eq!(atlas_combat_status(&view,true).0,"No recent combat");
+        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        view.wild=Some(native_hunts::WildInfo::default());
+        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        view.wild=None; // Encounter cleared; location and activity persist.
+        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        view.measurements.combat_event_age_secs=Some(181);
+        assert_eq!(atlas_combat_status(&view,true).0,"In hunt · no recent activity");
         view.in_center=true;
         assert_eq!(atlas_combat_status(&view,true).0,"At Pokémon Center");
     }
