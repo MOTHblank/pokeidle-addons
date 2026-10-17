@@ -854,7 +854,7 @@ fn draw_atlas_outland_tier(
                                 pending.is_none() && eligible && active!=Some(tier);
                             ui.add_enabled_ui(enabled,|ui|{
                                 if ui.selectable_label(active==Some(tier),format!(
-                                    "Outland {tier} · Lv {threshold} · ×{multiplier:g} rare drops"
+                                    "Outland {tier} · Lv {threshold} · ×{multiplier:.2} rare drops"
                                 )).clicked(){
                                     request=Some(tier);
                                 }
