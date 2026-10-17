@@ -4106,11 +4106,16 @@ fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
     view.hunts.iter().find(|entry| entry.slug == slug)
 }
 fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
-    overview_hunt(view)?.species.iter()
-        .filter(|species| (1..=1025).contains(&species.id))
-        .max_by(|a, b| a.weight.total_cmp(&b.weight)
-            .then_with(|| b.id.cmp(&a.id)))
-        .map(|species| species.id)
+    // Native hunt intelligence already retains the representative through
+    // selvagem:null frames. Use the catalogue/name fallback if the UI has an
+    // older snapshot that does not yet contain that remembered choice.
+    view.hunt_art_species.or_else(|| {
+        overview_hunt(view).and_then(native_hunts::representative_hunt_species)
+    })
+}
+
+fn overview_hunt_art_looktype(view: &HuntView) -> Option<u64> {
+    overview_hunt(view).and_then(|hunt| hunt.looktype).filter(|id| *id > 0)
 }
 
 // Looktypes are the game's visual IDs; species IDs require a separate
@@ -4160,6 +4165,8 @@ fn draw_overview_matchup(
         .and_then(overview_hunt);
     let hunt_species = view.filter(|_| fresh).filter(|v| !v.in_center)
         .and_then(overview_hunt_art_species);
+    let hunt_looktype = view.filter(|_| fresh).filter(|v| !v.in_center)
+        .and_then(overview_hunt_art_looktype);
     let pokemon_name = pokemon.map(|p|p.name.as_str())
         .filter(|name|!name.is_empty())
         .or_else(|| (fresh && !health.active_pokemon.is_empty())
@@ -4192,7 +4199,8 @@ fn draw_overview_matchup(
             ui.label(RichText::new(tr("Current hunt"))
                 .size(9.0).color(DIM));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                overview_combat_image(&mut app.visuals, ui, None, None, hunt_species, true);
+                overview_combat_image(&mut app.visuals, ui,
+                    None, hunt_looktype, hunt_species, true);
                 ui.vertical(|ui| {
                     let name = if combat == OverviewCombatState::Center {
                         tr("At Pokémon Center")
@@ -4316,6 +4324,12 @@ mod overview_combat_tests {
         assert_eq!(overview_hunt_art_species(&view), Some(123));
         view.hunt_slug = Some("field-b".into());
         assert_eq!(overview_hunt_art_species(&view), Some(25));
+        // Fallback can also be learned from the first real encounter and
+        // remains available even when no server spawn weights were sent.
+        view.hunt_art_species = Some(123);
+        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        view.hunt_slug = Some("field-a".into());
+        assert_eq!(overview_hunt_art_species(&view), Some(123));
     }
 }
 

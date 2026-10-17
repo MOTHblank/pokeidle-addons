@@ -3,7 +3,7 @@
 //! Other-hunt projections are explicitly scenario comparisons, NOT combat forecasts.
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default)]
@@ -24,6 +24,46 @@ pub struct HuntEntry {
     pub looktype: Option<u64>,
     pub species: Vec<HuntSpecies>,
 }
+// When a public hunt payload omits spawn species, recognize the Pokémon
+// named by its server-confirmed hunt (e.g. "Outland Scyther Lv 150").
+// This tiny, checked-in index contains names, not artwork or HTTP requests.
+fn normalized_species_name(name: &str) -> String {
+    name.chars().map(|ch| {
+        if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' }
+    }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn species_id_from_hunt_name(name: &str) -> Option<u64> {
+    static NAMES: OnceLock<Vec<(String, u64)>> = OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        include_str!("../assets/visual/pokedex-names.tsv").lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| {
+                let (id, name) = line.split_once('\t')?;
+                let id = id.parse::<u64>().ok()?;
+                let normalized = normalized_species_name(name);
+                (!normalized.is_empty() && (1..=1025).contains(&id))
+                    .then_some((format!(" {normalized} "), id))
+            }).collect()
+    });
+    let normalized = format!(" {} ", normalized_species_name(name));
+    names.iter().filter(|(needle, _)| normalized.contains(needle))
+        .max_by_key(|(needle, _)| needle.len())
+        .map(|(_, id)| *id)
+}
+
+/// Prefer actual server spawn weights; otherwise use the species explicitly
+/// named by this hunt. Neither depends on the live wild encounter slot.
+pub fn representative_hunt_species(hunt: &HuntEntry) -> Option<u64> {
+    hunt.species.iter()
+        .filter(|species| (1..=1025).contains(&species.id))
+        .max_by(|a, b| a.weight.total_cmp(&b.weight)
+            .then_with(|| b.id.cmp(&a.id)))
+        .map(|species| species.id)
+        .or_else(|| species_id_from_hunt_name(&hunt.name))
+        .or_else(|| species_id_from_hunt_name(&hunt.slug))
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PokemonInfo {
     pub id: u64,
@@ -121,6 +161,9 @@ pub struct HuntView {
     pub field_init_timestamp: Option<u64>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
+    /// Stable representative sprite for the confirmed hunt. This is not
+    /// cleared between kills or tied to the current wild target.
+    pub hunt_art_species: Option<u64>,
     pub pending_hunt_slug: Option<String>,
     pub in_center: bool,
     pub active_pokemon: Option<PokemonInfo>,
@@ -323,6 +366,10 @@ impl HuntIntel {
     fn adopt_hunt(&mut self, slug: &str, now: Instant) {
         if self.view.hunt_slug.as_deref() != Some(slug) {
             self.view.hunt_slug = Some(slug.to_owned());
+            self.view.hunt_art_species = self.view.hunts.iter()
+                .find(|hunt| hunt.slug == slug)
+                .and_then(representative_hunt_species)
+                .or_else(|| species_id_from_hunt_name(slug));
             // A confirmed new location supersedes the previous Center state.
             self.view.in_center = false;
             self.samples.clear();
@@ -532,6 +579,16 @@ impl HuntIntel {
         if let Some(patches) = state.get("pkMud").and_then(Value::as_array) {
             for p in patches { self.set_pokemon(p); }
         }
+        // The very first confirmed wild for a hunt is a stable art fallback
+        // when the server catalog and location name provide no species.
+        // Subsequent encounters never overwrite it.
+        if !self.view.in_center && self.view.hunt_slug.is_some()
+            && self.view.hunt_art_species.is_none() {
+            self.view.hunt_art_species = self.view.wild.as_ref()
+                .and_then(|wild| wild.species_id
+                    .filter(|id| (1..=1025).contains(id))
+                    .or_else(|| species_id_from_hunt_name(&wild.name)));
+        }
         self.view.pokemon_count = self.pokemon.len();
         self.view.active_pokemon = self.active_id.and_then(|id| self.pokemon.get(&id).cloned());
         if let Some(event) = state.get("evento") {
@@ -569,22 +626,37 @@ impl HuntIntel {
     fn catalog(&mut self, list: &[Value]) {
         let mut hunts = Vec::new();
         for item in list {
-            let Some(slug) = item.get("slug").and_then(Value::as_str)
+            let Some(slug) = item.get("slug").or_else(|| item.get("s"))
+                .and_then(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 128) else { continue };
-            let species = item.get("especies").and_then(Value::as_array)
+            // Support full game entries and compact [species ID, weight]
+            // entries; a partial catalog must not suppress hunt artwork.
+            let species = item.get("especies").or_else(|| item.get("e"))
+                .and_then(Value::as_array)
                 .map(|entries| entries.iter().filter_map(|entry| {
-                    let id = entry.get("pokeId").or_else(|| entry.get("speciesId"))
-                        .or_else(|| entry.get("id")).and_then(Value::as_u64)?;
-                    let weight = entry.get("pontos").or_else(|| entry.get("weight"))
-                        .or_else(|| entry.get("peso")).and_then(Value::as_f64).unwrap_or(1.0);
-                    Some(HuntSpecies { id, weight: weight.max(0.0) })
+                    let (id, weight) = if let Some(pair) = entry.as_array() {
+                        (pair.first()?.as_u64()?,
+                         pair.get(1).and_then(Value::as_f64).unwrap_or(1.0))
+                    } else {
+                        (entry.get("pokeId").or_else(|| entry.get("speciesId"))
+                            .or_else(|| entry.get("id")).and_then(Value::as_u64)?,
+                         entry.get("pontos").or_else(|| entry.get("weight"))
+                            .or_else(|| entry.get("peso")).and_then(Value::as_f64)
+                            .unwrap_or(1.0))
+                    };
+                    (id > 0 && weight.is_finite())
+                        .then_some(HuntSpecies { id, weight: weight.max(0.0) })
                 }).collect()).unwrap_or_default();
             hunts.push(HuntEntry {
                 slug: slug.to_owned(),
-                name: item.get("nome").and_then(Value::as_str).unwrap_or(slug).to_owned(),
+                name: item.get("nome").or_else(||item.get("name"))
+                    .or_else(||item.get("n"))
+                    .and_then(Value::as_str).unwrap_or(slug).to_owned(),
                 area: item.get("area").and_then(Value::as_str).unwrap_or("").to_owned(),
                 region: item.get("regiao").and_then(Value::as_str).unwrap_or("").to_owned(),
-                level: Self::num(item, "nivel").unwrap_or(0).min(u32::MAX as u64) as u32,
+                level: Self::num(item, "nivel")
+                    .or_else(||Self::num(item,"nv"))
+                    .unwrap_or(0).min(u32::MAX as u64) as u32,
                 total_spawns: Self::num(item, "totalSpawns").unwrap_or(0).min(u32::MAX as u64) as u32,
                 looktype: Self::num(item, "looktype"),
                 species,
@@ -592,6 +664,13 @@ impl HuntIntel {
         }
         self.view.catalog_ready = true;
         self.view.hunts = Arc::new(hunts);
+        if let Some(slug) = self.view.hunt_slug.as_deref() {
+            let resolved = self.view.hunts.iter()
+                .find(|hunt| hunt.slug == slug)
+                .and_then(representative_hunt_species)
+                .or_else(|| species_id_from_hunt_name(slug));
+            self.view.hunt_art_species = resolved.or(self.view.hunt_art_species);
+        }
     }
     pub fn ingest(&mut self, raw: &str, now: Instant) {
         let Ok(frame) = serde_json::from_str::<Value>(raw) else { return };
@@ -855,6 +934,56 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn representative_sprite_uses_server_species_then_hunt_name() {
+        let mut hunt = HuntEntry {
+            name: "Outland Scyther Level 150".into(),
+            slug: "outland-scyther-150".into(),
+            ..Default::default()
+        };
+        assert_eq!(representative_hunt_species(&hunt), Some(123));
+        hunt.species = vec![
+            HuntSpecies { id: 127, weight: 10.0 },
+            HuntSpecies { id: 25, weight: 90.0 },
+        ];
+        assert_eq!(representative_hunt_species(&hunt), Some(25));
+        hunt.species = vec![HuntSpecies { id: 10501, weight: 10.0 }];
+        assert_eq!(representative_hunt_species(&hunt), Some(123));
+        assert_eq!(species_id_from_hunt_name("Mewtwo Cave"), Some(150));
+        assert_eq!(species_id_from_hunt_name("Scyther's Nest"), Some(123));
+        assert_eq!(species_id_from_hunt_name("empty clearing"), None);
+    }
+
+    #[test]
+    fn wild_art_fallback_survives_encounters_but_resets_on_new_hunt() {
+        let mut intel = HuntIntel::new();
+        let now = Instant::now();
+        intel.ingest(r#"{"t":"welcome","hunts":[
+            {"slug":"forest","nome":"Forest Hunt"},
+            {"slug":"beach","nome":"Beach Hunt"}
+        ],"estado":{"huntSlug":"forest","selvagem":{
+            "speciesId":123,"nome":"Scyther","hp":30}}}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+        intel.ingest(r#"{"t":"estado","estado":{"selvagem":{
+            "speciesId":127,"nome":"Pinsir","hp":80}}}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+        intel.ingest(r#"{"t":"batalha","ev":[{"k":"hunt","slug":"beach"}]}"#, now);
+        assert_eq!(intel.snapshot().hunt_art_species, None);
+    }
+
+    #[test]
+    fn compact_species_catalog_supplies_sprite_id() {
+        let mut intel = HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","hunts":[
+            {"s":"forest","n":"Forest","nv":150,"e":[[123,60],[127,40]]}
+        ],"estado":{"huntSlug":"forest"}}"#, Instant::now());
+        assert_eq!(intel.snapshot().hunt_art_species, Some(123));
+        assert_eq!(intel.snapshot().hunts[0].species.len(), 2);
+        assert_eq!(intel.snapshot().hunts[0].level, 150);
+    }
+
     #[test]
     fn location_init_recovers_a_confirmed_hunt_without_wild_encounters() {
         let now = Instant::now();
