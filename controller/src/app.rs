@@ -5056,12 +5056,12 @@ fn capture_restock_threshold(
     ui.horizontal_wrapped(|ui|{
         ui.add_sized([77.0,18.0],egui::Label::new(
             RichText::new(label).strong().size(10.0).color(TEXT)));
-        ui.label(RichText::new("at ≤").size(10.0).color(DIM));
+        ui.label(RichText::new(tr("at ≤")).size(10.0).color(DIM));
         ui.add_sized([75.0,20.0],egui::DragValue::new(at).range(0..=1_000_000));
-        ui.label(RichText::new("to").size(10.0).color(DIM));
+        ui.label(RichText::new(tr("to")).size(10.0).color(DIM));
         ui.add_sized([75.0,20.0],egui::DragValue::new(to).range(0..=1_000_000));
         if let Some(count)=current {
-            ui.label(RichText::new(format!("{count} in bag")).size(10.0)
+            ui.label(RichText::new(format!("{count} {}",tr("in bag"))).size(10.0)
                 .color(if count <= *at {WARN} else {DIM}));
         }
     });

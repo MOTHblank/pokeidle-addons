@@ -454,7 +454,7 @@ fn draw_hunt_row(
                     ui.add_space(15.0);
                     ui.vertical(|ui|{
                         ui.label(RichText::new(tr("Combat pace")).size(10.0).color(DIM));
-                        ui.label(RichText::new(format!("{:.0} kills/h",f.kills_h))
+                        ui.label(RichText::new(format!("{:.0} {}",f.kills_h,tr("kills/h")))
                             .size(13.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
                             "{:.1}s/kill · {:.0}% coverage",
@@ -586,10 +586,24 @@ fn atlas_type_multiplier(
 
 /// Neutral does not mean missing: hide 1× results by default so advantages,
 /// immunities and weaknesses remain readable above the fold.
+
+fn atlas_type_name(kind:&str)->&str {
+    if !pt_br(){return kind}
+    match kind.to_ascii_uppercase().as_str(){
+        "NORMAL"=>"Normal","FIRE"=>"Fogo","WATER"=>"Água",
+        "ELECTRIC"=>"Elétrico","GRASS"=>"Planta","ICE"=>"Gelo",
+        "FIGHTING"=>"Lutador","POISON"=>"Venenoso","GROUND"=>"Terra",
+        "FLYING"=>"Voador","PSYCHIC"=>"Psíquico","BUG"=>"Inseto",
+        "ROCK"=>"Pedra","GHOST"=>"Fantasma","DRAGON"=>"Dragão",
+        "DARK"=>"Sombrio","STEEL"=>"Aço","FAIRY"=>"Fada",
+        _=>kind,
+    }
+}
 fn atlas_multiplier_text(multiplier:f64)->String{
-    if multiplier==0.0{"0× IMMUNE".into()}
-    else if (multiplier-0.25).abs()<0.001{"0.25×".into()}
-    else if (multiplier-0.5).abs()<0.001{"0.5×".into()}
+    let decimal=|pt,en|if pt_br(){pt}else{en};
+    if multiplier==0.0{"0×".into()}
+    else if (multiplier-0.25).abs()<0.001{decimal("0,25×","0.25×").into()}
+    else if (multiplier-0.5).abs()<0.001{decimal("0,5×","0.5×").into()}
     else if (multiplier-1.0).abs()<0.001{"1×".into()}
     else if (multiplier-2.0).abs()<0.001{"2×".into()}
     else if (multiplier-4.0).abs()<0.001{"4×".into()}
@@ -600,9 +614,7 @@ fn atlas_multiplier_color(multiplier:f64,incoming:bool)->Color32{
     else if (multiplier<1.0)==incoming{GOOD}
     else{BAD}
 }
-fn atlas_type_chip(
-    ui:&mut egui::Ui,kind:&str,multiplier:f64,incoming:bool,
-){
+fn atlas_type_chip(ui:&mut egui::Ui,kind:&str,multiplier:f64,incoming:bool){
     let color=atlas_multiplier_color(multiplier,incoming);
     egui::Frame::new()
         .fill(color.linear_multiply(0.10))
@@ -610,136 +622,66 @@ fn atlas_type_chip(
         .corner_radius(6.0).inner_margin(egui::Margin::symmetric(7,4))
         .show(ui,|ui|{
             ui.label(RichText::new(format!(
-                "{kind}  {}",atlas_multiplier_text(multiplier)
+                "{}  {}",atlas_type_name(kind),atlas_multiplier_text(multiplier)
             )).size(10.0).strong().color(color));
         });
 }
 
-/// The selected "Weak to" filters are ATTACK TYPES that hit this species.
-/// Show EACH chosen multiplier, even on "Any selected" results where another
-/// selected type is neutral, resisted or immune. Otherwise the filter seems
-/// contradictory and hides vital counter-matchup information.
+/// Filters represent attack types against this species. Each selected type
+/// still shows its own multiplier, including neutral and immune results.
 fn draw_atlas_selected_weaknesses(
     ui:&mut egui::Ui,reference:Option<&AtlasReference>,
     defender_types:&[String],selected:&std::collections::BTreeSet<String>
 ){
     if selected.is_empty(){return}
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("DAMAGE FROM SELECTED TYPES")
+        ui.label(RichText::new(tr("Damage from selected types"))
             .size(9.0).strong().color(DIM));
         for attack in selected{
             if let Some(multiplier)=reference.and_then(|guide|
                 atlas_type_multiplier(guide,attack,defender_types)){
                 atlas_type_chip(ui,attack,multiplier,false);
             }else{
-                ui.label(RichText::new(format!("{attack}  — unknown"))
-                    .size(10.0).color(MUTED));
+                ui.label(RichText::new(format!(
+                    "{} · {}",atlas_type_name(attack),tr("Unknown")
+                )).size(10.0).color(MUTED));
             }
         }
     });
 }
 
-/// Multipliers apply to an ATTACK TYPE, not a Pokémon's overall damage or
-/// ability to learn the move. STAB types are prioritized, but do not imply
-/// any particular move is selected or equipped.
+/// Display only non-neutral multipliers for each combatant's own attack
+/// types. Do not imply arbitrary moves are available or learned.
 fn draw_atlas_type_direction(
     ui:&mut egui::Ui,reference:&AtlasReference,
     attacker_types:&[String],defender_types:&[String],incoming:bool,
 ){
-    ui.label(RichText::new(if incoming{
-        "DAMAGE YOU TAKE"
-    }else{
-        "DAMAGE YOU DEAL"
-    }).size(11.0).strong().color(TEXT));
-    ui.label(RichText::new(if incoming{
-        tr("Enemy attack type → your Pokémon")
-    }else{
-        tr("Your attack type → opposing Pokémon")
-    }).size(10.0).color(MUTED));
-    ui.add_space(4.0);
-    if defender_types.is_empty(){
-        ui.label(RichText::new(
-            tr("Defending Pokémon's typing is unknown. No multiplier is assumed.")
-        ).size(10.0).color(WARN));
+    ui.label(RichText::new(tr(if incoming{"Damage received"}else{"Damage dealt"}))
+        .size(11.0).strong().color(TEXT));
+    if attacker_types.is_empty() || defender_types.is_empty(){
+        ui.label(RichText::new(tr("Type data unavailable")).size(10.0).color(MUTED));
         return;
     }
-    let mut possible=reference.chart.keys().filter_map(|kind|
-        atlas_type_multiplier(reference,kind,defender_types)
-            .map(|multiplier|(kind.as_str(),multiplier))
-    ).collect::<Vec<_>>();
-    if possible.is_empty(){
-        ui.label(RichText::new(tr("Type chart is not available."))
-            .size(10.0).color(MUTED));
-        return;
-    }
-    // STAB is useful context, not evidence that those moves are equipped.
-    ui.label(RichText::new(tr("Same-type attacks (if learned)"))
-        .size(10.0).strong().color(DIM));
-    if attacker_types.is_empty(){
-        ui.label(RichText::new(
-            tr("Attacker's types unknown; all type-chart possibilities below.")
-        ).size(10.0).color(MUTED));
-    }else{
-        ui.horizontal_wrapped(|ui|{
-            for kind in attacker_types{
-                if let Some(multiplier)=atlas_type_multiplier(
-                    reference,kind,defender_types){
+    let mut known=false;
+    let mut shown=false;
+    ui.horizontal_wrapped(|ui|{
+        for kind in attacker_types{
+            if let Some(multiplier)=atlas_type_multiplier(reference,kind,defender_types){
+                known=true;
+                if (multiplier-1.0).abs()>=0.001{
+                    shown=true;
                     atlas_type_chip(ui,kind,multiplier,incoming);
                 }
             }
-        });
-    }
-    ui.add_space(6.0);
-    possible.retain(|(kind,n)|
-        (n-1.0).abs()>=0.001 &&
-        !attacker_types.iter().any(|own|
-            own.eq_ignore_ascii_case(kind))
-    );
-    possible.sort_by(|(left_name,left),(right_name,right)|
-        right.total_cmp(left).then_with(||left_name.cmp(right_name))
-    );
-    // The direction changes which multipliers are favorable; the multiplier
-    // itself is ALWAYS an attack type hitting the defender, never reversed.
-    let (danger,safe)=if incoming{
-        ("EXTRA DAMAGE TAKEN · 2× / 4×",
-         "REDUCED / IMMUNE · 0.5× / 0.25× / 0×")
-    }else{
-        ("EXTRA DAMAGE DEALT · 2× / 4×",
-         "RESISTED / IMMUNE · 0.5× / 0.25× / 0×")
-    };
-    for (heading,high) in [(danger,true),(safe,false)]{
-        let matching=possible.iter()
-            .filter(|(_,n)|if high{*n>1.0}else{*n<1.0})
-            .collect::<Vec<_>>();
-        if !matching.is_empty(){
-            ui.label(RichText::new(heading)
-                .size(9.0).strong().color(DIM));
-            ui.horizontal_wrapped(|ui|{
-                for (kind,multiplier) in matching{
-                    atlas_type_chip(ui,kind,*multiplier,incoming);
-                }
-            });
-            ui.add_space(4.0);
         }
-    }
-    if possible.is_empty(){
-        ui.label(RichText::new(
-            tr("No other non-neutral attack types.")
-        ).size(10.0).color(MUTED));
-    }
-    let neutral=reference.chart.keys()
-        .filter_map(|kind|atlas_type_multiplier(reference,kind,defender_types)
-            .filter(|n|(n-1.0).abs()<0.001)
-            .map(|_|kind.as_str()))
-        .collect::<Vec<_>>();
-    if !neutral.is_empty(){
-        ui.collapsing(tr_dynamic(format!("Neutral move types (1× · {})",neutral.len())),|ui|{
-            ui.horizontal_wrapped(|ui|{
-                for kind in &neutral{atlas_type_chip(ui,kind,1.0,incoming);}
-            });
-        });
-    }
+        if !known{
+            ui.label(RichText::new(tr("Type data unavailable")).size(10.0).color(MUTED));
+        }else if !shown{
+            ui.label(RichText::new(tr("No type advantage (1×)")).size(10.0).color(MUTED));
+        }
+    });
 }
+
 fn atlas_types_for_active(
     view:&HuntView,reference:&AtlasReference
 )->Vec<String>{
@@ -748,6 +690,7 @@ fn atlas_types_for_active(
     pokemon.species_id.and_then(|id|reference.species.get(&id))
         .map(|species|species.types.clone()).unwrap_or_default()
 }
+
 fn draw_atlas_matchup(
     ui:&mut egui::Ui,reference:Option<&AtlasReference>,
     lead_types:&[String],target_types:&[String],
@@ -759,22 +702,21 @@ fn draw_atlas_matchup(
         .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new("TYPE ADVANTAGES & WEAKNESSES")
-                    .size(12.0).strong().color(TEXT));
+                ui.label(RichText::new(tr("TYPE MATCHUP"))
+                    .size(12.0).strong().color(TEXT))
+                    .on_hover_text(tr("Type matchup assumes same-type moves; actual moves are not verified."));
                 ui.label(RichText::new(format!(
                     "{lead_name}  ↔  {target_name}"
                 )).size(11.0).color(ACCENT));
             });
-            ui.label(RichText::new(target_context)
-                .size(10.0).color(MUTED));
-            ui.add_space(6.0);
+            ui.label(RichText::new(target_context).size(9.0).color(MUTED));
+            ui.add_space(4.0);
             let Some(reference)=reference else{
-                ui.label(RichText::new(
-                    tr("Waiting for the game guide's type chart.")
-                ).size(10.0).color(MUTED));
+                ui.label(RichText::new(tr("Waiting for the game guide's type chart."))
+                    .size(10.0).color(MUTED));
                 return;
             };
-            if ui.available_width()>=750.0{
+            if ui.available_width()>=540.0{
                 ui.columns(2,|cols|{
                     draw_atlas_type_direction(&mut cols[0],reference,
                         lead_types,target_types,false);
@@ -784,16 +726,12 @@ fn draw_atlas_matchup(
             }else{
                 draw_atlas_type_direction(ui,reference,
                     lead_types,target_types,false);
-                ui.separator();
+                ui.add_space(5.0);
                 draw_atlas_type_direction(ui,reference,
                     target_types,lead_types,true);
             }
-            ui.label(RichText::new(
-                tr("Type effectiveness only: results assume a move of the displayed attack type. Learned moves, stats, abilities and battle timing are not included. Dual-type effects multiply (0.25× to 4×).")
-            ).size(9.0).color(DIM));
         });
 }
-
 fn atlas_objective(
     sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
     hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
@@ -1105,9 +1043,9 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.vertical(|ui|{
-                    ui.label(RichText::new(if !live {"LAST CONFIRMED HUNT"}
+                    ui.label(RichText::new(tr(if !live {"LAST CONFIRMED HUNT"}
                         else if view.in_center {"CURRENT LOCATION"}
-                        else {"CURRENT HUNT"})
+                        else {"CURRENT HUNT"}))
                         .size(9.0).strong().color(DIM));
                     ui.add(egui::Label::new(RichText::new(name)
                         .size(13.0).strong().color(TEXT)).truncate())
@@ -1147,7 +1085,7 @@ fn draw_atlas_outland_tier(
         .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new("OUTLAND TIER")
+                ui.label(RichText::new(tr("OUTLAND TIER"))
                     .size(10.0).strong().color(DIM));
                 ui.label(RichText::new(match active{
                     Some(tier)=>tr_dynamic(format!("● Outland {tier} active")),
@@ -1282,7 +1220,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ).text(tr("Relative measured trainer XP/h")));
                         }
                         ui.add_space(7.0);
-                        ui.label(RichText::new("TOP MODELED UNLOCKED HUNTS")
+                        ui.label(RichText::new(tr("TOP MODELED UNLOCKED HUNTS"))
                             .size(10.0).strong().color(DIM));
                         let mut estimates=view.hunts.iter().filter_map(|h|{
                             app.hunt_estimate_cache[*index].get(&h.slug)
@@ -1374,7 +1312,7 @@ fn atlas_filters_panel(
                     ui.label(RichText::new(tr("Minimum exceeds maximum"))
                         .size(10.0).color(WARN));
                 }else{
-                    ui.label(RichText::new("0 = no limit").size(9.0).color(DIM));
+                    ui.label(RichText::new(tr("0 = no limit")).size(9.0).color(DIM));
                 }
             });
             ui.horizontal_wrapped(|ui|{
@@ -1608,7 +1546,7 @@ fn draw_atlas_species(
                                 ui.label(RichText::new(kind).size(10.0).color(ACCENT));
                             }
                             ui.label(RichText::new(format!(
-                                "{} destinations",row.destinations.len()
+                                "{} {}",row.destinations.len(),tr("destinations")
                             )).size(10.0).color(MUTED));
                         });
                     });
@@ -1825,8 +1763,8 @@ fn draw_atlas_explorer(
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(format!(
                 "Weak to: {} · {}",
-                filters.weak_to.iter().cloned().collect::<Vec<_>>().join(" + "),
-                if filters.weakness_match_all{"ALL selected"}else{"ANY selected"}
+                filters.weak_to.iter().map(|kind|atlas_type_name(kind).to_owned()).collect::<Vec<_>>().join(" + "),
+                if filters.weakness_match_all{tr("ALL selected")}else{tr("ANY selected")}
             )).size(11.0).strong().color(ACCENT));
             ui.label(RichText::new(
                 tr("Each Pokémon shows its damage multiplier for every selected type.")
@@ -1947,7 +1885,7 @@ fn draw_atlas_explorer(
                 egui::vec2(details_width,pane_height),
                 Layout::top_down(Align::Min),
                 |ui|{
-                    ui.label(RichText::new("SPECIES DETAILS")
+                    ui.label(RichText::new(tr("SPECIES DETAILS"))
                         .size(10.0).strong().color(DIM));
                     ui.add_space(5.0);
                     let details_height=ui.available_height().max(120.0);
@@ -2173,11 +2111,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .stroke(Stroke::new(1.0,BORDER))
                             .inner_margin(egui::Margin::same(12))
                             .show(&mut cols[0],|ui|{
-                                ui.label(RichText::new("LEAD & HUNT").size(10.0)
+                                ui.label(RichText::new(tr("LEAD & HUNT")).size(10.0)
                                     .strong().color(DIM));
                                 ui.columns(2,|sides|{
                                     sides[0].vertical_centered(|ui|{
-                                        ui.label(RichText::new("YOUR POKÉMON")
+                                        ui.label(RichText::new(tr("YOUR POKÉMON"))
                                             .size(9.0).strong().color(DIM));
                                         if let Some(p)=hunts.active_pokemon.as_ref(){
                                             ui.label(RichText::new(&p.name)
@@ -2192,7 +2130,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         }
                                     });
                                     sides[1].vertical_centered(|ui|{
-                                        ui.label(RichText::new("HUNT SPECIES")
+                                        ui.label(RichText::new(tr("HUNT SPECIES"))
                                             .size(9.0).strong().color(DIM));
                                         let hunt_name=if hunts.in_center {
                                             tr("At Pokémon Center")
@@ -2238,7 +2176,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .inner_margin(egui::Margin::same(12))
                             .show(&mut cols[if two_columns{1}else{0}],|ui|{
                                 let b=&hunts.bonuses;
-                                ui.label(RichText::new("BONUSES & LOCATION")
+                                ui.label(RichText::new(tr("BONUSES & LOCATION"))
                                     .size(10.0).strong().color(DIM));
                                 ui.label(format!(
                                     "Twitch {} · Guild {}",
@@ -2287,7 +2225,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 guide.species.get(&id)
                                     .map(|species|(species.name.as_str(),
                                         species.types.as_slice(),
-                                        tr("Confirmed wild species. Move types shown are type-chart possibilities, not confirmed attacks."))))));
+                                        tr("Current wild species"))))));
                     let representative=guide.and_then(|guide|
                         current.and_then(|hunt|hunt.species.iter()
                             .filter(|species|species.weight>0.0)
@@ -2296,10 +2234,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .and_then(|spawn|guide.species.get(&spawn.id)
                                 .map(|species|(species.name.as_str(),
                                     species.types.as_slice(),
-                                    tr("Most common species in this hunt (representative only; not necessarily the enemy being fought)."))))));
-                    let target=wild_target.or_else(||{
-                        if hunts.wild.is_some(){None}else{representative}
-                    });
+                                    tr("Most common hunt species"))))));
+                    let target=representative.or(wild_target);
                     let (target_name,target_types,note)=target.unwrap_or((
                         tr("Unidentified opponent"),&[][..],
                         tr("Opponent typing is unavailable; no advantages or weaknesses are assumed.")
@@ -2735,9 +2671,9 @@ mod tests {
         assert_eq!(atlas_multiplier_color(0.0,true),GOOD);
         assert_eq!(atlas_multiplier_color(0.5,false),BAD);
         assert_eq!(atlas_multiplier_color(0.5,true),GOOD);
-        assert_eq!(atlas_multiplier_text(0.0),"0× IMMUNE");
-        assert_eq!(atlas_multiplier_text(0.25),"0.25×");
-        assert_eq!(atlas_multiplier_text(0.5),"0.5×");
+        assert_eq!(atlas_multiplier_text(0.0),"0×");
+        assert_eq!(atlas_multiplier_text(0.25),"0,25×");
+        assert_eq!(atlas_multiplier_text(0.5),"0,5×");
         assert_eq!(atlas_multiplier_text(2.0),"2×");
         assert_eq!(atlas_multiplier_text(4.0),"4×");
     }
