@@ -218,16 +218,18 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     .inner_margin(egui::Margin::symmetric(9,6)).show(ui,|ui|{
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
-                            "#{} · {} · {} · max {} / unit",
+                            "#{} · {} · {} · {} {} / {}",
                             t.id,if t.kind=="pokemon"{"Pokémon"}else{tr("Item")},
-                            if t.currency=="orb"{tr("Gems")}else{tr("Gold")},t.max_price
+                            if t.currency=="orb"{tr("Gems")}else{tr("Gold")},
+                            tr("max"),t.max_price,tr("unit")
                         )).size(11.0).strong().color(TEXT));
                         if ui.small_button(tr("Remove from Snatch")).clicked(){remove=Some(i);}
                     });
                     if let Some(s)=seen {
                         ui.label(RichText::new(format!(
-                            "{} · {} attempts · {} units available",
-                            s.phase,s.attempts,s.quantity
+                            "{} · {} {} · {} {}",
+                            tr_dynamic(s.phase.clone()),s.attempts,tr("attempts"),
+                            s.quantity,tr("units available")
                         )).size(10.0).color(if s.phase.contains("burst"){GOOD}else{MUTED}));
                     } else {
                         ui.label(RichText::new(tr("Saved · waiting for the account to connect and the offer to appear"))
@@ -258,8 +260,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     for row in discovery {
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(format!(
-                                "#{} · {} · {} {} /unit · {}x · {}",
-                                row.id,row.kind,row.price,row.currency,row.quantity,row.phase
+                                "#{} · {} · {} {} /{} · {}x · {}",
+                                row.id,tr(&row.kind),row.price,tr(&row.currency),
+                                tr("unit"),row.quantity,tr_dynamic(row.phase.clone())
                             )).size(10.0).color(MUTED));
                             if ui.add_enabled(cfg.snatch_targets.len()<40,
                                 egui::Button::new(tr("Snatch"))).clicked() {
@@ -286,7 +289,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         .size(11.0).color(TEXT));
                     for row in automatic {
                         ui.label(RichText::new(format!(
-                            "#{} · {} {} · {} · {} attempts",
+                            "#{} · {} {} · {} · {} {}",
                             row.id,row.price,row.currency,row.phase,row.attempts
                         )).size(10.0).color(MUTED));
                     }
