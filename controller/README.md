@@ -6,12 +6,12 @@ Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com
 
 ## Uso
 
-Em **Accounts (Contas)**, configure seus perfis e faça login no PokéIdle e na Twitch quando solicitado. Os cartões mostram o estado das conexões e os controles de cada sessão.
+Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quando solicitado. Os cartões mostram o estado das conexões e os controles de cada sessão.
 
-- **Dashboard (Painel):** visão geral da atividade das contas e detalhes das sessões.
+- **Painel:** visão geral da atividade das contas e detalhes das sessões.
 - **Hunt Atlas:** análise e comparação de caçadas.
-- **Automation (Automações):** captura automática, reposição de itens e regras do mercado.
-- **Open in Firefox (Abrir no Firefox):** abre o jogo no navegador para interação manual.
+- **Automações:** captura automática, reposição de itens e regras do mercado.
+- **Abrir no Firefox:** abre o jogo no navegador para interação manual.
 
 ## Compilação
 
