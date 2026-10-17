@@ -2594,6 +2594,63 @@ mod tests {
         guide
     }
     #[test]
+    fn type_matchups_respect_immunity_stacked_dual_types_and_neutral(){
+        let mut guide=AtlasReference::default();
+        for kind in ["FIRE","GRASS","ICE","WATER","ROCK","NORMAL","GHOST"]{
+            guide.chart.insert(kind.into(),Default::default());
+        }
+        guide.chart.get_mut("FIRE").unwrap().extend([
+            ("GRASS".into(),2.0),("ICE".into(),2.0),
+            ("WATER".into(),0.5),("ROCK".into(),0.5),
+        ]);
+        guide.chart.get_mut("NORMAL").unwrap()
+            .insert("GHOST".into(),0.0);
+        let hit=|attack:&str,types:&[&str]|{
+            atlas_type_multiplier(&guide,attack,
+                &types.iter().map(|v|v.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(hit("NORMAL",&["GHOST"]),Some(0.0));
+        assert_eq!(hit("FIRE",&["WATER"]),Some(0.5));
+        assert_eq!(hit("FIRE",&["WATER","ROCK"]),Some(0.25));
+        assert_eq!(hit("FIRE",&["GRASS"]),Some(2.0));
+        assert_eq!(hit("FIRE",&["GRASS","ICE"]),Some(4.0));
+        assert_eq!(hit("FIRE",&["NORMAL"]),Some(1.0));
+        assert_eq!(hit("fire",&["Grass","ICE"]),Some(4.0));
+        assert_eq!(hit("FIRE",&[]),None);
+        assert_eq!(hit("FIRE",&["NOT_IN_CHART"]),None);
+        assert_eq!(hit("UNKNOWN",&["ICE"]),None);
+    }
+    #[test]
+    fn matchup_colors_change_with_damage_direction(){
+        assert_eq!(atlas_multiplier_color(4.0,false),GOOD);
+        assert_eq!(atlas_multiplier_color(4.0,true),BAD);
+        assert_eq!(atlas_multiplier_color(0.0,false),BAD);
+        assert_eq!(atlas_multiplier_color(0.0,true),GOOD);
+        assert_eq!(atlas_multiplier_color(0.5,false),BAD);
+        assert_eq!(atlas_multiplier_color(0.5,true),GOOD);
+        assert_eq!(atlas_multiplier_text(0.0),"0× IMMUNE");
+        assert_eq!(atlas_multiplier_text(0.25),"¼×");
+        assert_eq!(atlas_multiplier_text(0.5),"½×");
+        assert_eq!(atlas_multiplier_text(2.0),"2×");
+        assert_eq!(atlas_multiplier_text(4.0),"4×");
+    }
+    #[test]
+    fn live_party_types_take_precedence_over_guide_fallback(){
+        let mut guide=AtlasReference::default();
+        guide.species.insert(25,native_atlas::ReferenceSpecies{
+            name:"Pikachu".into(),types:vec!["ELECTRIC".into()],
+            base:vec![10.0;6],moves:vec![],drops:vec![]
+        });
+        let mut view=HuntView::default();
+        assert!(atlas_types_for_active(&view,&guide).is_empty());
+        view.active_pokemon=Some(native_hunts::PokemonInfo{
+            species_id:Some(25),..Default::default()
+        });
+        assert_eq!(atlas_types_for_active(&view,&guide),vec!["ELECTRIC"]);
+        view.active_pokemon.as_mut().unwrap().types=vec!["STEEL".into()];
+        assert_eq!(atlas_types_for_active(&view,&guide),vec!["STEEL"]);
+    }
+    #[test]
     fn species_action_uses_an_unlocked_destination_not_a_locked_best(){
         let locked=native_hunts::HuntEntry{
             slug:"guide-only".into(),..Default::default()
