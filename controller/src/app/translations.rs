@@ -3,6 +3,7 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Immune: no damage from this attack type." => "Imune: nenhum dano causado por golpes deste tipo.",
         "weight unavailable" => "peso indisponível",
         "per eligible kill" => "por abate elegível",
         "eligible kill" => "abate elegível",
