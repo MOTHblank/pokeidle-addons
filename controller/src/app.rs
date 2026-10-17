@@ -283,6 +283,10 @@ fn localize_status(message: String) -> String {
     value
 }
 
+fn tr_dynamic(value: String) -> String {
+    if pt_br() { translations::dynamic(tr(&value).to_owned()) } else { value }
+}
+
 fn tr<'a>(en: &'a str) -> &'a str {
     if !pt_br() {
         return en;
@@ -3782,7 +3786,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                             ui.label(RichText::new("VIP").size(10.0).strong().color(WARN));
                         }
                         if view.bonuses.guild_boost_active {
-                            ui.label(RichText::new("Guild boost").size(10.0).color(GOOD));
+                            ui.label(RichText::new(tr("Guild boost")).size(10.0).color(GOOD));
                         }
                         for (label, percent, known) in [
                             ("Twitch", view.bonuses.twitch_pct, view.bonuses.twitch_known),
@@ -4424,10 +4428,10 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) 
         "Up to 90 days of battle history, saved locally for each account."
     )).size(10.0).color(DIM));
     if let Some(error)=history.load_error.as_deref(){
-        ui.colored_label(WARN,format!("History load: {error}"));
+        ui.colored_label(WARN,tr_dynamic(format!("History load: {error}")));
     }
     if let Some(error)=history.save_error.as_deref(){
-        ui.colored_label(WARN,format!("History save: {error}"));
+        ui.colored_label(WARN,tr_dynamic(format!("History save: {error}")));
     }
     ui.add_space(9.0);
     egui::Frame::new().fill(PANEL).corner_radius(10.0)

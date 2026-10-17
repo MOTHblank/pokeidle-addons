@@ -27,8 +27,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 let state=if !status.enabled {tr("Off")} else if status.pending.is_some() {tr("Buying")} else {tr("Scanning")};
                 ui.label(RichText::new(state).size(10.0)
                     .color(if status.enabled{GOOD}else{DIM}));
-                ui.label(RichText::new(format!("{} attempts · {} purchases · {} awaiting confirmation",
-                    status.sent,status.confirmed,status.unknown)).size(10.0).color(MUTED));
+                ui.label(RichText::new(tr_dynamic(format!("{} attempts · {} purchases · {} awaiting confirmation",
+                    status.sent,status.confirmed,status.unknown))).size(10.0).color(MUTED));
             } else {
                 ui.label(RichText::new(tr("Your saved rules will start when this account connects"))
                     .size(10.0).color(DIM));
@@ -40,12 +40,12 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         ui.label(RichText::new(tr("Fast buying is enabled: checks several offers at once, retries quickly, and buys as many units as your rules and balance allow."))
             .size(10.0).color(MUTED));
         if let Some(status)=&live_status {
-            if let Some(p)=&status.pending {ui.label(RichText::new(format!("Waiting for purchase confirmation: {p}")).size(10.0).color(WARN));}
-            if !status.last.is_empty() {ui.label(RichText::new(&status.last).size(10.0).color(MUTED));}
-            if let Some(error)=&status.error {ui.label(RichText::new(error).size(10.0).color(WARN));}
+            if let Some(p)=&status.pending {ui.label(RichText::new(tr_dynamic(format!("Waiting for purchase confirmation: {p}"))).size(10.0).color(WARN));}
+            if !status.last.is_empty() {ui.label(RichText::new(tr_dynamic(status.last.clone())).size(10.0).color(MUTED));}
+            if let Some(error)=&status.error {ui.label(RichText::new(tr_dynamic(error.to_string())).size(10.0).color(WARN));}
         }
         if !app.market_notices[index].is_empty() {
-            ui.label(RichText::new(&app.market_notices[index]).size(10.0).color(WARN));
+            ui.label(RichText::new(tr_dynamic(app.market_notices[index].clone())).size(10.0).color(WARN));
         }
         draw_market_copy_controls(app,ui,index);
         let Some(cfg)=app.market_drafts[index].as_mut() else {return};
@@ -69,7 +69,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         ui.separator();
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(tr("Balance reserves")).strong().size(11.0).color(TEXT));
-            field(ui,"Gold",&mut cfg.gold_reserve);
+            field(ui,tr("Gold"),&mut cfg.gold_reserve);
             field(ui,tr("Gems"),&mut cfg.gem_reserve);
         });
         ui.collapsing(tr("Global spending limits (0 = unlimited)"),|ui|{
@@ -90,7 +90,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         });
         ui.add_space(7.0);
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(format!("Buying rules ({})",cfg.rules.len())).strong().color(TEXT));
+            ui.label(RichText::new(tr_dynamic(format!("Buying rules ({})",cfg.rules.len()))).strong().color(TEXT));
             if ui.small_button(tr("+ Specific item")).clicked() {new_rule(cfg,"item");}
             if ui.small_button(tr("+ Any item")).clicked() {new_rule(cfg,"any_item");}
             if ui.small_button(tr("+ Pokémon")).clicked() {new_rule(cfg,"pokemon_any");}
@@ -111,7 +111,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     let item=if rule.kind=="item" {format!(" #{}",rule.item_id)} else {String::new()};
                     ui.label(RichText::new(format!("{}{} · max {}/unit · {}",
                         kind_label(&rule.kind),item,rule.buy_max,
-                        if rule.currency=="orb"{tr("Gems")}else{"Gold"}))
+                        if rule.currency=="orb"{tr("Gems")}else{tr("Gold")}))
                         .size(11.0).strong().color(if rule.enabled{TEXT}else{MUTED}));
                     if ui.small_button(tr("Remove"))
                         .on_hover_text(tr("Remove from the editor; save to apply")).clicked(){
@@ -135,9 +135,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 });
                             if rule.kind=="pokemon_shiny"{rule.currency="orb".into();}
                             egui::ComboBox::from_id_salt(("native-market-currency",index,i))
-                                .selected_text(if rule.currency=="orb"{tr("Gems")}else{"Gold"})
+                                .selected_text(if rule.currency=="orb"{tr("Gems")}else{tr("Gold")})
                                 .show_ui(ui,|ui|{
-                                    ui.selectable_value(&mut rule.currency,"gold".into(),"Gold");
+                                    ui.selectable_value(&mut rule.currency,"gold".into(),tr("Gold"));
                                     ui.selectable_value(&mut rule.currency,"orb".into(),tr("Gems"));
                                 });
                             if rule.kind=="item"{field(ui,tr("Item ID"),&mut rule.item_id);}
@@ -165,7 +165,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         }
         ui.add_space(5.0);
         let snatch_response = egui::CollapsingHeader::new(
-            format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len()))
+            tr_dynamic(format!("Snatch · {} saved offers · buy when available",cfg.snatch_targets.len())))
             .id_salt(("market-snatch", index))
             .default_open(true)
             .show(ui,|ui|{
@@ -184,9 +184,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         ui.selectable_value(&mut t.kind,"pokemon".into(),"Pokémon");
                     });
                 egui::ComboBox::from_id_salt(("snatch-currency",index))
-                    .selected_text(if t.currency=="orb"{tr("Gems")}else{"Gold"})
+                    .selected_text(if t.currency=="orb"{tr("Gems")}else{tr("Gold")})
                     .show_ui(ui,|ui|{
-                        ui.selectable_value(&mut t.currency,"gold".into(),"Gold");
+                        ui.selectable_value(&mut t.currency,"gold".into(),tr("Gold"));
                         ui.selectable_value(&mut t.currency,"orb".into(),tr("Gems"));
                     });
                 field(ui,tr("Listing #"),&mut t.id);
@@ -220,7 +220,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         ui.label(RichText::new(format!(
                             "#{} · {} · {} · max {} / unit",
                             t.id,if t.kind=="pokemon"{"Pokémon"}else{tr("Item")},
-                            if t.currency=="orb"{tr("Gems")}else{"Gold"},t.max_price
+                            if t.currency=="orb"{tr("Gems")}else{tr("Gold")},t.max_price
                         )).size(11.0).strong().color(TEXT));
                         if ui.small_button(tr("Remove from Snatch")).clicked(){remove=Some(i);}
                     });
@@ -241,7 +241,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 save=true;
             }
             if let Some(status)=live_status.as_ref() {
-                ui.label(RichText::new(format!("Snatch buy attempts: {}",status.snatch_sent))
+                ui.label(RichText::new(tr_dynamic(format!("Snatch buy attempts: {}",status.snatch_sent)))
                     .size(10.0).color(MUTED));
                 let automatic=status.snatches.iter().filter(|s|!s.manual)
                     .take(20).collect::<Vec<_>>();
@@ -352,7 +352,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
                 if dest == source { continue; }
                 let name = app.accounts[dest].name.trim();
                 let label = if name.is_empty() {
-                    format!("Account {}", dest+1)
+                    tr_dynamic(format!("Account {}", dest+1))
                 } else {
                     format!("{} · {}", dest+1, name)
                 };

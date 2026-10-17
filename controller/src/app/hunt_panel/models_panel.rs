@@ -97,7 +97,7 @@ pub(super) fn draw_retrospective(
     let mut archived=history.forecasts.iter().filter(|entry|entry.hunt==slug)
         .collect::<Vec<_>>();
     archived.sort_by_key(|record|std::cmp::Reverse(record.hour));
-    ui.collapsing(format!("Archived prediction checkpoints ({})",archived.len()),|ui|{
+    ui.collapsing(tr_dynamic(format!("Archived prediction checkpoints ({})",archived.len())),|ui|{
         if archived.is_empty(){
             ui.label(tr("No point-in-time forecasts were captured yet. Open Hunt Atlas during an authenticated session to collect checkpoints."));
         }else{
@@ -135,25 +135,25 @@ pub(super) fn draw_retrospective(
     });
     let mut latest=rows.iter().filter(|r|r.observed_seconds>=60).collect::<Vec<_>>();
     latest.sort_by_key(|row|std::cmp::Reverse(row.day));
-    ui.collapsing(format!("Daily time-attributed measurements ({})",latest.len()),|ui|{
+    ui.collapsing(tr_dynamic(format!("Daily time-attributed measurements ({})",latest.len())),|ui|{
         egui::ScrollArea::vertical().id_salt(("atlas-daily",slug))
             .max_height(215.0).show(ui,|ui|{
                 for d in latest.iter().take(90){
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(format!("Day {} · {} kills · {}s observed",
-                            d.day,d.timed_kills,d.observed_seconds));
-                        ui.label(format!("Trainer {} / h",
+                        ui.label(tr_dynamic(format!("Day {} · {} kills · {}s observed",
+                            d.day,d.timed_kills,d.observed_seconds)));
+                        ui.label(tr_dynamic(format!("Trainer {} / h",
                             value(if d.timed_kills>0 &&
                                 d.timed_trainer_receipts==d.timed_kills{
                                 models::retrospective_rate(
                                     d.timed_trainer_xp,d.observed_seconds)
-                            }else{None})));
-                        ui.label(format!("Pokémon {} / h",
+                            }else{None}))));
+                        ui.label(tr_dynamic(format!("Pokémon {} / h",
                             value(if d.timed_kills>0 &&
                                 d.timed_pokemon_receipts==d.timed_kills{
                                 models::retrospective_rate(
                                     d.timed_pokemon_xp,d.observed_seconds)
-                            }else{None})));
+                            }else{None}))));
                     });
                 }
             });
@@ -210,10 +210,10 @@ pub(super) fn draw_atlas_models(
         ui.horizontal_wrapped(|ui|{
             ui.label(tr("Model preview tier"));
             ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
-            ui.label(format!("Requires trainer Lv {}",
-                models::TIER_LEVELS[(scenario.tier-1) as usize]));
+            ui.label(tr_dynamic(format!("Requires trainer Lv {}",
+                models::TIER_LEVELS[(scenario.tier-1) as usize])));
             if let Some(actual)=observed_tier{
-                ui.label(RichText::new(format!("Game tier: Outland {actual}"))
+                ui.label(RichText::new(tr_dynamic(format!("Game tier: Outland {actual}")))
                     .size(10.0).color(GOOD));
                 if scenario.tier!=actual && ui.small_button(tr("Preview active tier")).clicked(){
                     scenario.tier=actual;
@@ -324,8 +324,8 @@ pub(super) fn draw_atlas_models(
         rows.push((spawn.id,name.to_owned(),share,rarity,plan));
     }
     rows.sort_by(|a,b|b.2.total_cmp(&a.2));
-    ui.label(RichText::new(format!("Capture forecasts · {} species · {} with rarity input",
-        rows.len(),rows.iter().filter(|r|r.3.is_some()).count()))
+    ui.label(RichText::new(tr_dynamic(format!("Capture forecasts · {} species · {} with rarity input",
+        rows.len(),rows.iter().filter(|r|r.3.is_some()).count())))
         .size(12.0).strong().color(TEXT));
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .inner_margin(egui::Margin::same(11)).show(ui,|ui|{
