@@ -307,12 +307,9 @@ pub(super) fn draw_atlas_models(
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(tr("MOST COMMON ENCOUNTERS"))
                 .size(10.0).strong().color(DIM));
-            for (_,name,share,_,plan) in rows.iter().take(5){
+            for (_,name,_share,_,plan) in rows.iter().take(5){
                 ui.horizontal_wrapped(|ui|{
                     ui.label(RichText::new(name).strong().size(11.0).color(TEXT));
-                    ui.label(RichText::new(format!(
-                        "{:.1}% spawn",share*100.0
-                    )).size(10.0).color(MUTED));
                     ui.label(RichText::new(format!(
                         "Catch {} · Caught/h {}",
                         plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
@@ -335,11 +332,10 @@ pub(super) fn draw_atlas_models(
             if ui.available_width()>=860.0{
                 egui::Grid::new(("atlas-capture-models",&hunt.slug,scenario.ball.id()))
                     .striped(true).spacing([12.0,6.0]).show(ui,|ui|{
-                        ui.strong("Pokémon");ui.strong(tr("Spawn"));ui.strong(tr("Catch / throw"));
+                        ui.strong("Pokémon");ui.strong(tr("Catch / throw"));
                         ui.strong(tr("Caught/h"));ui.strong(tr("Shiny/h"));ui.strong(tr("Shiny ≥1/24h"));ui.end_row();
-                        for (_,name,share,_,plan) in rows.iter().take(32){
+                        for (_,name,_share,_,plan) in rows.iter().take(32){
                             ui.label(name);
-                            ui.label(format!("{:.1}%",share*100.0));
                             ui.label(plan.as_ref().map(|p|format!("{:.3}%",p.chance*100.0))
                                 .unwrap_or_else(||"—".into()));
                             ui.label(value(plan.as_ref().map(|p|p.catches_h)));
@@ -351,12 +347,8 @@ pub(super) fn draw_atlas_models(
                         }
                     });
             }else{
-                for (_,name,share,_,plan) in rows.iter().take(32){
-                    ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new(name).strong().size(12.0).color(TEXT));
-                        ui.label(RichText::new(format!("{:.1}% {}",share*100.0,tr("spawns")))
-                            .size(10.0).color(MUTED));
-                    });
+                for (_,name,_share,_,plan) in rows.iter().take(32){
+                    ui.label(RichText::new(name).strong().size(12.0).color(TEXT));
                     ui.horizontal_wrapped(|ui|{
                         for (label,result) in [
                             (tr("Catch / throw"),plan.as_ref()
@@ -380,7 +372,7 @@ pub(super) fn draw_atlas_models(
                     ui.separator();
                 }
             }
-            if rows.len()>32 {ui.label(tr("First 32 species shown; highest spawn probability first."));}
+            if rows.len()>32 {ui.label(tr("First 32 species shown."));}
         });
     });
     ui.label(RichText::new(tr("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds."))
