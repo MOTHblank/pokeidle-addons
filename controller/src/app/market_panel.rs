@@ -109,8 +109,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     ui.checkbox(&mut rule.enabled,"")
                         .on_hover_text(tr("Include this rule when automatic buying is enabled"));
                     let item=if rule.kind=="item" {format!(" #{}",rule.item_id)} else {String::new()};
-                    ui.label(RichText::new(format!("{}{} · max {}/unit · {}",
-                        kind_label(&rule.kind),item,rule.buy_max,
+                    ui.label(RichText::new(format!("{}{} · {} {}/{} · {}",
+                        kind_label(&rule.kind),item,tr("max"),rule.buy_max,tr("unit"),
                         if rule.currency=="orb"{tr("Gems")}else{tr("Gold")}))
                         .size(11.0).strong().color(if rule.enabled{TEXT}else{MUTED}));
                     if ui.small_button(tr("Remove"))
