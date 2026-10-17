@@ -3,6 +3,7 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "First 32 species shown." => "Exibindo as primeiras 32 espécies.",
         "Capture chance" => "Chance de captura",
         "Catalog sale value" => "Valor de venda (catálogo)",
         "Filters & sorting" => "Filtros e classificação",
