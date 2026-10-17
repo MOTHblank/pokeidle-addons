@@ -203,6 +203,13 @@ impl Default for VisualCache {
                             _ => load_worker_image(&client, &root, &job)
                                 .map(|bytes| vec![bytes]),
                         };
+                        if frames.is_none() &&
+                            matches!(job.kind, Kind::Pokemon | Kind::PokemonLooktype) {
+                            crate::logging::warn(&format!(
+                                "Pokémon sprite unavailable: kind={:?} id={}; retrying later",
+                                job.kind, job.id
+                            ));
+                        }
                         if output.send(Response {
                             key: (job.kind, job.id), frames,
                         }).is_err() { break; }
