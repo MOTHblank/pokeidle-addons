@@ -2891,7 +2891,10 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        // Drain replies from requests made on the previous UI frame before
+        // resetting the current frame's Pokémon sprite usage.
         self.visuals.poll(ui.ctx());
+        self.visuals.begin_frame();
         if self.account_setup_checked_at
             .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
             .unwrap_or(true)
@@ -3004,6 +3007,10 @@ impl eframe::App for ControllerApp {
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
+
+        // Keep exactly the Pokémon art used by Overview this frame (at most
+        // two sprites per account). Hunt Atlas and other tabs keep none.
+        self.visuals.end_frame();
 
         // Only keep Explorer results for the account actually being viewed.
         // Rankings can be rebuilt on demand; holding all four accounts'
