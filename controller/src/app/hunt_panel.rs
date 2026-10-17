@@ -1232,11 +1232,11 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         for (rank,(hunt,score,calibrated)) in estimates.iter().take(3).enumerate(){
                             ui.horizontal_wrapped(|ui|{
                                 ui.label(RichText::new(format!(
-                                    "{}. {} · {} trainer XP/h",
-                                    rank+1,hunt.name,format_hunt_amount(*score)
+                                    "{}. {} · {} {}",
+                                    rank+1,hunt.name,format_hunt_amount(*score),tr("Trainer XP/h")
                                 )).size(11.0).color(TEXT));
-                                ui.label(RichText::new(if *calibrated{"calibrated"}
-                                    else{"experimental"}).size(9.0).color(WARN));
+                                ui.label(RichText::new(if *calibrated{tr("calibrated")}
+                                    else{tr("experimental")}).size(9.0).color(WARN));
                             });
                         }
                         if estimates.is_empty(){
@@ -1262,8 +1262,8 @@ fn atlas_filters_panel(
         ui.label(RichText::new(tr("Pokémon explorer"))
             .size(15.0).strong().color(TEXT));
         if ui.small_button(format!(
-            "{} filters · {} active",
-            if f.filters_open{tr("Hide")}else{tr("More")},f.active_count()
+            "{} {} · {} {}",
+            if f.filters_open{tr("Hide")}else{tr("More")},tr("filters"),f.active_count(),tr("active filters")
         )).clicked(){f.filters_open=!f.filters_open}
         if f.active_count()>0 && ui.small_button(tr("Reset filters")).clicked(){
             f.clear();*page=0;
@@ -2102,8 +2102,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .or(hunts.hunt_slug.as_deref()).unwrap_or(tr("No confirmed hunt"))
                     };
                     ui.label(RichText::new(format!(
-                        "{title} · {} unlocked hunts · {} recorded kills",
-                        hunts.hunts.len(),hunts.battle_kills
+                        "{title} · {} {} · {} {}",
+                        hunts.hunts.len(),tr("unlocked hunts"),hunts.battle_kills,tr("recorded kills")
                     )).size(11.0).color(MUTED));
                     ui.add_space(8.0);
                     let two_columns=ui.available_width()>=720.0;
@@ -2144,7 +2144,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                             .size(13.0).strong().color(TEXT));
                                         if let Some(h)=current.filter(|_|!hunts.in_center){
                                             ui.label(RichText::new(format!(
-                                                "Lv {} · hunt species",h.level
+                                                "Lv {} · {}",h.level,tr("hunt species")
                                             )).size(10.0).color(MUTED));
                                         }else if hunts.in_center{
                                             ui.label(RichText::new(tr("Not hunting"))
@@ -2155,12 +2155,12 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 if let Some(p)=hunts.active_pokemon.as_ref(){
                                     ui.separator();
                                     ui.label(RichText::new(format!(
-                                        "P{} · Quality {} · {} Pokémon in party",
+                                        "P{} · {} {} · {} {}",
                                         p.potency.map(|n|n.to_string())
                                             .unwrap_or_else(||"—".into()),
-                                        p.quality.map(|n|format!("{n:.3}"))
+                                        tr("Quality"),p.quality.map(|n|format!("{n:.3}"))
                                             .unwrap_or_else(||"—".into()),
-                                        hunts.pokemon_count
+                                        hunts.pokemon_count,tr("Pokémon in party")
                                     )).size(10.0).color(MUTED));
                                     let names=["HP","ATK","DEF",tr("SpA"),tr("SpD"),"SPD"];
                                     ui.label(RichText::new(names.iter().enumerate()
@@ -2180,27 +2180,27 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 ui.label(RichText::new(tr("BONUSES & LOCATION"))
                                     .size(10.0).strong().color(DIM));
                                 ui.label(format!(
-                                    "Twitch {} · Guild {}",
-                                    known_percent(b.twitch_pct,b.twitch_known),
+                                    "Twitch {} · {} {}",
+                                    known_percent(b.twitch_pct,b.twitch_known),tr("Guild"),
                                     known_percent(b.guild_pct,b.guild_known)
                                 ));
                                 ui.label(format!(
-                                    "Trainer event {} · Pokémon event {}",
-                                    known_percent(b.trainer_event_pct,b.trainer_event_known),
-                                    known_percent(b.pokemon_event_pct,b.pokemon_event_known)
+                                    "{} {} · {} {}",
+                                    tr("Trainer event"),known_percent(b.trainer_event_pct,b.trainer_event_known),
+                                    tr("Pokémon event"),known_percent(b.pokemon_event_pct,b.pokemon_event_known)
                                 ));
                                 ui.label(RichText::new(format!(
-                                    "VIP {} · Guild boost {}",
+                                    "VIP {} · {} {}",
                                     known_boost(b.vip_active,b.vip_known,
-                                        hunts.server_now.is_some()),
+                                        hunts.server_now.is_some()),tr("Guild boost"),
                                     known_boost(b.guild_boost_active,b.guild_boost_known,
                                         hunts.server_now.is_some())
                                 )).size(10.0).color(MUTED));
                                 ui.separator();
                                 if let Some(h)=current{
                                     ui.label(RichText::new(format!(
-                                        "{} · {} · Lv {} · {} spawn slots",
-                                        h.area,h.region,h.level,h.total_spawns
+                                        "{} · {} · Lv {} · {} {}",
+                                        h.area,h.region,h.level,h.total_spawns,tr("spawn slots")
                                     )).size(10.0).color(MUTED));
                                 }
                                 if let Some(slug)=hunts.pending_hunt_slug.as_deref(){
@@ -2295,19 +2295,20 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     }
                 });
                 ui.label(RichText::new(format!(
-                    "{:.2}s / kill · {:.0}% guide species coverage",
-                    forecast.seconds_per_kill,forecast.coverage*100.0
+                    "{:.2}s / {} · {:.0}% {}",
+                    forecast.seconds_per_kill,tr("kill"),forecast.coverage*100.0,
+                    tr("guide species coverage")
                 )).size(10.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
                     ui.label(format!(
-                        "Trainer XP/kill {} · Pokémon XP/kill {}",
-                        format_hunt_amount(forecast.trainer_xp_per_kill),
-                        format_hunt_amount(forecast.pokemon_xp_per_kill)
+                        "{} {} · {} {}",
+                        tr("Trainer XP/kill"),format_hunt_amount(forecast.trainer_xp_per_kill),
+                        tr("Pokémon XP/kill"),format_hunt_amount(forecast.pokemon_xp_per_kill)
                     ));
                     ui.label(format!(
-                        "Combat gold/h {} + expected NPC loot/h {}",
-                        format_hunt_amount(forecast.combat_gold_h),
-                        format_hunt_amount(forecast.npc_loot_gold_h)
+                        "{} {} + {} {}",
+                        tr("Combat gold/h"),format_hunt_amount(forecast.combat_gold_h),
+                        tr("Expected NPC loot/h"),format_hunt_amount(forecast.npc_loot_gold_h)
                     ));
                 });
                 for (channel,observed,valid,estimate) in [
@@ -2465,15 +2466,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     records.iter().fold(0u64,|total,row|
                                         total.saturating_add(getter(row)));
                                 ui.label(format!(
-                                    "{} retained days · {} kills · {} captures · {} shiny events",
-                                    records.len(),sum(|d|d.kills),sum(|d|d.captures),
-                                    sum(|d|d.shiny_seen)
+                                    "{} {} · {} {} · {} {} · {} {}",
+                                    records.len(),tr("retained days"),sum(|d|d.kills),tr("kills"),
+                                    sum(|d|d.captures),tr("captures"),sum(|d|d.shiny_seen),tr("shiny events")
                                 ));
                                 ui.label(format!(
-                                    "Trainer XP {} · Pokémon XP {} · Combat gold {}",
-                                    format_hunt_amount(sum(|d|d.trainer_xp) as f64),
-                                    format_hunt_amount(sum(|d|d.pokemon_xp) as f64),
-                                    format_hunt_amount(sum(|d|d.combat_gold) as f64),
+                                    "{} {} · {} {} · {} {}",
+                                    tr("Trainer XP"),format_hunt_amount(sum(|d|d.trainer_xp) as f64),
+                                    tr("Pokémon XP"),format_hunt_amount(sum(|d|d.pokemon_xp) as f64),
+                                    tr("Combat gold"),format_hunt_amount(sum(|d|d.combat_gold) as f64),
                                 ));
                                 ui.label(RichText::new(
                                     tr("These are persistent totals, not historical XP/hour; per-hunt elapsed time is not currently retained.")
@@ -2493,7 +2494,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ui.label(RichText::new(tr("Where should I hunt?"))
                             .size(15.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "{} unlocked hunts",hunts.hunts.len()
+                            "{} {}",hunts.hunts.len(),tr("unlocked hunts")
                         )).size(11.0).color(MUTED));
                     });
                     ui.add_space(6.0);
@@ -2544,7 +2545,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         String::new(),tr("All types")).changed(){app.hunt_page=0;}
                                     for kind in types{
                                         if ui.selectable_value(&mut app.hunt_type,
-                                            kind.to_owned(),kind).changed(){app.hunt_page=0;}
+                                            kind.to_owned(),atlas_type_name(kind)).changed(){app.hunt_page=0;}
                                     }
                                 });
                         }
@@ -2558,8 +2559,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         &app.hunt_query,&app.hunt_region,&app.hunt_type,
                         &app.hunt_estimate_cache[index]);
                     ui.label(RichText::new(format!(
-                        "{} matching hunts · only the current hunt has measured rates",
-                        ranked.len()
+                        "{} {} · {}",
+                        ranked.len(),tr("matching hunts"),tr("only current hunt has measured rates")
                     )).size(11.0).color(MUTED));
                     if !live {ui.label(tr("Rankings disabled while account data is stale."));}
                     let visible=atlas_pager(ui,&mut app.hunt_page,ranked.len(),16);
@@ -2588,19 +2589,19 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             });
                     }
                     ui.add_space(7.0);
-                    ui.collapsing("XP bonus assumptions",|ui|{
+                    ui.collapsing(tr("XP bonus assumptions"),|ui|{
                         let b=&hunts.bonuses;
                         ui.label(format!(
-                            "Trainer event: {} · Pokémon event: {} · Guild: {} · Twitch: {}",
-                            known_percent(b.trainer_event_pct,b.trainer_event_known),
-                            known_percent(b.pokemon_event_pct,b.pokemon_event_known),
-                            known_percent(b.guild_pct,b.guild_known),
+                            "{}: {} · {}: {} · {}: {} · Twitch: {}",
+                            tr("Trainer event"),known_percent(b.trainer_event_pct,b.trainer_event_known),
+                            tr("Pokémon event"),known_percent(b.pokemon_event_pct,b.pokemon_event_known),
+                            tr("Guild"),known_percent(b.guild_pct,b.guild_known),
                             known_percent(b.twitch_pct,b.twitch_known)
                         ));
                         ui.label(format!(
-                            "VIP: {} · Guild boost: {}",
+                            "VIP: {} · {}: {}",
                             known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
-                            known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
+                            tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
                         ));
                         ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
                     });
