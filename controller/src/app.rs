@@ -4077,7 +4077,7 @@ fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OverviewCombatState { Offline, Center, Fighting, Hunting, Waiting, Stalled }
+enum OverviewCombatState { Offline, Center, Active, Hunting, Waiting, Stalled }
 
 // A wild encounter is short-lived; the account's confirmed hunt is not.
 // Never switch the overview to "between encounters" or clear its hunt artwork
@@ -4087,12 +4087,13 @@ fn overview_combat_state(view: Option<&HuntView>, live: bool) -> OverviewCombatS
     let Some(view) = view else { return OverviewCombatState::Waiting; };
     if view.in_center { return OverviewCombatState::Center; }
     if view.hunt_slug.is_none() { return OverviewCombatState::Waiting; }
+    // An encounter may be absent immediately after a kill. Recent combat
+    // receipts still confirm that the selected hunt is producing activity.
+    if view.measurements.combat_event_age_secs.is_some_and(|age| age <= 180) {
+        return OverviewCombatState::Active;
+    }
     if view.measurements.combat_event_age_secs.is_some_and(|age| age > 180) {
         return OverviewCombatState::Stalled;
-    }
-    if view.wild.is_some() &&
-        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 90) {
-        return OverviewCombatState::Fighting;
     }
     OverviewCombatState::Hunting
 }
@@ -4214,11 +4215,11 @@ fn draw_overview_matchup(
         });
     });
     let (state_label, color)=match combat {
-        OverviewCombatState::Fighting=>(tr("Fighting"),GOOD),
+        OverviewCombatState::Active=>("Hunt active",GOOD),
         OverviewCombatState::Hunting=>(tr("Hunting"),GOOD),
         OverviewCombatState::Center=>(tr("At Pokémon Center"),WARN),
         OverviewCombatState::Waiting=>(tr("Waiting for combat"),WARN),
-        OverviewCombatState::Stalled=>(tr("No combat activity"),BAD),
+        OverviewCombatState::Stalled=>("In hunt · no recent activity",WARN),
         OverviewCombatState::Offline=>(tr("No live connection"),DIM),
     };
     ui.horizontal_wrapped(|ui| {
@@ -4286,9 +4287,9 @@ mod overview_combat_tests {
         assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Hunting);
         view.wild = Some(WildInfo { name: "Scyther".into(), ..Default::default() });
         view.measurements.combat_event_age_secs = Some(10);
-        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Fighting);
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Active);
         view.wild = None; // selvagem:null between fights
-        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Hunting);
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Active);
         view.measurements.combat_event_age_secs = Some(181);
         assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Stalled);
         assert_eq!(overview_combat_state(Some(&view), false), OverviewCombatState::Offline);
