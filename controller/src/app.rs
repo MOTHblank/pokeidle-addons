@@ -4126,6 +4126,9 @@ fn overview_hunt_art_looktype(view: &HuntView) -> Option<u64> {
 
 // Looktypes are the game's visual IDs; species IDs require a separate
 // catalog lookup. Never treat an arbitrary species ID as a looktype.
+// 50% larger than the previous 48px overview sprites on both sides.
+const OVERVIEW_POKEMON_SPRITE_SIZE: f32 = 72.0;
+
 fn overview_combat_image(
     visuals: &mut VisualCache,
     ui: &mut egui::Ui,
@@ -4149,9 +4152,9 @@ fn overview_combat_image(
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
             if let Some(texture) = texture {
-                ui.image((texture, egui::vec2(48.0, 48.0)));
+                ui.image((texture, egui::vec2(OVERVIEW_POKEMON_SPRITE_SIZE, OVERVIEW_POKEMON_SPRITE_SIZE)));
             } else {
-                ui.add_sized([48.0, 48.0], egui::Label::new(
+                ui.add_sized([OVERVIEW_POKEMON_SPRITE_SIZE; 2], egui::Label::new(
                     RichText::new(if opponent { "◇" } else { "◈" })
                         .size(26.0).color(if opponent { WARN } else { ACCENT })));
             }
