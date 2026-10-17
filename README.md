@@ -6,19 +6,19 @@ Gerencie até **quatro contas do PokéIdle** em um só aplicativo. Acompanhe sua
 
 ## Funcionalidades
 
-- **Dashboard (Painel):** acompanhe suas contas, caçadas ativas, Pokémon, adversários e itens em uma visão geral.
+- **Painel:** acompanhe suas contas, caçadas ativas, Pokémon, adversários e itens em uma visão geral.
 - **Hunt Atlas:** compare caçadas, estimativas de experiência, chances de captura e níveis de Outland.
-- **Automation (Automações):** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
-- **Accounts (Contas):** organize até quatro perfis e acompanhe suas conexões com o PokéIdle e a Twitch.
+- **Automações:** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
+- **Contas:** organize até quatro perfis e acompanhe suas conexões com o PokéIdle e a Twitch.
 
 ## Como começar
 
 1. [**Baixe o Moth Controller**](https://github.com/MOTHblank/pokeidle-addons/releases/latest) e abra o aplicativo.
-2. Acesse **Accounts (Contas)** e configure os perfis que deseja utilizar.
+2. Acesse **Contas** e configure os perfis que deseja utilizar.
 3. Entre no **PokéIdle** e na **Twitch** quando solicitado.
-4. Use o **Dashboard** para acompanhar suas contas, **Automation** para configurar as automações e **Hunt Atlas** para encontrar as melhores caçadas para seus objetivos.
+4. Use o **Painel** para acompanhar suas contas, **Automações** para configurar as automações e **Hunt Atlas** para encontrar as melhores caçadas para seus objetivos.
 
-Para jogar pelo navegador, selecione **Open in Firefox (Abrir no Firefox)** na conta desejada.
+Para jogar pelo navegador, selecione **Abrir no Firefox** na conta desejada.
 
 ## Desenvolvimento
 
