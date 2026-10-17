@@ -45,26 +45,26 @@ pub(super) fn draw_retrospective(
     ui:&mut egui::Ui,history:&HistorySnapshot,slug:Option<&str>,
     forecast:Option<&native_atlas::Forecast>
 ){
-    ui.label(RichText::new("Historical observation vs current forecast")
+    ui.label(RichText::new(tr("Historical observation vs current forecast"))
         .size(13.0).strong().color(TEXT));
     let Some(slug)=slug else{
-        ui.label("No selected hunt; history cannot be grouped.");return
+        ui.label(tr("No selected hunt; history cannot be grouped."));return
     };
     let rows:Vec<_>=history.days.iter().filter(|d|d.hunt==slug).collect();
     if rows.is_empty(){
-        ui.label("No retained observations for this hunt.");return
+        ui.label(tr("No retained observations for this hunt."));return
     }
     // Older history has no model checkpoints. Compare current models and
     // archived snapshots only when the actual fields really exist.
     let latest_day=rows.iter().map(|d|d.day).max().unwrap_or(0);
-    ui.label(RichText::new("The summary uses the CURRENT model. Archived checkpoints below preserve point-in-time predictions when Hunt Atlas was open. Old history without observed durations remains unavailable.")
+    ui.label(RichText::new(tr("The summary uses the CURRENT model. Archived checkpoints below preserve point-in-time predictions when Hunt Atlas was open. Old history without observed durations remains unavailable."))
         .size(10.0).color(WARN));
     egui::ScrollArea::horizontal().id_salt(("atlas-history-x",slug))
         .show(ui,|ui|{
             egui::Grid::new(("atlas-history",slug)).striped(true)
                 .spacing([15.0,6.0]).show(ui,|ui|{
-            ui.strong("Retained window");ui.strong("Observed trainer/h");
-            ui.strong("Observed Pokémon/h");ui.strong("Current model / observed");ui.end_row();
+            ui.strong(tr("Retained window"));ui.strong(tr("Observed trainer/h"));
+            ui.strong(tr("Observed Pokémon/h"));ui.strong(tr("Current model / observed"));ui.end_row();
             for (days,title) in [(7,"7 days"),(30,"30 days"),(90,"90 days")]{
                 let matching=rows.iter().filter(|d|
                     d.day<=latest_day&&latest_day-d.day<days);
@@ -99,16 +99,16 @@ pub(super) fn draw_retrospective(
     archived.sort_by_key(|record|std::cmp::Reverse(record.hour));
     ui.collapsing(format!("Archived prediction checkpoints ({})",archived.len()),|ui|{
         if archived.is_empty(){
-            ui.label("No point-in-time forecasts were captured yet. Open Hunt Atlas during an authenticated session to collect checkpoints.");
+            ui.label(tr("No point-in-time forecasts were captured yet. Open Hunt Atlas during an authenticated session to collect checkpoints."));
         }else{
-            ui.label(RichText::new("Checkpoints are saved when this panel is open, no more than once per 15 minutes. Same-day observations may cover different hours and are not exact paired combat sessions.")
+            ui.label(RichText::new(tr("Checkpoints are saved when this panel is open, no more than once per 15 minutes. Same-day observations may cover different hours and are not exact paired combat sessions."))
                 .size(10.0).color(MUTED));
             egui::ScrollArea::vertical().id_salt(("atlas-archived",slug))
                 .max_height(240.0).show(ui,|ui|{
                     egui::Grid::new(("atlas-archived-grid",slug))
                         .striped(true).spacing([12.0,5.0]).show(ui,|ui|{
-                            ui.strong("Day · hour");ui.strong("Archived trainer / Pokémon XP/h");
-                            ui.strong("Same-day trainer/h");ui.strong("Forecast / measured");
+                            ui.strong(tr("Day · hour"));ui.strong(tr("Archived trainer / Pokémon XP/h"));
+                            ui.strong(tr("Same-day trainer/h"));ui.strong(tr("Forecast / measured"));
                             ui.end_row();
                             for sample in archived.iter().take(30){
                                 let observed=rows.iter().find(|row|row.day==sample.day)
@@ -165,9 +165,9 @@ pub(super) fn draw_atlas_models(
     cache:&EstimateCache,scenario:&mut AtlasScenario,history:&HistorySnapshot,live:bool
 ){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Scenario lab")
+        ui.label(RichText::new(tr("Scenario lab"))
             .size(16.0).strong().color(TEXT));
-        ui.label(RichText::new("What-if reference · not observed server outcomes")
+        ui.label(RichText::new(tr("What-if reference · not observed server outcomes"))
             .size(10.0).color(WARN));
     });
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -176,11 +176,11 @@ pub(super) fn draw_atlas_models(
             ui.label(RichText::new("SCENARIO INPUTS").size(10.0)
                 .strong().color(DIM));
     ui.horizontal_wrapped(|ui|{
-        ui.label("Destination");
+        ui.label(tr("Destination"));
         let current=selected_hunt(view,reference,scenario)
             .map(|(hunt,unlocked)|format!("{} · {}",
-                hunt.name,if unlocked{"Unlocked"}else{"Guide-only"}))
-            .unwrap_or_else(||"No hunts loaded".into());
+                hunt.name,if unlocked{tr("Unlocked")}else{tr("Guide-only")}))
+            .unwrap_or_else(||tr("No hunts loaded").into());
         egui::ComboBox::from_id_salt("atlas-model-destination")
             .width(245.0).selected_text(current).show_ui(ui,|ui|{
                 let hunts=atlas_destinations(view,reference);
@@ -190,7 +190,7 @@ pub(super) fn draw_atlas_models(
                             if *unlocked{"unlocked"}else{"guide-only"}));
                 }
             });
-        ui.label("Ball");
+        ui.label(tr("Ball"));
         for ball in [BallKind::Ultra,BallKind::Beast]{
             ui.selectable_value(&mut scenario.ball,ball,ball.label());
         }
@@ -198,51 +198,51 @@ pub(super) fn draw_atlas_models(
         });
     ui.add_space(8.0);
     let Some((hunt,unlocked))=selected_hunt(view,reference,scenario) else{
-        ui.label("No available destination or public-guide preview.");return
+        ui.label(tr("No available destination or public-guide preview."));return
     };
     if !unlocked {
-        ui.label(RichText::new("This location is listed in the guide but is not available for this account. You can compare estimates, but cannot switch to it here.")
+        ui.label(RichText::new(tr("This location is listed in the guide but is not available for this account. You can compare estimates, but cannot switch to it here."))
             .size(10.0).color(WARN));
     }
     let observed_tier=view.outland_tier;
     let outland=hunt.area.eq_ignore_ascii_case("outland");
     if outland {
         ui.horizontal_wrapped(|ui|{
-            ui.label("Model preview tier");
+            ui.label(tr("Model preview tier"));
             ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
             ui.label(format!("Requires trainer Lv {}",
                 models::TIER_LEVELS[(scenario.tier-1) as usize]));
             if let Some(actual)=observed_tier{
                 ui.label(RichText::new(format!("Game tier: Outland {actual}"))
                     .size(10.0).color(GOOD));
-                if scenario.tier!=actual && ui.small_button("Preview active tier").clicked(){
+                if scenario.tier!=actual && ui.small_button(tr("Preview active tier")).clicked(){
                     scenario.tier=actual;
                 }
             }else{
-                ui.label(RichText::new("Game tier unavailable")
+                ui.label(RichText::new(tr("Game tier unavailable"))
                     .size(10.0).color(MUTED));
             }
             ui.label(RichText::new(
-                "Preview only. To change the game tier, use the Outland selector above."
+                tr("Preview only. To change the game tier, use the Outland selector above.")
             ).size(10.0).color(DIM));
         });
     }
     ui.horizontal_wrapped(|ui|{
         let mut override_active=scenario.accepted_fraction_override.is_some();
-        if ui.checkbox(&mut override_active,"Override target acceptance").changed(){
+        if ui.checkbox(&mut override_active,tr("Override target acceptance")).changed(){
             scenario.accepted_fraction_override=if override_active{Some(1.0)}else{None};
         }
         if let Some(fraction)=scenario.accepted_fraction_override.as_mut(){
-            ui.add(egui::Slider::new(fraction,0.0..=1.0).text("Attempt share"));
+            ui.add(egui::Slider::new(fraction,0.0..=1.0).text(tr("Attempt share")));
         }else{
-            ui.label(RichText::new("Assumes all eligible corpses are targeted: optimistic ceiling")
+            ui.label(RichText::new(tr("Assumes all eligible corpses are targeted: optimistic ceiling"))
                 .size(10.0).color(DIM));
         }
     });
     ui.horizontal_wrapped(|ui|{
-        if ui.small_button(if scenario.modifiers_open{"▾ Hide modifiers"}else{"▸ Hypothetical modifiers"})
+        if ui.small_button(if scenario.modifiers_open{tr("▾ Hide modifiers")}else{tr("▸ Hypothetical modifiers")})
             .clicked(){scenario.modifiers_open=!scenario.modifiers_open}
-        ui.label(RichText::new("No boost is treated as active automatically.")
+        ui.label(RichText::new(tr("No boost is treated as active automatically."))
             .size(10.0).color(DIM));
     });
     if scenario.modifiers_open {
@@ -250,25 +250,25 @@ pub(super) fn draw_atlas_models(
             .inner_margin(egui::Margin::same(9)).show(ui,|ui|{
                 let m=&mut scenario.modifiers;
                 ui.horizontal_wrapped(|ui|{
-                    ui.checkbox(&mut m.capture_boost,"Capture boost ×1.5");
-                    ui.checkbox(&mut m.shiny_boost,"Shiny boost ×1.5");
-                    ui.checkbox(&mut m.kick_capture,"Kick catch ×1.15");
-                    ui.checkbox(&mut m.kick_shiny,"Kick shiny ×1.15");
-                    ui.checkbox(&mut m.lure,"Shiny lure (1/12k)");
+                    ui.checkbox(&mut m.capture_boost,tr("Capture boost ×1.5"));
+                    ui.checkbox(&mut m.shiny_boost,tr("Shiny boost ×1.5"));
+                    ui.checkbox(&mut m.kick_capture,tr("Kick catch ×1.15"));
+                    ui.checkbox(&mut m.kick_shiny,tr("Kick shiny ×1.15"));
+                    ui.checkbox(&mut m.lure,tr("Shiny lure (1/12k)"));
                 });
                 ui.horizontal_wrapped(|ui|{
-                    ui.label("Catch event %");
+                    ui.label(tr("Catch event %"));
                     ui.add(egui::DragValue::new(&mut m.catch_event_pct).range(0.0..=1000.0));
-                    ui.label("Shiny event %");
+                    ui.label(tr("Shiny event %"));
                     ui.add(egui::DragValue::new(&mut m.shiny_event_pct).range(0.0..=1000.0));
                     for (label,n) in [
-                        ("Loot ×",&mut m.loot),("Guild ×",&mut m.guild),
-                        ("Drop event ×",&mut m.drop_event),("Kick drop ×",&mut m.kick_drop)]{
+                        (tr("Loot ×"),&mut m.loot),(tr("Guild ×"),&mut m.guild),
+                        (tr("Drop event ×"),&mut m.drop_event),(tr("Kick drop ×"),&mut m.kick_drop)]{
                         ui.label(label);ui.add(egui::DragValue::new(n)
                             .range(1.0..=1000.0).speed(0.05));
                     }
                 });
-                if ui.small_button("Restore neutral modifiers").clicked(){
+                if ui.small_button(tr("Restore neutral modifiers")).clicked(){
                     m.clone_from(&Modifiers::default());
                 }
             });
@@ -279,19 +279,19 @@ pub(super) fn draw_atlas_models(
     egui::Frame::new().fill(PANEL_ALT).corner_radius(9.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
-                ui.label(RichText::new("Combat baseline")
+                ui.label(RichText::new(tr("Combat baseline"))
                     .size(13.0).strong().color(TEXT));
                 if let Some(f)=f.as_ref(){
                     ui.colored_label(WARN,if f.calibrated{
-                        "Calibrated estimate"
-                    }else{"Experimental model"});
+                        tr("Calibrated estimate")
+                    }else{tr("Experimental model")});
                 }
             });
             ui.horizontal_wrapped(|ui|{
                 for (label,number) in [
-                    ("Kills / h",kills),
-                    ("Trainer XP / h",f.as_ref().map(|f|f.trainer_xp_h)),
-                    ("Pokémon XP / h",f.as_ref().map(|f|f.pokemon_xp_h)),
+                    (tr("Kills / h"),kills),
+                    (tr("Trainer XP / h"),f.as_ref().map(|f|f.trainer_xp_h)),
+                    (tr("Pokémon XP / h"),f.as_ref().map(|f|f.pokemon_xp_h)),
                 ]{
                     ui.vertical(|ui|{
                         ui.label(RichText::new(label).size(10.0).color(DIM));
@@ -347,7 +347,7 @@ pub(super) fn draw_atlas_models(
                 });
             }
             if rows.is_empty(){
-                ui.label(RichText::new("No eligible species in this destination.")
+                ui.label(RichText::new(tr("No eligible species in this destination."))
                     .size(10.0).color(MUTED));
             }
         });
@@ -360,8 +360,8 @@ pub(super) fn draw_atlas_models(
             if ui.available_width()>=860.0{
                 egui::Grid::new(("atlas-capture-models",&hunt.slug,scenario.ball.id()))
                     .striped(true).spacing([12.0,6.0]).show(ui,|ui|{
-                        ui.strong("Pokémon");ui.strong("Spawn");ui.strong("Catch / throw");
-                        ui.strong("Caught/h");ui.strong("Shiny/h");ui.strong("Shiny ≥1/24h");ui.end_row();
+                        ui.strong("Pokémon");ui.strong(tr("Spawn"));ui.strong(tr("Catch / throw"));
+                        ui.strong(tr("Caught/h"));ui.strong(tr("Shiny/h"));ui.strong(tr("Shiny ≥1/24h"));ui.end_row();
                         for (_,name,share,_,plan) in rows.iter().take(32){
                             ui.label(name);
                             ui.label(format!("{:.1}%",share*100.0));
@@ -384,13 +384,13 @@ pub(super) fn draw_atlas_models(
                     });
                     ui.horizontal_wrapped(|ui|{
                         for (label,result) in [
-                            ("Catch / throw",plan.as_ref()
+                            (tr("Catch / throw"),plan.as_ref()
                                 .map(|p|format!("{:.3}%",p.chance*100.0))
                                 .unwrap_or_else(||"—".into())),
-                            ("Caught / h",value(plan.as_ref().map(|p|p.catches_h))),
-                            ("Shiny / h",value(plan.as_ref()
+                            (tr("Caught / h"),value(plan.as_ref().map(|p|p.catches_h))),
+                            (tr("Shiny / h"),value(plan.as_ref()
                                 .and_then(|p|p.shiny_caught_h))),
-                            ("Shiny ≥1 / 24h",plan.as_ref()
+                            (tr("Shiny ≥1 / 24h"),plan.as_ref()
                                 .and_then(|p|p.shiny_caught_24h)
                                 .map(|p|format!("{:.2}%",p*100.0))
                                 .unwrap_or_else(||"—".into())),
@@ -405,26 +405,26 @@ pub(super) fn draw_atlas_models(
                     ui.separator();
                 }
             }
-            if rows.len()>32 {ui.label("First 32 species shown; highest spawn probability first.");}
+            if rows.len()>32 {ui.label(tr("First 32 species shown; highest spawn probability first."));}
         });
     });
-    ui.label(RichText::new("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds.")
+    ui.label(RichText::new(tr("Unknown rarity or combat pace = unavailable, not zero. Shiny capture probability in Outland is not inferred from generic wiki odds."))
         .size(10.0).color(MUTED));
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Rare items & Outland")
+        ui.label(RichText::new(tr("Rare items & Outland"))
             .size(13.0).strong().color(TEXT));
-        ui.label("Ranking target");
+        ui.label(tr("Ranking target"));
         egui::ComboBox::from_id_salt("atlas-rare-target")
             .selected_text(match scenario.rare_target{
-                70000=>"Bronze Boss Token",70011=>"Key Fragment",
-                70012=>"Shiny Stone Fragment",70013=>"Bicycle Fragment",
-                70017=>"Shiny Egg Fragment",_=>"Unknown",
+                70000=>tr("Bronze Boss Token"),70011=>tr("Key Fragment"),
+                70012=>tr("Shiny Stone Fragment"),70013=>tr("Bicycle Fragment"),
+                70017=>tr("Shiny Egg Fragment"),_=>"Unknown",
             }).show_ui(ui,|ui|{
                 for (id,name) in [
-                    (70000,"Bronze Boss Token"),(70011,"Key Fragment"),
-                    (70012,"Shiny Stone Fragment"),(70013,"Bicycle Fragment"),
-                    (70017,"Shiny Egg Fragment"),
+                    (70000,tr("Bronze Boss Token")),(70011,tr("Key Fragment")),
+                    (70012,tr("Shiny Stone Fragment")),(70013,tr("Bicycle Fragment")),
+                    (70017,tr("Shiny Egg Fragment")),
                 ]{
                     ui.selectable_value(&mut scenario.rare_target,id,name);
                 }
@@ -435,8 +435,8 @@ pub(super) fn draw_atlas_models(
             view.trainer_level,speed,&scenario.modifiers);
         if rare.is_empty(){
             ui.label(RichText::new(if outland{
-                "Preview tier is locked at this trainer level, or the level is unavailable."
-            }else{"This destination is below the shiny-egg threshold."})
+                tr("Preview tier is locked at this trainer level, or the level is unavailable.")
+            }else{tr("This destination is below the shiny-egg threshold.")})
                 .size(11.0).color(MUTED));
         }
         let columns=if ui.available_width()>=820.0{2}else{1};
@@ -455,9 +455,9 @@ pub(super) fn draw_atlas_models(
                     });
                     ui.horizontal_wrapped(|ui|{
                         for (label,number) in [
-                            ("Units/h",format!("{:.5}",item.units_h)),
-                            ("Chance / 24h",format!("{:.2}%",item.chance_24h*100.0)),
-                            ("Craft time",format!("{:.1}h",item.craft_hours)),
+                            (tr("Units/h"),format!("{:.5}",item.units_h)),
+                            (tr("Chance / 24h"),format!("{:.2}%",item.chance_24h*100.0)),
+                            (tr("Craft time"),format!("{:.1}h",item.craft_hours)),
                         ]{
                             ui.vertical(|ui|{
                                 ui.label(RichText::new(label).size(9.0).color(DIM));
@@ -473,18 +473,18 @@ pub(super) fn draw_atlas_models(
             }
         });
     }else{
-        ui.label("Rare drops need a modeled or measured kill rate.");
+        ui.label(tr("Rare drops need a modeled or measured kill rate."));
     }
     if outland {
-        ui.collapsing("All eight Outland tiers · base drop probabilities",|ui|{
+        ui.collapsing(tr("All eight Outland tiers · base drop probabilities"),|ui|{
             egui::ScrollArea::horizontal()
                 .id_salt(("atlas-outland-table-scroll",&hunt.slug))
                 .show(ui,|ui|{
             egui::Grid::new(("atlas-outland-all",&hunt.slug))
                 .striped(true).spacing([14.0,5.0]).show(ui,|ui|{
-                    ui.strong("Tier");ui.strong("Required Lv");ui.strong("Multiplier");
-                    ui.strong("Token %/kill");ui.strong("Key/Stone/Bicycle %/kill");
-                    ui.strong("Access");ui.end_row();
+                    ui.strong(tr("Tier"));ui.strong(tr("Required Lv"));ui.strong(tr("Multiplier"));
+                    ui.strong(tr("Token %/kill"));ui.strong(tr("Key/Stone/Bicycle %/kill"));
+                    ui.strong(tr("Access"));ui.end_row();
                     for idx in 0..8{
                         let tier=(idx+1) as u8;
                         let mult=models::TIER_MULTIPLIERS[idx];
@@ -494,21 +494,21 @@ pub(super) fn draw_atlas_models(
                         ui.label(format!("{:.5}%",0.0005*mult*100.0));
                         ui.label(format!("{:.6}%",0.000005*mult*100.0));
                         ui.label(if models::unlocked_tier(tier,view.trainer_level).is_some(){
-                            "Level eligible"
-                        }else{"Locked / unknown"});
+                            tr("Level eligible")
+                        }else{tr("Locked / unknown")});
                         ui.end_row();
                     }
                 });
                 });
-            ui.label(RichText::new("The guide mentions Bicycle Fragments here, but the game has not confirmed this. Reaching the required level does not guarantee access.")
+            ui.label(RichText::new(tr("The guide mentions Bicycle Fragments here, but the game has not confirmed this. Reaching the required level does not guarantee access."))
                 .size(10.0).color(WARN));
         });
     }else{
-        ui.label(RichText::new("Outside Outland: Shiny Egg Fragment uses the upstream 30-threshold level ladder; 10 fragments per craft, 168h reference incubation.")
+        ui.label(RichText::new(tr("Outside Outland: Shiny Egg Fragment uses the upstream 30-threshold level ladder; 10 fragments per craft, 168h reference incubation."))
             .size(10.0).color(MUTED));
     }
     ui.add_space(8.0);
-    ui.label(RichText::new("Market scenario")
+    ui.label(RichText::new(tr("Market scenario"))
         .size(13.0).strong().color(TEXT));
     let mut possible=std::collections::BTreeSet::new();
     if let Some(reference)=reference{
@@ -523,17 +523,17 @@ pub(super) fn draw_atlas_models(
         }
     }
     ui.horizontal_wrapped(|ui|{
-        ui.label("Sale item");
+        ui.label(tr("Sale item"));
         egui::ComboBox::from_id_salt("atlas-market-item")
-            .selected_text(if scenario.market_item.is_empty(){"Select a guide drop".to_owned()}
+            .selected_text(if scenario.market_item.is_empty(){tr("Select a guide drop").to_owned()}
                 else{scenario.market_item.clone()})
             .show_ui(ui,|ui|{
-                ui.selectable_value(&mut scenario.market_item,String::new(),"No item");
+                ui.selectable_value(&mut scenario.market_item,String::new(),tr("No item"));
                 for name in possible.iter().take(150){
                     ui.selectable_value(&mut scenario.market_item,name.clone(),name.as_str());
                 }
             });
-        ui.label("User-assumed market gold / unit");
+        ui.label(tr("User-assumed market gold / unit"));
         ui.add(egui::DragValue::new(&mut scenario.market_gold_per_unit)
             .range(0.0..=1_000_000_000.0).speed(1.0));
     });
@@ -555,12 +555,12 @@ pub(super) fn draw_atlas_models(
         .stroke(Stroke::new(1.0,BORDER))
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
             let metrics=[
-                ("Combat gold / h",f.as_ref().map(|f|f.combat_gold_h)),
+                (tr("Combat gold / h"),f.as_ref().map(|f|f.combat_gold_h)),
                 ("NPC loot gold / h",f.as_ref().map(|f|f.npc_loot_gold_h)),
-                ("Item units / h",units),
-                ("Market proceeds / h",market_value),
-                ("Ball gold cost / h",gold_cost),
-                ("Ball diamonds / h",diamond_cost),
+                (tr("Item units / h"),units),
+                (tr("Market proceeds / h"),market_value),
+                (tr("Ball gold cost / h"),gold_cost),
+                (tr("Ball diamonds / h"),diamond_cost),
             ];
             let columns=if ui.available_width()>=680.0{3}else{2};
             ui.columns(columns,|cols|{
@@ -585,7 +585,7 @@ pub(super) fn draw_atlas_models(
     ui.label(RichText::new("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent.")
         .size(10.0).color(WARN));
     ui.add_space(10.0);
-    ui.collapsing("History & forecast comparisons",|ui|{
+    ui.collapsing(tr("History & forecast comparisons"),|ui|{
         draw_retrospective(ui,history,Some(&hunt.slug),f.as_ref());
     });
 }

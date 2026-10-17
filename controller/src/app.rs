@@ -12,6 +12,7 @@ use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
 mod market_panel;
+mod translations;
 use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
@@ -985,7 +986,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch sign-in" => "Entrar na Twitch",
         "Automation is managed in the controller. Start this account to see its current settings." =>
             "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
-        _ => en,
+        _ => translations::pt(en),
     }
 }
 

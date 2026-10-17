@@ -93,11 +93,11 @@ enum RateSource { Measured, Calibrated, Experimental, Scenario, Unavailable }
 impl RateSource {
     fn label(self) -> &'static str {
         match self {
-            Self::Measured => "Measured",
-            Self::Calibrated => "Calibrated estimate",
-            Self::Experimental => "Early estimate",
-            Self::Scenario => "Same-pace scenario",
-            Self::Unavailable => "Unavailable",
+            Self::Measured => tr("Measured"),
+            Self::Calibrated => tr("Calibrated estimate"),
+            Self::Experimental => tr("Early estimate"),
+            Self::Scenario => tr("Same-pace scenario"),
+            Self::Unavailable => tr("Unavailable"),
         }
     }
     fn color(self) -> Color32 {
@@ -292,9 +292,9 @@ fn ranked_hunts<'a>(
 
 fn rate_label(ranking: HuntRanking) -> &'static str {
     match ranking {
-        HuntRanking::TrainerXp => "Trainer XP/h",
-        HuntRanking::PokemonXp => "Pokémon XP/h",
-        HuntRanking::Gold => "Gold/h",
+        HuntRanking::TrainerXp => tr("Trainer XP/h"),
+        HuntRanking::PokemonXp => tr("Pokémon XP/h"),
+        HuntRanking::Gold => tr("Gold/h"),
     }
 }
 
@@ -335,17 +335,17 @@ fn atlas_pager(ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize)
         let first=(*page*per_page).min(count);
         let last=(first+per_page).min(count);
         ui.label(RichText::new(if count==0 {
-            "No results".to_owned()
+            tr("No results").to_owned()
         }else{
             format!("Showing {}–{} of {}",first+1,last,count)
         }).size(11.0).strong().color(TEXT));
         ui.add_space(8.0);
-        if ui.add_enabled(*page>0,egui::Button::new("← Previous"))
+        if ui.add_enabled(*page>0,egui::Button::new(tr("← Previous")))
             .clicked(){*page-=1;}
         ui.label(RichText::new(format!("{} / {}",*page+1,total_pages))
             .size(10.0).color(MUTED));
         if ui.add_enabled(*page+1<total_pages,
-            egui::Button::new("Next →")).clicked(){*page+=1;}
+            egui::Button::new(tr("Next →"))).clicked(){*page+=1;}
     });
     let first=*page*per_page;
     first..(first+per_page).min(count)
@@ -356,12 +356,12 @@ fn atlas_pager(ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize)
 /// never means the player left the hunt.
 fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
     match overview_combat_state(Some(view),live) {
-        OverviewCombatState::Offline => ("Offline / stale",WARN),
+        OverviewCombatState::Offline => (tr("Offline / stale"),WARN),
         OverviewCombatState::Center => ("At Pokémon Center",WARN),
-        OverviewCombatState::Waiting => ("No confirmed hunt",MUTED),
-        OverviewCombatState::Active => ("Hunt active",GOOD),
-        OverviewCombatState::Hunting => ("Hunting",GOOD),
-        OverviewCombatState::Stalled => ("In hunt · no recent activity",WARN),
+        OverviewCombatState::Waiting => (tr("No confirmed hunt"),MUTED),
+        OverviewCombatState::Active => (tr("Hunt active"),GOOD),
+        OverviewCombatState::Hunting => (tr("Hunting"),GOOD),
+        OverviewCombatState::Stalled => (tr("In hunt · no recent activity"),WARN),
     }
 }
 
@@ -370,7 +370,7 @@ fn draw_atlas_encounter(
     sum:f64,reference:Option<&AtlasReference>,
 ){
     let species=reference.and_then(|r|r.species.get(&spawn.id));
-    let name=species.map(|s|s.name.as_str()).unwrap_or("Unknown species");
+    let name=species.map(|s|s.name.as_str()).unwrap_or(tr("Unknown species"));
     let pct=if sum>0.0{Some(100.0*spawn.weight.max(0.0)/sum)}else{None};
     ui.push_id(spawn.id,|ui|{
         ui.horizontal_wrapped(|ui|{
@@ -392,15 +392,15 @@ fn draw_atlas_encounter(
                             drop.item_name.as_deref()
                                 .map(str::to_owned)
                                 .or_else(||drop.item_id.map(|id|format!("Item #{id}")))
-                                .unwrap_or_else(||"Unknown item".into()),
+                                .unwrap_or_else(||tr("Unknown item").into()),
                             drop.chance_pct,drop.minimum,drop.maximum
                         )).size(10.0).color(MUTED));
                     }
                     if species.drops.len()>12{
-                        ui.label("Showing the first 12 reference drops.");
+                        ui.label(tr("Showing the first 12 reference drops."));
                     }
                     ui.label(RichText::new(
-                        "Reference probabilities are not confirmed drops or live prices."
+                        tr("Reference probabilities are not confirmed drops or live prices.")
                     ).size(10.0).color(WARN));
                 });
             }
@@ -435,11 +435,11 @@ fn draw_hunt_row(
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
                     if current{
-                        ui.colored_label(GOOD,"● Current");
+                        ui.colored_label(GOOD,tr("● Current"));
                     }else if pending{
-                        ui.colored_label(WARN,"Switching…");
+                        ui.colored_label(WARN,tr("Switching…"));
                     }else if ui.add_enabled(live,
-                        egui::Button::new("Hunt →")).clicked(){
+                        egui::Button::new(tr("Hunt →"))).clicked(){
                         match native.send_command(GameCommand::Hunt(hunt.slug.clone())){
                             Ok(())=>*error=None,
                             Err(e)=>*error=Some(e),
@@ -453,7 +453,7 @@ fn draw_hunt_row(
                 if let Some(f)=result.forecast.as_ref(){
                     ui.add_space(15.0);
                     ui.vertical(|ui|{
-                        ui.label(RichText::new("Combat pace").size(10.0).color(DIM));
+                        ui.label(RichText::new(tr("Combat pace")).size(10.0).color(DIM));
                         ui.label(RichText::new(format!("{:.0} kills/h",f.kills_h))
                             .size(13.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
@@ -464,7 +464,7 @@ fn draw_hunt_row(
                 }
             });
             ui.push_id(&hunt.slug,|ui|{
-                ui.collapsing("Pokémon encounters · estimate assumptions",|ui|{
+                ui.collapsing(tr("Pokémon encounters · estimate assumptions"),|ui|{
                     ui.label(RichText::new(format!(
                         "{} spawn slots · {} species",
                         hunt.total_spawns,hunt.species.len()
@@ -483,10 +483,10 @@ fn draw_hunt_row(
                             }
                         });
                     }
-                    if hunt.species.len()>60 {ui.label("Only the first 60 species shown.");}
+                    if hunt.species.len()>60 {ui.label(tr("Only the first 60 species shown."));}
                     match result.source {
                         RateSource::Measured => {
-                            ui.label("Measured from the currently selected hunt, not a prediction.");
+                            ui.label(tr("Measured from the currently selected hunt, not a prediction."));
                         }
                         RateSource::Calibrated | RateSource::Experimental => {
                             if let Some(f)=result.forecast.as_ref(){
@@ -495,13 +495,13 @@ fn draw_hunt_row(
                                     f.coverage*100.0,f.seconds_per_kill,f.kills_h
                                 ));
                             }
-                            ui.label("Approximated DPS and spawn weights. Real move timing, captures, time outside combat, and item costs may differ.");
+                            ui.label(tr("Approximated DPS and spawn weights. Real move timing, captures, time outside combat, and item costs may differ."));
                         }
                         RateSource::Scenario => {
-                            ui.label("Uses the currently measured kills/h at another hunt's base level. No bonus, DPS, or travel projection.");
+                            ui.label(tr("Uses the currently measured kills/h at another hunt's base level. No bonus, DPS, or travel projection."));
                         }
                         RateSource::Unavailable => {
-                            ui.label("No valid measured pace or sufficiently complete guide model is available.");
+                            ui.label(tr("No valid measured pace or sufficiently complete guide model is available."));
                         }
                     }
                 });
@@ -638,14 +638,14 @@ fn draw_atlas_type_direction(
         "DAMAGE YOU DEAL"
     }).size(11.0).strong().color(TEXT));
     ui.label(RichText::new(if incoming{
-        "Enemy attack type → your Pokémon"
+        tr("Enemy attack type → your Pokémon")
     }else{
-        "Your attack type → opposing Pokémon"
+        tr("Your attack type → opposing Pokémon")
     }).size(10.0).color(MUTED));
     ui.add_space(4.0);
     if defender_types.is_empty(){
         ui.label(RichText::new(
-            "Defending Pokémon's typing is unknown. No multiplier is assumed."
+            tr("Defending Pokémon's typing is unknown. No multiplier is assumed.")
         ).size(10.0).color(WARN));
         return;
     }
@@ -654,16 +654,16 @@ fn draw_atlas_type_direction(
             .map(|multiplier|(kind.as_str(),multiplier))
     ).collect::<Vec<_>>();
     if possible.is_empty(){
-        ui.label(RichText::new("Type chart is not available.")
+        ui.label(RichText::new(tr("Type chart is not available."))
             .size(10.0).color(MUTED));
         return;
     }
     // STAB is useful context, not evidence that those moves are equipped.
-    ui.label(RichText::new("Same-type attacks (if learned)")
+    ui.label(RichText::new(tr("Same-type attacks (if learned)"))
         .size(10.0).strong().color(DIM));
     if attacker_types.is_empty(){
         ui.label(RichText::new(
-            "Attacker's types unknown; all type-chart possibilities below."
+            tr("Attacker's types unknown; all type-chart possibilities below.")
         ).size(10.0).color(MUTED));
     }else{
         ui.horizontal_wrapped(|ui|{
@@ -710,7 +710,7 @@ fn draw_atlas_type_direction(
     }
     if possible.is_empty(){
         ui.label(RichText::new(
-            "No other non-neutral attack types."
+            tr("No other non-neutral attack types.")
         ).size(10.0).color(MUTED));
     }
     let neutral=reference.chart.keys()
@@ -756,7 +756,7 @@ fn draw_atlas_matchup(
             ui.add_space(6.0);
             let Some(reference)=reference else{
                 ui.label(RichText::new(
-                    "Waiting for the game guide's type chart."
+                    tr("Waiting for the game guide's type chart.")
                 ).size(10.0).color(MUTED));
                 return;
             };
@@ -775,7 +775,7 @@ fn draw_atlas_matchup(
                     target_types,lead_types,true);
             }
             ui.label(RichText::new(
-                "Type effectiveness only: results assume a move of the displayed attack type. Learned moves, stats, abilities and battle timing are not included. Dual-type effects multiply (0.25× to 4×)."
+                tr("Type effectiveness only: results assume a move of the displayed attack type. Learned moves, stats, abilities and battle timing are not included. Dual-type effects multiply (0.25× to 4×).")
             ).size(9.0).color(DIM));
         });
 }
@@ -815,19 +815,19 @@ fn atlas_objective(
 }
 fn atlas_sort_label(sort:AtlasSort)->&'static str {
     match sort {
-        AtlasSort::TrainerXp=>"Trainer XP/h",
-        AtlasSort::PokemonXp=>"Pokémon XP/h",
-        AtlasSort::Gold=>"Gross gold/h",
-        AtlasSort::NpcLoot=>"Guide NPC loot gold/h",
-        AtlasSort::Capture=>"Ultra/Beast captures/h",
-        AtlasSort::ShinyCaught=>"Conditional shiny caught/h",
-        AtlasSort::OutlandRare=>"Outland rare units/h",
-        AtlasSort::Market=>"Manual-price market gold/h",
-        AtlasSort::Rare=>"Guide item units/h",
-        AtlasSort::Shiny=>"Shiny encounter/h (conditional)",
-        AtlasSort::Spawn=>"Spawn weight",
-        AtlasSort::Level=>"Hunt level",
-        AtlasSort::Name=>"Species name",
+        AtlasSort::TrainerXp=>tr("Trainer XP/h"),
+        AtlasSort::PokemonXp=>tr("Pokémon XP/h"),
+        AtlasSort::Gold=>tr("Gross gold/h"),
+        AtlasSort::NpcLoot=>tr("Guide NPC loot gold/h"),
+        AtlasSort::Capture=>tr("Ultra/Beast captures/h"),
+        AtlasSort::ShinyCaught=>tr("Conditional shiny caught/h"),
+        AtlasSort::OutlandRare=>tr("Outland rare units/h"),
+        AtlasSort::Market=>tr("Manual-price market gold/h"),
+        AtlasSort::Rare=>tr("Guide item units/h"),
+        AtlasSort::Shiny=>tr("Shiny encounter/h (conditional)"),
+        AtlasSort::Spawn=>tr("Spawn weight"),
+        AtlasSort::Level=>tr("Hunt level"),
+        AtlasSort::Name=>tr("Species name"),
     }
 }
 fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
@@ -867,7 +867,7 @@ fn atlas_species_rows<'a>(
         for spawn in &hunt.species {
             if spawn.weight<=0.0 {continue}
             let meta=reference.and_then(|r|r.species.get(&spawn.id));
-            let name=meta.map(|m|m.name.as_str()).unwrap_or("Unknown species");
+            let name=meta.map(|m|m.name.as_str()).unwrap_or(tr("Unknown species"));
             let types=meta.map(|m|m.types.clone()).unwrap_or_default();
             if !filters.kind.is_empty() && !types.iter().any(|t|t==&filters.kind){continue}
             if !query.is_empty()
@@ -986,12 +986,12 @@ fn account_is_live(session:&NativeSession)->bool {
 fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.horizontal_wrapped(|ui|{
         for (tab,label,hint) in [
-            (HuntSubtab::Explorer,"Explorer","Find Pokémon and their destinations"),
-            (HuntSubtab::Recommendations,"Rankings","Compare unlocked hunt estimates"),
-            (HuntSubtab::Current,"Current hunt","Selected hunt, activity and measured gains"),
-            (HuntSubtab::Models,"Models","Capture, Outland and economy scenarios"),
-            (HuntSubtab::Session,"Session","Recorded battle rewards and history"),
-            (HuntSubtab::Compare,"Compare","Compare all four accounts"),
+            (HuntSubtab::Explorer,tr("Explorer"),tr("Find Pokémon and their destinations")),
+            (HuntSubtab::Recommendations,tr("Rankings"),tr("Compare unlocked hunt estimates")),
+            (HuntSubtab::Current,"Current hunt",tr("Selected hunt, activity and measured gains")),
+            (HuntSubtab::Models,tr("Models"),tr("Capture, Outland and economy scenarios")),
+            (HuntSubtab::Session,"Session",tr("Recorded battle rewards and history")),
+            (HuntSubtab::Compare,tr("Compare"),tr("Compare all four accounts")),
         ]{
             if workspace_tab_button(ui,label,app.hunt_subtab==tab,hint).clicked(){
                 app.hunt_subtab=tab;
@@ -1007,7 +1007,7 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
         view.hunt_slug.as_deref()==Some(h.slug.as_str()));
     let name=if view.in_center{"At Pokémon Center"}else{
         current.map(|h|h.name.as_str())
-            .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+            .or(view.hunt_slug.as_deref()).unwrap_or(tr("No confirmed hunt"))
     };
     let (activity,color)=atlas_combat_status(view,live);
     let mut open=false;
@@ -1037,7 +1037,7 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
                         "Pokémon {} XP/h",format_hunt_amount(m.pokemon_xp_h)
                     )).size(11.0).color(GOOD));
                 }
-                if ui.small_button("View hunt →").clicked(){open=true;}
+                if ui.small_button(tr("View hunt →")).clicked(){open=true;}
             });
         });
     open
@@ -1063,10 +1063,10 @@ fn draw_atlas_outland_tier(
                     .size(10.0).strong().color(DIM));
                 ui.label(RichText::new(match active{
                     Some(tier)=>format!("● Outland {tier} active"),
-                    None=>"Awaiting game state".to_owned()
+                    None=>tr("Awaiting game state").to_owned()
                 }).size(11.0).strong().color(if active.is_some(){GOOD}else{WARN}));
                 let label=pending.map(|tier|format!("Requesting Outland {tier}…"))
-                    .unwrap_or_else(||"Choose tier".into());
+                    .unwrap_or_else(||tr("Choose tier").into());
                 egui::ComboBox::from_id_salt(("atlas-outland-tier",account))
                     .selected_text(label)
                     .width(170.0)
@@ -1092,13 +1092,13 @@ fn draw_atlas_outland_tier(
                 if let Some(tier)=pending{
                     ui.colored_label(WARN,format!("Waiting for Outland {tier} confirmation"));
                 }else if level.is_none(){
-                    ui.label(RichText::new("Trainer level unavailable")
+                    ui.label(RichText::new(tr("Trainer level unavailable"))
                         .size(10.0).color(MUTED));
                 }else if level.is_some_and(|level|level<150){
-                    ui.label(RichText::new("Unlocks at trainer Lv 150")
+                    ui.label(RichText::new(tr("Unlocks at trainer Lv 150"))
                         .size(10.0).color(MUTED));
                 }else if !live{
-                    ui.label(RichText::new("Offline · read only")
+                    ui.label(RichText::new(tr("Offline · read only"))
                         .size(10.0).color(WARN));
                 }
             });
@@ -1115,10 +1115,10 @@ fn draw_atlas_outland_tier(
 }
 
 fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
-    ui.label(RichText::new("Account comparison")
+    ui.label(RichText::new(tr("Account comparison"))
         .size(16.0).strong().color(TEXT));
     ui.label(RichText::new(
-        "Current measured results and best modeled unlocked hunts, side by side. Unknown and stale values remain unavailable."
+        tr("Current measured results and best modeled unlocked hunts, side by side. Unknown and stale values remain unavailable.")
     ).size(11.0).color(MUTED));
     let mut views=Vec::new();
     for index in 0..app.games.len(){
@@ -1153,10 +1153,10 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(name).strong().size(14.0).color(TEXT));
                             ui.colored_label(if *live{GOOD}else{WARN},
-                                if *live{"● Live"}else{"○ Offline / stale"});
+                                if *live{tr("● Live")}else{tr("○ Offline / stale")});
                             let (activity,color)=atlas_combat_status(view,*live);
                             ui.colored_label(color,format!("● {activity}"));
-                            if ui.small_button("Open Atlas →").clicked(){
+                            if ui.small_button(tr("Open Atlas →")).clicked(){
                                 app.select_workspace_account(*index);
                                 app.hunt_subtab=HuntSubtab::Explorer;
                             }
@@ -1165,7 +1165,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             view.hunt_slug.as_deref()==Some(h.slug.as_str()));
                         let location=if view.in_center{"At Pokémon Center"}else{
                             current.map(|h|h.name.as_str())
-                                .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                                .or(view.hunt_slug.as_deref()).unwrap_or(tr("No confirmed hunt"))
                         };
                         ui.label(RichText::new(format!(
                             "Location: {location}"
@@ -1176,22 +1176,22 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         )).size(10.0).color(MUTED));
                         ui.horizontal_wrapped(|ui|{
                             let m=&view.measurements;
-                            draw_rate(ui,"Trainer XP/h",
+                            draw_rate(ui,tr("Trainer XP/h"),
                                 if *live&&m.valid_trainer{Some(m.trainer_xp_h)}else{None},
                                 RateSource::Measured);
                             ui.add_space(9.0);
-                            draw_rate(ui,"Pokémon XP/h",
+                            draw_rate(ui,tr("Pokémon XP/h"),
                                 if *live&&m.valid_pokemon{Some(m.pokemon_xp_h)}else{None},
                                 RateSource::Measured);
                             ui.add_space(9.0);
-                            draw_rate(ui,"Net gold/h",
+                            draw_rate(ui,tr("Net gold/h"),
                                 if *live&&m.valid_gold{Some(m.gold_net_h)}else{None},
                                 RateSource::Measured);
                         });
                         if max_xp>0.0 && *live && view.measurements.valid_trainer {
                             ui.add(egui::ProgressBar::new(
                                 (view.measurements.trainer_xp_h/max_xp).clamp(0.0,1.0) as f32
-                            ).text("Relative measured trainer XP/h"));
+                            ).text(tr("Relative measured trainer XP/h")));
                         }
                         ui.add_space(7.0);
                         ui.label(RichText::new("TOP MODELED UNLOCKED HUNTS")
@@ -1214,8 +1214,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         if estimates.is_empty(){
                             ui.label(RichText::new(if *live &&
                                 app.hunt_estimate_cache[*index].is_pending(){
-                                "Calculating modeled rankings..."
-                            }else{"Not enough battle data for a reliable estimate yet."})
+                                tr("Calculating modeled rankings...")
+                            }else{tr("Not enough battle data for a reliable estimate yet.")})
                                 .size(10.0).color(MUTED));
                         }
                     });
@@ -1231,22 +1231,22 @@ fn atlas_filters_panel(
     view:&HuntView, reference:Option<&AtlasReference>, account:usize,
 ){
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Pokémon explorer")
+        ui.label(RichText::new(tr("Pokémon explorer"))
             .size(15.0).strong().color(TEXT));
         if ui.small_button(format!(
             "{} filters · {} active",
-            if f.filters_open{"Hide"}else{"More"},f.active_count()
+            if f.filters_open{tr("Hide")}else{tr("More")},f.active_count()
         )).clicked(){f.filters_open=!f.filters_open}
-        if f.active_count()>0 && ui.small_button("Reset filters").clicked(){
+        if f.active_count()>0 && ui.small_button(tr("Reset filters")).clicked(){
             f.clear();*page=0;
         }
     });
     ui.horizontal_wrapped(|ui|{
         let search_width=(ui.available_width()*0.38).clamp(155.0,310.0);
         if ui.add(egui::TextEdit::singleline(&mut f.search)
-            .hint_text("Search Pokémon, hunt, area or #ID")
+            .hint_text(tr("Search Pokémon, hunt, area or #ID"))
             .desired_width(search_width)).changed(){*page=0}
-        ui.label("Rank");
+        ui.label(tr("Rank"));
         egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
             .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
                 for item in [
@@ -1264,7 +1264,7 @@ fn atlas_filters_panel(
                 }
             });
         if ui.small_button(if f.ascending{"↑"}else{"↓"})
-            .on_hover_text(if f.ascending{"Ascending sort"}else{"Descending sort"})
+            .on_hover_text(if f.ascending{tr("Ascending sort")}else{tr("Descending sort")})
             .clicked(){
             f.ascending=!f.ascending;*page=0;
         }
@@ -1275,55 +1275,55 @@ fn atlas_filters_panel(
         .inner_margin(egui::Margin::same(10)).show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
-                ui.label("Level");
+                ui.label(tr("Level"));
                 if ui.add(egui::DragValue::new(&mut f.min_level)
                     .range(0..=25_000).speed(1.0)
-                    .prefix("From ")).changed(){*page=0}
+                    .prefix(tr("From "))).changed(){*page=0}
                 if ui.add(egui::DragValue::new(&mut f.max_level)
                     .range(0..=25_000).speed(1.0)
-                    .prefix("To ")).changed(){*page=0}
+                    .prefix(tr("To "))).changed(){*page=0}
                 if f.min_level>0 && f.max_level>0 && f.min_level>f.max_level{
-                    ui.label(RichText::new("Minimum exceeds maximum")
+                    ui.label(RichText::new(tr("Minimum exceeds maximum"))
                         .size(10.0).color(WARN));
                 }else{
                     ui.label(RichText::new("0 = no limit").size(9.0).color(DIM));
                 }
             });
             ui.horizontal_wrapped(|ui|{
-                ui.label("Location");
+                ui.label(tr("Location"));
                 let mut areas=atlas_destinations(view,reference).into_iter()
                     .map(|(hunt,_)|if hunt.area.is_empty(){hunt.region.as_str()}
                          else{hunt.area.as_str()})
                     .filter(|area|!area.is_empty()).collect::<Vec<_>>();
                 areas.sort_unstable();areas.dedup();
                 egui::ComboBox::from_id_salt(("atlas-place",account))
-                    .selected_text(if f.region.is_empty(){"All areas".to_owned()}
+                    .selected_text(if f.region.is_empty(){tr("All areas").to_owned()}
                         else{f.region.clone()})
                     .show_ui(ui,|ui|{
-                        if ui.selectable_value(&mut f.region,String::new(),"All areas")
+                        if ui.selectable_value(&mut f.region,String::new(),tr("All areas"))
                             .changed(){*page=0}
                         for area in areas {
                             if ui.selectable_value(&mut f.region,area.to_owned(),area)
                                 .changed(){*page=0}
                         }
                     });
-                ui.label("Availability");
+                ui.label(tr("Availability"));
                 egui::ComboBox::from_id_salt(("atlas-access",account))
                     .selected_text(match f.availability {
-                        AtlasAvailability::All=>"All (guide + server)",
-                        AtlasAvailability::Unlocked=>"Unlocked",
-                        AtlasAvailability::Locked=>"Guide-only / locked"
+                        AtlasAvailability::All=>tr("All (guide + server)"),
+                        AtlasAvailability::Unlocked=>tr("Unlocked"),
+                        AtlasAvailability::Locked=>tr("Guide-only / locked")
                     }).show_ui(ui,|ui|{
                         for (item,label) in [
-                            (AtlasAvailability::Unlocked,"Unlocked"),
-                            (AtlasAvailability::All,"All destinations"),
-                            (AtlasAvailability::Locked,"Guide-only / locked"),
+                            (AtlasAvailability::Unlocked,tr("Unlocked")),
+                            (AtlasAvailability::All,tr("All destinations")),
+                            (AtlasAvailability::Locked,tr("Guide-only / locked")),
                         ]{
                             if ui.selectable_value(&mut f.availability,item,label)
                                 .changed(){*page=0}
                         }
                     });
-                ui.label("Type");
+                ui.label(tr("Type"));
                 let mut types=reference.map(|r|r.chart.keys()
                     .map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
                 types.sort_unstable();
@@ -1340,29 +1340,29 @@ fn atlas_filters_panel(
                     });
             });
             ui.horizontal_wrapped(|ui|{
-                ui.label("Depot");
+                ui.label(tr("Depot"));
                 egui::ComboBox::from_id_salt(("atlas-owned",account))
                     .selected_text(match f.collection {
-                        AtlasCollection::All=>"All species",
-                        AtlasCollection::InDepot=>"In Pokémon depot",
-                        AtlasCollection::NotInDepot=>"Not in Pokémon depot",
+                        AtlasCollection::All=>tr("All species"),
+                        AtlasCollection::InDepot=>tr("In Pokémon depot"),
+                        AtlasCollection::NotInDepot=>tr("Not in Pokémon depot"),
                     }).show_ui(ui,|ui|{
                         for (item,label) in [
-                            (AtlasCollection::All,"All species"),
-                            (AtlasCollection::InDepot,"In Pokémon depot"),
-                            (AtlasCollection::NotInDepot,"Not in Pokémon depot"),
+                            (AtlasCollection::All,tr("All species")),
+                            (AtlasCollection::InDepot,tr("In Pokémon depot")),
+                            (AtlasCollection::NotInDepot,tr("Not in Pokémon depot")),
                         ]{
                             if ui.selectable_value(&mut f.collection,item,label)
                                 .changed(){*page=0}
                         }
                     });
                 ui.label(RichText::new(
-                    "Depot ownership is not a historical Pokédex capture record."
+                    tr("Depot ownership is not a historical Pokédex capture record.")
                 ).size(9.0).color(DIM));
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
-                ui.label("Weak to");
+                ui.label(tr("Weak to"));
                 if let Some(reference)=reference {
                     let mut kinds=reference.chart.keys().map(String::as_str)
                         .collect::<Vec<_>>();
@@ -1381,21 +1381,21 @@ fn atlas_filters_panel(
                         }
                     }
                 }else{
-                    ui.label(RichText::new("Guide type chart unavailable")
+                    ui.label(RichText::new(tr("Guide type chart unavailable"))
                         .size(10.0).color(MUTED));
                 }
             });
             ui.horizontal_wrapped(|ui|{
                 if ui.checkbox(&mut f.weakness_match_all,
-                    "Match all selected weaknesses (otherwise any)").changed(){*page=0}
-                if ui.small_button("Clear weaknesses").clicked(){
+                    tr("Match all selected weaknesses (otherwise any)")).changed(){*page=0}
+                if ui.small_button(tr("Clear weaknesses")).clicked(){
                     f.weak_to.clear();*page=0;
                 }
             });
             ui.separator();
             ui.horizontal_wrapped(|ui|{
                 if f.sort==AtlasSort::Rare {
-                    ui.label("Guide item");
+                    ui.label(tr("Guide item"));
                     let mut items=std::collections::BTreeSet::new();
                     if let Some(reference)=reference {
                         for species in reference.species.values(){
@@ -1410,11 +1410,11 @@ fn atlas_filters_panel(
                     }
                     egui::ComboBox::from_id_salt(("atlas-drop-name",account))
                         .selected_text(if f.rare_item.is_empty(){
-                            "All guide drops".to_owned()
+                            tr("All guide drops").to_owned()
                         }else{f.rare_item.clone()})
                         .show_ui(ui,|ui|{
                             if ui.selectable_value(&mut f.rare_item,
-                                String::new(),"All guide drops").changed(){*page=0}
+                                String::new(),tr("All guide drops")).changed(){*page=0}
                             for name in items.iter().take(250){
                                 if ui.selectable_value(&mut f.rare_item,
                                     name.clone(),name.as_str()).changed(){*page=0}
@@ -1448,13 +1448,13 @@ fn draw_atlas_destination(
                     dest.hunt.name,dest.hunt.level,dest.share*100.0
                 )).strong().size(11.0).color(TEXT));
                 if current{
-                    ui.colored_label(GOOD,"● Current");
+                    ui.colored_label(GOOD,tr("● Current"));
                 }else if pending{
-                    ui.colored_label(WARN,"Switching…");
+                    ui.colored_label(WARN,tr("Switching…"));
                 }else if !dest.unlocked{
-                    ui.colored_label(WARN,"Guide-only · locked");
+                    ui.colored_label(WARN,tr("Guide-only · locked"));
                 }else if ui.add_enabled(live,
-                    egui::Button::new("Hunt →")).clicked(){
+                    egui::Button::new(tr("Hunt →"))).clicked(){
                     match native.send_command(GameCommand::Hunt(
                         dest.hunt.slug.clone())){
                         Ok(())=>*error=None,
@@ -1465,10 +1465,10 @@ fn draw_atlas_destination(
             if let Some(f)=dest.forecast.as_ref(){
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
-                        ("Trainer XP/h",f.trainer_xp_h),
-                        ("Pokémon XP/h",f.pokemon_xp_h),
-                        ("Gross gold/h",f.gold_h),
-                        ("Kills/h",f.kills_h),
+                        (tr("Trainer XP/h"),f.trainer_xp_h),
+                        (tr("Pokémon XP/h"),f.pokemon_xp_h),
+                        (tr("Gross gold/h"),f.gold_h),
+                        (tr("Kills/h"),f.kills_h),
                     ]{
                         ui.vertical(|ui|{
                             ui.label(RichText::new(label).size(9.0).color(DIM));
@@ -1480,12 +1480,12 @@ fn draw_atlas_destination(
                 });
                 ui.label(RichText::new(format!(
                     "{} · {:.0}% species modeled · combat gold {} / h · NPC loot {} / h",
-                    if f.calibrated{"Calibrated estimate"}else{"Early estimate"},
+                    if f.calibrated{tr("Calibrated estimate")}else{tr("Early estimate")},
                     f.coverage*100.0,format_hunt_amount(f.combat_gold_h),
                     format_hunt_amount(f.npc_loot_gold_h)
                 )).size(10.0).color(MUTED));
             }else{
-                ui.label(RichText::new("Combat forecast unavailable for this location")
+                ui.label(RichText::new(tr("Combat forecast unavailable for this location"))
                     .size(10.0).color(MUTED));
             }
         });
@@ -1514,7 +1514,7 @@ fn draw_atlas_species(
                             ui.label(RichText::new(format!("#{}",row.id))
                                 .size(10.0).color(DIM));
                             if row.owned{
-                                ui.colored_label(GOOD,"● In depot");
+                                ui.colored_label(GOOD,tr("● In depot"));
                             }
                         });
                         ui.horizontal_wrapped(|ui|{
@@ -1555,7 +1555,7 @@ fn draw_atlas_species(
                             best.hunt.name,best.hunt.level,best.share*100.0
                         )).size(10.0).color(MUTED));
                         if !best.unlocked{
-                            ui.colored_label(WARN,"Top result locked");
+                            ui.colored_label(WARN,tr("Top result locked"));
                         }
                         if let Some(target)=available{
                             let current=view.hunt_slug.as_deref()
@@ -1563,11 +1563,11 @@ fn draw_atlas_species(
                             let pending=view.pending_hunt_slug.as_deref()
                                 ==Some(target.hunt.slug.as_str());
                             if current{
-                                ui.colored_label(GOOD,"● Current hunt");
+                                ui.colored_label(GOOD,tr("● Current hunt"));
                             }else if pending{
-                                ui.colored_label(WARN,"Switching…");
+                                ui.colored_label(WARN,tr("Switching…"));
                             }else if ui.add_enabled(live,egui::Button::new(
-                                if best.unlocked{"Hunt best →"}else{"Hunt unlocked →"}
+                                if best.unlocked{tr("Hunt best →")}else{tr("Hunt unlocked →")}
                             )).on_hover_text(format!(
                                 "Switch to {} (server-unlocked)",target.hunt.name
                             )).clicked(){
@@ -1578,7 +1578,7 @@ fn draw_atlas_species(
                                 }
                             }
                         }else{
-                            ui.colored_label(WARN,"No unlocked destination");
+                            ui.colored_label(WARN,tr("No unlocked destination"));
                         }
                     });
                 }
@@ -1590,7 +1590,7 @@ fn draw_atlas_species(
                     view.active_pokemon.as_ref().map(|p|p.name.as_str())
                         .unwrap_or("Your Pokémon"),
                     &row.name,
-                    "Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move.");
+                    tr("Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move."));
                 ui.add_space(7.0);
                 ui.push_id("destinations",|ui|{
                     egui::CollapsingHeader::new(format!(
@@ -1617,7 +1617,7 @@ fn draw_atlas_species(
                                 }
                                 if row.destinations.len()>35{
                                     ui.label(RichText::new(
-                                        "Showing the first 35 ranked destinations."
+                                        tr("Showing the first 35 ranked destinations.")
                                     ).size(10.0).color(MUTED));
                                 }
                             });
@@ -1633,7 +1633,7 @@ fn draw_atlas_species(
                                 let name=drop.item_name.as_deref()
                                     .map(str::to_owned)
                                     .or_else(||drop.item_id.map(|id|format!("Item #{id}")))
-                                    .unwrap_or_else(||"Unknown item".into());
+                                    .unwrap_or_else(||tr("Unknown item").into());
                                 ui.horizontal_wrapped(|ui|{
                                     ui.label(RichText::new(name)
                                         .size(11.0).color(TEXT));
@@ -1644,11 +1644,11 @@ fn draw_atlas_species(
                                 });
                             }
                             if species.drops.len()>20{
-                                ui.label(RichText::new("First 20 guide items shown.")
+                                ui.label(RichText::new(tr("First 20 guide items shown."))
                                     .size(10.0).color(MUTED));
                             }
                             ui.label(RichText::new(
-                                "Guide probabilities are not measured drops or live market prices."
+                                tr("Guide probabilities are not measured drops or live market prices.")
                             ).size(10.0).color(WARN));
                         });
                     }
@@ -1687,7 +1687,7 @@ fn draw_atlas_species_selector(
                     ui.label(RichText::new(format!(
                         "#{} · {} locations{}",
                         row.id,row.destinations.len(),
-                        if row.owned{" · In depot"}else{""}
+                        if row.owned{tr(" · In depot")}else{""}
                     )).size(10.0).color(MUTED));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
@@ -1744,13 +1744,13 @@ fn draw_atlas_explorer(
                 if filters.weakness_match_all{"ALL selected"}else{"ANY selected"}
             )).size(11.0).strong().color(ACCENT));
             ui.label(RichText::new(
-                "Each Pokémon shows its damage multiplier for every selected type."
+                tr("Each Pokémon shows its damage multiplier for every selected type.")
             ).size(10.0).color(MUTED));
         });
     }
     if filters.collection!=AtlasCollection::All && !view.roster_ready {
         ui.label(RichText::new(
-            "Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures."
+            tr("Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures.")
         ).size(10.0).color(WARN));
     }
     let unlocked_count=view.hunts.len();
@@ -1761,24 +1761,24 @@ fn draw_atlas_explorer(
             rows.len(),unlocked_count,guide_count
         )).strong().size(11.0).color(TEXT));
         if cache.is_pending(){
-            ui.label(RichText::new("Calculating combat models...")
+            ui.label(RichText::new(tr("Calculating combat models..."))
                 .size(10.0).color(WARN));
         }
     });
     if matches!(filters.sort,AtlasSort::Shiny) {
         ui.label(RichText::new(
-            "Shiny estimates use a base rate of 1 in 24,000 wild encounters outside Outland. Capture chances and extra bonuses are not included."
+            tr("Shiny estimates use a base rate of 1 in 24,000 wild encounters outside Outland. Capture chances and extra bonuses are not included.")
         ).size(10.0).color(WARN));
     }
     if matches!(filters.sort,AtlasSort::Rare) {
         ui.label(RichText::new(
-            "Guide item-yield estimates use per-kill loot chances, quantities and modeled kill rates; they are not confirmed rare drops, prices or market proceeds."
+            tr("Guide item-yield estimates use per-kill loot chances, quantities and modeled kill rates; they are not confirmed rare drops, prices or market proceeds.")
         ).size(10.0).color(WARN));
     }
     if matches!(filters.sort,AtlasSort::Capture|AtlasSort::ShinyCaught|
         AtlasSort::OutlandRare|AtlasSort::Market){
         ui.label(RichText::new(
-            "These are conditional model rankings. Configure the ball, Outland tier, item quote and hypothetical bonuses in Capture · Outland · Economy."
+            tr("These are conditional model rankings. Configure the ball, Outland tier, item quote and hypothetical bonuses in Capture · Outland · Economy.")
         ).size(10.0).color(WARN));
     }
     if rows.is_empty(){
@@ -1786,21 +1786,21 @@ fn draw_atlas_explorer(
             .stroke(Stroke::new(1.0,BORDER))
             .inner_margin(egui::Margin::same(14)).show(ui,|ui|{
                 ui.set_min_width(ui.available_width());
-                ui.label(RichText::new("No matching Pokémon")
+                ui.label(RichText::new(tr("No matching Pokémon"))
                     .size(13.0).strong().color(TEXT));
                 let message=if filters.collection!=AtlasCollection::All
                     && !view.roster_ready{
-                    "Waiting for the full Pokémon depot before ownership can be filtered."
+                    tr("Waiting for the full Pokémon depot before ownership can be filtered.")
                 }else if cache.is_pending(){
-                    "Combat estimates are updating; rankings will refresh as inputs arrive."
+                    tr("Combat estimates are updating; rankings will refresh as inputs arrive.")
                 }else if reference.is_none(){
-                    "The guide reference is not available yet. Species names and model coverage may be incomplete."
+                    tr("The guide reference is not available yet. Species names and model coverage may be incomplete.")
                 }else{
-                    "Try a wider level range, different availability or fewer filters. Unknown model values are never treated as zero."
+                    tr("Try a wider level range, different availability or fewer filters. Unknown model values are never treated as zero.")
                 };
                 ui.label(RichText::new(message).size(11.0).color(MUTED));
                 if filters.active_count()>0 &&
-                    ui.small_button("Reset explorer filters").clicked(){
+                    ui.small_button(tr("Reset explorer filters")).clicked(){
                     filters.clear();*page=0;
                 }
             });
@@ -1915,7 +1915,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         let tx = app.hunt_reference_tx.clone();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(native_atlas::load)
-                .unwrap_or_else(|_| Err("Guide reference loader panicked".into()));
+                .unwrap_or_else(|_| Err(tr("Guide reference loader panicked").into()));
             let _ = tx.send(result);
         });
     }
@@ -1944,7 +1944,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         ui.label(RichText::new(format!(
             "● Guide loaded · {} species",reference.species.len()
         )).size(10.0).color(GOOD)).on_hover_text(
-            "The guide is read-only; the game server alone unlocks hunts."
+            tr("The guide is read-only; the game server alone unlocks hunts.")
         );
     }
     ui.add_space(6.0);
@@ -1955,10 +1955,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             .stroke(Stroke::new(1.0,BORDER))
             .corner_radius(9.0).inner_margin(egui::Margin::same(14))
             .show(ui,|ui|{
-                ui.label(RichText::new("Hunt data unavailable")
+                ui.label(RichText::new(tr("Hunt data unavailable"))
                     .size(15.0).strong().color(TEXT));
                 ui.label(RichText::new(
-                    "Start this account to load unlocked hunts, battle measurements and Pokémon."
+                    tr("Start this account to load unlocked hunts, battle measurements and Pokémon.")
                 ).size(11.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
                     let starting=app.games[index].child.is_some()
@@ -1967,7 +1967,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         || app.native_verifying[index]
                         || app.native_handoff_busy[index];
                     if starting {
-                        ui.label(RichText::new("Account starting or waiting for sign-in")
+                        ui.label(RichText::new(tr("Account starting or waiting for sign-in"))
                             .size(11.0).color(WARN));
                     } else if app.accounts[index].enabled {
                         if ui.button(tr("Start account")).clicked(){
@@ -1988,7 +1988,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         .is_some_and(|received|received.elapsed()<=Duration::from_secs(90));
     let view=native.hunt_snapshot();
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(if live {"● Game connected"}else{"● Game stale"})
+        ui.label(RichText::new(if live {tr("● Game connected")}else{tr("● Game stale")})
             .size(11.0).strong().color(if live {GOOD}else{WARN}));
         if let Some(received)=status.last_received {
             ui.label(RichText::new(format!("Last game packet: {}s ago",
@@ -2000,11 +2000,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         }
     });
     if !live {
-        ui.label(RichText::new("Disconnected or stale. Previous account data is read-only; rates and switching are unavailable.")
+        ui.label(RichText::new(tr("Disconnected or stale. Previous account data is read-only; rates and switching are unavailable."))
             .color(WARN).size(11.0));
     }
     if !view.catalog_ready {
-        ui.label(RichText::new("Loading available hunts from the game…")
+        ui.label(RichText::new(tr("Loading available hunts from the game…"))
             .color(WARN));
         return;
     }
@@ -2028,7 +2028,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     if let Some(error)=app.hunt_action_error[index].clone(){
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(format!("Command: {error}")).color(BAD));
-            if ui.small_button("Dismiss").clicked(){app.hunt_action_error[index]=None;}
+            if ui.small_button(tr("Dismiss")).clicked(){app.hunt_action_error[index]=None;}
         });
     }
     ui.add_space(6.0);
@@ -2075,7 +2075,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
                     let title=if hunts.in_center{"At Pokémon Center"}else{
                         current.map(|h|h.name.as_str())
-                            .or(hunts.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                            .or(hunts.hunt_slug.as_deref()).unwrap_or(tr("No confirmed hunt"))
                     };
                     ui.label(RichText::new(format!(
                         "{title} · {} unlocked hunts · {} recorded kills",
@@ -2111,10 +2111,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                                 .size(13.0).strong().color(TEXT));
                                             ui.label(RichText::new(format!(
                                                 "Lv {} · {}",p.level,
-                                                if p.shiny{"Shiny"}else{"Active"}
+                                                if p.shiny{"Shiny"}else{tr("Active")}
                                             )).size(10.0).color(MUTED));
                                         }else{
-                                            ui.label(RichText::new("Lead not loaded")
+                                            ui.label(RichText::new(tr("Lead not loaded"))
                                                 .size(11.0).color(MUTED));
                                         }
                                     });
@@ -2130,7 +2130,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                         } else {
                                             current.map(|h|h.name.as_str())
                                                 .or(hunts.hunt_slug.as_deref())
-                                                .unwrap_or("No confirmed hunt")
+                                                .unwrap_or(tr("No confirmed hunt"))
                                         };
                                         ui.label(RichText::new(hunt_name)
                                             .size(13.0).strong().color(TEXT));
@@ -2139,7 +2139,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                                 "Lv {} · hunt species",h.level
                                             )).size(10.0).color(MUTED));
                                         }else if hunts.in_center{
-                                            ui.label(RichText::new("Not hunting")
+                                            ui.label(RichText::new(tr("Not hunting"))
                                                 .size(10.0).color(MUTED));
                                         }
                                     });
@@ -2154,7 +2154,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                             .unwrap_or_else(||"—".into()),
                                         hunts.pokemon_count
                                     )).size(10.0).color(MUTED));
-                                    let names=["HP","ATK","DEF","SpA","SpD","SPD"];
+                                    let names=["HP","ATK","DEF",tr("SpA"),tr("SpD"),"SPD"];
                                     ui.label(RichText::new(names.iter().enumerate()
                                         .map(|(i,k)|format!("{} {}",k,
                                             p.ivs[i].map(|v|v.to_string())
@@ -2218,7 +2218,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 guide.species.get(&id)
                                     .map(|species|(species.name.as_str(),
                                         species.types.as_slice(),
-                                        "Confirmed wild species. Move types shown are type-chart possibilities, not confirmed attacks.")))));
+                                        tr("Confirmed wild species. Move types shown are type-chart possibilities, not confirmed attacks."))))));
                     let representative=guide.and_then(|guide|
                         current.and_then(|hunt|hunt.species.iter()
                             .filter(|species|species.weight>0.0)
@@ -2227,13 +2227,13 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .and_then(|spawn|guide.species.get(&spawn.id)
                                 .map(|species|(species.name.as_str(),
                                     species.types.as_slice(),
-                                    "Most common species in this hunt (representative only; not necessarily the enemy being fought).")))));
+                                    tr("Most common species in this hunt (representative only; not necessarily the enemy being fought)."))))));
                     let target=wild_target.or_else(||{
                         if hunts.wild.is_some(){None}else{representative}
                     });
                     let (target_name,target_types,note)=target.unwrap_or((
-                        "Unidentified opponent",&[][..],
-                        "Opponent typing is unavailable; no advantages or weaknesses are assumed."
+                        tr("Unidentified opponent"),&[][..],
+                        tr("Opponent typing is unavailable; no advantages or weaknesses are assumed.")
                     ));
                     draw_atlas_matchup(ui,guide,&lead_types,target_types,
                         hunts.active_pokemon.as_ref().map(|p|p.name.as_str())
@@ -2271,16 +2271,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     ui.add_space(10.0);
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-            ui.label(RichText::new("Current hunt · estimated results")
+            ui.label(RichText::new(tr("Current hunt · estimated results"))
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
                 .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
-                        ("Trainer XP/h",forecast.trainer_xp_h),
-                        ("Pokémon XP/h",forecast.pokemon_xp_h),
-                        ("Gross gold/h",forecast.gold_h),
-                        ("Kills/h",forecast.kills_h),
+                        (tr("Trainer XP/h"),forecast.trainer_xp_h),
+                        (tr("Pokémon XP/h"),forecast.pokemon_xp_h),
+                        (tr("Gross gold/h"),forecast.gold_h),
+                        (tr("Kills/h"),forecast.kills_h),
                     ]{
                         draw_rate(ui,label,Some(value),
                             if forecast.calibrated {RateSource::Calibrated}
@@ -2319,13 +2319,13 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     }
                 }
                 ui.label(RichText::new(
-                    "These trainer/Pokémon streams must not be added together. Modeled gross gold excludes spending."
+                    tr("These trainer/Pokémon streams must not be added together. Modeled gross gold excludes spending.")
                 ).size(10.0).color(MUTED));
             } else {
                 ui.label(RichText::new(if app.hunt_estimate_cache[index].is_pending(){
-                    "Calculating your forecast…"
+                    tr("Calculating your forecast…")
                 }else{
-                    "Unavailable: reference species or active Pokémon combat data is incomplete."
+                    tr("Unavailable: reference species or active Pokémon combat data is incomplete.")
                 }).size(10.0).color(MUTED));
             }
         });
@@ -2333,7 +2333,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 }
                 HuntSubtab::Session => {
                     let session=&view.session;
-                    ui.label(RichText::new("Battle results recorded by the game")
+                    ui.label(RichText::new(tr("Battle results recorded by the game"))
                         .size(15.0).strong().color(TEXT));
                     ui.label(format!("Duration {:02}:{:02}:{:02}",
                         session.duration_secs/3600,
@@ -2364,21 +2364,21 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             if throws>0{
                                 ui.label(format!("Observed success per ball: {:.1}% ({} throws)",
                                     session.ball_captures as f64*100.0/throws as f64,throws))
-                                    .on_hover_text("Observed ball outcomes in this session; not a species capture probability.");
+                                    .on_hover_text(tr("Observed ball outcomes in this session; not a species capture probability."));
                             }else {
-                                ui.label(RichText::new("Capture success rate will appear after your first recorded throw.")
+                                ui.label(RichText::new(tr("Capture success rate will appear after your first recorded throw."))
                                     .color(MUTED));
                             }
                         });
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui|{
                         if !app.session_reset_confirm[index] {
-                            if ui.small_button("Reset session counters").clicked() {
+                            if ui.small_button(tr("Reset session counters")).clicked() {
                                 app.session_reset_confirm[index]=true;
                             }
                         } else {
-                            ui.label(RichText::new("Clear session-only totals?").color(WARN));
-                            if ui.small_button("Confirm").clicked(){
+                            ui.label(RichText::new(tr("Clear session-only totals?")).color(WARN));
+                            if ui.small_button(tr("Confirm")).clicked(){
                                 native.reset_hunt_session();
                                 app.session_reset_confirm[index]=false;
                             }
@@ -2386,7 +2386,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 app.session_reset_confirm[index]=false;
                             }
                         }
-                        if ui.small_button("Open persistent history").clicked(){
+                        if ui.small_button(tr("Open persistent history")).clicked(){
                             app.selected_details=Some(index);
                             app.dashboard_show_history=true;
                             app.history_rows_limit=100;
@@ -2394,15 +2394,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         }
                     });
                     ui.add_space(10.0);
-                    ui.label(RichText::new("Balls used").size(13.0).strong().color(TEXT));
-                    if session.balls_used.is_empty(){ui.label("No ball throws recorded yet.");}
+                    ui.label(RichText::new(tr("Balls used")).size(13.0).strong().color(TEXT));
+                    if session.balls_used.is_empty(){ui.label(tr("No ball throws recorded yet."));}
                     for (id,count) in &session.balls_used {
-                        let name=view.ball_names.get(id).map(String::as_str).unwrap_or("Unknown ball");
+                        let name=view.ball_names.get(id).map(String::as_str).unwrap_or(tr("Unknown ball"));
                         ui.label(format!("{name} (#{id}) · {count}"));
                     }
                     ui.separator();
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new("Items acquired from battles")
+                        ui.label(RichText::new(tr("Items acquired from battles"))
                             .size(13.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
                             "{} unique drops",session.acquired.len()
@@ -2411,7 +2411,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     let mut drops=session.acquired.iter().collect::<Vec<_>>();
                     drops.sort_by(|a,b|b.1.cmp(a.1).then_with(||a.0.cmp(b.0)));
                     if drops.is_empty(){
-                        ui.label(RichText::new("No confirmed battle drops yet.")
+                        ui.label(RichText::new(tr("No confirmed battle drops yet."))
                             .size(11.0).color(MUTED));
                     }else{
                         for (name,qty) in drops.iter().take(8){
@@ -2430,20 +2430,20 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     ui.label(format!("{name} ×{qty}"));
                                 }
                                 if drops.len()>200{
-                                    ui.label("Showing the first 200 items.");
+                                    ui.label(tr("Showing the first 200 items."));
                                 }
                             });
                         }
                     }
                     if !session.recent_drops.is_empty(){
-                        ui.collapsing("Latest drop events",|ui|{
+                        ui.collapsing(tr("Latest drop events"),|ui|{
                             for (name,count) in &session.recent_drops{
                                 ui.label(format!("{name} ×{count}"));
                             }
                         });
                     }
                     ui.separator();
-                    ui.collapsing("Persisted history for current hunt",|ui|{
+                    ui.collapsing(tr("Persisted history for current hunt"),|ui|{
                         let history=native.history_snapshot();
                         if let Some(error)=history.load_error.as_deref()
                             .or(history.save_error.as_deref()) {
@@ -2453,7 +2453,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             let records:Vec<_>=history.days.iter()
                                 .filter(|row|row.hunt==slug).collect();
                             if records.is_empty(){
-                                ui.label("No historical observations saved for this hunt.");
+                                ui.label(tr("No historical observations saved for this hunt."));
                             }else{
                                 let sum=|getter:fn(&crate::native_history::HistoryDay)->u64|
                                     records.iter().fold(0u64,|total,row|
@@ -2470,11 +2470,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                     format_hunt_amount(sum(|d|d.combat_gold) as f64),
                                 ));
                                 ui.label(RichText::new(
-                                    "These are persistent totals, not historical XP/hour; per-hunt elapsed time is not currently retained."
+                                    tr("These are persistent totals, not historical XP/hour; per-hunt elapsed time is not currently retained.")
                                 ).size(10.0).color(MUTED));
                             }
                         }else{
-                            ui.label("No current hunt ID is available for historical grouping.");
+                            ui.label(tr("No current hunt ID is available for historical grouping."));
                         }
                     });
                 }
@@ -2484,7 +2484,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     // the measured current-hunt rates. Rankings start with the
                     // user's decision, not an identical second status card.
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new("Where should I hunt?")
+                        ui.label(RichText::new(tr("Where should I hunt?"))
                             .size(15.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
                             "{} unlocked hunts",hunts.hunts.len()
@@ -2492,7 +2492,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     });
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new("Sort recommendations by").size(12.0).strong());
+                        ui.label(RichText::new(tr("Sort recommendations by")).size(12.0).strong());
                         for (ranking,label) in [
                             (HuntRanking::TrainerXp,"Trainer XP"),
                             (HuntRanking::PokemonXp,"Pokémon XP"),
@@ -2506,7 +2506,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
-                            .hint_text("Hunt, area, region or species").desired_width(220.0)).changed(){
+                            .hint_text(tr("Hunt, area, region or species")).desired_width(220.0)).changed(){
                             app.hunt_page=0;
                         }
                         let mut regions=hunts.hunts.iter().map(|h|h.region.as_str())
@@ -2555,7 +2555,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         "{} matching hunts · only the current hunt has measured rates",
                         ranked.len()
                     )).size(11.0).color(MUTED));
-                    if !live {ui.label("Rankings disabled while account data is stale.");}
+                    if !live {ui.label(tr("Rankings disabled while account data is stale."));}
                     let visible=atlas_pager(ui,&mut app.hunt_page,ranked.len(),16);
                     ui.add_space(7.0);
                     for (offset,result) in ranked.iter().skip(visible.start)
@@ -2568,12 +2568,12 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         egui::Frame::new().fill(PANEL).corner_radius(9.0)
                             .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
                                 ui.set_min_width(ui.available_width());
-                                ui.label(RichText::new("No matching hunts")
+                                ui.label(RichText::new(tr("No matching hunts"))
                                     .size(13.0).strong().color(TEXT));
                                 ui.label(RichText::new(
-                                    "Widen the search or clear the region and type filters."
+                                    tr("Widen the search or clear the region and type filters.")
                                 ).size(11.0).color(MUTED));
-                                if ui.small_button("Clear ranking filters").clicked(){
+                                if ui.small_button(tr("Clear ranking filters")).clicked(){
                                     app.hunt_query.clear();
                                     app.hunt_region.clear();
                                     app.hunt_type.clear();
@@ -2596,9 +2596,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
                             known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
                         ));
-                        ui.label("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded.");
+                        ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
                     });
-                    ui.label(RichText::new("Gold forecasts are gross expected rewards, not measured net gold. Guide model uses approximate DPS and may significantly overestimate real combat throughput.")
+                    ui.label(RichText::new(tr("Gold forecasts are gross expected rewards, not measured net gold. Guide model uses approximate DPS and may significantly overestimate real combat throughput."))
                         .size(10.0).color(MUTED));
                 }
             }
