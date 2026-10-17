@@ -600,7 +600,9 @@ fn atlas_type_name(kind:&str)->&str {
     }
 }
 fn atlas_multiplier_text(multiplier:f64)->String{
-    let decimal=|pt,en|if pt_br(){pt}else{en};
+    let decimal=|pt:&'static str,en:&'static str| -> &'static str {
+        if pt_br(){pt}else{en}
+    };
     if multiplier==0.0{"0×".into()}
     else if (multiplier-0.25).abs()<0.001{decimal("0,25×","0.25×").into()}
     else if (multiplier-0.5).abs()<0.001{decimal("0,5×","0.5×").into()}
@@ -1355,12 +1357,12 @@ fn atlas_filters_panel(
                 types.sort_unstable();
                 egui::ComboBox::from_id_salt(("atlas-type",account))
                     .selected_text(if f.kind.is_empty(){tr("All types").to_owned()}
-                        else{f.kind.clone()})
+                        else{atlas_type_name(&f.kind).to_owned()})
                     .show_ui(ui,|ui|{
                         if ui.selectable_value(&mut f.kind,String::new(),tr("All types"))
                             .changed(){*page=0}
                         for kind in types {
-                            if ui.selectable_value(&mut f.kind,kind.to_owned(),kind)
+                            if ui.selectable_value(&mut f.kind,kind.to_owned(),atlas_type_name(kind))
                                 .changed(){*page=0}
                         }
                     });
@@ -1396,7 +1398,7 @@ fn atlas_filters_panel(
                     for kind in kinds {
                         let selected=f.weak_to.contains(kind);
                         if ui.add(egui::Button::new(
-                            RichText::new(kind).size(9.0))
+                            RichText::new(atlas_type_name(kind)).size(9.0))
                             .fill(if selected{ACCENT.linear_multiply(0.25)}else{PANEL})
                             .stroke(Stroke::new(1.0,
                                 if selected{ACCENT}else{BORDER}))
@@ -1503,9 +1505,10 @@ fn draw_atlas_destination(
                     }
                 });
                 ui.label(RichText::new(format!(
-                    "{} · {:.0}% species modeled · combat gold {} / h · NPC loot {} / h",
+                    "{} · {:.0}% {} · {} {} / h · {} {} / h",
                     if f.calibrated{tr("Calibrated estimate")}else{tr("Early estimate")},
-                    f.coverage*100.0,format_hunt_amount(f.combat_gold_h),
+                    f.coverage*100.0,tr("species modeled"),tr("combat gold"),
+                    format_hunt_amount(f.combat_gold_h),tr("NPC loot"),
                     format_hunt_amount(f.npc_loot_gold_h)
                 )).size(10.0).color(MUTED));
             }else{
@@ -1543,7 +1546,7 @@ fn draw_atlas_species(
                         });
                         ui.horizontal_wrapped(|ui|{
                             for kind in &row.types{
-                                ui.label(RichText::new(kind).size(10.0).color(ACCENT));
+                                ui.label(RichText::new(atlas_type_name(kind)).size(10.0).color(ACCENT));
                             }
                             ui.label(RichText::new(format!(
                                 "{} {}",row.destinations.len(),tr("destinations")
@@ -1574,10 +1577,10 @@ fn draw_atlas_species(
                     // action instead uses the highest ranked unlocked location.
                     let available=atlas_first_unlocked(row);
                     ui.horizontal_wrapped(|ui|{
-                        ui.label(RichText::new(format!(
+                        ui.label(RichText::new(tr_dynamic(format!(
                             "Top: {} · Lv {} · {:.1}% encounter share",
                             best.hunt.name,best.hunt.level,best.share*100.0
-                        )).size(10.0).color(MUTED));
+                        ))).size(10.0).color(MUTED));
                         if !best.unlocked{
                             ui.colored_label(WARN,tr("Top result locked"));
                         }
@@ -1612,14 +1615,14 @@ fn draw_atlas_species(
                     .unwrap_or_default();
                 draw_atlas_matchup(ui,reference,&lead_types,&row.types,
                     view.active_pokemon.as_ref().map(|p|p.name.as_str())
-                        .unwrap_or("Your Pokémon"),
+                        .unwrap_or(tr("Your Pokémon")),
                     &row.name,
-                    tr("Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move."));
+                    tr("Against your active Pokémon"));
                 ui.add_space(7.0);
                 ui.push_id("destinations",|ui|{
-                    egui::CollapsingHeader::new(format!(
+                    egui::CollapsingHeader::new(tr_dynamic(format!(
                         "Destinations & forecasts ({})",row.destinations.len()
-                    )).default_open(false).show(ui,|ui|{
+                    ))).default_open(false).show(ui,|ui|{
                         for dest in row.destinations.iter().take(4){
                             ui.push_id(&dest.hunt.slug,|ui|{
                                 draw_atlas_destination(
@@ -1761,14 +1764,11 @@ fn draw_atlas_explorer(
     let rows=results.update(view,reference,cache,filters,scenario);
     if !filters.weak_to.is_empty(){
         ui.horizontal_wrapped(|ui|{
-            ui.label(RichText::new(format!(
+            ui.label(RichText::new(tr_dynamic(format!(
                 "Weak to: {} · {}",
                 filters.weak_to.iter().map(|kind|atlas_type_name(kind).to_owned()).collect::<Vec<_>>().join(" + "),
                 if filters.weakness_match_all{tr("ALL selected")}else{tr("ANY selected")}
-            )).size(11.0).strong().color(ACCENT));
-            ui.label(RichText::new(
-                tr("Each Pokémon shows its damage multiplier for every selected type.")
-            ).size(10.0).color(MUTED));
+            ))).size(11.0).strong().color(ACCENT));
         });
     }
     if filters.collection!=AtlasCollection::All && !view.roster_ready {
@@ -1780,8 +1780,9 @@ fn draw_atlas_explorer(
     let guide_count=reference.map_or(0,|r|r.hunts.len());
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(format!(
-            "{} species · {} server-unlocked destinations · {} guide destinations",
-            rows.len(),unlocked_count,guide_count
+            "{} {} · {} {} · {} {}",
+            rows.len(),tr("species"),unlocked_count,tr("server-unlocked destinations"),
+            guide_count,tr("guide destinations")
         )).strong().size(11.0).color(TEXT));
         if cache.is_pending(){
             ui.label(RichText::new(tr("Calculating combat models..."))
@@ -2242,7 +2243,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ));
                     draw_atlas_matchup(ui,guide,&lead_types,target_types,
                         hunts.active_pokemon.as_ref().map(|p|p.name.as_str())
-                            .unwrap_or("Your Pokémon"),
+                            .unwrap_or(tr("Your Pokémon")),
                         target_name,note);
                     ui.add_space(8.0);
     let m = &hunts.measurements;
