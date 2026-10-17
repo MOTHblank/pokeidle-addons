@@ -90,10 +90,6 @@ pub fn set_capture_settings(profile: GameProfile,
 pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
     set_native_preference(profile, &["enabled"], enabled)
 }
-/// Native Restock is configured on the Rust side and persists without Firefox.
-pub fn set_restock_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
-    set_native_preference(profile, &["restock", "enabled"], enabled)
-}
 
 #[cfg(windows)]
 mod platform {
