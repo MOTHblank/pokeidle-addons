@@ -493,6 +493,7 @@ struct BrowserSession {
     native_capture_installed: bool,
     native_reloaded: BTreeSet<String>,
     native_twitch_auth_opened: bool,
+    bridge_retry_after: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -1325,6 +1326,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         native_capture_installed,
         native_reloaded: BTreeSet::new(),
         native_twitch_auth_opened: false,
+        bridge_retry_after: None,
     })
 }
 
@@ -1514,9 +1516,25 @@ fn probe_page(
     };
 
     let runtime = if page_loading {
+        session.bridge_retry_after=None;
+        RuntimeProbe::default()
+    } else if session.bridge_retry_after.is_some_and(|until|Instant::now()<until) {
+        // Firefox without the old userscript bridge is a supported mode.
+        // Avoid repeating a script.evaluate just to rediscover its absence.
         RuntimeProbe::default()
     } else {
-        probe_runtime_details(session, &game.id).unwrap_or_default()
+        match probe_runtime_details(session, &game.id) {
+            Ok(runtime) => {
+                session.bridge_retry_after=None;
+                runtime
+            }
+            Err(error) => {
+                if error.contains("controller bridge is not installed") {
+                    session.bridge_retry_after=Some(Instant::now()+Duration::from_secs(30));
+                }
+                RuntimeProbe::default()
+            }
+        }
     };
 
     Ok(Probe {
