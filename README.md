@@ -4,6 +4,10 @@ Desenvolvido para ser o **gerenciador de múltiplas contas mais eficiente do Pok
 
 Acompanhe suas caçadas, configure automações e mantenha as sessões funcionando em segundo plano.
 
+**Menos de 2% de CPU e no máximo 50 MB de RAM — ou seu dinheiro de volta!**
+
+*Brincadeira à parte: o aplicativo é gratuito, e o consumo de recursos pode variar conforme o sistema e o uso.*
+
 **[Baixar a versão mais recente](https://github.com/MOTHblank/pokeidle-addons/releases/latest)** · [Relatar um problema](https://github.com/MOTHblank/pokeidle-addons/issues)
 
 ## Funcionalidades
