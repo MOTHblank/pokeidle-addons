@@ -458,7 +458,7 @@ fn draw_hunt_row(
                                     f.coverage*100.0,f.seconds_per_kill,f.kills_h
                                 ));
                             }
-                            ui.label(tr("Approximated DPS and spawn weights. Real move timing, captures, time outside combat, and item costs may differ."));
+                            ui.label(tr("Combat estimates are approximate; move timing, captures, pauses and costs may differ."));
                         }
                         RateSource::Scenario => {
                             ui.label(tr("Uses the currently measured kills/h at another hunt's base level. No bonus, DPS, or travel projection."));
