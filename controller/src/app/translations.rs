@@ -3,6 +3,10 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "weight unavailable" => "peso indisponível",
+        "per eligible kill" => "por abate elegível",
+        "eligible kill" => "abate elegível",
+        "locations" => "locais",
         "attempts" => "tentativas",
         "units available" => "unidades disponíveis",
         "orb" => "Gemas",
