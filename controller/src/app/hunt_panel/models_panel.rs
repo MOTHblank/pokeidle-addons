@@ -121,9 +121,9 @@ pub(super) fn draw_retrospective(
                                     .map(|n|sample.trainer_xp_h/n);
                                 ui.label(format!("{} · {:02}:00 UTC",sample.day,
                                     sample.hour%24));
-                                ui.label(format!("{} / {} · {:.0} kills/h",
+                                ui.label(format!("{} / {} · {:.0} {}",
                                     value(Some(sample.trainer_xp_h)),
-                                    value(Some(sample.pokemon_xp_h)),sample.kills_h));
+                                    value(Some(sample.pokemon_xp_h)),sample.kills_h,tr("kills/h")));
                                 ui.label(value(observed));
                                 ui.label(residual.map(|n|format!("{n:.2}×"))
                                     .unwrap_or_else(||"—".into()));
@@ -306,9 +306,10 @@ pub(super) fn draw_atlas_models(
     let efficiency=ball_quote.and_then(|q|q.efficiency)
         .unwrap_or_else(||scenario.ball.wiki_efficiency());
     let known_efficiency=ball_quote.and_then(|q|q.efficiency).is_some();
-    ui.label(RichText::new(format!("{} ball efficiency {:.2} ({}) · target HP assumed 0% for wiki scenario",
-        scenario.ball.label(),efficiency,
-        if known_efficiency{tr("server catalog")}else{tr("wiki default")}))
+    ui.label(RichText::new(format!("{} · {} {:.2} ({}) · {}",
+        scenario.ball.label(),tr("ball efficiency"),efficiency,
+        if known_efficiency{tr("server catalog")}else{tr("wiki default")},
+        tr("target HP assumed 0% for wiki scenario")) )
         .size(10.0).color(MUTED));
     let all_weight=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
     let mut rows=Vec::new();
@@ -379,7 +380,7 @@ pub(super) fn draw_atlas_models(
                 for (_,name,share,_,plan) in rows.iter().take(32){
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(name).strong().size(12.0).color(TEXT));
-                        ui.label(RichText::new(format!("{:.1}% spawns",share*100.0))
+                        ui.label(RichText::new(format!("{:.1}% {}",share*100.0,tr("spawns")))
                             .size(10.0).color(MUTED));
                     });
                     ui.horizontal_wrapped(|ui|{
