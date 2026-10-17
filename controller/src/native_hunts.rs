@@ -626,7 +626,8 @@ impl HuntIntel {
     fn catalog(&mut self, list: &[Value]) {
         let mut hunts = Vec::new();
         for item in list {
-            let Some(slug) = item.get("slug").and_then(Value::as_str)
+            let Some(slug) = item.get("slug").or_else(|| item.get("s"))
+                .and_then(Value::as_str)
                 .filter(|s| !s.is_empty() && s.len() <= 128) else { continue };
             // Support full game entries and compact [species ID, weight]
             // entries; a partial catalog must not suppress hunt artwork.
@@ -648,10 +649,14 @@ impl HuntIntel {
                 }).collect()).unwrap_or_default();
             hunts.push(HuntEntry {
                 slug: slug.to_owned(),
-                name: item.get("nome").and_then(Value::as_str).unwrap_or(slug).to_owned(),
+                name: item.get("nome").or_else(||item.get("name"))
+                    .or_else(||item.get("n"))
+                    .and_then(Value::as_str).unwrap_or(slug).to_owned(),
                 area: item.get("area").and_then(Value::as_str).unwrap_or("").to_owned(),
                 region: item.get("regiao").and_then(Value::as_str).unwrap_or("").to_owned(),
-                level: Self::num(item, "nivel").unwrap_or(0).min(u32::MAX as u64) as u32,
+                level: Self::num(item, "nivel")
+                    .or_else(||Self::num(item,"nv"))
+                    .unwrap_or(0).min(u32::MAX as u64) as u32,
                 total_spawns: Self::num(item, "totalSpawns").unwrap_or(0).min(u32::MAX as u64) as u32,
                 looktype: Self::num(item, "looktype"),
                 species,
@@ -972,10 +977,11 @@ mod tests {
     fn compact_species_catalog_supplies_sprite_id() {
         let mut intel = HuntIntel::new();
         intel.ingest(r#"{"t":"welcome","hunts":[
-            {"slug":"forest","nome":"Forest","e":[[123,60],[127,40]]}
+            {"s":"forest","n":"Forest","nv":150,"e":[[123,60],[127,40]]}
         ],"estado":{"huntSlug":"forest"}}"#, Instant::now());
         assert_eq!(intel.snapshot().hunt_art_species, Some(123));
         assert_eq!(intel.snapshot().hunts[0].species.len(), 2);
+        assert_eq!(intel.snapshot().hunts[0].level, 150);
     }
 
     #[test]
