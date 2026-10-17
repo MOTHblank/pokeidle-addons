@@ -822,6 +822,77 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
     open
 }
 
+/// Outland tiers are a server-backed account setting, not eight hunt slugs.
+/// This control deliberately stays outside Explorer and Models so an account
+/// can choose its real active tier from any Hunt Atlas workspace.
+fn draw_atlas_outland_tier(
+    ui:&mut egui::Ui,view:&HuntView,native:&NativeSession,
+    account:usize,live:bool,error:&mut Option<String>,
+){
+    let active=view.outland_tier;
+    let pending=view.pending_outland_tier;
+    let level=view.trainer_level;
+    let mut request=None;
+    egui::Frame::new().fill(PANEL_ALT)
+        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(11,7))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new("OUTLAND TIER")
+                    .size(10.0).strong().color(DIM));
+                ui.label(RichText::new(match active{
+                    Some(tier)=>format!("● Outland {tier} active"),
+                    None=>"Awaiting game state".to_owned()
+                }).size(11.0).strong().color(if active.is_some(){GOOD}else{WARN}));
+                let label=pending.map(|tier|format!("Requesting Outland {tier}…"))
+                    .unwrap_or_else(||"Choose tier".into());
+                egui::ComboBox::from_id_salt(("atlas-outland-tier",account))
+                    .selected_text(label)
+                    .width(170.0)
+                    .show_ui(ui,|ui|{
+                        for tier in 1u8..=8{
+                            let threshold=
+                                crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize];
+                            let multiplier=
+                                crate::native_atlas_models::TIER_MULTIPLIERS[(tier-1) as usize];
+                            let eligible=
+                                crate::native_atlas_models::unlocked_tier(tier,level).is_some();
+                            let enabled=live && active.is_some() &&
+                                pending.is_none() && eligible && active!=Some(tier);
+                            ui.add_enabled_ui(enabled,|ui|{
+                                if ui.selectable_label(active==Some(tier),format!(
+                                    "Outland {tier} · Lv {threshold} · ×{multiplier:.2} rare drops"
+                                )).clicked(){
+                                    request=Some(tier);
+                                }
+                            });
+                        }
+                    });
+                if let Some(tier)=pending{
+                    ui.colored_label(WARN,format!("Waiting for Outland {tier} confirmation"));
+                }else if level.is_none(){
+                    ui.label(RichText::new("Trainer level unavailable")
+                        .size(10.0).color(MUTED));
+                }else if level.is_some_and(|level|level<150){
+                    ui.label(RichText::new("Unlocks at trainer Lv 150")
+                        .size(10.0).color(MUTED));
+                }else if !live{
+                    ui.label(RichText::new("Offline · read only")
+                        .size(10.0).color(WARN));
+                }
+            });
+            if let Some(message)=view.outland_tier_error.as_deref(){
+                ui.label(RichText::new(message).size(10.0).color(WARN));
+            }
+        });
+    if let Some(tier)=request{
+        match native.send_command(GameCommand::OutlandTier(tier)){
+            Ok(())=>*error=None,
+            Err(message)=>*error=Some(message),
+        }
+    }
+}
+
 fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
     ui.label(RichText::new("Account comparison")
         .size(16.0).strong().color(TEXT));
@@ -1714,6 +1785,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         draw_atlas_context(ui,&view,live){
         app.hunt_subtab=HuntSubtab::Current;
     }
+    ui.add_space(6.0);
+    draw_atlas_outland_tier(ui,&view,native,index,live,
+        &mut app.hunt_action_error[index]);
     ui.add_space(6.0);
     // Explorer owns the remaining CentralPanel height. Do not wrap it in
     // a full-page vertical ScrollArea: that makes available_height() inside
