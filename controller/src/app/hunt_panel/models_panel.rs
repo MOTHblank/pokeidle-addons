@@ -208,17 +208,23 @@ pub(super) fn draw_atlas_models(
     let outland=hunt.area.eq_ignore_ascii_case("outland");
     if outland {
         ui.horizontal_wrapped(|ui|{
-            ui.label("Outland tier preview");
+            ui.label("Model preview tier");
             ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
-            ui.label(format!("Required trainer Lv {}",
+            ui.label(format!("Requires trainer Lv {}",
                 models::TIER_LEVELS[(scenario.tier-1) as usize]));
             if let Some(actual)=observed_tier{
-                ui.label(RichText::new(format!("Server tier: {actual}"))
+                ui.label(RichText::new(format!("Game tier: Outland {actual}"))
                     .size(10.0).color(GOOD));
+                if scenario.tier!=actual && ui.small_button("Preview active tier").clicked(){
+                    scenario.tier=actual;
+                }
             }else{
-                ui.label(RichText::new("Server tier unavailable")
+                ui.label(RichText::new("Game tier unavailable")
                     .size(10.0).color(MUTED));
             }
+            ui.label(RichText::new(
+                "Preview only. To change the game tier, use the Outland selector above."
+            ).size(10.0).color(DIM));
         });
     }
     ui.horizontal_wrapped(|ui|{

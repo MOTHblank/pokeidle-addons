@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 pub enum GameCommand {
     Throw { ball_id: u64, slot: u64 },
     Hunt(String),
+    /// Game-server Outland drop tier (independent of hunt location).
+    OutlandTier(u8),
     Center,
     AutoSet(serde_json::Map<String, Value>),
     SetAutomation { field: String, value: Value },
@@ -21,6 +23,7 @@ impl GameCommand {
         match self {
             Self::Throw { ball_id, slot } => json!({"t":"ball.throw","ballId":ball_id,"slot":slot}),
             Self::Hunt(slug) => json!({"t":"hunt.select","slug":slug}),
+            Self::OutlandTier(tier) => json!({"t":"outland.tier","tier":tier}),
             Self::Center => json!({"t":"centro.ir"}),
             Self::AutoSet(fields) => {
                 let mut fields=fields.clone();
@@ -39,6 +42,7 @@ impl GameCommand {
             Self::Throw{ball_id,slot} => *ball_id>0 && *slot>0,
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            Self::OutlandTier(tier) => (1..=8).contains(tier),
             Self::Center => true,
             Self::AutoSet(fields) => fields.len()<128 && !fields.contains_key("t"),
             Self::SetAutomation {field,value} =>
@@ -310,6 +314,16 @@ impl Gameplay {
 #[cfg(test)]
 mod protocol_command_tests {
     use super::*;
+    #[test]
+    fn outland_tier_uses_server_protocol_and_rejects_invalid_tiers() {
+        for tier in 1..=8 {
+            let cmd=GameCommand::OutlandTier(tier);
+            assert!(cmd.is_valid());
+            assert_eq!(cmd.wire(),json!({"t":"outland.tier","tier":tier}));
+        }
+        assert!(!GameCommand::OutlandTier(0).is_valid());
+        assert!(!GameCommand::OutlandTier(9).is_valid());
+    }
     #[test]
     fn sell_command_uses_managers_confirmed_wire_format() {
         assert_eq!(GameCommand::SellPokemon(42).wire(),
