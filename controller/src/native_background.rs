@@ -441,9 +441,14 @@ fn normalize_twitch_login(value: &str) -> Option<String> {
     } else { None }
 }
 
+#[cfg(test)]
 fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
     desired: &Arc<Mutex<Vec<String>>>) {
     let Ok(payload) = serde_json::from_str::<Value>(text) else { return };
+    observe_value(snapshot, &payload, desired);
+}
+fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
+    desired: &Arc<Mutex<Vec<String>>>) {
     let state = payload.get("estado");
     update(snapshot, |status| {
         status.frames = status.frames.saturating_add(1);
@@ -539,16 +544,20 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
         match first_session.take().map(Ok).unwrap_or_else(|| open_session(&credentials)) {
             Ok((mut socket, welcome)) => {
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
-                observe(&snapshot, &welcome, &desired);
-                gameplay.ingest(&welcome, Instant::now());
-                restock.ingest(&welcome, Instant::now());
+                // A server frame has one parsed representation. All consumers
+                // inspect borrowed values instead of deserializing it again.
+                let Ok(frame) = serde_json::from_str::<Value>(&welcome) else { continue };
+                let received_at = Instant::now();
+                observe_value(&snapshot, &frame, &desired);
+                gameplay.ingest_value(&frame, received_at);
+                restock.ingest_value(&frame, received_at);
                 let initial_market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
-                market.ingest(&welcome, Instant::now(), &initial_market_cfg);
+                market.ingest_value(&frame, received_at, &initial_market_cfg);
                 if let Some(catalog) = item_metadata.as_ref() {
                     restock.merge_item_metadata(catalog);
                 }
-                hunt_intel.ingest(&welcome, Instant::now());
-                history_recorder.ingest(&welcome,hunt_intel.view.hunt_slug.as_deref());
+                hunt_intel.ingest_value(&frame, received_at);
+                history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
                 let mut last_config = capture_config.lock().map(|v|v.clone())
@@ -769,14 +778,15 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     }
                     match socket.read() {
                         Ok(Message::Text(text)) => {
-                            gameplay.ingest(text.as_ref(), Instant::now());
-                            let confirmed_before = restock.status.confirmed;
-                            restock.ingest(text.as_ref(), Instant::now());
-                            let market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
-                            market.ingest(text.as_ref(), Instant::now(), &market_cfg);
-                            hunt_intel.ingest(text.as_ref(), Instant::now());
-                            history_recorder.ingest(text.as_ref(),hunt_intel.view.hunt_slug.as_deref());
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
+                                let received_at = Instant::now();
+                                gameplay.ingest_value(&frame, received_at);
+                                let confirmed_before = restock.status.confirmed;
+                                restock.ingest_value(&frame, received_at);
+                                let market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                                market.ingest_value(&frame, received_at, &market_cfg);
+                                hunt_intel.ingest_value(&frame, received_at);
+                                history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                                 if let Some(auto)=frame.get("estado")
                                     .and_then(|state|state.get("automation")) {
                                     automation_writer.observe(auto);
@@ -813,13 +823,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     }
                                 }
                             }
-                            if restock.status.confirmed > confirmed_before {
-                                crate::logging::info(&format!(
-                                    "Native restock: confirmed and reconciled {}",
-                                    restock.status.last_order.as_deref().unwrap_or("purchase")
-                                ));
+                                if restock.status.confirmed > confirmed_before {
+                                    crate::logging::info(&format!(
+                                        "Native restock: confirmed and reconciled {}",
+                                        restock.status.last_order.as_deref().unwrap_or("purchase")
+                                    ));
+                                }
+                                observe_value(&snapshot, &frame, &desired);
                             }
-                            observe(&snapshot, text.as_ref(), &desired);
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
                             update(&snapshot, |s| s.last_received = Some(Instant::now()));
