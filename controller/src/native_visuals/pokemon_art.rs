@@ -215,33 +215,67 @@ fn outfit_sprites(client: &Client, root: &Path, looktype: u64) -> Option<Vec<Vec
     crop_frames_png(&sheet, &frames)
 }
 
-/// Prefer the authentic outfit animation over the marker atlas. The first
-/// frame is always usable alone; cached old single-frame images provide a
-/// fallback on startup or when the game asset service is temporarily offline.
+// Small, conventional Pokédex sprites are a reliable last-resort visual when
+// PokéIdle's dynamic outfit manifests are empty or a looktype has no atlas slot.
+// Fetch only the two Pokémon used by Overview on demand, then reuse the disk
+// cache. No sprite database or artwork is packaged in the application.
+fn static_sprite_url(kind: Kind, id: u64) -> Option<String> {
+    let (species, shiny) = match kind {
+        Kind::Pokemon if (1..=1025).contains(&id) => (id, false),
+        // The upstream creatures-sprites-lab catalog documents these two
+        // looktype families as 60000+dex and 70000+dex.
+        Kind::PokemonLooktype if (60001..=61025).contains(&id) => (id - 60000, false),
+        Kind::PokemonLooktype if (70001..=71025).contains(&id) => (id - 70000, true),
+        _ => return None,
+    };
+    let variant = if shiny { "shiny/" } else { "" };
+    Some(format!(
+        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/{variant}{species}.png"
+    ))
+}
+
+fn static_sprite(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<Vec<u8>> {
+    let url = static_sprite_url(kind, id)?;
+    let response = client.get(url).send()
+        .and_then(|response| response.error_for_status()).ok()?;
+    if response.content_length().is_some_and(|length| length > super::MAX_IMAGE_BYTES) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    response.take(super::MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if !valid_image(&bytes) { return None; }
+    let path = root.join(format!("{}-{id}.img", kind.key()));
+    let temporary = path.with_extension("tmp");
+    if std::fs::write(&temporary, &bytes).is_ok() {
+        let _ = std::fs::rename(&temporary, &path);
+    }
+    Some(bytes)
+}
+
+/// Use the first cached frame immediately. Prefer a small, guaranteed
+/// national-dex PNG for known species and documented 60k/70k looktypes.
+/// Retain the game's outfits and marker atlas for all other looktypes.
 pub(super) fn load(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<Vec<Vec<u8>>> {
     if id == 0 { return None; }
     let output = root.join(format!("{}-{id}.img", kind.key()));
-    let previous = std::fs::read(&output).ok().filter(|bytes| valid_image(bytes));
+    if let Ok(bytes) = std::fs::read(&output) {
+        if valid_image(&bytes) { return Some(vec![bytes]); }
+        let _ = std::fs::remove_file(&output);
+    }
+    if let Some(bytes) = static_sprite(client, root, kind, id) {
+        return Some(vec![bytes]);
+    }
     let looktype = match kind {
         Kind::Pokemon => species_looktype(client, root, id),
         Kind::PokemonLooktype => Some(id),
         _ => None,
-    };
-    let Some(looktype) = looktype else {
-        return previous.map(|bytes| vec![bytes]);
-    };
+    }?;
     let frames = outfit_sprites(client, root, looktype)
-        .or_else(|| marker_sprite(client, root, looktype).map(|bytes| vec![bytes]))
-        .or_else(|| previous.clone().map(|bytes| vec![bytes]))?;
-    // Keep the existing disk-cache format for compatibility. Metadata and
-    // entire outfit sheets are already cached for reconstructing animation on
-    // the next launch; no frame textures are embedded in the executable.
-    if previous.as_deref() != frames.first().map(Vec::as_slice) {
-        if let Some(first) = frames.first() {
-            let temporary = output.with_extension("tmp");
-            if std::fs::write(&temporary, first).is_ok() {
-                let _ = std::fs::rename(temporary, output);
-            }
+        .or_else(|| marker_sprite(client, root, looktype).map(|bytes| vec![bytes]))?;
+    if let Some(first) = frames.first() {
+        let temporary = output.with_extension("tmp");
+        if std::fs::write(&temporary, first).is_ok() {
+            let _ = std::fs::rename(&temporary, &output);
         }
     }
     Some(frames)
@@ -250,6 +284,19 @@ pub(super) fn load(client: &Client, root: &Path, kind: Kind, id: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dex_sprite_fallback_is_bounded_and_only_used_for_verified_id_families() {
+        assert_eq!(static_sprite_url(Kind::Pokemon, 25).as_deref(),
+            Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png"));
+        assert_eq!(static_sprite_url(Kind::PokemonLooktype, 60025),
+            static_sprite_url(Kind::Pokemon, 25));
+        assert_eq!(static_sprite_url(Kind::PokemonLooktype, 70025).as_deref(),
+            Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/25.png"));
+        assert!(static_sprite_url(Kind::Pokemon, 0).is_none());
+        assert!(static_sprite_url(Kind::Pokemon, 1026).is_none());
+        assert!(static_sprite_url(Kind::PokemonLooktype, 47861).is_none());
+    }
+
     #[test]
     fn paths_remain_on_game_origin() {
         assert_eq!(asset_path("/assets-packs/pokemon/a.png?rev=1").as_deref(),
