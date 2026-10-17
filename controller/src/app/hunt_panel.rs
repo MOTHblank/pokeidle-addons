@@ -528,6 +528,33 @@ fn atlas_destinations<'a>(
 /// Return the combined game type-chart multiplier for an attack type against
 /// a single- or dual-type defender. The guide omits some neutral 1× entries;
 /// absent *entries* are neutral, but absent type definitions are unknown.
+
+fn atlas_locations(
+    view:&HuntView,reference:Option<&AtlasReference>
+)->std::collections::BTreeSet<String>{
+    let mut locations=std::collections::BTreeSet::new();
+    // Do not deduplicate by slug here: guide and server can supply
+    // complementary area/region names for the same hunt.
+    let guide=reference.into_iter().flat_map(|r|r.hunts.iter());
+    for hunt in view.hunts.iter().chain(guide){
+        for name in [&hunt.area,&hunt.region]{
+            if !name.trim().is_empty(){locations.insert(name.trim().to_owned());}
+        }
+    }
+    locations
+}
+fn atlas_hunt_matches_location(
+    hunt:&native_hunts::HuntEntry,location:&str,
+    guide_locations:&std::collections::BTreeMap<&str,(&str,&str)>
+)->bool{
+    if location.is_empty(){return true}
+    if hunt.area.trim().eq_ignore_ascii_case(location) ||
+        hunt.region.trim().eq_ignore_ascii_case(location) {return true}
+    guide_locations.get(hunt.slug.as_str()).is_some_and(|(area,region)|
+        area.trim().eq_ignore_ascii_case(location) ||
+        region.trim().eq_ignore_ascii_case(location))
+}
+
 fn atlas_type_multiplier(
     reference:&AtlasReference,attack:&str,defenders:&[String]
 )->Option<f64>{
@@ -829,14 +856,16 @@ fn atlas_species_rows(
     let query=filters.search.trim().to_lowercase();
     let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
         .filter_map(|mon|mon.species_id).collect();
+    let guide_locations=reference.map(|guide|guide.hunts.iter()
+        .map(|hunt|(hunt.slug.as_str(),(hunt.area.as_str(),hunt.region.as_str())))
+        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default();
     let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow>::new();
     for (hunt,unlocked) in atlas_destinations(view,reference) {
         if filters.availability==AtlasAvailability::Unlocked && !unlocked
             || filters.availability==AtlasAvailability::Locked && unlocked
             || filters.min_level>0 && hunt.level<filters.min_level
             || filters.max_level>0 && hunt.level>filters.max_level
-            || !filters.region.is_empty() &&
-               hunt.area!=filters.region && hunt.region!=filters.region
+            || !atlas_hunt_matches_location(hunt,&filters.region,&guide_locations)
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
@@ -1265,12 +1294,7 @@ fn atlas_filters_panel(
                     ui.label(tr("Location"));
                     // Include both names. Some server entries have area and region
                     // simultaneously; choosing one previously hid entire areas.
-                    let mut places=std::collections::BTreeSet::new();
-                    for (hunt,_) in atlas_destinations(view,reference){
-                        for label in [&hunt.area,&hunt.region] {
-                            if !label.trim().is_empty(){places.insert(label.as_str());}
-                        }
-                    }
+                    let places=atlas_locations(view,reference);
                     egui::ComboBox::from_id_salt(("atlas-place",account))
                         .selected_text(if f.region.is_empty(){tr("All areas").to_owned()}
                             else{f.region.clone()})
@@ -2651,6 +2675,25 @@ mod tests {
         assert_eq!(atlas_combat_status(&view,true).0,"In hunt · no recent activity");
         view.in_center=true;
         assert_eq!(atlas_combat_status(&view,true).0,"At Pokémon Center");
+    }
+    #[test]
+    fn location_selector_combines_server_and_guide_area_names(){
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"same".into(),area:"Kanto".into(),region:"Viridian".into(),
+            ..Default::default()
+        }]);
+        let mut guide=AtlasReference::default();
+        guide.hunts.push(native_hunts::HuntEntry{
+            slug:"same".into(),area:"Outland".into(),..Default::default()
+        });
+        let names=atlas_locations(&view,Some(&guide));
+        assert!(["Kanto","Viridian","Outland"].iter().all(|n|names.contains(*n)));
+        let guide_locations=guide.hunts.iter()
+            .map(|h|(h.slug.as_str(),(h.area.as_str(),h.region.as_str())))
+            .collect::<std::collections::BTreeMap<_,_>>();
+        assert!(atlas_hunt_matches_location(&view.hunts[0],"Outland",&guide_locations));
+        assert!(!atlas_hunt_matches_location(&view.hunts[0],"Johto",&guide_locations));
     }
     #[test]
     fn explorer_preserves_authoritative_unlocked_and_locked_separation(){
