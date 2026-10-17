@@ -837,7 +837,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         });
                                     }
                                 }
-                            }
                                 if restock.status.confirmed > confirmed_before {
                                     crate::logging::info(&format!(
                                         "Native restock: confirmed and reconciled {}",
