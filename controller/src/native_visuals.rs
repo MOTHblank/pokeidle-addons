@@ -17,8 +17,23 @@ mod generated {
 const MAX_IMAGE_BYTES: u64 = 1_048_576;
 const MAX_EDGE: u32 = 1024;
 // Dynamic Pokémon sprite textures, not bundled item icons, are budgeted.
-const MAX_POKEMON_TEXTURES: usize = 96;
-const MAX_POKEMON_TEXTURE_PIXELS: usize = 16 * 1024 * 1024;
+// Resident dynamic sprites are optional; the original art remains on disk.
+// A 2M-pixel RGBA budget is ~8 MiB of CPU-side decoded pixel data, rather
+// than the previous 16M-pixel (~64 MiB) allowance.
+const MAX_POKEMON_TEXTURES: usize = 24;
+const MAX_POKEMON_TEXTURE_PIXELS: usize = 2 * 1024 * 1024;
+const MAX_POKEMON_TEXTURE_EDGE: u32 = 128;
+
+fn pokemon_texture_size(width:u32, height:u32)->(u32,u32) {
+    let longest=width.max(height);
+    if longest <= MAX_POKEMON_TEXTURE_EDGE || longest==0 {
+        return (width,height)
+    }
+    let scale=MAX_POKEMON_TEXTURE_EDGE as u64;
+    let longest=longest as u64;
+    (((width as u64*scale)/longest).max(1) as u32,
+     ((height as u64*scale)/longest).max(1) as u32)
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind { Ball, Item, Pokemon, PokemonLooktype }
@@ -263,6 +278,12 @@ impl VisualCache {
             if img.width() == 0 || img.height() == 0 ||
                 img.width() > MAX_EDGE || img.height() > MAX_EDGE { continue; }
             let rgba = img.into_rgba8();
+            let rgba=if matches!(key.0,Kind::Pokemon|Kind::PokemonLooktype) {
+                let (w,h)=pokemon_texture_size(rgba.width(),rgba.height());
+                if w!=rgba.width() || h!=rgba.height() {
+                    image::imageops::resize(&rgba,w,h,image::imageops::FilterType::Nearest)
+                } else {rgba}
+            } else {rgba};
             pixels=pixels.saturating_add(rgba.width() as usize * rgba.height() as usize);
             let color_image = ColorImage::from_rgba_unmultiplied(
                 [rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
@@ -366,6 +387,15 @@ impl VisualCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pokemon_textures_bound_decoded_pixels_without_distorting_aspect_ratio() {
+        assert_eq!(pokemon_texture_size(512,256),(128,64));
+        assert_eq!(pokemon_texture_size(128,256),(64,128));
+        assert_eq!(pokemon_texture_size(32,64),(32,64));
+        assert_eq!(pokemon_texture_size(1,512),(1,128));
+        assert!(MAX_POKEMON_TEXTURE_PIXELS<=2*1024*1024);
+    }
+
     #[test]
     fn image_urls_never_accept_untrusted_domains_or_traversal() {
         assert!(trusted_url("https://evil.example/icon.png").is_none());
