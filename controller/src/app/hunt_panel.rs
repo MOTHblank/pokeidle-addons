@@ -959,7 +959,7 @@ fn atlas_species_rows(
                filters.collection==AtlasCollection::NotInDepot && owned {continue}
             let share=spawn.weight.max(0.0)/sum;
             let forecast=cache.get(&hunt.slug);
-            let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,
+            let base=atlas_objective(filters.sort,forecast.as_ref(),&hunt,
                 share,meta,&filters.rare_item);
             let objective=match filters.sort {
                 AtlasSort::Capture|AtlasSort::ShinyCaught=>forecast.as_ref()
