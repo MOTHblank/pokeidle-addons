@@ -7,7 +7,7 @@ mod models_panel;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum HuntSubtab { Explorer, Recommendations, Current, Models, Session, Compare }
 
-#[derive(Clone,Debug)]
+#[derive(Clone,Debug,PartialEq)]
 pub(super) struct AtlasScenario {
     hunt_slug:String,
     ball:BallKind,
@@ -39,7 +39,7 @@ enum AtlasSort {
     OutlandRare, Market, Rare, Shiny, Spawn, Level, Name,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct AtlasFilters {
     search: String,
     region: String,
@@ -510,19 +510,19 @@ fn draw_hunt_row(
 }
 
 #[derive(Clone)]
-struct AtlasDestination<'a> {
-    hunt:&'a native_hunts::HuntEntry,
+struct AtlasDestination {
+    hunt:Arc<native_hunts::HuntEntry>,
     unlocked:bool,
     share:f64,
     forecast:Option<native_atlas::Forecast>,
     objective:Option<f64>,
 }
-struct AtlasSpeciesRow<'a> {
+struct AtlasSpeciesRow {
     id:u64,
     name:String,
     types:Vec<String>,
     owned:bool,
-    destinations:Vec<AtlasDestination<'a>>,
+    destinations:Vec<AtlasDestination>,
     best:Option<f64>,
 }
 
@@ -842,10 +842,71 @@ fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
 
 /// Species are grouped across destinations, matching the game guide rather
 /// than repeating one card per hunt. A guide-only hunt is NEVER executable.
-fn atlas_species_rows<'a>(
-    view:&'a HuntView, reference:Option<&'a AtlasReference>, cache:&EstimateCache,
+/// Cache completed Explorer rankings across redraws. Live forecasts and
+/// reference/catalog changes invalidate it; UI selection and disclosure do not.
+#[derive(Default)]
+pub(super) struct ExplorerCache {
+    rows:Vec<AtlasSpeciesRow>,
+    filters:Option<AtlasFilters>,
+    scenario:Option<AtlasScenario>,
+    catalog_ptr:usize,
+    reference_ptr:usize,
+    forecast_at:Option<Instant>,
+    model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
+    hunt_slug:Option<String>,
+    trainer_level:Option<u32>,
+    roster_signature:u64,
+    roster_ready:bool,
+    ball_quotes_ptr:usize,
+    initialized:bool,
+}
+impl ExplorerCache {
+    fn update(&mut self,view:&HuntView,reference:Option<&AtlasReference>,
+        estimates:&EstimateCache,filters:&AtlasFilters,scenario:&AtlasScenario,
+    )->&[AtlasSpeciesRow] {
+        let mut key_filters=filters.clone();
+        key_filters.selected_species=None;
+        key_filters.filters_open=false;
+        let roster_signature=view.pokemon_roster.iter().filter_map(|mon|mon.species_id)
+            .fold(0u64,|hash,id|hash.wrapping_mul(1099511628211).wrapping_add(id));
+        let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
+        let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
+        let ball_quotes_ptr=Arc::as_ptr(&view.ball_quotes) as usize;
+        let changed=!self.initialized ||
+            self.filters.as_ref()!=Some(&key_filters) ||
+            self.scenario.as_ref()!=Some(scenario) ||
+            self.catalog_ptr!=catalog_ptr ||
+            self.reference_ptr!=reference_ptr ||
+            self.forecast_at!=estimates.refreshed ||
+            self.model_signature!=estimates.active_signature ||
+            self.hunt_slug!=view.hunt_slug ||
+            self.trainer_level!=view.trainer_level ||
+            self.roster_signature!=roster_signature ||
+            self.roster_ready!=view.roster_ready ||
+            self.ball_quotes_ptr!=ball_quotes_ptr;
+        if changed {
+            self.rows=atlas_species_rows(view,reference,estimates,filters,scenario);
+            self.filters=Some(key_filters);
+            self.scenario=Some(scenario.clone());
+            self.catalog_ptr=catalog_ptr;
+            self.reference_ptr=reference_ptr;
+            self.forecast_at=estimates.refreshed;
+            self.model_signature=estimates.active_signature;
+            self.hunt_slug=view.hunt_slug.clone();
+            self.trainer_level=view.trainer_level;
+            self.roster_signature=roster_signature;
+            self.roster_ready=view.roster_ready;
+            self.ball_quotes_ptr=ball_quotes_ptr;
+            self.initialized=true;
+        }
+        &self.rows
+    }
+}
+
+fn atlas_species_rows(
+    view:&HuntView, reference:Option<&AtlasReference>, cache:&EstimateCache,
     filters:&AtlasFilters,scenario:&AtlasScenario,
-)->Vec<AtlasSpeciesRow<'a>> {
+)->Vec<AtlasSpeciesRow> {
     // The absence of a complete roster is not proof that a species is missing.
     if filters.collection!=AtlasCollection::All && !view.roster_ready {
         return Vec::new();
@@ -853,7 +914,7 @@ fn atlas_species_rows<'a>(
     let query=filters.search.trim().to_lowercase();
     let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
         .filter_map(|mon|mon.species_id).collect();
-    let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow<'a>>::new();
+    let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow>::new();
     for (hunt,unlocked) in atlas_destinations(view,reference) {
         if filters.availability==AtlasAvailability::Unlocked && !unlocked
             || filters.availability==AtlasAvailability::Locked && unlocked
@@ -864,6 +925,8 @@ fn atlas_species_rows<'a>(
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
+        // Share a single owned hunt among all Pokémon in that destination.
+        let hunt=Arc::new(hunt.clone());
         for spawn in &hunt.species {
             if spawn.weight<=0.0 {continue}
             let meta=reference.and_then(|r|r.species.get(&spawn.id));
@@ -936,7 +999,7 @@ fn atlas_species_rows<'a>(
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
             }).destinations.push(AtlasDestination{
-                hunt,unlocked,share,forecast,objective,
+                hunt:Arc::clone(&hunt),unlocked,share,forecast,objective,
             });
         }
     }
@@ -1425,16 +1488,14 @@ fn atlas_filters_panel(
         });
 }
 
-fn atlas_first_unlocked<'a,'b>(
-    row:&'b AtlasSpeciesRow<'a>
-)->Option<&'b AtlasDestination<'a>>{
+fn atlas_first_unlocked(row:&AtlasSpeciesRow)->Option<&AtlasDestination>{
     row.destinations.iter().find(|destination|destination.unlocked)
 }
 
 /// Drilldown rows are compact by default; shared guide drops do not repeat
 /// once per destination, and the Hunt action never targets a guide-only entry.
 fn draw_atlas_destination(
-    ui:&mut egui::Ui,dest:&AtlasDestination<'_>,view:&HuntView,
+    ui:&mut egui::Ui,dest:&AtlasDestination,view:&HuntView,
     native:&NativeSession,live:bool,error:&mut Option<String>
 ){
     let current=view.hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
@@ -1492,7 +1553,7 @@ fn draw_atlas_destination(
 }
 
 fn draw_atlas_species(
-    ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,sort:AtlasSort,
+    ui:&mut egui::Ui,row:&AtlasSpeciesRow,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
     filters:&AtlasFilters,native:&NativeSession,live:bool,
     visuals:&mut VisualCache,error:&mut Option<String>,
@@ -1664,7 +1725,7 @@ fn draw_atlas_species(
 /// Entire rows, not only tiny text labels, are clickable. Missing artwork uses
 /// a readable abbreviation instead of a glyph absent from the bundled font.
 fn draw_atlas_species_selector(
-    ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,
+    ui:&mut egui::Ui,row:&AtlasSpeciesRow,
     sort:AtlasSort,selected:bool,visuals:&mut VisualCache,
     reference:Option<&AtlasReference>,filters:&AtlasFilters,
 )->bool{
@@ -1718,6 +1779,7 @@ fn draw_atlas_explorer(
     native:&NativeSession,live:bool,index:usize,
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
+    results:&mut ExplorerCache,
     visuals:&mut VisualCache,command_error:&mut Option<String>,
 ){
     // The Explorer is laid out directly in the finite-height CentralPanel.
@@ -1735,7 +1797,7 @@ fn draw_atlas_explorer(
         atlas_filters_panel(ui,filters,page,view,reference,index);
     }
     ui.add_space(9.0);
-    let rows=atlas_species_rows(view,reference,cache,filters,scenario);
+    let rows=results.update(view,reference,cache,filters,scenario);
     if !filters.weak_to.is_empty(){
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(format!(
@@ -2047,7 +2109,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         draw_atlas_explorer(ui,&view,native,live,index,
             app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
             &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
-            &app.atlas_scenarios[index],&mut app.visuals,
+            &app.atlas_scenarios[index],&mut app.atlas_results[index],
+            &mut app.visuals,
             &mut app.hunt_action_error[index]);
         return;
     }
@@ -2701,11 +2764,11 @@ mod tests {
             best:Some(200.0),
             destinations:vec![
                 AtlasDestination{
-                    hunt:&locked,unlocked:false,share:0.7,
+                    hunt:Arc::new(locked),unlocked:false,share:0.7,
                     forecast:None,objective:Some(200.0)
                 },
                 AtlasDestination{
-                    hunt:&accessible,unlocked:true,share:0.3,
+                    hunt:Arc::new(accessible),unlocked:true,share:0.3,
                     forecast:None,objective:Some(100.0)
                 }
             ],
