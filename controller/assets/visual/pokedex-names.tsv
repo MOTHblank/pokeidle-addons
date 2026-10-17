@@ -1,740 +1,947 @@
-# Compact national Pokédex name index generated from pokeidle-upstream/assets/creatures-sprites-lab.json.
-# species ID\tEnglish species name. This index is only used when the game's hunt catalog lacks spawn IDs.
-1	Bulbasaur
-2	Ivysaur
-3	Venusaur
-4	Charmander
-5	Charmeleon
-6	Charizard
-7	Squirtle
-8	Wartortle
-9	Blastoise
-10	Caterpie
-11	Metapod
-12	Butterfree
-13	Weedle
-14	Kakuna
-15	Beedrill
-16	Pidgey
-17	Pidgeotto
-18	Pidgeot
-19	Rattata
-20	Raticate
-21	Spearow
-22	Fearow
-23	Ekans
-24	Arbok
-25	Pikachu
-26	Raichu
-27	Sandshrew
-28	Sandslash
-29	Nidoran Female
-30	Nidorina
-31	Nidoqueen
-32	Nidoran Male
-33	Nidorino
-34	Nidoking
-35	Clefairy
-36	Clefable
-37	Vulpix
-38	Ninetales
-39	Jigglypuff
-40	Wigglytuff
-41	Zubat
-42	Golbat
-43	Oddish
-44	Gloom
-45	Vileplume
-46	Paras
-47	Parasect
-48	Venonat
-49	Venomoth
-50	Diglett
-51	Dugtrio
-52	Meowth
-53	Persian
-54	Psyduck
-55	Golduck
-56	Mankey
-57	Primeape
-58	Growlithe
-59	Arcanine
-60	Poliwag
-61	Poliwhirl
-62	Poliwrath
-63	Abra
-64	Kadabra
-65	Alakazam
-66	Machop
-67	Machoke
-68	Machamp
-69	Bellsprout
-70	Weepinbell
-71	Victreebel
-72	Tentacool
-73	Tentacruel
-74	Geodude
-75	Graveler
-76	Golem
-77	Ponyta
-78	Rapidash
-79	Slowpoke
-80	Slowbro
-81	Magnemite
-82	Magneton
-83	Farfetchd
-84	Doduo
-85	Dodrio
-86	Seel
-87	Dewgong
-88	Grimer
-89	Muk
-90	Shellder
-91	Cloyster
-92	Gastly
-93	Haunter
-94	Gengar
-95	Onix
-96	Drowzee
-97	Hypno
-98	Krabby
-99	Kingler
-100	Voltorb
-101	Electrode
-102	Exeggcute
-103	Exeggutor
-104	Cubone
-105	Marowak
-106	Hitmonlee
-107	Hitmonchan
-108	Lickitung
-109	Koffing
-110	Weezing
-111	Rhyhorn
-112	Rhydon
-113	Chansey
-114	Tangela
-115	Kangaskhan
-116	Horsea
-117	Seadra
-118	Goldeen
-119	Seaking
-120	Staryu
-121	Starmie
-122	Mr. Mime
-123	Scyther
-124	Jynx
-125	Electabuzz
-126	Magmar
-127	Pinsir
-128	Tauros
-129	Magikarp
-130	Gyarados
-131	Lapras
-132	Ditto
-133	Eevee
-134	Vaporeon
-135	Jolteon
-136	Flareon
-137	Porygon
-138	Omanyte
-139	Omastar
-140	Kabuto
-141	Kabutops
-142	Aerodactyl
-143	Snorlax
-144	Articuno
-145	Zapdos
-146	Moltres
-147	Dratini
-148	Dragonair
-149	Dragonite
-150	Mewtwo
-151	Mew
-152	Chikorita
-153	Bayleef
-154	Meganium
-155	Cyndaquil
-157	Typhlosion
-158	Totodile
-159	Croconaw
-160	Feraligatr
-161	Sentret
-162	Furret
-163	Hoothoot
-164	Noctowl
-165	Ledyba
-166	Ledian
-167	Spinarak
-168	Ariados
-169	Crobat
-170	Chinchou
-171	Lanturn
-172	Pichu
-173	Cleffa
-174	Igglybuff
-175	Togepi
-176	Togetic
-177	Natu
-178	Xatu
-179	Mareep
-180	Flaaffy
-181	Ampharos
-182	Bellossom
-183	Marill
-184	Azumarill
-185	Sudowoodo
-186	Politoed
-187	Hoppip
-188	Skiploom
-189	Jumpluff
-190	Aipom
-191	Sunkern
-192	Sunflora
-193	Yanma
-194	Wooper
-195	Quagsire
-196	Espeon
-197	Umbreon
-198	Murkrow
-199	Slowking
-200	Misdreavus
-201	Unown
-202	Wobbuffet
-203	Girafarig
-204	Pineco
-205	Forretress
-206	Dunsparce
-207	Gligar
-208	Steelix
-209	Snubbull
-210	Granbull
-211	Qwilfish
-212	Scizor
-213	Shuckle
-214	Heracross
-215	Sneasel
-216	Teddiursa
-217	Ursaring
-218	Slugma
-219	Magcargo
-220	Swinub
-221	Piloswine
-222	Corsola
-223	Remoraid
-224	Octillery
-225	Delibird
-226	Mantine
-227	Skarmory
-228	Houndour
-229	Houndoom
-230	Kingdra
-231	Phanpy
-232	Donphan
-233	Porygon2
-234	Stantler
-235	Smeargle
-236	Tyrogue
-237	Hitmontop
-238	Smoochum
-239	Elekid
-240	Magby
-241	Miltank
-242	Blissey
-243	Raikou
-244	Entei
-245	Suicune
-246	Larvitar
-248	Tyranitar
-250	Ho-oh
-251	Celebi
-252	Treecko
-253	Grovyle
-254	Sceptile
-255	Torchic
-256	Combusken
-257	Blaziken
-258	Mudkip
-259	Marshtomp
-260	Swampert
-262	Mightyena
-263	Zigzagoon
-264	Linoone
-265	Wurmple
-266	Silcoon
-267	Beautifly
-268	Cascoon
-269	Dustox
-270	Lotad
-271	Lombre
-272	Ludicolo
-273	Seedot
-274	Nuzleaf
-275	Shiftry
-276	Taillow
-277	Swellow
-278	Wingull
-279	Pelipper
-280	Ralts
-281	Kirlia
-282	Gardevoir
-283	Surskit
-284	Masquerain
-285	Shroomish
-286	Breloom
-287	Slakoth
-288	Vigoroth
-289	Slaking
-290	Nincada
-291	Ninjask
-292	Shedinja
-293	Whismur
-294	Loudred
-295	Exploud
-296	Makuhita
-297	Hariyama
-298	Azurill
-299	Nosepass
-300	Skitty
-301	Delcatty
-302	Sableye
-303	Mawile
-304	Aron
-305	Lairon
-306	Aggron
-307	Meditite
-308	Medicham
-309	Electrike
-310	Manectric
-311	Plusle
-312	Minun
-313	Volbeat
-314	Illumise
-315	Roselia
-316	Gulpin
-317	Swalot
-318	Carvanha
-319	Sharpedo
-320	Wailmer
-321	Wailord
-322	Numel
-323	Camerupt
-324	Torkoal
-325	Spoink
-326	Grumpig
-327	Spinda
-328	Trapinch
-329	Vibrava
-330	Flygon
-331	Cacnea
-332	Cacturne
-333	Swablu
-334	Altaria
-335	Zangoose
-336	Seviper
-337	Lunatone
-338	Solrock
-339	Barboach
-340	Whiscash
-341	Corphish
-342	Crawdaunt
-343	Baltoy
-344	Claydol
-345	Lileep
-346	Cradily
-347	Anorith
-348	Armaldo
-349	Feebas
-350	Milotic
-351	Castform
-352	Kecleon
-353	Shuppet
-354	Banette
-355	Duskull
-356	Dusclops
-357	Tropius
-358	Chimecho
-359	Absol
-360	Wynaut
-361	Snorunt
-362	Glalie
-363	Spheal
-364	Sealeo
-365	Walrein
-366	Clamperl
-367	Huntail
-368	Gorebyss
-369	Relicanth
-370	Luvdisc
-371	Bagon
-372	Shelgon
-373	Salamence
-374	Beldum
-375	Metang
-376	Metagross
-377	Regirock
-378	Regice
-379	Registeel
-382	Kyogre
-383	Groudon
-384	Rayquaza
-385	Jirachi
-387	Turtwig
-388	Grotle
-389	Torterra
-390	Chimchar
-391	Monferno
-392	Infernape
-393	Piplup
-394	Prinplup
-395	Empoleon
-396	Starly
-397	Staravia
-398	Staraptor
-399	Bidoof
-400	Bibarel
-401	Kricketot
-402	Kricketune
-403	Shinx
-404	Luxio
-405	Luxray
-406	Budew
-407	Roserade
-408	Cranidos
-409	Rampardos
-410	Shieldon
-411	Bastiodon
-412	Burmy
-413	Wormadam
-414	Mothim
-415	Combee
-416	Vespiquen
-417	Pachirisu
-418	Buizel
-419	Floatzel
-420	Cherubi
-421	Cherrim
-422	Shellos
-423	Gastrodon
-424	Ambipom
-425	Drifloon
-426	Drifblim
-427	Buneary
-428	Lopunny
-429	Mismagius
-430	Honchkrow
-431	Glameow
-432	Purugly
-433	Chingling
-434	Stunky
-435	Skuntank
-436	Bronzor
-437	Bronzong
-439	Mime Jr.
-441	Chatot
-442	Spiritomb
-443	Gible
-444	Gabite
-445	Garchomp
-446	Munchlax
-447	Riolu
-448	Lucario
-449	Hippopotas
-450	Hippowdon
-451	Skorupi
-452	Drapion
-453	Croagunk
-454	Toxicroak
-455	Carnivine
-456	Finneon
-457	Lumineon
-458	Mantyke
-459	Snover
-460	Abomasnow
-461	Weavile
-462	Magnezone
-463	Lickilicky
-464	Rhyperior
-465	Tangrowth
-466	Electivire
-467	Magmortar
-468	Togekiss
-469	Yanmega
-470	Leafeon
-471	Glaceon
-472	Gliscor
-473	Mamoswine
-474	Porygon-Z
-475	Gallade
-476	Probopass
-477	Dusknoir
-478	Froslass
-479	Rotom
-480	Uxie
-481	Mesprit
-482	Azelf
-483	Dialga
-484	Palkia
-485	Heatran
-486	Regigigas
-487	Giratina
-488	Cresselia
-489	Phione
-490	Manaphy
-491	Darkrai
-494	Victini
-495	Snivy
-496	Servine
-497	Serperior
-498	Tepig
-499	Pignite
-500	Emboar
-501	Oshawott
-502	Dewott
-503	Samurott
-504	Patrat
-505	Watchog
-506	Lillipup
-508	Stoutland
-510	Liepard
-511	Pansage
-512	Simisage
-513	Pansear
-514	Simisear
-515	Panpour
-516	Simipour
-517	Munna
-518	Musharna
-519	Pidove
-520	Tranquill
-521	Unfezant
-522	Blitzle
-523	Zebstrika
-524	Roggenrola
-525	Boldore
-526	Gigalith
-527	Woobat
-528	Swoobat
-530	Excadrill
-531	Audino
-532	Timburr
-533	Gurdurr
-534	Conkeldurr
-535	Tympole
-536	Palpitoad
-537	Seismitoad
-538	Throh
-539	Sawk
-540	Sewaddle
-541	Swadloon
-542	Leavanny
-543	Venipede
-544	Whirlipede
-545	Scolipede
-546	Cottonee
-547	Whimsicott
-548	Petilil
-549	Lilligant
-551	Sandile
-552	Krokorok
-553	Krookodile
-554	Darumaka
-556	Maractus
-557	Dwebble
-558	Crustle
-560	Scrafty
-561	Sigilyph
-562	Yamask
-563	Cofagrigus
-564	Tirtouga
-565	Carracosta
-566	Archen
-567	Archeops
-568	Trubbish
-569	Garbodor
-570	Zorua
-571	Zoroark
-572	Minccino
-573	Cinccino
-574	Gothita
-575	Gothorita
-576	Gothitelle
-577	Solosis
-578	Duosion
-579	Reuniclus
-580	Ducklett
-581	Swanna
-582	Vanillite
-584	Vanilluxe
-585	Deerling
-586	Sawsbuck
-587	Emolga
-588	Karrablast
-589	Escavalier
-590	Foongus
-591	Amoonguss
-592	Frillish
-593	Jellicent
-595	Joltik
-596	Galvantula
-597	Ferroseed
-598	Ferrothorn
-599	Klink
-601	Klinklang
-602	Tynamo
-603	Eelektrik
-604	Eelektross
-605	Elgyem
-607	Litwick
-608	Lampent
-609	Chandelure
-610	Axew
-611	Fraxure
-612	Haxorus
-613	Cubchoo
-614	Beartic
-615	Cryogonal
-616	Shelmet
-617	Accelgor
-618	Stunfisk
-619	Mienfoo
-620	Mienshao
-621	Druddigon
-622	Golett
-623	Golurk
-624	Pawniard
-625	Bisharp
-626	Bouffalant
-627	Rufflet
-628	Braviary
-629	Vullaby
-630	Mandibuzz
-631	Heatmor
-633	Deino
-634	Zweilous
-635	Hydreigon
-636	Larvesta
-637	Volcarona
-638	Cobalion
-639	Terrakion
-640	Virizion
-643	Reshiram
-644	Zekrom
-646	Kyurem
-648	Meloetta
-649	Genesect
-652	Chesnaught
-655	Delphox
-658	Greninja
-659	Bunnelby
-660	Diggersby
-661	Fletchling
-662	Fletchinder
-663	Talonflame
-664	Scatterbug
-665	Spewpa
-666	Vivillon
-667	Litleo
-668	Pyroar
-669	Flabebe
-671	Florges
-674	Pancham
-675	Pangoro
-677	Espurr
-678	Meowstic
-679	Honedge
-680	Doublade
-681	Aegislash
-682	Spritzee
-683	Aromatisse
-684	Swirlix
-685	Slurpuff
-686	Inkay
-687	Malamar
-688	Binacle
-689	Barbaracle
-690	Skrelp
-691	Dragalge
-692	Clauncher
-693	Clawitzer
-694	Helioptile
-695	Heliolisk
-696	Tyrunt
-698	Amaura
-699	Aurorus
-700	Sylveon
-701	Hawlucha
-702	Dedenne
-703	Carbink
-704	Goomy
-705	Sliggoo
-706	Goodra
-707	Klefki
-708	Phantump
-709	Trevenant
-712	Bergmite
-713	Avalugg
-714	Noibat
-715	Noivern
-723	Dartrix
-725	Litten
-726	Torracat
-727	Incineroar
-728	Popplio
-729	Brionne
-730	Primarina
-731	Pikipek
-732	Trumbeak
-733	Toucannon
-734	Yungoos
-735	Gumshoos
-736	Grubbin
-737	Charjabug
-738	Vikavolt
-742	Cutiefly
-743	Ribombee
-744	Rockruff
-747	Mareanie
-748	Toxapex
-749	Mudbray
-750	Mudsdale
-751	Dewpider
-752	Araquanid
-755	Morelull
-756	Shiinotic
-757	Salandit
-758	Salazzle
-759	Stufful
-760	Bewear
-761	Bounsweet
-762	Steenee
-763	Tsareena
-766	Passimian
-767	Wimpod
-768	Golisopod
-777	Togedemaru
-778	Mimikyu
-779	Bruxish
-780	Drampa
-781	Dhelmise
-782	Jangmo-o
-783	Hakamo-o
-784	Kommo-o
-798	Kartana
-799	Guzzlord
-803	Poipole
-804	Naganadel
-813	Scorbunny
-814	Raboot
-815	Cinderace
-868	Milcery
-869	Alcremie
-885	Dreepy
-901	Ursaluna
-935	Charcadet
-936	Armarouge
-957	Tinkatink
-958	Tinkatuff
-959	Tinkaton
-979	Annihilape
-989	Sandy Shocks
+# PokéIdle species -> game looktype -> name, from pokeidle-upstream/assets/creatures-sprites-lab.json.
+# This is a compact identity index, not bundled sprite artwork.
+# pokeId\tlooktype\tname
+1	60001	Bulbasaur
+2	60002	Ivysaur
+3	60003	Venusaur
+4	60004	Charmander
+5	60005	Charmeleon
+6	60006	Charizard
+7	60007	Squirtle
+8	60008	Wartortle
+9	60009	Blastoise
+10	60010	Caterpie
+11	60011	Metapod
+12	60012	Butterfree
+13	60013	Weedle
+14	60014	Kakuna
+15	60015	Beedrill
+16	60016	Pidgey
+17	60017	Pidgeotto
+18	60018	Pidgeot
+19	60019	Rattata
+20	60020	Raticate
+21	60021	Spearow
+22	60022	Fearow
+23	60023	Ekans
+24	60024	Arbok
+25	60025	Pikachu
+26	60026	Raichu
+27	60027	Sandshrew
+28	60028	Sandslash
+29	60029	Nidoran Female
+30	60030	Nidorina
+31	60031	Nidoqueen
+32	60032	Nidoran Male
+33	60033	Nidorino
+34	60034	Nidoking
+35	60035	Clefairy
+36	60036	Clefable
+37	60037	Vulpix
+38	60038	Ninetales
+39	60039	Jigglypuff
+40	60040	Wigglytuff
+41	60041	Zubat
+42	60042	Golbat
+43	60043	Oddish
+44	60044	Gloom
+45	60045	Vileplume
+46	60046	Paras
+47	60047	Parasect
+48	60048	Venonat
+49	60049	Venomoth
+50	60050	Diglett
+51	60051	Dugtrio
+52	60052	Meowth
+53	60053	Persian
+54	60054	Psyduck
+55	60055	Golduck
+56	60056	Mankey
+57	60057	Primeape
+58	60058	Growlithe
+59	60059	Arcanine
+60	60060	Poliwag
+61	60061	Poliwhirl
+62	60062	Poliwrath
+63	60063	Abra
+64	60064	Kadabra
+65	60065	Alakazam
+66	60066	Machop
+67	60067	Machoke
+68	60068	Machamp
+69	60069	Bellsprout
+70	60070	Weepinbell
+71	60071	Victreebel
+72	60072	Tentacool
+73	60073	Tentacruel
+74	60074	Geodude
+75	60075	Graveler
+76	60076	Golem
+77	60077	Ponyta
+78	60078	Rapidash
+79	60079	Slowpoke
+80	60080	Slowbro
+81	60081	Magnemite
+82	60082	Magneton
+83	60083	Farfetchd
+84	60084	Doduo
+85	60085	Dodrio
+86	60086	Seel
+87	60087	Dewgong
+88	60088	Grimer
+89	60089	Muk
+90	60090	Shellder
+91	60091	Cloyster
+92	60092	Gastly
+93	60093	Haunter
+94	60094	Gengar
+95	60095	Onix
+96	60096	Drowzee
+97	60097	Hypno
+98	60098	Krabby
+99	60099	Kingler
+100	60100	Voltorb
+101	60101	Electrode
+102	60102	Exeggcute
+103	60103	Exeggutor
+104	60104	Cubone
+105	60105	Marowak
+106	60106	Hitmonlee
+107	60107	Hitmonchan
+108	60108	Lickitung
+109	60109	Koffing
+110	60110	Weezing
+111	60111	Rhyhorn
+112	60112	Rhydon
+113	60113	Chansey
+114	60114	Tangela
+115	60115	Kangaskhan
+116	60116	Horsea
+117	60117	Seadra
+118	60118	Goldeen
+119	60119	Seaking
+120	60120	Staryu
+121	60121	Starmie
+122	60122	Mr. Mime
+123	60123	Scyther
+124	60124	Jynx
+125	60125	Electabuzz
+126	60126	Magmar
+127	60127	Pinsir
+128	60128	Tauros
+129	60129	Magikarp
+130	60130	Gyarados
+131	60131	Lapras
+132	60132	Ditto
+133	60133	Eevee
+134	60134	Vaporeon
+135	60135	Jolteon
+136	60136	Flareon
+137	60137	Porygon
+138	60138	Omanyte
+139	60139	Omastar
+140	60140	Kabuto
+141	60141	Kabutops
+142	60142	Aerodactyl
+143	60143	Snorlax
+144	60144	Articuno
+145	60145	Zapdos
+146	60146	Moltres
+147	60147	Dratini
+148	60148	Dragonair
+149	60149	Dragonite
+150	60150	Mewtwo
+151	60151	Mew
+152	60152	Chikorita
+153	60153	Bayleef
+154	60154	Meganium
+155	60155	Cyndaquil
+157	60157	Typhlosion
+158	60158	Totodile
+159	60159	Croconaw
+160	60160	Feraligatr
+161	60161	Sentret
+162	60162	Furret
+163	60163	Hoothoot
+164	60164	Noctowl
+165	60165	Ledyba
+166	60166	Ledian
+167	60167	Spinarak
+168	60168	Ariados
+169	60169	Crobat
+170	60170	Chinchou
+171	60171	Lanturn
+172	60172	Pichu
+173	60173	Cleffa
+174	60174	Igglybuff
+175	60175	Togepi
+176	60176	Togetic
+177	60177	Natu
+178	60178	Xatu
+179	60179	Mareep
+180	60180	Flaaffy
+181	60181	Ampharos
+182	60182	Bellossom
+183	60183	Marill
+184	60184	Azumarill
+185	60185	Sudowoodo
+186	60186	Politoed
+187	60187	Hoppip
+188	60188	Skiploom
+189	60189	Jumpluff
+190	60190	Aipom
+191	60191	Sunkern
+192	60192	Sunflora
+193	60193	Yanma
+194	60194	Wooper
+195	60195	Quagsire
+196	60196	Espeon
+197	60197	Umbreon
+198	60198	Murkrow
+199	60199	Slowking
+200	60200	Misdreavus
+201	60201	Unown
+202	60202	Wobbuffet
+203	60203	Girafarig
+204	60204	Pineco
+205	60205	Forretress
+206	60206	Dunsparce
+207	60207	Gligar
+208	60208	Steelix
+209	60209	Snubbull
+210	60210	Granbull
+211	60211	Qwilfish
+212	60212	Scizor
+213	60213	Shuckle
+214	60214	Heracross
+215	60215	Sneasel
+216	60216	Teddiursa
+217	60217	Ursaring
+218	60218	Slugma
+219	60219	Magcargo
+220	60220	Swinub
+221	60221	Piloswine
+222	60222	Corsola
+223	60223	Remoraid
+224	60224	Octillery
+225	60225	Delibird
+226	60226	Mantine
+227	60227	Skarmory
+228	60228	Houndour
+229	60229	Houndoom
+230	60230	Kingdra
+231	60231	Phanpy
+232	60232	Donphan
+233	60233	Porygon2
+234	60234	Stantler
+235	60235	Smeargle
+236	60236	Tyrogue
+237	60237	Hitmontop
+238	60238	Smoochum
+239	60239	Elekid
+240	60240	Magby
+241	60241	Miltank
+242	60242	Blissey
+243	60243	Raikou
+244	60244	Entei
+245	60245	Suicune
+246	60246	Larvitar
+248	60248	Tyranitar
+250	60250	Ho-oh
+251	60251	Celebi
+252	60252	Treecko
+253	60253	Grovyle
+254	60254	Sceptile
+255	60255	Torchic
+256	60256	Combusken
+257	60257	Blaziken
+258	60258	Mudkip
+259	60259	Marshtomp
+260	60260	Swampert
+262	60262	Mightyena
+263	60263	Zigzagoon
+264	60264	Linoone
+265	60265	Wurmple
+266	60266	Silcoon
+267	60267	Beautifly
+268	60268	Cascoon
+269	60269	Dustox
+270	60270	Lotad
+271	60271	Lombre
+272	60272	Ludicolo
+273	60273	Seedot
+274	60274	Nuzleaf
+275	60275	Shiftry
+276	60276	Taillow
+277	60277	Swellow
+278	60278	Wingull
+279	60279	Pelipper
+280	60280	Ralts
+281	60281	Kirlia
+282	60282	Gardevoir
+283	60283	Surskit
+284	60284	Masquerain
+285	60285	Shroomish
+286	60286	Breloom
+287	60287	Slakoth
+288	60288	Vigoroth
+289	60289	Slaking
+290	60290	Nincada
+291	60291	Ninjask
+292	60292	Shedinja
+293	60293	Whismur
+294	60294	Loudred
+295	60295	Exploud
+296	60296	Makuhita
+297	60297	Hariyama
+298	60298	Azurill
+299	60299	Nosepass
+300	60300	Skitty
+301	60301	Delcatty
+302	60302	Sableye
+303	60303	Mawile
+304	60304	Aron
+305	60305	Lairon
+306	60306	Aggron
+307	60307	Meditite
+308	60308	Medicham
+309	60309	Electrike
+310	60310	Manectric
+311	60311	Plusle
+312	60312	Minun
+313	60313	Volbeat
+314	60314	Illumise
+315	60315	Roselia
+316	60316	Gulpin
+317	60317	Swalot
+318	60318	Carvanha
+319	60319	Sharpedo
+320	60320	Wailmer
+321	60321	Wailord
+322	60322	Numel
+323	60323	Camerupt
+324	60324	Torkoal
+325	60325	Spoink
+326	60326	Grumpig
+327	60327	Spinda
+328	60328	Trapinch
+329	60329	Vibrava
+330	60330	Flygon
+331	60331	Cacnea
+332	60332	Cacturne
+333	60333	Swablu
+334	60334	Altaria
+335	60335	Zangoose
+336	60336	Seviper
+337	60337	Lunatone
+338	60338	Solrock
+339	60339	Barboach
+340	60340	Whiscash
+341	60341	Corphish
+342	60342	Crawdaunt
+343	60343	Baltoy
+344	60344	Claydol
+345	60345	Lileep
+346	60346	Cradily
+347	60347	Anorith
+348	60348	Armaldo
+349	60349	Feebas
+350	60350	Milotic
+351	60351	Castform
+352	60352	Kecleon
+353	60353	Shuppet
+354	60354	Banette
+355	60355	Duskull
+356	60356	Dusclops
+357	60357	Tropius
+358	60358	Chimecho
+359	60359	Absol
+360	60360	Wynaut
+361	60361	Snorunt
+362	60362	Glalie
+363	60363	Spheal
+364	60364	Sealeo
+365	60365	Walrein
+366	60366	Clamperl
+367	60367	Huntail
+368	60368	Gorebyss
+369	60369	Relicanth
+370	60370	Luvdisc
+371	60371	Bagon
+372	60372	Shelgon
+373	60373	Salamence
+374	60374	Beldum
+375	60375	Metang
+376	60376	Metagross
+377	60377	Regirock
+378	60378	Regice
+379	60379	Registeel
+382	60382	Kyogre
+383	60383	Groudon
+384	60384	Rayquaza
+385	60385	Jirachi
+387	60387	Turtwig
+388	60388	Grotle
+389	60389	Torterra
+390	60390	Chimchar
+391	60391	Monferno
+392	60392	Infernape
+393	60393	Piplup
+394	60394	Prinplup
+395	60395	Empoleon
+396	60396	Starly
+397	60397	Staravia
+398	60398	Staraptor
+399	60399	Bidoof
+400	60400	Bibarel
+401	60401	Kricketot
+402	60402	Kricketune
+403	60403	Shinx
+404	60404	Luxio
+405	60405	Luxray
+406	60406	Budew
+407	60407	Roserade
+408	60408	Cranidos
+409	60409	Rampardos
+410	60410	Shieldon
+411	60411	Bastiodon
+412	60412	Burmy
+413	60413	Wormadam
+414	60414	Mothim
+415	60415	Combee
+416	60416	Vespiquen
+417	60417	Pachirisu
+418	60418	Buizel
+419	60419	Floatzel
+420	60420	Cherubi
+421	60421	Cherrim
+422	60422	Shellos
+423	60423	Gastrodon
+424	60424	Ambipom
+425	60425	Drifloon
+426	60426	Drifblim
+427	60427	Buneary
+428	60428	Lopunny
+429	60429	Mismagius
+430	60430	Honchkrow
+431	60431	Glameow
+432	60432	Purugly
+433	60433	Chingling
+434	60434	Stunky
+435	60435	Skuntank
+436	60436	Bronzor
+437	60437	Bronzong
+439	60439	Mime Jr.
+441	60441	Chatot
+442	60442	Spiritomb
+443	60443	Gible
+444	60444	Gabite
+445	60445	Garchomp
+446	60446	Munchlax
+447	60447	Riolu
+448	60448	Lucario
+449	60449	Hippopotas
+450	60450	Hippowdon
+451	60451	Skorupi
+452	60452	Drapion
+453	60453	Croagunk
+454	60454	Toxicroak
+455	60455	Carnivine
+456	60456	Finneon
+457	60457	Lumineon
+458	60458	Mantyke
+459	60459	Snover
+460	60460	Abomasnow
+461	60461	Weavile
+462	60462	Magnezone
+463	60463	Lickilicky
+464	60464	Rhyperior
+465	60465	Tangrowth
+466	60466	Electivire
+467	60467	Magmortar
+468	60468	Togekiss
+469	60469	Yanmega
+470	60470	Leafeon
+471	60471	Glaceon
+472	60472	Gliscor
+473	60473	Mamoswine
+474	60474	Porygon-Z
+475	60475	Gallade
+476	60476	Probopass
+477	60477	Dusknoir
+478	60478	Froslass
+479	60479	Rotom
+480	60480	Uxie
+481	60481	Mesprit
+482	60482	Azelf
+483	60483	Dialga
+484	60484	Palkia
+485	60485	Heatran
+486	60486	Regigigas
+487	60487	Giratina
+488	60488	Cresselia
+489	60489	Phione
+490	60490	Manaphy
+491	60491	Darkrai
+494	60494	Victini
+495	60495	Snivy
+496	60496	Servine
+497	60497	Serperior
+498	60498	Tepig
+499	60499	Pignite
+500	60500	Emboar
+501	60501	Oshawott
+502	60502	Dewott
+503	60503	Samurott
+504	60504	Patrat
+505	60505	Watchog
+506	60506	Lillipup
+508	60508	Stoutland
+510	60510	Liepard
+511	60511	Pansage
+512	60512	Simisage
+513	60513	Pansear
+514	60514	Simisear
+515	60515	Panpour
+516	60516	Simipour
+517	60517	Munna
+518	60518	Musharna
+519	60519	Pidove
+520	60520	Tranquill
+521	60521	Unfezant
+522	60522	Blitzle
+523	60523	Zebstrika
+524	60524	Roggenrola
+525	60525	Boldore
+526	60526	Gigalith
+527	60527	Woobat
+528	60528	Swoobat
+530	60530	Excadrill
+531	60531	Audino
+532	60532	Timburr
+533	60533	Gurdurr
+534	60534	Conkeldurr
+535	60535	Tympole
+536	60536	Palpitoad
+537	60537	Seismitoad
+538	60538	Throh
+539	60539	Sawk
+540	60540	Sewaddle
+541	60541	Swadloon
+542	60542	Leavanny
+543	60543	Venipede
+544	60544	Whirlipede
+545	60545	Scolipede
+546	60546	Cottonee
+547	60547	Whimsicott
+548	60548	Petilil
+549	60549	Lilligant
+551	60551	Sandile
+552	60552	Krokorok
+553	60553	Krookodile
+554	60554	Darumaka
+556	60556	Maractus
+557	60557	Dwebble
+558	60558	Crustle
+560	60560	Scrafty
+561	60561	Sigilyph
+562	60562	Yamask
+563	60563	Cofagrigus
+564	60564	Tirtouga
+565	60565	Carracosta
+566	60566	Archen
+567	60567	Archeops
+568	60568	Trubbish
+569	60569	Garbodor
+570	60570	Zorua
+571	60571	Zoroark
+572	60572	Minccino
+573	60573	Cinccino
+574	60574	Gothita
+575	60575	Gothorita
+576	60576	Gothitelle
+577	60577	Solosis
+578	60578	Duosion
+579	60579	Reuniclus
+580	60580	Ducklett
+581	60581	Swanna
+582	60582	Vanillite
+584	60584	Vanilluxe
+585	60585	Deerling
+586	60586	Sawsbuck
+587	60587	Emolga
+588	60588	Karrablast
+589	60589	Escavalier
+590	60590	Foongus
+591	60591	Amoonguss
+592	60592	Frillish
+593	60593	Jellicent
+595	60595	Joltik
+596	60596	Galvantula
+597	60597	Ferroseed
+598	60598	Ferrothorn
+599	60599	Klink
+601	60601	Klinklang
+602	60602	Tynamo
+603	60603	Eelektrik
+604	60604	Eelektross
+605	60605	Elgyem
+607	60607	Litwick
+608	60608	Lampent
+609	60609	Chandelure
+610	60610	Axew
+611	60611	Fraxure
+612	60612	Haxorus
+613	60613	Cubchoo
+614	60614	Beartic
+615	60615	Cryogonal
+616	60616	Shelmet
+617	60617	Accelgor
+618	60618	Stunfisk
+619	60619	Mienfoo
+620	60620	Mienshao
+621	60621	Druddigon
+622	60622	Golett
+623	60623	Golurk
+624	60624	Pawniard
+625	60625	Bisharp
+626	60626	Bouffalant
+627	60627	Rufflet
+628	60628	Braviary
+629	60629	Vullaby
+630	60630	Mandibuzz
+631	60631	Heatmor
+633	60633	Deino
+634	60634	Zweilous
+635	60635	Hydreigon
+636	60636	Larvesta
+637	60637	Volcarona
+638	60638	Cobalion
+639	60639	Terrakion
+640	60640	Virizion
+643	60643	Reshiram
+644	60644	Zekrom
+646	60646	Kyurem
+648	60648	Meloetta
+649	60649	Genesect
+652	60652	Chesnaught
+655	60655	Delphox
+658	60658	Greninja
+659	60659	Bunnelby
+660	60660	Diggersby
+661	60661	Fletchling
+662	60662	Fletchinder
+663	60663	Talonflame
+664	60664	Scatterbug
+665	60665	Spewpa
+666	60666	Vivillon
+667	60667	Litleo
+668	60668	Pyroar
+669	60669	Flabebe
+671	60671	Florges
+674	60674	Pancham
+675	60675	Pangoro
+677	60677	Espurr
+678	60678	Meowstic
+679	60679	Honedge
+680	60680	Doublade
+681	60681	Aegislash
+682	60682	Spritzee
+683	60683	Aromatisse
+684	60684	Swirlix
+685	60685	Slurpuff
+686	60686	Inkay
+687	60687	Malamar
+688	60688	Binacle
+689	60689	Barbaracle
+690	60690	Skrelp
+691	60691	Dragalge
+692	60692	Clauncher
+693	60693	Clawitzer
+694	60694	Helioptile
+695	60695	Heliolisk
+696	60696	Tyrunt
+698	60698	Amaura
+699	60699	Aurorus
+700	60700	Sylveon
+701	60701	Hawlucha
+702	60702	Dedenne
+703	60703	Carbink
+704	60704	Goomy
+705	60705	Sliggoo
+706	60706	Goodra
+707	60707	Klefki
+708	60708	Phantump
+709	60709	Trevenant
+712	60712	Bergmite
+713	60713	Avalugg
+714	60714	Noibat
+715	60715	Noivern
+723	60723	Dartrix
+725	60725	Litten
+726	60726	Torracat
+727	60727	Incineroar
+728	60728	Popplio
+729	60729	Brionne
+730	60730	Primarina
+731	60731	Pikipek
+732	60732	Trumbeak
+733	60733	Toucannon
+734	60734	Yungoos
+735	60735	Gumshoos
+736	60736	Grubbin
+737	60737	Charjabug
+738	60738	Vikavolt
+742	60742	Cutiefly
+743	60743	Ribombee
+744	60744	Rockruff
+747	60747	Mareanie
+748	60748	Toxapex
+749	60749	Mudbray
+750	60750	Mudsdale
+751	60751	Dewpider
+752	60752	Araquanid
+755	60755	Morelull
+756	60756	Shiinotic
+757	60757	Salandit
+758	60758	Salazzle
+759	60759	Stufful
+760	60760	Bewear
+761	60761	Bounsweet
+762	60762	Steenee
+763	60763	Tsareena
+766	60766	Passimian
+767	60767	Wimpod
+768	60768	Golisopod
+777	60777	Togedemaru
+778	60778	Mimikyu
+779	60779	Bruxish
+780	60780	Drampa
+781	60781	Dhelmise
+782	60782	Jangmo-o
+783	60783	Hakamo-o
+784	60784	Kommo-o
+798	60798	Kartana
+799	60799	Guzzlord
+803	60803	Poipole
+804	60804	Naganadel
+813	60813	Scorbunny
+814	60814	Raboot
+815	60815	Cinderace
+868	60868	Milcery
+869	60869	Alcremie
+885	60885	Dreepy
+901	60901	Ursaluna
+935	60935	Charcadet
+936	60936	Armarouge
+957	60957	Tinkatink
+958	60958	Tinkatuff
+959	60959	Tinkaton
+979	60979	Annihilape
+989	60989	Sandy Shocks
+1001	60001	Wo-Chien
+1002	60002	Chien-Pao
+1003	60003	Ting-Lu
+1004	60004	Chi-Yu
+1005	60005	Roaring Moon
+1006	60006	Iron Valiant
+1007	60007	Koraidon
+1008	60008	Miraidon
+1009	60009	Walking Wake
+1010	60010	Iron Leaves
+1011	60011	Dipplin
+1012	60012	Poltchageist
+1013	60013	Sinistcha
+1014	60014	Okidogi
+1015	60015	Munkidori
+1016	60016	Fezandipiti
+1017	60017	Ogerpon
+1018	60018	Archaludon
+1019	60019	Hydrapple
+1020	60020	Gouging Fire
+1021	60021	Raging Bolt
+1022	60022	Iron Boulder
+1023	60023	Iron Crown
+1024	60024	Terapagos
+1025	60025	Pecharunt
+2001	60009	Brave Blastoise
+2002	60160	Tribal Feraligatr
+2003	60154	Ancient Meganium
+2004	60003	Brave Venusaur
+2005	60214	War Heracross
+2006	60123	Furious Scyther
+2007	60203	Enigmatic Girafarig
+2008	60026	Charged Raichu
+2009	60181	Furious Ampharos
+2010	60125	Magnetic Electabuzz
+2011	60148	Ancient Dragonair
+2012	60091	Evil Cloyster
+2013	60087	Freezing Dewgong
+2014	60124	Psy Jynx
+2015	60221	Heavy Piloswine
+2016	60241	Milch-Miltank
+2017	60232	Roll Donphan
+2018	60028	Furious Sandslash
+2019	60076	Hard Golem
+2020	60112	Brute Rhydon
+2021	60006	Brave Charizard
+2022	60157	Enraged Typhlosion
+2023	60034	Brave Nidoking
+2024	60031	Brave Nidoqueen
+2025	60169	Dark Crobat
+2026	60094	Trickmaster Gengar
+2027	60200	Banshee Misdreavus
+2028	60107	Taekwondo Hitmonchan
+2029	60106	Taekwondo Hitmonlee
+2030	60237	Taekwondo Hitmontop
+2031	60059	Brave Arcanine
+2032	60126	Furious Magmar
+2034	60208	Brave Steelix
+2035	60040	Furious Wigglytuff
+2036	60178	Ancient Xatu
+2037	60065	Brave Alakazam
+2038	60097	Ancient Hypno
+2039	60130	Furious Gyarados
+2040	60226	Brave Mantine
+2041	60127	Ancient Pinsir
+2042	60036	Brave Clefable
+2043	60210	Ancient Granbull
+2044	60227	Furious Skarmory
+2045	60164	Brave Noctowl
+2046	60018	Furious Pidgeot
+2047	60105	Ancient Marowak
+13252	60252	Treecko
+13253	60253	Grovyle
+13254	60254	Sceptile
+13255	60255	Torchic
+13256	60256	Combusken
+13257	60257	Blaziken
+13258	60258	Mudkip
+13259	60259	Marshtomp
+13260	60260	Swampert
+13262	60262	Mightyena
+13263	60263	Zigzagoon
+13264	60264	Linoone
+13265	60265	Wurmple
+13266	60266	Silcoon
+13267	60267	Beautifly
+13268	60268	Cascoon
+13269	60269	Dustox
+13270	60270	Lotad
+13271	60271	Lombre
+13272	60272	Ludicolo
+13273	60273	Seedot
+13274	60274	Nuzleaf
+13275	60275	Shiftry
+13276	60276	Taillow
+13277	60277	Swellow
+13278	60278	Wingull
+13279	60279	Pelipper
+13280	60280	Ralts
+13281	60281	Kirlia
+13282	60282	Gardevoir
+13283	60283	Surskit
+13284	60284	Masquerain
+13285	60285	Shroomish
+13286	60286	Breloom
+13287	60287	Slakoth
+13288	60288	Vigoroth
+13290	60290	Nincada
+13291	60291	Ninjask
+13292	60292	Shedinja
+13293	60293	Whismur
+13294	60294	Loudred
+13295	60295	Exploud
+13296	60296	Makuhita
+13297	60297	Hariyama
+13298	60298	Azurill
+13299	60299	Nosepass
+13300	60300	Skitty
+13301	60301	Delcatty
+13302	60302	Sableye
+13303	60303	Mawile
+13304	60304	Aron
+13305	60305	Lairon
+13306	60306	Aggron
+13307	60307	Meditite
+13308	60308	Medicham
+13309	60309	Electrike
+13310	60310	Manectric
+13311	60311	Plusle
+13312	60312	Minun
+13313	60313	Volbeat
+13314	60314	Illumise
+13315	60315	Roselia
+13316	60316	Gulpin
+13317	60317	Swalot
+13318	60318	Carvanha
+13319	60319	Sharpedo
+13320	60320	Wailmer
+13321	60321	Wailord
+13322	60322	Numel
+13323	60323	Camerupt
+13324	60324	Torkoal
+13325	60325	Spoink
+13326	60326	Grumpig
+13327	60327	Spinda
+13328	60328	Trapinch
+13329	60329	Vibrava
+13330	60330	Flygon
+13331	60331	Cacnea
+13332	60332	Cacturne
+13333	60333	Swablu
+13334	60334	Altaria
+13335	60335	Zangoose
+13336	60336	Seviper
+13337	60337	Lunatone
+13338	60338	Solrock
+13339	60339	Barboach
+13340	60340	Whiscash
+13341	60341	Corphish
+13342	60342	Crawdaunt
+13343	60343	Baltoy
+13344	60344	Claydol
+13345	60345	Lileep
+13346	60346	Cradily
+13347	60347	Anorith
+13348	60348	Armaldo
+13351	60351	Castform
+13352	60352	Kecleon
+13353	60353	Shuppet
+13354	60354	Banette
+13355	60355	Duskull
+13356	60356	Dusclops
+13357	60357	Tropius
+13358	60358	Chimecho
+13359	60359	Absol
+13360	60360	Wynaut
+13361	60361	Snorunt
+13362	60362	Glalie
+13363	60363	Spheal
+13364	60364	Sealeo
+13365	60365	Walrein
+13366	60366	Clamperl
+13367	60367	Huntail
+13368	60368	Gorebyss
+13369	60369	Relicanth
+13370	60370	Luvdisc
+13371	60371	Bagon
+13372	60372	Shelgon
+13374	60374	Beldum
+13375	60375	Metang
+13377	60377	Regirock
+13378	60378	Regice
+13379	60379	Registeel
+13382	60382	Kyogre
+13383	60383	Groudon
+13384	60384	Rayquaza
+13385	60385	Jirachi
+13447	60447	Riolu
+13448	60448	Lucario
+14009	60009	Mega Blastoise
+14065	60065	Mega Alakazam
+14282	60282	Mega Gardevoir
+14302	60302	Mega Sableye
+14334	60334	Mega Altaria
+14351	60351	Castform Fire
+14448	60448	Mega Lucario
