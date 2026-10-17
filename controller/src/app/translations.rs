@@ -3,6 +3,7 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Combat estimates are approximate; move timing, captures, pauses and costs may differ." => "As estimativas de combate são aproximadas; o tempo dos golpes, capturas, pausas e custos podem variar.",
         "First 32 species shown." => "Exibindo as primeiras 32 espécies.",
         "Capture chance" => "Chance de captura",
         "Catalog sale value" => "Valor de venda (catálogo)",
