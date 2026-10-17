@@ -631,9 +631,9 @@ fn draw_atlas_type_direction(
         "Your attack type → opposing Pokémon"
     }).size(10.0).color(MUTED));
     ui.add_space(4.0);
-    if attacker_types.is_empty()||defender_types.is_empty(){
+    if defender_types.is_empty(){
         ui.label(RichText::new(
-            "Type matchup unavailable: one or both Pokémon types are unknown."
+            "Defending Pokémon's typing is unknown. No multiplier is assumed."
         ).size(10.0).color(WARN));
         return;
     }
@@ -646,41 +646,60 @@ fn draw_atlas_type_direction(
             .size(10.0).color(MUTED));
         return;
     }
-    // Show same-type moves separately; an attacker can have multiple STAB
-    // types. Do not suggest that the game has actually equipped those moves.
-    ui.label(RichText::new("Same-type moves (if available)")
-        .size(9.0).strong().color(DIM));
-    ui.horizontal_wrapped(|ui|{
-        for kind in attacker_types{
-            if let Some(multiplier)=atlas_type_multiplier(
-                reference,kind,defender_types
-            ){
-                atlas_type_chip(ui,kind,multiplier,incoming);
-            }
-        }
-    });
-    ui.add_space(5.0);
-    // For defensive exposure put dangerous multipliers first; for offense
-    // put super-effective attacks first. Immunities are always conspicuous.
-    possible.retain(|(_,n)|(n-1.0).abs()>=0.001);
-    possible.sort_by(|(left_name,left),(right_name,right)|{
-        let ord=if incoming{right.total_cmp(left)}else{right.total_cmp(left)};
-        ord.then_with(||left_name.cmp(right_name))
-    });
-    ui.label(RichText::new("Other notable attack types")
-        .size(9.0).strong().color(DIM));
-    if possible.is_empty(){
-        ui.label(RichText::new("All other attack types are neutral (1×)")
-            .size(10.0).color(MUTED));
+    // STAB is useful context, not evidence that those moves are equipped.
+    ui.label(RichText::new("Same-type attacks (if learned)")
+        .size(10.0).strong().color(DIM));
+    if attacker_types.is_empty(){
+        ui.label(RichText::new(
+            "Attacker's types unknown; all type-chart possibilities below."
+        ).size(10.0).color(MUTED));
     }else{
         ui.horizontal_wrapped(|ui|{
-            for (kind,multiplier) in &possible{
-                if !attacker_types.iter().any(|s|
-                    s.eq_ignore_ascii_case(kind)){
-                    atlas_type_chip(ui,kind,*multiplier,incoming);
+            for kind in attacker_types{
+                if let Some(multiplier)=atlas_type_multiplier(
+                    reference,kind,defender_types){
+                    atlas_type_chip(ui,kind,multiplier,incoming);
                 }
             }
         });
+    }
+    ui.add_space(6.0);
+    possible.retain(|(kind,n)|
+        (n-1.0).abs()>=0.001 &&
+        !attacker_types.iter().any(|own|
+            own.eq_ignore_ascii_case(kind))
+    );
+    possible.sort_by(|(left_name,left),(right_name,right)|
+        right.total_cmp(left).then_with(||left_name.cmp(right_name))
+    );
+    // The direction changes which multipliers are favorable; the multiplier
+    // itself is ALWAYS an attack type hitting the defender, never reversed.
+    let (danger,safe)=if incoming{
+        ("WEAK TO · incoming 2× / 4×",
+         "RESISTS / IMMUNE · incoming ½× / ¼× / 0×")
+    }else{
+        ("HIT HARD · outgoing 2× / 4×",
+         "RESISTED / IMMUNE · outgoing ½× / ¼× / 0×")
+    };
+    for (heading,high) in [(danger,true),(safe,false)]{
+        let matching=possible.iter()
+            .filter(|(_,n)|if high{*n>1.0}else{*n<1.0})
+            .collect::<Vec<_>>();
+        if !matching.is_empty(){
+            ui.label(RichText::new(heading)
+                .size(9.0).strong().color(DIM));
+            ui.horizontal_wrapped(|ui|{
+                for (kind,multiplier) in matching{
+                    atlas_type_chip(ui,kind,*multiplier,incoming);
+                }
+            });
+            ui.add_space(4.0);
+        }
+    }
+    if possible.is_empty(){
+        ui.label(RichText::new(
+            "No other non-neutral attack types."
+        ).size(10.0).color(MUTED));
     }
     let neutral=reference.chart.keys()
         .filter_map(|kind|atlas_type_multiplier(reference,kind,defender_types)
