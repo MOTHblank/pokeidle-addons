@@ -611,12 +611,12 @@ fn draw_atlas_selected_weaknesses(
 ){
     if selected.is_empty(){return}
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("SELECTED TYPE DAMAGE TAKEN")
+        ui.label(RichText::new("DAMAGE FROM SELECTED TYPES")
             .size(9.0).strong().color(DIM));
         for attack in selected{
             if let Some(multiplier)=reference.and_then(|guide|
                 atlas_type_multiplier(guide,attack,defender_types)){
-                atlas_type_chip(ui,attack,multiplier,true);
+                atlas_type_chip(ui,attack,multiplier,false);
             }else{
                 ui.label(RichText::new(format!("{attack}  — unknown"))
                     .size(10.0).color(MUTED));
@@ -1736,6 +1736,18 @@ fn draw_atlas_explorer(
     }
     ui.add_space(9.0);
     let rows=atlas_species_rows(view,reference,cache,filters,scenario);
+    if !filters.weak_to.is_empty(){
+        ui.horizontal_wrapped(|ui|{
+            ui.label(RichText::new(format!(
+                "Weak to: {} · {}",
+                filters.weak_to.iter().cloned().collect::<Vec<_>>().join(" + "),
+                if filters.weakness_match_all{"ALL selected"}else{"ANY selected"}
+            )).size(11.0).strong().color(ACCENT));
+            ui.label(RichText::new(
+                "Each Pokémon shows its damage multiplier for every selected type."
+            ).size(10.0).color(MUTED));
+        });
+    }
     if filters.collection!=AtlasCollection::All && !view.roster_ready {
         ui.label(RichText::new(
             "Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures."
@@ -2602,6 +2614,7 @@ mod tests {
             [("NORMAL".into(),2.0)].into_iter().collect());
         guide.chart.insert("GHOST".into(),
             [("NORMAL".into(),0.0)].into_iter().collect());
+        guide.chart.insert("NORMAL".into(),Default::default());
         guide.species.insert(1,native_atlas::ReferenceSpecies{
             name:"Testmon".into(),types:vec!["NORMAL".into()],
             base:vec![100.0;6],moves:vec![],
@@ -2749,6 +2762,55 @@ mod tests {
             .destinations[0].hunt.slug,"guide-locked");
         filters.min_level=250;
         assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default()).is_empty());
+    }
+    #[test]
+    fn multi_weakness_filter_uses_each_multiplier_for_any_and_all_modes(){
+        let mut guide=AtlasReference::default();
+        for kind in ["FIRE","FIGHTING","GRASS","ICE","NORMAL","ROCK"]{
+            guide.chart.insert(kind.into(),Default::default());
+        }
+        guide.chart.get_mut("FIRE").unwrap().extend([
+            ("GRASS".into(),2.0),("ICE".into(),2.0),
+            ("NORMAL".into(),1.0),("ROCK".into(),2.0),
+        ]);
+        guide.chart.get_mut("FIGHTING").unwrap().extend([
+            ("GRASS".into(),0.5),("ICE".into(),1.0),
+            ("NORMAL".into(),2.0),("ROCK".into(),2.0),
+        ]);
+        for (id,name,types) in [
+            (1,"Four times Fire",vec!["GRASS","ICE"]),
+            (2,"Double Fire Quadruple Fighting",vec!["NORMAL","ROCK"]),
+        ]{
+            guide.species.insert(id,native_atlas::ReferenceSpecies{
+                name:name.into(),types:types.into_iter().map(str::to_owned).collect(),
+                base:vec![100.0;6],moves:vec![],drops:vec![],
+            });
+        }
+        let types_a=&guide.species[&1].types;
+        let types_b=&guide.species[&2].types;
+        assert_eq!(atlas_type_multiplier(&guide,"FIRE",types_a),Some(4.0));
+        assert_eq!(atlas_type_multiplier(&guide,"FIGHTING",types_a),Some(0.5));
+        assert_eq!(atlas_type_multiplier(&guide,"FIRE",types_b),Some(2.0));
+        assert_eq!(atlas_type_multiplier(&guide,"FIGHTING",types_b),Some(4.0));
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"multi".into(),name:"Multi".into(),level:100,
+            species:vec![
+                native_hunts::HuntSpecies{id:1,weight:50.0},
+                native_hunts::HuntSpecies{id:2,weight:50.0},
+            ],
+            ..Default::default()
+        }]);
+        let cache=EstimateCache::default();
+        let mut filters=AtlasFilters::default();
+        filters.weak_to.extend(["FIRE".into(),"FIGHTING".into()]);
+        let scenario=AtlasScenario::default();
+        let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows.len(),2,"any-mode shows species weak to either");
+        filters.weakness_match_all=true;
+        let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows.len(),1,"all-mode requires both selected types >1×");
+        assert_eq!(rows[0].id,2);
     }
     #[test]
     fn explorer_weakness_and_depot_filters_follow_selected_account(){
