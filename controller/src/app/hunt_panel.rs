@@ -849,15 +849,15 @@ pub(super) struct ExplorerCache {
     rows:Vec<AtlasSpeciesRow>,
     filters:Option<AtlasFilters>,
     scenario:Option<AtlasScenario>,
-    catalog_ptr:usize,
+    catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
     reference_ptr:usize,
     forecast_at:Option<Instant>,
     model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
     hunt_slug:Option<String>,
     trainer_level:Option<u32>,
-    roster_signature:u64,
+    roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
     roster_ready:bool,
-    ball_quotes_ptr:usize,
+    ball_quotes:Option<Arc<std::collections::BTreeMap<u64,native_hunts::BallQuote>>>,
     initialized:bool,
     #[cfg(test)]
     rebuilds:usize,
@@ -869,41 +869,36 @@ impl ExplorerCache {
         let mut key_filters=filters.clone();
         key_filters.selected_species=None;
         key_filters.filters_open=false;
-        // Depot changes can alter ownership without changing its length.
-        // This cheap fingerprint is order-independent, avoiding false misses
-        // when the server reorders an otherwise identical roster.
-        let roster_signature=view.pokemon_roster.iter().filter_map(|mon|mon.species_id)
-            .fold(0u64,|hash,id|hash.wrapping_add(id.wrapping_mul(1099511628211)));
-        let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
+        // Retaining the previous source Arc prevents pointer reuse from
+        // hiding a genuine server roster/catalog update.
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
-        let ball_quotes_ptr=Arc::as_ptr(&view.ball_quotes) as usize;
         let changed=!self.initialized ||
             self.filters.as_ref()!=Some(&key_filters) ||
             self.scenario.as_ref()!=Some(scenario) ||
-            self.catalog_ptr!=catalog_ptr ||
+            self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference_ptr!=reference_ptr ||
             self.forecast_at!=estimates.refreshed ||
             self.model_signature!=estimates.active_signature ||
             self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
-            self.roster_signature!=roster_signature ||
+            self.roster.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.pokemon_roster)) ||
             self.roster_ready!=view.roster_ready ||
-            self.ball_quotes_ptr!=ball_quotes_ptr;
+            self.ball_quotes.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.ball_quotes));
         if changed {
             #[cfg(test)]
             {self.rebuilds+=1;}
             self.rows=atlas_species_rows(view,reference,estimates,filters,scenario);
             self.filters=Some(key_filters);
             self.scenario=Some(scenario.clone());
-            self.catalog_ptr=catalog_ptr;
+            self.catalog=Some(Arc::clone(&view.hunts));
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
             self.model_signature=estimates.active_signature;
             self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
-            self.roster_signature=roster_signature;
+            self.roster=Some(Arc::clone(&view.pokemon_roster));
             self.roster_ready=view.roster_ready;
-            self.ball_quotes_ptr=ball_quotes_ptr;
+            self.ball_quotes=Some(Arc::clone(&view.ball_quotes));
             self.initialized=true;
         }
         &self.rows
