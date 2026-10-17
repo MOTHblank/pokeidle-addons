@@ -359,44 +359,16 @@ fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
 
 fn draw_atlas_encounter(
     ui:&mut egui::Ui,spawn:&native_hunts::HuntSpecies,
-    sum:f64,reference:Option<&AtlasReference>,
+    _sum:f64,reference:Option<&AtlasReference>,
 ){
     let species=reference.and_then(|r|r.species.get(&spawn.id));
     let name=species.map(|s|s.name.as_str()).unwrap_or(tr("Unknown species"));
-    let pct=if sum>0.0{Some(100.0*spawn.weight.max(0.0)/sum)}else{None};
     ui.push_id(spawn.id,|ui|{
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(name).size(11.0).color(TEXT));
-            ui.label(RichText::new(format!(
-                "#{} · {}",spawn.id,
-                pct.map(|v|format!("{v:.1}% {}",tr("spawns")))
-                    .unwrap_or_else(||tr("weight unavailable").into())
-            )).size(10.0).color(MUTED));
+            ui.label(RichText::new(format!("#{}",spawn.id))
+                .size(10.0).color(MUTED));
         });
-        if let Some(species)=species{
-            if !species.drops.is_empty(){
-                ui.collapsing(tr_dynamic(format!(
-                    "Guide item drops ({})",species.drops.len()
-                )),|ui|{
-                    for drop in species.drops.iter().take(12){
-                        ui.label(RichText::new(format!(
-                            "{} · {:.3}% {} · {:.0}–{:.0} {}",
-                            drop.item_name.as_deref()
-                                .map(str::to_owned)
-                                .or_else(||drop.item_id.map(|id|tr_dynamic(format!("Item #{id}"))))
-                                .unwrap_or_else(||tr("Unknown item").into()),
-                            drop.chance_pct,tr("per eligible kill"),drop.minimum,drop.maximum,tr("units")
-                        )).size(10.0).color(MUTED));
-                    }
-                    if species.drops.len()>12{
-                        ui.label(tr("Showing the first 12 reference drops."));
-                    }
-                    ui.label(RichText::new(
-                        tr("Reference probabilities are not confirmed drops or live prices.")
-                    ).size(10.0).color(WARN));
-                });
-            }
-        }
     });
 }
 
@@ -1607,35 +1579,7 @@ fn draw_atlas_species(
                         }
                     });
                 });
-                if let Some(species)=reference.and_then(|r|r.species.get(&row.id)){
-                    if !species.drops.is_empty(){
-                        ui.collapsing(tr_dynamic(format!(
-                            "Guide item drops ({})",species.drops.len()
-                        )),|ui|{
-                            for drop in species.drops.iter().take(20){
-                                let name=drop.item_name.as_deref()
-                                    .map(str::to_owned)
-                                    .or_else(||drop.item_id.map(|id|tr_dynamic(format!("Item #{id}"))))
-                                    .unwrap_or_else(||tr("Unknown item").into());
-                                ui.horizontal_wrapped(|ui|{
-                                    ui.label(RichText::new(name)
-                                        .size(11.0).color(TEXT));
-                                    ui.label(RichText::new(format!(
-                                        "{:.3}% / {} · {:.0}–{:.0} {}",
-                                        drop.chance_pct,tr("eligible kill"),drop.minimum,drop.maximum,tr("units")
-                                    )).size(10.0).color(MUTED));
-                                });
-                            }
-                            if species.drops.len()>20{
-                                ui.label(RichText::new(tr("First 20 guide items shown."))
-                                    .size(10.0).color(MUTED));
-                            }
-                            ui.label(RichText::new(
-                                tr("Guide probabilities are not measured drops or live market prices.")
-                            ).size(10.0).color(WARN));
-                        });
-                    }
-                }
+
             });
         ui.add_space(6.0);
     });
@@ -2725,6 +2669,7 @@ mod tests {
             !*valid && hunt.slug=="guide-locked"));
         let cache=EstimateCache::default();
         let mut filters=AtlasFilters::default();
+        filters.availability=AtlasAvailability::Unlocked;
         assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default())[0]
             .destinations.len(),1);
         filters.availability=AtlasAvailability::All;
@@ -2810,32 +2755,30 @@ mod tests {
         filters.collection=AtlasCollection::NotInDepot;
         assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default()).is_empty());
     }
+
     #[test]
-    fn guide_drop_and_shiny_scenarios_never_infer_missing_capture_data(){
-        let guide=guide_fixture();
-        let meta=&guide.species[&1];
+    fn gross_gold_and_sale_value_do_not_include_obsolete_npc_drops(){
         let hunt=native_hunts::HuntEntry{
             slug:"a".into(),name:"A".into(),level:120,area:"Kanto".into(),
             ..Default::default()
         };
-        let forecast=native_atlas::Forecast{
+        let forecast=native_atlas::Forecast {
             kills_h:100.0,trainer_xp_h:1000.0,pokemon_xp_h:900.0,
-            gold_h:100.0,combat_gold_h:80.0,npc_loot_gold_h:20.0,
+            gold_h:80.0,combat_gold_h:80.0,npc_loot_gold_h:0.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:9.0,
             seconds_per_kill:36.0,coverage:1.0,calibrated:false,
         };
-        assert!((atlas_objective(AtlasSort::Rare,Some(&forecast),&hunt,
-            0.5,Some(meta),"Moon Stone").unwrap()-10.0).abs()<1e-10);
-        assert_eq!(atlas_objective(AtlasSort::Rare,Some(&forecast),&hunt,
-            0.5,Some(meta),"Unknown"),None);
-        assert_eq!(atlas_objective(AtlasSort::Shiny,None,&hunt,
-            0.5,Some(meta),""),None);
+        assert_eq!(atlas_objective(AtlasSort::Gold,Some(&forecast),&hunt,1.0,None),Some(80.0));
+        assert_eq!(atlas_objective(AtlasSort::Xp,Some(&forecast),&hunt,1.0,None),Some(1000.0));
+        assert_eq!(atlas_objective(AtlasSort::SaleValue,None,&hunt,1.0,Some(500.0)),Some(500.0));
+        assert_eq!(atlas_objective(AtlasSort::SaleValue,None,&hunt,1.0,None),None);
+        assert_eq!(atlas_objective(AtlasSort::Shiny,None,&hunt,0.5,None),None);
+        assert_eq!(atlas_objective(AtlasSort::Shiny,Some(&forecast),&hunt,0.5,None),Some(100.0*0.5/24000.0));
         let outland=native_hunts::HuntEntry{area:"Outland".into(),..hunt};
-        assert_eq!(atlas_objective(AtlasSort::Shiny,Some(&forecast),&outland,
-            0.5,Some(meta),""),None);
+        assert_eq!(atlas_objective(AtlasSort::Shiny,Some(&forecast),&outland,0.5,None),None);
     }
     #[test]
-    fn capture_and_market_objectives_retain_source_coverage(){
+    fn capture_chance_and_sale_value_do_not_depend_on_kills_per_hour(){
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
             slug:"route".into(),name:"Route".into(),level:120,
@@ -2843,28 +2786,20 @@ mod tests {
             ..Default::default()
         }]);
         let mut guide=guide_fixture();
-        let forecast=native_atlas::Forecast{
-            kills_h:100.0,trainer_xp_h:10000.0,pokemon_xp_h:9000.0,
-            gold_h:1000.0,combat_gold_h:800.0,npc_loot_gold_h:200.0,
-            trainer_xp_per_kill:100.0,pokemon_xp_per_kill:90.0,
-            seconds_per_kill:36.0,coverage:1.0,calibrated:false,
-        };
-        let mut cache=EstimateCache::default();
-        cache.values.insert("route".into(),Some(forecast));
+        let cache=EstimateCache::default();
         let mut filters=AtlasFilters::default();
         filters.sort=AtlasSort::Capture;
-        let mut scenario=AtlasScenario::default();
+        let scenario=AtlasScenario::default();
         let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
         assert_eq!(rows[0].best,None);
         guide.capture_rarities.insert(1,12000.0);
         let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
-        assert!(rows[0].best.is_some_and(|n|n>0.0));
-        filters.sort=AtlasSort::Market;
-        scenario.market_item="Moon Stone".into();
+        assert!(rows[0].best.is_some_and(|n|n>0.0&&n<=0.10));
+        filters.sort=AtlasSort::SaleValue;
         assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario)[0].best,None);
-        scenario.market_gold_per_unit=400.0;
+        guide.catalog_sell_values.insert(1,400.0);
         let after=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
-        assert!(after[0].best.is_some_and(|n|n>0.0));
+        assert_eq!(after[0].best,Some(400.0));
     }
     #[test]
     fn unknown_rate_is_never_turned_into_zero(){
@@ -2926,7 +2861,6 @@ mod tests {
         assert!(results.update(&view,None,&estimates,&filters,&scenario).is_empty());
         assert_eq!(results.rebuilds,1);
         filters.selected_species=Some(25);
-        filters.filters_open=true;
         results.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(results.rebuilds,1);
         filters.min_level=80;
