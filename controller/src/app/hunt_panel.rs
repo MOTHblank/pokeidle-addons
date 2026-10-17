@@ -623,9 +623,12 @@ fn atlas_type_chip(ui:&mut egui::Ui,kind:&str,multiplier:f64,incoming:bool){
         .stroke(Stroke::new(1.0,color.linear_multiply(0.65)))
         .corner_radius(6.0).inner_margin(egui::Margin::symmetric(7,4))
         .show(ui,|ui|{
-            ui.label(RichText::new(format!(
+            let response=ui.label(RichText::new(format!(
                 "{}  {}",atlas_type_name(kind),atlas_multiplier_text(multiplier)
             )).size(10.0).strong().color(color));
+            if multiplier==0.0{
+                response.on_hover_text(tr("Immune: no damage from this attack type."));
+            }
         });
 }
 
@@ -718,6 +721,11 @@ fn draw_atlas_matchup(
                     .size(10.0).color(MUTED));
                 return;
             };
+            if lead_types.is_empty() || target_types.is_empty(){
+                ui.label(RichText::new(tr("Type data unavailable"))
+                    .size(10.0).color(MUTED));
+                return;
+            }
             if ui.available_width()>=540.0{
                 ui.columns(2,|cols|{
                     draw_atlas_type_direction(&mut cols[0],reference,
