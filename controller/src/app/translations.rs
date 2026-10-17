@@ -469,6 +469,17 @@ pub(super) fn dynamic(mut english: String) -> String {
         (" attempts · ", " tentativas · "),
         (" purchases · ", " compras · "),
         (" awaiting confirmation", " aguardando confirmação"),
+        ("History load: ", "Erro ao carregar histórico: "),
+        ("History save: ", "Erro ao salvar histórico: "),
+        ("Combat: ", "Combate: "),
+        (" · Auto-sale: ", " · Venda automática: "),
+        ("Ball #", "Bola nº "),
+        (" sent · ", " enviadas · "),
+        (" caught", " capturados"),
+        ("Last game update: ", "Última atualização do jogo: "),
+        (" spawn slots", " espaços de spawn"),
+        ("Wild: ", "Selvagem: "),
+        (" Twitch channels", " canais da Twitch"),
     ] {
         if english.contains(from) {
             english = english.replace(from, to);
