@@ -377,23 +377,23 @@ fn draw_atlas_encounter(
             ui.label(RichText::new(name).size(11.0).color(TEXT));
             ui.label(RichText::new(format!(
                 "#{} · {}",spawn.id,
-                pct.map(|v|format!("{v:.1}% spawns"))
-                    .unwrap_or_else(||"weight unavailable".into())
+                pct.map(|v|format!("{v:.1}% {}",tr("spawns")))
+                    .unwrap_or_else(||tr("weight unavailable").into())
             )).size(10.0).color(MUTED));
         });
         if let Some(species)=species{
             if !species.drops.is_empty(){
-                ui.collapsing(format!(
+                ui.collapsing(tr_dynamic(format!(
                     "Guide item drops ({})",species.drops.len()
-                ),|ui|{
+                )),|ui|{
                     for drop in species.drops.iter().take(12){
                         ui.label(RichText::new(format!(
-                            "{} · {:.3}% per eligible kill · {:.0}–{:.0} units",
+                            "{} · {:.3}% {} · {:.0}–{:.0} {}",
                             drop.item_name.as_deref()
                                 .map(str::to_owned)
                                 .or_else(||drop.item_id.map(|id|tr_dynamic(format!("Item #{id}"))))
                                 .unwrap_or_else(||tr("Unknown item").into()),
-                            drop.chance_pct,drop.minimum,drop.maximum
+                            drop.chance_pct,tr("per eligible kill"),drop.minimum,drop.maximum,tr("units")
                         )).size(10.0).color(MUTED));
                     }
                     if species.drops.len()>12{
@@ -1057,12 +1057,12 @@ fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->bool{
                 let m=&view.measurements;
                 if live && m.valid_trainer{
                     ui.label(RichText::new(format!(
-                        "Trainer {} XP/h",format_hunt_amount(m.trainer_xp_h)
+                        "{}: {}",tr("Trainer XP/h"),format_hunt_amount(m.trainer_xp_h)
                     )).size(11.0).color(GOOD));
                 }
                 if live && m.valid_pokemon{
                     ui.label(RichText::new(format!(
-                        "Pokémon {} XP/h",format_hunt_amount(m.pokemon_xp_h)
+                        "{}: {}",tr("Pokémon XP/h"),format_hunt_amount(m.pokemon_xp_h)
                     )).size(11.0).color(GOOD));
                 }
                 if ui.small_button(tr("View hunt →")).clicked(){open=true;}
@@ -1470,8 +1470,8 @@ fn draw_atlas_destination(
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
                 ui.label(RichText::new(format!(
-                    "{} · Lv {} · {:.1}% spawns",
-                    dest.hunt.name,dest.hunt.level,dest.share*100.0
+                    "{} · Lv {} · {:.1}% {}",
+                    dest.hunt.name,dest.hunt.level,dest.share*100.0,tr("spawns")
                 )).strong().size(11.0).color(TEXT));
                 if current{
                     ui.colored_label(GOOD,tr("● Current"));
@@ -1653,9 +1653,9 @@ fn draw_atlas_species(
                 });
                 if let Some(species)=reference.and_then(|r|r.species.get(&row.id)){
                     if !species.drops.is_empty(){
-                        ui.collapsing(format!(
+                        ui.collapsing(tr_dynamic(format!(
                             "Guide item drops ({})",species.drops.len()
-                        ),|ui|{
+                        )),|ui|{
                             for drop in species.drops.iter().take(20){
                                 let name=drop.item_name.as_deref()
                                     .map(str::to_owned)
@@ -1665,8 +1665,8 @@ fn draw_atlas_species(
                                     ui.label(RichText::new(name)
                                         .size(11.0).color(TEXT));
                                     ui.label(RichText::new(format!(
-                                        "{:.3}% / eligible kill · {:.0}–{:.0} units",
-                                        drop.chance_pct,drop.minimum,drop.maximum
+                                        "{:.3}% / {} · {:.0}–{:.0} {}",
+                                        drop.chance_pct,tr("eligible kill"),drop.minimum,drop.maximum,tr("units")
                                     )).size(10.0).color(MUTED));
                                 });
                             }
@@ -1710,8 +1710,8 @@ fn draw_atlas_species_selector(
                     ui.label(RichText::new(&row.name)
                         .strong().size(12.0).color(TEXT));
                     ui.label(RichText::new(format!(
-                        "#{} · {} locations{}",
-                        row.id,row.destinations.len(),
+                        "#{} · {} {}{}",
+                        row.id,row.destinations.len(),tr("locations"),
                         if row.owned{tr(" · In depot")}else{""}
                     )).size(10.0).color(MUTED));
                 });
