@@ -5472,9 +5472,9 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 detail_stat_line(&mut cols[2], tr("Net gold/h"),
                     &if m.valid_gold { format_hunt_amount(m.gold_net_h) } else { "—".into() });
             });
-            ui.label(RichText::new(format!("{} · {}s · {} kills/h",
+            ui.label(RichText::new(format!("{} · {}s · {} {}",
                 view.sample_quality, view.measurements.seconds.round() as u64,
-                format_hunt_amount(view.measurements.kills_h)))
+                format_hunt_amount(view.measurements.kills_h),tr("kills/h")))
                 .size(10.0).color(MUTED));
             ui.columns(2, |cols| {
                 detail_stat_line(&mut cols[0], tr("Trainer XP earned"),
