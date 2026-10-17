@@ -394,8 +394,12 @@ impl HistoryRecorder {
         self.dirty=true;
         self.needs_publish=true;
     }
+    #[cfg(test)]
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else{return};
+        self.ingest_value(&frame, hunt);
+    }
+    pub fn ingest_value(&mut self, frame:&Value, hunt:Option<&str>) {
         let kind=frame.get("t").and_then(Value::as_str);
         if kind==Some("welcome") { self.last_kill=None; }
         if matches!(kind,Some("welcome"|"estado")) {
