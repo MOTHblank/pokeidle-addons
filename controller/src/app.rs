@@ -4077,24 +4077,39 @@ fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OverviewCombatState { Offline, Center, Fighting, Between, Waiting, Stalled }
+enum OverviewCombatState { Offline, Center, Fighting, Hunting, Waiting, Stalled }
 
+// A wild encounter is short-lived; the account's confirmed hunt is not.
+// Never switch the overview to "between encounters" or clear its hunt artwork
+// just because the battle server briefly sends selvagem:null.
 fn overview_combat_state(view: Option<&HuntView>, live: bool) -> OverviewCombatState {
     if !live { return OverviewCombatState::Offline; }
     let Some(view) = view else { return OverviewCombatState::Waiting; };
     if view.in_center { return OverviewCombatState::Center; }
-    if view.measurements.combat_event_age_secs.is_some_and(|age| age > 90) {
+    if view.hunt_slug.is_none() { return OverviewCombatState::Waiting; }
+    if view.measurements.combat_event_age_secs.is_some_and(|age| age > 180) {
         return OverviewCombatState::Stalled;
     }
     if view.wild.is_some() &&
-        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 45) {
+        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 90) {
         return OverviewCombatState::Fighting;
     }
-    if view.wild.is_none() &&
-        view.measurements.combat_event_age_secs.is_some_and(|age| age <= 45) {
-        return OverviewCombatState::Between;
-    }
-    OverviewCombatState::Waiting
+    OverviewCombatState::Hunting
+}
+
+// Use the hunt catalog, not the ephemeral wild slot, for a stable right card.
+// Choosing the highest-weight species is representative artwork only; the
+// card names the hunt rather than asserting this is the exact current enemy.
+fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
+    let slug = view.hunt_slug.as_deref()?;
+    view.hunts.iter().find(|entry| entry.slug == slug)
+}
+fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
+    overview_hunt(view)?.species.iter()
+        .filter(|species| (1..=1025).contains(&species.id))
+        .max_by(|a, b| a.weight.total_cmp(&b.weight)
+            .then_with(|| b.id.cmp(&a.id)))
+        .map(|species| species.id)
 }
 
 // Looktypes are the game's visual IDs; species IDs require a separate
@@ -4140,7 +4155,10 @@ fn draw_overview_matchup(
     view: Option<&HuntView>,
 ) {
     let pokemon = if fresh { view.and_then(|v|v.active_pokemon.as_ref()) } else { None };
-    let wild = if fresh { view.and_then(|v|v.wild.as_ref()) } else { None };
+    let hunt = view.filter(|_| fresh).filter(|v| !v.in_center)
+        .and_then(overview_hunt);
+    let hunt_species = view.filter(|_| fresh).filter(|v| !v.in_center)
+        .and_then(overview_hunt_art_species);
     let pokemon_name = pokemon.map(|p|p.name.as_str())
         .filter(|name|!name.is_empty())
         .or_else(|| (fresh && !health.active_pokemon.is_empty())
@@ -4167,31 +4185,37 @@ fn draw_overview_matchup(
                     .size(9.0).color(DIM));
             });
         });
-        // Keep the opponent on the right without nesting an RTL horizontal
-        // layout inside another RTL layout (which clipped the enemy label).
+        // The right half tracks the selected hunt, not the transient opponent
+        // slot. The artwork represents a species encountered in that hunt.
         cols[1].with_layout(Layout::top_down(Align::Max), |ui| {
-            ui.label(RichText::new(tr("Opponent"))
+            ui.label(RichText::new(tr("Current hunt"))
                 .size(9.0).color(DIM));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                overview_combat_image(app, ui,
-                    None, None, wild.and_then(|p| p.species_id), true);
+                overview_combat_image(app, ui, None, None, hunt_species, true);
                 ui.vertical(|ui| {
-                    let name=wild.map(|w|w.name.as_str()).filter(|s|!s.is_empty())
-                        .unwrap_or(if combat == OverviewCombatState::Between {
-                            tr("Between encounters")
-                        } else { "—" });
-                    ui.add(egui::Label::new(RichText::new(compact_text(name,16))
+                    let name = if combat == OverviewCombatState::Center {
+                        tr("At Pokémon Center")
+                    } else {
+                        hunt.map(|h| h.name.as_str())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| (fresh && !health.hunt.is_empty())
+                                .then_some(health.hunt.as_str()))
+                            .unwrap_or("—")
+                    };
+                    ui.add(egui::Label::new(RichText::new(compact_text(name, 21))
                         .size(11.0).strong().color(TEXT))
                         .truncate()).on_hover_text(name);
-                    ui.label(RichText::new(wild.map(|w|format!("Lv. {}",w.level))
-                        .unwrap_or_else(||"—".into())).size(9.0).color(DIM));
+                    let level = hunt.filter(|h| h.level > 0)
+                        .map(|h| format!("Lv. {}", h.level))
+                        .unwrap_or_else(|| "—".into());
+                    ui.label(RichText::new(level).size(9.0).color(DIM));
                 });
             });
         });
     });
     let (state_label, color)=match combat {
         OverviewCombatState::Fighting=>(tr("Fighting"),GOOD),
-        OverviewCombatState::Between=>(tr("Between encounters"),GOOD),
+        OverviewCombatState::Hunting=>(tr("Hunting"),GOOD),
         OverviewCombatState::Center=>(tr("At Pokémon Center"),WARN),
         OverviewCombatState::Waiting=>(tr("Waiting for combat"),WARN),
         OverviewCombatState::Stalled=>(tr("No combat activity"),BAD),
@@ -4251,20 +4275,46 @@ fn draw_overview_account_summary(
 
 #[cfg(test)]
 mod overview_combat_tests {
-    use super::{overview_combat_state,OverviewCombatState};
-    use crate::native_hunts::{HuntView,WildInfo};
+    use super::{overview_combat_state, overview_hunt_art_species, OverviewCombatState};
+    use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, WildInfo};
+    use std::sync::Arc;
+
     #[test]
-    fn live_opponent_needs_recent_combat_before_claiming_fighting() {
-        let mut view=HuntView::default();
-        view.wild=Some(WildInfo {name:"Scyther".into(),..Default::default()});
-        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Waiting);
-        view.measurements.combat_event_age_secs=Some(10);
-        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Fighting);
-        view.measurements.combat_event_age_secs=Some(91);
-        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Stalled);
-        assert_eq!(overview_combat_state(Some(&view),false),OverviewCombatState::Offline);
-        view.in_center=true;
-        assert_eq!(overview_combat_state(Some(&view),true),OverviewCombatState::Center);
+    fn confirmed_hunt_stays_visible_across_encounters() {
+        let mut view = HuntView { hunt_slug: Some("scyther-field".into()),
+            ..Default::default() };
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Hunting);
+        view.wild = Some(WildInfo { name: "Scyther".into(), ..Default::default() });
+        view.measurements.combat_event_age_secs = Some(10);
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Fighting);
+        view.wild = None; // selvagem:null between fights
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Hunting);
+        view.measurements.combat_event_age_secs = Some(181);
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Stalled);
+        assert_eq!(overview_combat_state(Some(&view), false), OverviewCombatState::Offline);
+        view.in_center = true;
+        assert_eq!(overview_combat_state(Some(&view), true), OverviewCombatState::Center);
+    }
+
+    #[test]
+    fn overview_art_is_deterministic_per_hunt_not_current_wild() {
+        let mut view = HuntView { hunt_slug: Some("field-a".into()),
+            hunts: Arc::new(vec![
+                HuntEntry { slug: "field-a".into(), species: vec![
+                    HuntSpecies { id: 127, weight: 30.0 },
+                    HuntSpecies { id: 123, weight: 70.0 },
+                ], ..Default::default() },
+                HuntEntry { slug: "field-b".into(), species: vec![
+                    HuntSpecies { id: 25, weight: 1.0 }
+                ], ..Default::default() },
+            ]), ..Default::default() };
+        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        view.wild = Some(WildInfo { species_id: Some(127), ..Default::default() });
+        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        view.wild = None;
+        assert_eq!(overview_hunt_art_species(&view), Some(123));
+        view.hunt_slug = Some("field-b".into());
+        assert_eq!(overview_hunt_art_species(&view), Some(25));
     }
 }
 
