@@ -586,8 +586,8 @@ fn atlas_type_multiplier(
 /// immunities and weaknesses remain readable above the fold.
 fn atlas_multiplier_text(multiplier:f64)->String{
     if multiplier==0.0{"0× IMMUNE".into()}
-    else if (multiplier-0.25).abs()<0.001{"¼×".into()}
-    else if (multiplier-0.5).abs()<0.001{"½×".into()}
+    else if (multiplier-0.25).abs()<0.001{"0.25×".into()}
+    else if (multiplier-0.5).abs()<0.001{"0.5×".into()}
     else if (multiplier-1.0).abs()<0.001{"1×".into()}
     else if (multiplier-2.0).abs()<0.001{"2×".into()}
     else if (multiplier-4.0).abs()<0.001{"4×".into()}
@@ -675,11 +675,11 @@ fn draw_atlas_type_direction(
     // The direction changes which multipliers are favorable; the multiplier
     // itself is ALWAYS an attack type hitting the defender, never reversed.
     let (danger,safe)=if incoming{
-        ("WEAK TO · incoming 2× / 4×",
-         "RESISTS / IMMUNE · incoming ½× / ¼× / 0×")
+        ("EXTRA DAMAGE TAKEN · 2× / 4×",
+         "REDUCED / IMMUNE · 0.5× / 0.25× / 0×")
     }else{
-        ("HIT HARD · outgoing 2× / 4×",
-         "RESISTED / IMMUNE · outgoing ½× / ¼× / 0×")
+        ("EXTRA DAMAGE DEALT · 2× / 4×",
+         "RESISTED / IMMUNE · 0.5× / 0.25× / 0×")
     };
     for (heading,high) in [(danger,true),(safe,false)]{
         let matching=possible.iter()
@@ -725,7 +725,7 @@ fn atlas_types_for_active(
 fn draw_atlas_matchup(
     ui:&mut egui::Ui,reference:Option<&AtlasReference>,
     lead_types:&[String],target_types:&[String],
-    target_name:&str,target_context:&str,
+    lead_name:&str,target_name:&str,target_context:&str,
 ){
     egui::Frame::new().fill(PANEL)
         .stroke(Stroke::new(1.0,BORDER))
@@ -735,8 +735,9 @@ fn draw_atlas_matchup(
             ui.horizontal_wrapped(|ui|{
                 ui.label(RichText::new("TYPE ADVANTAGES & WEAKNESSES")
                     .size(12.0).strong().color(TEXT));
-                ui.label(RichText::new(target_name)
-                    .size(11.0).color(ACCENT));
+                ui.label(RichText::new(format!(
+                    "{lead_name}  ↔  {target_name}"
+                )).size(11.0).color(ACCENT));
             });
             ui.label(RichText::new(target_context)
                 .size(10.0).color(MUTED));
@@ -762,7 +763,7 @@ fn draw_atlas_matchup(
                     target_types,lead_types,true);
             }
             ui.label(RichText::new(
-                "Type effectiveness only: move availability, damage stats, abilities and battle timing are not modeled here. Immunity is 0×; dual types can multiply to ¼× or 4×."
+                "Type effectiveness only: results assume a move of the displayed attack type. Learned moves, stats, abilities and battle timing are not included. Dual-type effects multiply (0.25× to 4×)."
             ).size(9.0).color(DIM));
         });
 }
@@ -1571,6 +1572,8 @@ fn draw_atlas_species(
                     .map(|guide|atlas_types_for_active(view,guide))
                     .unwrap_or_default();
                 draw_atlas_matchup(ui,reference,&lead_types,&row.types,
+                    view.active_pokemon.as_ref().map(|p|p.name.as_str())
+                        .unwrap_or("Your Pokémon"),
                     &row.name,
                     "Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move.");
                 ui.add_space(7.0);
@@ -2201,6 +2204,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         "Opponent typing is unavailable; no advantages or weaknesses are assumed."
                     ));
                     draw_atlas_matchup(ui,guide,&lead_types,target_types,
+                        hunts.active_pokemon.as_ref().map(|p|p.name.as_str())
+                            .unwrap_or("Your Pokémon"),
                         target_name,note);
                     ui.add_space(8.0);
     let m = &hunts.measurements;
@@ -2629,8 +2634,8 @@ mod tests {
         assert_eq!(atlas_multiplier_color(0.5,false),BAD);
         assert_eq!(atlas_multiplier_color(0.5,true),GOOD);
         assert_eq!(atlas_multiplier_text(0.0),"0× IMMUNE");
-        assert_eq!(atlas_multiplier_text(0.25),"¼×");
-        assert_eq!(atlas_multiplier_text(0.5),"½×");
+        assert_eq!(atlas_multiplier_text(0.25),"0.25×");
+        assert_eq!(atlas_multiplier_text(0.5),"0.5×");
         assert_eq!(atlas_multiplier_text(2.0),"2×");
         assert_eq!(atlas_multiplier_text(4.0),"4×");
     }
