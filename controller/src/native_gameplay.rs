@@ -139,8 +139,12 @@ impl Gameplay {
         self.balls.get(&id).copied().unwrap_or(0)
             .saturating_sub(self.unreflected.get(&id).copied().unwrap_or(0))
     }
+    #[cfg(test)]
     pub fn ingest(&mut self, raw:&str, now:Instant) {
         let Ok(frame)=serde_json::from_str::<Value>(raw) else {return};
+        self.ingest_value(&frame, now);
+    }
+    pub fn ingest_value(&mut self, frame:&Value, now:Instant) {
         let kind=frame.get("t").and_then(Value::as_str);
         if kind==Some("welcome") {
             self.on_disconnect();

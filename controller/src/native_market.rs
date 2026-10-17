@@ -486,8 +486,12 @@ impl MarketBuyer {
         if changed {self.persist();}
         self.update_pending();
     }
+    #[cfg(test)]
     pub fn ingest(&mut self, text: &str, now: Instant, cfg:&MarketRules) {
         let Ok(frame)=serde_json::from_str::<Value>(text) else{return};
+        self.ingest_value(&frame, now, cfg);
+    }
+    pub fn ingest_value(&mut self, frame: &Value, now: Instant, cfg:&MarketRules) {
         let t=frame.get("t").and_then(Value::as_str).unwrap_or("");
         if t=="welcome" { self.on_disconnect(); }
         if matches!(t,"welcome"|"estado") {
