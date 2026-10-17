@@ -12,6 +12,7 @@ use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
 mod market_panel;
+mod translations;
 use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
@@ -280,6 +281,10 @@ fn localize_status(message: String) -> String {
         value = value.replace(en, pt);
     }
     value
+}
+
+fn tr_dynamic(value: String) -> String {
+    if pt_br() { translations::dynamic(tr(&value).to_owned()) } else { value }
 }
 
 fn tr<'a>(en: &'a str) -> &'a str {
@@ -985,7 +990,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch sign-in" => "Entrar na Twitch",
         "Automation is managed in the controller. Start this account to see its current settings." =>
             "A automação é gerenciada no aplicativo. Inicie a conta para ver as configurações atuais.",
-        _ => en,
+        _ => translations::pt(en),
     }
 }
 
@@ -3781,7 +3786,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                             ui.label(RichText::new("VIP").size(10.0).strong().color(WARN));
                         }
                         if view.bonuses.guild_boost_active {
-                            ui.label(RichText::new("Guild boost").size(10.0).color(GOOD));
+                            ui.label(RichText::new(tr("Guild boost")).size(10.0).color(GOOD));
                         }
                         for (label, percent, known) in [
                             ("Twitch", view.bonuses.twitch_pct, view.bonuses.twitch_known),
@@ -4423,10 +4428,10 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) 
         "Up to 90 days of battle history, saved locally for each account."
     )).size(10.0).color(DIM));
     if let Some(error)=history.load_error.as_deref(){
-        ui.colored_label(WARN,format!("History load: {error}"));
+        ui.colored_label(WARN,tr_dynamic(format!("History load: {error}")));
     }
     if let Some(error)=history.save_error.as_deref(){
-        ui.colored_label(WARN,format!("History save: {error}"));
+        ui.colored_label(WARN,tr_dynamic(format!("History save: {error}")));
     }
     ui.add_space(9.0);
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
@@ -4515,9 +4520,9 @@ fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) 
                                     ui.label(format_number(day.trainer_xp));
                                     ui.label(format_number(day.pokemon_xp));
                                     ui.label(format_number(day.combat_gold.saturating_add(day.auto_sale_gold)))
-                                        .on_hover_text(format!("Combat: {} · Auto-sale: {}",
+                                        .on_hover_text(tr_dynamic(format!("Combat: {} · Auto-sale: {}",
                                             format_number(day.combat_gold),
-                                            format_number(day.auto_sale_gold)));
+                                            format_number(day.auto_sale_gold))));
                                     let drop_text=if day.drops.is_empty() {
                                         "—".to_owned()
                                     } else {
@@ -4754,7 +4759,7 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let below_target=rule.current.is_some_and(|stock|stock<rule.low);
                     ui.label(RichText::new(&rule.name).size(11.0).strong()
                         .color(if below_target{WARN}else{TEXT}))
-                        .on_hover_text(format!("Item #{}",rule.id));
+                        .on_hover_text(tr_dynamic(format!("Item #{}",rule.id)));
                     ui.label(RichText::new(format!(
                         "{} {} / {} · {} {}",
                         rule.current.map(|n|n.to_string()).unwrap_or_else(||"—".into()),
@@ -4852,7 +4857,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 }
                 for (id,used) in &capture.used_by_ball {
                     let caught=capture.caught_by_ball.get(id).copied().unwrap_or(0);
-                    ui.label(format!("Ball #{id}: {used} sent · {caught} caught"));
+                    ui.label(tr_dynamic(format!("Ball #{id}: {used} sent · {caught} caught")));
                 }
                 ui.label(RichText::new(
                     tr("These numbers show Auto Catch only. Manual catches are included in the dashboard totals.")
@@ -5185,7 +5190,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         });
         });
         ui.add_space(10.0);
-        ui.label(RichText::new("Restock at ≤ / Fill to").size(10.0).color(DIM));
+        ui.label(RichText::new(tr("Restock at ≤ / Fill to")).size(10.0).color(DIM));
         capture_restock_threshold(ui,tr("Balls"),&mut cfg.ball_at,&mut cfg.ball_to,
             selected_stock("ball",cfg.ball_id));
         capture_restock_threshold(ui,tr("Potions"),&mut cfg.potion_at,&mut cfg.potion_to,
@@ -5249,10 +5254,10 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
     ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
     ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new("Throw interval").size(10.0).color(MUTED));
+        ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
             .range(100..=3000).speed(10.0).suffix(" ms"));
-        ui.label(RichText::new("100 ms matches Auto Catch+; unanswered throws retry after 1 s")
+        ui.label(RichText::new(tr("100 ms matches Auto Catch+; unanswered throws retry after 1 s"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
@@ -5348,8 +5353,8 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 automation_badge(ui, "Twitch", &twitch.phase,
                     twitch.phase == "Online");
                 if let Some(last) = status.last_received {
-                    ui.label(RichText::new(format!("Last game update: {}s ago",
-                        last.elapsed().as_secs())).size(10.0).color(MUTED));
+                    ui.label(RichText::new(tr_dynamic(format!("Last game update: {}s ago",
+                        last.elapsed().as_secs()))).size(10.0).color(MUTED));
                 }
             });
             if !phase_online {
@@ -5387,8 +5392,8 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
             });
             if let Some(hunt) = view.hunts.iter().find(|hunt|
                 Some(hunt.slug.as_str()) == view.hunt_slug.as_deref()) {
-                ui.label(RichText::new(format!("{} · {} · Lv {} · {} spawn slots",
-                    hunt.area, hunt.region, hunt.level, hunt.total_spawns))
+                ui.label(RichText::new(tr_dynamic(format!("{} · {} · Lv {} · {} spawn slots",
+                    hunt.area, hunt.region, hunt.level, hunt.total_spawns)))
                     .size(10.0).color(DIM));
             }
             if let Some(map) = view.field_map.as_deref() {
@@ -5396,8 +5401,8 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                     .size(10.0).color(DIM));
             }
             if let Some(wild) = view.wild.as_ref() {
-                ui.label(RichText::new(format!("Wild: {} · Lv {} · HP {}/{}",
-                    wild.name, wild.level, wild.hp, wild.max_hp))
+                ui.label(RichText::new(tr_dynamic(format!("Wild: {} · Lv {} · HP {}/{}",
+                    wild.name, wild.level, wild.hp, wild.max_hp)))
                     .size(10.0).color(MUTED));
             }
             ui.horizontal_wrapped(|ui| {
@@ -5412,7 +5417,7 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                         .size(10.0).color(DIM));
                 }
                 if bonus.vip_active { ui.label(RichText::new("VIP").color(GOOD)); }
-                if bonus.guild_boost_active { ui.label(RichText::new("Guild boost").color(GOOD)); }
+                if bonus.guild_boost_active { ui.label(RichText::new(tr("Guild boost")).color(GOOD)); }
             });
         });
     ui.add_space(9.0);
@@ -6599,8 +6604,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         });
         if let Some(state) = twitch_phase.as_ref() {
             if twitch_online {
-                ui.label(RichText::new(format!("{} / {} Twitch channels",
-                    state.joined, state.desired)).size(10.0).color(DIM));
+                ui.label(RichText::new(tr_dynamic(format!("{} / {} Twitch channels",
+                    state.joined, state.desired))).size(10.0).color(DIM));
             }
             if let Some(error) = &state.error {
                 ui.label(RichText::new(error).size(10.0).color(WARN));
