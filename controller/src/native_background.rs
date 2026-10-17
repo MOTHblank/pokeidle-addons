@@ -173,7 +173,7 @@ pub struct NativeSession {
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
-    market_rules: Arc<Mutex<MarketRules>>,
+    market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
     session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
@@ -199,7 +199,9 @@ impl NativeSession {
             crate::logging::warn(&format!("Market rule settings unavailable; disabled: {error}"));
             MarketRules::default()
         });
-        let market_rules=Arc::new(Mutex::new(rules));
+        // Worker and editor share immutable rule data; a 60 ms dispatcher
+        // must not retain a second full allocation of the same rule set.
+        let market_rules=Arc::new(Mutex::new(Arc::new(rules)));
         let worker_market_rules=Arc::clone(&market_rules);
         let market_rules_revision=Arc::new(AtomicU64::new(0));
         let worker_rules_revision=Arc::clone(&market_rules_revision);
@@ -252,7 +254,7 @@ impl NativeSession {
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
         rules.save(self.profile)?;
         let mut live=self.market_rules.lock().map_err(|_|"Market settings unavailable".to_owned())?;
-        *live=rules;
+        *live=Arc::new(rules);
         self.market_rules_revision.fetch_add(1, Ordering::Release);
         Ok(())
     }
@@ -523,7 +525,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     capture_config: Arc<Mutex<CatchSettings>>,
-    market_rules: Arc<Mutex<MarketRules>>,
+    market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
     session_reset: Arc<AtomicBool>,
     mut hunt_intel: HuntIntel,
@@ -552,7 +554,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 observe_value(&snapshot, &frame, &desired);
                 gameplay.ingest_value(&frame, received_at);
                 restock.ingest_value(&frame, received_at);
-                let mut market_cfg=market_rules.lock().map(|v|v.clone()).unwrap_or_default();
+                let mut market_cfg=market_rules.lock()
+                    .map(|v|Arc::clone(&v))
+                    .unwrap_or_else(|_|Arc::new(MarketRules::default()));
                 let mut last_rules_revision=market_rules_revision.load(Ordering::Acquire);
                 market.ingest_value(&frame, received_at, &market_cfg);
                 if let Some(catalog) = item_metadata.as_ref() {
@@ -720,7 +724,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     let revision=market_rules_revision.load(Ordering::Acquire);
                     if revision != last_rules_revision {
                         if let Ok(rules)=market_rules.lock() {
-                            market_cfg=rules.clone();
+                            market_cfg=Arc::clone(&rules);
                             last_rules_revision=revision;
                         }
                     }

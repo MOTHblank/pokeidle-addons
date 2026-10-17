@@ -509,9 +509,23 @@ fn draw_hunt_row(
         });
 }
 
+// Explorer needs only these three fields to display/select a destination.
+// Keeping an entire HuntEntry (including its species allocation) alive in
+// each account's cached results multiplied RAM after the ranking-cache change.
+#[derive(Clone)]
+struct AtlasHuntLabel {
+    slug:String,
+    name:String,
+    level:u32,
+}
+impl AtlasHuntLabel {
+    fn from_hunt(hunt:&native_hunts::HuntEntry)->Self {
+        Self {slug:hunt.slug.clone(),name:hunt.name.clone(),level:hunt.level}
+    }
+}
 #[derive(Clone)]
 struct AtlasDestination {
-    hunt:Arc<native_hunts::HuntEntry>,
+    hunt:Arc<AtlasHuntLabel>,
     unlocked:bool,
     share:f64,
     forecast:Option<native_atlas::Forecast>,
@@ -863,6 +877,12 @@ pub(super) struct ExplorerCache {
     rebuilds:usize,
 }
 impl ExplorerCache {
+    pub(super) fn release(&mut self) {
+        // Release cached forecasts, destination labels and Arc source handles
+        // when Explorer is not the active workspace. Only one account needs
+        // rankings resident at a time.
+        if self.initialized { *self=Self::default(); }
+    }
     fn update(&mut self,view:&HuntView,reference:Option<&AtlasReference>,
         estimates:&EstimateCache,filters:&AtlasFilters,scenario:&AtlasScenario,
     )->&[AtlasSpeciesRow] {
@@ -927,8 +947,9 @@ fn atlas_species_rows(
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
-        // Share a single owned hunt among all Pokémon in that destination.
-        let hunt=Arc::new(hunt.clone());
+        // Only allocate a compact destination label if at least one species
+        // actually passes the current filters.
+        let mut destination_label:Option<Arc<AtlasHuntLabel>>=None;
         for spawn in &hunt.species {
             if spawn.weight<=0.0 {continue}
             let meta=reference.and_then(|r|r.species.get(&spawn.id));
@@ -958,7 +979,7 @@ fn atlas_species_rows(
                filters.collection==AtlasCollection::NotInDepot && owned {continue}
             let share=spawn.weight.max(0.0)/sum;
             let forecast=cache.get(&hunt.slug);
-            let base=atlas_objective(filters.sort,forecast.as_ref(),&hunt,
+            let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,
                 share,meta,&filters.rare_item);
             let objective=match filters.sort {
                 AtlasSort::Capture|AtlasSort::ShinyCaught=>forecast.as_ref()
@@ -997,11 +1018,13 @@ fn atlas_species_rows(
                     })),
                 _=>base
             };
+            let label=destination_label.get_or_insert_with(||
+                Arc::new(AtlasHuntLabel::from_hunt(hunt)));
             grouped.entry(spawn.id).or_insert_with(||AtlasSpeciesRow{
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
             }).destinations.push(AtlasDestination{
-                hunt:Arc::clone(&hunt),unlocked,share,forecast,objective,
+                hunt:Arc::clone(label),unlocked,share,forecast,objective,
             });
         }
     }
@@ -2754,6 +2777,30 @@ mod tests {
         assert_eq!(atlas_types_for_active(&view,&guide),vec!["STEEL"]);
     }
     #[test]
+    fn explorer_release_drops_previous_source_handles() {
+        let mut cache=ExplorerCache::default();
+        let view=HuntView::default();
+        let original=Arc::clone(&view.hunts);
+        cache.update(&view,None,&EstimateCache::default(),
+            &AtlasFilters::default(),&AtlasScenario::default());
+        assert!(Arc::strong_count(&original)>=3);
+        cache.release();
+        assert_eq!(Arc::strong_count(&original),2);
+        assert!(!cache.initialized);
+    }
+    #[test]
+    fn cached_destination_does_not_clone_hunt_species() {
+        let mut hunt=native_hunts::HuntEntry::default();
+        hunt.slug="test".into();
+        hunt.name="Test".into();
+        hunt.level=100;
+        hunt.species.push(native_hunts::HuntSpecies::default());
+        let label=AtlasHuntLabel::from_hunt(&hunt);
+        assert_eq!(label.slug,"test");
+        assert_eq!(label.name,"Test");
+        assert_eq!(label.level,100);
+    }
+    #[test]
     fn species_action_uses_an_unlocked_destination_not_a_locked_best(){
         let locked=native_hunts::HuntEntry{
             slug:"guide-only".into(),..Default::default()
@@ -2766,11 +2813,11 @@ mod tests {
             best:Some(200.0),
             destinations:vec![
                 AtlasDestination{
-                    hunt:Arc::new(locked),unlocked:false,share:0.7,
+                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&locked)),unlocked:false,share:0.7,
                     forecast:None,objective:Some(200.0)
                 },
                 AtlasDestination{
-                    hunt:Arc::new(accessible),unlocked:true,share:0.3,
+                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&accessible)),unlocked:true,share:0.3,
                     forecast:None,objective:Some(100.0)
                 }
             ],
