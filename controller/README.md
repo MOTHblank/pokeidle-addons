@@ -1,47 +1,31 @@
 # Moth Controller
 
-The desktop controller manages authenticated PokéIdle and Twitch connections for up to four accounts. Browser windows are needed for sign-in and optional interactive gameplay, not for ordinary background execution.
+Moth Controller is the native desktop application for [PokéIdle Addons](../README.md). It manages up to four independently authenticated game profiles and native Twitch connections.
 
-## Run and build
+**[Latest release](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
 
-- Download a Windows or Linux binary from [Releases](https://github.com/MOTHblank/pokeidle-addons/releases/latest).
-- To build locally, run `cargo build --release` from the `controller/` directory.
-- Firefox or Firefox Developer Edition is required if sign-in has not been saved or has expired. Set `MOTH_FIREFOX` to its executable path if necessary.
-- In **Accounts**, four cards show account names, PokéIdle login state, Twitch login state, and Start/Stop controls. A successful setup confirms both connections before saving the setup marker.
-- The **Open in Firefox** action is for manual browser play, while **Start account** prefers saved credentials and opens a visible Firefox window if authentication is needed.
+## Using the app
 
-### Build while the Windows app is running
+Set up profiles in **Accounts**, signing in to PokéIdle and Twitch when the app requests it. The account cards show connection status and session controls. Firefox or Firefox Developer Edition is used for authentication when needed; use **Open in Firefox** whenever you want to play interactively.
 
-Windows prevents overwriting an executable in use. From PowerShell in `controller/`, run:
+Once authenticated, the game and Twitch connections operate in the background without requiring an open browser window. No userscript manager or browser add-on is required.
 
-```powershell
-.\build-windows.ps1
-```
+The **Dashboard** displays account activity and details; **Hunt Atlas** compares hunts and capture outcomes; **Automation** contains Auto Catch, restocking, and market rules. Account-specific options are managed inside the app.
 
-The script detects a locked `target/release/moth-controller.exe` and builds to a separate output folder instead, without stopping active sessions. It prints the exact executable path.
+## Artwork
 
-## Game icons and cache
+Item icons and Pokémon sprites are loaded lazily from supported public game assets and cached on disk. There is **no manual “Download game icons” step or button**. Missing images do not prevent the controller from functioning.
 
-In **Options**, **Download game icons** queues known public Poké Ball and item images on the dedicated cache worker. Downloads are stored per user:
+See [native visual asset notes](assets/visual/README.md) for cache behavior and developer tooling.
 
-- Windows: `%LOCALAPPDATA%\Moth\PokeIdle\VisualCache`
-- Linux: `~/.cache/moth-controller/visual` (or `$XDG_CACHE_HOME/moth-controller/visual`)
+## Building
 
-The committed [asset manifest](assets/visual/manifest.json) currently contains no bundled sprites. Pokémon image URLs have not yet been mapped, so the button only downloads the known images. See [visual asset notes](assets/visual/README.md) for mapping, packaging, and permission details.
-
-## Automation and Hunt Atlas
-
-The app handles Auto Catch, restocking (including potions and revives), Moth Watch market rules and Snatch, and Hunt Atlas estimates. Historical battle details are available through Dashboard details. Mission settings remain read-only until reliable update commands are identified.
-
-The ordinary desktop release version is **0.1.7**. The latest available published release may be older until a new release is built and uploaded.
-
-## Development
+From this directory:
 
 ```sh
-cd controller
-cargo check
-cargo test
 cargo build --release
 ```
 
-The desktop app requires live authenticated PokéIdle and Twitch sessions to verify sign-in and game data. Keep credentials out of logs and commits. The validation workflow runs manually.
+On Windows, if an older executable is still running, the optional `build-windows.ps1` script builds into a separate output directory instead of overwriting the active file.
+
+For development, use `cargo check` and `cargo test` from `controller/`. Do not commit credentials or authentication data.
