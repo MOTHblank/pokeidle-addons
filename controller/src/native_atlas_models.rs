@@ -9,7 +9,7 @@ impl BallKind {
     pub fn label(self)->&'static str {match self {Self::Ultra=>"Ultra",Self::Beast=>"Beast"}}
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Modifiers {
     pub capture_boost:bool, pub shiny_boost:bool,
     pub kick_capture:bool, pub kick_shiny:bool,
