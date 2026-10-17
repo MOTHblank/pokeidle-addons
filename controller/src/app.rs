@@ -4192,7 +4192,7 @@ fn draw_overview_matchup(
             ui.label(RichText::new(tr("Current hunt"))
                 .size(9.0).color(DIM));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                overview_combat_image(app, ui, None, None, hunt_species, true);
+                overview_combat_image(&mut app.visuals, ui, None, None, hunt_species, true);
                 ui.vertical(|ui| {
                     let name = if combat == OverviewCombatState::Center {
                         tr("At Pokémon Center")
