@@ -265,7 +265,7 @@ impl VisualCache {
     pub fn end_frame(&mut self) {
         let expired: Vec<_> = self.textures.keys().filter(|key|
             matches!(key.0, Kind::Pokemon | Kind::PokemonLooktype)
-                && !self.pokemon_visible.contains(key)
+                && !self.pokemon_visible.contains(*key)
         ).copied().collect();
         for key in expired {
             self.textures.remove(&key);
