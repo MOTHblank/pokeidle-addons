@@ -173,7 +173,7 @@ pub(super) fn draw_atlas_models(
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .stroke(Stroke::new(1.0,BORDER))
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
-            ui.label(RichText::new("SCENARIO INPUTS").size(10.0)
+            ui.label(RichText::new(tr("SCENARIO INPUTS")).size(10.0)
                 .strong().color(DIM));
     ui.horizontal_wrapped(|ui|{
         ui.label(tr("Destination"));
@@ -187,7 +187,7 @@ pub(super) fn draw_atlas_models(
                 for (hunt,unlocked) in hunts.iter().take(1500){
                     ui.selectable_value(&mut scenario.hunt_slug,hunt.slug.clone(),
                         format!("{} · Lv {} · {}",hunt.name,hunt.level,
-                            if *unlocked{"unlocked"}else{"guide-only"}));
+                            if *unlocked{tr("unlocked")}else{tr("guide-only")}));
                 }
             });
         ui.label(tr("Ball"));
@@ -308,7 +308,7 @@ pub(super) fn draw_atlas_models(
     let known_efficiency=ball_quote.and_then(|q|q.efficiency).is_some();
     ui.label(RichText::new(format!("{} ball efficiency {:.2} ({}) · target HP assumed 0% for wiki scenario",
         scenario.ball.label(),efficiency,
-        if known_efficiency{"server catalog"}else{"wiki default"}))
+        if known_efficiency{tr("server catalog")}else{tr("wiki default")}))
         .size(10.0).color(MUTED));
     let all_weight=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
     let mut rows=Vec::new();
@@ -330,7 +330,7 @@ pub(super) fn draw_atlas_models(
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
         .inner_margin(egui::Margin::same(11)).show(ui,|ui|{
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("MOST COMMON ENCOUNTERS")
+            ui.label(RichText::new(tr("MOST COMMON ENCOUNTERS"))
                 .size(10.0).strong().color(DIM));
             for (_,name,share,_,plan) in rows.iter().take(5){
                 ui.horizontal_wrapped(|ui|{
@@ -582,7 +582,7 @@ pub(super) fn draw_atlas_models(
         "Conditional gold balance (combat + USER-QUOTED market - known ball gold cost): {} / h",
         value(hypothetical_net)
     )).size(11.0).strong().color(if hypothetical_net.is_some(){GOOD}else{MUTED}));
-    ui.label(RichText::new("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent.")
+    ui.label(RichText::new(tr("Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent."))
         .size(10.0).color(WARN));
     ui.add_space(10.0);
     ui.collapsing(tr("History & forecast comparisons"),|ui|{
