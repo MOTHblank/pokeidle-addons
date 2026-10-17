@@ -2,6 +2,7 @@ use crate::accounts;
 use crate::config::{AccountConfig, Config, GameProfile, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
+use crate::native_kick::KickMonitor;
 use crate::logging;
 use crate::native_background::NativeSession;
 use crate::native_gameplay::GameCommand;
@@ -1666,6 +1667,10 @@ pub struct ControllerApp {
     inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     accounts: [AccountConfig; 4],
+    /// Kick Developer API monitors are independent per profile. No token persistence.
+    kick_monitors: [Option<KickMonitor>; 4],
+    kick_api_token_input: [String; 4],
+    kick_channels_input: [String; 4],
     account_names_dirty: [bool; 4],
     status: String,
     status_error: bool,
@@ -1788,6 +1793,12 @@ impl ControllerApp {
             inventory_catalog_busy:false,
             inventory_catalog_tx,
             inventory_catalog_rx,
+            kick_monitors: std::array::from_fn(|_| None),
+            kick_api_token_input: std::array::from_fn(|_| String::new()),
+            kick_channels_input: Config::load_kick_channels().unwrap_or_else(|error| {
+                logging::warn(&error);
+                std::array::from_fn(|_| String::new())
+            }),
             account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -2630,6 +2641,8 @@ impl ControllerApp {
 
     fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
+        // A stopped account must not keep an independent Kick worker alive.
+        self.kick_monitors[index].take();
         let account_name = self.account_name(profile);
         if self.games[index].handoff_closing {
             // The dedicated shutdown worker already owns and is closing the
@@ -6660,6 +6673,95 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 app.automation_section = AutomationSection::Capture;
                 app.panel_tab = PanelTab::Automation;
             }
+        });
+
+        // Kick is an independent, read-only Developer API integration. A
+        // successful poll confirms metadata access, NOT video viewing/rewards.
+        ui.add_space(9.0);
+        ui.collapsing(if pt_br() { "Kick · monitoramento nativo" }
+                     else { "Kick · native live monitor" }, |ui| {
+            ui.label(RichText::new(if pt_br() {
+                "Canais da Kick (separados por vírgula)"
+            } else {
+                "Kick channel names (comma separated)"
+            }).size(10.0).color(MUTED));
+            ui.add(egui::TextEdit::singleline(&mut app.kick_channels_input[index])
+                .hint_text("canal1, canal2")
+                .desired_width(ui.available_width()));
+            let monitoring = app.kick_monitors[index].is_some();
+            if !monitoring {
+                ui.label(RichText::new(if pt_br() {
+                    "Token de acesso da API de desenvolvedores da Kick"
+                } else {
+                    "Kick Developer API access token"
+                }).size(10.0).color(MUTED));
+                ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
+                    .password(true).desired_width(ui.available_width()));
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button(if pt_br() { "Salvar canais" } else { "Save channels" }).clicked() {
+                    match Config::save_kick_channels(&app.kick_channels_input) {
+                        Ok(()) => app.set_status(if pt_br() {
+                            "Canais Kick salvos".into()
+                        } else { "Kick channels saved".into() }, false),
+                        Err(error) => app.set_status(error, true),
+                    }
+                }
+                if monitoring {
+                    if ui.small_button(if pt_br() { "Parar Kick" } else { "Stop Kick" }).clicked() {
+                        app.kick_monitors[index].take();
+                    }
+                } else if ui.small_button(if pt_br() { "Monitorar Kick" }
+                                          else { "Monitor Kick" }).clicked() {
+                    let token = std::mem::take(&mut app.kick_api_token_input[index]);
+                    match KickMonitor::start(token, &app.kick_channels_input[index]) {
+                        Ok(monitor) => {
+                            app.kick_monitors[index] = Some(monitor);
+                            if let Err(error) = Config::save_kick_channels(&app.kick_channels_input) {
+                                app.set_status(error, true);
+                            } else {
+                                app.set_status(if pt_br() { "Monitor Kick iniciado" }
+                                               else { "Kick monitor started" }.into(), false);
+                            }
+                        }
+                        Err(error) => app.set_status(error, true),
+                    }
+                }
+                if ui.small_button(if pt_br() { "Abrir canais" }
+                                   else { "Open channels" }).clicked() {
+                    match crate::native_kick::normalize_channels(&app.kick_channels_input[index]) {
+                        Ok(channels) => match open_kick_channels_in_regular_browser(&channels) {
+                            Ok(_) => {},
+                            Err(error) => app.set_status(error, true),
+                        },
+                        Err(error) => app.set_status(error, true),
+                    }
+                }
+            });
+            if let Some(monitor) = app.kick_monitors[index].as_ref() {
+                let snapshot = monitor.snapshot();
+                ui.label(RichText::new(format!("Kick API: {}", snapshot.phase))
+                    .size(10.0).color(if snapshot.phase == "Online" { GOOD } else { WARN }));
+                for channel in &snapshot.channels {
+                    let state = match channel.live {
+                        Some(true) => if pt_br() { "AO VIVO" } else { "LIVE" },
+                        Some(false) => if pt_br() { "offline" } else { "offline" },
+                        None => if pt_br() { "desconhecido" } else { "unknown" },
+                    };
+                    let count = channel.viewers.map(|n| format!(" · {n} viewers"))
+                        .unwrap_or_default();
+                    ui.label(RichText::new(format!("{}: {}{}", channel.slug, state, count))
+                        .size(10.0).color(if channel.live == Some(true) { GOOD } else { MUTED }));
+                }
+                if let Some(error) = snapshot.error {
+                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+            }
+            ui.label(RichText::new(if pt_br() {
+                "A API informa se o canal está ao vivo. Não reproduz vídeo nem confirma pontos."
+            } else {
+                "API status is not video playback or confirmation of channel points."
+            }).size(9.0).color(DIM));
         });
 
         let show_guide = !setup.setup_complete || app.show_setup_guide[index];
