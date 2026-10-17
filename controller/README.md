@@ -14,7 +14,7 @@ O **Dashboard (Painel)** mostra a atividade e os detalhes das contas; o **Hunt A
 
 ## Imagens do jogo
 
-Os ícones de itens e os sprites de Pokémon são carregados sob demanda a partir dos recursos públicos compatíveis do jogo e armazenados em cache no computador. **Não há etapa nem botão para baixar manualmente os ícones.** Se uma imagem estiver indisponível, o aplicativo continuará funcionando.
+Os ícones de Poké Bolas, poções, revives e itens compatíveis são **incluídos diretamente no executável** e carregados localmente. Sprites de Pokémon e imagens de itens não incluídos continuam usando cache sob demanda. **Não há etapa nem botão para baixar manualmente os ícones.** Se uma imagem estiver indisponível, o aplicativo continuará funcionando.
 
 Consulte a [documentação dos recursos visuais nativos](assets/visual/README.md) para detalhes técnicos sobre o cache e as ferramentas de desenvolvimento.
 

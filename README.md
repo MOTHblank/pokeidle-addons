@@ -10,7 +10,7 @@ Aplicativo leve para gerenciar até **quatro contas do PokéIdle**. O Moth Contr
 - **Hunt Atlas:** comparação de caçadas, estimativas de experiência, planejamento de capturas e níveis de Outland.
 - **Automation (Automações):** configuração de captura automática, reposição de itens e regras de compra no mercado.
 - **Accounts (Contas):** gerenciamento de quatro perfis independentes e do estado das conexões com o PokéIdle e a Twitch.
-- **Imagens do jogo:** ícones de itens e sprites de Pokémon são carregados conforme necessário e armazenados em cache local. Não é preciso baixar os arquivos separadamente.
+- **Imagens do jogo:** ícones de Poké Bolas, poções, revives e itens compatíveis já vêm no executável. Sprites de Pokémon continuam sob demanda, com cache local.
 
 ## Como começar
 
