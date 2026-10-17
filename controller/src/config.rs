@@ -116,6 +116,55 @@ impl Config {
         Ok(accounts)
     }
 
+    /// Public Kick channel choices only. API tokens are never stored here.
+    pub fn kick_channels_path() -> Result<PathBuf, String> {
+        Ok(data_root()?.join("kick-channels.json"))
+    }
+
+    pub fn load_kick_channels() -> Result<[String; 4], String> {
+        let mut channels: [String; 4] = std::array::from_fn(|_| String::new());
+        let path = Self::kick_channels_path()?;
+        if !path.exists() { return Ok(channels); }
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|_| "Could not read Kick channel settings".to_owned())?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|_| "Invalid Kick channel settings".to_owned())?;
+        if let Some(entries) = value.get("accounts").and_then(Value::as_array) {
+            for entry in entries {
+                let Some(slot) = entry.get("slot").and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value < 4) else { continue; };
+                if let Some(raw) = entry.get("channels").and_then(Value::as_str) {
+                    if raw.len() <= 2048 { channels[slot] = raw.to_owned(); }
+                }
+            }
+        }
+        Ok(channels)
+    }
+
+    pub fn save_kick_channels(channels: &[String; 4]) -> Result<(), String> {
+        for raw in channels {
+            if raw.len() > 2048 { return Err("Kick channel list is too large".into()); }
+            if !raw.trim().is_empty() {
+                crate::native_kick::normalize_channels(raw)?;
+            }
+        }
+        let path = Self::kick_channels_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|_| "Could not prepare Kick channel settings".to_owned())?;
+        }
+        let value = json!({
+            "version": 1,
+            "accounts": channels.iter().enumerate().map(|(slot, channels)| json!({
+                "slot": slot, "channels": channels
+            })).collect::<Vec<_>>()
+        });
+        let raw = serde_json::to_string_pretty(&value)
+            .map_err(|_| "Could not serialize Kick channels".to_owned())?;
+        save_config_atomic(&path, &raw, "Kick channel settings")
+    }
+
     pub fn save_accounts(accounts: &[AccountConfig; 4]) -> Result<(), String> {
         let path = Self::accounts_path()?;
         if let Some(parent) = path.parent() {
