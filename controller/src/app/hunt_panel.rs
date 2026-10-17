@@ -867,8 +867,11 @@ impl ExplorerCache {
         let mut key_filters=filters.clone();
         key_filters.selected_species=None;
         key_filters.filters_open=false;
+        // Depot changes can alter ownership without changing its length.
+        // This cheap fingerprint is order-independent, avoiding false misses
+        // when the server reorders an otherwise identical roster.
         let roster_signature=view.pokemon_roster.iter().filter_map(|mon|mon.species_id)
-            .fold(0u64,|hash,id|hash.wrapping_mul(1099511628211).wrapping_add(id));
+            .fold(0u64,|hash,id|hash.wrapping_add(id.wrapping_mul(1099511628211)));
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
         let ball_quotes_ptr=Arc::as_ptr(&view.ball_quotes) as usize;

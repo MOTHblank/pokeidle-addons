@@ -244,7 +244,7 @@ impl VisualCache {
             (self.last_used.len()>MAX_POKEMON_TEXTURES ||
              self.pokemon_pixels>MAX_POKEMON_TEXTURE_PIXELS) {
             let Some(key)=self.last_used.iter()
-                .min_by_key(|(_,sequence)|*sequence).map(|(key,_)|*key)
+                .min_by_key(|(_,sequence)|**sequence).map(|(key,_)|*key)
                 else {break};
             self.last_used.remove(&key);
             self.textures.remove(&key);
@@ -285,8 +285,9 @@ impl VisualCache {
     pub fn poll(&mut self, ctx: &egui::Context) {
         if self.attempted.len()>2048 {
             let now=std::time::Instant::now();
+            let textures=&self.textures;
             self.attempted.retain(|key,at|
-                self.textures.contains_key(key) ||
+                textures.contains_key(key) ||
                 now.saturating_duration_since(*at)<std::time::Duration::from_secs(120));
         }
         while let Ok(reply) = self.results.try_recv() {
