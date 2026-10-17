@@ -100,7 +100,6 @@ fn species_looktype(client: &Client, root: &Path, species: u64) -> Option<u64> {
     let mut index = INDEX.get_or_init(|| Mutex::new(None)).lock().ok()?;
     if index.is_none() {
         let mut resolved = BTreeMap::new();
-        let mut found = false;
         for (cache, url) in [
             ("creatures-base.json", "/assets/creatures.json"),
             ("creatures-current.json", "/assets/creatures-novos.json"),
@@ -108,7 +107,6 @@ fn species_looktype(client: &Client, root: &Path, species: u64) -> Option<u64> {
         ] {
             if let Some(document) = catalog(client, root, cache, url) {
                 if document.get("creatures").is_some_and(Value::is_array) {
-                    found = true;
                     merge_species(&mut resolved, &document, "creatures");
                 }
             }
@@ -117,7 +115,9 @@ fn species_looktype(client: &Client, root: &Path, species: u64) -> Option<u64> {
             "/assets/creatures-sprites-lab.json") {
             merge_species(&mut resolved, &patches, "patches");
         }
-        if !found || resolved.is_empty() { return None; }
+        // Upstream's base creature JSONs can be empty while the verified
+        // sprite-patch catalog is populated. Those patches are sufficient.
+        if resolved.is_empty() { return None; }
         *index = Some(resolved);
     }
     index.as_ref()?.get(&species).copied()
