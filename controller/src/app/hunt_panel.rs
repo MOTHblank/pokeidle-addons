@@ -547,18 +547,6 @@ fn atlas_destinations<'a>(
     result
 }
 
-fn atlas_effectiveness(
-    reference:&AtlasReference, types:&[String], attack:&str
-)->Option<f64> {
-    let row=reference.chart.get(attack)?;
-    if types.is_empty(){return None}
-    let mut product=1.0;
-    for defend in types {
-        product*=*row.get(defend)?;
-    }
-    Some(product)
-}
-
 /// Return the combined game type-chart multiplier for an attack type against
 /// a single- or dual-type defender. The guide omits some neutral 1× entries;
 /// absent *entries* are neutral, but absent type definitions are unknown.
@@ -611,6 +599,30 @@ fn atlas_type_chip(
                 "{kind}  {}",atlas_multiplier_text(multiplier)
             )).size(10.0).strong().color(color));
         });
+}
+
+/// The selected "Weak to" filters are ATTACK TYPES that hit this species.
+/// Show EACH chosen multiplier, even on "Any selected" results where another
+/// selected type is neutral, resisted or immune. Otherwise the filter seems
+/// contradictory and hides vital counter-matchup information.
+fn draw_atlas_selected_weaknesses(
+    ui:&mut egui::Ui,reference:Option<&AtlasReference>,
+    defender_types:&[String],selected:&std::collections::BTreeSet<String>
+){
+    if selected.is_empty(){return}
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new("SELECTED TYPE DAMAGE TAKEN")
+            .size(9.0).strong().color(DIM));
+        for attack in selected{
+            if let Some(multiplier)=reference.and_then(|guide|
+                atlas_type_multiplier(guide,attack,defender_types)){
+                atlas_type_chip(ui,attack,multiplier,true);
+            }else{
+                ui.label(RichText::new(format!("{attack}  — unknown"))
+                    .size(10.0).color(MUTED));
+            }
+        }
+    });
 }
 
 /// Multipliers apply to an ATTACK TYPE, not a Pokémon's overall damage or
@@ -868,7 +880,7 @@ fn atlas_species_rows<'a>(
             if !filters.weak_to.is_empty() {
                 let Some(reference)=reference else{continue};
                 let is_weak=|attack:&String|
-                    atlas_effectiveness(reference,&types,attack).is_some_and(|n|n>1.0);
+                    atlas_type_multiplier(reference,attack,&types).is_some_and(|n|n>1.0);
                 let matches=if filters.weakness_match_all {
                     filters.weak_to.iter().all(is_weak)
                 }else{
@@ -1482,8 +1494,8 @@ fn draw_atlas_destination(
 fn draw_atlas_species(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
-    native:&NativeSession,live:bool,visuals:&mut VisualCache,
-    error:&mut Option<String>,
+    filters:&AtlasFilters,native:&NativeSession,live:bool,
+    visuals:&mut VisualCache,error:&mut Option<String>,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -1530,6 +1542,9 @@ fn draw_atlas_species(
                         "{}  ·  {}",atlas_sort_label(sort),atlas_value_label(sort,row.best)
                     )).size(12.0).strong().color(TEXT));
                 }
+                draw_atlas_selected_weaknesses(
+                    ui,reference,&row.types,&filters.weak_to
+                );
                 if let Some(best)=row.destinations.first(){
                     // The highest projected destination may be guide-only. The
                     // action instead uses the highest ranked unlocked location.
@@ -1651,6 +1666,7 @@ fn draw_atlas_species(
 fn draw_atlas_species_selector(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow<'_>,
     sort:AtlasSort,selected:bool,visuals:&mut VisualCache,
+    reference:Option<&AtlasReference>,filters:&AtlasFilters,
 )->bool{
     let row_frame=egui::Frame::new()
         .fill(if selected{ACCENT.linear_multiply(0.13)}else{PANEL})
@@ -1684,6 +1700,9 @@ fn draw_atlas_species_selector(
                     });
                 });
             });
+            draw_atlas_selected_weaknesses(
+                ui,reference,&row.types,&filters.weak_to
+            );
         });
     let selected=ui.interact(
         row_frame.response.rect,
@@ -1818,7 +1837,8 @@ fn draw_atlas_explorer(
                             for row in slice{
                                 if draw_atlas_species_selector(
                                     ui,row,filters.sort,
-                                    filters.selected_species==Some(row.id),visuals
+                                    filters.selected_species==Some(row.id),visuals,
+                                    reference,filters
                                 ){
                                     filters.selected_species=Some(row.id);
                                 }
@@ -1843,7 +1863,7 @@ fn draw_atlas_explorer(
                             if let Some(row)=slice.iter().find(|row|
                                 filters.selected_species==Some(row.id)){
                                 draw_atlas_species(ui,row,filters.sort,view,reference,
-                                    native,live,visuals,&mut error);
+                                    filters,native,live,visuals,&mut error);
                             }
                         });
                 }
@@ -1865,7 +1885,7 @@ fn draw_atlas_explorer(
                         for row in rows.iter().skip(visible.start)
                             .take(visible.end-visible.start){
                             draw_atlas_species(ui,row,filters.sort,view,reference,
-                                native,live,visuals,&mut error);
+                                filters,native,live,visuals,&mut error);
                         }
                     });
             }
