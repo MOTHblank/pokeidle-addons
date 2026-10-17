@@ -1456,7 +1456,7 @@ impl TrayRuntime {
                         }
                     }
 
-                    std::thread::sleep(Duration::from_millis(30));
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             })
             .map_err(|error| format!("could not start tray event worker: {error}"))?;
@@ -1639,6 +1639,7 @@ pub struct ControllerApp {
     hunt_page: usize,
     hunt_action_error: [Option<String>;4],
     hunt_estimate_cache: [hunt_panel::EstimateCache;4],
+    atlas_results: [hunt_panel::ExplorerCache;4],
     atlas_filters: [hunt_panel::AtlasFilters;4],
     atlas_scenarios: [hunt_panel::AtlasScenario;4],
     atlas_page: [usize;4],
@@ -1763,6 +1764,7 @@ impl ControllerApp {
             hunt_page: 0,
             hunt_action_error: std::array::from_fn(|_|None),
             hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
+            atlas_results: std::array::from_fn(|_|hunt_panel::ExplorerCache::default()),
             atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
             atlas_scenarios: std::array::from_fn(|_|hunt_panel::AtlasScenario::default()),
             atlas_page: [0;4],

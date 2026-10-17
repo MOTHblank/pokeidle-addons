@@ -21,7 +21,13 @@ fn write_json<T: Serialize>(profile: GameProfile, name: &str, obj: &T) -> Result
     let path = path(profile, name)?;
     let parent = path.parent().ok_or("Invalid market configuration path")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("Market directory: {e}"))?;
-    let contents = serde_json::to_vec_pretty(obj).map_err(|e| e.to_string())?;
+    // Purchase receipts are machine-readable and rewritten frequently.
+    // Compact JSON reduces both serialization work and disk traffic.
+    let contents = if name == "orders" {
+        serde_json::to_vec(obj)
+    } else {
+        serde_json::to_vec_pretty(obj)
+    }.map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, contents).map_err(|e| format!("Market save: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Market atomic replace: {e}"))
@@ -323,6 +329,7 @@ impl Offer {
 enum Scan { Summary, Item(u64,String), Pokemon(String,u64) }
 pub struct MarketBuyer {
     profile: GameProfile, session: u64, journal: Journal,
+    last_housekeeping: Option<Instant>,
     pub status: MarketStatus, nick: String, balances: [Option<u64>;2],
     server_offset_ms: i64, offers: Vec<Offer>, summary: BTreeMap<u64,[u64;2]>,
     // Up to five in-flight orders per account and three per item listing, as
@@ -354,7 +361,8 @@ impl MarketBuyer {
         for o in &mut journal.orders {
             if o.status=="submitted" {o.status="unknown".into();}
         }
-        Self { profile, session: clock_ms(), journal, status: MarketStatus {error:error.clone(),..Default::default()},
+        Self { profile, session: clock_ms(), journal, last_housekeeping: None,
+            status: MarketStatus {error:error.clone(),..Default::default()},
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
             summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
             urgent_details:HashSet::new(),scan_sequence:0,
@@ -364,13 +372,16 @@ impl MarketBuyer {
             snatch_last_send:HashMap::new() }
     }
     pub fn on_disconnect(&mut self) {
+        let had_pending=!self.pending.is_empty();
         let old=std::mem::take(&mut self.pending);
         for idx in old {
             if let Some(o)=self.journal.orders.get_mut(idx) {
                 if o.status=="submitted" {o.status="unknown".into();}
             }
         }
-        self.persist();
+        // Welcome/reconnect with no outstanding buys does not mutate the
+        // journal and must not rewrite it to disk.
+        if had_pending { self.persist(); }
         self.pending.clear(); self.pending_scan=None; self.offers.clear();
         self.urgent_details.clear();
         self.snatch.clear();self.snatch_closed.clear();self.snatch_verifying.clear();
@@ -486,8 +497,12 @@ impl MarketBuyer {
         if changed {self.persist();}
         self.update_pending();
     }
+    #[cfg(test)]
     pub fn ingest(&mut self, text: &str, now: Instant, cfg:&MarketRules) {
         let Ok(frame)=serde_json::from_str::<Value>(text) else{return};
+        self.ingest_value(&frame, now, cfg);
+    }
+    pub fn ingest_value(&mut self, frame: &Value, now: Instant, cfg:&MarketRules) {
         let t=frame.get("t").and_then(Value::as_str).unwrap_or("");
         if t=="welcome" { self.on_disconnect(); }
         if matches!(t,"welcome"|"estado") {
@@ -699,8 +714,14 @@ impl MarketBuyer {
     }
     pub fn next(&mut self,cfg:&MarketRules,now:Instant) -> Option<Value> {
         self.status.enabled=cfg.enabled&&!cfg.paused;
-        self.offers.retain(|offer|offer.at.elapsed()<Duration::from_secs(60));
-        self.blocked.retain(|_,at|at.elapsed()<Duration::from_secs(3600));
+        // Time-based cache cleanup is maintenance, not a Snatch deadline.
+        // Avoid scanning every offer and blocked listing every 60 ms.
+        if self.last_housekeeping.is_none_or(|at|
+            now.saturating_duration_since(at)>=Duration::from_secs(1)) {
+            self.offers.retain(|offer|now.saturating_duration_since(offer.at)<Duration::from_secs(60));
+            self.blocked.retain(|_,at|now.saturating_duration_since(*at)<Duration::from_secs(3600));
+            self.last_housekeeping=Some(now);
+        }
         // Pausing buying never freezes the receipt/timeout state machine.
         self.expire_pending(now);
         if self.failed_closed || !self.status.enabled || self.nick.is_empty() ||

@@ -16,6 +16,9 @@ mod generated {
 }
 const MAX_IMAGE_BYTES: u64 = 1_048_576;
 const MAX_EDGE: u32 = 1024;
+// Dynamic Pokémon sprite textures, not bundled item icons, are budgeted.
+const MAX_POKEMON_TEXTURES: usize = 96;
+const MAX_POKEMON_TEXTURE_PIXELS: usize = 16 * 1024 * 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind { Ball, Item, Pokemon, PokemonLooktype }
@@ -31,6 +34,10 @@ struct Response { key: (Kind, u64), frames: Option<Vec<Vec<u8>>> }
 pub struct VisualCache {
     textures: BTreeMap<(Kind, u64), Vec<TextureHandle>>,
     attempted: BTreeMap<(Kind, u64), std::time::Instant>,
+    last_used: BTreeMap<(Kind, u64), u64>,
+    use_sequence: u64,
+    pokemon_pixels: usize,
+    texture_pixels: BTreeMap<(Kind, u64), usize>,
     request: Sender<Request>,
     results: Receiver<Response>,
 }
@@ -216,28 +223,73 @@ impl Default for VisualCache {
                     }
                 }).ok();
         }
-        Self { textures: BTreeMap::new(), attempted: BTreeMap::new(), request, results }
+        Self { textures: BTreeMap::new(), attempted: BTreeMap::new(),
+            last_used: BTreeMap::new(), use_sequence: 0, pokemon_pixels: 0,
+            texture_pixels: BTreeMap::new(), request, results }
     }
 }
 
 impl VisualCache {
+    fn touch(&mut self, key: (Kind,u64)) {
+        if !matches!(key.0, Kind::Pokemon | Kind::PokemonLooktype) { return; }
+        self.use_sequence=self.use_sequence.wrapping_add(1);
+        self.last_used.insert(key,self.use_sequence);
+    }
+
+    fn trim_pokemon_textures(&mut self) {
+        // Dropping TextureHandles releases egui-managed GPU textures. Keep at
+        // least one sprite even when an unusually large animation exceeds
+        // the pixel budget by itself.
+        while self.last_used.len()>1 &&
+            (self.last_used.len()>MAX_POKEMON_TEXTURES ||
+             self.pokemon_pixels>MAX_POKEMON_TEXTURE_PIXELS) {
+            let Some(key)=self.last_used.iter()
+                .min_by_key(|(_,sequence)|**sequence).map(|(key,_)|*key)
+                else {break};
+            self.last_used.remove(&key);
+            self.textures.remove(&key);
+            self.pokemon_pixels=self.pokemon_pixels.saturating_sub(
+                self.texture_pixels.remove(&key).unwrap_or(0));
+            // Reopening the species can enqueue its already disk-cached art.
+            self.attempted.remove(&key);
+        }
+    }
+
     fn put(&mut self, ctx: &egui::Context, key: (Kind, u64), frames: &[Vec<u8>]) {
         let mut textures = Vec::with_capacity(frames.len().min(12));
+        let mut pixels = 0usize;
         for (frame, bytes) in frames.iter().take(12).enumerate() {
             let Ok(img) = image::load_from_memory(bytes) else { continue };
             if img.width() == 0 || img.height() == 0 ||
                 img.width() > MAX_EDGE || img.height() > MAX_EDGE { continue; }
             let rgba = img.into_rgba8();
-            let pixels = ColorImage::from_rgba_unmultiplied(
+            pixels=pixels.saturating_add(rgba.width() as usize * rgba.height() as usize);
+            let color_image = ColorImage::from_rgba_unmultiplied(
                 [rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
             textures.push(ctx.load_texture(
                 format!("native-visual-{}-{}-{frame}", key.0.key(), key.1),
-                pixels, TextureOptions::NEAREST));
+                color_image, TextureOptions::NEAREST));
         }
-        if !textures.is_empty() { self.textures.insert(key, textures); }
+        if !textures.is_empty() {
+            self.textures.insert(key, textures);
+            if matches!(key.0, Kind::Pokemon | Kind::PokemonLooktype) {
+                self.pokemon_pixels=self.pokemon_pixels.saturating_sub(
+                    self.texture_pixels.insert(key,pixels).unwrap_or(0));
+                self.pokemon_pixels=self.pokemon_pixels.saturating_add(pixels);
+                self.touch(key);
+                self.trim_pokemon_textures();
+            }
+        }
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if self.attempted.len()>2048 {
+            let now=std::time::Instant::now();
+            let textures=&self.textures;
+            self.attempted.retain(|key,at|
+                textures.contains_key(key) ||
+                now.saturating_duration_since(*at)<std::time::Duration::from_secs(120));
+        }
         while let Ok(reply) = self.results.try_recv() {
             if let Some(frames) = reply.frames {
                 self.put(ctx, reply.key, &frames);
@@ -277,6 +329,7 @@ impl VisualCache {
     pub fn texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64,
                       icon_hint: Option<&str>) -> Option<egui::TextureId> {
         self.ensure(ui, kind, id, icon_hint);
+        if self.textures.contains_key(&(kind,id)) {self.touch((kind,id));}
         self.textures.get(&(kind, id))
             .and_then(|frames| frames.first().map(TextureHandle::id))
     }
@@ -289,6 +342,7 @@ impl VisualCache {
     {
         if !matches!(kind, Kind::Pokemon | Kind::PokemonLooktype) { return None; }
         self.ensure(ui, kind, id, None);
+        if self.textures.contains_key(&(kind,id)) {self.touch((kind,id));}
         let frames = self.textures.get(&(kind, id))?;
         let frame = if frames.len() > 1 && ui.input(|input| input.focused) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
