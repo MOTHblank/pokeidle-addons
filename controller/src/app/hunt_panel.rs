@@ -602,7 +602,7 @@ fn atlas_type_chip(
 }
 
 /// The selected "Weak to" filters are ATTACK TYPES that hit this species.
-/// Show EACH chosen multiplier, even on tr("Any selected") results where another
+/// Show EACH chosen multiplier, even on "Any selected" results where another
 /// selected type is neutral, resisted or immune. Otherwise the filter seems
 /// contradictory and hides vital counter-matchup information.
 fn draw_atlas_selected_weaknesses(
@@ -976,7 +976,7 @@ fn atlas_species_rows<'a>(
 
 fn account_is_live(session:&NativeSession)->bool {
     let status=session.snapshot();
-    status.phase==tr("Online") && status.last_received
+    status.phase=="Online" && status.last_received
         .is_some_and(|at|at.elapsed()<=Duration::from_secs(90))
 }
 
@@ -1984,7 +1984,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         return;
     };
     let status=native.snapshot();
-    let live=status.phase==tr("Online") && status.last_received
+    let live=status.phase=="Online" && status.last_received
         .is_some_and(|received|received.elapsed()<=Duration::from_secs(90));
     let view=native.hunt_snapshot();
     ui.horizontal_wrapped(|ui|{
