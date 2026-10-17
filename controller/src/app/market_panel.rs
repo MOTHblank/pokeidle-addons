@@ -290,7 +290,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     for row in automatic {
                         ui.label(RichText::new(format!(
                             "#{} · {} {} · {} · {} {}",
-                            row.id,row.price,row.currency,row.phase,row.attempts
+                            row.id,row.price,tr(&row.currency),tr_dynamic(row.phase.clone()),
+                            row.attempts,tr("attempts")
                         )).size(10.0).color(MUTED));
                     }
                 }
