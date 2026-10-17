@@ -1,6 +1,8 @@
 # Moth Controller — PokéIdle
 
-Gerencie até **quatro contas do PokéIdle** em um só aplicativo. Acompanhe suas caçadas, configure automações e mantenha suas sessões do jogo e da Twitch funcionando em segundo plano.
+Desenvolvido para ser o **gerenciador de múltiplas contas mais eficiente do PokéIdle**, o Moth Controller reúne até **quatro contas simultâneas** em um único aplicativo. Cada conta pode acompanhar **mais de dez canais da Twitch** por conexões leves de chat, com foco em um consumo extremamente baixo de **CPU e memória RAM**.
+
+Acompanhe suas caçadas, configure automações e mantenha as sessões funcionando em segundo plano.
 
 **[Baixar a versão mais recente](https://github.com/MOTHblank/pokeidle-addons/releases/latest)** · [Relatar um problema](https://github.com/MOTHblank/pokeidle-addons/issues)
 
