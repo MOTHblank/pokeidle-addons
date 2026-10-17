@@ -871,9 +871,12 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         });
                         let current=view.hunts.iter().find(|h|
                             view.hunt_slug.as_deref()==Some(h.slug.as_str()));
+                        let location=if view.in_center{"At Pokémon Center"}else{
+                            current.map(|h|h.name.as_str())
+                                .or(view.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                        };
                         ui.label(RichText::new(format!(
-                            "Hunt: {}",current.map(|h|h.name.as_str())
-                                .or(view.hunt_slug.as_deref()).unwrap_or("—")
+                            "Location: {location}"
                         )).size(11.0).color(TEXT));
                         ui.label(RichText::new(format!(
                             "Lead: {}",view.active_pokemon.as_ref()
@@ -1745,8 +1748,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     });
                     let current=hunts.hunts.iter().find(|h|
                         hunts.hunt_slug.as_deref()==Some(h.slug.as_str()));
-                    let title=current.map(|h|h.name.as_str())
-                        .or(hunts.hunt_slug.as_deref()).unwrap_or("Unknown hunt");
+                    let title=if hunts.in_center{"At Pokémon Center"}else{
+                        current.map(|h|h.name.as_str())
+                            .or(hunts.hunt_slug.as_deref()).unwrap_or("No confirmed hunt")
+                    };
                     ui.label(RichText::new(format!(
                         "{title} · {} unlocked hunts · {} recorded kills",
                         hunts.hunts.len(),hunts.battle_kills
@@ -1758,7 +1763,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             .stroke(Stroke::new(1.0,BORDER))
                             .inner_margin(egui::Margin::same(12))
                             .show(&mut cols[0],|ui|{
-                                ui.label(RichText::new("MATCHUP").size(10.0)
+                                ui.label(RichText::new("LEAD & HUNT").size(10.0)
                                     .strong().color(DIM));
                                 // This is a hunt-location card, not a live
                                 // wild encounter widget. Spawn artwork is
