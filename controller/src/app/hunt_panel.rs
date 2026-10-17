@@ -559,6 +559,195 @@ fn atlas_effectiveness(
     Some(product)
 }
 
+/// Return the combined game type-chart multiplier for an attack type against
+/// a single- or dual-type defender. The guide omits some neutral 1× entries;
+/// absent *entries* are neutral, but absent type definitions are unknown.
+fn atlas_type_multiplier(
+    reference:&AtlasReference,attack:&str,defenders:&[String]
+)->Option<f64>{
+    if defenders.is_empty(){return None}
+    let row=reference.chart.iter()
+        .find(|(kind,_)|kind.eq_ignore_ascii_case(attack))?.1;
+    let mut multiplier=1.0;
+    for defender in defenders {
+        if !reference.chart.keys().any(|kind|kind.eq_ignore_ascii_case(defender)){
+            return None;
+        }
+        let step=row.iter().find(|(kind,_)|
+            kind.eq_ignore_ascii_case(defender))
+            .map(|(_,value)|*value).unwrap_or(1.0);
+        if !step.is_finite() || step<0.0{return None}
+        multiplier*=step;
+    }
+    Some(multiplier)
+}
+
+/// Neutral does not mean missing: hide 1× results by default so advantages,
+/// immunities and weaknesses remain readable above the fold.
+fn atlas_multiplier_text(multiplier:f64)->String{
+    if multiplier==0.0{"0× IMMUNE".into()}
+    else if (multiplier-0.25).abs()<0.001{"¼×".into()}
+    else if (multiplier-0.5).abs()<0.001{"½×".into()}
+    else if (multiplier-1.0).abs()<0.001{"1×".into()}
+    else if (multiplier-2.0).abs()<0.001{"2×".into()}
+    else if (multiplier-4.0).abs()<0.001{"4×".into()}
+    else{format!("{multiplier:.2}×")}
+}
+fn atlas_multiplier_color(multiplier:f64,incoming:bool)->Color32{
+    if (multiplier-1.0).abs()<0.001{MUTED}
+    else if (multiplier<1.0)==incoming{GOOD}
+    else{BAD}
+}
+fn atlas_type_chip(
+    ui:&mut egui::Ui,kind:&str,multiplier:f64,incoming:bool,
+){
+    let color=atlas_multiplier_color(multiplier,incoming);
+    egui::Frame::new()
+        .fill(color.linear_multiply(0.10))
+        .stroke(Stroke::new(1.0,color.linear_multiply(0.65)))
+        .corner_radius(6.0).inner_margin(egui::Margin::symmetric(7,4))
+        .show(ui,|ui|{
+            ui.label(RichText::new(format!(
+                "{kind}  {}",atlas_multiplier_text(multiplier)
+            )).size(10.0).strong().color(color));
+        });
+}
+
+/// Multipliers apply to an ATTACK TYPE, not a Pokémon's overall damage or
+/// ability to learn the move. STAB types are prioritized, but do not imply
+/// any particular move is selected or equipped.
+fn draw_atlas_type_direction(
+    ui:&mut egui::Ui,reference:&AtlasReference,
+    attacker_types:&[String],defender_types:&[String],incoming:bool,
+){
+    ui.label(RichText::new(if incoming{
+        "DAMAGE YOU TAKE"
+    }else{
+        "DAMAGE YOU DEAL"
+    }).size(11.0).strong().color(TEXT));
+    ui.label(RichText::new(if incoming{
+        "Enemy attack type → your Pokémon"
+    }else{
+        "Your attack type → opposing Pokémon"
+    }).size(10.0).color(MUTED));
+    ui.add_space(4.0);
+    if attacker_types.is_empty()||defender_types.is_empty(){
+        ui.label(RichText::new(
+            "Type matchup unavailable: one or both Pokémon types are unknown."
+        ).size(10.0).color(WARN));
+        return;
+    }
+    let mut possible=reference.chart.keys().filter_map(|kind|
+        atlas_type_multiplier(reference,kind,defender_types)
+            .map(|multiplier|(kind.as_str(),multiplier))
+    ).collect::<Vec<_>>();
+    if possible.is_empty(){
+        ui.label(RichText::new("Type chart is not available.")
+            .size(10.0).color(MUTED));
+        return;
+    }
+    // Show same-type moves separately; an attacker can have multiple STAB
+    // types. Do not suggest that the game has actually equipped those moves.
+    ui.label(RichText::new("Same-type moves (if available)")
+        .size(9.0).strong().color(DIM));
+    ui.horizontal_wrapped(|ui|{
+        for kind in attacker_types{
+            if let Some(multiplier)=atlas_type_multiplier(
+                reference,kind,defender_types
+            ){
+                atlas_type_chip(ui,kind,multiplier,incoming);
+            }
+        }
+    });
+    ui.add_space(5.0);
+    // For defensive exposure put dangerous multipliers first; for offense
+    // put super-effective attacks first. Immunities are always conspicuous.
+    possible.retain(|(_,n)|(n-1.0).abs()>=0.001);
+    possible.sort_by(|(left_name,left),(right_name,right)|{
+        let ord=if incoming{right.total_cmp(left)}else{right.total_cmp(left)};
+        ord.then_with(||left_name.cmp(right_name))
+    });
+    ui.label(RichText::new("Other notable attack types")
+        .size(9.0).strong().color(DIM));
+    if possible.is_empty(){
+        ui.label(RichText::new("All other attack types are neutral (1×)")
+            .size(10.0).color(MUTED));
+    }else{
+        ui.horizontal_wrapped(|ui|{
+            for (kind,multiplier) in &possible{
+                if !attacker_types.iter().any(|s|
+                    s.eq_ignore_ascii_case(kind)){
+                    atlas_type_chip(ui,kind,*multiplier,incoming);
+                }
+            }
+        });
+    }
+    let neutral=reference.chart.keys()
+        .filter_map(|kind|atlas_type_multiplier(reference,kind,defender_types)
+            .filter(|n|(n-1.0).abs()<0.001)
+            .map(|_|kind.as_str()))
+        .collect::<Vec<_>>();
+    if !neutral.is_empty(){
+        ui.collapsing(format!("Neutral move types (1× · {})",neutral.len()),|ui|{
+            ui.horizontal_wrapped(|ui|{
+                for kind in &neutral{atlas_type_chip(ui,kind,1.0,incoming);}
+            });
+        });
+    }
+}
+fn atlas_types_for_active(
+    view:&HuntView,reference:&AtlasReference
+)->Vec<String>{
+    let Some(pokemon)=view.active_pokemon.as_ref()else{return Vec::new()};
+    if !pokemon.types.is_empty(){return pokemon.types.clone()}
+    pokemon.species_id.and_then(|id|reference.species.get(&id))
+        .map(|species|species.types.clone()).unwrap_or_default()
+}
+fn draw_atlas_matchup(
+    ui:&mut egui::Ui,reference:Option<&AtlasReference>,
+    lead_types:&[String],target_types:&[String],
+    target_name:&str,target_context:&str,
+){
+    egui::Frame::new().fill(PANEL)
+        .stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(9.0).inner_margin(egui::Margin::symmetric(12,10))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new("TYPE ADVANTAGES & WEAKNESSES")
+                    .size(12.0).strong().color(TEXT));
+                ui.label(RichText::new(target_name)
+                    .size(11.0).color(ACCENT));
+            });
+            ui.label(RichText::new(target_context)
+                .size(10.0).color(MUTED));
+            ui.add_space(6.0);
+            let Some(reference)=reference else{
+                ui.label(RichText::new(
+                    "Waiting for the game guide's type chart."
+                ).size(10.0).color(MUTED));
+                return;
+            };
+            if ui.available_width()>=750.0{
+                ui.columns(2,|cols|{
+                    draw_atlas_type_direction(&mut cols[0],reference,
+                        lead_types,target_types,false);
+                    draw_atlas_type_direction(&mut cols[1],reference,
+                        target_types,lead_types,true);
+                });
+            }else{
+                draw_atlas_type_direction(ui,reference,
+                    lead_types,target_types,false);
+                ui.separator();
+                draw_atlas_type_direction(ui,reference,
+                    target_types,lead_types,true);
+            }
+            ui.label(RichText::new(
+                "Type effectiveness only: move availability, damage stats, abilities and battle timing are not modeled here. Immunity is 0×; dual types can multiply to ¼× or 4×."
+            ).size(9.0).color(DIM));
+        });
+}
+
 fn atlas_objective(
     sort:AtlasSort, forecast:Option<&native_atlas::Forecast>,
     hunt:&native_hunts::HuntEntry, share:f64, species:Option<&native_atlas::ReferenceSpecies>,
