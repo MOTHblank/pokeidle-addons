@@ -1547,6 +1547,14 @@ fn draw_atlas_species(
                         }
                     });
                 }
+                ui.add_space(8.0);
+                let lead_types=reference
+                    .map(|guide|atlas_types_for_active(view,guide))
+                    .unwrap_or_default();
+                draw_atlas_matchup(ui,reference,&lead_types,&row.types,
+                    &row.name,
+                    "Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move.");
+                ui.add_space(7.0);
                 ui.push_id("destinations",|ui|{
                     egui::CollapsingHeader::new(format!(
                         "Destinations & forecasts ({})",row.destinations.len()
@@ -2145,6 +2153,36 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 }
                             });
                     });
+                    ui.add_space(8.0);
+                    let guide=app.hunt_reference.as_deref();
+                    let lead_types=guide.map(|guide|
+                        atlas_types_for_active(hunts,guide))
+                        .unwrap_or_default();
+                    let wild_target=guide.and_then(|guide|
+                        hunts.wild.as_ref().and_then(|wild|
+                            wild.species_id.and_then(|id|
+                                guide.species.get(&id)
+                                    .map(|species|(species.name.as_str(),
+                                        species.types.as_slice(),
+                                        "Confirmed wild species. Move types shown are type-chart possibilities, not confirmed attacks.")))));
+                    let representative=guide.and_then(|guide|
+                        current.and_then(|hunt|hunt.species.iter()
+                            .filter(|species|species.weight>0.0)
+                            .max_by(|left,right|
+                                left.weight.total_cmp(&right.weight))
+                            .and_then(|spawn|guide.species.get(&spawn.id)
+                                .map(|species|(species.name.as_str(),
+                                    species.types.as_slice(),
+                                    "Most common species in this hunt (representative only; not necessarily the enemy being fought).")))));
+                    let target=wild_target.or_else(||{
+                        if hunts.wild.is_some(){None}else{representative}
+                    });
+                    let (target_name,target_types,note)=target.unwrap_or((
+                        "Unidentified opponent",&[][..],
+                        "Opponent typing is unavailable; no advantages or weaknesses are assumed."
+                    ));
+                    draw_atlas_matchup(ui,guide,&lead_types,target_types,
+                        target_name,note);
                     ui.add_space(8.0);
     let m = &hunts.measurements;
     egui::Frame::new().fill(PANEL_ALT).corner_radius(10.0)
