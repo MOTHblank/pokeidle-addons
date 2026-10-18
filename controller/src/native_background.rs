@@ -276,7 +276,7 @@ impl NativeSession {
             if view.outland_tier==Some(*tier){
                 return Err("The requested Outland tier is already active".into());
             }
-            if crate::native_atlas_models::unlocked_tier(*tier,view.trainer_level).is_none(){
+            if view.unlocked_outland_tier(*tier).is_none(){
                 return Err("The requested Outland tier is not unlocked at this trainer level".into());
             }
         }
