@@ -258,6 +258,11 @@ fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
             state.error = None;
         } else {
             state.phase = "Reconnecting".into();
+            // Make failed public-channel lookups visible at account level.
+            // Previously errors existed only inside collapsed per-channel
+            // details, so users saw an endless 0/N and "waiting" message.
+            state.error = state.channels.iter()
+                .find_map(|item| item.error.clone());
         }
     }
 }
@@ -276,9 +281,16 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
             return;
         }
     };
+    let public_client = match native_kick_viewer::new_public_client() {
+        Ok(client) => client,
+        Err(error) => {
+            update_channel(&snapshot, &slug, |c| c.error = Some(error));
+            return;
+        }
+    };
     let mut failures = 0_u32;
     while !stop.load(Ordering::Relaxed) {
-        match native_kick_viewer::channel_meta(&client, &slug) {
+        match native_kick_viewer::channel_meta(&public_client, &slug) {
             Ok(meta) => {
                 failures = 0;
                 update_channel(&snapshot, &slug, |c| {
@@ -294,9 +306,11 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     }
                     // Check a real balance even if a channel is offline, so
                     // previously earned points are not misrepresented as zero.
-                    if let Ok(balance) = native_kick_viewer::point_balance(&client, &slug) {
-                        if let Ok(mut state) = telemetry.lock() {
-                            native_kick_viewer::observe_points(&mut state, balance);
+                    let balance_result = native_kick_viewer::point_balance(&client, &slug);
+                    if let Ok(mut state) = telemetry.lock() {
+                        match balance_result {
+                            Ok(balance) => native_kick_viewer::observe_points(&mut state, balance),
+                            Err(error) => state.error = Some(error),
                         }
                     }
                     pause(&stop, OFFLINE_POLL);
@@ -322,13 +336,14 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 pause(&stop, Duration::from_secs(delay));
             },
             Err(error) => {
-                let login_expired = error.contains("401/403");
+                // Public metadata requests cannot prove that an account's
+                // saved login has expired. A 401/403 can also be a network
+                // challenge, so retain errors and retry with backoff.
                 update_channel(&snapshot, &slug, |c| {
                     c.error = Some(error);
                     c.live = None;
                     c.viewers = None;
                 });
-                if login_expired { break; }
                 failures = failures.saturating_add(1);
                 pause(&stop, Duration::from_secs(
                     (10_u64.saturating_mul(2_u64.pow(failures.min(4)))).min(180)));

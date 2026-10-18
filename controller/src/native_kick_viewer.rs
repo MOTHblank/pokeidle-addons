@@ -5,7 +5,7 @@ use crate::native_kick_hls::{MediaRunner, MediaStatus};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tungstenite::{client_tls, client::IntoClientRequest, http::header, Message};
@@ -39,6 +39,24 @@ pub struct WatchTelemetry {
     pub last_points: Option<Instant>,
     pub error: Option<String>,
 }
+/// Channel metadata is public. Do not send a user's site credential to
+/// the public lookup; bearer validity belongs to private point/viewer APIs.
+pub fn new_public_client() -> Result<Client, String> {
+    // A public metadata client carries no user credentials. Share its HTTP
+    // pool across accounts/channels instead of allocating a second expensive
+    // client per Kick worker (up to 48 channel workers across four accounts).
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() { return Ok(client.clone()); }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(12))
+        .connect_timeout(Duration::from_secs(6))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0")
+        .build()
+        .map_err(|_| "Could not initialize Kick public channel lookup".to_owned())?;
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
+}
+
 pub fn new_client(token: &str) -> Result<Client, String> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::ORIGIN,
@@ -47,6 +65,10 @@ pub fn new_client(token: &str) -> Result<Client, String> {
         reqwest::header::HeaderValue::from_static("application/json, text/plain, */*"));
     headers.insert(reqwest::header::REFERER,
         reqwest::header::HeaderValue::from_static("https://kick.com/"));
+    headers.insert(reqwest::header::USER_AGENT,
+        reqwest::header::HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
+        ));
     let authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| "Invalid Kick account credential".to_owned())?;
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
@@ -59,8 +81,9 @@ fn get_value(client: &Client, url: &str) -> Result<Value, String> {
     let result = client.get(url).send()
         .map_err(|_| "Could not connect to Kick account API".to_owned())?;
     match result.status().as_u16() {
-        200 => result.json().map_err(|_| "Kick API returned an invalid response".to_owned()),
-        401 | 403 => Err("Kick account authorization expired or denied (401/403)".to_owned()),
+        200 => result.json().map_err(|_|
+            "Kick public channel API returned invalid JSON (possibly a site challenge)".to_owned()),
+        401 | 403 => Err("Kick public channel lookup blocked (401/403); this does not prove the saved login expired".to_owned()),
         404 => Err("Kick channel/endpoint not found (404)".to_owned()),
         429 => Err("Kick API rate-limited this account (429)".to_owned()),
         code => Err(format!("Kick account API failed (HTTP {code})")),
@@ -79,8 +102,11 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
         .ok_or_else(|| "Kick channel user ID unavailable".to_owned())?;
     let stream = data.get("livestream").filter(|v| v.is_object());
     let stream_id = stream.and_then(|v| v.get("id")).and_then(Value::as_u64).unwrap_or(0);
+    // Kick's v2 channel endpoint may return a populated livestream object
+    // without an is_live field. The existence of a current stream ID means
+    // live unless Kick explicitly says false; absence is not false.
     let is_live = stream_id > 0 && stream.and_then(|v| v.get("is_live"))
-        .and_then(Value::as_bool).unwrap_or(false);
+        .and_then(Value::as_bool).unwrap_or(true);
     let playback_url = data.get("playback_url").and_then(Value::as_str)
         .unwrap_or_default().to_owned();
     Ok(ChannelMeta {
@@ -303,6 +329,21 @@ mod tests {
         assert_eq!(meta.viewers,Some(42));
         assert_eq!(handshake(&meta)["data"]["message"]["channelId"],123);
         assert_eq!(watch_event(&meta)["data"]["message"]["livestream_id"],789);
+    }
+    #[test]
+    fn detects_live_stream_when_kick_omits_is_live() {
+        let metadata = json!({
+            "id": 120, "user_id": 300, "playback_url": "https://example.com/live.m3u8",
+            "livestream": {"id": 456, "session_title": "streaming", "viewer_count": 20}
+        });
+        let meta = parse_meta(&metadata).unwrap();
+        assert!(meta.is_live);
+        assert_eq!(meta.stream_id, 456);
+        let explicit_offline = json!({"id":120, "user_id":300,
+            "livestream":{"id":456,"is_live":false}});
+        assert!(!parse_meta(&explicit_offline).unwrap().is_live);
+        let without_stream = json!({"id":120, "user_id":300, "livestream":null});
+        assert!(!parse_meta(&without_stream).unwrap().is_live);
     }
     #[test]
     fn points_delta_requires_numeric_confirmed_balance() {
