@@ -207,6 +207,9 @@ pub struct HuntView {
     /// Catalog quotes are alternatives by currency, not additive costs.
     pub ball_quotes: Arc<BTreeMap<u64,BallQuote>>,
     pub outland_tier:Option<u8>,
+    /// Validated eight-tier table from the game's welcome catalog.
+    /// Absent catalogs use the pinned upstream v1.314.2 thresholds.
+    pub outland_catalog:Option<[(u32,f64);8]>,
     /// Awaiting authoritative tierOutland from the game (not socket send).
     pub pending_outland_tier:Option<u8>,
     pub outland_tier_error:Option<String>,
@@ -229,6 +232,38 @@ pub struct HuntView {
     pub captures: u64,
     pub catalog_ready: bool,
     pub last_error: Option<String>,
+}
+impl HuntView {
+    pub fn outland_requirement(&self,tier:u8)->Option<(u32,f64)> {
+        let index=usize::from(tier.checked_sub(1)?);
+        if index>=8{return None}
+        Some(self.outland_catalog.map(|rows|rows[index]).unwrap_or((
+            crate::native_atlas_models::TIER_LEVELS[index],
+            crate::native_atlas_models::TIER_MULTIPLIERS[index])))
+    }
+    pub fn unlocked_outland_tier(&self,tier:u8)->Option<f64>{
+        let (level,mult)=self.outland_requirement(tier)?;
+        (self.trainer_level?>=level).then_some(mult)
+    }
+}
+/// Refuse partial, reordered or malformed tables from a remote game message.
+/// Do not mix an untrusted tier threshold with an unrelated multiplier.
+fn parse_outland_catalog(raw:&Value)->Option<[(u32,f64);8]>{
+    let rows=raw.as_array().filter(|rows|rows.len()==8)?;
+    let mut out=[(0u32,0.0f64);8];
+    for (index,row) in rows.iter().enumerate(){
+        let tier=row.get("tier").and_then(Value::as_u64)?;
+        let level=row.get("nivel").or_else(||row.get("level"))
+            .and_then(Value::as_u64).and_then(|v|u32::try_from(v).ok())?;
+        let mult=row.get("mult").or_else(||row.get("multiplier"))
+            .and_then(Value::as_f64)?;
+        if tier!=index as u64+1 || level==0 ||
+            (index>0&&level<=out[index-1].0) ||
+            !mult.is_finite() || !(1.0..=100.0).contains(&mult) ||
+            (index>0&&mult<out[index-1].1) {return None}
+        out[index]=(level,mult);
+    }
+    Some(out)
 }
 #[derive(Clone, Debug)]
 struct Sample { at: Instant, trainer: Option<u64>, pokemon: Option<u64>, gold: Option<u64>, kills: u64 }
@@ -319,10 +354,11 @@ impl HuntIntel {
         }
         let level=self.view.trainer_level
             .ok_or("Trainer level not reported by the game")?;
-        if level<crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize]{
+        let threshold=self.view.outland_requirement(tier)
+            .ok_or("Unknown Outland tier")?.0;
+        if level<threshold {
             return Err(format!(
-                "Outland {tier} requires trainer level {}",
-                crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize]
+                "Outland {tier} requires trainer level {threshold}"
             ));
         }
         if self.view.pending_outland_tier.is_some(){
@@ -378,6 +414,7 @@ impl HuntIntel {
         self.view.pending_outland_tier=None;
         self.pending_outland_at=None;
         self.view.outland_tier=None;
+        self.view.outland_catalog=None;
         self.view.outland_tier_error=None;
         self.view.pending_hunt_slug = None;
         self.pending_at = None;
@@ -724,6 +761,9 @@ impl HuntIntel {
     pub fn ingest_value(&mut self, frame: &Value, now: Instant) {
         match frame.get("t").and_then(Value::as_str) {
             Some("welcome") => {
+                self.view.outland_catalog=frame.get("catalogoOutlandTiers")
+                    .or_else(||frame.get("outlandTiers"))
+                    .and_then(parse_outland_catalog);
                 if let Some(catalog) = frame.get("catalogoBolas").and_then(Value::as_array) {
                     self.view.ball_names=Arc::new(catalog.iter().filter_map(|ball| {
                         Some((ball.get("id").and_then(Value::as_u64)?,
@@ -1533,6 +1573,40 @@ mod tests {
         assert!(!intel.view.bonuses.vip_active);
     }
 
+    #[test]
+    fn outland_catalog_gate_from_server_overrides_baked_thresholds(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","catalogoOutlandTiers":[
+            {"tier":1,"nivel":150,"mult":1},{"tier":2,"nivel":1100,"mult":1.25},
+            {"tier":3,"nivel":2100,"mult":1.5},{"tier":4,"nivel":4100,"mult":2},
+            {"tier":5,"nivel":8100,"mult":3},{"tier":6,"nivel":16100,"mult":4},
+            {"tier":7,"nivel":24100,"mult":6},{"tier":8,"nivel":36100,"mult":8}
+        ],"estado":{"level":1000,"tierOutland":1}}"#,now);
+        assert_eq!(intel.view.outland_requirement(2),Some((1100,1.25)));
+        assert_eq!(intel.view.unlocked_outland_tier(2),None);
+        assert!(intel.request_outland_tier(2,now).is_err());
+        intel.ingest(r#"{"t":"estado","estado":{"level":1100}}"#,now);
+        assert_eq!(intel.view.unlocked_outland_tier(2),Some(1.25));
+        assert!(intel.request_outland_tier(2,now).is_ok());
+        intel.on_disconnect();
+        assert_eq!(intel.view.outland_requirement(2),Some((1000,1.25)));
+    }
+    #[test]
+    fn malformed_outland_catalog_cannot_unlock_a_higher_tier(){
+        let mut catalog=serde_json::json!([
+            {"tier":1,"nivel":150,"mult":1},{"tier":2,"nivel":1000,"mult":1.25},
+            {"tier":3,"nivel":2000,"mult":1.5},{"tier":4,"nivel":4000,"mult":2},
+            {"tier":5,"nivel":8000,"mult":3},{"tier":6,"nivel":16000,"mult":4},
+            {"tier":7,"nivel":24000,"mult":6},{"tier":8,"nivel":36000,"mult":8}
+        ]);
+        assert!(parse_outland_catalog(&catalog).is_some());
+        catalog[1]["nivel"]=serde_json::json!(100);
+        assert!(parse_outland_catalog(&catalog).is_none());
+        catalog[1]["nivel"]=serde_json::json!(1000);
+        catalog[2]["mult"]=serde_json::json!(null);
+        assert!(parse_outland_catalog(&catalog).is_none());
+    }
     #[test]
     fn outland_tier_changes_only_on_server_confirmation(){
         let now=Instant::now();
