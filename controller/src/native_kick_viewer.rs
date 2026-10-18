@@ -102,10 +102,10 @@ pub fn point_balance(client: &Client, slug: &str) -> Result<Option<u64>, String>
         .map_err(|_| "Could not fetch Kick point balance".to_owned())?;
     let status = response.status().as_u16();
     if status == 404 {
-        // Some Kick accounts are served by the old channel response schema.
-        let channel = get_value(client, &format!("https://kick.com/api/v2/channels/{slug}"))?;
-        return Ok(channel.pointer("/data/user/points")
-            .or_else(|| channel.pointer("/user/points")).and_then(Value::as_u64));
+        // The channel profile fallback in some miners exposes the creator's
+        // user object, not a proven balance for our authenticated viewer.
+        // Never mistake those values for earned points.
+        return Ok(None);
     }
     match status {
         200 => {
@@ -251,8 +251,7 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
         match socket.read() {
             Ok(Message::Text(message)) => {
                 let text = message.as_str();
-                if text == "ping" { ws_send(&mut socket, heartbeat().as_object()
-                    .map(|_| json!({"type":"pong"})).unwrap_or_default())?; }
+                if text == "ping" { ws_send(&mut socket, json!({"type":"pong"}))?; }
                 if let Ok(value) = serde_json::from_str::<Value>(text) {
                     match value.get("type").and_then(Value::as_str) {
                         Some("channel_handshake") => {
