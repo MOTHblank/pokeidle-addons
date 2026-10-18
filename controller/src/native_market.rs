@@ -327,6 +327,31 @@ impl Offer {
 }
 #[derive(Clone)]
 enum Scan { Summary, Item(u64,String), Pokemon(String,u64) }
+
+// Market vitrine replies may omit top-level kind/currency on nonempty pages.
+// Accept them only with positive per-row Pokémon and currency evidence. An
+// empty page has no such evidence and must carry all three discriminators.
+fn pokemon_scan_rows<'a>(frame: &'a Value, currency: &str, page: u64) -> Option<&'a Vec<Value>> {
+    if frame.get("tipo").and_then(Value::as_str).is_some_and(|kind|kind!="pokemon") ||
+        frame.get("moeda").and_then(Value::as_str).is_some_and(|value|value!=currency) ||
+        number(frame,"pagina").is_some_and(|value|value!=page) {return None}
+    let rows=frame.get("linhas")?.as_array()?;
+    if rows.is_empty() {
+        return (frame.get("tipo").and_then(Value::as_str)==Some("pokemon") &&
+            frame.get("moeda").and_then(Value::as_str)==Some(currency) &&
+            number(frame,"pagina")==Some(page)).then_some(rows);
+    }
+    if page!=0 && number(frame,"pagina").is_none() {return None}
+    if !rows.iter().all(|row|
+        row.get("ficha").is_some_and(Value::is_object) &&
+        row.get("tipo").and_then(Value::as_str).is_none_or(|kind|kind=="pokemon") &&
+        row.get("moeda").and_then(Value::as_str).is_none_or(|value|value==currency)) {return None}
+    if frame.get("moeda").and_then(Value::as_str).is_none() &&
+        !rows.iter().all(|row|row.get("moeda").and_then(Value::as_str)==Some(currency)) {
+        return None;
+    }
+    Some(rows)
+}
 pub struct MarketBuyer {
     profile: GameProfile, session: u64, journal: Journal,
     last_housekeeping: Option<Instant>,
@@ -338,7 +363,8 @@ pub struct MarketBuyer {
     pending: VecDeque<usize>, pending_scan: Option<(Scan,Instant)>,
     last_scan: HashMap<String,Instant>, urgent_details: HashSet<String>,
     scan_sequence: u64, last_buy: Option<Instant>,
-    blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>, failed_closed: bool,
+    blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>,
+    scan_slow_until: Option<Instant>, failed_closed: bool,
     snatch:HashMap<u64,SnatchEntry>, snatch_closed:HashMap<u64,String>,
     snatch_verifying:HashMap<u64,Instant>, snatch_last_verify:HashMap<u64,Instant>,
     snatch_last_send:HashMap<u64,Instant>,
@@ -366,7 +392,8 @@ impl MarketBuyer {
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
             summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
             urgent_details:HashSet::new(),scan_sequence:0,
-            last_buy:None,blocked:HashMap::new(),backoff_until:None,failed_closed:error.is_some(),
+            last_buy:None,blocked:HashMap::new(),backoff_until:None,
+            scan_slow_until:None,failed_closed:error.is_some(),
             snatch:HashMap::new(),snatch_closed:HashMap::new(),
             snatch_verifying:HashMap::new(),snatch_last_verify:HashMap::new(),
             snatch_last_send:HashMap::new() }
@@ -584,6 +611,9 @@ impl MarketBuyer {
             if message.to_lowercase().contains("rate limit") || message.to_lowercase().contains("muitas mensagens") {
                 self.status.error=Some("Market request rate-limited; backing off".into());
                 self.backoff_until=Some(now+Duration::from_secs(15));
+                // Preserve release-time buying priority: repeated scan-limit
+                // errors must not keep the fast scanner active indefinitely.
+                self.scan_slow_until=Some(now+Duration::from_secs(180));
             }
         }
         if t!="market" {return}
@@ -614,17 +644,16 @@ impl MarketBuyer {
                 }
                 true
             },
-            (Scan::Pokemon(currency,page),Some("vitrine")) if
-                frame.get("tipo").and_then(Value::as_str)==Some("pokemon") &&
-                frame.get("moeda").and_then(Value::as_str)==Some(currency.as_str()) &&
-                number(&frame,"pagina")==Some(*page) => {
-                if let Some(rows)=frame.get("linhas").and_then(Value::as_array) {
+            (Scan::Pokemon(currency,page),Some("vitrine")) => {
+                if let Some(rows)=pokemon_scan_rows(frame,currency,*page) {
                     if *page==0 {self.offers.retain(|o|!(o.kind=="pokemon"&&o.currency==*currency));}
-                    for o in rows.iter().take(120) {
-                        if let Some(o)=Offer::from_listing(o,"pokemon",0,currency,now){self.offers.push(o);}
+                    for row in rows.iter().take(120) {
+                        if let Some(offer)=Offer::from_listing(row,"pokemon",0,currency,now) {
+                            self.offers.push(offer);
+                        }
                     }
-                }
-                true
+                    true
+                } else {false}
             },
             _=>false
         };
@@ -728,29 +757,25 @@ impl MarketBuyer {
             self.backoff_until.is_some_and(|until|now<until) ||
             self.balances.iter().any(Option::is_none) || !cfg.rules.iter().any(|r|r.enabled) {return None}
         if self.snatch_critical(cfg) {return None}
-        let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
-        // Watch can dispatch five buys without awaiting unrelated receipts;
-        // normal rule sends have a 120 ms spacing, not a seven-second stall.
-        if self.pending.len()<5 &&
-            self.last_buy.is_none_or(|at|now.saturating_duration_since(at)>=Duration::from_millis(120)) {
-        for rule in cfg.rules.iter().filter(|r|r.enabled&&r.buy_max>0) {
-            let selected=self.offers.iter()
-                .filter(|o|o.currency==rule.currency&&o.matches(rule,&self.nick,server_ms))
-                .filter(|o|!self.blocked.get(&o.id).is_some_and(|until|now<*until))
-                .filter(|o|self.pending.iter().filter(|i|self.journal.orders.get(**i)
-                    .is_some_and(|x|x.listing_id==o.id)).count()<if o.kind=="item"{3}else{1})
-                .filter(|o|o.kind=="item" || !self.journal.orders.iter().any(|x|
-                    x.listing_id==o.id && x.status!="refused"))
-                .min_by_key(|o|(o.price,o.id)).cloned();
-            let Some(offer)=selected else {continue};
-            if let Some(payload)=self.buy_quote(cfg,rule,&offer,now,false) {
-                return Some(payload);
-            }
-        }
-        }
-        if self.pending_scan.as_ref().is_some_and(|(_,at)|at.elapsed()<Duration::from_secs(7)){return None}
+        if let Some(buy)=self.next_ready_buy(cfg,now) {return Some(buy)}
+        // Preserve one outstanding scan for response attribution. Pokémon
+        // listing replies use the shorter, independently verified Watch wait.
+        if self.pending_scan.as_ref().is_some_and(|(scan,at)| {
+            let timeout=if matches!(scan,Scan::Pokemon(..)) {
+                Duration::from_millis(2700)
+            } else {Duration::from_secs(7)};
+            now.saturating_duration_since(*at)<timeout
+        }) {return None}
         self.pending_scan=None;
-        if self.last_scan.values().any(|at|at.elapsed()<Duration::from_secs(2)){return None}
+        // Only active Pokémon buying uses the faster rate; other market
+        // scanning retains its conservative two-second request spacing.
+        let pokemon_buying=cfg.rules.iter().any(|r|
+            r.enabled && r.buy_max>0 && r.kind.starts_with("pokemon_"));
+        let gap=if self.scan_slow_until.is_some_and(|until|now<until) {
+            Duration::from_secs(3)
+        } else if pokemon_buying {Duration::from_millis(1250)}
+            else {Duration::from_secs(2)};
+        if self.last_scan.values().any(|at|now.saturating_duration_since(*at)<gap){return None}
         let mut targets=Vec::<(String,Scan,Value)>::new();
         if cfg.rules.iter().any(|r|r.enabled&&r.kind=="any_item") {
             targets.push(("summary".into(),Scan::Summary,json!({"t":"market.itens"})));
@@ -805,10 +830,19 @@ impl MarketBuyer {
         let slot=self.scan_sequence%6;
         let (key,scan,payload)=targets.into_iter()
             .filter(|(key,_,_)|self.urgent_details.contains(key) ||
-                self.last_scan.get(key).is_none_or(|at|
-                    at.elapsed()>=Duration::from_secs(if key=="summary"{15}else{25})))
+                self.last_scan.get(key).is_none_or(|at| {
+                    let ttl=if key=="summary" {15} else if key.starts_with("pokemon:") {
+                        if key.ends_with(":0") {6} else {40}
+                    } else {25};
+                    now.saturating_duration_since(*at)>=Duration::from_secs(ttl)
+                }))
             .min_by_key(|(key,_,_)| {
-                let tier=if self.urgent_details.contains(key) {0}
+                // Page zero contains the cheapest current Pokémon and is
+                // where we discover held listings early enough to Snatch.
+                // Deep pages remain sampled but cannot delay the front page
+                // until their 40-second refresh comes due.
+                let front_page=key.starts_with("pokemon:") && key.ends_with(":0");
+                let tier=if self.urgent_details.contains(key) || front_page {0}
                     else if (slot<=2 && fixed.contains(key)) ||
                             (slot==3 && key=="summary") ||
                             (slot==4 && key.starts_with("pokemon:")) ||
@@ -820,6 +854,37 @@ impl MarketBuyer {
         self.scan_sequence=self.scan_sequence.wrapping_add(1);
         self.last_scan.insert(key,now);self.pending_scan=Some((scan,now));
         Some(payload)
+    }
+
+    // Called both by the normal worker tick and immediately after a matched
+    // market response, so a fresh bargain does not wait for another socket
+    // read timeout or UI/history processing before submitting the buy.
+    pub fn next_ready_buy(&mut self,cfg:&MarketRules,now:Instant)->Option<Value> {
+        if self.failed_closed || !cfg.enabled || cfg.paused ||
+            self.nick.is_empty() || self.balances.iter().any(Option::is_none) ||
+            self.backoff_until.is_some_and(|until|now<until) ||
+            self.snatch_critical(cfg) {return None}
+        let server_ms=(clock_ms() as i64-self.server_offset_ms).max(0) as u64;
+        // Multiple unrelated orders may be in flight, but never duplicate a
+        // unique Pokémon order awaiting a server receipt.
+        if self.pending.len()>=5 ||
+            self.last_buy.is_some_and(|at|
+                now.saturating_duration_since(at)<Duration::from_millis(120)) {return None}
+        for rule in cfg.rules.iter().filter(|r|r.enabled&&r.buy_max>0) {
+            let selected=self.offers.iter()
+                .filter(|o|o.currency==rule.currency&&o.matches(rule,&self.nick,server_ms))
+                .filter(|o|!self.blocked.get(&o.id).is_some_and(|until|now<*until))
+                .filter(|o|self.pending.iter().filter(|i|self.journal.orders.get(**i)
+                    .is_some_and(|x|x.listing_id==o.id)).count()<if o.kind=="item"{3}else{1})
+                .filter(|o|o.kind=="item" || !self.journal.orders.iter().any(|x|
+                    x.listing_id==o.id && x.status!="refused"))
+                .min_by_key(|o|(o.price,o.id)).cloned();
+            let Some(offer)=selected else {continue};
+            if let Some(payload)=self.buy_quote(cfg,rule,&offer,now,false) {
+                return Some(payload);
+            }
+        }
+        None
     }
 
     /// Shared purchase journal and global caps: Snatch is never a competing
@@ -1248,6 +1313,51 @@ mod tests {
         assert_eq!(actions.len(),1);
         assert_eq!(actions[0],json!({"t":"market.anuncio","id":991}));
         assert!(buyer.snatch_verifying.contains_key(&991));
+    }
+    #[test]
+    fn pokemon_reply_scope_accepts_proven_rows_but_not_ambiguous_pages() {
+        let row=json!({"id":29,"preco":22,"qtd":1,"vendedor":"seller",
+            "ficha":{"potencia":5,"shiny":false},"moeda":"gold"});
+        let partial=json!({"t":"market","aba":"vitrine","linhas":[row.clone()]});
+        assert!(pokemon_scan_rows(&partial,"gold",0).is_some());
+        assert!(pokemon_scan_rows(&partial,"orb",0).is_none());
+        assert!(pokemon_scan_rows(&partial,"gold",1).is_none());
+        let explicit=json!({"t":"market","aba":"vitrine","tipo":"pokemon",
+            "moeda":"gold","pagina":1,"linhas":[row.clone()]});
+        assert!(pokemon_scan_rows(&explicit,"gold",1).is_some());
+        assert!(pokemon_scan_rows(&explicit,"gold",0).is_none());
+        let empty=json!({"t":"market","aba":"vitrine","linhas":[]});
+        assert!(pokemon_scan_rows(&empty,"gold",0).is_none());
+        let typed_empty=json!({"t":"market","aba":"vitrine","tipo":"pokemon",
+            "moeda":"gold","pagina":0,"linhas":[]});
+        assert!(pokemon_scan_rows(&typed_empty,"gold",0).is_some());
+        let conflicting=json!({"t":"market","aba":"vitrine","tipo":"diamante",
+            "moeda":"gold","pagina":0,"linhas":[row]});
+        assert!(pokemon_scan_rows(&conflicting,"gold",0).is_none());
+    }
+    #[test]
+    fn active_pokemon_rules_prioritize_fresh_front_page_scans() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game1);
+        buyer.failed_closed=false;
+        buyer.nick="me".into();
+        buyer.balances=[Some(1000),Some(10)];
+        let now=Instant::now();
+        for page in 0..3 {
+            buyer.last_scan.insert(format!("pokemon:gold:{page}"),
+                now-Duration::from_secs(if page==0 {7} else {45}));
+        }
+        // The other currency has a recent page-zero response, so the due
+        // Gold front page must win over an older Gold deep page.
+        buyer.last_scan.insert("pokemon:orb:0".into(),now-Duration::from_secs(2));
+        // Without front-page priority the oldest deep page wins here.
+        let cfg=MarketRules{enabled:true,rules:vec![BuyRule{
+            id:"pokemon-rule".into(),kind:"pokemon_any".into(),currency:"gold".into(),
+            enabled:true,buy_max:100,..Default::default()
+        }],..Default::default()};
+        let scan=buyer.next(&cfg,now).unwrap();
+        assert_eq!(scan["t"],"market.listar");
+        assert_eq!(scan["pagina"],0);
+        assert_eq!(scan["moeda"],"gold");
     }
     #[test] fn imported_watch_rules_are_disarmed_globally() {
         let rules=MarketRules::import_watch(r#"{"fixedRulesEnabled":true,"fixedItemRules":[{"itemId":42,"buyMax":100,"currency":"gold","buyEnabled":true}],"pokemonBuyRules":[{"kind":"shiny","buyMax":2,"currency":"gold"}]}"#).unwrap();
