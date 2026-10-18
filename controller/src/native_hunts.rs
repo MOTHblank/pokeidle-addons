@@ -1537,7 +1537,7 @@ mod tests {
     fn outland_tier_changes_only_on_server_confirmation(){
         let now=Instant::now();
         let mut intel=HuntIntel::new();
-        intel.ingest(r#"{"t":"welcome","estado":{"level":500,
+        intel.ingest(r#"{"t":"welcome","estado":{"level":1000,
             "tierOutland":1}}"#,now);
         assert!(intel.request_outland_tier(3,now).is_err());
         assert!(intel.request_outland_tier(2,now).is_ok());
@@ -1558,7 +1558,7 @@ mod tests {
     fn outland_tier_timeout_and_disconnect_discard_pending_request(){
         let now=Instant::now();
         let mut intel=HuntIntel::new();
-        intel.ingest(r#"{"t":"welcome","estado":{"level":5000,
+        intel.ingest(r#"{"t":"welcome","estado":{"level":8000,
             "tierOutland":2}}"#,now);
         assert!(intel.request_outland_tier(5,now).is_ok());
         intel.expire_outland_request(now+Duration::from_secs(7));
