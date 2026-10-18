@@ -74,8 +74,9 @@ fn get_value(client: &Client, url: &str) -> Result<Value, String> {
     let result = client.get(url).send()
         .map_err(|_| "Could not connect to Kick account API".to_owned())?;
     match result.status().as_u16() {
-        200 => result.json().map_err(|_| "Kick API returned an invalid response".to_owned()),
-        401 | 403 => Err("Kick account authorization expired or denied (401/403)".to_owned()),
+        200 => result.json().map_err(|_|
+            "Kick public channel API returned invalid JSON (possibly a site challenge)".to_owned()),
+        401 | 403 => Err("Kick public channel lookup blocked (401/403); this does not prove the saved login expired".to_owned()),
         404 => Err("Kick channel/endpoint not found (404)".to_owned()),
         429 => Err("Kick API rate-limited this account (429)".to_owned()),
         code => Err(format!("Kick account API failed (HTTP {code})")),
