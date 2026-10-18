@@ -50,8 +50,6 @@ fn cookie_looks_like_kick_token(value: &str) -> bool {
         && secret.bytes().all(|b| b.is_ascii_graphic())
 }
 
-/// Return one unexpired Kick session token or None. Never copy other cookies
-/// or open an arbitrary Firefox profile/database.
 /// Decode URL-encoded session values such as 123%7Csecret, then
 /// validate the actual credential. All bytes remain local and bounded.
 fn decode_kick_session_cookie(value: &str) -> Option<String> {
@@ -81,6 +79,8 @@ fn decode_kick_session_cookie(value: &str) -> Option<String> {
     cookie_looks_like_kick_token(&token).then_some(token)
 }
 
+/// Return one unexpired session credential from the selected account's
+/// first-party Kick cookie database. Do not touch other browser data.
 fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
     let path = profile_dir.join("cookies.sqlite");
     if !path.is_file() { return Ok(None); }
@@ -215,8 +215,8 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
         return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again.".into());
     }
     let mut browser = firefox::launch_kick_login(&config)?;
-    // Ordinary Firefox is user-controlled. No inspection or interaction with
-    // its web pages: the user signs in and closes the browser when finished.
+    // The browser stays uninstrumented. Watch the local Firefox cookie
+    // database; no site scripts, Remote Agent or BiDi are involved.
     loop {
         if cancelled.load(Ordering::Relaxed) {
             let _ = browser.kill();
@@ -242,7 +242,7 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
         return Err("Kick login cancelled".into());
     }
     let token = read_kick_cookie(&config.profile_dir)?.ok_or_else(|| {
-        "No valid Kick session_token was found. Sign in, then close the Firefox window.".to_owned()
+        "Kick login not detected. Sign in using Firefox; Moth will import automatically.".to_owned()
     })?;
     native_auth::save_kick_token(profile, &token)
 }
