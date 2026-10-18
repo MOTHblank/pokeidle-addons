@@ -1678,6 +1678,10 @@ pub struct ControllerApp {
     kick_monitors: [Option<KickMonitor>; 4],
     kick_api_token_input: [String; 4],
     kick_channels_input: [String; 4],
+    // Live official channels are discovered from the native PokéIdle socket,
+    // not copied into the user's saved manual preferences.
+    kick_discovered_live: [Vec<String>; 4],
+    kick_discovery_available: [bool; 4],
     kick_channel_new: [String; 4],
     kick_saved_login: [bool; 4],
     kick_remember_login: [bool; 4],
@@ -1811,6 +1815,8 @@ impl ControllerApp {
                 logging::warn(&error);
                 std::array::from_fn(|_| String::new())
             }),
+            kick_discovered_live: std::array::from_fn(|_| Vec::new()),
+            kick_discovery_available: [false; 4],
             kick_channel_new: std::array::from_fn(|_| String::new()),
             kick_saved_login: std::array::from_fn(|index| {
                 GameProfile::from_index(index).is_some_and(|profile|
@@ -2923,6 +2929,7 @@ impl Drop for ControllerApp {
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.refresh_processes();
+        self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
         self.visuals.poll(ui.ctx());
@@ -6723,8 +6730,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let kick_running = app.kick_monitors[index].is_some();
-            let kick_channels = crate::native_kick::normalize_channels(
-                &app.kick_channels_input[index]).map(|items| items.len()).unwrap_or(0);
+            let kick_channels = kick_panel::desired_kick_channels(app, index).len();
             ui.label(RichText::new(format!("Kick · {} {}",
                 kick_channels, if pt_br() { "canais" } else { "channels" }))
                 .size(10.0).color(if kick_running { GOOD } else { MUTED }));

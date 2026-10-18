@@ -26,10 +26,19 @@ duplicar toda a configuração.
    A interface não implementa OAuth nem captura automática de sessão.
    Escolha **Salvar login com proteção do sistema** para guardá-lo apenas no
    cofre protegido pelo sistema operacional; o campo sempre fica mascarado.
-2. **Canais:** adicione o nome ou a URL de cada canal com **+ Adicionar
-   canal**. Até 12 por conta; é possível remover diretamente pelos chips.
-   O arquivo `kick-channels.json` guarda somente nomes públicos de canais,
-   nunca credenciais. Os canais são salvos ao adicionar/remover.
+2. **Canais oficiais do PokéIdle:** Moth Controller lê automaticamente
+   `state.kick.oficiais` do WebSocket autenticado de `pokeidle.io/app`,
+   usando `slug`/`login` quando `aoVivo` é verdadeiro. Os canais aparecem
+   em **Canais oficiais ao vivo** no painel Kick. O browser não precisa
+   permanecer aberto: a sessão nativa fornece os mesmos dados. Durante o
+   login pelo Firefox, o scanner antigo pode servir como fallback se estiver
+   disponível. O monitor adiciona novos streamers e desconecta os que saíram
+   do ar sem reiniciar os demais canais.
+3. **Canais manuais:** é opcional adicionar nomes ou URLs usando
+   **+ Adicionar canal**. Até 12 canais simultâneos por conta; os oficiais
+   ao vivo têm prioridade. É possível remover canais manuais pelos chips.
+   O arquivo `kick-channels.json` guarda apenas nomes informados manualmente,
+   nunca credenciais nem o catálogo volátil de lives oficiais.
 3. **Iniciar transmissões:** inicia as sessões da conta selecionada. Se
    existir um token protegido salvo, basta clicar novamente em iniciar nas
    próximas execuções. **Parar transmissões** encerra as conexões. Para
