@@ -69,7 +69,7 @@ impl ControllerApp {
     fn persist_kick_channels(&mut self) {
         match Config::save_kick_channels(&self.kick_channels_input) {
             Ok(()) => self.set_status(
-                kick_label(pt_br(), "Kick channels saved", "Canais Kick salvos").into(), false),
+                kick_label(pt_br(), "Kick channels saved", "Canais Kick salvos"), false),
             Err(error) => self.set_status(error, true),
         }
     }
@@ -78,7 +78,7 @@ impl ControllerApp {
             Ok(found) if found.len() == 1 => found[0].clone(),
             _ => {
                 self.set_status(kick_label(pt_br(), "Enter one valid Kick channel",
-                    "Informe um canal Kick válido por vez").into(), true);
+                    "Informe um canal Kick válido por vez"), true);
                 return;
             },
         };
@@ -90,7 +90,7 @@ impl ControllerApp {
         found.push(proposed);
         if found.len() > 12 {
             self.set_status(kick_label(pt_br(), "Limit: 12 channels per account",
-                "Limite de 12 canais por conta").into(), true);
+                "Limite de 12 canais por conta"), true);
             return;
         }
         found.sort();
@@ -111,7 +111,7 @@ impl ControllerApp {
         if target.is_empty() && !self.kick_discovery_available[index] {
             self.set_status(kick_label(pt_br(),
                 "Start PokéIdle or add a Kick channel first",
-                "Inicie o PokéIdle ou adicione um canal Kick primeiro").into(), true);
+                "Inicie o PokéIdle ou adicione um canal Kick primeiro"), true);
             return;
         }
         // Prefer a freshly typed token, otherwise use the OS vault. Failed
@@ -125,7 +125,7 @@ impl ControllerApp {
                 Ok(None) => {
                     self.kick_saved_login[index] = false;
                     self.set_status(kick_label(pt_br(), "Enter a Kick account token",
-                        "Informe o token da sua conta Kick").into(), true);
+                        "Informe o token da sua conta Kick"), true);
                     return;
                 },
                 Err(error) => { self.set_status(error, true); return; },
@@ -163,7 +163,7 @@ impl ControllerApp {
     fn stop_kick_account(&mut self, index: usize) {
         self.kick_monitors[index].take();
         self.set_status(kick_label(pt_br(), "Kick streams stopped",
-            "Transmissões Kick interrompidas").into(), false);
+            "Transmissões Kick interrompidas"), false);
     }
     fn forget_kick_account(&mut self, index: usize) {
         let Some(profile) = GameProfile::from_index(index) else { return; };
@@ -174,7 +174,7 @@ impl ControllerApp {
                 self.kick_api_token_input[index].clear();
                 self.kick_saved_login[index] = false;
                 self.set_status(kick_label(pt_br(), "Saved Kick login removed",
-                    "Login Kick salvo removido").into(), false);
+                    "Login Kick salvo removido"), false);
             },
             Err(error) => self.set_status(error, true),
         }
