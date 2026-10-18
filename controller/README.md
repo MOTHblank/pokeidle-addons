@@ -20,12 +20,22 @@ escolher outra conta não interrompe as demais. Os cartões principais do
 gerenciador PokéIdle contêm somente um atalho **Gerenciar Kick →**, sem
 duplicar toda a configuração.
 
-1. **Login:** abra a Kick pelo link da interface e autentique-se normalmente
-   no navegador. Para o worker nativo, é necessário fornecer manualmente o
-   Bearer token da sua própria conta Kick (não um token Developer API).
-   A interface não implementa OAuth nem captura automática de sessão.
-   Escolha **Salvar login com proteção do sistema** para guardá-lo apenas no
-   cofre protegido pelo sistema operacional; o campo sempre fica mascarado.
+1. **Login pelo Firefox:** selecione o perfil em **Contas → Kick** e
+   clique em **Entrar na Kick pelo Firefox**. O Moth abre **uma janela
+   temporária com exatamente o perfil Firefox desse jogo**, instala um
+   observador de autenticação restrito a requisições da própria Kick, e
+   aguarda o login normal do usuário. Após obter uma credencial de sessão
+   válida em formato Bearer, o programa salva-a no cofre protegido do SO
+   (DPAPI no Windows, Secret Service no Linux) e encerra o Firefox temporário.
+   **Não há necessidade de localizar nem copiar o Bearer manualmente.**
+   A conta PokéIdle deve ter concluído sua transferência para a sessão
+   nativa antes, pois dois processos Firefox não podem compartilhar o
+   mesmo perfil. O monitor de Kick é iniciado separadamente após o login.
+   É possível cancelar a tentativa. Em caso de expiração ou de mudanças
+   na autenticação interna da Kick, repita o login.
+   **Avançado → Token manual** permanece como alternativa.
+   A captura utiliza a autenticação do site, não o OAuth Developer API.
+   **A compatibilidade real ainda depende de teste na Kick**.
 2. **Canais oficiais do PokéIdle:** Moth Controller lê automaticamente
    `state.kick.oficiais` do WebSocket autenticado de `pokeidle.io/app`,
    usando `slug`/`login` quando `aoVivo` é verdadeiro. Os canais aparecem
@@ -39,12 +49,12 @@ duplicar toda a configuração.
    ao vivo têm prioridade. É possível remover canais manuais pelos chips.
    O arquivo `kick-channels.json` guarda apenas nomes informados manualmente,
    nunca credenciais nem o catálogo volátil de lives oficiais.
-3. **Iniciar transmissões:** inicia as sessões da conta selecionada. Se
+4. **Iniciar transmissões:** inicia as sessões da conta selecionada. Se
    existir um token protegido salvo, basta clicar novamente em iniciar nas
    próximas execuções. **Parar transmissões** encerra as conexões. Para
    remover o token do cofre, utilize **Esquecer login salvo**; isto também
    encerra as transmissões da conta.
-4. **Atividade:** cartões responsivos mostram cada canal, estado ao vivo,
+5. **Atividade:** cartões responsivos mostram cada canal, estado ao vivo,
    conexão WebSocket, fluxo HLS, saldo de pontos e ganho observado. A
    seção **Detalhes da conexão** concentra bytes, segmentos, bitrate e erros.
 
