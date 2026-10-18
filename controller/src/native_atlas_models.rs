@@ -224,10 +224,10 @@ mod tests {
         let mut boosted=Modifiers::default();
         boosted.capture_boost=true;
         boosted.kick_capture=true;
-        boosted.catch_event=20.0;
+        boosted.catch_event_pct=1000.0;
         let capped=capture_scenario_with_stage(Some(20),None,8.0,100.0,1.0,
             None,false,&boosted).unwrap();
-        assert!(capped.chance<=0.10);
+        assert_eq!(capped.chance,0.10);
         let m=Modifiers::default();
         let forecast=capture_scenario_with_stage(Some(20),None,8.0,100.0,1.0,
             None,false,&m).unwrap();
