@@ -616,3 +616,46 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
     });
 }
+
+#[cfg(test)]
+mod channel_row_tests {
+    use super::*;
+    use crate::native_kick::{OfficialKickChannel, OfflinePoints};
+
+    #[test]
+    fn one_row_per_official_and_manual_creator_even_when_offline() {
+        let official = vec![
+            OfficialKickChannel { slug: "offline_one".into(), live: false },
+            OfficialKickChannel { slug: "live_two".into(), live: true },
+        ];
+        let chosen = vec!["live_two".into(), "manual_three".into()];
+        let rows = channel_rows(&chosen, &official, None, &Default::default());
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].slug, "live_two");
+        assert_eq!(rows[0].live, Some(true));
+        assert_eq!(rows[1].slug, "offline_one");
+        assert_eq!(rows[1].live, Some(false));
+        assert_eq!(rows[2].slug, "manual_three");
+        assert_eq!(rows[2].live, None);
+        assert!(rows.iter().all(|row| row.points.is_none()));
+    }
+
+    #[test]
+    fn offline_verified_balance_is_per_channel_not_a_total() {
+        let official = vec![
+            OfficialKickChannel { slug:"one".into(), live:false },
+            OfficialKickChannel { slug:"two".into(), live:false },
+        ];
+        let mut balances = std::collections::BTreeMap::new();
+        balances.insert("one".into(), OfflinePoints {
+            balance: Some(125), ..OfflinePoints::default()
+        });
+        balances.insert("two".into(), OfflinePoints {
+            balance: Some(800), ..OfflinePoints::default()
+        });
+        let rows = channel_rows(&[], &official, None, &balances);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].points, Some(125));
+        assert_eq!(rows[1].points, Some(800));
+    }
+}
