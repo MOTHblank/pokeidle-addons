@@ -688,15 +688,13 @@ mod tests {
         assert_eq!(bonus(&view,false),1.0);
     }
     #[test]
-    fn guide_drop_probabilities_are_parsed_as_reference_not_game_receipts(){
+    fn obsolete_guide_drop_tables_do_not_reenter_native_models(){
         let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
             "especies":[{"id":4,"n":"Test","t":["NORMAL"],"b":[10,10,10,10,10,10],
             "l":[[42,2.5,1,3,100],[43,120,1,2,100]]}]};"#;
         let reference=parse(script).unwrap();
         let drops=&reference.species[&4].drops;
-        assert_eq!(drops.len(),1);
-        assert_eq!(drops[0].item_id,Some(42));
-        assert_eq!(drops[0].chance_pct,2.5);
+        assert!(drops.is_empty(), "Legacy NPC drops were retired upstream");
     }
 
 }
