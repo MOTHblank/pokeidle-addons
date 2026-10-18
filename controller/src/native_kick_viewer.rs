@@ -375,6 +375,25 @@ mod tests {
         assert!(!parse_meta(&without_stream).unwrap().is_live);
     }
     #[test]
+    fn parses_optional_user_id_and_nested_hls_source() {
+        let data = json!({
+            "data": {
+                "id": 2300,
+                "livestream": {
+                    "id": 987,
+                    "session_title": "Live",
+                    "viewers": 45,
+                    "playback_url": "https://live-video.net/example.m3u8"
+                }
+            }
+        });
+        let channel = parse_meta(&data).unwrap();
+        assert!(channel.is_live);
+        assert_eq!(channel.user_id, 2300);
+        assert_eq!(channel.viewers, Some(45));
+        assert_eq!(channel.playback_url, "https://live-video.net/example.m3u8");
+    }
+    #[test]
     fn points_delta_requires_numeric_confirmed_balance() {
         let mut status=WatchTelemetry::default();
         observe_points(&mut status,parse_points(&json!({"data":{"points":100}})));
