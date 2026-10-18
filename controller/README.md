@@ -60,7 +60,15 @@ duplicar toda a configuração.
    próximas execuções. **Parar transmissões** encerra as conexões. Para
    remover o token do cofre, utilize **Esquecer login salvo**; isto também
    encerra as transmissões da conta.
-5. **Canais Kick:** lista compacta com **uma linha por canal**, incluindo
+5. **Canais Kick:** a visão geral distingue canais **ao vivo segundo o
+   PokéIdle**, quantos já receberam **resposta da API da Kick**, e quantos
+   estão **recebendo mídia**. Erros do servidor ou bloqueios da API são
+   mostrados diretamente no painel, nunca ocultos apenas em detalhes. O
+   monitor usa uma única conexão HTTP pública compartilhada para consultar
+   os metadados dos canais; a sessão autenticada é reservada às operações
+   privadas e aos saldos individuais. Não considera um cookie salvo como
+   garantia de que a API da Kick aceitou a autenticação.
+   A lista compacta mostra **uma linha por canal**, incluindo
    os streamers oficiais que estejam **offline**. Exibe o nome, **AO VIVO /
    OFFLINE / Não verificado**, o **saldo de pontos individual da conta
    naquele canal** e o botão **Abrir ↗**. Os dados de WebSocket/HLS ficam
