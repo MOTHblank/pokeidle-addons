@@ -39,6 +39,17 @@ pub struct WatchTelemetry {
     pub last_points: Option<Instant>,
     pub error: Option<String>,
 }
+/// Channel metadata is public. Do not send a user's site credential to
+/// the public lookup; bearer validity belongs to private point/viewer APIs.
+pub fn new_public_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(12))
+        .connect_timeout(Duration::from_secs(6))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0")
+        .build()
+        .map_err(|_| "Could not initialize Kick public channel lookup".to_owned())
+}
+
 pub fn new_client(token: &str) -> Result<Client, String> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::ORIGIN,
