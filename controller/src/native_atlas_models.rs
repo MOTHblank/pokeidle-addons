@@ -32,7 +32,7 @@ impl Modifiers {
             .all(|v|v.is_finite()&&(1.0..=1000.0).contains(v))
     }
     pub fn catch_factor(&self)->f64 {
-        (if self.capture_boost {1.5}else{1.0})
+        (if self.capture_boost {2.0}else{1.0})
         *(1.0+self.catch_event_pct/100.0)
         *(if self.kick_capture {1.15}else{1.0})
     }
@@ -209,6 +209,16 @@ mod tests {
         assert!(wiki_capture_chance(0.0,4.0,0.0).is_none());
         assert_eq!(catalog_rarity(Some(200),Some(100.0),None),
             Some((12000.0_f64*(200.0_f64/150.0).powf(0.6)).round()));
+    }
+    #[test] fn capture_boost_doubles_odds_before_10_percent_cap(){
+        let mut boosted=Modifiers::default();
+        boosted.capture_boost=true;
+        assert_eq!(boosted.catch_factor(),2.0);
+        let baseline=capture_scenario_with_stage(Some(40),None,8.0,1.0,1.0,
+            None,false,&Modifiers::default()).unwrap().chance;
+        let doubled=capture_scenario_with_stage(Some(40),None,8.0,1.0,1.0,
+            None,false,&boosted).unwrap().chance;
+        assert!((doubled-2.0*baseline).abs()<1e-12);
     }
     #[test] fn upstream_evolution_stage_capture_factors(){
         let ordinary=|tier,ball|capture_chance_for_stage(Some(tier),None,ball,0.0).unwrap();
