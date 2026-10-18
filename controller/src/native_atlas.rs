@@ -76,11 +76,12 @@ pub fn special_capture_species(id:u64)->bool{
     let dex=if id>=13000{id%1000}else{forms.get(&id).copied().unwrap_or(id)};
     special.contains(&dex)
 }
-/// A special encounter cannot borrow the old NPC-price chance as a fallback.
+/// Ordinary hunts use stages exclusively. An incomplete stage catalog
+/// must produce an unknown chance, NEVER a price-based chance from old rules.
+/// Non-hunt special encounters have separate models outside Hunt Atlas.
 pub fn capture_inputs(reference:&Reference,id:u64)->(Option<u32>,Option<f64>){
     if special_capture_species(id){return (None,None)}
-    (reference.capture_stages.get(&id).copied(),
-     reference.capture_rarities.get(&id).copied())
+    (reference.capture_stages.get(&id).copied(),None)
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -648,6 +649,8 @@ mod tests {
         reference.capture_rarities.insert(5144,15000.0);
         reference.capture_stages.insert(5144,100);
         assert_eq!(capture_inputs(&reference,5144),(None,None));
+        assert_eq!(capture_inputs(&reference,4019),(None,None));
+        reference.capture_rarities.insert(4019,999.0);
         assert_eq!(capture_inputs(&reference,4019),(None,None));
         reference.capture_stages.insert(4019,40);
         assert_eq!(capture_inputs(&reference,4019),(Some(40),None));
