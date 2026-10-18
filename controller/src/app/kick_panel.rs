@@ -173,6 +173,7 @@ impl ControllerApp {
                 self.kick_monitors[index].take();
                 self.kick_api_token_input[index].clear();
                 self.kick_saved_login[index] = false;
+                crate::native_kick_login::reset(profile);
                 self.set_status(kick_label(pt_br(), "Saved Kick login removed",
                     "Login Kick salvo removido"), false);
             },
