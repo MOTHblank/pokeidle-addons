@@ -835,6 +835,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 let confirmed_before = restock.status.confirmed;
                                 restock.ingest_value(&frame, received_at);
                                 market.ingest_value(&frame, received_at, &market_cfg);
+                                // Submit a qualified freshly discovered bargain immediately.
+                                // Waiting for the following 60 ms read timeout (plus
+                                // hunt/history work) loses release-time races.
+                                if frame.get("t").and_then(Value::as_str)==Some("market") {
+                                    if let Some(buy)=market.next_ready_buy(&market_cfg,received_at) {
+                                        if socket.send(Message::Text(buy.to_string().into())).is_err() {
+                                            market.send_failed();
+                                            break;
+                                        }
+                                    }
+                                }
                                 hunt_intel.ingest_value(&frame, received_at);
                                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                                 if let Some(auto)=frame.get("estado")
