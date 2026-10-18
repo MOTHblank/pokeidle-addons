@@ -42,6 +42,31 @@ required_command curl curl
 required_command xdg-open xdg-utils
 required_command secret-tool libsecret-tools
 
+# SQLite is loaded with dlopen() only when Kick login imports Firefox
+# cookies, so ldd will NOT reveal this optional-at-startup dependency.
+sqlite_found=0
+for sqlite_path in /lib/x86_64-linux-gnu/libsqlite3.so.0 \
+                   /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
+                   /usr/lib64/libsqlite3.so.0 \
+                   /usr/lib/libsqlite3.so.0; do
+  if [[ -f "$sqlite_path" ]]; then
+    sqlite_found=1
+    break
+  fi
+done
+if (( !sqlite_found )) && command -v ldconfig >/dev/null 2>&1; then
+  libraries="$(ldconfig -p 2>/dev/null || true)"
+  if [[ "$libraries" == *libsqlite3.so.0* ]]; then
+    sqlite_found=1
+  fi
+fi
+if (( sqlite_found )); then
+  printf '[OK] SQLite runtime (libsqlite3.so.0)\n'
+else
+  printf '[INFO] SQLite runtime not located; Kick Firefox-cookie import requires libsqlite3-0.\n'
+  printf '       Nonstandard library paths may not be detected by this check.\n'
+fi
+
 if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
   printf '[INFO] No X11/Wayland display detected. GUI mode requires a desktop session.\n'
 fi

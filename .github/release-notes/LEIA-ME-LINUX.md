@@ -48,7 +48,7 @@ Perfis, preferências, histórico e logs ficam em `$XDG_DATA_HOME/Moth/PokeIdle/
 Dentro de `controller/`, instale Rust e as bibliotecas de desenvolvimento necessárias. No Ubuntu 22.04:
 
 ```bash
-sudo apt-get install -y build-essential pkg-config libssl-dev libsqlite3-dev \
+sudo apt-get install -y build-essential pkg-config libssl-dev \
   libgtk-3-dev libudev-dev libx11-dev libxi-dev libxcursor-dev \
   libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev \
   libgl1-mesa-dev libegl1-mesa-dev
@@ -56,6 +56,17 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-O `libsqlite3-dev` é **necessário na compilação** porque a importação do cookie Kick usa `-lsqlite3`. O `libsqlite3-0` é suficiente na máquina que só executará o binário.
+A integração Kick carrega `libsqlite3.so.0` quando necessário. Portanto, **não é necessário instalar `libsqlite3-dev` para compilar** nem fornecer uma biblioteca Linux no Windows para usar Zig. No computador Linux de destino, instale `libsqlite3-0` para permitir a importação de cookies do Firefox.
+
+### Compilação cruzada a partir do Windows (Zig)
+
+Com Rust, Zig e `cargo-zigbuild` instalados, execute em PowerShell dentro de `controller/`:
+
+```powershell
+rustup target add x86_64-unknown-linux-gnu
+cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.35
+```
+
+O resultado é `target/x86_64-unknown-linux-gnu/release/moth-controller`. Nenhum Linux, Docker ou GitHub Actions é necessário no host Windows.
 
 **Limitações:** sem ícone de bandeja no Linux; ainda não distribuído como `.deb`, `.rpm`, Flatpak ou AppImage. Ambientes Wayland/X11, navegadores empacotados em Snap/Flatpak, desktops sem Secret Service e distribuições diferentes ainda exigem testes de integração reais.
