@@ -114,7 +114,8 @@ pub fn capture_scenario(
         shiny_caught_h,shiny_caught_24h,balls_per_capture:1.0/chance,
         accepted_is_ceiling:accepted_fraction.is_none()})
 }
-pub const TIER_LEVELS:[u32;8]=[150,500,1000,2000,4000,8000,16000,25000];
+// Upstream shared/outland-tiers.mjs (v1.314.2).
+pub const TIER_LEVELS:[u32;8]=[150,1000,2000,4000,8000,16000,24000,36000];
 pub const TIER_MULTIPLIERS:[f64;8]=[1.0,1.25,1.5,2.0,3.0,4.0,6.0,8.0];
 pub const SHINY_EGG_LEVELS:[u32;30]=[
     5000,5400,5900,6400,6950,8000,8600,10000,11250,12750,
@@ -208,7 +209,8 @@ mod tests {
     #[test] fn outland_tiers_egg_and_event_modifiers(){
         let m=Modifiers::default();
         assert_eq!(unlocked_tier(8,Some(16000)),None);
-        assert_eq!(unlocked_tier(8,Some(25000)),Some(8.0));
+        assert_eq!(unlocked_tier(8,Some(25000)),None);
+        assert_eq!(unlocked_tier(8,Some(36000)),Some(8.0));
         assert_eq!(shiny_egg_chance(4999,false),0.0);
         assert_eq!(shiny_egg_chance(5000,false),375.0/10_000_000.0);
         assert_eq!(shiny_egg_chance(5000,true),0.0);
