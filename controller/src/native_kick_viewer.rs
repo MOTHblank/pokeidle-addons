@@ -138,25 +138,38 @@ fn parse_points(value: &Value) -> Option<u64> {
         .into_iter()
         .find_map(|key| value.pointer(key).and_then(Value::as_u64))
 }
-pub fn point_balance(client: &Client, slug: &str) -> Result<Option<u64>, String> {
-    let url = format!("https://kick.com/api/v2/channels/{slug}/points");
-    let response = client.get(&url).send()
-        .map_err(|_| "Could not fetch Kick point balance".to_owned())?;
-    let status = response.status().as_u16();
-    if status == 404 {
-        // The channel profile fallback in some miners exposes the creator's
-        // user object, not a proven balance for our authenticated viewer.
-        // Never mistake those values for earned points.
-        return Ok(None);
-    }
-    match status {
-        200 => {
-            let value: Value = response.json()
-                .map_err(|_| "Invalid Kick points response".to_owned())?;
-            Ok(parse_points(&value))
+/// Perform authenticated website requests using the same short-lived
+/// system HTTP transport as public lookups. Only if curl is absent do we
+/// fall back to the existing reqwest client. Never expose a Bearer in argv.
+fn private_get(client: &Client, url: &str, bearer: &str,
+               extra_headers: &[(&str, String)]) -> Result<(u16, Value), String> {
+    match crate::native_kick_http::get(url, Some(bearer), extra_headers) {
+        Ok(value) => Ok(value),
+        Err(error) if error == "curl unavailable" => {
+            let mut request = client.get(url);
+            for (name, value) in extra_headers {
+                request = request.header(*name, value);
+            }
+            let response = request.send().map_err(|_| "Kick API request failed".to_owned())?;
+            let code = response.status().as_u16();
+            if code != 200 { return Ok((code, Value::Null)); }
+            let value = response.json().map_err(|_|
+                "Kick API returned invalid JSON (possibly a site challenge)".to_owned())?;
+            Ok((code, value))
         },
-        401 | 403 => Err("Kick points endpoint denied authorization (401/403)".to_owned()),
-        429 => Err("Kick points request rate-limited (429)".to_owned()),
+        Err(error) => Err(error),
+    }
+}
+pub fn point_balance(client: &Client, slug: &str, bearer: &str) -> Result<Option<u64>, String> {
+    let url = format!("https://kick.com/api/v2/channels/{slug}/points");
+    let (status, response) = private_get(client, &url, bearer, &[])?;
+    match status {
+        200 => Ok(parse_points(&response)),
+        // A channel profile contains the creator's totals, NOT the viewer's
+        // points. An unavailable private endpoint is an unknown balance.
+        404 => Ok(None),
+        401 | 403 => Err("Kick points authorization denied (401/403)".into()),
+        429 => Err("Kick points request rate limited (429)".into()),
         code => Err(format!("Kick points request failed (HTTP {code})")),
     }
 }
